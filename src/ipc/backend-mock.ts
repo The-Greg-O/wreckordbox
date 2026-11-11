@@ -2920,6 +2920,9 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       return () => problemListeners.delete(listener);
     },
     libraryProblem: () => wait<LibraryProblem | null>(problem),
+    // The mock has no Library service to lose.
+    onServiceStopped: () => () => {},
+    serviceProblem: () => wait<string | null>(null),
     createLibrary: async () => {
       await wait(undefined);
       libraryFound();

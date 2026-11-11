@@ -7,9 +7,11 @@
     clippy::panic
 )]
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use rbl_db::fixture::{self, Shape};
+use rbl_library::{History, LibraryCore, NoHost, Touched};
 use serde_json::json;
 use wreckordbox_service::{codes, Client, Config, Event, Service};
 
@@ -183,4 +185,227 @@ fn the_hosting_process_runs_commands_and_hears_changes_without_the_socket() {
         .call("no.such.command", json!({}))
         .unwrap_err();
     assert_eq!(unknown.code, codes::UNKNOWN_COMMAND);
+}
+
+/// A front end's own Library core over a fixture, loaded as the window
+/// loads its own, with the service hosted on it.
+struct SharedCore {
+    _dir: tempfile::TempDir,
+    core: Arc<LibraryCore>,
+    location: rbl_db::LibraryLocation,
+    config: Config,
+}
+
+fn shared_core() -> SharedCore {
+    let dir = tempfile::tempdir().unwrap();
+    let library = dir.path().join("library");
+    std::fs::create_dir_all(&library).unwrap();
+    let location = fixture::build(
+        &library,
+        Shape {
+            tracks: 3,
+            ..Shape::default()
+        },
+    )
+    .unwrap();
+    let config = Config {
+        runtime_dir: dir.path().join("run"),
+        idle_exit: None,
+        recovery_dir: dir.path().join("recovery"),
+    };
+    let core = Arc::new(LibraryCore::new(config.recovery_dir.clone()));
+    SharedCore {
+        _dir: dir,
+        core,
+        location,
+        config,
+    }
+}
+
+fn no_host() -> Arc<dyn rbl_library::Host + Send + Sync> {
+    Arc::new(NoHost)
+}
+
+impl SharedCore {
+    fn load(&self) {
+        let db = rbl_db::Library::open(self.location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
+        let (index, _) = rbl_index::load(&db).unwrap();
+        self.core.set_library(
+            &NoHost,
+            index,
+            false,
+            db.schema().db_version,
+            0,
+            self.location.clone(),
+        );
+    }
+
+    fn host(&self) -> Service {
+        Service::host(&self.location, &self.config, &self.core, &no_host()).unwrap()
+    }
+
+    fn client(&self) -> Client {
+        Client::connect(&self.config.socket_path(&self.location)).unwrap()
+    }
+
+    fn rating(&self, id: &str) -> u8 {
+        let index = self.core.library().unwrap();
+        index.rating[index.row_of(id).unwrap() as usize]
+    }
+}
+
+#[test]
+fn a_service_hosted_on_a_front_ends_core_shares_its_library_and_generation() {
+    let front = shared_core();
+    front.load();
+    let _service = front.host();
+    let mut client = front.client();
+    let id = fixture::track_id(1);
+
+    // A client's edit is an edit of the front end's own Library.
+    let rated = client.rate_track(&id, 4).unwrap();
+    assert_eq!(front.rating(&id), 4);
+    assert_eq!(rated.generation, front.core.generation());
+
+    // The front end's edit is what a client then lists, one generation on.
+    let (_, change) = front
+        .core
+        .edit(
+            &NoHost,
+            History::Outside,
+            Touched::Metadata(vec![id.clone()]),
+            |writer| writer.set_rating(&id, 2),
+        )
+        .unwrap();
+    assert_eq!(change.generation, rated.generation + 1);
+    let listed = client.tracks(&Default::default()).unwrap();
+    assert_eq!(listed.tracks.iter().find(|t| t.id == id).unwrap().rating, 2);
+    assert_eq!(client.status().unwrap().library.tracks, 3);
+}
+
+#[test]
+fn a_hosted_service_answers_loading_until_the_front_end_has_read_the_library() {
+    let front = shared_core();
+    let _service = front.host();
+    let mut client = front.client();
+
+    assert_eq!(
+        client.tracks(&Default::default()).unwrap_err().code,
+        codes::LIBRARY_LOADING
+    );
+
+    front.load();
+    assert_eq!(client.tracks(&Default::default()).unwrap().total, 3);
+}
+
+#[test]
+fn a_service_by_itself_stops_when_asked_and_a_front_end_takes_the_library_over() {
+    let front = shared_core();
+    let alone = Service::start(front.location.clone(), &front.config).unwrap();
+    let mut other = front.client();
+    other.status().unwrap();
+
+    // Hosting finds the running service, asks it to stop, and takes its place.
+    front.load();
+    let hosted = front.host();
+
+    alone.wait();
+    assert_eq!(other.status().unwrap_err().code, codes::SERVICE_FAILED);
+    let mut client = front.client();
+    assert_eq!(
+        client.status().unwrap().pid,
+        hosted.status().unwrap().pid,
+        "the socket now answers for the front end's service"
+    );
+    client.rate_track(&fixture::track_id(0), 5).unwrap();
+    assert_eq!(front.rating(&fixture::track_id(0)), 5);
+}
+
+#[test]
+fn a_hosted_service_refuses_to_stop_for_a_client_so_its_front_end_stays_the_writer() {
+    let front = shared_core();
+    front.load();
+    let _hosted = front.host();
+    let mut client = front.client();
+
+    assert_eq!(client.stop().unwrap_err().code, codes::STOP_REFUSED);
+    assert!(client.status().unwrap().running);
+
+    // A second front end cannot take the Library from the first.
+    let second = Service::host(
+        &front.location,
+        &front.config,
+        &Arc::new(LibraryCore::new(front.config.recovery_dir.clone())),
+        &no_host(),
+    )
+    .map(|_| ())
+    .unwrap_err();
+    assert_eq!(second.code, codes::STOP_REFUSED);
+    assert!(client.status().unwrap().running);
+}
+
+#[test]
+fn a_front_end_is_told_when_its_service_stops() {
+    let front = shared_core();
+    front.load();
+    let service = front.host();
+    let stopped = service.stopped();
+    let (told, hears) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        stopped.wait();
+        let _ = told.send(());
+    });
+    assert!(hears.recv_timeout(Duration::from_millis(200)).is_err());
+
+    service.stop();
+
+    hears.recv_timeout(Duration::from_secs(5)).unwrap();
+}
+
+#[test]
+fn a_front_ends_own_change_is_sent_to_clients_and_not_back_to_the_front_end() {
+    let front = shared_core();
+    front.load();
+    let service = front.host();
+    let events = service.events();
+    let mut client = front.client();
+    client.subscribe().unwrap();
+    let id = fixture::track_id(1);
+
+    // The front end edits through its own core, as the window's commands do.
+    let (_, change) = front
+        .core
+        .edit(
+            &NoHost,
+            History::Outside,
+            Touched::Metadata(vec![id.clone()]),
+            |writer| writer.set_rating(&id, 2),
+        )
+        .unwrap();
+
+    assert_eq!(
+        client
+            .next_event(Duration::from_secs(5))
+            .unwrap()
+            .unwrap()
+            .data,
+        json!({ "kind": "library", "generation": change.generation })
+    );
+    assert!(events.recv_timeout(Duration::from_millis(200)).is_err());
+
+    // A client's change is sent to clients once, and to the front end.
+    let rated = client.rate_track(&id, 4).unwrap();
+    assert_eq!(
+        client
+            .next_event(Duration::from_secs(5))
+            .unwrap()
+            .unwrap()
+            .data,
+        json!({ "kind": "library", "generation": rated.generation })
+    );
+    assert_eq!(client.next_event(Duration::from_millis(200)).unwrap(), None);
+    assert_eq!(
+        events.recv_timeout(Duration::from_secs(5)).unwrap().data,
+        json!({ "kind": "library", "generation": rated.generation })
+    );
 }

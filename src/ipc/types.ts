@@ -365,6 +365,14 @@ export interface Backend {
    * up before the window has subscribed.
    */
   libraryProblem(): Promise<LibraryProblem | null>;
+  /**
+   * The window can no longer change the Library: the Library service it
+   * hosts has stopped, or another window has the Library. The message is
+   * for the DJ.
+   */
+  onServiceStopped(listener: (message: string) => void): () => void;
+  /** What `onServiceStopped` said, for a window that was not listening yet. */
+  serviceProblem(): Promise<string | null>;
 
   /**
    * Makes a new, empty library where rekordbox keeps one and loads it;

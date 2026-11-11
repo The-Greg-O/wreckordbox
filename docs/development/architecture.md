@@ -77,6 +77,25 @@ with a new generation, and the interface drops the pages it has cached.
 Tag List edits emit `tag-list:changed` and keep the generation. The same path
 serves edits made from a CDJ over LINK (`src-tauri/src/link.rs`).
 
+### The window and the Library service
+
+While the window is open it hosts the Library service
+([`wreckordbox-service`](../../crates/wreckordbox-service/README.md)) in its
+own process, on the same `LibraryCore` that `AppState` holds
+(`src-tauri/src/service_host.rs`). The `wreckordbox` command therefore works
+on the window's Library: its edits take the edit path above, and the window
+forwards the change to the interface as `library:changed` or
+`tag-list:changed`, exactly as for its own edits. The window's own changes
+reach the service's subscribed clients the same way. Before it reads the
+Library, the window takes the service's lock, asking a service that a command
+started by itself to stop, so there is one writer. If it cannot (another
+window has the Library) or its service stops, the core refuses every write
+and the interface is sent `service:stopped` with the reason.
+
+This is a transition: only the track query, the rating edit and the change
+event exist as service commands, and every other window command still calls
+the core in-process.
+
 ### Library edit sequence
 
 This is the ordinary UI edit path in `commands.rs`, `state.rs` and

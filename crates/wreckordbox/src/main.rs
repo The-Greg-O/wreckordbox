@@ -4,6 +4,7 @@
 //! when none is running. Results go to standard output, as text or with
 //! `--json` as JSON; errors go to standard error with a non-zero status.
 
+mod reading;
 mod tracks;
 
 use std::fmt::Write as _;
@@ -43,6 +44,21 @@ enum Commands {
     Tracks {
         #[command(subcommand)]
         command: TrackCommands,
+    },
+    /// Read the My Tag categories and tags, and which tracks carry them.
+    Mytags {
+        #[command(subcommand)]
+        command: reading::MyTagCommands,
+    },
+    /// Read the playlist tree and what is in a playlist.
+    Playlists {
+        #[command(subcommand)]
+        command: reading::PlaylistCommands,
+    },
+    /// Read play history: what was played on which occasion, in order.
+    History {
+        #[command(subcommand)]
+        command: reading::HistoryCommands,
     },
     /// Run the Library service in the foreground until interrupted.
     ///
@@ -148,6 +164,27 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
             } else {
                 print(&rated_text(&rated));
             }
+        }
+        Commands::Mytags { command } => {
+            print(&reading::my_tags(
+                &mut connect(&config)?,
+                cli.json,
+                command,
+            )?);
+        }
+        Commands::Playlists { command } => {
+            print(&reading::playlists(
+                &mut connect(&config)?,
+                cli.json,
+                command,
+            )?);
+        }
+        Commands::History { command } => {
+            print(&reading::history(
+                &mut connect(&config)?,
+                cli.json,
+                command,
+            )?);
         }
         Commands::Tracks {
             command: TrackCommands::Show(args),

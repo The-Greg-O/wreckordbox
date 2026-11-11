@@ -10,6 +10,8 @@
 //! opens an [`rbl_db::write::Writer`], which refuses while rekordbox is
 //! running and, under `RBXPORT_TEST`, for a detected real Library.
 
+pub mod read;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -197,7 +199,14 @@ pub struct LibraryCore {
     /// Stable local home for recovery journals.
     recovery_dir: PathBuf,
     inner: RwLock<Inner>,
+    /// Who is told of every change, whoever made it. See [`Self::watch`].
+    watchers: parking_lot::Mutex<Vec<Watcher>>,
+    /// Why nothing may be written through this core, when its holder has
+    /// said so. See [`Self::refuse_writes`].
+    refusal: parking_lot::Mutex<Option<String>>,
 }
+
+type Watcher = Box<dyn FnMut(Change) -> bool + Send>;
 
 impl LibraryCore {
     /// A core with no Library loaded yet, keeping its recovery journals
@@ -209,7 +218,38 @@ impl LibraryCore {
             analysis_write: parking_lot::Mutex::new(()),
             recovery_dir: recovery_dir.into(),
             inner: RwLock::new(Inner { next_view_id: 1, generation: 1, ..Inner::default() }),
+            watchers: parking_lot::Mutex::new(Vec::new()),
+            refusal: parking_lot::Mutex::new(None),
         }
+    }
+
+    /// Tells `watcher` of every change from now on, in the order they
+    /// happen, until it answers `false`: an edit, a reload, anything that
+    /// moves the generation or the Tag List, whoever made it. This is how a
+    /// service sharing the core with a window tells its clients what the
+    /// window did.
+    ///
+    /// The watcher runs while the core's lock is held. It must not read the
+    /// core, block, or do anything slow: hand the change to a channel.
+    pub fn watch(&self, watcher: impl FnMut(Change) -> bool + Send + 'static) {
+        self.watchers.lock().push(Box::new(watcher));
+    }
+
+    /// Call with the core's lock held, so watchers hear changes in order.
+    fn tell_watchers(&self, kind: ChangeKind, generation: u32) {
+        self.watchers.lock().retain_mut(|watcher| watcher(Change { kind, generation }));
+    }
+
+    /// Refuses every write through this core with `reason`, or allows them
+    /// again with `None`. For a holder that has found it is not the
+    /// Library's one writer: another process has the Library's service.
+    pub fn refuse_writes(&self, reason: Option<String>) {
+        *self.refusal.lock() = reason;
+    }
+
+    /// Why writes are refused, when the holder has refused them.
+    pub fn write_refusal(&self) -> Option<String> {
+        self.refusal.lock().clone()
     }
 
     /// The gate every edit holds.
@@ -293,6 +333,9 @@ impl LibraryCore {
         let started = std::time::Instant::now();
         let location = self.location().map_err(|e| rbl_db::DbError::NotInstalled(e.to_string()))?;
         let _gate = self.edit_gate.lock();
+        if let Some(reason) = self.write_refusal() {
+            return Err(rbl_db::DbError::WriteRefused(reason));
+        }
         if rbl_backup::journal::pending(&self.recovery_dir) {
             return Err(rbl_db::DbError::WriteRefused("A library restore is unfinished. Restart the app to recover it before editing.".into()));
         }
@@ -410,6 +453,7 @@ impl LibraryCore {
         inner.view_order.clear();
         inner.generation = inner.generation.wrapping_add(1).max(1);
         host.library_replaced(another);
+        self.tell_watchers(ChangeKind::Library, inner.generation);
     }
 
     /// Drops every open view and bumps the generation.
@@ -423,6 +467,7 @@ impl LibraryCore {
         inner.folders.clear();
         inner.view_order.clear();
         inner.generation = inner.generation.wrapping_add(1).max(1);
+        self.tell_watchers(ChangeKind::Library, inner.generation);
         inner.generation
     }
 
@@ -435,6 +480,7 @@ impl LibraryCore {
         let Inner { views, folders, view_order, generation, .. } = &mut *inner;
         views.retain(|_, open| !open.tag_list);
         view_order.retain(|id| views.contains_key(id) || folders.contains_key(id));
+        self.tell_watchers(ChangeKind::TagList, *generation);
         *generation
     }
 
@@ -452,6 +498,7 @@ impl LibraryCore {
         inner.folders.clear();
         inner.view_order.clear();
         inner.generation = inner.generation.wrapping_add(1).max(1);
+        self.tell_watchers(ChangeKind::Library, inner.generation);
         Ok(inner.generation)
     }
 

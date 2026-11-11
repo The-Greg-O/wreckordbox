@@ -9,7 +9,10 @@
 fn the_recovery_folder_defaults_to_wreckordboxs_backup_state() {
     let data = std::path::Path::new("/nonexistent/wreckordbox-identity-test/data");
     std::env::set_var("XDG_DATA_HOME", data);
-    std::env::set_var(wreckordbox_service::RUNTIME_DIR_ENV, "/nonexistent/wreckordbox-identity-test/run");
+    std::env::set_var(
+        wreckordbox_service::RUNTIME_DIR_ENV,
+        "/nonexistent/wreckordbox-identity-test/run",
+    );
     std::env::remove_var(rbl_backup::STATE_DIR_ENV);
 
     let config = wreckordbox_service::Config::from_env().unwrap();
