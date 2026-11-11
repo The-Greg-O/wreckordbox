@@ -29,6 +29,9 @@ pub(crate) struct OpenLibrary {
     /// the window's when the window hosts the service, so an edit from
     /// either is the same edit under one generation.
     core: Arc<LibraryCore>,
+    /// A read-only connection a service by itself keeps open; every write
+    /// opens its own inside the core and closes it again.
+    db: Option<rbl_db::Library>,
     /// What the core borrows for an edit: nothing for a service by itself,
     /// the window's recovery and edit history when the window hosts.
     host: Arc<dyn Host + Send + Sync>,
@@ -58,6 +61,7 @@ impl OpenLibrary {
         );
         Ok(Self {
             core: Arc::new(core),
+            db: Some(db),
             host: Arc::new(NoHost),
         })
     }
@@ -65,7 +69,11 @@ impl OpenLibrary {
     /// The Library a front end already has open, served as it stands: the
     /// front end loads it, and reloads it, through the same core.
     pub(crate) fn shared(core: Arc<LibraryCore>, host: Arc<dyn Host + Send + Sync>) -> Self {
-        Self { core, host }
+        Self {
+            core,
+            db: None,
+            host,
+        }
     }
 
     /// The Library core, for the service to watch for changes.
@@ -78,7 +86,22 @@ impl OpenLibrary {
         Ok(u32::try_from(self.index()?.len()).unwrap_or(u32::MAX))
     }
 
-    fn index(&self) -> Result<Arc<rbl_index::Library>, ServiceError> {
+    /// Runs `read` on a read-only connection, for what the index does not
+    /// hold. A service by itself keeps one open; a service the window hosts
+    /// opens one for the read, as the window may replace the file under it
+    /// (a restore).
+    pub(crate) fn with_db<T>(
+        &self,
+        read: impl FnOnce(&rbl_db::Library) -> Result<T, ServiceError>,
+    ) -> Result<T, ServiceError> {
+        match &self.db {
+            Some(db) => read(db),
+            None => read(&self.core.open_read_only().map_err(|e| open_error(&e))?),
+        }
+    }
+
+    /// The index as it stands now: a snapshot an edit does not change.
+    pub(crate) fn index(&self) -> Result<Arc<rbl_index::Library>, ServiceError> {
         self.core
             .library()
             .map_err(|e| ServiceError::new(codes::LIBRARY_LOADING, e.to_string()))
@@ -176,7 +199,7 @@ impl From<rbl_library::Change> for LibraryChanged {
     }
 }
 
-fn track(index: &rbl_index::Library, row: rbl_index::Row) -> Track {
+pub(crate) fn track(index: &rbl_index::Library, row: rbl_index::Row) -> Track {
     let at = row as usize;
     let bpm_x100 = index.bpm_x100.get(at).copied().unwrap_or(0);
     Track {

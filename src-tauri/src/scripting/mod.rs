@@ -96,7 +96,7 @@ impl ScriptError {
         Self { code: Self::MISSING_PARAMETER, message: message.into() }
     }
     fn not_ready() -> Self {
-        Self::failed("rbxport's window is still starting. Try again in a moment.")
+        Self::failed("wreckordbox's window is still starting. Try again in a moment.")
     }
 }
 
@@ -158,7 +158,7 @@ impl Bridge {
             Ok(Err(message)) => Err(ScriptError::failed(message)),
             Err(_) => {
                 tracing::warn!(action, "the window did not answer a script request");
-                Err(ScriptError::failed("rbxport's window did not answer."))
+                Err(ScriptError::failed("wreckordbox's window did not answer."))
             }
         }
     }

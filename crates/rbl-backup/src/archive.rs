@@ -17,7 +17,7 @@ pub type Archive = ZipArchive<fs::File>;
 pub fn open(path: &Path) -> Result<Archive> {
     let meta = fs::symlink_metadata(path)?;
     if !meta.is_file() {
-        return Err(refused("Choose an RBXport backup ZIP file."));
+        return Err(refused("Choose a wreckordbox backup ZIP file."));
     }
     ZipArchive::new(fs::File::open(path)?).map_err(|_| refused("This file is not a readable ZIP archive."))
 }

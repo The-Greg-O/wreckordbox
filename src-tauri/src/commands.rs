@@ -92,7 +92,7 @@ pub fn disable_read_only() -> AppResult<()> {
         Ok(())
     } else {
         Err(AppError::internal(format!(
-            "Set {} before launching rbxport to enable this override.",
+            "Set {} before launching wreckordbox to enable this override.",
             rbl_db::UNSAFE_WRITES_ENV
         )))
     }
@@ -172,17 +172,6 @@ impl ListStyle {
         Self { folder: "history", leaf: "history", smart: "history", calendar: true };
 }
 
-/// A month folder's name as rekordbox shows it: `djmdHistory` stores the
-/// month as its number.
-fn month_name(number: &str) -> Option<&'static str> {
-    const MONTHS: [&str; 12] = [
-        "January", "February", "March", "April", "May", "June",
-        "July", "August", "September", "October", "November", "December",
-    ];
-    let month = number.parse::<usize>().ok()?;
-    MONTHS.get(month.checked_sub(1)?).copied()
-}
-
 /// Flattens one list tree onto `nodes`, depth-first, in `Seq` order — or, for
 /// a calendar, with the year and month folders in date order.
 ///
@@ -194,61 +183,13 @@ fn push_lists(
     style: ListStyle,
     open_to: u32,
 ) {
-    let mut children: Vec<Vec<usize>> = vec![Vec::new(); lists.len()];
-    let mut roots: Vec<usize> = Vec::new();
-    for index in 0..lists.len() {
-        match lists.parent.get(index).copied() {
-            Some(parent) if parent != rbl_index::NO_ID && (parent as usize) < lists.len() => {
-                if let Some(bucket) = children.get_mut(parent as usize) {
-                    bucket.push(index);
-                }
-            }
-            _ => roots.push(index),
-        }
-    }
-    if style.calendar {
-        // A year is "2026" and a month "9": the number is the date. A folder
-        // named anything else sorts after the dated ones, in `Seq` order.
-        let by_date = |index: &usize| -> (u64, u32) {
-            if lists.is_folder(*index) {
-                (lists.name(*index).parse::<u64>().unwrap_or(u64::MAX), 0)
-            } else {
-                (u64::MAX, lists.seq.get(*index).copied().unwrap_or(u32::MAX))
-            }
-        };
-        roots.sort_by_key(by_date);
-        for bucket in &mut children {
-            bucket.sort_by_key(by_date);
-        }
-    }
-
-    // Iterative, with a visited set: a corrupt parent cycle must not recurse
-    // forever or blow the stack.
-    let mut stack: Vec<(usize, u32)> = roots.iter().rev().map(|&i| (i, 1_u32)).collect();
-    let mut visited = vec![false; lists.len()];
-    while let Some((index, depth)) = stack.pop() {
-        if visited.get(index).copied().unwrap_or(true) {
-            continue;
-        }
-        if let Some(slot) = visited.get_mut(index) {
-            *slot = true;
-        }
-        let under = children.get(index).map_or(0, Vec::len);
-        let members = lists.members.get(index).map_or(0, Vec::len);
-        // A folder by its attribute, or by what is under it: a history year
-        // is a folder only in the second sense, an empty playlist folder only
-        // in the first.
-        let folder = lists.is_folder(index) || under > 0;
-        let name = lists.name(index);
-        // Depth 2 under the section's heading is the month, filed in a year.
-        let name = match (style.calendar && folder && depth == 2, month_name(name)) {
-            (true, Some(month)) => month.to_owned(),
-            _ => name.to_owned(),
-        };
-        let smart = !folder && lists.is_smart(index);
+    // The walk itself is the Library core's, which the Library service
+    // reads the same trees with.
+    for entry in rbl_library::read::list_tree(lists, style.calendar) {
+        let (index, depth, folder, smart) = (entry.index, entry.depth, entry.folder, entry.smart);
         nodes.push(TreeNodeDto {
             id: lists.ids.get(index).copied().unwrap_or(0).to_string(),
-            name,
+            name: entry.name,
             kind: if folder {
                 style.folder
             } else if smart {
@@ -264,14 +205,9 @@ fn push_lists(
             child_count: if smart {
                 None
             } else {
-                Some(u32::try_from(if folder { under } else { members }).unwrap_or(u32::MAX))
+                Some(u32::try_from(if folder { entry.children } else { entry.members }).unwrap_or(u32::MAX))
             },
         });
-        if let Some(below) = children.get(index) {
-            for &child in below.iter().rev() {
-                stack.push((child, depth + 1));
-            }
-        }
     }
 }
 

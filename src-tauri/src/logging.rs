@@ -29,17 +29,17 @@ use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
-/// Where the log files go: `<data dir>/rbxport/logs`, beside the backups,
+/// Where the log files go: `<data dir>/wreckordbox/logs`, beside the backups,
 /// unless `RBXPORT_LOG_DIR` names somewhere else.
-const LOG_DIR: &str = "rbxport/logs";
+const LOG_DIR: &str = "wreckordbox/logs";
 /// Names the log directory, for a test or a support case.
 pub const LOG_DIR_ENV: &str = "RBXPORT_LOG_DIR";
 /// Daily files older than the newest this many are removed.
 const KEEP_FILES: usize = 5;
 
 /// The crates the level applies to: ours, and nothing pulled in.
-const OUR_CRATES: [&str; 18] = [
-    "rbxport", "rbxport_lib", "rbl_core", "rbl_db", "rbl_index", "rbl_anlz", "rbl_analysis", "rbl_audio", "rbl_deck",
+const OUR_CRATES: [&str; 21] = [
+    "wreckordbox", "wreckordbox_desktop", "wreckordbox_service", "rbxport", "rbxport_lib", "rbl_core", "rbl_db", "rbl_index", "rbl_anlz", "rbl_analysis", "rbl_audio", "rbl_deck",
     "rbl_prolink", "rbl_link", "rbl_dbserver", "rbl_nfs", "rbl_export", "rbl_devices", "rbl_pdb",
     "rbl_onelibrary", "rbl_difftool",
 ];
@@ -254,7 +254,7 @@ fn latest_log_file_in(dir: &Path) -> std::io::Result<Option<PathBuf>> {
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
-        if !name.starts_with("rbxport.") || Path::new(&name).extension().is_none_or(|ext| ext != "log") {
+        if !name.starts_with("wreckordbox.") || Path::new(&name).extension().is_none_or(|ext| ext != "log") {
             continue;
         }
         if newest.as_ref().is_none_or(|(current, _)| name > *current) {
@@ -278,7 +278,7 @@ pub fn install() {
     let file = match std::fs::create_dir_all(&dir).and_then(|()| {
         tracing_appender::rolling::Builder::new()
             .rotation(tracing_appender::rolling::Rotation::DAILY)
-            .filename_prefix("rbxport")
+            .filename_prefix("wreckordbox")
             .filename_suffix("log")
             .max_log_files(KEEP_FILES)
             .build(&dir)
@@ -288,12 +288,12 @@ pub fn install() {
             let (writer, guard) = tracing_appender::non_blocking(appender);
             // Set once per process; a second install (a test's) keeps the first.
             if FILE_GUARD.set(guard).is_err() {
-                eprintln!("rbxport: the logger was installed twice");
+                eprintln!("wreckordbox: the logger was installed twice");
             }
             Some(tracing_subscriber::fmt::layer().with_writer(writer).with_ansi(false))
         }
         Err(error) => {
-            eprintln!("rbxport: no log file under {}: {error}", dir.display());
+            eprintln!("wreckordbox: no log file under {}: {error}", dir.display());
             None
         }
     };
@@ -378,19 +378,19 @@ mod tests {
     fn latest_log_is_the_newest_daily_file() {
         let dir = tempfile::tempdir().expect("temporary log directory");
         for name in [
-            "rbxport.2026-09-22.log",
-            "rbxport.2026-09-24.log",
-            "rbxport.2026-09-23.log",
+            "wreckordbox.2026-09-22.log",
+            "wreckordbox.2026-09-24.log",
+            "wreckordbox.2026-09-23.log",
             "notes.log",
         ] {
             std::fs::write(dir.path().join(name), name).expect("test log");
         }
-        std::fs::create_dir(dir.path().join("rbxport.2099-01-01.log"))
+        std::fs::create_dir(dir.path().join("wreckordbox.2099-01-01.log"))
             .expect("lookalike directory");
 
         assert_eq!(
             latest_log_file_in(dir.path()).expect("scan logs"),
-            Some(dir.path().join("rbxport.2026-09-24.log")),
+            Some(dir.path().join("wreckordbox.2026-09-24.log")),
         );
     }
 }

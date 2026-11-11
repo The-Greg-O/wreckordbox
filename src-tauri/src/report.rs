@@ -55,7 +55,7 @@ pub async fn report_attachment(player: State<'_, std::sync::Arc<crate::player::P
 fn log_file(dir: &std::path::Path) -> AppResult<String> {
     let mut paths: Vec<_> = match std::fs::read_dir(dir) {
         Ok(entries) => entries.filter_map(Result::ok).map(|entry| entry.path())
-            .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("rbxport")) && p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("log"))).collect(),
+            .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("wreckordbox")) && p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("log"))).collect(),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok("No application log available.\n".into()),
         Err(e) => return Err(AppError::internal(format!("The log directory could not be read: {e}"))),
     };
@@ -77,7 +77,7 @@ mod tests {
             "email=dj@example.com path=/Users/dj/Music title=Unreleased Track custom-field=visible\n{}\nend of log\n",
             "x".repeat(1_048_576),
         );
-        std::fs::write(directory.path().join("rbxport.2026-10-06.log"), &log)
+        std::fs::write(directory.path().join("wreckordbox.2026-10-06.log"), &log)
             .expect("write report log");
 
         assert_eq!(log_file(directory.path()).expect("read report log"), log);

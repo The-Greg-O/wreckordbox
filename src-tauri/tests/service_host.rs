@@ -174,6 +174,9 @@ fn the_command_works_on_the_open_windows_library() {
 
     assert_eq!(status["pid"], std::process::id(), "the window's own process answers");
     assert_eq!(status["library"]["tracks"], 5);
+    // A read the index does not answer by itself (the My Tag catalogue is
+    // read from the database) is served too.
+    assert!(window.cli(&["--json", "mytags", "list"]).ok);
 }
 
 #[test]

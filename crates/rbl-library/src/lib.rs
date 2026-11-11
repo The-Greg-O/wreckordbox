@@ -10,6 +10,8 @@
 //! opens an [`rbl_db::write::Writer`], which refuses while rekordbox is
 //! running and, under `RBXPORT_TEST`, for a detected real Library.
 
+pub mod read;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

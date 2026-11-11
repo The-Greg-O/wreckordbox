@@ -203,8 +203,8 @@ export function ViewPane({ tab, onResetColumns, onResetLayout }: ViewPaneProps) 
           <Button onClick={() => { void resetPlayedTracks(t); }}>RESET</Button>
         </div>
       </Section>
-      <Section title="RBXport VU Meter">
-        <Radios label="RBXport VU Meter" value={view.vuMeter}
+      <Section title="Wreckordbox VU Meter">
+        <Radios label="Wreckordbox VU Meter" value={view.vuMeter}
           choices={[{ value: "normal", label: "Normal (shows signal peaks, like rekordbox)" }, { value: "fabulous", label: "Advanced (peak + RMS, inspired by FabFilter Pro-L 2)" }]}
           onChange={(vuMeter) => set({ vuMeter })} />
       </Section>

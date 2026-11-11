@@ -15,12 +15,10 @@ use crate::state::{AppState, LibraryEdit};
 /// A versioned JSON catalog keeps category identity intact even when names
 /// overlap. IDs belong to this library; a missing DBID is not a global ID.
 pub fn catalog_json(library_id: u64, rows: &[rbl_db::export_info::MyTagRow]) -> String {
-    let categories: Vec<_> = rows.iter().filter(|row| row.attribute == 1).collect();
-    // Tags grouped by their category's place, each category's in `Seq`
-    // order (the rows come in `Seq` order and the sort is stable), as
-    // rekordbox lists them; tags of no live category last.
-    let mut tags: Vec<_> = rows.iter().filter(|row| row.attribute == 0).collect();
-    tags.sort_by_key(|tag| categories.iter().position(|category| category.id == tag.parent).unwrap_or(usize::MAX));
+    // The grouping is the Library core's, which the Library service lists
+    // the same catalogue with: tags by their category's place, each
+    // category's in `Seq` order, tags of no live category last.
+    let rbl_library::read::MyTagCatalogue { categories, tags } = rbl_library::read::my_tag_catalogue(rows);
     let categories: Vec<_> = categories.into_iter()
         .map(|row| json!({ "id": row.id, "name": row.name })).collect();
     let tags: Vec<_> = tags.into_iter()

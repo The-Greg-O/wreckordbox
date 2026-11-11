@@ -167,11 +167,11 @@ export function relocateSteps(backend: Backend, t: Translate): RelocateSteps {
     relocate: (track, path) => backend.relocateTrack(track.id, path),
     alreadyInCollection: () => backend.tell(t("This file is already in the collection."), manager()),
     askFindOthers: (title) => backend.confirm(
-      `${t("Would you like RBXport to find other missing file using the location of this track ?")}\n${title}`,
+      `${t("Would you like wreckordbox to find other missing file using the location of this track ?")}\n${title}`,
       { yes: t("Yes"), no: t("No"), title: manager() },
     ),
     findOthers: (ids, from, to) => backend.relocateByLocation(ids, from, to),
-    found: (count) => backend.tell(t("RBXport found {count} files.", { count }), manager()),
+    found: (count) => backend.tell(t("Wreckordbox found {count} files.", { count }), manager()),
   };
 }
 

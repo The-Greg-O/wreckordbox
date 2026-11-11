@@ -2120,7 +2120,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
             dbVersion: null,
           })
         : notReady(),
-    disableReadOnly: () => Promise.reject(new Error("Set RBX_DISABLE_READ_ONLY before launching rbxport to enable this override.")),
+    disableReadOnly: () => Promise.reject(new Error("Set RBX_DISABLE_READ_ONLY before launching wreckordbox to enable this override.")),
     rememberScreenAssets: () => Promise.resolve(),
 
     // A copy, like the real backend: handing out the internal array lets a
@@ -2934,7 +2934,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     openLogFolder: () => Promise.reject(new Error("Opening the log folder requires the desktop app.")),
     saveLogText: () => wait(null),
     logStatusMessage: (failed, text) => {
-      mockLogLine(failed ? "warn" : "info", "rbxport::status", text);
+      mockLogLine(failed ? "warn" : "info", "wreckordbox::status", text);
       return wait(undefined);
     },
     appDiagnostics: () =>

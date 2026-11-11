@@ -26,11 +26,11 @@ SHARE_DIR="$DB_DIR/share"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 ROLLBACK="$DB_DIR/.rbxport-before-restore-$STAMP-$$"
 
-echo "RBXport standalone rekordbox restore"
+echo "wreckordbox standalone rekordbox restore"
 echo "Backup folder: $SCRIPT_DIR"
 echo "Checking the extracted backup contents…"
 if [[ ! -f "$SCRIPT_DIR/master.db" || ! -d "$SCRIPT_DIR/analysis" || ! -d "$SCRIPT_DIR/artwork" ]]; then
-  echo "This script must be run from an extracted RBXport backup." >&2
+  echo "This script must be run from an extracted wreckordbox backup." >&2
   exit 1
 fi
 echo "Backup contents found."
@@ -131,13 +131,13 @@ $ShareDir = Join-Path $DbDir 'share'
 $Stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $Rollback = Join-Path $DbDir ".rbxport-before-restore-$Stamp-$PID"
 
-Write-Host 'RBXport standalone rekordbox restore'
+Write-Host 'wreckordbox standalone rekordbox restore'
 Write-Host "Backup folder: $SourceDir"
 Write-Host 'Checking the extracted backup contents…'
 if (!(Test-Path -LiteralPath (Join-Path $SourceDir 'master.db') -PathType Leaf) -or
     !(Test-Path -LiteralPath (Join-Path $SourceDir 'analysis') -PathType Container) -or
     !(Test-Path -LiteralPath (Join-Path $SourceDir 'artwork') -PathType Container)) {{
-  throw 'This script must be run from an extracted RBXport backup.'
+  throw 'This script must be run from an extracted wreckordbox backup.'
 }}
 Write-Host 'Backup contents found.'
 Write-Host 'Checking whether rekordbox is running…'
