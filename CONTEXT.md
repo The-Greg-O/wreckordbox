@@ -78,6 +78,14 @@ _Avoid_: AZ stems, stem files
 A Stem exported to a Stick as an ordinary track, for players that cannot play Native stems.
 _Avoid_: Acapella track, detached stem
 
+**Recipe**:
+The DJ's written criteria for a journey through a set: how Intensity should move, how far tempo and key may shift, which Situations belong where, how much to favour recent additions. A plain-text file the DJ versions and refines.
+_Avoid_: Rules, template, preset
+
+**Set plan**:
+An ordered choice of tracks built from a Recipe, held in the Sidecar with the reason for each transition and a suggested place to mix. It reaches the Library and a Stick as an ordinary playlist.
+_Avoid_: Setlist, set, generated playlist
+
 **Round-trip**:
 Bringing cues, ratings and play history changed on a Stick at a gig back into the Library.
 _Avoid_: Sync back, import (import means adding audio files to the Library)
