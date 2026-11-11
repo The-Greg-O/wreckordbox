@@ -30,6 +30,14 @@ The property of a Stick that rekordbox on any machine can open it and show its t
 The DJ's own 1 to 5 judgement of how intense a track is, stored as the track's star rating. It is not a quality score.
 _Avoid_: Rating, stars (when the meaning is intended)
 
+**Track Filter**:
+The filter on the player itself, which narrows a list by MyTag, Energy, Prep colour, tempo and key while the DJ is playing. It reads only native rekordbox fields on the Stick.
+_Avoid_: Smart filter, deck filter
+
+**Tag schema**:
+The DJ's written vocabulary for describing tracks: a genre tree in which a child implies its parent, any number of other dimensions, and which of them appear as the four MyTag categories. A plain-text file the DJ versions and refines.
+_Avoid_: Taxonomy, tag config, MyTag layout
+
 **Intensity**:
 A measured, continuous Fact about how hard a track hits, including how it rises and falls over the track's length. Calibrated against Energy, which remains the DJ's own judgement.
 _Avoid_: Energy level, energy curve, loudness
