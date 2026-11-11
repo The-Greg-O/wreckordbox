@@ -238,7 +238,7 @@ async fn edit_cues<R: tauri::Runtime>(
         let state = writing;
         // Held from the write until the entry is recorded, so no Undo runs
         // in between and finds rows the history does not know of yet.
-        let _gate = state.edit_gate.lock();
+        let _gate = state.edit_gate().lock();
         // `apply` answers with the interface's error; the writer's own
         // refusals are carried out of the closure and mapped the same way.
         // The history-owning write: this edit records itself, so it is not
@@ -413,7 +413,7 @@ pub async fn convert_memory_cues_to_hot<R: tauri::Runtime>(
     if let Some(revision) = revision.filter(|revision| !revision.is_empty()) {
         let writing = Arc::clone(&state);
         blocking("convert_memory_cues_to_hot", move || {
-            let _gate = writing.edit_gate.lock();
+            let _gate = writing.edit_gate().lock();
             writing.edit_history.lock().record(LibraryEdit::Cues(revision), "Convert Memory Cues to Hot Cues");
             Ok(())
         })

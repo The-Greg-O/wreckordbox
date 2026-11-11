@@ -519,7 +519,7 @@ fn apply_options(editor: &GridEditor, library: &Library, location: &rbl_db::Libr
 /// (#505; rekordbox's `djplay::BeatGridAdjustment::ApplyNewBpm` is undoable
 /// too, 7.2.19 symbols).
 pub(crate) fn set_tempo(state: &AppState, editor: &GridEditor, track: &str, value: &str) -> AppResult<()> {
-    let _edit_guard = state.edit_gate.lock();
+    let _edit_guard = state.edit_gate().lock();
     set_tempo_inner(state, editor, track, value)
 }
 
@@ -530,7 +530,7 @@ fn set_tempo_inner(state: &AppState, editor: &GridEditor, track: &str, value: &s
     }
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "validated 40..=499 above")]
     let bpm_x100 = (bpm * 100.0).round() as u16;
-    let _files = state.analysis_write.lock();
+    let _files = state.analysis_write().lock();
     let location = state.location()?;
     if let Some(reason) = rbl_db::write_refusal_reason(location.is_real_install,
         rbl_db::test_mode(), rbl_db::is_rekordbox_running()) {
@@ -591,8 +591,8 @@ async fn run<R: tauri::Runtime>(
         let state = Arc::clone(&state);
         let track = track.clone();
         blocking(name, move || {
-            let _edit_guard = state.edit_gate.lock();
-            let _files_guard = state.analysis_write.lock();
+            let _edit_guard = state.edit_gate().lock();
+            let _files_guard = state.analysis_write().lock();
             let mut set_bpm = |bpm_x100: u32| {
                 let track = track.clone();
                 state.write(|writer| writer.save_grid_revision(&track, bpm_x100)).map_err(write_error)
@@ -708,7 +708,7 @@ pub async fn grid_lock<R: tauri::Runtime>(
     let state = Arc::clone(&state);
     let changed = track.clone();
     let result = blocking("grid_lock", move || {
-        let _gate = state.edit_gate.lock();
+        let _gate = state.edit_gate().lock();
         state.write(|writer| writer.set_analysis_lock(&track, on)).map_err(write_error)?;
         editor.set_locked(&track, false)?;
         let mut result = state_with(&editor, &library, &location.share_root, &track, registered.as_deref())?;
@@ -874,7 +874,7 @@ mod tests {
     /// app's writer, not the fixture's recorder.
     fn through_writer(f: &Fixture, state: &AppState, action: GridAction) -> AppResult<GridOutcome> {
         // Held as `run` holds it, so the writer leaves this journal alone.
-        let _files = state.analysis_write.lock();
+        let _files = state.analysis_write().lock();
         let mut set_bpm = |bpm: u32| state.write(|w| w.save_grid_revision(&Fixture::track(), bpm)).map_err(write_error);
         apply(&f.editor, &f.library, &f.location, &Fixture::track(), action, &mut set_bpm)
     }

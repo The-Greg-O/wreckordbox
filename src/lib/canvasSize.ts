@@ -10,13 +10,29 @@
  * - the device pixel ratio is capped, because past 2× the extra samples are
  *   not visible in a 14-pixel-high waveform and the buffer grows with the
  *   square of the ratio.
+ *
+ * The ratio is the display's times the whole-interface scale
+ * (`pixelRatio.ts`), and the limits move with that scale: at 1.25 on a 2×
+ * display the element covers 2.5 device pixels per CSS pixel, and at 0.8 on
+ * a 1× display it covers 0.8, so the store is neither stretched nor squeezed
+ * onto the element at any scale.
  */
+import { pixelRatio, pixelZoom } from "./pixelRatio";
 
 /** Reallocate in steps this wide rather than on every pixel of a drag. */
 export const STEP = 16;
 
-/** Beyond this the extra resolution is not visible in a waveform strip. */
+/**
+ * Beyond this the extra resolution is not visible in a waveform strip. The
+ * display's ratio: the whole-interface scale multiplies it.
+ */
 export const MAX_RATIO = 2;
+
+/** The ratio a store is built at: `ratio`, within what the window's zoom allows. */
+function storeScale(ratio: number): number {
+  const zoom = pixelZoom();
+  return Math.min(Math.max(finite(ratio, 1), Math.min(1, zoom)), MAX_RATIO * zoom);
+}
 
 /**
  * Guards against a runaway layout asking for a buffer megabytes wide.
@@ -38,11 +54,11 @@ export interface BackingSize {
 export function backingSize(
   cssWidth: number,
   cssHeight: number,
-  ratio: number = typeof window === "undefined" ? 1 : window.devicePixelRatio,
+  ratio: number = pixelRatio(),
 ): BackingSize {
   // `Math.max(NaN, 1)` is NaN, and a canvas given a NaN width silently keeps
   // its old buffer — so anything not a real number becomes the floor here.
-  const scale = Math.min(Math.max(finite(ratio, 1), 1), MAX_RATIO);
+  const scale = storeScale(ratio);
   const stepped = Math.ceil(Math.max(finite(cssWidth, 1), 1) / STEP) * STEP;
   return {
     width: Math.min(MAX_WIDTH, Math.max(STEP, Math.round(stepped * scale))),
@@ -62,9 +78,9 @@ export function backingSize(
 export function exactBackingSize(
   cssWidth: number,
   cssHeight: number,
-  ratio: number = typeof window === "undefined" ? 1 : window.devicePixelRatio,
+  ratio: number = pixelRatio(),
 ): BackingSize {
-  const scale = Math.min(Math.max(finite(ratio, 1), 1), MAX_RATIO);
+  const scale = storeScale(ratio);
   return {
     width: Math.min(MAX_WIDTH, Math.max(1, Math.round(Math.max(finite(cssWidth, 1), 1) * scale))),
     height: Math.max(1, Math.round(Math.max(finite(cssHeight, 1), 1) * scale)),

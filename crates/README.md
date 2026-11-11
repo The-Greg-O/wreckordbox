@@ -14,6 +14,7 @@ These crates are independent of Tauri; application coordination belongs in
 | [rbl-core](rbl-core/README.md) | Shared primitives and durable publication. |
 | [rbl-db](rbl-db/README.md) | Master library access, guarded writes, and fixtures. |
 | [rbl-index](rbl-index/README.md) | In-memory browsing, sorting, filtering, and searching. |
+| [rbl-library](rbl-library/README.md) | The Library core: loaded index, open views, and the single edit path. |
 | [rbl-anlz](rbl-anlz/README.md) | Analysis-file parsing and authoring. |
 | [rbl-audio](rbl-audio/README.md) | Audio decoding and export compatibility. |
 | [rbl-analysis](rbl-analysis/README.md) | Offline tempo, grid, key, and waveform DSP. |
@@ -28,6 +29,13 @@ These crates are independent of Tauri; application coordination belongs in
 | [rbl-export](rbl-export/README.md) | Export and synchronization orchestration. |
 | [rbl-pdb](rbl-pdb/README.md) | Legacy DeviceSQL binary database. |
 | [rbl-onelibrary](rbl-onelibrary/README.md) | Device Library Plus / OneLibrary database. |
+
+## Library service and command line
+
+| Crate | Responsibility |
+| --- | --- |
+| [wreckordbox-service](wreckordbox-service/README.md) | The Library service, its client and their protocol. |
+| [wreckordbox](wreckordbox/README.md) | The headless `wreckordbox` command. |
 
 ## Link Export and diagnostics
 

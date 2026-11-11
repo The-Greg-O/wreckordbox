@@ -83,7 +83,7 @@ import { MixerStrip } from "@/views/player/MixerStrip";
 import { DualZoom } from "@/views/player/DualDeck";
 import type { PreferencesTarget } from "@/views/settings/Preferences";
 import { PreferencesProvider, usePreferencesStore } from "@/store/usePreferences";
-import type { PreferencePane } from "@/lib/preferences";
+import { stepUiScale, type PreferencePane } from "@/lib/preferences";
 import { answer, deckNumber, setPlaying, whenLoaded, withSetting, type ScriptHandler } from "@/lib/scripting";
 import { continuesFrom, playedToEnd, skipRowIndex, type ListPosition } from "@/lib/continuousPlay";
 import { useAnalysis } from "@/store/useAnalysis";
@@ -103,6 +103,7 @@ import { nativeMenuLabels } from "@/lib/nativeMenu";
 /** The commands the shell itself registers, and so the keys it runs. */
 const SHELL_COMMANDS: ReadonlySet<Action> = new Set<Action>([
   "volumeUp", "volumeDown", "mute", "focusSearch", "clearSearch", "analyseSelection", "sortItems",
+  "uiScaleSmaller", "uiScaleLarger", "uiScaleReset",
 ]);
 
 /**
@@ -2522,6 +2523,8 @@ function AppBody() {
   // The keyboard: the shell's own shortcuts, and the menu accelerators the
   // webview keeps from the native menu on Windows.
   const keyOverrides = keyMap(prefs.preferences.keyboard);
+  const uiScaleStop = prefs.preferences.view.uiScale;
+  const updatePreferences = prefs.update;
   /** The level Mute took the master down from, while it is muted. */
   const mutedFrom = useRef<number | null>(null);
   // The shell's own commands (see `src/lib/commands.ts`): the keys below, the
@@ -2563,6 +2566,21 @@ function AppBody() {
     },
     analyseSelection: () => {
       analyseSelection();
+      return true;
+    },
+    // The whole-interface scale: a stop at a time, held key included. The
+    // stored stop is what every window draws at (`followUiScale`), so the
+    // command only has to store it. At either end the key is still ours.
+    uiScaleSmaller: () => {
+      updatePreferences("view", { uiScale: stepUiScale(uiScaleStop, "smaller") });
+      return true;
+    },
+    uiScaleLarger: () => {
+      updatePreferences("view", { uiScale: stepUiScale(uiScaleStop, "larger") });
+      return true;
+    },
+    uiScaleReset: () => {
+      updatePreferences("view", { uiScale: stepUiScale(uiScaleStop, "reset") });
       return true;
     },
   });

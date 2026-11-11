@@ -89,6 +89,7 @@ import type { HotCueColor } from "@/lib/preferences";
 import { hotCueColour } from "@/lib/hotCueColours";
 import { memoryCueMarkerColour } from "@/lib/memoryCueColours";
 import { formatKey, quantizeFraction } from "@/lib/preferences";
+import { pixelRatio } from "@/lib/pixelRatio";
 import { loadDeckQuantize, saveDeckQuantize } from "@/lib/deckQuantize";
 import {
   beatNudgeFor, beatWait, inPhaseAt, MAX_TEMPO, MIN_TEMPO, syncTo, tempoFor, type Deck as SyncDeck,
@@ -1153,7 +1154,9 @@ export const Player = memo(function Player({
     // Both heads in whole device pixels, at their width and their place: a
     // line straddling a pixel boundary is blended at partial colour into
     // the waveform under it, where rekordbox paints it solid (#393).
-    const ratio = globalThis.devicePixelRatio;
+    // The display's ratio times the whole-interface scale: the device pixels
+    // a CSS pixel really covers in this window.
+    const ratio = pixelRatio();
     const headWidth = `${playheadWidth(ratio)}px`;
     const x = (headPercent() / 100) * detail.width;
     if (detailHead.current) {
@@ -1180,7 +1183,7 @@ export const Player = memo(function Player({
       // Whole device pixels: a fractional slide resamples the layer, and the
       // one-pixel bars shimmer as the fraction changes frame to frame (#346).
       if (scroller.current) {
-        const dx = snapOffset(scrollOffset(at, drawn.current, span, detail.width), globalThis.devicePixelRatio);
+        const dx = snapOffset(scrollOffset(at, drawn.current, span, detail.width), pixelRatio());
         scroller.current.style.transform = `translateX(${dx}px)`;
       }
       if (needsRedraw(at, drawn.current, span)) setAnchor(at);
@@ -1210,7 +1213,7 @@ export const Player = memo(function Player({
     drawn.current = anchor;
     if (scroller.current) {
       const at = total > 0 ? Math.min(positionRef.current / total, 1) : 0;
-      const dx = snapOffset(scrollOffset(at, anchor, span, detail.width), globalThis.devicePixelRatio);
+      const dx = snapOffset(scrollOffset(at, anchor, span, detail.width), pixelRatio());
       scroller.current.style.transform = `translateX(${dx}px)`;
     }
   }, [anchor, span, total, detail.width, positionRef]);

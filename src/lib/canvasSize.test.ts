@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { backingSize, exactBackingSize, MAX_RATIO, MAX_WIDTH, STEP } from "./canvasSize";
+import { setPixelZoom } from "./pixelRatio";
 
 describe("backingSize", () => {
   it("follows the element rather than a fixed number", () => {
@@ -45,5 +46,28 @@ describe("exactBackingSize", () => {
     expect(exactBackingSize(100_000, 14, 2).width).toBe(MAX_WIDTH);
     expect(exactBackingSize(0, 0, 1)).toEqual({ width: 1, height: 1 });
     expect(exactBackingSize(Number.NaN, 14, Number.NaN).width).toBeGreaterThan(0);
+  });
+});
+
+describe("under the whole-interface scale", () => {
+  afterEach(() => setPixelZoom(1));
+
+  it("is the device pixels a scaled-up element covers, past 2x on a retina display", () => {
+    // 1.25 on a 2x display: 2.5 device pixels to the CSS pixel.
+    setPixelZoom(1.25);
+    expect(exactBackingSize(1000, 100, 2 * 1.25)).toEqual({ width: 2500, height: 250 });
+    expect(backingSize(400, 16, 2 * 1.25)).toEqual({ width: 1000, height: 40 });
+  });
+
+  it("is the device pixels a scaled-down element covers, below 1x", () => {
+    // 0.8 on a 1x display: a 1000pt strip is 800 device pixels wide.
+    setPixelZoom(0.8);
+    expect(exactBackingSize(1000, 100, 0.8)).toEqual({ width: 800, height: 80 });
+    expect(backingSize(400, 20, 0.8)).toEqual({ width: 320, height: 16 });
+  });
+
+  it("still stops at twice the display's pixels", () => {
+    setPixelZoom(1.5);
+    expect(exactBackingSize(1000, 100, 3 * 1.5)).toEqual(exactBackingSize(1000, 100, MAX_RATIO * 1.5));
   });
 });

@@ -90,6 +90,39 @@ export function browseListVars(
   };
 }
 
+/**
+ * The whole-interface scale's stops, as multiples of the measured size:
+ * every window is drawn this much smaller or larger, lists, decks and
+ * waveforms alike. The stored choice is a stop's index. Wreckordbox's own;
+ * rekordbox has no such setting. Browse › FontSize and Line Space scale the
+ * lists on top of it.
+ */
+export const UI_SCALES: readonly number[] = [0.6, 0.7, 0.8, 0.9, 1, 1.1, 1.25, 1.5];
+export const UI_SCALE_DEFAULT = 4;
+
+/** The multiple a stored stop stands for; anything that is not a stop is 1. */
+export function uiScale(step: number): number {
+  return UI_SCALES[step] ?? 1;
+}
+
+function isUiScaleStop(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value < UI_SCALES.length;
+}
+
+/** What the scale's three commands ask for. */
+export type UiScaleChange = "smaller" | "larger" | "reset";
+
+/**
+ * The stop one press of a scale command leads to: the next one down or up,
+ * staying on the smallest or the largest, or the measured size.
+ */
+export function stepUiScale(step: number, change: UiScaleChange): number {
+  if (change === "reset") return UI_SCALE_DEFAULT;
+  const from = isUiScaleStop(step) ? step : UI_SCALE_DEFAULT;
+  const to = from + (change === "larger" ? 1 : -1);
+  return Math.min(UI_SCALES.length - 1, Math.max(0, to));
+}
+
 export type VuMeterMode = "normal" | "fabulous";
 
 export const LOCALES = [
@@ -114,6 +147,8 @@ export interface ViewPreferences {
   browseBold: boolean;
   /** Browse › Line Space, as a slider stop 0 to 4. */
   browseLineSpace: number;
+  /** The whole-interface scale, as an index into `UI_SCALES`. */
+  uiScale: number;
   /** Key display format: `Ebm` or `2A`. */
   keyDisplay: KeyDisplay;
   /** How the browser's Key column is ordered. */
@@ -373,6 +408,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
     browseFontSize: BROWSE_SCALE_DEFAULT,
     browseBold: false,
     browseLineSpace: BROWSE_SCALE_DEFAULT,
+    uiScale: UI_SCALE_DEFAULT,
     keyDisplay: "classic",
     keySort: "alphabetical",
     overviewWaveform: "half",
@@ -554,6 +590,9 @@ export function sanitisePreferences(value: unknown): Preferences {
       browseFontSize: step(view.browseFontSize, d.view.browseFontSize),
       browseBold: bool(view.browseBold, d.view.browseBold),
       browseLineSpace: step(view.browseLineSpace, d.view.browseLineSpace),
+      // Out of range is the measured size, not the nearest end: a stop from
+      // a build with a different set of stops is not a size anyone chose.
+      uiScale: isUiScaleStop(view.uiScale) ? view.uiScale : d.view.uiScale,
       keyDisplay: oneOf(view.keyDisplay, KEY_DISPLAYS, d.view.keyDisplay),
       keySort: oneOf(
         view.keySort,

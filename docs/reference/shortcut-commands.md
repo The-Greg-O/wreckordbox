@@ -100,6 +100,17 @@ The shell keeps the states (`set_menu_enabled`).
 | Sort Items (`sortItems`) | unbound | 500d | Playlist › Sort Items | key once bound; tree context menu on a folder or the Playlists heading (#443); native Playlist menu (#513) | App (the folder selected in the tree), none |
 | Volume, Volume Down (`volumeUp`, `volumeDown`) | command + F12, command + F11 | 3003, 3004 | no | key; the master knob sets the level directly | App, none |
 | Mute (`mute`) | command + F10 | 3005 | no | key | App, none |
+| Smaller Interface, Larger Interface, Reset Interface Size (`uiScaleSmaller`, `uiScaleLarger`, `uiScaleReset`) | command + -, command + =, option + command + 0 (wreckordbox's own) | none | no | key | App, none |
+
+The interface scale commands move `view.uiScale` one stop along
+`UI_SCALES` in `src/lib/preferences.ts` (0.6 to 1.5, 1 by default) and store
+it. Every window applies the stored stop as the webview's zoom when it opens
+and whenever it changes (`src/lib/uiScale.ts`), so the keys are pressed in
+the main window and the Preferences, Sync Manager, Report bug and Log
+windows follow. They work while a field has the focus. Command + 0 is Full
+Browser and shift + command + 0 is a pad's clear in the Performance 2
+preset, which is why the reset carries option. The webview's built-in zoom
+hotkeys stay off (`src-tauri/tests/window_config.rs`).
 
 ### Deck
 
