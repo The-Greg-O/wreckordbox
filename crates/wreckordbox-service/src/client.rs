@@ -129,6 +129,21 @@ impl Client {
         command: &str,
         args: Value,
     ) -> Result<T, ServiceError> {
+        let mut kept = Vec::new();
+        let answer = self.call_watching(command, args, |event| kept.push(event));
+        self.events.extend(kept);
+        answer
+    }
+
+    /// Sends one command and waits for its answer, handing each event that
+    /// arrives meanwhile to `on_event` as it arrives: how a client follows
+    /// a long command's progress. [`subscribe`](Self::subscribe) first.
+    pub fn call_watching<T: DeserializeOwned>(
+        &mut self,
+        command: &str,
+        args: Value,
+        mut on_event: impl FnMut(Event),
+    ) -> Result<T, ServiceError> {
         let id = self.next_id;
         self.next_id += 1;
         let request = Request {
@@ -155,7 +170,7 @@ impl Client {
                     };
                 }
                 Some(Message::Response(_)) | None => {}
-                Some(Message::Event(event)) => self.events.push_back(event),
+                Some(Message::Event(event)) => on_event(event),
             }
         }
     }
