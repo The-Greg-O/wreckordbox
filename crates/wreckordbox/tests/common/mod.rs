@@ -2,6 +2,8 @@
 //! real `wreckordbox` binary pointed at them.
 #![allow(dead_code)]
 
+pub mod catalogue;
+
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
@@ -27,6 +29,23 @@ impl Run {
         serde_json::from_str(&self.stderr)
             .unwrap_or_else(|e| panic!("stderr is not JSON ({e}): {}", self.stderr))
     }
+}
+
+/// What [`Sandbox::detail_track`] sets. Texts are as the window's Info
+/// panel takes them; an empty one is left alone.
+#[derive(Default)]
+pub struct Details<'a> {
+    pub album: &'a str,
+    pub genre: &'a str,
+    pub label: &'a str,
+    pub year: &'a str,
+    pub play_count: &'a str,
+    pub comment: &'a str,
+    /// The colour label as the Library numbers it: 1 Pink, 2 Red, 3 Orange,
+    /// 4 Yellow, 5 Green, 6 Aqua, 7 Blue, 8 Purple.
+    pub colour_id: Option<u8>,
+    /// MyTag identifiers, such as `fixture::MY_TAG_PEAK`.
+    pub my_tags: &'a [&'a str],
 }
 
 pub struct Sandbox {
@@ -96,6 +115,95 @@ impl Sandbox {
             writer.set_field(&id, TrackField::Key, key).unwrap();
             writer.set_rating(&id, stars).unwrap();
         });
+    }
+
+    /// Gives the `index`th fixture track the rest of what a DJ fills in.
+    /// A field left at its default is not touched.
+    pub fn detail_track(&self, index: usize, details: &Details) {
+        let id = fixture::track_id(index);
+        self.edit(|writer| {
+            for (field, value) in [
+                (TrackField::Album, details.album),
+                (TrackField::Genre, details.genre),
+                (TrackField::Label, details.label),
+                (TrackField::Year, details.year),
+                (TrackField::PlayCount, details.play_count),
+            ] {
+                if !value.is_empty() {
+                    writer.set_field(&id, field, value).unwrap();
+                }
+            }
+            if !details.comment.is_empty() {
+                writer.set_comment(&id, details.comment).unwrap();
+            }
+            if let Some(colour) = details.colour_id {
+                writer.set_color(&id, Some(&colour.to_string())).unwrap();
+            }
+            if !details.my_tags.is_empty() {
+                let tags: Vec<String> = details
+                    .my_tags
+                    .iter()
+                    .map(|tag| (*tag).to_owned())
+                    .collect();
+                writer.set_my_tags(&id, &tags).unwrap();
+            }
+        });
+    }
+
+    /// Adds a MyTag to the fixture's one category, Situation, and answers
+    /// its identifier.
+    pub fn create_my_tag(&self, name: &str) -> String {
+        let mut id = String::new();
+        self.edit(|writer| {
+            let tag = writer.create_my_tag(fixture::MY_TAG_CATEGORY).unwrap();
+            writer.rename_my_tag(&tag.id, name).unwrap();
+            id = tag.id;
+        });
+        id
+    }
+
+    /// Adds a playlist holding the fixture tracks at `indexes`, in that
+    /// order, and answers its identifier.
+    pub fn create_playlist(&self, name: &str, indexes: &[usize]) -> String {
+        let mut id = String::new();
+        self.edit(|writer| {
+            id = writer.create_playlist(name, "root").unwrap();
+            let tracks: Vec<String> = indexes
+                .iter()
+                .map(|&index| fixture::track_id(index))
+                .collect();
+            writer.add_tracks(&id, &tracks).unwrap();
+        });
+        id
+    }
+
+    /// Adds an intelligent playlist of the tracks whose genre contains
+    /// `genre`, and answers its identifier.
+    pub fn create_genre_playlist(&self, name: &str, genre: &str) -> String {
+        let mut id = String::new();
+        self.edit(|writer| {
+            id = writer
+                .create_smart_playlist(name, "root", |playlist| {
+                    format!(
+                        "<NODE Id=\"{playlist}\" LogicalOperator=\"1\" AutomaticUpdate=\"0\">\
+                         <CONDITION PropertyName=\"genre\" Operator=\"8\" ValueUnit=\"\" \
+                         ValueLeft=\"{genre}\" ValueRight=\"\"/></NODE>"
+                    )
+                })
+                .unwrap();
+        });
+        id
+    }
+
+    /// Imports a silent audio file of `seconds` as rekordbox imports one:
+    /// added today, not yet analysed. Answers the new track's identifier.
+    pub fn import_track(&self, file_name: &str, seconds: u32) -> String {
+        let path = self.dir.path().join("audio").join(file_name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        write_wav(&path, seconds);
+        let mut id = String::new();
+        self.edit(|writer| id = writer.import_file(&path).unwrap());
+        id
     }
 
     pub fn master_db(&self) -> &Path {
@@ -225,4 +333,25 @@ impl Drop for Sandbox {
 
 pub fn alive(pid: u64) -> bool {
     Path::new(&format!("/proc/{pid}")).exists()
+}
+
+/// A silent 8 kHz mono 16-bit WAV file.
+fn write_wav(path: &Path, seconds: u32) {
+    let rate: u32 = 8_000;
+    let data_len = rate * 2 * seconds;
+    let mut out = Vec::new();
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data_len).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16_u32.to_le_bytes());
+    out.extend_from_slice(&1_u16.to_le_bytes());
+    out.extend_from_slice(&1_u16.to_le_bytes());
+    out.extend_from_slice(&rate.to_le_bytes());
+    out.extend_from_slice(&(rate * 2).to_le_bytes());
+    out.extend_from_slice(&2_u16.to_le_bytes());
+    out.extend_from_slice(&16_u16.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data_len.to_le_bytes());
+    out.resize(44 + data_len as usize, 0);
+    std::fs::write(path, out).unwrap();
 }
