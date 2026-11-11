@@ -11,7 +11,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use serde_json::json;
 use wreckordbox_service::{
-    Client, Config, Launcher, Service, ServiceError, Status, TrackList, TrackQuery,
+    Client, Config, Launcher, RatedTrack, Service, ServiceError, Status, TrackList, TrackQuery,
     DEFAULT_TRACK_LIMIT,
 };
 
@@ -68,6 +68,19 @@ enum TrackCommands {
         #[arg(long, value_name = "ROWS", default_value_t = DEFAULT_TRACK_LIMIT)]
         limit: usize,
     },
+    /// Set a track's rating and report what it was and what it is now.
+    ///
+    /// The window and every other client of the Library service see the
+    /// change at once. Nothing is changed when the track is not in the
+    /// Library, or while rekordbox is running.
+    Rate {
+        /// The track's identifier: the ID column of `tracks list`.
+        #[arg(value_name = "ID")]
+        id: String,
+        /// Stars, 0 to 5. 0 clears the rating.
+        #[arg(value_name = "STARS")]
+        stars: u8,
+    },
 }
 
 fn main() -> ExitCode {
@@ -108,6 +121,16 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
                 print(&json!(list).to_string());
             } else {
                 print(&tracks_text(&list));
+            }
+        }
+        Commands::Tracks {
+            command: TrackCommands::Rate { id, stars },
+        } => {
+            let rated = connect(&config)?.rate_track(id, *stars)?;
+            if cli.json {
+                print(&json!(rated).to_string());
+            } else {
+                print(&rated_text(&rated));
             }
         }
         Commands::Serve { spawned: true } => {
@@ -205,6 +228,32 @@ fn tracks_text(list: &TrackList) -> String {
         );
     }
     text
+}
+
+/// One line saying what a rating edit did.
+fn rated_text(rated: &RatedTrack) -> String {
+    let stars = |count: u8| {
+        if count == 1 {
+            "1 star".to_owned()
+        } else {
+            format!("{count} stars")
+        }
+    };
+    if rated.rating == rated.previous_rating {
+        return format!(
+            "Track {} \"{}\" already has {}.",
+            rated.id,
+            rated.title,
+            stars(rated.rating)
+        );
+    }
+    format!(
+        "Rated track {} \"{}\": {}, was {}.",
+        rated.id,
+        rated.title,
+        stars(rated.rating),
+        stars(rated.previous_rating)
+    )
 }
 
 /// A cell with nothing in it would shift the ones after it when read back.

@@ -7,6 +7,7 @@ use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -15,8 +16,8 @@ use serde_json::{json, Value};
 
 use crate::library::OpenLibrary;
 use crate::protocol::{
-    codes, commands, Event, LibraryStatus, Outcome, Request, Response, ServiceError, Status,
-    TrackQuery, PROTOCOL_VERSION,
+    codes, commands, Event, LibraryStatus, Outcome, RateTrack, Request, Response, ServiceError,
+    Status, TrackQuery, PROTOCOL_VERSION,
 };
 use crate::Config;
 
@@ -42,6 +43,8 @@ struct Shared {
     /// Set, and signalled, once the service has stopped.
     stopped: (Mutex<bool>, Condvar),
     connections: Mutex<HashMap<u64, Arc<Connection>>>,
+    /// The hosting process's own subscriptions ([`Service::events`]).
+    listeners: Mutex<Vec<Sender<Event>>>,
     /// When the last client left; `None` while one is connected.
     idle_since: Mutex<Option<Instant>>,
 }
@@ -77,7 +80,7 @@ impl Service {
         let socket = config.socket_path(&library);
         let lock = take_lock(&library.master_db, &socket)?;
         let master_db = library.master_db.clone();
-        let open = OpenLibrary::open(library)?;
+        let open = OpenLibrary::open(library, config.recovery_dir.clone())?;
         let listener = listen(&config.runtime_dir, &socket)?;
 
         let shared = Arc::new(Shared {
@@ -90,6 +93,7 @@ impl Service {
             stopping: AtomicBool::new(false),
             stopped: (Mutex::new(false), Condvar::new()),
             connections: Mutex::new(HashMap::new()),
+            listeners: Mutex::new(Vec::new()),
             idle_since: Mutex::new(Some(Instant::now())),
         });
         if let Some(idle_exit) = config.idle_exit {
@@ -111,6 +115,27 @@ impl Service {
     /// Sends `event` to every subscribed client.
     pub fn publish(&self, event: &Event) {
         self.shared.publish(event);
+    }
+
+    /// Runs one command for the process hosting the service, without the
+    /// socket: the same dispatch a client's request goes through, so there
+    /// is one path to the Library. `subscribe` is a connection's command;
+    /// the host calls [`events`](Self::events) instead.
+    pub fn call(&self, command: &str, args: Value) -> Result<Value, ServiceError> {
+        let request = Request {
+            id: 0,
+            command: command.to_owned(),
+            args,
+        };
+        self.shared.dispatch(None, &request)
+    }
+
+    /// Every event from now on, for the process hosting the service: what a
+    /// subscribed client is sent. Dropping the receiver ends it.
+    pub fn events(&self) -> Receiver<Event> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        lock(&self.shared.listeners).push(sender);
+        receiver
     }
 
     /// Stops accepting clients and disconnects the ones there are.
@@ -185,16 +210,34 @@ impl Shared {
     }
 
     /// The one place a command name becomes behaviour.
-    fn dispatch(&self, connection: &Connection, request: &Request) -> Result<Value, ServiceError> {
+    fn dispatch(
+        &self,
+        connection: Option<&Connection>,
+        request: &Request,
+    ) -> Result<Value, ServiceError> {
         match request.command.as_str() {
             commands::STATUS => to_value(&self.status()?),
             commands::SUBSCRIBE => {
+                let Some(connection) = connection else {
+                    return Err(ServiceError::new(
+                        codes::BAD_REQUEST,
+                        "subscribe is for a connection; the hosting process reads Service::events",
+                    ));
+                };
                 connection.subscribed.store(true, Ordering::Release);
                 Ok(json!({}))
             }
             commands::TRACKS_LIST => {
                 let query: TrackQuery = arguments(request)?;
-                to_value(&self.with_library(|library| library.tracks(&query))?)
+                to_value(&self.with_library(|library| library.tracks(&query))??)
+            }
+            commands::TRACKS_RATE => {
+                let edit: RateTrack = required_arguments(request)?;
+                let (rated, changed) = self.with_library(|library| library.rate(&edit))??;
+                // After the Library's lock is let go: a slow client must not
+                // hold up the next command.
+                self.publish(&changed.event());
+                to_value(&rated)
             }
             unknown => Err(ServiceError::new(
                 codes::UNKNOWN_COMMAND,
@@ -216,6 +259,8 @@ impl Shared {
             // A client that has gone is dropped by its own reader.
             let _ = connection.send(&line);
         }
+        // A host that dropped its receiver is forgotten here.
+        lock(&self.listeners).retain(|listener| listener.send(event.clone()).is_ok());
     }
 
     fn stop(&self) {
@@ -288,7 +333,7 @@ fn serve_client(shared: &Shared, connection: &Connection, stream: UnixStream) {
         let response = match serde_json::from_str::<Request>(&line) {
             Ok(request) => Response {
                 id: request.id,
-                outcome: match shared.dispatch(connection, &request) {
+                outcome: match shared.dispatch(Some(connection), &request) {
                     Ok(result) => Outcome::Result(result),
                     Err(error) => Outcome::Error(error),
                 },
@@ -448,6 +493,18 @@ fn arguments<T: serde::de::DeserializeOwned + Default>(
     if request.args.is_null() {
         return Ok(T::default());
     }
+    serde_json::from_value(request.args.clone()).map_err(|e| {
+        ServiceError::new(
+            codes::BAD_REQUEST,
+            format!("bad arguments to {}: {e}", request.command),
+        )
+    })
+}
+
+/// A command's arguments when it has ones that cannot be left out.
+fn required_arguments<T: serde::de::DeserializeOwned>(
+    request: &Request,
+) -> Result<T, ServiceError> {
     serde_json::from_value(request.args.clone()).map_err(|e| {
         ServiceError::new(
             codes::BAD_REQUEST,

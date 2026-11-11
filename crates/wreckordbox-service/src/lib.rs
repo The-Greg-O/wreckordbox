@@ -22,7 +22,8 @@ use rbl_db::LibraryLocation;
 
 pub use client::{Client, Launcher};
 pub use protocol::{
-    codes, Event, ServiceError, Status, Track, TrackList, TrackQuery, DEFAULT_TRACK_LIMIT,
+    codes, events, ChangeKind, Event, LibraryChanged, RateTrack, RatedTrack, ServiceError, Status,
+    Track, TrackList, TrackQuery, DEFAULT_TRACK_LIMIT,
 };
 pub use server::{serve_spawned, Service};
 
@@ -41,6 +42,9 @@ pub struct Config {
     /// which is what a front end hosting the service in its own process
     /// wants.
     pub idle_exit: Option<Duration>,
+    /// Where the Library's recovery journals are kept: the same folder the
+    /// window uses, so an unfinished restore stops an edit from either.
+    pub recovery_dir: PathBuf,
 }
 
 impl Config {
@@ -68,6 +72,7 @@ impl Config {
         Ok(Self {
             runtime_dir,
             idle_exit,
+            recovery_dir: rbl_backup::state_dir(),
         })
     }
 

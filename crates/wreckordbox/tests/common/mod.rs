@@ -120,6 +120,7 @@ impl Sandbox {
         Config {
             runtime_dir: self.runtime_dir(),
             idle_exit: None,
+            recovery_dir: self.dir.path().join("home/recovery"),
         }
     }
 

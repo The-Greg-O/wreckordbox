@@ -14,7 +14,8 @@ use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
 use crate::protocol::{
-    codes, commands, Event, Outcome, Request, Response, ServiceError, Status, TrackList, TrackQuery,
+    codes, commands, Event, Outcome, RateTrack, RatedTrack, Request, Response, ServiceError,
+    Status, TrackList, TrackQuery,
 };
 use crate::{Config, IDLE_EXIT_ENV, RUNTIME_DIR_ENV};
 
@@ -96,6 +97,16 @@ impl Client {
     /// Tracks in the Library, as the window lists and searches them.
     pub fn tracks(&mut self, query: &TrackQuery) -> Result<TrackList, ServiceError> {
         self.call(commands::TRACKS_LIST, json!(query))
+    }
+
+    /// Sets a track's rating, 0 to 5 stars, by its identifier. Every
+    /// subscribed client is told the Library changed.
+    pub fn rate_track(&mut self, id: &str, rating: u8) -> Result<RatedTrack, ServiceError> {
+        let edit = RateTrack {
+            id: id.to_owned(),
+            rating,
+        };
+        self.call(commands::TRACKS_RATE, json!(edit))
     }
 
     /// Asks the service to send this connection its events; read them with

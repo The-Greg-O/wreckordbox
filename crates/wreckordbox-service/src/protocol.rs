@@ -22,6 +22,18 @@ pub mod commands {
     /// Lists tracks in the Library: takes a [`TrackQuery`](super::TrackQuery),
     /// answers a [`TrackList`](super::TrackList).
     pub const TRACKS_LIST: &str = "tracks.list";
+    /// Sets one track's rating: takes a [`RateTrack`](super::RateTrack),
+    /// answers a [`RatedTrack`](super::RatedTrack), and sends every
+    /// subscribed client a [`LIBRARY_CHANGED`](super::events::LIBRARY_CHANGED)
+    /// event.
+    pub const TRACKS_RATE: &str = "tracks.rate";
+}
+
+/// The names of the events the service sends.
+pub mod events {
+    /// The Library changed: `data` is a
+    /// [`LibraryChanged`](super::LibraryChanged).
+    pub const LIBRARY_CHANGED: &str = "library_changed";
 }
 
 /// The stable codes an error carries. A client decides on the code and shows
@@ -45,6 +57,14 @@ pub mod codes {
     pub const UNKNOWN_COMMAND: &str = "unknown_command";
     /// A message that is not valid for this protocol.
     pub const BAD_REQUEST: &str = "bad_request";
+    /// The Library has no track with that identifier.
+    pub const TRACK_NOT_FOUND: &str = "track_not_found";
+    /// A rating that is not a whole number of stars from 0 to 5.
+    pub const INVALID_RATING: &str = "invalid_rating";
+    /// A write guard refused the edit: rekordbox is running, a restore is
+    /// unfinished, or a test tried to write to a real Library. Nothing was
+    /// changed.
+    pub const WRITE_REFUSED: &str = "write_refused";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,4 +187,61 @@ pub struct Track {
     pub key: String,
     /// Stars, 0 to 5.
     pub rating: u8,
+}
+
+/// The arguments of `tracks.rate`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RateTrack {
+    /// The track's identifier, as `tracks.list` gives it.
+    pub id: String,
+    /// Stars, 0 to 5; 0 clears the rating.
+    pub rating: u8,
+}
+
+/// What `tracks.rate` answers: the track, and its rating before and after.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RatedTrack {
+    pub id: String,
+    pub title: String,
+    /// Stars the track has now.
+    pub rating: u8,
+    /// Stars it had before this edit.
+    pub previous_rating: u8,
+    /// The Library's generation after the edit, as the change event carries
+    /// it.
+    pub generation: u32,
+}
+
+/// The data of a [`events::LIBRARY_CHANGED`] event: what the window's own
+/// change events carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LibraryChanged {
+    /// Which kind of data was touched.
+    pub kind: ChangeKind,
+    /// The generation the Library is at now. Rows a client fetched under an
+    /// older one are stale.
+    pub generation: u32,
+}
+
+/// Which kind of data a change touched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangeKind {
+    /// Anything a list of tracks or the tree shows: every open list is
+    /// stale. The window's `library:changed`.
+    Library,
+    /// Only the Tag List, under the same generation. The window's
+    /// `tag-list:changed`.
+    TagList,
+}
+
+impl LibraryChanged {
+    /// The event that carries this change.
+    #[must_use]
+    pub fn event(self) -> Event {
+        Event {
+            event: events::LIBRARY_CHANGED.to_owned(),
+            data: serde_json::json!(self),
+        }
+    }
 }

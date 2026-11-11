@@ -34,6 +34,7 @@ fn host() -> Hosted {
     let config = Config {
         runtime_dir: dir.path().join("run"),
         idle_exit: None,
+        recovery_dir: dir.path().join("recovery"),
     };
     let socket = config.socket_path(&location);
     let service = Service::start(location, &config).unwrap();
@@ -115,6 +116,7 @@ fn a_stopped_service_lets_go_of_the_library() {
     let config = Config {
         runtime_dir: socket.parent().unwrap().to_path_buf(),
         idle_exit: None,
+        recovery_dir: socket.parent().unwrap().join("recovery"),
     };
     let second = Service::start(location.clone(), &config)
         .map(|_| ())
@@ -130,4 +132,55 @@ fn a_stopped_service_lets_go_of_the_library() {
     );
     let again = Service::start(location, &config).unwrap();
     assert_eq!(again.status().unwrap().library.tracks, 3);
+}
+
+#[test]
+fn the_hosting_process_runs_commands_and_hears_changes_without_the_socket() {
+    let hosted = host();
+    let events = hosted.service.events();
+    let mut client = Client::connect(&hosted.socket).unwrap();
+    client.subscribe().unwrap();
+    let id = fixture::track_id(1);
+
+    let rated = hosted
+        .service
+        .call("tracks.rate", json!({ "id": id, "rating": 3 }))
+        .unwrap();
+
+    assert_eq!(rated["previous_rating"], 0);
+    assert_eq!(rated["rating"], 3);
+    // The host and a client on the socket are told the same thing.
+    let heard = events.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(heard.event, "library_changed");
+    assert_eq!(
+        heard.data,
+        json!({ "kind": "library", "generation": rated["generation"] })
+    );
+    assert_eq!(
+        client.next_event(Duration::from_secs(5)).unwrap(),
+        Some(heard)
+    );
+    // And the host's edit is what a client then lists.
+    let listed = client.tracks(&Default::default()).unwrap();
+    assert_eq!(
+        listed
+            .tracks
+            .iter()
+            .find(|track| track.id == id)
+            .unwrap()
+            .rating,
+        3
+    );
+    // A client's edit reaches the host too.
+    client.rate_track(&id, 5).unwrap();
+    assert_eq!(
+        events.recv_timeout(Duration::from_secs(5)).unwrap().event,
+        "library_changed"
+    );
+
+    let unknown = hosted
+        .service
+        .call("no.such.command", json!({}))
+        .unwrap_err();
+    assert_eq!(unknown.code, codes::UNKNOWN_COMMAND);
 }
