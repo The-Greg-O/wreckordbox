@@ -10,6 +10,7 @@
 //! opens an [`rbl_db::write::Writer`], which refuses while rekordbox is
 //! running and, under `RBXPORT_TEST`, for a detected real Library.
 
+pub mod my_tags;
 pub mod read;
 
 use std::collections::HashMap;

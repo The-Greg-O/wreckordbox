@@ -63,8 +63,6 @@ import { AppCost } from "@/views/topbar/AppCost";
 import { useAudioOutput } from "@/store/useAudioOutput";
 import { useLimiter } from "@/store/useLimiter";
 import { onPreviewError, stopPreview } from "@/store/usePreview";
-import { useUpdater } from "@/store/useUpdater";
-import { UpdateReadyNotice } from "@/views/update/UpdateReadyNotice";
 import { MasterOutputProvider, MasterOutputConnection, useMasterControls, useMasterDisplay } from "@/store/MasterOutput";
 import { asLayout, deckCount, isFullDeck, type PlayerLayout } from "@/lib/layout";
 import { FIELD_LABEL } from "@/views/info/fieldLabel";
@@ -122,15 +120,11 @@ const AnalysisDialog = lazy(() => import("@/views/analysis/AnalysisDialog").then
 const NewLibraryDialog = lazy(() => import("@/views/library/NewLibraryDialog").then(m => ({ default: m.NewLibraryDialog })));
 const DevicePanel = lazy(() => import("@/views/devices/DevicePanel").then(m => ({ default: m.DevicePanel })));
 const InfoPanel = lazy(() => import("@/views/info/InfoPanel").then(m => ({ default: m.InfoPanel })));
-const ReportBug = lazy(() => import("@/views/report/ReportBug").then(m => ({ default: m.ReportBug })));
 const LogView = lazy(() => import("@/views/log/LogView").then(m => ({ default: m.LogView })));
-const UpdateManager = lazy(() => import("@/views/update/UpdateManager").then(m => ({ default: m.UpdateManager })));
 const Preferences = lazy(() => import("@/views/settings/Preferences").then(m => ({ default: m.Preferences })));
 const SyncManager = lazy(() => import("@/views/sync/SyncManager").then(m => ({ default: m.SyncManager })));
 const SmartPlaylistEditor = lazy(() => import("@/views/tree/SmartPlaylistEditor").then(m => ({ default: m.SmartPlaylistEditor })));
 const MissingFileManager = lazy(() => import("@/views/library/MissingFileManager").then(m => ({ default: m.MissingFileManager })));
-
-const SHOW_MAIN_SUPPORT = true;
 
 /**
  * How many tracks one backend call handles in a long operation. Each call is
@@ -491,19 +485,12 @@ function AppBody() {
       if (!opened) setSyncOpen(true);
     });
   }, []);
-  const [reportOpen, setReportOpen] = useState(false);
-  const openReport = useCallback(() => {
-    void getBackend().then(backend => backend.openReportWindow()).then(opened => { if (!opened) setReportOpen(true); });
-  }, []);
   // The Log window, the same way again: clicking the status bar's message
   // opens it, or brings the open one to the front.
   const [logOpen, setLogOpen] = useState(false);
   const openLogWindow = useCallback(() => {
     void getBackend().then(backend => backend.openLogWindow()).then(opened => { if (!opened) setLogOpen(true); })
       .catch(() => setLogOpen(true));
-  }, []);
-  const openSupport = useCallback(() => {
-    void getBackend().then(backend => backend.openUrl("https://www.paypal.com/donate/?hosted_button_id=H6GGU8PHP8CJE")).catch(() => {});
   }, []);
   const prefs = usePreferencesStore();
   const { view: viewPrefs, advanced: advancedPrefs, analysis: analysisPrefs } = prefs.preferences;
@@ -557,21 +544,6 @@ function AppBody() {
       setLibraryEditHistory(null, null);
     };
   }, []);
-  // Checks on its own a while after launch when Preferences says so; the
-  // menu and Preferences ask by hand.
-  const updater = useUpdater(advancedPrefs.checkUpdates, advancedPrefs.updateFrequency);
-  const checkForUpdates = updater.check;
-  const openWhatsNew = useCallback(() => {
-    const release = updater.state.phase === "ready" ? `#v${updater.state.ready.version}` : "";
-    void getBackend()
-      .then((backend) => backend.openUrl(`https://rbxport.com/whats-new/${release}`))
-      .catch(() => {});
-  }, [updater.state]);
-  const [updateNoticeVisible, setUpdateNoticeVisible] = useState(false);
-  useEffect(() => {
-    setUpdateNoticeVisible(updater.state.phase === "ready");
-  }, [updater.state.phase]);
-  const updateNotice = updater.state.phase === "ready" && updateNoticeVisible ? updater.state : null;
   // DJ System in Preferences is what a stick with no settings of its own
   // gets on export; the same shape goes with every export call.
   const stickDefaults = prefs.preferences.djSystem;
@@ -2469,13 +2441,8 @@ function AppBody() {
       setSubOpen((open) => !open);
       return;
     }
-    if (outcome.action === "report-bug") { openReport(); return; }
     if (outcome.action === "tempo-slider") {
       prefs.update("view", { tempoSlider: !viewPrefs.tempoSlider });
-      return;
-    }
-    if (outcome.action === "updates") {
-      checkForUpdates(true);
       return;
     }
     if (outcome.action.startsWith("layout-")) {
@@ -2489,7 +2456,7 @@ function AppBody() {
     openPreferences("view");
   }, [
     readOnly, advancedPrefs.protectLibrary, importFromMenu, importFolderFromMenu, importXmlFromMenu, exportXmlFromMenu, refuse,
-    openPreferences, checkForUpdates, prefs, viewPrefs.tempoSlider, openReport,
+    openPreferences, prefs, viewPrefs.tempoSlider,
     editHistory, runLibraryHistory,
   ]);
 
@@ -3633,15 +3600,6 @@ function AppBody() {
         />
       </div>
       <Suspense fallback={null}>
-      {updater.open ? (
-        <UpdateManager
-          state={updater.state}
-          onCheck={() => updater.check(true)}
-          onRetry={updater.retry}
-          onRestart={updater.restart}
-          onClose={updater.dismiss}
-        />
-      ) : null}
       {duplicatePrompt ? (
         <DuplicateTracksDialog playlist={duplicatePrompt.playlist} duplicates={duplicatePrompt.duplicates}
           total={duplicatePrompt.total} onAnswer={duplicatePrompt.settle} />
@@ -3729,7 +3687,6 @@ function AppBody() {
           onClose={() => setSettingsOpen(null)}
         />
       ) : null}
-      {reportOpen ? <ReportBug onClose={() => setReportOpen(false)} /> : null}
       {logOpen ? <LogView onClose={() => setLogOpen(false)} /> : null}
       {smartEditor ? (
         <SmartPlaylistEditor
@@ -3766,18 +3723,8 @@ function AppBody() {
         exports={(exportRunning ? exportBatch : []).map(job => ({
           ...job, name: devices.find(device => device.path === job.path)?.name ?? job.path.split(/[\\/]/).filter(Boolean).at(-1) ?? job.path,
         }))}
-        onReportBug={openReport}
-        onSupport={SHOW_MAIN_SUPPORT ? openSupport : undefined}
         onOpenLog={openLog}
         onShowLog={openLogWindow}
-        updateNotice={updateNotice ? (
-          <UpdateReadyNotice
-            state={updateNotice}
-            onRestart={updater.restart}
-            onWhatsNew={openWhatsNew}
-            onDismiss={() => setUpdateNoticeVisible(false)}
-          />
-        ) : null}
         backupActivity={backupJob.error || backupJob.text}
         backupProgress={backupJob.progress.running ? backupJob.progress : undefined}
         version={version}

@@ -4,6 +4,7 @@
 //! when none is running. Results go to standard output, as text or with
 //! `--json` as JSON; errors go to standard error with a non-zero status.
 
+mod mytag_edits;
 mod reading;
 mod stems;
 mod tracks;
@@ -46,7 +47,8 @@ enum Commands {
         #[command(subcommand)]
         command: TrackCommands,
     },
-    /// Read the My Tag categories and tags, and which tracks carry them.
+    /// Read and edit the My Tag categories and tags, and which tracks carry
+    /// them.
     Mytags {
         #[command(subcommand)]
         command: reading::MyTagCommands,
