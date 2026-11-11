@@ -354,8 +354,9 @@ impl Reader {
     fn new(library: &OpenLibrary) -> Result<Self, ServiceError> {
         Ok(Self {
             index: library.index()?,
-            my_tag_rows: rbl_db::export_info::my_tags(library.db().connection())
-                .map_err(|e| open_error(&e))?,
+            my_tag_rows: library.with_db(|db| {
+                rbl_db::export_info::my_tags(db.connection()).map_err(|e| open_error(&e))
+            })?,
         })
     }
 

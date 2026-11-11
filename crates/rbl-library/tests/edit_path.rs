@@ -235,3 +235,60 @@ fn a_detected_real_library_is_not_written_under_the_test_variable() {
     let (persisted, _) = rbl_index::load(&core.open_read_only().unwrap()).unwrap();
     assert_eq!(persisted.rating[persisted.row_of(&track).unwrap() as usize], was);
 }
+
+#[test]
+fn a_watcher_hears_every_change_in_order_until_it_says_stop() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = core_in(dir.path());
+    let track = rbl_db::fixture::track_id(1);
+    let heard = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let keep = std::sync::Arc::new(AtomicBool::new(true));
+    {
+        let (heard, keep) = (std::sync::Arc::clone(&heard), std::sync::Arc::clone(&keep));
+        core.watch(move |change| {
+            heard.lock().unwrap().push(change);
+            keep.load(Ordering::SeqCst)
+        });
+    }
+
+    let (_, rated) = core
+        .edit(&NoHost, History::Outside, Touched::Metadata(vec![track.clone()]), |w| w.set_rating(&track, 4))
+        .unwrap();
+    let (_, tagged) = core
+        .edit(&NoHost, History::Outside, Touched::TagList, |w| w.tag_list_add(std::slice::from_ref(&track)))
+        .unwrap();
+    // A reload by whoever holds the core is a change like any other.
+    let reloaded = core.invalidate_views();
+
+    assert_eq!(
+        *heard.lock().unwrap(),
+        [rated, tagged, Change { kind: ChangeKind::Library, generation: reloaded }]
+    );
+    assert_eq!(tagged.kind, ChangeKind::TagList);
+
+    keep.store(false, Ordering::SeqCst);
+    core.invalidate_views();
+    core.invalidate_views();
+    assert_eq!(heard.lock().unwrap().len(), 4, "a watcher that said stop is not told again");
+}
+
+#[test]
+fn writes_are_refused_with_the_holders_reason_until_it_allows_them_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = core_in(dir.path());
+    let track = rbl_db::fixture::track_id(1);
+    let generation = core.generation();
+
+    core.refuse_writes(Some("Another wreckordbox window has this Library.".to_owned()));
+    let refused = core
+        .edit(&NoHost, History::Outside, Touched::Metadata(vec![track.clone()]), |w| w.set_rating(&track, 5))
+        .unwrap_err();
+
+    assert!(matches!(&refused, rbl_db::DbError::WriteRefused(why) if why == "Another wreckordbox window has this Library."), "{refused}");
+    assert_eq!(core.generation(), generation);
+    assert_eq!(core.write_refusal().as_deref(), Some("Another wreckordbox window has this Library."));
+
+    core.refuse_writes(None);
+    core.edit(&NoHost, History::Outside, Touched::Metadata(vec![track.clone()]), |w| w.set_rating(&track, 5)).unwrap();
+    assert_eq!(rating_of(&core, &track), 5);
+}

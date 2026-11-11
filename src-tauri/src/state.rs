@@ -21,7 +21,14 @@ pub struct AppState {
     /// The loaded Library, its open views and the path every edit takes
     /// (`rbl-library`). The rest of this struct is what the window keeps
     /// around it, lent to the core through [`rbl_library::Host`].
-    core: LibraryCore,
+    ///
+    /// Shared with the Library service this window hosts
+    /// ([`crate::service_host`]), so a client's edit and the window's are
+    /// edits of one Library under one generation.
+    core: Arc<LibraryCore>,
+    /// The Library service this window hosts, once it does. Never taken
+    /// with the edit gate or the core's lock held.
+    pub(crate) service: parking_lot::Mutex<Option<crate::service_host::Hosted>>,
     pub(crate) edit_history: parking_lot::Mutex<EditHistory>,
     /// Told when a write outside the library history ended its Redo branch,
     /// so the window's Edit menu stops offering it. Set once by the app;
@@ -269,7 +276,8 @@ impl AppState {
         let backup_dir = backup_dir.into();
         let backup_destination = rbl_backup::default_destination(&backup_dir);
         Self {
-            core: LibraryCore::new(backup_dir.clone()),
+            core: Arc::new(LibraryCore::new(backup_dir.clone())),
+            service: parking_lot::Mutex::new(None),
             edit_history: parking_lot::Mutex::new(EditHistory::default()),
             history_changed: std::sync::OnceLock::new(),
             backup_progress: parking_lot::Mutex::new(crate::backups::BackupProgress::default()),
@@ -291,6 +299,11 @@ impl AppState {
     /// window in it.
     pub fn core(&self) -> &LibraryCore {
         &self.core
+    }
+
+    /// The same core, to share with the service this window hosts.
+    pub(crate) fn shared_core(&self) -> Arc<LibraryCore> {
+        Arc::clone(&self.core)
     }
 
     /// The gate every edit holds for its whole length, refresh included.

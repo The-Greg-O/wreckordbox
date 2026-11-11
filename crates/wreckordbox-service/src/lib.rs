@@ -27,7 +27,7 @@ pub use protocol::{
     codes, events, ChangeKind, Event, LibraryChanged, RateTrack, RatedTrack, ServiceError, Status,
     Track, TrackList, TrackQuery, DEFAULT_TRACK_LIMIT,
 };
-pub use server::{serve_spawned, Service};
+pub use server::{serve_spawned, Service, Stopped};
 
 /// Names the directory the socket goes in, instead of the user's runtime
 /// directory. What a test points at a private folder.
