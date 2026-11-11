@@ -162,6 +162,58 @@ impl Sandbox {
         id
     }
 
+    /// Gives the fixture the four MyTag categories every rekordbox Library
+    /// has, and answers their identifiers in order: the fixture's own
+    /// Situation, then Mood, Sound and Sub-genre, each empty.
+    ///
+    /// The Library's writer cannot make a category (rekordbox fixes them),
+    /// so the three rows are written as the fixture builder writes its one:
+    /// `Attribute` 1 under `root`, numbered on after it.
+    pub fn four_categories(&self) -> [String; 4] {
+        let added = [
+            ("700101", "Mood"),
+            ("700102", "Sound"),
+            ("700103", "Sub-genre"),
+        ];
+        self.edit(|writer| {
+            for (place, (id, name)) in added.iter().enumerate() {
+                writer
+                    .library()
+                    .connection()
+                    .execute_batch(&format!(
+                        "INSERT INTO djmdMyTag
+                            (ID, Seq, Name, Attribute, ParentID, UUID,
+                             rb_data_status, rb_local_data_status, rb_local_deleted,
+                             rb_local_synced, usn, rb_local_usn, created_at, updated_at)
+                         SELECT '{id}', {seq}, '{name}', 1, 'root', 'fixture-mytag-{id}',
+                                0, 0, 0, 0, NULL, rb_local_usn, created_at, updated_at
+                         FROM djmdMyTag WHERE ID = '{first}'",
+                        seq = place + 2,
+                        first = fixture::MY_TAG_CATEGORY,
+                    ))
+                    .unwrap();
+            }
+        });
+        [
+            fixture::MY_TAG_CATEGORY.to_owned(),
+            "700101".to_owned(),
+            "700102".to_owned(),
+            "700103".to_owned(),
+        ]
+    }
+
+    /// Adds a MyTag called `name` to the end of `category` and answers its
+    /// identifier.
+    pub fn create_my_tag_in(&self, category: &str, name: &str) -> String {
+        let mut id = String::new();
+        self.edit(|writer| {
+            let tag = writer.create_my_tag(category).unwrap();
+            writer.rename_my_tag(&tag.id, name).unwrap();
+            id = tag.id;
+        });
+        id
+    }
+
     /// Adds a playlist holding the fixture tracks at `indexes`, in that
     /// order, and answers its identifier.
     pub fn create_playlist(&self, name: &str, indexes: &[usize]) -> String {

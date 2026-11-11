@@ -241,6 +241,13 @@ impl Shared {
             }
             reading if crate::reading::answers(reading) => self
                 .with_library(|library| crate::reading::answer(library, reading, &request.args))?,
+            edit if crate::mytag_edits::answers(edit) => {
+                let (result, changed) = self.with_library(|library| {
+                    crate::mytag_edits::answer(library, edit, &request.args)
+                })??;
+                self.publish(&changed.event());
+                Ok(result)
+            }
             crate::tracks::TRACKS_GET | crate::tracks::TRACKS_QUERY => {
                 self.with_library(|library| crate::tracks::answer(library, request))?
             }
