@@ -7704,6 +7704,7 @@ version = "1.10.0"
 dependencies = [
  "dirs 5.0.1",
  "rbl-db",
+ "rbl-index",
  "rusqlite",
  "serde",
  "serde_json",

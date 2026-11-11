@@ -11,6 +11,7 @@
 //! display.
 
 mod client;
+mod library;
 pub mod protocol;
 mod server;
 
@@ -20,7 +21,7 @@ use std::time::Duration;
 use rbl_db::LibraryLocation;
 
 pub use client::{Client, Launcher};
-pub use protocol::{codes, Event, ServiceError, Status};
+pub use protocol::{codes, Event, ServiceError, Status, Track, TrackList, TrackQuery, DEFAULT_TRACK_LIMIT};
 pub use server::{serve_spawned, Service};
 
 /// Names the directory the socket goes in, instead of the user's runtime

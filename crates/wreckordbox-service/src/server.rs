@@ -10,12 +10,14 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use rbl_db::{DbError, LibraryLocation, OpenMode};
+use rbl_db::{DbError, LibraryLocation};
 use serde_json::{json, Value};
 
 use crate::protocol::{
-    codes, commands, Event, LibraryStatus, Outcome, Request, Response, ServiceError, Status, PROTOCOL_VERSION,
+    codes, commands, Event, LibraryStatus, Outcome, Request, Response, ServiceError, Status, TrackQuery,
+    PROTOCOL_VERSION,
 };
+use crate::library::OpenLibrary;
 use crate::Config;
 
 /// How long a service started on demand stays up with no client, unless
@@ -45,7 +47,7 @@ struct Shared {
 }
 
 struct Owned {
-    library: rbl_db::Library,
+    library: OpenLibrary,
     /// The kernel drops it with the process, so a crashed service never
     /// blocks the next one.
     _lock: File,
@@ -72,9 +74,7 @@ impl Service {
         let socket = config.socket_path(&library);
         let lock = take_lock(&library.master_db, &socket)?;
         let master_db = library.master_db.clone();
-        let open = rbl_db::Library::open(library, OpenMode::ReadOnly).map_err(|e| open_error(&e))?;
-        // The count is what proves the Library reads as one.
-        open.live_track_count().map_err(|e| open_error(&e))?;
+        let open = OpenLibrary::open(library)?;
         let listener = listen(&config.runtime_dir, &socket)?;
 
         let shared = Arc::new(Shared {
@@ -153,10 +153,7 @@ pub fn serve_spawned(mut config: Config) -> bool {
 
 impl Shared {
     fn status(&self) -> Result<Status, ServiceError> {
-        let tracks = match lock(&self.library).as_ref() {
-            Some(owned) => owned.library.live_track_count().map_err(|e| open_error(&e))?,
-            None => return Err(ServiceError::new(codes::SERVICE_FAILED, "the Library service is stopping")),
-        };
+        let tracks = self.with_library(OpenLibrary::track_count)??;
         Ok(Status {
             running: true,
             pid: std::process::id(),
@@ -167,6 +164,14 @@ impl Shared {
         })
     }
 
+    /// Runs `use_it` on the open Library, one command at a time.
+    fn with_library<T>(&self, use_it: impl FnOnce(&OpenLibrary) -> T) -> Result<T, ServiceError> {
+        match lock(&self.library).as_ref() {
+            Some(owned) => Ok(use_it(&owned.library)),
+            None => Err(ServiceError::new(codes::SERVICE_FAILED, "the Library service is stopping")),
+        }
+    }
+
     /// The one place a command name becomes behaviour.
     fn dispatch(&self, connection: &Connection, request: &Request) -> Result<Value, ServiceError> {
         match request.command.as_str() {
@@ -174,6 +179,10 @@ impl Shared {
             commands::SUBSCRIBE => {
                 connection.subscribed.store(true, Ordering::Release);
                 Ok(json!({}))
+            }
+            commands::TRACKS_LIST => {
+                let query: TrackQuery = arguments(request)?;
+                to_value(&self.with_library(|library| library.tracks(&query))?)
             }
             unknown => Err(ServiceError::new(codes::UNKNOWN_COMMAND, format!("unknown command: {unknown}"))),
         }
@@ -373,6 +382,16 @@ pub(crate) fn open_error(error: &DbError) -> ServiceError {
             format!("the Library is damaged or is not a rekordbox library: {other}"),
         ),
     }
+}
+
+/// A command's arguments; leaving them out altogether means the defaults.
+fn arguments<T: serde::de::DeserializeOwned + Default>(request: &Request) -> Result<T, ServiceError> {
+    if request.args.is_null() {
+        return Ok(T::default());
+    }
+    serde_json::from_value(request.args.clone()).map_err(|e| {
+        ServiceError::new(codes::BAD_REQUEST, format!("bad arguments to {}: {e}", request.command))
+    })
 }
 
 fn to_value<T: serde::Serialize>(value: &T) -> Result<Value, ServiceError> {
