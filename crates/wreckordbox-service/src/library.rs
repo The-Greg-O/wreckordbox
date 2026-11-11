@@ -130,6 +130,29 @@ impl OpenLibrary {
         })
     }
 
+    /// Makes `action`'s writes through the Library's single edit path (the
+    /// write guards, the writes, the re-read of what they `touched`), and
+    /// answers its result beside what to tell every client. Outside the edit
+    /// history, as [`Self::rate`] is.
+    pub(crate) fn edit<T>(
+        &self,
+        touched: Touched,
+        action: impl FnOnce(&mut rbl_db::write::Writer) -> Result<T, DbError>,
+    ) -> Result<(T, LibraryChanged), ServiceError> {
+        let (value, change) = self
+            .core
+            .edit(&*self.host, History::Outside, touched, action)
+            .map_err(|e| edit_error(&e))?;
+        let changed = LibraryChanged {
+            kind: match change.kind {
+                rbl_library::ChangeKind::Library => ChangeKind::Library,
+                rbl_library::ChangeKind::TagList => ChangeKind::TagList,
+            },
+            generation: change.generation,
+        };
+        Ok((value, changed))
+    }
+
     /// Sets one track's rating through the Library's single edit path, and
     /// answers what to tell the caller and what to tell every client.
     ///
