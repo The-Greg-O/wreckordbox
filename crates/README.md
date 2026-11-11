@@ -29,6 +29,13 @@ These crates are independent of Tauri; application coordination belongs in
 | [rbl-pdb](rbl-pdb/README.md) | Legacy DeviceSQL binary database. |
 | [rbl-onelibrary](rbl-onelibrary/README.md) | Device Library Plus / OneLibrary database. |
 
+## Library service and command line
+
+| Crate | Responsibility |
+| --- | --- |
+| [wreckordbox-service](wreckordbox-service/README.md) | The Library service, its client and their protocol. |
+| [wreckordbox](wreckordbox/README.md) | The headless `wreckordbox` command. |
+
 ## Link Export and diagnostics
 
 | Crate | Responsibility |
