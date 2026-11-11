@@ -107,7 +107,7 @@ export function StatusBar({
           onOpenLog();
         } : undefined}
       >
-        rbxport
+        wreckordbox
         {version === null ? null : <> <span className={styles.version}>{version}</span></>}
       </span>
       {readOnly ? (

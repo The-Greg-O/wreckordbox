@@ -5,9 +5,9 @@ describe("errorMessage", () => {
   it("includes the developer detail returned with an internal error", () => {
     expect(errorMessage({
       kind: "internal",
-      message: "Something went wrong inside rbxport.",
+      message: "Something went wrong inside wreckordbox.",
       detail: "The backup folder is not writable: permission denied",
-    })).toBe("Something went wrong inside rbxport. The backup folder is not writable: permission denied");
+    })).toBe("Something went wrong inside wreckordbox. The backup folder is not writable: permission denied");
   });
 
   it("does not repeat identical detail", () => {

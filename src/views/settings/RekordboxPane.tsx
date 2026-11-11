@@ -10,12 +10,12 @@ export function RekordboxPane() {
   const id = useId();
   return (
     <Section title="Browse settings">
-      <p className={`${layout.help} ${option.intro}`}>Choose how RBXport uses rekordbox browse settings.</p>
+      <p className={`${layout.help} ${option.intro}`}>Choose how wreckordbox uses rekordbox browse settings.</p>
       <label className={`${layout.summary} ${option.option}`}>
         <span className={option.details}>
           <strong id={`${id}-sync`}>Keep browse settings synchronized</strong>
           <span id={`${id}-sync-help`} className={option.description}>
-            Import supported column visibility, order, and widths, plus browser pane widths, from rekordbox when RBXport starts.
+            Import supported column visibility, order, and widths, plus browser pane widths, from rekordbox when wreckordbox starts.
           </span>
           <span className={option.default}>Default: On</span>
         </span>

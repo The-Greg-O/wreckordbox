@@ -40,7 +40,7 @@ fn log_level_trace_reaches_the_file() {
         text = std::fs::read_dir(dir.path())
             .unwrap()
             .filter_map(Result::ok)
-            .filter(|e| e.file_name().to_string_lossy().starts_with("rbxport"))
+            .filter(|e| e.file_name().to_string_lossy().starts_with("wreckordbox."))
             .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
             .collect();
         if text.contains("needle-trace") && text.contains("needle-debug") {

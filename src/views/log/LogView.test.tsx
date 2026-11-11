@@ -17,7 +17,7 @@ let root: Root;
 const at = Date.UTC(2026, 9, 16, 10, 55, 7, 0);
 const lines: LogLine[] = [
   { seq: 1, timeMs: at, level: "debug", target: "rbxport_lib::logging", message: "logging to stdout and a daily file" },
-  { seq: 2, timeMs: at, level: "warn", target: "rbxport::status", message: "The playlist could not be renamed." },
+  { seq: 2, timeMs: at, level: "warn", target: "wreckordbox::status", message: "The playlist could not be renamed." },
   { seq: 3, timeMs: at, level: "error", target: "rbxport_lib::error", message: "internal error error.detail=disk full" },
 ];
 
@@ -62,19 +62,19 @@ it("shows what was logged, filtered by level and text, and saves what it shows",
   await flush();
   expect(shown()).toEqual([
     "2026-10-16T10:55:07.000Z DEBUG rbxport_lib::logging: logging to stdout and a daily file",
-    "2026-10-16T10:55:07.000Z  WARN rbxport::status: The playlist could not be renamed.",
+    "2026-10-16T10:55:07.000Z  WARN wreckordbox::status: The playlist could not be renamed.",
     "2026-10-16T10:55:07.000Z ERROR rbxport_lib::error: internal error error.detail=disk full",
   ]);
 
   change(host.querySelector("select")!, "warn");
   expect(shown()).toHaveLength(2);
   change(host.querySelector<HTMLInputElement>("input[type=search]")!, "PLAYLIST");
-  expect(shown()).toEqual(["2026-10-16T10:55:07.000Z  WARN rbxport::status: The playlist could not be renamed."]);
+  expect(shown()).toEqual(["2026-10-16T10:55:07.000Z  WARN wreckordbox::status: The playlist could not be renamed."]);
   expect(host.textContent).toContain("1 of 3 lines");
 
   const button = (label: string) => [...host.querySelectorAll("button")].find(b => b.textContent === label);
   await act(async () => { button("Save…")?.click(); await vi.advanceTimersByTimeAsync(0); });
-  expect(saveLogText).toHaveBeenCalledWith("2026-10-16T10:55:07.000Z  WARN rbxport::status: The playlist could not be renamed.\n");
+  expect(saveLogText).toHaveBeenCalledWith("2026-10-16T10:55:07.000Z  WARN wreckordbox::status: The playlist could not be renamed.\n");
   expect(host.textContent).toContain("Saved 1 line.");
 
   await act(async () => { button("Open log folder")?.click(); await vi.advanceTimersByTimeAsync(0); });

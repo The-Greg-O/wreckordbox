@@ -70,9 +70,9 @@ pub async fn log_status_message(failed: bool, text: String) -> AppResult<()> {
 
 fn log_status(failed: bool, text: &str) {
     if failed {
-        tracing::warn!(target: "rbxport::status", "{text}");
+        tracing::warn!(target: "wreckordbox::status", "{text}");
     } else {
-        tracing::info!(target: "rbxport::status", "{text}");
+        tracing::info!(target: "wreckordbox::status", "{text}");
     }
 }
 
@@ -120,8 +120,8 @@ mod tests {
         let page = held.lock().expect("buffer").after(0);
         let lines: Vec<_> = page.lines.iter().map(|l| (l.level, l.target.as_str(), l.message.as_str())).collect();
         assert_eq!(lines, [
-            ("warn", "rbxport::status", "The playlist could not be renamed."),
-            ("info", "rbxport::status", "Copied 3 tracks."),
+            ("warn", "wreckordbox::status", "The playlist could not be renamed."),
+            ("info", "wreckordbox::status", "Copied 3 tracks."),
         ]);
     }
 }

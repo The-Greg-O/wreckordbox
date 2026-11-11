@@ -46,7 +46,7 @@ pub struct Activation {
 pub fn detect() -> Result<Option<Detected>, String> {
     use midir::MidiOutput;
 
-    let output = MidiOutput::new("rbxport RX3 Link Export")
+    let output = MidiOutput::new("wreckordbox RX3 Link Export")
         .map_err(|error| format!("Could not inspect MIDI outputs for an XDJ-RX3: {error}"))?;
     let mut seen = Vec::new();
     let found = output.ports().into_iter().find_map(|port| {
@@ -78,7 +78,7 @@ impl Detected {
         let name = self.name;
         let mut connection = self
             .output
-            .connect(&self.port, "rbxport RX3 Link Export activation")
+            .connect(&self.port, "wreckordbox RX3 Link Export activation")
             .map_err(|error| format!("Could not open the XDJ-RX3 MIDI output {name:?}: {error}"))?;
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);

@@ -75,7 +75,7 @@ export function BackupsPane() {
           {job.progress.currentItem}
         </div> : null}
         <div className={styles.progressFooter}>
-          <p>{t("You can keep using RBXport while this runs.")}</p>
+          <p>{t("You can keep using wreckordbox while this runs.")}</p>
           <Button className={styles.backupButton} disabled={stopping} onClick={() => void job.stop()}>{stopping ? t("Stopping…") : t("Stop backup")}</Button>
         </div>
       </div> : <>
@@ -133,7 +133,7 @@ export function BackupsPane() {
     <section className={`${styles.destination} ${styles.restoreFile}`} aria-label={t("Restore a backup")}>
       <div>
         <h4 className={styles.sectionHeading}>{t("Restore a backup")}</h4>
-        <p className={layout.help}>{t("To restore, quit RBXport and open RBXport Restore. It shows what each backup holds and lets you restore all of it or only some parts.")}</p>
+        <p className={layout.help}>{t("To restore, quit wreckordbox and open wreckordbox Restore. It shows what each backup holds and lets you restore all of it or only some parts.")}</p>
       </div>
     </section>
   </Section>;

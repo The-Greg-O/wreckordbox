@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("Preferences creates and deletes a library backup, and points restores to RBXport Restore", async ({ page }) => {
+test("Preferences creates and deletes a library backup, and points restores to wreckordbox Restore", async ({ page }) => {
   await page.goto("/?writable=1");
   const settings = page.getByRole("banner").getByRole("button", { name: "Settings" });
   const preferences = page.getByRole("dialog", { name: "Preferences", exact: true });
@@ -20,7 +20,7 @@ test("Preferences creates and deletes a library backup, and points restores to R
   await expect(table.locator("time").first()).toHaveAttribute("datetime", /^\d{4}-/);
   await expect(table.getByRole("button", { name: "Restore", exact: true })).toHaveCount(0);
   await expect(preferences.getByRole("button", { name: "Restore from ZIP…", exact: true })).toHaveCount(0);
-  await expect(preferences.getByRole("region", { name: "Restore a backup" })).toContainText("open RBXport Restore");
+  await expect(preferences.getByRole("region", { name: "Restore a backup" })).toContainText("open wreckordbox Restore");
   await table.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(preferences.getByText("Backup deleted.")).toBeVisible();
   await expect(preferences.getByText("No backups yet.")).toBeVisible();

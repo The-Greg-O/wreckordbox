@@ -1001,7 +1001,7 @@ mod tests {
     #[test]
     fn a_failed_background_backup_reports_what_went_wrong() {
         let failed = error("Access is denied. (os error 5)");
-        assert_eq!(failure_message(&failed), "Something went wrong inside rbxport. Backup: Access is denied. (os error 5)");
+        assert_eq!(failure_message(&failed), "Something went wrong inside wreckordbox. Backup: Access is denied. (os error 5)");
         let plain = AppError::new(crate::error::ErrorKind::NotFound, "The library could not be found.");
         assert_eq!(failure_message(&plain), "The library could not be found.");
     }

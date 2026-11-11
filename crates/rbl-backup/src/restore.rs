@@ -88,7 +88,7 @@ pub fn restore(request: &Request<'_>, guard: &dyn Fn() -> Result<()>, progress: 
     crate::writable(location)?;
     guard()?;
     if crate::analysis_edit_pending(state_dir) {
-        return Err(refused("RBXport has an analysis edit it has not finished. Open RBXport once so it can finish it, quit it, then restore."));
+        return Err(refused("Wreckordbox has an analysis edit it has not finished. Open wreckordbox once so it can finish it, quit it, then restore."));
     }
     journal::recover(state_dir, location)?;
     journal::remove_orphans(state_dir, location)?;
@@ -123,7 +123,7 @@ pub fn restore(request: &Request<'_>, guard: &dyn Fn() -> Result<()>, progress: 
         if journal::pending(state_dir) {
             if let Err(recovery) = journal::recover(state_dir, location) {
                 return Err(refused(format!(
-                    "{error} The library could not be put back as it was ({recovery}). Open RBXport Restore again to finish recovering it."
+                    "{error} The library could not be put back as it was ({recovery}). Open wreckordbox Restore again to finish recovering it."
                 )));
             }
         } else {
@@ -524,11 +524,11 @@ mod tests {
             &Request { archive: &fixture.archive, parts: Parts::ALL, location: &fixture.location, state_dir: &state(&fixture), sizes: None },
             &|| {
                 calls.set(calls.get() + 1);
-                if calls.get() > 1 { Err(refused("Quit RBXport before restoring a backup.")) } else { Ok(()) }
+                if calls.get() > 1 { Err(refused("Quit wreckordbox before restoring a backup.")) } else { Ok(()) }
             },
             &mut |_, _, _, _| Ok(()),
         );
-        assert!(matches!(result, Err(Error::Refused(message)) if message.starts_with("Quit RBXport")));
+        assert!(matches!(result, Err(Error::Refused(message)) if message.starts_with("Quit wreckordbox")));
         assert_eq!(calls.get(), 2);
         assert_eq!(testing::rating(&fixture.location), 1);
         assert_eq!(fs::read(&fixture.grid).unwrap(), b"edited grid");

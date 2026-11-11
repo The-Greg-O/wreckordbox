@@ -61,7 +61,7 @@ impl AppError {
         let detail = detail.into();
         tracing::error!(error.detail = %detail, "internal error");
         crate::sentry::capture_internal_error();
-        Self::new(ErrorKind::Internal, "Something went wrong inside rbxport.").with_detail(detail)
+        Self::new(ErrorKind::Internal, "Something went wrong inside wreckordbox.").with_detail(detail)
     }
 }
 
@@ -115,7 +115,7 @@ mod tests {
     #[test]
     fn an_internal_error_keeps_its_explanation() {
         let err = AppError::internal("the database was unavailable");
-        assert_eq!(err.message, "Something went wrong inside rbxport.");
+        assert_eq!(err.message, "Something went wrong inside wreckordbox.");
         assert_eq!(err.detail.as_deref(), Some("the database was unavailable"));
     }
 
@@ -126,7 +126,7 @@ mod tests {
         let err = AppError::internal("Could not publish /Volumes/USB/Contents/a.mp3: No such file or directory (os error 2)");
         assert_eq!(
             err.full_message(),
-            "Something went wrong inside rbxport. Could not publish /Volumes/USB/Contents/a.mp3: No such file or directory (os error 2)"
+            "Something went wrong inside wreckordbox. Could not publish /Volumes/USB/Contents/a.mp3: No such file or directory (os error 2)"
         );
         let plain = AppError::new(ErrorKind::Internal, "could not write exportLibrary.db: Operation not supported (os error 45)");
         assert_eq!(plain.full_message(), plain.message);

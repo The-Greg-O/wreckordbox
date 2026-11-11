@@ -17,7 +17,7 @@ test("clicking the status bar's error opens the log, which keeps the message", a
   await error.getByRole("button").click();
   const log = page.getByRole("dialog", { name: "Log", exact: true });
   const lines = log.getByRole("log", { name: "Log lines" });
-  await expect(lines).toContainText("WARN rbxport::status: Load error. The file could not be found.");
+  await expect(lines).toContainText("WARN wreckordbox::status: Load error. The file could not be found.");
 
   // Only errors and warnings, then only lines with the text in them.
   await log.getByRole("combobox").selectOption("warn");
