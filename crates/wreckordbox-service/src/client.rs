@@ -13,7 +13,7 @@ use rbl_db::LibraryLocation;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
-use crate::protocol::{codes, commands, Event, Outcome, Request, Response, ServiceError, Status};
+use crate::protocol::{codes, commands, Event, Outcome, Request, Response, ServiceError, Status, TrackList, TrackQuery};
 use crate::{Config, IDLE_EXIT_ENV, RUNTIME_DIR_ENV};
 
 /// How long a started service has to answer on its socket.
@@ -83,6 +83,11 @@ impl Client {
     /// The service and the Library it has open.
     pub fn status(&mut self) -> Result<Status, ServiceError> {
         self.call(commands::STATUS, json!({}))
+    }
+
+    /// Tracks in the Library, as the window lists and searches them.
+    pub fn tracks(&mut self, query: &TrackQuery) -> Result<TrackList, ServiceError> {
+        self.call(commands::TRACKS_LIST, json!(query))
     }
 
     /// Asks the service to send this connection its events; read them with

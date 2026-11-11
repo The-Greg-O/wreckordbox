@@ -11,6 +11,8 @@ workspace = true
 
 [dependencies]
 rbl-db = { path = "../rbl-db" }
+# The index and search the window uses, so a query here matches the window.
+rbl-index = { path = "../rbl-index" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 dirs = "5"

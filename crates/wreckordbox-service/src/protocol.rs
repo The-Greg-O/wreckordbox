@@ -19,6 +19,9 @@ pub mod commands {
     pub const STATUS: &str = "status";
     /// Asks for [`Event`](super::Event)s on this connection from now on.
     pub const SUBSCRIBE: &str = "subscribe";
+    /// Lists tracks in the Library: takes a [`TrackQuery`](super::TrackQuery),
+    /// answers a [`TrackList`](super::TrackList).
+    pub const TRACKS_LIST: &str = "tracks.list";
 }
 
 /// The stable codes an error carries. A client decides on the code and shows
@@ -117,4 +120,48 @@ pub struct LibraryStatus {
     pub path: PathBuf,
     /// Tracks in the Library, not counting deleted ones.
     pub tracks: u32,
+}
+
+/// The arguments of `tracks.list`. Every one may be left out.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrackQuery {
+    /// Text to search for, as typed into the window's search box: every
+    /// word must appear somewhere in the track's details. Empty matches
+    /// every track.
+    #[serde(default)]
+    pub filter: String,
+    /// The most tracks to return; [`DEFAULT_TRACK_LIMIT`] when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+}
+
+/// How many tracks `tracks.list` returns when the client names no limit:
+/// enough to browse, few enough that a large Library does not flood the
+/// caller.
+pub const DEFAULT_TRACK_LIMIT: usize = 50;
+
+/// What `tracks.list` answers.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TrackList {
+    /// In the collection's own order, as the window lists them.
+    pub tracks: Vec<Track>,
+    /// How many tracks matched, which is more than were returned when the
+    /// limit cut the list short.
+    pub total: usize,
+}
+
+/// One track, as a row of the window's track list shows it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Track {
+    /// The track's identifier in the Library; what an edit names it by.
+    pub id: String,
+    pub title: String,
+    /// Empty when the track has none.
+    pub artist: String,
+    /// Beats per minute; `null` for a track with no tempo.
+    pub bpm: Option<f64>,
+    /// As the Library spells it, for example `8A`; empty when not analysed.
+    pub key: String,
+    /// Stars, 0 to 5.
+    pub rating: u8,
 }

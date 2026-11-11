@@ -7,6 +7,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 
 use rbl_db::fixture::{self, Shape};
+use rbl_db::write::{TrackField, Writer};
 use rbl_db::LibraryLocation;
 use wreckordbox_service::{Client, Config};
 
@@ -38,10 +39,19 @@ pub struct Sandbox {
 impl Sandbox {
     /// A fixture Library of 40 tracks.
     pub fn new() -> Self {
+        Self::with_shape(Shape::default())
+    }
+
+    /// A fixture Library with no tracks at all.
+    pub fn empty() -> Self {
+        Self::with_shape(Shape { tracks: 0, playlists: 0, tracks_per_playlist: 0, history_sessions: 0, ..Shape::default() })
+    }
+
+    pub fn with_shape(shape: Shape) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let library = dir.path().join("library");
         std::fs::create_dir_all(&library).unwrap();
-        let location = fixture::build(&library, Shape::default()).unwrap();
+        let location = fixture::build(&library, shape).unwrap();
         fixture::write_options_json(
             &dir.path().join("options.json"),
             location.master_db.to_str().unwrap(),
@@ -50,6 +60,28 @@ impl Sandbox {
         .unwrap();
         std::fs::create_dir_all(dir.path().join("home")).unwrap();
         Self { dir, location, idle_exit_secs: 5, pids: Mutex::new(Vec::new()) }
+    }
+
+    /// Changes the fixture Library with upstream's own writer, as the window
+    /// would. Call it before anything starts a service: the service is the
+    /// Library's only writer once it is up.
+    pub fn edit(&self, change: impl FnOnce(&mut Writer)) {
+        let mut writer = Writer::open(self.location.clone(), self.dir.path().join("backups")).unwrap();
+        writer.disable_automatic_backups();
+        change(&mut writer);
+    }
+
+    /// Gives the `index`th fixture track a title, an artist, a key and a
+    /// rating.
+    pub fn describe_track(&self, index: usize, title: &str, artist: &str, key: &str, stars: u8) {
+        let id = fixture::track_id(index);
+        self.edit(|writer| {
+            writer.set_field(&id, TrackField::Title, title).unwrap();
+            writer.set_field(&id, TrackField::Artist, artist).unwrap();
+            writer.ensure_detected_key(key).unwrap();
+            writer.set_field(&id, TrackField::Key, key).unwrap();
+            writer.set_rating(&id, stars).unwrap();
+        });
     }
 
     pub fn master_db(&self) -> &Path {
