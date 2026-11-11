@@ -1,0 +1,20 @@
+[package]
+name = "rbl-library"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The Library core: the loaded index, its open views, and the single path every Library edit takes."
+
+[lints]
+workspace = true
+
+[dependencies]
+rbl-db = { path = "../rbl-db" }
+rbl-index = { path = "../rbl-index" }
+rbl-backup = { path = "../rbl-backup" }
+parking_lot = "0.12"
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
