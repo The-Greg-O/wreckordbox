@@ -82,3 +82,29 @@ It answers with `progress` lines and one `done` (stem paths, `source_samples`,
   it the engine falls back to libsndfile.
 - Models, the virtual environment and caches are never committed
   (`.gitignore` here covers `.venv/` and Python caches).
+
+## Measured on ARM Linux
+
+The real backend installs from the unchanged `uv.lock` and runs on aarch64
+Linux (audio-separator 0.44.2, PyTorch 2.13.0, CPU only). One run, machine
+otherwise idle, through the worker protocol above:
+
+| | |
+|---|---|
+| Machine | Apple M2, 8 cores, 15 GB RAM, Asahi Linux aarch64 |
+| Request | `four_stem`, `quality: standard` (model `htdemucs_ft`) |
+| Track | stereo 44.1 kHz MP3, 304.3 s |
+| Wall time | 1358 s, which is 4.46 times the track's length |
+| Peak memory | 4.4 GB resident |
+| Cores used | 5.0 of 8 on average |
+| Sample count | source and all four stems: 13,418,790 frames each |
+
+`htdemucs_ft` is a bag of four models, one fine-tuned per stem, and the
+library runs each twice with a random time shift (`shifts=2`) and averages:
+8 passes over the track, each in overlapping chunks of about 7.8 s. The engine
+exposes no faster setting (`quality` is `standard` or the slower `max`); the
+library has them (`shifts=1`, or the single-model `htdemucs`), unmeasured.
+
+The first run downloads the model (about 320 MB) into `--model-dir`. Stems
+from an MP3 source are written as 16-bit PCM WAV. The `separating` progress
+fraction is a clock-based estimate and can sit still for most of a first run.
