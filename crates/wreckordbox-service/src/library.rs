@@ -60,6 +60,12 @@ impl OpenLibrary {
         self.db.live_track_count().map_err(|e| open_error(&e))
     }
 
+    /// The read-only connection, for what the index does not hold.
+    pub(crate) fn db(&self) -> &rbl_db::Library {
+        &self.db
+    }
+
+    /// The index as it stands now: a snapshot an edit does not change.
     pub(crate) fn index(&self) -> Result<std::sync::Arc<rbl_index::Library>, ServiceError> {
         self.core
             .library()
@@ -152,7 +158,7 @@ impl OpenLibrary {
     }
 }
 
-fn track(index: &rbl_index::Library, row: rbl_index::Row) -> Track {
+pub(crate) fn track(index: &rbl_index::Library, row: rbl_index::Row) -> Track {
     let at = row as usize;
     let bpm_x100 = index.bpm_x100.get(at).copied().unwrap_or(0);
     Track {

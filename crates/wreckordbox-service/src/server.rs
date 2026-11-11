@@ -239,6 +239,8 @@ impl Shared {
                 self.publish(&changed.event());
                 to_value(&rated)
             }
+            reading if crate::reading::answers(reading) => self
+                .with_library(|library| crate::reading::answer(library, reading, &request.args))?,
             crate::tracks::TRACKS_GET | crate::tracks::TRACKS_QUERY => {
                 self.with_library(|library| crate::tracks::answer(library, request))?
             }

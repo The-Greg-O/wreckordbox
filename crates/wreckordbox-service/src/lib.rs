@@ -13,6 +13,7 @@
 mod client;
 mod library;
 pub mod protocol;
+pub mod reading;
 mod server;
 pub mod tracks;
 
