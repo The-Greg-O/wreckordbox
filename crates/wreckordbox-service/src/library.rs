@@ -60,7 +60,7 @@ impl OpenLibrary {
         self.db.live_track_count().map_err(|e| open_error(&e))
     }
 
-    fn index(&self) -> Result<std::sync::Arc<rbl_index::Library>, ServiceError> {
+    pub(crate) fn index(&self) -> Result<std::sync::Arc<rbl_index::Library>, ServiceError> {
         self.core
             .library()
             .map_err(|e| ServiceError::new(codes::SERVICE_FAILED, e.to_string()))

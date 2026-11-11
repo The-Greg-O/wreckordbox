@@ -239,6 +239,9 @@ impl Shared {
                 self.publish(&changed.event());
                 to_value(&rated)
             }
+            crate::tracks::TRACKS_GET | crate::tracks::TRACKS_QUERY => {
+                self.with_library(|library| crate::tracks::answer(library, request))?
+            }
             unknown => Err(ServiceError::new(
                 codes::UNKNOWN_COMMAND,
                 format!("unknown command: {unknown}"),
