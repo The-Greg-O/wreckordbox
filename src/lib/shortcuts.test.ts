@@ -537,3 +537,41 @@ describe("PERFORMANCE mode's fixed-distance beat jumps", () => {
     expect(dispatch({ key: "ArrowRight", metaKey: true, altKey: true }, MAC, { tagName: "INPUT" }, overrides)).toBeNull();
   });
 });
+
+describe("the whole-interface scale's keys", () => {
+  const MAC_OS = { mac: true };
+  const LINUX = { mac: false, linux: true };
+
+  it("are the primary modifier with minus and equals, and with option + 0 for the reset", () => {
+    expect(actionFor({ key: "-", code: "Minus", ctrlKey: true }, LINUX)).toBe("uiScaleSmaller");
+    expect(actionFor({ key: "=", code: "Equal", ctrlKey: true }, LINUX)).toBe("uiScaleLarger");
+    expect(actionFor({ key: "0", code: "Digit0", ctrlKey: true, altKey: true }, LINUX)).toBe("uiScaleReset");
+    // Option turns the 0 into `º` on a US Mac; the physical key is still 0.
+    expect(actionFor({ key: "º", code: "Digit0", metaKey: true, altKey: true }, MAC_OS)).toBe("uiScaleReset");
+    expect(actionFor({ key: "-", code: "Minus", metaKey: true }, MAC_OS)).toBe("uiScaleSmaller");
+  });
+
+  it("leave Full Browser its key, and minus and equals alone to the decks", () => {
+    expect(actionFor({ key: "0", code: "Digit0", ctrlKey: true }, LINUX)).toBeNull();
+    expect(menuAccelerator({ key: "0", code: "Digit0", ctrlKey: true }, LINUX)).toBe("layout-browser");
+    expect(menuAccelerator({ key: "0", code: "Digit0", ctrlKey: true, altKey: true }, LINUX)).toBeNull();
+    expect(actionFor({ key: "-", code: "Minus" }, LINUX)).toBeNull();
+    expect(actionFor({ key: "=", code: "Equal" }, LINUX)).toBeNull();
+  });
+
+  it("are no other binding's keys", () => {
+    for (const id of ["uiScaleSmaller", "uiScaleLarger", "uiScaleReset"]) {
+      const own = BINDINGS.find((b) => b.id === id);
+      expect(own, id).toBeDefined();
+      if (!own) continue;
+      expect(BINDINGS.filter((b) => b.chord.key !== "" && sameChord(b.chord, own.chord)).map((b) => b.id)).toEqual([id]);
+    }
+  });
+
+  it("work while a field has the focus", () => {
+    const field = { tagName: "INPUT" };
+    expect(dispatch({ key: "-", code: "Minus", ctrlKey: true }, LINUX, field)).toBe("uiScaleSmaller");
+    expect(dispatch({ key: "=", code: "Equal", ctrlKey: true }, LINUX, field)).toBe("uiScaleLarger");
+    expect(dispatch({ key: "0", code: "Digit0", ctrlKey: true, altKey: true }, LINUX, field)).toBe("uiScaleReset");
+  });
+});

@@ -57,6 +57,9 @@ export function usePreferencesStore(initial?: Preferences): PreferencesStore {
       const base = storedPreferences() ?? current;
       const next = { ...base, [pane]: DEFAULT_PREFERENCES[pane] };
       savePreferences(next);
+      // As `update` does: this window's own listeners (the language, the
+      // whole-interface scale) hear of a reset too.
+      window.dispatchEvent(new CustomEvent("rbl-preferences"));
       return next;
     });
   }, []);

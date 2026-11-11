@@ -109,3 +109,19 @@ fn the_linux_window_still_takes_the_linux_overrides() {
     assert_eq!(window.get("decorations"), Some(&json!(true)));
     assert_eq!(window.get("dragDropEnabled"), Some(&json!(true)));
 }
+
+/// The whole-interface scale is the app's own: stored stops between limits,
+/// applied by each window as it opens (`src/lib/uiScale.ts`). The webview's
+/// built-in zoom hotkeys would move the zoom behind its back, with no limit
+/// and nothing remembered, so no window may turn them on.
+#[test]
+fn no_window_enables_the_built_in_zoom_hotkeys() {
+    for (name, platform) in [("base", "{}"), ("linux", LINUX)] {
+        for window in windows(&merged(platform)) {
+            assert!(
+                matches!(window.get("zoomHotkeysEnabled"), None | Some(Value::Bool(false))),
+                "{name}: zoomHotkeysEnabled must stay off"
+            );
+        }
+    }
+}

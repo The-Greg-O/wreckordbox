@@ -134,6 +134,12 @@ export type Action =
   | "volumeUp"
   | "volumeDown"
   | "mute"
+  // The whole-interface scale (wreckordbox's own): one stop smaller, one
+  // larger, and back to the measured size. See `UI_SCALES` in
+  // `preferences.ts`.
+  | "uiScaleSmaller"
+  | "uiScaleLarger"
+  | "uiScaleReset"
   // The GRID panel: `Adjust BPM/BeatGrid` (`command + G`) opens it, the
   // modified arrows are `Shift Beatgrid left/right`, and `Shift Beatgrid to
   // the center` (`option + command + \`) puts the nearest beat under the
@@ -468,6 +474,10 @@ export function isTyping(target: FocusTarget | null | undefined): boolean {
 const WHILE_TYPING: ReadonlySet<Action> = new Set<Action>([
   "focusSearch",
   "clearSearch",
+  // The scale is the window's, not the field's: nothing is typed with them.
+  "uiScaleSmaller",
+  "uiScaleLarger",
+  "uiScaleReset",
 ]);
 
 /** The action to run for an event, accounting for where the focus is. */
@@ -689,6 +699,12 @@ export const BINDINGS: readonly Binding[] = [
   { id: "volumeUp", group: "General", label: "Volume", chord: { key: "F12", metaKey: true }, action: "volumeUp", command: "3003" },
   { id: "volumeDown", group: "General", label: "Volume Down", chord: { key: "F11", metaKey: true }, action: "volumeDown", command: "3004" },
   { id: "mute", group: "General", label: "Mute", chord: { key: "F10", metaKey: true }, action: "mute", command: "3005" },
+  // The whole-interface scale: the keys a browser zooms with, except that
+  // command + 0 is Full Browser here and shift + command + 0 a pad's clear
+  // in the Performance 2 preset, so the reset carries option (alt).
+  { id: "uiScaleSmaller", group: "General", label: "Smaller Interface", chord: { key: "-", metaKey: true }, action: "uiScaleSmaller", pane: "View" },
+  { id: "uiScaleLarger", group: "General", label: "Larger Interface", chord: { key: "=", metaKey: true }, action: "uiScaleLarger", pane: "View" },
+  { id: "uiScaleReset", group: "General", label: "Reset Interface Size", chord: { key: "0", metaKey: true, altKey: true }, action: "uiScaleReset", pane: "View" },
   { id: "menu.import", group: "Menu", label: "Import File", chord: { key: "o", metaKey: true }, command: "2000" },
   { id: "menu.settings", group: "Menu", label: "Preferences", chord: { key: ",", metaKey: true }, command: "200a" },
   { id: "menu.info", group: "Menu", label: "Information Window", chord: { key: "i", metaKey: true }, command: "b103" },
