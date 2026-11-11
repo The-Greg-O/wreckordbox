@@ -58,6 +58,14 @@ _Avoid_: Subjective fact, tag fact
 A Fact computed from a specific audio file's samples, such as Intensity or Stems. It is stale once that file's audio changes.
 _Avoid_: Analysis result, objective fact
 
+**Decision**:
+A recorded judgement between fixed candidates: the question, the context given, the candidates, the choice, how sure, and which Decider answered. A Decision can be asked again of a different Decider and compared.
+_Avoid_: Classification, prediction, inference
+
+**Decider**:
+Whatever answers a Decision: a rule, an agent, a decision model or the DJ.
+_Avoid_: Model, classifier, judge
+
 **Projection**:
 A deliberate step that writes chosen Facts into fields rekordbox and players understand, such as a MyTag, Energy, comment, Prep colour or cue. Each kind of change can be set to wait for the DJ or to apply above a confidence.
 _Avoid_: Sync, write-back
