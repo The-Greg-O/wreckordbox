@@ -141,7 +141,7 @@ impl OpenLibrary {
     ) -> Result<(T, LibraryChanged), ServiceError> {
         let (value, change) = self
             .core
-            .edit(&NoHost, History::Outside, touched, action)
+            .edit(&*self.host, History::Outside, touched, action)
             .map_err(|e| edit_error(&e))?;
         let changed = LibraryChanged {
             kind: match change.kind {

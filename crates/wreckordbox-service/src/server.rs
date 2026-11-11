@@ -394,7 +394,9 @@ impl Shared {
                 let (result, changed) = self.with_library(|library| {
                     crate::mytag_edits::answer(library, edit, &request.args)
                 })??;
-                self.publish(&changed.event());
+                // As for a rating: clients hear of it from the core, the
+                // hosting process here.
+                self.tell_host(&changed.event());
                 Ok(result)
             }
             crate::tracks::TRACKS_GET | crate::tracks::TRACKS_QUERY => {

@@ -619,8 +619,9 @@ struct Vocabulary {
 impl Vocabulary {
     fn read(library: &OpenLibrary) -> Result<Self, ServiceError> {
         Ok(Self {
-            rows: rbl_db::export_info::my_tags(library.db().connection())
-                .map_err(|e| open_error(&e))?,
+            rows: library.with_db(|db| {
+                rbl_db::export_info::my_tags(db.connection()).map_err(|e| open_error(&e))
+            })?,
         })
     }
 
