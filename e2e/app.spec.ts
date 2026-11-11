@@ -2518,7 +2518,7 @@ test("the title bar carries the name in the middle of the window", async ({ page
   await page.goto("/");
   const bar = page.getByTestId("title-bar");
   const name = bar.locator('[class*="appName"]');
-  await expect(name).toHaveText("rbxport");
+  await expect(name).toHaveText("wreckordbox");
   const strip = await bar.boundingBox();
   const text = await name.boundingBox();
   const centre = (strip?.x ?? 0) + (strip?.width ?? 0) / 2;

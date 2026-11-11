@@ -6,6 +6,14 @@ rust-version.workspace = true
 license.workspace = true
 description = "Rekordbox-compatible export-mode library manager."
 
+# The desktop app's binary. The package keeps upstream's name (ADR 0003), and
+# `wreckordbox` is the CLI's binary (crates/wreckordbox), so this one has its
+# own name: it is what a launcher entry runs and what the compositor reports
+# as the window's class.
+[[bin]]
+name = "wreckordbox-desktop"
+path = "src/main.rs"
+
 [lib]
 name = "rbxport_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]

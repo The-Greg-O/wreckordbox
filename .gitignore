@@ -12,7 +12,9 @@ src-tauri/gen/
 
 # Private research and captured reference material. Never commit these.
 .agents/
-.claude/
+.claude/*
+# Project-scope Claude Code plugins travel with the repo.
+!.claude/settings.json
 .codex/
 skills/
 bugs/

@@ -275,7 +275,7 @@ export function Preferences({
             <ul className={styles.panes} role="tablist" aria-orientation="vertical">
               {PANES.map(({ id, label, Icon }) => (
                 <li key={id}>
-                  {id === "rekordbox" ? <h4 className={styles.paneGroupHeading}>RBXport</h4> : null}
+                  {id === "rekordbox" ? <h4 className={styles.paneGroupHeading}>wreckordbox</h4> : null}
                   <button
                     type="button"
                     role="tab"

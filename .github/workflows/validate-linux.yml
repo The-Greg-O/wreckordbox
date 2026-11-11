@@ -70,14 +70,14 @@ jobs:
             pid=$!
             trap "kill $pid 2>/dev/null || true; wait $pid 2>/dev/null || true" EXIT
             for _ in $(seq 1 20); do
-              if xwininfo -root -tree | grep -Fq "rbxport"; then exit 0; fi
+              if xwininfo -root -tree | grep -Fq "wreckordbox"; then exit 0; fi
               if ! kill -0 "$pid" 2>/dev/null; then break; fi
               sleep 1
             done
             cat "$2"
-            echo "::error::rbxport did not create a Linux window"
+            echo "::error::wreckordbox did not create a Linux window"
             exit 1
-          ' _ target/debug/rbxport "$log"
+          ' _ target/debug/wreckordbox-desktop "$log"
 
       - name: Clean the runner
         if: always()

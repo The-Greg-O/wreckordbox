@@ -204,7 +204,7 @@ export function AdvancedPane({ tab, summary }: {
             }}
           >
             <h3>{t("Library Protection")}</h3>
-            <p>{t("It looks like you haven’t made a backup yet. We strongly recommend creating one before using RBXport.")}</p>
+            <p>{t("It looks like you haven’t made a backup yet. We strongly recommend creating one before using wreckordbox.")}</p>
             <div className={styles.warningActions}>
               <Button onClick={() => {
                 setUnlockWarning(false);

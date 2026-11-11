@@ -103,7 +103,7 @@ it("gently recommends a backup and offers Unlock anyway or Cancel", async () => 
   await toggleProtection();
 
   const dialog = host.querySelector('[role="dialog"]');
-  expect(dialog?.textContent).toContain("It looks like you haven’t made a backup yet. We strongly recommend creating one before using RBXport.");
+  expect(dialog?.textContent).toContain("It looks like you haven’t made a backup yet. We strongly recommend creating one before using wreckordbox.");
   expect([...dialog!.querySelectorAll("button")].map(button => button.textContent)).toEqual([
     "Unlock anyway", "Cancel",
   ]);
