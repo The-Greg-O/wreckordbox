@@ -50,6 +50,14 @@ _Avoid_: Extra tables, metadata db, cache
 One thing known about a track, held in the Sidecar with its source (the DJ, an agent, a tool or a web lookup) and a confidence. A value the DJ sets by hand is a Fact whose source is the DJ, and it outranks any other source.
 _Avoid_: Finding, attribute, metadata
 
+**Judgement**:
+A Fact about the music itself, such as genre, mood, Situation or Energy. It follows the track when its audio file is replaced, moved or re-added.
+_Avoid_: Subjective fact, tag fact
+
+**Measurement**:
+A Fact computed from a specific audio file's samples, such as Intensity or Stems. It is stale once that file's audio changes.
+_Avoid_: Analysis result, objective fact
+
 **Projection**:
 A deliberate step that writes chosen Facts into fields rekordbox and players understand, such as a MyTag, Energy, comment, Prep colour or cue. Each kind of change can be set to wait for the DJ or to apply above a confidence.
 _Avoid_: Sync, write-back
