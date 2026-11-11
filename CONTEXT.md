@@ -42,9 +42,25 @@ _Avoid_: Colour tag, track colour
 Wreckordbox's own store beside the Library, keyed by track, holding results from tools rekordbox does not have. It is never part of the rekordbox-format Library.
 _Avoid_: Extra tables, metadata db, cache
 
+**Fact**:
+One thing known about a track, held in the Sidecar with its source (the DJ, an agent, a tool or a web lookup) and a confidence. A value the DJ sets by hand is a Fact whose source is the DJ, and it outranks any other source.
+_Avoid_: Finding, attribute, metadata
+
 **Projection**:
-A deliberate step that writes chosen Sidecar results into fields rekordbox and players understand, such as a MyTag, comment, colour or cue.
+A deliberate step that writes chosen Facts into fields rekordbox and players understand, such as a MyTag, Energy, comment, Prep colour or cue. Each kind of change can be set to wait for the DJ or to apply above a confidence.
 _Avoid_: Sync, write-back
+
+**Run**:
+One piece of work by an agent, a tool or the DJ that changes the Library or the Sidecar, recorded as a unit so it can be reviewed and unwound together.
+_Avoid_: Batch, job, session
+
+**Ledger**:
+The durable record of every change to the Library and the Sidecar: what changed, from what to what, by which source, in which Run.
+_Avoid_: History, audit log, undo stack
+
+**Unwind**:
+Reversing a Run, or part of one, from the Ledger at any later time and out of order. A value changed since is flagged, not overwritten. Distinct from undo, which reverses the most recent edits in the window.
+_Avoid_: Rollback, revert, restore
 
 **Stem**:
 A separated component of a parent track (vocals, melody, bass or drums), held in the Sidecar, attached to its parent and inheriting the parent's beat grid, key and cues.
