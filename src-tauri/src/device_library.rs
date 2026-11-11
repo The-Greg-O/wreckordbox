@@ -815,8 +815,8 @@ fn carry_stick_analysis(state: &AppState, mount: &Path, content: &str, copy: &Pa
     let dat_relative = Path::new(&stick.analysis);
     let dat = if stick.analysis.trim().is_empty() { None } else { read(dat_relative)? };
 
-    let _gate = state.edit_gate.lock();
-    let _files = state.analysis_write.lock();
+    let _gate = state.edit_gate().lock();
+    let _files = state.analysis_write().lock();
     let location = state.location()?;
     crate::file_journal::recover(state.backup_dir(), &location)?;
     let key = Some(stick.key.as_str()).filter(|k| !k.is_empty());

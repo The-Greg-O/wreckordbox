@@ -666,7 +666,7 @@ pub fn plan(
 /// history (#502), under the edit gate so no Undo runs between the two.
 /// Answers how many tracks it pointed somewhere.
 fn record_relocation(state: &AppState, moves: &[(String, PathBuf)], manual: bool) -> AppResult<u32> {
-    let _gate = state.edit_gate.lock();
+    let _gate = state.edit_gate().lock();
     let relocation = state
         .write_history_then(
             |writer| {
