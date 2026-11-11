@@ -92,7 +92,7 @@ pub fn disable_read_only() -> AppResult<()> {
         Ok(())
     } else {
         Err(AppError::internal(format!(
-            "Set {} before launching rbxport to enable this override.",
+            "Set {} before launching wreckordbox to enable this override.",
             rbl_db::UNSAFE_WRITES_ENV
         )))
     }

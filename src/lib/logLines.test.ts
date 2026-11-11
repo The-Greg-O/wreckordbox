@@ -9,8 +9,8 @@ describe("log lines", () => {
   const lines = [
     line(1, "trace", "packet"),
     line(2, "debug", "opened the library"),
-    line(3, "info", "Copied 3 tracks.", "rbxport::status"),
-    line(4, "warn", "The playlist could not be renamed.", "rbxport::status"),
+    line(3, "info", "Copied 3 tracks.", "wreckordbox::status"),
+    line(4, "warn", "The playlist could not be renamed.", "wreckordbox::status"),
     line(5, "error", "internal error error.detail=disk full"),
   ];
 
@@ -28,7 +28,7 @@ describe("log lines", () => {
 
   it("writes a line the way the log file does", () => {
     expect(formatLogLine(lines[3]!)).toBe(
-      "2026-10-16T10:55:07.123Z  WARN rbxport::status: The playlist could not be renamed.");
+      "2026-10-16T10:55:07.123Z  WARN wreckordbox::status: The playlist could not be renamed.");
   });
 
   it("appends only lines after the newest held, up to the window's limit", () => {

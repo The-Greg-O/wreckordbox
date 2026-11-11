@@ -78,7 +78,7 @@ pub fn install(app: &AppHandle) {
 // ------------------------------------------------------------ the backend
 
 fn app() -> Result<&'static AppHandle, ScriptError> {
-    APP.get().ok_or_else(|| ScriptError::failed("rbxport is still starting."))
+    APP.get().ok_or_else(|| ScriptError::failed("wreckordbox is still starting."))
 }
 
 fn state() -> Result<Arc<AppState>, ScriptError> {

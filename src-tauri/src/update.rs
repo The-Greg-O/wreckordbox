@@ -189,7 +189,7 @@ fn store_install() -> bool {
 }
 
 fn store_refusal() -> AppError {
-    AppError::new(ErrorKind::Internal, "The Microsoft Store installs this copy of rbxport's updates.")
+    AppError::new(ErrorKind::Internal, "The Microsoft Store installs this copy of wreckordbox's updates.")
 }
 
 /// The variable the Nix launcher (`packaging/nix/bin.nix`) sets, to `nix`,
@@ -230,7 +230,7 @@ fn nix_install() -> bool {
 }
 
 fn nix_refusal() -> AppError {
-    AppError::new(ErrorKind::Internal, "Nix installs this copy of rbxport's updates.")
+    AppError::new(ErrorKind::Internal, "Nix installs this copy of wreckordbox's updates.")
 }
 
 /// The refusal for a copy whose updates a package manager or store installs,

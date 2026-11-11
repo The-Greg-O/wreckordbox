@@ -37,7 +37,7 @@ const player = (page: Page) => page.getByRole("region", { name: "Preview player"
 test("View VU Meter switches modes and persists the selection", async ({ page }) => {
   await open(page);
   const dialog = await prefs(page);
-  const choices = dialog.getByRole("radiogroup", { name: "RBXport VU Meter", exact: true });
+  const choices = dialog.getByRole("radiogroup", { name: "Wreckordbox VU Meter", exact: true });
   await expect(choices.getByRole("radio", { name: "Normal (shows signal peaks, like rekordbox)", exact: true })).toBeChecked();
   await choices.getByRole("radio", { name: "Advanced (peak + RMS, inspired by FabFilter Pro-L 2)", exact: true }).click();
   await expect(page.getByRole("banner").locator('[role="meter"][data-mode="fabulous"]')).toHaveCount(2);
@@ -228,7 +228,7 @@ test("Audio has its own sections for the rate, the buffer, the metronome and the
   await open(page);
   const dialog = await prefs(page);
   await dialog.getByRole("tab", { name: "Audio" }).click();
-  for (const name of ["Sample Rate", "Buffer size", "Metronome", "RBXport Master Limiter"]) {
+  for (const name of ["Sample Rate", "Buffer size", "Metronome", "Wreckordbox Master Limiter"]) {
     await expect(dialog.getByRole("heading", { name })).toBeVisible();
   }
   await expect(dialog.getByRole("combobox", { name: "Sample Rate" })).toHaveValue("48000");
@@ -310,7 +310,7 @@ test("About groups version and update controls", async ({ page }) => {
   await expect(dialog.getByText("in California", { exact: true })).toBeVisible();
   await expect(dialog.getByRole("heading", { name: "Support rbxport" })).toBeVisible();
   await expect(dialog.getByText("rbxport is free to use and independently developed by TRIODE.")).toBeVisible();
-  await expect(dialog.getByRole("heading", { name: "rbxport", exact: true })).toBeVisible();
+  await expect(dialog.getByRole("heading", { name: "wreckordbox", exact: true })).toBeVisible();
   await expect(dialog.getByRole("group", { name: "Author links" })).toBeVisible();
   const updates = dialog.getByRole("region", { name: "About", exact: true });
   await expect(dialog.getByTestId("about-version")).toHaveText("v0.4.0");

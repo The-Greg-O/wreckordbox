@@ -349,7 +349,7 @@ prints the rollback folder's location.
 ## Local state
 
 `rbl_backup::state_dir()` is RBXport's backup state folder:
-`<data dir>/rbxport/backups`, or the path in `RBXPORT_STATE_DIR` when that is
+`<data dir>/wreckordbox/backups`, or the path in `RBXPORT_STATE_DIR` when that is
 set. It holds:
 
 | File | Purpose |

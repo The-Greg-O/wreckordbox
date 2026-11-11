@@ -7,11 +7,11 @@
 #   scripts/omarchy/headless-shot.sh [out.png] [WIDTHxHEIGHT] [settle-seconds]
 set -euo pipefail
 
-out=${1:-/tmp/rbxport-headless.png}
+out=${1:-/tmp/wreckordbox-headless.png}
 size=${2:-1800x1130}
 settle=${3:-5}
 root=$(cd "$(dirname "$0")/../.." && pwd)
-bin=${RBXPORT_BIN:-$root/target/debug/rbxport}
+bin=${RBXPORT_BIN:-$root/target/debug/wreckordbox-desktop}
 runtime=${XDG_RUNTIME_DIR:?}
 
 before=$(ls "$runtime" | grep -E '^wayland-[0-9]+$' || true)

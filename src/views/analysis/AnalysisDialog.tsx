@@ -109,7 +109,7 @@ export function AnalysisDialog({ count, auto = false, initialMode, initialBpmRan
               <span>{t("Analysis Mode")}</span>
               <select value={settings.mode} onChange={event => update({ mode: event.target.value as AnalysisMode })}>
                 <option value="rekordbox">{t("Normal")}</option>
-                <option value="rbxport">{t("RBXport (Electronic Music)")}</option>
+                <option value="rbxport">{t("Wreckordbox (Electronic Music)")}</option>
               </select>
             </label>
             <p className={styles.modeBlurb}>
