@@ -243,16 +243,23 @@ const MAIN_WINDOW: &str = "main";
 /// restore that included visibility called `show()` the moment the window was
 /// built, and the window came up as an empty frame until React drew into it.
 ///
-/// On Linux the saved state does not carry decorations either: the window's
-/// are set in `tauri.linux.conf.json`, and a state saved by a decorated build
-/// put the title bar back on every launch.
-#[cfg(not(target_os = "linux"))]
-const WINDOW_STATE: tauri_plugin_window_state::StateFlags =
-    tauri_plugin_window_state::StateFlags::all().difference(tauri_plugin_window_state::StateFlags::VISIBLE);
-#[cfg(target_os = "linux")]
-const WINDOW_STATE: tauri_plugin_window_state::StateFlags = tauri_plugin_window_state::StateFlags::all()
-    .difference(tauri_plugin_window_state::StateFlags::VISIBLE)
-    .difference(tauri_plugin_window_state::StateFlags::DECORATIONS);
+/// On Linux it does not carry decorations either. The window has none there
+/// (`tauri.linux.conf.json`), and a state saved by a decorated build said
+/// `"decorated": true`, which put the title bar back on every launch.
+///
+/// Takes the platform's name (`std::env::consts::OS`) rather than a `cfg`, so
+/// the Linux rule is checked on whatever machine runs the tests.
+#[must_use]
+pub fn saved_window_state(os: &str) -> tauri_plugin_window_state::StateFlags {
+    use tauri_plugin_window_state::StateFlags;
+
+    let everything_but_visibility = StateFlags::all().difference(StateFlags::VISIBLE);
+    if os == "linux" {
+        everything_but_visibility.difference(StateFlags::DECORATIONS)
+    } else {
+        everything_but_visibility
+    }
+}
 
 /// How long after the window appears its geometry is still corrected.
 ///
@@ -278,7 +285,7 @@ fn window_geometry() -> tauri::plugin::TauriPlugin<tauri::Wry> {
             if window.label() != MAIN_WINDOW {
                 return;
             }
-            if let Err(e) = window.restore_state(WINDOW_STATE) {
+            if let Err(e) = window.restore_state(saved_window_state(std::env::consts::OS)) {
                 tracing::warn!(error = %e, "could not restore the window's geometry");
             }
 
@@ -321,7 +328,7 @@ fn window_geometry() -> tauri::plugin::TauriPlugin<tauri::Wry> {
                 }
                 *last = std::time::Instant::now();
                 drop(last);
-                if let Err(e) = subject.app_handle().save_window_state(WINDOW_STATE) {
+                if let Err(e) = subject.app_handle().save_window_state(saved_window_state(std::env::consts::OS)) {
                     tracing::warn!(error = %e, "could not save the window's geometry");
                 }
             });
@@ -435,7 +442,7 @@ pub fn run() {
         // the restore had moved it, so all three found nothing wrong.
         .plugin(
             tauri_plugin_window_state::Builder::default()
-                .with_state_flags(WINDOW_STATE)
+                .with_state_flags(saved_window_state(std::env::consts::OS))
                 .skip_initial_state(MAIN_WINDOW)
                 .build(),
         )
