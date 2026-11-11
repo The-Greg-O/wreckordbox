@@ -16,7 +16,6 @@ Commands in these guides run from the repository root unless stated otherwise.
 | [Contributing](../CONTRIBUTING.md) | Reporting an issue or preparing a change for review. |
 | [Debugging](development/debugging.md) | Diagnosing failures and managing local output. |
 | [Releases](development/releases.md) | Understanding versions, CI, and release operations. |
-| [Sentry](development/sentry.md) | Configuring crash reporting for a build. |
 
 ## Using the app
 

@@ -77,13 +77,6 @@ jobs:
         if: inputs.check_rust
         run: cargo check --workspace --all-targets
 
-      - name: Check silent updater task script
-        if: inputs.check_rust
-        shell: pwsh
-        run: |
-          & ./src-tauri/windows/install-update-task.ps1 `
-            -InstallDirectory "$env:RUNNER_TEMP/rbxport" -ValidateOnly
-
       # Backups write, flush and rename files, which Windows treats differently
       # from Unix (handle access rights, open-file locking). Run them natively.
       - name: Backup tests

@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 /**
  * The Log window (#484): the status bar's message is shown for a moment, and
  * clicking it opens the log, where the message stays. In a browser the log is
- * drawn over the main window, as the Report bug and Sync Manager windows are.
+ * drawn over the main window, as the Sync Manager window is.
  */
 test("clicking the status bar's error opens the log, which keeps the message", async ({ page }) => {
   // Read-only, so a double-click loads rather than edits; row 1 is missing.

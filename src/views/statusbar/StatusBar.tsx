@@ -1,6 +1,4 @@
 import styles from "./StatusBar.module.css";
-import { Bug, Heart } from "lucide-react";
-import type { ReactNode } from "react";
 import { useTooltip } from "@/store/usePreferences";
 import { refusal } from "@/lib/menu";
 import type { ExportProgress } from "@/ipc/types";
@@ -36,8 +34,6 @@ export interface StatusBarProps {
   onExplainReadOnly?: (() => void) | undefined;
   onDisableReadOnly?: (() => void) | undefined;
   onOpenProtection?: (() => void) | undefined;
-  onReportBug?: (() => void) | undefined;
-  onSupport?: (() => void) | undefined;
   /** Opens the current application log with the OS default handler. */
   onOpenLog?: (() => void) | undefined;
   /** Opens the Log window; the status and error messages are its way in. */
@@ -48,8 +44,6 @@ export interface StatusBarProps {
   analysisFailures?: number;
   /** Which tracks failed and why, listed in the failure badge's tooltip. */
   analysisFailed?: readonly { title: string; reason: string }[];
-  /** A short-lived status-bar action, such as a downloaded update. */
-  updateNotice?: ReactNode;
 }
 
 export function StatusBar({
@@ -68,14 +62,11 @@ export function StatusBar({
   onExplainReadOnly,
   onDisableReadOnly,
   onOpenProtection,
-  onReportBug,
-  onSupport,
   onOpenLog,
   onShowLog,
   onCancelAnalysis,
   analysisFailures = 0,
   analysisFailed = [],
-  updateNotice,
 }: StatusBarProps) {
   const tip = useTooltip();
   const t = useTranslation();
@@ -193,11 +184,6 @@ export function StatusBar({
         </span>
       ) : null}
       <span className={styles.selection}>{selection}</span>
-      <span className={styles.actions}>
-        {updateNotice}
-        {onSupport ? <button type="button" className={`${styles.reportBug} ${styles.support}`} onClick={onSupport}><Heart size="1em" aria-hidden="true" /> Support rbxport</button> : null}
-        {onReportBug ? <button type="button" className={`${styles.reportBug} ${styles.report}`} onClick={onReportBug}><Bug size="1em" aria-hidden="true" /> Report bug</button> : null}
-      </span>
     </footer>
   );
 }

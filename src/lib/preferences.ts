@@ -282,9 +282,6 @@ export interface DjSystemPreferences {
   linkKeySort: "alphabetical" | "musical";
 }
 
-export const UPDATE_FREQUENCIES = ["start", "daily", "weekly"] as const;
-export type UpdateFrequency = (typeof UPDATE_FREQUENCIES)[number];
-
 /** What adding a track a playlist already holds does: ask, leave it out, or add it again. */
 export const DUPLICATE_TRACKS = ["ask", "skip", "add"] as const;
 export type DuplicateTracks = (typeof DUPLICATE_TRACKS)[number];
@@ -342,10 +339,6 @@ export interface AdvancedPreferences {
   /** Allow BEAT/BPM SYNC with double/half BPM. */
   syncDoubleHalf: boolean;
   quantizeBeat: QuantizeBeat;
-  /** Ask the download server for a newer version when the app starts. */
-  checkUpdates: boolean;
-  /** How often that automatic check runs: every start, once a day, once a week. */
-  updateFrequency: UpdateFrequency;
   /** A track played for `playbackTime` seconds goes on today's history and its count goes up. */
   recordHistory: boolean;
   /**
@@ -473,8 +466,6 @@ export const DEFAULT_PREFERENCES: Preferences = {
     syncType: "beat",
     syncDoubleHalf: true,
     quantizeBeat: "1/1",
-    checkUpdates: true,
-    updateFrequency: "start",
     recordHistory: true,
     playbackTime: PLAYBACK_TIME.default,
   },
@@ -672,8 +663,6 @@ export function sanitisePreferences(value: unknown): Preferences {
       syncType: oneOf(advanced.syncType, SYNC_TYPES, d.advanced.syncType),
       syncDoubleHalf: bool(advanced.syncDoubleHalf, d.advanced.syncDoubleHalf),
       quantizeBeat: oneOf(advanced.quantizeBeat, QUANTIZE_BEATS, d.advanced.quantizeBeat),
-      checkUpdates: bool(advanced.checkUpdates, d.advanced.checkUpdates),
-      updateFrequency: oneOf(advanced.updateFrequency, UPDATE_FREQUENCIES, d.advanced.updateFrequency),
     },
     keyboard: {
       preset: oneOf(keyboard.preset, KEY_PRESETS, d.keyboard.preset),
