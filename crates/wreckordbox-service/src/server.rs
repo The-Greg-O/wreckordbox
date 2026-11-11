@@ -110,15 +110,15 @@ impl Service {
     /// another front end does not stop: this fails with
     /// [`codes::STOP_REFUSED`], and the caller must not write.
     pub fn host(
-        library: LibraryLocation,
+        library: &LibraryLocation,
         config: &Config,
-        core: Arc<LibraryCore>,
-        host: Arc<dyn Host + Send + Sync>,
+        core: &Arc<LibraryCore>,
+        host: &Arc<dyn Host + Send + Sync>,
     ) -> Result<Self, ServiceError> {
-        let socket = config.socket_path(&library);
+        let socket = config.socket_path(library);
         let deadline = Instant::now() + HANDOVER_TIMEOUT;
         loop {
-            let (core, host) = (Arc::clone(&core), Arc::clone(&host));
+            let (core, host) = (Arc::clone(core), Arc::clone(host));
             let started = Self::begin(library.clone(), config, true, |_| {
                 Ok(OpenLibrary::shared(core, host))
             });
@@ -162,7 +162,7 @@ impl Service {
         let open = open(library)?;
         let core = open.core();
         let listener = listen(&config.runtime_dir, &socket)?;
-        let (changes, changed) = std::sync::mpsc::channel();
+        let (queue, queued) = std::sync::mpsc::channel();
 
         let shared = Arc::new(Shared {
             library: Mutex::new(Some(Owned {
@@ -177,7 +177,7 @@ impl Service {
             stopped: (Mutex::new(false), Condvar::new()),
             connections: Mutex::new(HashMap::new()),
             listeners: Mutex::new(Vec::new()),
-            changes: Mutex::new(Some(changes)),
+            changes: Mutex::new(Some(queue)),
             idle_since: Mutex::new(Some(Instant::now())),
         });
         // Every change to the Library, whoever made it: a client's command,
@@ -199,7 +199,7 @@ impl Service {
             let shared = Arc::clone(&shared);
             std::thread::spawn(move || {
                 // Ends when the service stops and closes the queue.
-                for event in changed {
+                for event in queued {
                     shared.send_to_clients(&event);
                 }
             });

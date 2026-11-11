@@ -118,7 +118,7 @@ impl AppState {
         }
         let core = self.shared_core();
         let host: Arc<dyn Host + Send + Sync> = Arc::new(WindowHost(Arc::downgrade(self)));
-        let service = match Service::host(location.clone(), config, Arc::clone(&core), host) {
+        let service = match Service::host(location, config, &core, &host) {
             Ok(service) => service,
             Err(error) => {
                 let message = cannot_host(&error);
@@ -187,8 +187,11 @@ impl AppState {
 
 /// Why the window could not become the host, for the DJ.
 fn cannot_host(error: &ServiceError) -> String {
-    if error.code == codes::STOP_REFUSED || error.code == codes::SERVICE_ALREADY_RUNNING {
+    if error.code == codes::STOP_REFUSED {
         "Another wreckordbox window has this Library open, so this window cannot change it. Close the other window, then restart this one.".to_owned()
+    } else if error.code == codes::SERVICE_ALREADY_RUNNING {
+        // It holds the Library's lock and did not answer on this socket.
+        "Another wreckordbox service has this Library open and did not stop, so this window cannot change it. Stop it, then restart this window.".to_owned()
     } else {
         format!("The Library service could not start, so this window cannot change the Library: {}", error.message)
     }
@@ -251,6 +254,7 @@ pub fn host_with<R: tauri::Runtime>(
 /// Why this window cannot change the Library, or nothing when it can: what
 /// `service:stopped` said, for a window that was not listening yet.
 #[tauri::command]
+#[allow(clippy::needless_pass_by_value, reason = "a command is handed its state by value")]
 pub fn service_problem(state: tauri::State<'_, Arc<AppState>>) -> Option<String> {
     state.service_problem()
 }

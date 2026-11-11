@@ -222,6 +222,10 @@ fn shared_core() -> SharedCore {
     }
 }
 
+fn no_host() -> Arc<dyn rbl_library::Host + Send + Sync> {
+    Arc::new(NoHost)
+}
+
 impl SharedCore {
     fn load(&self) {
         let db = rbl_db::Library::open(self.location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
@@ -237,13 +241,7 @@ impl SharedCore {
     }
 
     fn host(&self) -> Service {
-        Service::host(
-            self.location.clone(),
-            &self.config,
-            Arc::clone(&self.core),
-            Arc::new(NoHost),
-        )
-        .unwrap()
+        Service::host(&self.location, &self.config, &self.core, &no_host()).unwrap()
     }
 
     fn client(&self) -> Client {
@@ -281,10 +279,7 @@ fn a_service_hosted_on_a_front_ends_core_shares_its_library_and_generation() {
         .unwrap();
     assert_eq!(change.generation, rated.generation + 1);
     let listed = client.tracks(&Default::default()).unwrap();
-    assert_eq!(
-        listed.tracks.iter().find(|t| t.id == id).unwrap().rating,
-        2
-    );
+    assert_eq!(listed.tracks.iter().find(|t| t.id == id).unwrap().rating, 2);
     assert_eq!(client.status().unwrap().library.tracks, 3);
 }
 
@@ -338,10 +333,10 @@ fn a_hosted_service_refuses_to_stop_for_a_client_so_its_front_end_stays_the_writ
 
     // A second front end cannot take the Library from the first.
     let second = Service::host(
-        front.location.clone(),
+        &front.location,
         &front.config,
-        Arc::new(LibraryCore::new(front.config.recovery_dir.clone())),
-        Arc::new(NoHost),
+        &Arc::new(LibraryCore::new(front.config.recovery_dir.clone())),
+        &no_host(),
     )
     .map(|_| ())
     .unwrap_err();
@@ -389,7 +384,11 @@ fn a_front_ends_own_change_is_sent_to_clients_and_not_back_to_the_front_end() {
         .unwrap();
 
     assert_eq!(
-        client.next_event(Duration::from_secs(5)).unwrap().unwrap().data,
+        client
+            .next_event(Duration::from_secs(5))
+            .unwrap()
+            .unwrap()
+            .data,
         json!({ "kind": "library", "generation": change.generation })
     );
     assert!(events.recv_timeout(Duration::from_millis(200)).is_err());
@@ -397,7 +396,11 @@ fn a_front_ends_own_change_is_sent_to_clients_and_not_back_to_the_front_end() {
     // A client's change is sent to clients once, and to the front end.
     let rated = client.rate_track(&id, 4).unwrap();
     assert_eq!(
-        client.next_event(Duration::from_secs(5)).unwrap().unwrap().data,
+        client
+            .next_event(Duration::from_secs(5))
+            .unwrap()
+            .unwrap()
+            .data,
         json!({ "kind": "library", "generation": rated.generation })
     );
     assert_eq!(client.next_event(Duration::from_millis(200)).unwrap(), None);

@@ -693,23 +693,25 @@ function AppBody() {
   const refuse = useCallback((text: string) => setNote({ text, failed: true }), []);
   const stopJob = useCallback((id: number) => jobs.stop(id), [jobs]);
   // The Library service this window hosts has stopped, or another window
-  // has the Library: nothing more is saved, and the DJ is told why. Asked
-  // as well as heard, since it can happen before this has subscribed.
+  // has the Library: nothing more is saved, and the status bar says why for
+  // as long as that is so. Asked as well as heard, since it can happen
+  // before this has subscribed.
+  const [serviceProblem, setServiceProblem] = useState<string | null>(null);
   useEffect(() => {
     let live = true;
     let stop: (() => void) | undefined;
     void (async () => {
       const backend = await getBackend();
       if (!live) return;
-      stop = backend.onServiceStopped(refuse);
+      stop = backend.onServiceStopped(setServiceProblem);
       const problem = await backend.serviceProblem().catch(() => null);
-      if (live && problem) refuse(problem);
+      if (live && problem) setServiceProblem(problem);
     })();
     return () => {
       live = false;
       stop?.();
     };
-  }, [refuse]);
+  }, []);
   jobError.current = (job, error) => refuse(error instanceof Error ? error.message : `${job.label} failed.`);
   // A waveform click whose track could not be previewed says why.
   useEffect(() => onPreviewError(refuse), [refuse]);
@@ -3271,7 +3273,7 @@ function AppBody() {
   // log as it appears, so the Log window still has it once the bar moves on;
   // a running job's changing progress text is left out.
   const statusActivity = note !== null && !note.failed ? note.text : "";
-  const statusError = playerError ?? loadError ?? [...exportJobs.values()].find(job => job.state === "failed")?.title
+  const statusError = playerError ?? loadError ?? serviceProblem ?? [...exportJobs.values()].find(job => job.state === "failed")?.title
     ?? (note?.failed === true ? note.text : null);
   const loggedActivity = note?.busy === true ? "" : statusActivity;
   useEffect(() => {

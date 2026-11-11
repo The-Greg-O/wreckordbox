@@ -33,6 +33,9 @@ fn wreckordbox() -> &'static PathBuf {
     })
 }
 
+/// What the interface would have been sent, in order.
+type Heard<T> = Arc<Mutex<Vec<T>>>;
+
 struct Window {
     dir: tempfile::TempDir,
     app: tauri::App<MockRuntime>,
@@ -72,7 +75,7 @@ fn window() -> Window {
 fn app_on(
     dir: &tempfile::TempDir,
     location: &rbl_db::LibraryLocation,
-) -> (tauri::App<MockRuntime>, Arc<Mutex<Vec<u32>>>, Arc<Mutex<Vec<String>>>) {
+) -> (tauri::App<MockRuntime>, Heard<u32>, Heard<String>) {
     let state = AppState::with_backups(dir.path().join("backups"));
     let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
     let (index, _) = rbl_index::load(&db).unwrap();
