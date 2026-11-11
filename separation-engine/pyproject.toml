@@ -1,0 +1,42 @@
+[project]
+name = "stemsplitter-engine"
+version = "0.1.0"
+description = "Stem separation worker for the Dubplate macOS app (JSON-lines stdio protocol)"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    # <2.4 keeps numba resolvable (numpy 2.5 forces numba to an unbuildable floor)
+    "numpy>=1.26,<2.4",
+    "soundfile>=0.12",
+    "mutagen>=1.47",
+]
+
+[project.optional-dependencies]
+# The real separation backend. Unit tests run without it (FakeBackend);
+# EnvironmentBootstrap installs with this extra on first launch.
+# [cpu] pulls onnxruntime, which audio-separator imports unconditionally
+# but only declares via its own extras.
+full = [
+    "audio-separator[cpu]>=0.30",
+    # Ships a static ffmpeg binary inside the venv; the worker symlinks it
+    # onto PATH at startup so Finder-launched apps (bare GUI PATH, possibly
+    # no homebrew at all) can always decode.
+    "imageio-ffmpeg>=0.5",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/stemsplitter_engine"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: drives the real separation model end-to-end (needs the full extra)",
+]
