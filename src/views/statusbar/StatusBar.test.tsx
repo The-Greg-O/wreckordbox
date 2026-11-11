@@ -66,15 +66,11 @@ it("names read-only as a library state", () => {
   expect(badge?.title).toContain("Editing is locked while rekordbox is running");
 });
 
-it("offers the support action when it is available", () => {
-  const onSupport = vi.fn();
-  act(() => root.render(<StatusBar onSupport={onSupport} />));
+it("offers no donation, bug report or update action", () => {
+  act(() => root.render(<StatusBar version="1.2.3" />));
 
-  const button = Array.from(host.querySelectorAll("button")).find(candidate => candidate.textContent?.includes("Support rbxport"));
-  act(() => button?.click());
-
-  expect(button).toBeDefined();
-  expect(onSupport).toHaveBeenCalledOnce();
+  expect(host.querySelectorAll("button")).toHaveLength(0);
+  expect(host.textContent).toBe("wreckordbox 1.2.3");
 });
 
 it("lists the running job and then those waiting, each with its own Stop", () => {

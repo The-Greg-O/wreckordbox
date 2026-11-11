@@ -591,8 +591,6 @@ export interface Backend {
    */
   trackVocals(trackId: string): Promise<Uint8Array>;
 
-  /** Opens an https address in the person's browser. */
-  openUrl(url: string): Promise<void>;
   /** The backups this app has taken, newest first. */
   listBackups(): Promise<Backup[]>;
   /** The configured directory, including before the first backup exists. */
@@ -748,32 +746,6 @@ export interface Backend {
   audioDevices(): Promise<AudioDevices>;
   /** Choose one, or `null` for the system's own. Takes effect on the next play. */
   setAudioDevice(device: string | null): Promise<void>;
-  /**
-   * Asks the download server for the newest version.
-   *
-   * `version` is null when this build is the newest; otherwise `changes`
-   * holds the release notes between the two, newest first, and the update is
-   * held for `downloadUpdate`. `ready` says when that version was already
-   * downloaded this run, so there is nothing to fetch again.
-   */
-  checkForUpdate(): Promise<UpdateCheck>;
-  /** A completed download held by this process, without asking the network. */
-  readyUpdate(): Promise<UpdateReady | null>;
-  /**
-   * Downloads what the last check found and puts it in place: swapped on
-   * disk where the app can be while it runs (macOS, an AppImage), so the
-   * next launch is the new version; staged for the quit on Windows. Resolves
-   * to what happened.
-   */
-  downloadUpdate(): Promise<UpdateReady>;
-  /**
-   * Runs the downloaded update now: a restart into one that is in place, or
-   * the staged installer, which brings the app back itself. Resolves only
-   * if that failed — a success ends the process.
-   */
-  restartToUpdate(): Promise<void>;
-  /** The download's progress, about ten times a second while it runs. */
-  onUpdateProgress(listener: (progress: UpdateProgress) => void): () => void;
   /** The master limiter as it stands. */
   masterLimiter(): Promise<Limiter>;
   /** Sets the master limiter; what comes back is what the engine could set. */
@@ -947,8 +919,7 @@ export interface Backend {
 
   /**
    * The Preferences window asking the main one for something only it holds:
-   * the browser's columns or the panes' widths put back, or a check for
-   * updates, whose window belongs to the main one. Returns its own
+   * the browser's columns or the panes' widths put back. Returns its own
    * unsubscribe.
    */
   onPreferencesReset(listener: (what: PreferencesRequest) => void): () => void;
@@ -963,9 +934,6 @@ export interface Backend {
    * manager over itself instead.
    */
   openSyncWindow(): Promise<boolean>;
-  openReportWindow(): Promise<boolean>;
-  reportAttachment(): Promise<string>;
-  openReportAttachment(attachment: string): Promise<void>;
 
   /**
    * What `syncDevices` would use and give back on each stick, from the record
@@ -1186,60 +1154,6 @@ export interface AudioDevices {
 
 /** What the Preferences window can ask the main window to do. */
 export type PreferencesRequest = "columns" | "layout";
-
-/** One release's section of the published release notes. */
-export interface UpdateChange {
-  version: string;
-  /** `2026-09-10`, when the heading carries one. */
-  date: string | null;
-  /** The section's markdown, its heading included. */
-  body: string;
-}
-
-/** What a check for updates found. */
-export interface UpdateCheck {
-  currentVersion: string;
-  /** The version on offer, or null when this build is the newest. */
-  version: string | null;
-  /** RFC 3339, when the feed says when it was published. */
-  date: string | null;
-  /** The release notes between the two versions, newest first. */
-  changes: UpdateChange[];
-  /** Set when the version on offer is already downloaded this run. */
-  ready: UpdateReady | null;
-  /**
-   * This copy was installed by the Microsoft Store, which installs its
-   * updates. The check did not ask the download server; `version` is null.
-   */
-  storeInstall: boolean;
-  /**
-   * This copy was installed through Nix, whose channel brings its updates;
-   * the built-in updater is unavailable. The check did not ask the download
-   * server; `version` is null.
-   */
-  nixInstall: boolean;
-  /**
-   * Why the last update, installed after the app quit, did not install.
-   * Given once, by the first check after the launch that found it.
-   */
-  previousFailure?: string | null;
-}
-
-/** A downloaded update, and whether it is already in the app's place. */
-export interface UpdateReady {
-  version: string;
-  /**
-   * true when the next launch runs it as things stand; false when an
-   * installer still has to run, at the quit or from Restart Now.
-   */
-  installed: boolean;
-}
-
-export interface UpdateProgress {
-  downloaded: number;
-  /** null when the server did not say how big the file is. */
-  total: number | null;
-}
 
 /**
  * The master limiter, which keeps two decks summed from clipping.

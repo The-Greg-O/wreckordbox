@@ -501,14 +501,11 @@ impl Session {
             device_settings,
             key_order,
         ));
-        let unsupported_command_reporter = Arc::new(|transaction, command, player| {
-            crate::sentry::capture_unsupported_link_database_command(transaction, command, player);
-        });
         let export = LinkExport::start_with_unsupported_command_reporter(
             source,
             chosen,
             Ports::REKORDBOX,
-            Some(unsupported_command_reporter),
+            None,
             state.link_played(),
         )
         .map_err(|e| e.to_string())?;

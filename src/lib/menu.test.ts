@@ -63,13 +63,11 @@ describe("menu", () => {
     expect(resolveMenu("import-folder", false)).toEqual({ action: "import-folder" });
   });
 
-  it("checks for updates whatever state the library is in", () => {
-    // An update touches nothing in the library, so a read-only one is no
-    // reason to refuse — whichever of the two reasons made it read-only.
-    expect(resolveMenu("updates", true)).toEqual({ action: "updates" });
-    expect(resolveMenu("updates", true, true)).toEqual({ action: "updates" });
-    expect(resolveMenu("updates", false)).toEqual({ action: "updates" });
-    expect(menuCommand("updates")?.writes).toBe(false);
+  it("has no update check and no bug report to offer", () => {
+    // Wreckordbox contacts none of upstream's services, so an id for either
+    // is not one of its commands.
+    expect(resolveMenu("updates", false)).toBeNull();
+    expect(resolveMenu("report-bug", false)).toBeNull();
   });
 
   it("opens the Missing File Manager on a read-only library", () => {

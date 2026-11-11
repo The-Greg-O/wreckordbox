@@ -4741,19 +4741,6 @@ pub async fn remove_from_history<R: tauri::Runtime>(
     .await
 }
 
-/// Opens a web address in the person's browser: the About pane's links.
-/// Only `https://`, so nothing in the webview can hand the OS a file or a
-/// scheme of its own.
-#[tauri::command]
-pub async fn open_url<R: tauri::Runtime>(app: tauri::AppHandle<R>, url: String) -> AppResult<()> {
-    if !url.starts_with("https://") {
-        return Err(AppError::new(ErrorKind::Malformed, "Only an https address can be opened."));
-    }
-    app.opener().open_url(&url, None::<&str>).map_err(|e| {
-        AppError::new(ErrorKind::Internal, "That address could not be opened.").with_detail(e.to_string())
-    })
-}
-
 /// Reset DJ Play Count: the tracks' counts go back to zero.
 #[tauri::command]
 pub async fn reset_play_count<R: tauri::Runtime>(

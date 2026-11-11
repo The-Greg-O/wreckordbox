@@ -11,7 +11,6 @@ mod file_drop;
 mod file_drag;
 mod startup;
 mod screen_cache;
-mod sentry;
 #[cfg(test)]
 mod test_stick;
 pub mod analysis;
@@ -47,22 +46,14 @@ mod browse_settings;
 mod protocol;
 mod relocate;
 mod sync_window;
-mod report;
 mod scripting;
 mod device_settings;
 pub mod dto;
 mod error;
 pub mod state;
 mod test_port;
-mod elevated_update;
-mod update;
 
 pub use error::{AppError, AppResult, ErrorKind};
-
-/// Runs the protected Windows update entry point before Tauri starts.
-pub fn run_elevated_update_helper_if_requested() -> Option<i32> {
-    update::run_elevated_helper_if_requested()
-}
 
 use state::AppState;
 use std::sync::Arc;
@@ -405,10 +396,6 @@ pub fn browser_args() -> Option<String> {
 pub fn run() {
     startup::begin();
     logging::install();
-    // Keep the guard alive until the Tauri event loop exits so a panic has a
-    // chance to be delivered during shutdown.  The build injects the DSN;
-    // without one this intentionally becomes a no-op client.
-    let _sentry = sentry::install();
 
     let mut context = tauri::generate_context!();
     #[cfg(target_os = "macos")]
@@ -429,7 +416,6 @@ pub fn run() {
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
         // Puts the window back where it was: size, position, and whether it
         // was maximised. Restored before the window is shown, so it does not
         // appear at the default size and jump.
@@ -451,7 +437,6 @@ pub fn run() {
         .manage(Arc::new(crate::player::Player::default()))
         .manage(Arc::new(crate::preview::Preview::default()))
         .manage(Arc::new(crate::grid::GridEditor::default()))
-        .manage(Arc::new(crate::update::Updates::default()))
         .manage(crate::test_port::TestPort::default())
         .setup(|app| {
             // The system webview runs the whole interface, and on macOS its
@@ -619,10 +604,6 @@ pub fn run() {
             commands::set_audio_device,
             commands::master_limiter,
             commands::set_master_limiter,
-            update::check_for_update,
-            update::ready_update,
-            update::download_update,
-            update::restart_to_update,
             commands::deck_tempo,
             commands::deck_metronome,
             commands::deck_metronome_grid,
@@ -663,9 +644,6 @@ pub fn run() {
             relocate::relocate_by_location,
             preferences::open_preferences,
             sync_window::open_sync_window,
-            report::open_report_window,
-            report::report_attachment,
-            report::open_report_attachment,
             commands::sync_devices,
             commands::estimate_sync,
             commands::validate_export_files,
@@ -713,7 +691,6 @@ pub fn run() {
             commands::back_up_library,
             commands::delete_backup,
             commands::set_backup_directory,
-            commands::open_url,
             commands::reset_play_count,
             commands::record_play,
             commands::played_tracks,
@@ -777,13 +754,9 @@ pub fn run() {
 
     match result {
         Ok(app) => {
-            crate::update::Updates::clear_stale(app.handle());
             app.run(|handle, event| {
-                // An update downloaded this run and waiting for the quit
-                // (Windows) is installed now, silently.
                 if matches!(event, tauri::RunEvent::Exit) {
                     crate::screen_cache::save(handle);
-                    crate::update::on_exit(handle);
                 }
             });
         }

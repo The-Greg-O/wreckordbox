@@ -18,7 +18,7 @@ import type {
   AppErrorDto, Backend, Backup, BackupProgress, BackupSizes, Cue, DeckEvent, Device, DeviceSettings, Edits, ExplorerRoot, ExportReport,
   DatabaseDrive, EditHistoryState, FilterValues, GridState, LibraryProblem, LibrarySummary, Limiter, LinkPeerSeen, LinkStatus, RelatedCriterion, RowDto, SortKey,
   SelectionDetails, SmartRule, StickDefaults, SyncPlaylist, SyncProgress, Tick, TrackDetails, TrackField,
-  PreferencesRequest, RelocateSearch, UpdateCheck, UpdateProgress, UpdateReady, ExportProgress,
+  PreferencesRequest, RelocateSearch, ExportProgress,
   DeckId, TrackFilter, TreeNode, ViewHandle, ViewSpec, WaveformKind, LogLine, LogLevel,
 } from "./types";
 import { TREE_ROOT } from "./types";
@@ -1972,10 +1972,6 @@ export function createMockBackend(options: MockOptions = {}): Backend {
 
   const preferencesRequestListeners = new Set<(what: PreferencesRequest) => void>();
 
-  /** Who is told how the pretend download is going. */
-  const updateProgressListeners = new Set<(progress: UpdateProgress) => void>();
-  let updateReady: UpdateReady | null = null;
-
   // The mock's head stops exactly on the last frame, so standing there
   // stopped is having played to the end.
   const ended = (deck: typeof deckA): boolean =>
@@ -2435,9 +2431,6 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     },
 
     // No windows in a browser: the shell draws the manager over itself.
-    openReportWindow: () => wait(false),
-    reportAttachment: () => wait("System information\nBrowser preview\n\nApplication log\nNo application log available.\n"),
-    openReportAttachment: () => Promise.reject(new Error("Opening the text editor requires the desktop app.")),
     openSyncWindow: () => wait(false),
     // Stick after stick, each announced before and after, as the real run
     // is. A destination that is not a mock device is a stick that was
@@ -2545,11 +2538,6 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     onExportProgress: (listener) => { exportListeners.add(listener); return () => { exportListeners.delete(listener); }; },
     exportProgress: () => wait([...exportJobs.values()]),
     cancelExport: (path) => { cancelledExports.add(path); return Promise.resolve(); },
-    // A browser opens the address itself.
-    openUrl: (url) => {
-      window.open(url, "_blank", "noopener");
-      return wait(undefined);
-    },
     backupDirectory: () => wait(backupDirectory),
     openBackupDirectory: () => wait(undefined),
     backupSizes: (refresh = false) => {
@@ -2807,70 +2795,6 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     setAudioDevice: () => wait(undefined),
     // Held and given back clamped as the engine would, so the controls in
     // Settings behave in a browser.
-    // A browser has nothing to update, so this offers a pretend version two
-    // releases on, with a changelog shaped like the real one, and its
-    // download runs at a believable pace so the bar can be watched. Once
-    // downloaded it stays downloaded, as the shell's does.
-    checkForUpdate: () =>
-      wait<UpdateCheck>({
-        ready: updateReady,
-        storeInstall: false,
-        nixInstall: false,
-        currentVersion: "0.4.0",
-        version: "0.6.0",
-        date: "2026-09-12T18:00:00Z",
-        changes: [
-          {
-            version: "0.6.0",
-            date: "2026-09-12",
-            body:
-              "## [0.6.0] — 2026-09-12\n\n### Added\n- The app checks for a newer version when it " +
-              "starts, downloads it with a progress bar, and shows what changed since the version " +
-              "running.\n\n### Fixed\n- A track dragged to a player carries a faded copy of its row.",
-          },
-          {
-            version: "0.5.0",
-            date: "2026-09-11",
-            body:
-              "## [0.5.0] — 2026-09-11\n\n### Added\n- The app icon is the rekordbox cube ring with a " +
-              "feather in the middle.\n\n### Changed\n- The right-click menus list what rekordbox's do.",
-          },
-        ],
-      }),
-    readyUpdate: () => wait(updateReady),
-    downloadUpdate: () =>
-      new Promise<UpdateReady>((resolve) => {
-        if (updateReady) {
-          resolve(updateReady);
-          return;
-        }
-        const total = 16_342_693;
-        let downloaded = 0;
-        const tick = () => {
-          downloaded = Math.min(total, downloaded + 900_000 + Math.random() * 400_000);
-          for (const listener of updateProgressListeners) listener({ downloaded, total });
-          if (downloaded < total) {
-            setTimeout(tick, 100);
-          } else {
-            // The swap on disk takes a moment on a real machine too.
-            setTimeout(() => {
-              updateReady = { version: "0.6.0", installed: true };
-              resolve(updateReady);
-            }, 800);
-          }
-        };
-        setTimeout(tick, 300);
-      }),
-    // A real restart never comes back; a browser cannot restart, so the
-    // manager is told what it would be told if the restart had failed —
-    // which is the only way it ever hears back.
-    restartToUpdate: () => wait(undefined).then(() => Promise.reject(new Error("A browser cannot restart into an update."))),
-    onUpdateProgress: (listener) => {
-      updateProgressListeners.add(listener);
-      return () => {
-        updateProgressListeners.delete(listener);
-      };
-    },
     // A browser is not an install; nothing is counted.
     masterLimiter: () => wait({ ...limiter }),
     setMasterLimiter: (wanted) => {

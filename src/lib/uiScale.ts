@@ -8,7 +8,7 @@
  * zoom hotkeys do the same thing but keep nothing and have no limits, so
  * they are off and the stops in `preferences.ts` are the only way in.
  *
- * Every window (main, Preferences, Sync Manager, Report bug, Log) runs
+ * Every window (main, Preferences, Sync Manager, Log) runs
  * `followUiScale` from `main.tsx` before it draws: it applies the stored
  * stop, and applies it again whenever the stored preferences change, in this
  * window or another.
