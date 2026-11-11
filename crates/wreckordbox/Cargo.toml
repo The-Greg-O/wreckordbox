@@ -1,0 +1,20 @@
+[package]
+name = "wreckordbox"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The headless wreckordbox command: a thin client of the Library service."
+
+[lints]
+workspace = true
+
+[dependencies]
+wreckordbox-service = { path = "../wreckordbox-service" }
+clap = { version = "4", features = ["derive"] }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+rbl-db = { path = "../rbl-db" }
+serde_json = { workspace = true }
+tempfile = "3"

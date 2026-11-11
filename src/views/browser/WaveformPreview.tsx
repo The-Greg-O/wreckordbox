@@ -5,7 +5,7 @@
  * bitmap, so scrolling back over a row is a single `drawImage` rather than an
  * IPC round trip and a redraw.
  */
-import { memo, useEffect, useRef, type MouseEvent as ReactMouseEvent } from "react";
+import { memo, useEffect, useRef, useSyncExternalStore, type MouseEvent as ReactMouseEvent } from "react";
 import { getBackend } from "@/ipc/client";
 import type { RowCue } from "@/ipc/types";
 import {
@@ -14,6 +14,7 @@ import {
 } from "@/canvas";
 import { useTranslation } from "@/i18n";
 import { hotCueColour } from "@/lib/hotCueColours";
+import { onPixelRatioChange, pixelRatio } from "@/lib/pixelRatio";
 import { usePreferences } from "@/store/usePreferences";
 import { previewPositionMs, startPreview, stopPreview, usePreview } from "@/store/usePreview";
 import styles from "./TrackTable.module.css";
@@ -141,6 +142,8 @@ export interface WaveformPreviewProps {
   startupCache?: boolean;
 }
 
+const serverPixelRatio = () => 1;
+
 export const WaveformPreview = memo(function WaveformPreview({
   trackId,
   width,
@@ -158,10 +161,13 @@ export const WaveformPreview = memo(function WaveformPreview({
   // in rekordbox.
   const { waveformColor: palette, hotCueColor, overviewWaveform } = usePreferences().view;
   const half = overviewWaveform !== "full";
+  // The device pixels a CSS pixel covers, whole-interface scale included. The
+  // row keeps its CSS size when the scale changes, so nothing else would
+  // resize the canvas below and repaint it: `dpr` is one of the effect's keys.
+  const dpr = useSyncExternalStore(onPixelRatioChange, pixelRatio, serverPixelRatio);
 
   useEffect(() => {
     let cancelled = false;
-    const dpr = window.devicePixelRatio || 1;
     const key = `${startupCache ? "startup" : "live"}:${palette}:${half ? "half" : "full"}:${WaveformCache.key(trackId, width, dpr)}`;
 
     const paint = (entry: { bitmap: CanvasImageSource }) => {
@@ -197,9 +203,8 @@ export const WaveformPreview = memo(function WaveformPreview({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [trackId, width, height, hotCues, memoryCues, memoryCueColours, durationSec, palette, half, hotCueColor, startupCache]);
+  }, [trackId, width, height, hotCues, memoryCues, memoryCueColours, durationSec, palette, half, hotCueColor, startupCache, dpr]);
 
-  const dpr = typeof window === "undefined" ? 1 : window.devicePixelRatio || 1;
   return (
     <span className={styles.previewWave} style={{ width: `${width}px`, height: `${height}px` }}>
       <canvas

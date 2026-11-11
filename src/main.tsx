@@ -4,11 +4,16 @@ import "./styles/base.css";
 import { Localization } from "./i18n";
 import { syncRekordboxBrowseAtStartup } from "./lib/rekordboxBrowse";
 import { initializeSentry } from "./lib/sentry";
+import { followUiScale } from "./lib/uiScale";
 import * as Sentry from "@sentry/react";
 
 // Suppress the webview's Reload/Inspect menu in every app window. Leave
 // propagation intact so the app's context-menu handlers still receive it.
 window.addEventListener("contextmenu", (event) => event.preventDefault());
+
+// The whole-interface scale, in every window this bundle draws, before any of
+// them paints: each opens at the stored scale and follows a change to it.
+followUiScale();
 
 const el = document.getElementById("root");
 if (!el) throw new Error("#root missing from index.html");

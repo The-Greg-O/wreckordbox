@@ -12,7 +12,6 @@
         "titleBarStyle": "Visible",
         "hiddenTitle": false,
         "decorations": false,
-        "zoomHotkeysEnabled": true,
         "acceptFirstMouse": true,
         "visible": false,
         "dragDropEnabled": true

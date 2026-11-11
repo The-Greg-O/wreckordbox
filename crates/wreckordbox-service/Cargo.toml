@@ -1,0 +1,23 @@
+[package]
+name = "wreckordbox-service"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The Library service: the one owner of the Library, and the client its front ends use."
+
+[lints]
+workspace = true
+
+[dependencies]
+rbl-db = { path = "../rbl-db" }
+# The index and search the window uses, so a query here matches the window.
+rbl-index = { path = "../rbl-index" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+dirs = "5"
+# Only to tell a locked Library from a damaged one by SQLite's result code.
+rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
+
+[dev-dependencies]
+tempfile = "3"
