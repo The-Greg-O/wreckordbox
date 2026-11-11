@@ -144,3 +144,19 @@ fn no_platform_restores_whether_the_window_was_showing() {
         assert!(!rbxport_lib::saved_window_state(os).contains(StateFlags::VISIBLE), "{os}");
     }
 }
+
+/// The whole-interface scale is the app's own: stored stops between limits,
+/// applied by each window as it opens (`src/lib/uiScale.ts`). The webview's
+/// built-in zoom hotkeys would move the zoom behind its back, with no limit
+/// and nothing remembered, so no window may turn them on.
+#[test]
+fn no_window_enables_the_built_in_zoom_hotkeys() {
+    for (name, platform) in [("base", "{}"), ("linux", LINUX)] {
+        for window in windows(&merged(platform)) {
+            assert!(
+                matches!(window.get("zoomHotkeysEnabled"), None | Some(Value::Bool(false))),
+                "{name}: zoomHotkeysEnabled must stay off"
+            );
+        }
+    }
+}

@@ -10,6 +10,10 @@ import {
   formatKey,
   quantizeFraction,
   sanitisePreferences,
+  stepUiScale,
+  uiScale,
+  UI_SCALE_DEFAULT,
+  UI_SCALES,
 } from "./preferences";
 
 describe("sanitisePreferences", () => {
@@ -291,4 +295,52 @@ it("keeps the Playback time setting in rekordbox's 1 to 60 seconds, 60 by defaul
   for (const stored of [0, 61, 12.5, "30", null]) {
     expect(sanitisePreferences({ advanced: { playbackTime: stored } }).advanced.playbackTime).toBe(60);
   }
+});
+
+describe("the whole-interface scale", () => {
+  it("starts at the measured size", () => {
+    expect(DEFAULT_PREFERENCES.view.uiScale).toBe(UI_SCALE_DEFAULT);
+    expect(uiScale(DEFAULT_PREFERENCES.view.uiScale)).toBe(1);
+  });
+
+  it("goes one stop smaller or larger at a time", () => {
+    expect(UI_SCALES).toEqual([0.6, 0.7, 0.8, 0.9, 1, 1.1, 1.25, 1.5]);
+    expect(uiScale(stepUiScale(4, "smaller"))).toBe(0.9);
+    expect(uiScale(stepUiScale(4, "larger"))).toBe(1.1);
+    expect(uiScale(stepUiScale(stepUiScale(4, "larger"), "larger"))).toBe(1.25);
+  });
+
+  it("stops at the smallest and the largest stop", () => {
+    expect(uiScale(stepUiScale(0, "smaller"))).toBe(0.6);
+    expect(uiScale(stepUiScale(7, "larger"))).toBe(1.5);
+    let stop = 4;
+    for (let press = 0; press < 20; press++) stop = stepUiScale(stop, "smaller");
+    expect(uiScale(stop)).toBe(0.6);
+    for (let press = 0; press < 20; press++) stop = stepUiScale(stop, "larger");
+    expect(uiScale(stop)).toBe(1.5);
+  });
+
+  it("resets to the measured size from anywhere", () => {
+    for (const stop of [0, 2, 4, 7]) expect(uiScale(stepUiScale(stop, "reset"))).toBe(1);
+  });
+
+  it("steps from the measured size when the stop it is given is not one", () => {
+    expect(uiScale(stepUiScale(99, "smaller"))).toBe(0.9);
+    expect(uiScale(stepUiScale(Number.NaN, "larger"))).toBe(1.1);
+  });
+
+  it("keeps a stored stop and reads anything else as the measured size", () => {
+    expect(sanitisePreferences({}).view.uiScale).toBe(UI_SCALE_DEFAULT);
+    expect(sanitisePreferences({ view: {} }).view.uiScale).toBe(UI_SCALE_DEFAULT);
+    expect(sanitisePreferences({ view: { uiScale: 0 } }).view.uiScale).toBe(0);
+    expect(sanitisePreferences({ view: { uiScale: 7 } }).view.uiScale).toBe(7);
+    for (const stored of [-1, 8, 99, 2.5, 0.8, "3", null, Number.NaN]) {
+      expect(sanitisePreferences({ view: { uiScale: stored } }).view.uiScale, String(stored)).toBe(UI_SCALE_DEFAULT);
+    }
+  });
+
+  it("leaves the Browse font size and line space as they were stored", () => {
+    const view = sanitisePreferences({ view: { uiScale: 1, browseFontSize: 4, browseLineSpace: 0 } }).view;
+    expect(view).toMatchObject({ uiScale: 1, browseFontSize: 4, browseLineSpace: 0 });
+  });
 });
