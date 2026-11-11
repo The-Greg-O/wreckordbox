@@ -12,25 +12,28 @@ use rbl_index::folder::FolderView;
 use rbl_index::{
     BpmFilter, Library, RelatedCriterion, SortColumn, TrackFilter, TrackSource, View, ViewSpec, COLOR_NAMES,
 };
+use rbl_library::{History, LibraryCore};
 
 use crate::dto::{cue_colour_css, RowCueDto, RowDto, TrackFilterDto, TrackSourceDto, ViewSpecDto};
 use crate::error::{AppError, AppResult, ErrorKind};
 
-/// Views are dropped oldest-first past this many, so a user clicking through
-/// playlists cannot grow memory without bound.
-const MAX_VIEWS: usize = 16;
-
 pub struct AppState {
-    pub(crate) edit_gate: parking_lot::ReentrantMutex<()>,
+    /// The loaded Library, its open views and the path every edit takes
+    /// (`rbl-library`). The rest of this struct is what the window keeps
+    /// around it, lent to the core through [`rbl_library::Host`].
+    core: LibraryCore,
     pub(crate) edit_history: parking_lot::Mutex<EditHistory>,
     /// Told when a write outside the library history ended its Redo branch,
     /// so the window's Edit menu stops offering it. Set once by the app;
     /// tests run without one.
     history_changed: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>>,
-    pub(crate) analysis_write: parking_lot::Mutex<()>,
     pub(crate) backup_progress: parking_lot::Mutex<crate::backups::BackupProgress>,
     pub(crate) backup_sizes: parking_lot::Mutex<crate::backup_sizes::SizeCache>,
     inner: RwLock<Inner>,
+    /// Why the last load failed, until one succeeds. Kept rather than only
+    /// sent as an event: with no library at all the load fails in
+    /// milliseconds, before the window has subscribed to anything.
+    library_problem: parking_lot::Mutex<Option<crate::dto::LibraryProblemDto>>,
     /// Stable local home for recovery journals and the destination setting.
     backup_dir: std::path::PathBuf,
     backup_destination: RwLock<std::path::PathBuf>,
@@ -237,43 +240,14 @@ impl EditHistory {
     }
 }
 
-/// A library view, and whether it lists the Tag List: the one source a Tag
-/// List edit makes stale.
-struct OpenView {
-    view: Arc<View>,
-    tag_list: bool,
-}
-
+/// What the window keeps beside the Library core.
 #[derive(Default)]
 struct Inner {
-    library: Option<Arc<Library>>,
-    /// Where the library is, decided once when it is loaded. Every later open
-    /// — the reader, the writer, a reload — goes through this rather than
-    /// detecting again, which is also what lets a test point the whole shell
-    /// at a fixture.
-    location: Option<rbl_db::LibraryLocation>,
-    read_only: bool,
-    db_version: Option<i64>,
-    load_ms: u64,
-    views: HashMap<u32, OpenView>,
-    /// The Explorer's views, under the same ids and the same eviction.
-    folders: HashMap<u32, Arc<FolderView>>,
-    /// The Devices tree's views of a stick's own library, likewise.
-    devices: HashMap<u32, Arc<rbl_index::device::DeviceView>>,
-    /// Insertion order, for eviction.
-    view_order: Vec<u32>,
-    next_view_id: u32,
-    /// Bumped when the library is reloaded; invalidates cached pages.
-    generation: u32,
     /// The LINK session, while one is running.
     link: Option<crate::link::Session>,
     /// The passive network watcher, running from startup: who is on the
     /// network, so the shell can offer LINK when a player appears.
     watcher: Option<rbl_link::Watcher>,
-    /// Why the last load failed, until one succeeds. Kept rather than only
-    /// sent as an event: with no library at all the load fails in
-    /// milliseconds, before the window has subscribed to anything.
-    library_problem: Option<crate::dto::LibraryProblemDto>,
 }
 
 impl Default for AppState {
@@ -295,13 +269,13 @@ impl AppState {
         let backup_dir = backup_dir.into();
         let backup_destination = rbl_backup::default_destination(&backup_dir);
         Self {
-            edit_gate: parking_lot::ReentrantMutex::new(()),
+            core: LibraryCore::new(backup_dir.clone()),
             edit_history: parking_lot::Mutex::new(EditHistory::default()),
             history_changed: std::sync::OnceLock::new(),
-            analysis_write: parking_lot::Mutex::new(()),
             backup_progress: parking_lot::Mutex::new(crate::backups::BackupProgress::default()),
             backup_sizes: parking_lot::Mutex::new(crate::backup_sizes::SizeCache::default()),
-            inner: RwLock::new(Inner { next_view_id: 1, generation: 1, ..Inner::default() }),
+            inner: RwLock::new(Inner::default()),
+            library_problem: parking_lot::Mutex::new(None),
             backup_dir,
             backup_destination: RwLock::new(backup_destination),
             reader: parking_lot::Mutex::new(None),
@@ -311,6 +285,22 @@ impl AppState {
             drawing: parking_lot::Mutex::new(HashMap::new()),
             played: PlayedMarks::default(),
         }
+    }
+
+    /// The Library core: the index, its views and the edit path, with no
+    /// window in it.
+    pub fn core(&self) -> &LibraryCore {
+        &self.core
+    }
+
+    /// The gate every edit holds for its whole length, refresh included.
+    pub(crate) fn edit_gate(&self) -> &parking_lot::ReentrantMutex<()> {
+        self.core.edit_gate()
+    }
+
+    /// The lock an analysis or grid edit holds while it publishes its files.
+    pub(crate) fn analysis_write(&self) -> &parking_lot::Mutex<()> {
+        self.core.analysis_write()
     }
 
     /// The colouring marks a LINK session copies its played marks into.
@@ -356,7 +346,7 @@ impl AppState {
     /// Persist the destination before publishing it to the running app.
     /// Recovery journals stay local even when snapshots go to a removable drive.
     pub fn set_backup_destination(&self, directory: &std::path::Path) -> AppResult<String> {
-        let _gate = self.edit_gate.lock();
+        let _gate = self.edit_gate().lock();
         let progress = self.backup_progress.lock();
         if progress.running {
             return Err(AppError::internal("Wait for the current backup to finish before changing its folder."));
@@ -395,24 +385,14 @@ impl AppState {
 
     /// Where the loaded library is.
     pub fn location(&self) -> AppResult<rbl_db::LibraryLocation> {
-        self.inner
-            .read()
-            .location
-            .clone()
-            .ok_or_else(|| AppError::new(ErrorKind::NotFound, "The library has not finished loading yet."))
+        self.core.location().map_err(not_loaded)
     }
 
     /// A fresh read-only handle to the loaded library.
     ///
     /// Blocking — call from `spawn_blocking`, never from a command body.
     pub fn open_read_only(&self) -> Result<rbl_db::Library, rbl_db::DbError> {
-        if crate::backups::pending(self.backup_dir()) {
-            return Err(rbl_db::DbError::WriteRefused("A library restore is unfinished. Restart the app to recover it before reading.".into()));
-        }
-        let location = self
-            .location()
-            .map_err(|e| rbl_db::DbError::NotInstalled(e.message))?;
-        rbl_db::Library::open(location, rbl_db::OpenMode::ReadOnly)
+        self.core.open_read_only()
     }
 
     /// Opens the library for writing, runs one edit against it, and closes
@@ -447,7 +427,7 @@ impl AppState {
         edit: impl FnOnce(&mut rbl_db::write::Writer) -> Result<T, rbl_db::DbError>,
         refresh: impl FnOnce(&rbl_db::Library, T) -> Result<U, rbl_db::DbError>,
     ) -> Result<U, rbl_db::DbError> {
-        self.write_inner(false, edit, refresh)
+        self.core.write_then(self, History::Outside, edit, refresh)
     }
 
     /// [`Self::write_then`] for the code that keeps the library history
@@ -458,54 +438,13 @@ impl AppState {
         edit: impl FnOnce(&mut rbl_db::write::Writer) -> Result<T, rbl_db::DbError>,
         refresh: impl FnOnce(&rbl_db::Library, T) -> Result<U, rbl_db::DbError>,
     ) -> Result<U, rbl_db::DbError> {
-        self.write_inner(true, edit, refresh)
+        self.core.write_then(self, History::Caller, edit, refresh)
     }
 
     /// Who to tell when a write outside the history ended its Redo branch.
     /// The first call wins; the app makes it once, at start.
     pub fn on_history_changed(&self, listener: impl Fn() + Send + Sync + 'static) {
         let _ = self.history_changed.set(Box::new(listener));
-    }
-
-    fn write_inner<T, U>(
-        &self,
-        owns_history: bool,
-        edit: impl FnOnce(&mut rbl_db::write::Writer) -> Result<T, rbl_db::DbError>,
-        refresh: impl FnOnce(&rbl_db::Library, T) -> Result<U, rbl_db::DbError>,
-    ) -> Result<U, rbl_db::DbError> {
-        let started = std::time::Instant::now();
-        let location = self
-            .location()
-            .map_err(|e| rbl_db::DbError::NotInstalled(e.message))?;
-        let _gate = self.edit_gate.lock();
-        if crate::backups::pending(self.backup_dir()) {
-            return Err(rbl_db::DbError::WriteRefused("A library restore is unfinished. Restart the app to recover it before editing.".into()));
-        }
-        // Grid/analysis edits hold this mutex while intentionally publishing
-        // their own journal. Otherwise recover before another edit can change
-        // the USN used to decide an interrupted operation's outcome.
-        if let Some(_files) = self.analysis_write.try_lock() {
-            crate::file_journal::recover(self.backup_dir(), &location)
-                .map_err(|e| rbl_db::DbError::WriteRefused(e.to_string()))?;
-        }
-        let gate_ms = started.elapsed().as_millis();
-        let mut writer = rbl_db::write::Writer::open(location.clone(), self.backup_dir.clone())?;
-        writer.disable_automatic_backups();
-        let open_ms = started.elapsed().as_millis();
-        let result = edit(&mut writer);
-        let edit_ms = started.elapsed().as_millis();
-        // Counted before the refresh, which only reads. A failed edit that
-        // changed rows before it stopped counts too: its rows may not all
-        // have been put back.
-        let wrote = writer.library().connection().total_changes() > 0;
-        let result = result.and_then(|value| refresh(writer.library(), value));
-        tracing::debug!(gate_ms, open_ms = open_ms - gate_ms,
-            edit_ms = edit_ms - open_ms, refresh_ms = started.elapsed().as_millis() - edit_ms,
-            "library write phases");
-        if wrote && !owns_history {
-            self.end_redo_branch();
-        }
-        result
     }
 
     /// Ends the Redo branch after a write the history does not record, and
@@ -557,37 +496,7 @@ impl AppState {
         load_ms: u64,
         location: rbl_db::LibraryLocation,
     ) {
-        // The reader is a handle to wherever the previous library was. Dropped
-        // before `inner` is taken: `read_db` holds the reader while it opens,
-        // and opening reads `inner`, so taking them the other way round here
-        // would be a deadlock waiting for a reload during a point read.
-        *self.reader.lock() = None;
-        // What the new index holds now needs no overlay. An analysis that
-        // landed after this read began is not in it, so its entry stays.
-        self.fresh_analysis.lock().retain(|track, _| {
-            library.row_of(track).is_some_and(|row| library.analysis_path.get(row as usize).is_empty())
-        });
-        let mut inner = self.inner.write();
-        // Another library's ids name other tracks: its rows start unmarked,
-        // as rekordbox's do when it opens another master database.
-        if inner.location.as_ref().is_some_and(|old| old.master_db != location.master_db) {
-            self.reset_played();
-        }
-        inner.library = Some(Arc::new(library));
-        inner.library_problem = None;
-        inner.location = Some(location);
-        inner.read_only = read_only;
-        inner.db_version = db_version;
-        inner.load_ms = load_ms;
-        inner.views.clear();
-        inner.folders.clear();
-        inner.view_order.clear();
-        inner.generation = inner.generation.wrapping_add(1).max(1);
-        // A reload follows every write, including a new analysis: the
-        // players must not be served what was parsed before it.
-        if let Some(session) = inner.link.as_ref() {
-            session.analysis_changed();
-        }
+        self.core.set_library(self, library, read_only, db_version, load_ms, location);
     }
 
     /// A track's share-relative analysis `.DAT`, empty when it has none: the
@@ -627,54 +536,29 @@ impl AppState {
 
     /// Why the library is not loaded, when a load has failed.
     pub fn library_problem(&self) -> Option<crate::dto::LibraryProblemDto> {
-        self.inner.read().library_problem.clone()
+        self.library_problem.lock().clone()
     }
 
     pub(crate) fn set_library_problem(&self, problem: Option<crate::dto::LibraryProblemDto>) {
-        self.inner.write().library_problem = problem;
+        *self.library_problem.lock() = problem;
     }
 
-    /// Drops every open view and bumps the generation.
-    ///
-    /// Used after a playlist edit: the track columns are untouched, but a view
-    /// over a playlist whose membership changed is stale, and so are the pages
-    /// the frontend has cached against the old generation.
+    /// Drops every open view and bumps the generation. See
+    /// [`LibraryCore::invalidate_views`].
     pub fn invalidate_views(&self) -> u32 {
-        let mut inner = self.inner.write();
-        inner.views.clear();
-        inner.folders.clear();
-        inner.view_order.clear();
-        inner.generation = inner.generation.wrapping_add(1).max(1);
-        inner.generation
+        self.core.invalidate_views()
     }
 
-    /// Drops the views over the Tag List and keeps every other. No row or
-    /// column of any other view shows Tag List membership, so they stay open
-    /// under the same generation and the frontend keeps the pages it has: a
-    /// player tagging a track does not reload the playlist on screen.
+    /// Drops the views over the Tag List and keeps every other, under the
+    /// same generation. See [`LibraryCore::invalidate_tag_list_views`].
     pub fn invalidate_tag_list_views(&self) -> u32 {
-        let mut inner = self.inner.write();
-        let Inner { views, folders, view_order, generation, .. } = &mut *inner;
-        views.retain(|_, open| !open.tag_list);
-        view_order.retain(|id| views.contains_key(id) || folders.contains_key(id));
-        *generation
+        self.core.invalidate_tag_list_views()
     }
 
     /// Publish metadata without changing row identities or analysis files.
     /// Call under the edit gate, using the connection that committed the edit.
     pub fn refresh_metadata(&self, db: &rbl_db::Library, ids: &[String], histories: bool) -> Result<u32, rbl_db::DbError> {
-        let mut inner = self.inner.write();
-        let current = inner.library.as_ref().ok_or_else(|| rbl_db::DbError::Open("No library loaded".into()))?;
-        // Build privately so a failed read never publishes a partial update.
-        let mut next = (**current).clone();
-        rbl_index::reload_metadata(db, &mut next, ids)?;
-        if histories { next.set_histories(rbl_index::reload_histories(db, &next)?); }
-        inner.library = Some(Arc::new(next));
-        inner.views.clear();
-        inner.folders.clear();
-        inner.view_order.clear();
-        inner.generation = inner.generation.wrapping_add(1).max(1);
-        Ok(inner.generation)
+        self.core.refresh_metadata(db, ids, histories)
     }
 
     /// Starts or replaces the LINK session. Returns the previous one, if
@@ -741,22 +625,17 @@ impl AppState {
 
 
     pub fn library(&self) -> AppResult<Arc<Library>> {
-        self.inner
-            .read()
-            .library
-            .clone()
-            .ok_or_else(|| AppError::new(ErrorKind::NotFound, "The library has not finished loading yet."))
+        self.core.library().map_err(not_loaded)
     }
 
     /// Where analysis files live for the loaded library, or nowhere useful
     /// before it has loaded.
     pub fn share_root(&self) -> std::path::PathBuf {
-        self.inner.read().location.as_ref().map(|l| l.share_root.clone()).unwrap_or_default()
+        self.core.share_root()
     }
 
     pub fn summary(&self) -> (bool, Option<i64>, u64, u32) {
-        let inner = self.inner.read();
-        (inner.read_only, inner.db_version, inner.load_ms, inner.generation)
+        self.core.summary()
     }
 
     /// Opens a view and returns `(view_id, len, generation)`.
@@ -773,32 +652,17 @@ impl AppState {
         spec: &ViewSpec,
         field: rbl_index::SearchField,
     ) -> AppResult<(u32, u32, u32, Option<rbl_index::ListTotals>)> {
-        let library = self.library()?;
-        let view = library.open_view_scoped(spec, field);
-        let len = u32::try_from(view.len()).unwrap_or(u32::MAX);
-        let totals = view.totals();
-
-        let mut inner = self.inner.write();
-        let tag_list = matches!(spec.source, TrackSource::TagList);
-        let id = inner.register(Registered::Library(OpenView { view: Arc::new(view), tag_list }));
-        let generation = inner.generation;
-        Ok((id, len, generation, totals))
+        self.core.open_view_scoped(spec, field).map_err(not_loaded)
     }
 
     /// Opens the Explorer's view of one folder; the same handle shape.
     pub fn open_folder_view(&self, view: FolderView) -> (u32, u32, u32) {
-        let len = u32::try_from(view.len()).unwrap_or(u32::MAX);
-        let mut inner = self.inner.write();
-        let id = inner.register(Registered::Folder(Arc::new(view)));
-        (id, len, inner.generation)
+        self.core.open_folder_view(view)
     }
 
     /// Opens a view of a library on a stick; the same handle shape.
     pub fn open_device_view(&self, view: rbl_index::device::DeviceView) -> (u32, u32, u32) {
-        let len = u32::try_from(view.len()).unwrap_or(u32::MAX);
-        let mut inner = self.inner.write();
-        let id = inner.register(Registered::Device(Arc::new(view)));
-        (id, len, inner.generation)
+        self.core.open_device_view(view)
     }
 
     /// Records the analysis and artwork of the tracks on the stick at
@@ -824,17 +688,17 @@ impl AppState {
 
     /// The device view behind an id, or `None` for any other kind of id.
     pub fn device_view(&self, view_id: u32) -> Option<Arc<rbl_index::device::DeviceView>> {
-        self.inner.read().devices.get(&view_id).cloned()
+        self.core.device_view(view_id)
     }
 
     /// The folder view behind an id, or `None` when the id is a library view
     /// or nothing at all.
     pub fn folder_view(&self, view_id: u32) -> Option<Arc<FolderView>> {
-        self.inner.read().folders.get(&view_id).cloned()
+        self.core.folder_view(view_id)
     }
 
     pub fn view(&self, view_id: u32) -> AppResult<Arc<View>> {
-        self.inner.read().views.get(&view_id).map(|open| Arc::clone(&open.view)).ok_or_else(|| {
+        self.core.view(view_id).ok_or_else(|| {
             AppError::new(ErrorKind::NotFound, "That list is no longer open. Reselect it to continue.")
                 .with_detail(format!("view {view_id} was evicted or never existed"))
         })
@@ -847,38 +711,49 @@ fn default_backup_dir() -> std::path::PathBuf {
     rbl_backup::state_dir()
 }
 
-/// A view of either kind, on its way into the table.
-enum Registered {
-    Library(OpenView),
-    Folder(Arc<FolderView>),
-    Device(Arc<rbl_index::device::DeviceView>),
+/// The core's "no Library yet", as the window is told it.
+fn not_loaded(error: rbl_library::NotLoaded) -> AppError {
+    AppError::new(ErrorKind::NotFound, error.to_string())
 }
 
-impl Inner {
-    /// Hands out the next id and evicts the oldest view past the cap, whichever
-    /// kind it is.
-    fn register(&mut self, view: Registered) -> u32 {
-        let id = self.next_view_id;
-        self.next_view_id = self.next_view_id.wrapping_add(1).max(1);
-        match view {
-            Registered::Library(view) => {
-                self.views.insert(id, view);
-            }
-            Registered::Folder(view) => {
-                self.folders.insert(id, view);
-            }
-            Registered::Device(view) => {
-                self.devices.insert(id, view);
-            }
+/// What the window lends the Library core.
+impl rbl_library::Host for AppState {
+    fn recover_interrupted_files(&self, location: &rbl_db::LibraryLocation) -> Result<(), String> {
+        crate::file_journal::recover(self.backup_dir(), location).map_err(|e| e.to_string())
+    }
+
+    fn wrote_outside_history(&self) {
+        self.end_redo_branch();
+    }
+
+    fn library_replacing(&self, library: &Library) {
+        // The reader is a handle to wherever the previous library was. Dropped
+        // before the core's lock is taken: `read_db` holds the reader while it
+        // opens, and opening reads the core, so taking them the other way
+        // round here would be a deadlock waiting for a reload during a point
+        // read.
+        *self.reader.lock() = None;
+        // What the new index holds now needs no overlay. An analysis that
+        // landed after this read began is not in it, so its entry stays.
+        self.fresh_analysis.lock().retain(|track, _| {
+            library.row_of(track).is_some_and(|row| library.analysis_path.get(row as usize).is_empty())
+        });
+    }
+
+    fn library_replaced(&self, another_library: bool) {
+        // Another library's ids name other tracks: its rows start unmarked,
+        // as rekordbox's do when it opens another master database.
+        if another_library {
+            self.reset_played();
         }
-        self.view_order.push(id);
-        while self.view_order.len() > MAX_VIEWS {
-            let oldest = self.view_order.remove(0);
-            self.views.remove(&oldest);
-            self.folders.remove(&oldest);
-            self.devices.remove(&oldest);
+        *self.library_problem.lock() = None;
+        // A reload follows every write, including a new analysis: the
+        // players must not be served what was parsed before it. The core's
+        // lock is held here, so this read must not queue behind a writer
+        // that is itself waiting on a reader of the core.
+        if let Some(session) = self.inner.read_recursive().link.as_ref() {
+            session.analysis_changed();
         }
-        id
     }
 }
 

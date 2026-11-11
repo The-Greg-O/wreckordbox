@@ -4253,6 +4253,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rbl-library"
+version = "1.10.0"
+dependencies = [
+ "parking_lot",
+ "rbl-backup",
+ "rbl-db",
+ "rbl-index",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "rbl-link"
 version = "1.10.0"
 dependencies = [
@@ -4352,6 +4364,7 @@ dependencies = [
  "rbl-devices",
  "rbl-export",
  "rbl-index",
+ "rbl-library",
  "rbl-link",
  "rbl-onelibrary",
  "rbl-pdb",
