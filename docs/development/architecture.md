@@ -38,6 +38,7 @@ README, code map, safety contracts, and focused checks.
 | `rbl-core` | Ids, time formats and durable file publishing shared by everything. |
 | `rbl-db` | Opens rekordbox's SQLCipher `master.db`. `write.rs` holds every write the app makes; `fixture.rs` builds a throwaway library with the real schema for tests. |
 | `rbl-index` | Loads the whole library into memory as columns. Sorting, filtering and searching happen here, not in the interface. |
+| `rbl-library` | The Library core: holds the loaded index, the open views and the change generation, and runs the single edit path. Independent of the desktop framework. |
 | `rbl-anlz` | Reads and writes rekordbox's ANLZ analysis files (`.DAT`, `.EXT`, `.2EX`): grids, cues, waveforms. |
 | `rbl-audio` | Decodes audio for analysis. |
 | `rbl-analysis` | Tempo, beat grid, key and waveform analysis. |
@@ -65,17 +66,21 @@ README, code map, safety contracts, and focused checks.
    filter, a search) that `rbl-index` evaluates, then fetches windows of rows
    by index as the table scrolls.
 
-Edits go through one path. A command calls `edit(...)` in `commands.rs`,
-which runs a `rbl_db::write::Writer` method inside `AppState::write_then`, then
+Edits go through one path, which lives in the `rbl-library` crate and knows
+nothing of the window. A command calls `edit(...)` in `commands.rs`, which
+runs a `rbl_db::write::Writer` method inside `AppState::write_then`, then
 `refresh_after_edit` re-reads only what changed (`Touched::Playlists`,
-`Touched::Metadata`, and so on). The backend then emits `library:changed`
+`Touched::Metadata`, and so on); both hand straight to
+`rbl_library::LibraryCore`, which `AppState` holds and lends its window state
+to through `rbl_library::Host`. The backend then emits `library:changed`
 with a new generation, and the interface drops the pages it has cached.
 Tag List edits emit `tag-list:changed` and keep the generation. The same path
 serves edits made from a CDJ over LINK (`src-tauri/src/link.rs`).
 
 ### Library edit sequence
 
-This is the ordinary UI edit path in `commands.rs` and `state.rs`. The worker
+This is the ordinary UI edit path in `commands.rs`, `state.rs` and
+`crates/rbl-library`. The worker
 serializes edits and checks restore/recovery state before opening a writer.
 The success event is emitted only after the edit and targeted refresh return
 success; this diagram does not imply that refresh and database writes are one

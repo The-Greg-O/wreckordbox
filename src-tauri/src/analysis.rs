@@ -292,9 +292,9 @@ fn analyse_and_save_notated(
         result.analysis_artifacts=analysis_artifacts;result.completed_stages=completed_stages;return Ok(result);
     }
 
-    let _edit_guard = state.edit_gate.lock();
+    let _edit_guard = state.edit_gate().lock();
     ensure_analysis_unlocked(state, editor, track_id)?;
-    let _files_guard = state.analysis_write.lock();
+    let _files_guard = state.analysis_write().lock();
     let location = state.location()?;
     crate::file_journal::recover(state.backup_dir(), &location)?;
     state.write(|writer| writer.import_artwork(track_id)).map_err(write_error)?;
@@ -677,7 +677,7 @@ fn analyse_key_only(state: &AppState, library: &rbl_index::Library, row: usize, 
 fn save_key_only(state:&AppState,library:&rbl_index::Library,row:usize,track_id:&str,key:Option<&rbl_analysis::MusicalKey>,peak:f32,editor:&crate::grid::GridEditor,started:std::time::Instant,notation:crate::key_tag::KeyNotation)->AppResult<AnalysisResultDto> {
     let found_key=key.map(detected);
     let key = found_key.as_ref().map(|key| key.name_for(notation).to_owned());
-    let _edit_guard = state.edit_gate.lock();
+    let _edit_guard = state.edit_gate().lock();
     ensure_analysis_unlocked(state, editor, track_id)?;
     // Match full analysis: only use keys already named by this library.
     // A sparse imported library may not contain every recognised key.
@@ -739,8 +739,8 @@ pub async fn edit_phrase<R: tauri::Runtime>(
             return Err(AppError::new(ErrorKind::NotFound, "That track has no analysis."));
         }
         let ext = rbl_anlz::sibling(&rbl_anlz::resolve(&share, &relative), "EXT");
-        let _edit_guard = state.edit_gate.lock();
-        let _files = state.analysis_write.lock();
+        let _edit_guard = state.edit_gate().lock();
+        let _files = state.analysis_write().lock();
         let file = rbl_anlz::Anlz::read(&ext).map_err(|e| {
             AppError::new(ErrorKind::NotFound, "That track's analysis file could not be read.").with_detail(e.to_string())
         })?;

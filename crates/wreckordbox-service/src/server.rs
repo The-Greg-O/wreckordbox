@@ -7,17 +7,18 @@ use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use rbl_db::{DbError, LibraryLocation};
 use serde_json::{json, Value};
 
-use crate::protocol::{
-    codes, commands, Event, LibraryStatus, Outcome, Request, Response, ServiceError, Status, TrackQuery,
-    PROTOCOL_VERSION,
-};
 use crate::library::OpenLibrary;
+use crate::protocol::{
+    codes, commands, Event, LibraryStatus, Outcome, RateTrack, Request, Response, ServiceError,
+    Status, TrackQuery, PROTOCOL_VERSION,
+};
 use crate::Config;
 
 /// How long a service started on demand stays up with no client, unless
@@ -42,6 +43,8 @@ struct Shared {
     /// Set, and signalled, once the service has stopped.
     stopped: (Mutex<bool>, Condvar),
     connections: Mutex<HashMap<u64, Arc<Connection>>>,
+    /// The hosting process's own subscriptions ([`Service::events`]).
+    listeners: Mutex<Vec<Sender<Event>>>,
     /// When the last client left; `None` while one is connected.
     idle_since: Mutex<Option<Instant>>,
 }
@@ -68,22 +71,29 @@ impl Service {
         if !library.master_db.is_file() {
             return Err(ServiceError::new(
                 codes::LIBRARY_MISSING,
-                format!("the Library is missing: there is no {}", library.master_db.display()),
+                format!(
+                    "the Library is missing: there is no {}",
+                    library.master_db.display()
+                ),
             ));
         }
         let socket = config.socket_path(&library);
         let lock = take_lock(&library.master_db, &socket)?;
         let master_db = library.master_db.clone();
-        let open = OpenLibrary::open(library)?;
+        let open = OpenLibrary::open(library, config.recovery_dir.clone())?;
         let listener = listen(&config.runtime_dir, &socket)?;
 
         let shared = Arc::new(Shared {
-            library: Mutex::new(Some(Owned { library: open, _lock: lock })),
+            library: Mutex::new(Some(Owned {
+                library: open,
+                _lock: lock,
+            })),
             master_db,
             socket,
             stopping: AtomicBool::new(false),
             stopped: (Mutex::new(false), Condvar::new()),
             connections: Mutex::new(HashMap::new()),
+            listeners: Mutex::new(Vec::new()),
             idle_since: Mutex::new(Some(Instant::now())),
         });
         if let Some(idle_exit) = config.idle_exit {
@@ -105,6 +115,27 @@ impl Service {
     /// Sends `event` to every subscribed client.
     pub fn publish(&self, event: &Event) {
         self.shared.publish(event);
+    }
+
+    /// Runs one command for the process hosting the service, without the
+    /// socket: the same dispatch a client's request goes through, so there
+    /// is one path to the Library. `subscribe` is a connection's command;
+    /// the host calls [`events`](Self::events) instead.
+    pub fn call(&self, command: &str, args: Value) -> Result<Value, ServiceError> {
+        let request = Request {
+            id: 0,
+            command: command.to_owned(),
+            args,
+        };
+        self.shared.dispatch(None, &request)
+    }
+
+    /// Every event from now on, for the process hosting the service: what a
+    /// subscribed client is sent. Dropping the receiver ends it.
+    pub fn events(&self) -> Receiver<Event> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        lock(&self.shared.listeners).push(sender);
+        receiver
     }
 
     /// Stops accepting clients and disconnects the ones there are.
@@ -159,7 +190,10 @@ impl Shared {
             pid: std::process::id(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
             protocol: PROTOCOL_VERSION,
-            library: LibraryStatus { path: self.master_db.clone(), tracks },
+            library: LibraryStatus {
+                path: self.master_db.clone(),
+                tracks,
+            },
             socket: self.socket.clone(),
         })
     }
@@ -168,28 +202,54 @@ impl Shared {
     fn with_library<T>(&self, use_it: impl FnOnce(&OpenLibrary) -> T) -> Result<T, ServiceError> {
         match lock(&self.library).as_ref() {
             Some(owned) => Ok(use_it(&owned.library)),
-            None => Err(ServiceError::new(codes::SERVICE_FAILED, "the Library service is stopping")),
+            None => Err(ServiceError::new(
+                codes::SERVICE_FAILED,
+                "the Library service is stopping",
+            )),
         }
     }
 
     /// The one place a command name becomes behaviour.
-    fn dispatch(&self, connection: &Connection, request: &Request) -> Result<Value, ServiceError> {
+    fn dispatch(
+        &self,
+        connection: Option<&Connection>,
+        request: &Request,
+    ) -> Result<Value, ServiceError> {
         match request.command.as_str() {
             commands::STATUS => to_value(&self.status()?),
             commands::SUBSCRIBE => {
+                let Some(connection) = connection else {
+                    return Err(ServiceError::new(
+                        codes::BAD_REQUEST,
+                        "subscribe is for a connection; the hosting process reads Service::events",
+                    ));
+                };
                 connection.subscribed.store(true, Ordering::Release);
                 Ok(json!({}))
             }
             commands::TRACKS_LIST => {
                 let query: TrackQuery = arguments(request)?;
-                to_value(&self.with_library(|library| library.tracks(&query))?)
+                to_value(&self.with_library(|library| library.tracks(&query))??)
             }
-            unknown => Err(ServiceError::new(codes::UNKNOWN_COMMAND, format!("unknown command: {unknown}"))),
+            commands::TRACKS_RATE => {
+                let edit: RateTrack = required_arguments(request)?;
+                let (rated, changed) = self.with_library(|library| library.rate(&edit))??;
+                // After the Library's lock is let go: a slow client must not
+                // hold up the next command.
+                self.publish(&changed.event());
+                to_value(&rated)
+            }
+            unknown => Err(ServiceError::new(
+                codes::UNKNOWN_COMMAND,
+                format!("unknown command: {unknown}"),
+            )),
         }
     }
 
     fn publish(&self, event: &Event) {
-        let Ok(line) = serde_json::to_string(event) else { return };
+        let Ok(line) = serde_json::to_string(event) else {
+            return;
+        };
         let subscribers: Vec<Arc<Connection>> = lock(&self.connections)
             .values()
             .filter(|connection| connection.subscribed.load(Ordering::Acquire))
@@ -199,6 +259,8 @@ impl Shared {
             // A client that has gone is dropped by its own reader.
             let _ = connection.send(&line);
         }
+        // A host that dropped its receiver is forgotten here.
+        lock(&self.listeners).retain(|listener| listener.send(event.clone()).is_ok());
     }
 
     fn stop(&self) {
@@ -237,9 +299,14 @@ fn accept_clients(shared: &Arc<Shared>, listener: &UnixListener) {
             break;
         }
         let Ok(stream) = stream else { continue };
-        let Ok(writer) = stream.try_clone() else { continue };
+        let Ok(writer) = stream.try_clone() else {
+            continue;
+        };
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-        let connection = Arc::new(Connection { writer: Mutex::new(writer), subscribed: AtomicBool::new(false) });
+        let connection = Arc::new(Connection {
+            writer: Mutex::new(writer),
+            subscribed: AtomicBool::new(false),
+        });
         {
             let mut connections = lock(&shared.connections);
             connections.insert(id, Arc::clone(&connection));
@@ -266,7 +333,7 @@ fn serve_client(shared: &Shared, connection: &Connection, stream: UnixStream) {
         let response = match serde_json::from_str::<Request>(&line) {
             Ok(request) => Response {
                 id: request.id,
-                outcome: match shared.dispatch(connection, &request) {
+                outcome: match shared.dispatch(Some(connection), &request) {
                     Ok(result) => Outcome::Result(result),
                     Err(error) => Outcome::Error(error),
                 },
@@ -274,10 +341,15 @@ fn serve_client(shared: &Shared, connection: &Connection, stream: UnixStream) {
             // Nothing to answer to by id; 0 is never a client's id.
             Err(e) => Response {
                 id: 0,
-                outcome: Outcome::Error(ServiceError::new(codes::BAD_REQUEST, format!("not a request: {e}"))),
+                outcome: Outcome::Error(ServiceError::new(
+                    codes::BAD_REQUEST,
+                    format!("not a request: {e}"),
+                )),
             },
         };
-        let Ok(line) = serde_json::to_string(&response) else { break };
+        let Ok(line) = serde_json::to_string(&response) else {
+            break;
+        };
         if connection.send(&line).is_err() {
             break;
         }
@@ -299,16 +371,31 @@ fn stop_when_idle(shared: &Shared, idle_exit: Duration) {
 fn take_lock(master_db: &Path, socket: &Path) -> Result<File, ServiceError> {
     let path = crate::lock_path(master_db);
     let failed = |e: &dyn std::fmt::Display| {
-        ServiceError::new(codes::SERVICE_FAILED, format!("could not take the Library's lock at {}: {e}", path.display()))
+        ServiceError::new(
+            codes::SERVICE_FAILED,
+            format!(
+                "could not take the Library's lock at {}: {e}",
+                path.display()
+            ),
+        )
     };
-    let mut file =
-        File::options().read(true).write(true).create(true).truncate(false).open(&path).map_err(|e| failed(&e))?;
+    let mut file = File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(|e| failed(&e))?;
     match file.try_lock() {
         Ok(()) => {}
         Err(TryLockError::WouldBlock) => {
             let mut holder = String::new();
             let _ = file.read_to_string(&mut holder);
-            let holder = holder.lines().next().map(|pid| format!(" (pid {pid})")).unwrap_or_default();
+            let holder = holder
+                .lines()
+                .next()
+                .map(|pid| format!(" (pid {pid})"))
+                .unwrap_or_default();
             return Err(ServiceError::new(
                 codes::SERVICE_ALREADY_RUNNING,
                 format!(
@@ -321,19 +408,29 @@ fn take_lock(master_db: &Path, socket: &Path) -> Result<File, ServiceError> {
     }
     // For the message above, and for a person looking: who holds it, where.
     let note = format!("{}\n{}\n", std::process::id(), socket.display());
-    file.set_len(0).and_then(|()| file.rewind()).and_then(|()| file.write_all(note.as_bytes())).map_err(|e| failed(&e))?;
+    file.set_len(0)
+        .and_then(|()| file.rewind())
+        .and_then(|()| file.write_all(note.as_bytes()))
+        .map_err(|e| failed(&e))?;
     Ok(file)
 }
 
 /// Binds the socket in a directory only this user can enter.
 fn listen(runtime_dir: &Path, socket: &Path) -> Result<UnixListener, ServiceError> {
     let unusable = |what: &str, e: &dyn std::fmt::Display| {
-        ServiceError::new(codes::RUNTIME_DIR_UNUSABLE, format!("{what} {}: {e}", socket.display()))
+        ServiceError::new(
+            codes::RUNTIME_DIR_UNUSABLE,
+            format!("{what} {}: {e}", socket.display()),
+        )
     };
     if socket.as_os_str().len() > SOCKET_PATH_MAX {
-        return Err(unusable("the path is too long for a socket:", &"choose a shorter runtime directory"));
+        return Err(unusable(
+            "the path is too long for a socket:",
+            &"choose a shorter runtime directory",
+        ));
     }
-    private_dir(runtime_dir).map_err(|e| unusable("could not make the runtime directory for", &e))?;
+    private_dir(runtime_dir)
+        .map_err(|e| unusable("could not make the runtime directory for", &e))?;
     // This process holds the Library's lock, so a socket already here was
     // left by a service that is gone.
     match std::fs::remove_file(socket) {
@@ -349,7 +446,10 @@ fn listen(runtime_dir: &Path, socket: &Path) -> Result<UnixListener, ServiceErro
 
 /// Makes `dir` if needed and closes it to every other user.
 pub(crate) fn private_dir(dir: &Path) -> std::io::Result<()> {
-    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)?;
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
 }
 
@@ -363,9 +463,10 @@ pub(crate) fn open_error(error: &DbError) -> ServiceError {
         )
     };
     match error {
-        DbError::NotInstalled(why) => {
-            ServiceError::new(codes::LIBRARY_MISSING, format!("the Library is missing: {why}"))
-        }
+        DbError::NotInstalled(why) => ServiceError::new(
+            codes::LIBRARY_MISSING,
+            format!("the Library is missing: {why}"),
+        ),
         DbError::Sqlite(rusqlite::Error::SqliteFailure(failure, _))
             if matches!(failure.code, DatabaseBusy | DatabaseLocked) =>
         {
@@ -374,9 +475,10 @@ pub(crate) fn open_error(error: &DbError) -> ServiceError {
         // `rbl-db` folds the failure of its first read into a message, so
         // SQLite's own wording for SQLITE_BUSY is all there is to go on.
         DbError::Open(why) if why.contains("database is locked") => locked(),
-        DbError::WriteRefused(why) => {
-            ServiceError::new(codes::LIBRARY_LOCKED, format!("the Library is locked: {why}"))
-        }
+        DbError::WriteRefused(why) => ServiceError::new(
+            codes::LIBRARY_LOCKED,
+            format!("the Library is locked: {why}"),
+        ),
         other => ServiceError::new(
             codes::LIBRARY_DAMAGED,
             format!("the Library is damaged or is not a rekordbox library: {other}"),
@@ -385,12 +487,29 @@ pub(crate) fn open_error(error: &DbError) -> ServiceError {
 }
 
 /// A command's arguments; leaving them out altogether means the defaults.
-fn arguments<T: serde::de::DeserializeOwned + Default>(request: &Request) -> Result<T, ServiceError> {
+fn arguments<T: serde::de::DeserializeOwned + Default>(
+    request: &Request,
+) -> Result<T, ServiceError> {
     if request.args.is_null() {
         return Ok(T::default());
     }
     serde_json::from_value(request.args.clone()).map_err(|e| {
-        ServiceError::new(codes::BAD_REQUEST, format!("bad arguments to {}: {e}", request.command))
+        ServiceError::new(
+            codes::BAD_REQUEST,
+            format!("bad arguments to {}: {e}", request.command),
+        )
+    })
+}
+
+/// A command's arguments when it has ones that cannot be left out.
+fn required_arguments<T: serde::de::DeserializeOwned>(
+    request: &Request,
+) -> Result<T, ServiceError> {
+    serde_json::from_value(request.args.clone()).map_err(|e| {
+        ServiceError::new(
+            codes::BAD_REQUEST,
+            format!("bad arguments to {}: {e}", request.command),
+        )
     })
 }
 

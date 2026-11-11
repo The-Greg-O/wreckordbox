@@ -319,8 +319,8 @@ pub fn validate_destination(directory: &Path, location: &rbl_db::LibraryLocation
 
 #[allow(clippy::too_many_lines, reason = "one linear backup pipeline; splitting it would hide the order writes happen in")]
 fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&str, u64, u64, &str) -> AppResult<()>) -> AppResult<String> {
-    let _gate = state.edit_gate.lock();
-    let _files = state.analysis_write.lock();
+    let _gate = state.edit_gate().lock();
+    let _files = state.analysis_write().lock();
     let location = state.location()?;
     if pending(state.backup_dir()) {
         state.with_closed_reader(|| recover(state.backup_dir(), &location))?;
@@ -561,7 +561,7 @@ pub fn recover(root: &Path, location: &rbl_db::LibraryLocation) -> AppResult<()>
 }
 
 pub fn delete(state: &AppState, path: &Path) -> AppResult<()> {
-    let _gate = state.edit_gate.lock();
+    let _gate = state.edit_gate().lock();
     let path = checked(&state.backup_destination(), path)?;
     if path.is_dir() || path.extension().is_some_and(|e| e == "zip") {
         manifest(&path, &state.location()?)?;
@@ -621,7 +621,7 @@ mod tests {
         let (_dir, state, _location) = fixture();
         let saved = PathBuf::from(create(&state).unwrap());
         let listed = std::thread::scope(|scope| {
-            let running_backup = state.edit_gate.lock();
+            let running_backup = state.edit_gate().lock();
             let (send, receive) = std::sync::mpsc::channel();
             let state = &state;
             scope.spawn(move || {
@@ -1010,7 +1010,7 @@ mod tests {
     fn background_job_rejects_duplicates_and_can_be_stopped_while_waiting() {
         let (_dir, state, _location) = fixture();
         let state = std::sync::Arc::new(state);
-        let gate = state.edit_gate.lock();
+        let gate = state.edit_gate().lock();
         start(state.clone()).unwrap();
         assert!(state.backup_progress.lock().running);
         assert!(start(state.clone()).is_err());

@@ -13,6 +13,11 @@ workspace = true
 rbl-db = { path = "../rbl-db" }
 # The index and search the window uses, so a query here matches the window.
 rbl-index = { path = "../rbl-index" }
+# The Library core: the loaded index and the single path every edit takes,
+# shared with the window so the two cannot drift.
+rbl-library = { path = "../rbl-library" }
+# Only for where the window keeps its recovery journals.
+rbl-backup = { path = "../rbl-backup" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 dirs = "5"

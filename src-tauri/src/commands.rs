@@ -679,30 +679,27 @@ fn window_of(data: &[u8], stride: usize, from: Option<u32>, len: Option<u32>) ->
 
 // ---------------------------------------------------------------- editing
 
-/// What an edit changed, and therefore how much has to be re-read.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Touched {
-    /// Only the playlist tree. Re-reading it costs 24 ms against 233 ms for
-    /// the whole library, and it is by far the most common kind of edit.
-    Playlists,
-    /// A track column changed, so the ranks and the search arena are stale.
-    Tracks,
-    /// Only the Tag List.
-    TagList,
-    /// Existing tracks: rating, colour, comment, or play count.
-    Metadata(Vec<String>),
-    /// History membership, optionally with play counts to refresh.
-    Histories(Vec<String>),
-    /// One track's cues, re-read on their own as a cue edit does (#504).
-    Cues(String),
+pub(crate) use rbl_library::Touched;
+
+/// The event that tells the window about a change. A Tag List edit leaves
+/// every other view as it was, so it has its own rather than
+/// `library:changed`, which makes every open list fetch its rows again.
+pub(crate) trait ChangeEvent {
+    fn event(&self) -> &'static str;
 }
 
-impl Touched {
-    /// The event that tells the window. A Tag List edit leaves every other
-    /// view as it was, so it has its own rather than `library:changed`,
-    /// which makes every open list fetch its rows again.
-    pub(crate) fn event(&self) -> &'static str {
-        if matches!(self, Self::TagList) { "tag-list:changed" } else { "library:changed" }
+impl ChangeEvent for rbl_library::ChangeKind {
+    fn event(&self) -> &'static str {
+        match self {
+            Self::TagList => "tag-list:changed",
+            Self::Library => "library:changed",
+        }
+    }
+}
+
+impl ChangeEvent for Touched {
+    fn event(&self) -> &'static str {
+        self.change_kind().event()
     }
 }
 
@@ -720,7 +717,7 @@ where
     let state = Arc::clone(&state);
     let event = touched.event();
     let (generation, history) = blocking(name, move || {
-        let _gate = state.edit_gate.lock();
+        let _gate = state.edit_gate().lock();
         let generation = state.write_history_then(action, |db, ()| refresh_after_edit(&state, db, touched)).map_err(write_error)?;
         // Any non-recorded edit after an undo starts a new branch.
         let mut history = state.edit_history.lock();
@@ -747,7 +744,7 @@ where
     let state = Arc::clone(&state);
     let event = touched.event();
     let (generation, history) = blocking(name, move || {
-        let _gate = state.edit_gate.lock();
+        let _gate = state.edit_gate().lock();
         let generation = state.write_history_then(action, |db, ()| refresh_after_edit(&state, db, touched))
             .map_err(write_error)?;
         let mut history = state.edit_history.lock();
@@ -835,7 +832,7 @@ where
     let state = Arc::clone(&state);
     let event = touched.event();
     let dto = blocking(name, move || {
-        let _gate = state.edit_gate.lock();
+        let _gate = state.edit_gate().lock();
         let (generation, reversible) = state.write_history_then(
             action,
             |db, reversible| refresh_after_edit(&state, db, touched).map(|generation| (generation, reversible)),
@@ -1055,37 +1052,10 @@ fn step_track_edits(
 }
 
 /// Shared by desktop and CDJ edits; the writer holds the edit gate until
-/// both persistence and the new index are visible.
+/// both persistence and the new index are visible. The work is the Library
+/// core's ([`rbl_library::LibraryCore::refresh_after_edit`]).
 pub(crate) fn refresh_after_edit(state: &AppState, db: &rbl_db::Library, touched: Touched) -> Result<u32, rbl_db::DbError> {
-    match touched {
-        Touched::Metadata(ids) => state.refresh_metadata(db, &ids, false),
-        Touched::Histories(ids) if !ids.is_empty() => state.refresh_metadata(db, &ids, true),
-        Touched::Cues(track) => {
-            let library = state.library().map_err(|e| rbl_db::DbError::Open(e.to_string()))?;
-            rbl_index::reload_cues_of(db, &library, &track)?;
-            Ok(state.summary().3)
-        }
-        Touched::Tracks => {
-            let started = std::time::Instant::now();
-            let (library, _) = rbl_index::load(db)?;
-            let load_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-            state.set_library(library, rbl_db::is_rekordbox_running(), db.schema().db_version, load_ms, db.location().clone());
-            Ok(state.summary().3)
-        }
-        touched => {
-            let library = state.library().map_err(|e| rbl_db::DbError::Open(e.to_string()))?;
-            match touched {
-                Touched::TagList => {
-                    library.set_tag_list(rbl_index::reload_tag_list(db, &library)?);
-                    return Ok(state.invalidate_tag_list_views());
-                }
-                Touched::Playlists => library.set_playlists(rbl_index::reload_playlists(db, &library)?),
-                Touched::Histories(_) => library.set_histories(rbl_index::reload_histories(db, &library)?),
-                _ => unreachable!("track changes handled above"),
-            }
-            Ok(state.invalidate_views())
-        }
-    }
+    state.core().refresh_after_edit(state, db, touched)
 }
 
 /// Maps a database refusal onto the error kind the frontend distinguishes.
@@ -1111,7 +1081,7 @@ pub async fn reload_library<R: tauri::Runtime>(
 /// Re-reads the library and returns the new generation.
 pub(crate) async fn reload<R: tauri::Runtime>(app: tauri::AppHandle<R>, state: Arc<AppState>) -> AppResult<u32> {
     let generation = blocking("reload", move || {
-        let _gate = state.edit_gate.lock();
+        let _gate = state.edit_gate().lock();
         let db = state.open_read_only().map_err(write_error)?;
         let db_version = db.schema().db_version;
         let location = db.location().clone();
@@ -1864,8 +1834,8 @@ impl ExportSelection {
         loose: &[u64],
         automatic: bool,
     ) -> AppResult<Self> {
-        let _editing = state.edit_gate.lock();
-        let _analysis = state.analysis_write.lock();
+        let _editing = state.edit_gate().lock();
+        let _analysis = state.analysis_write().lock();
         // Named first and read after: `source_rows` takes the playlists
         // itself, so the guard is let go before it is asked.
         let mut named: Vec<(u64, String, rbl_index::TrackSource)> = Vec::with_capacity(playlist_ids.len());
@@ -3599,7 +3569,7 @@ async fn import_files_then<R: tauri::Runtime>(
     let writing = Arc::clone(&state);
     let report = blocking("import_files", move || {
         let files = expand_import_paths(&paths);
-        let _gate = writing.edit_gate.lock();
+        let _gate = writing.edit_gate().lock();
         let report = writing
             .write(|writer| {
                 let mut imported = 0_u32;
@@ -3699,7 +3669,7 @@ pub async fn import_folder_playlist<R: tauri::Runtime>(
         let mut budget = rbl_db::import::WalkBudget::new(IMPORT_MAX_DEPTH, IMPORT_MAX_ENTRIES);
         let files = rbl_db::import::audio_files_in(&dir, &mut budget);
         // Held from the write to the history entry, so no Undo runs between.
-        let _gate = writing.edit_gate.lock();
+        let _gate = writing.edit_gate().lock();
         let mut outcome = writing
             .write(|writer| {
                 let clash = match (replace.as_deref(), copy.unwrap_or(false)) {
@@ -4055,7 +4025,7 @@ pub(crate) enum Stepped {
 /// entry changed (`cues:changed`), the Tag List (`tag-list:changed`), or
 /// the library (`library:changed`).
 pub(crate) fn step_history(state: &AppState, undo: bool) -> AppResult<(EditHistoryDto, Stepped)> {
-    let _gate = state.edit_gate.lock();
+    let _gate = state.edit_gate().lock();
     let entry = {
         let history = state.edit_history.lock();
         if undo { history.undo.last().cloned() } else { history.redo.last().cloned() }
@@ -4470,7 +4440,7 @@ async fn import_collection<R: tauri::Runtime>(
         };
         // Looked for under the same edit gate as the import, so nothing can
         // make a same-named list between the question and the write.
-        let _gate = writing.edit_gate.lock();
+        let _gate = writing.edit_gate().lock();
         let outcome = writing
             .write(|writer| {
                 if !replace {

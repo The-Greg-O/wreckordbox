@@ -103,8 +103,8 @@ fn import(state: &AppState, editor: &crate::grid::GridEditor, root: &Path, cues:
     rbl_devices::settings::recover(root)
         .map_err(|e| err(format!("Could not recover an interrupted export before importing: {e}")))?;
     let _device_read = rbl_core::durable::read_lock(root).map_err(err)?;
-    let _gate = state.edit_gate.lock();
-    let _files = state.analysis_write.lock();
+    let _gate = state.edit_gate().lock();
+    let _files = state.analysis_write().lock();
     let mut report = ImportReport::default();
     let location = state.location()?;
     crate::file_journal::recover(state.backup_dir(), &location)?;
@@ -749,7 +749,7 @@ mod tests {
         assert!(finished.recv_timeout(std::time::Duration::from_millis(300)).is_err(), "the import waits for the export");
         let other = {
             let state = std::sync::Arc::clone(&state);
-            std::thread::spawn(move || state.edit_gate.try_lock().is_some() && state.analysis_write.try_lock().is_some())
+            std::thread::spawn(move || state.edit_gate().try_lock().is_some() && state.analysis_write().try_lock().is_some())
         };
         assert!(other.join().unwrap(), "an analysis can take the library's locks while the import waits");
         drop(export);

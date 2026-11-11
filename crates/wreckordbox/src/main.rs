@@ -11,7 +11,8 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use serde_json::json;
 use wreckordbox_service::{
-    Client, Config, Launcher, Service, ServiceError, Status, TrackList, TrackQuery, DEFAULT_TRACK_LIMIT,
+    Client, Config, Launcher, RatedTrack, Service, ServiceError, Status, TrackList, TrackQuery,
+    DEFAULT_TRACK_LIMIT,
 };
 
 /// Work on the wreckordbox Library from a terminal.
@@ -67,6 +68,19 @@ enum TrackCommands {
         #[arg(long, value_name = "ROWS", default_value_t = DEFAULT_TRACK_LIMIT)]
         limit: usize,
     },
+    /// Set a track's rating and report what it was and what it is now.
+    ///
+    /// The window and every other client of the Library service see the
+    /// change at once. Nothing is changed when the track is not in the
+    /// Library, or while rekordbox is running.
+    Rate {
+        /// The track's identifier: the ID column of `tracks list`.
+        #[arg(value_name = "ID")]
+        id: String,
+        /// Stars, 0 to 5. 0 clears the rating.
+        #[arg(value_name = "STARS")]
+        stars: u8,
+    },
 }
 
 fn main() -> ExitCode {
@@ -96,16 +110,35 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
                 print(&status_text(&status));
             }
         }
-        Commands::Tracks { command: TrackCommands::List { filter, limit } } => {
-            let list = connect(&config)?.tracks(&TrackQuery { filter: filter.clone(), limit: Some(*limit) })?;
+        Commands::Tracks {
+            command: TrackCommands::List { filter, limit },
+        } => {
+            let list = connect(&config)?.tracks(&TrackQuery {
+                filter: filter.clone(),
+                limit: Some(*limit),
+            })?;
             if cli.json {
                 print(&json!(list).to_string());
             } else {
                 print(&tracks_text(&list));
             }
         }
+        Commands::Tracks {
+            command: TrackCommands::Rate { id, stars },
+        } => {
+            let rated = connect(&config)?.rate_track(id, *stars)?;
+            if cli.json {
+                print(&json!(rated).to_string());
+            } else {
+                print(&rated_text(&rated));
+            }
+        }
         Commands::Serve { spawned: true } => {
-            return Ok(if wreckordbox_service::serve_spawned(config) { ExitCode::SUCCESS } else { ExitCode::FAILURE });
+            return Ok(if wreckordbox_service::serve_spawned(config) {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            });
         }
         Commands::Serve { spawned: false } => {
             let service = Service::start(wreckordbox_service::locate_library()?, &config)?;
@@ -126,9 +159,15 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
 fn connect(config: &Config) -> Result<Client, ServiceError> {
     let library = wreckordbox_service::locate_library()?;
     let program = std::env::current_exe().map_err(|e| {
-        ServiceError::new(wreckordbox_service::codes::SERVICE_FAILED, format!("could not find this program: {e}"))
+        ServiceError::new(
+            wreckordbox_service::codes::SERVICE_FAILED,
+            format!("could not find this program: {e}"),
+        )
     })?;
-    let launcher = Launcher { program, args: vec!["serve".into(), "--spawned".into()] };
+    let launcher = Launcher {
+        program,
+        args: vec!["serve".into(), "--spawned".into()],
+    };
     Client::connect_or_start(config, &library, &launcher)
 }
 
@@ -155,31 +194,75 @@ fn tracks_text(list: &TrackList) -> String {
             track.id.clone(),
             or_dash(&track.title),
             or_dash(&track.artist),
-            track.bpm.map_or_else(|| "-".to_owned(), |bpm| format!("{bpm:.2}")),
+            track
+                .bpm
+                .map_or_else(|| "-".to_owned(), |bpm| format!("{bpm:.2}")),
             or_dash(&track.key),
             track.rating.to_string(),
         ]
     }));
-    let widths: [usize; 6] =
-        std::array::from_fn(|column| rows.iter().map(|row| row[column].chars().count()).max().unwrap_or(0));
+    let widths: [usize; 6] = std::array::from_fn(|column| {
+        rows.iter()
+            .map(|row| row[column].chars().count())
+            .max()
+            .unwrap_or(0)
+    });
     let lines: Vec<String> = rows
         .iter()
         .map(|row| {
-            let line: Vec<String> =
-                row.iter().zip(widths).map(|(cell, width)| format!("{cell:<width$}")).collect();
+            let line: Vec<String> = row
+                .iter()
+                .zip(widths)
+                .map(|(cell, width)| format!("{cell:<width$}"))
+                .collect();
             line.join("  ").trim_end().to_owned()
         })
         .collect();
     let mut text = lines.join("\n");
     if list.tracks.len() < list.total {
-        let _ = write!(text, "\nShowing {} of {} tracks; raise --limit to see more.", list.tracks.len(), list.total);
+        let _ = write!(
+            text,
+            "\nShowing {} of {} tracks; raise --limit to see more.",
+            list.tracks.len(),
+            list.total
+        );
     }
     text
 }
 
+/// One line saying what a rating edit did.
+fn rated_text(rated: &RatedTrack) -> String {
+    let stars = |count: u8| {
+        if count == 1 {
+            "1 star".to_owned()
+        } else {
+            format!("{count} stars")
+        }
+    };
+    if rated.rating == rated.previous_rating {
+        return format!(
+            "Track {} \"{}\" already has {}.",
+            rated.id,
+            rated.title,
+            stars(rated.rating)
+        );
+    }
+    format!(
+        "Rated track {} \"{}\": {}, was {}.",
+        rated.id,
+        rated.title,
+        stars(rated.rating),
+        stars(rated.previous_rating)
+    )
+}
+
 /// A cell with nothing in it would shift the ones after it when read back.
 fn or_dash(text: &str) -> String {
-    if text.is_empty() { "-".to_owned() } else { text.to_owned() }
+    if text.is_empty() {
+        "-".to_owned()
+    } else {
+        text.to_owned()
+    }
 }
 
 fn print(text: &str) {
