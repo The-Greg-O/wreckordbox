@@ -1,6 +1,6 @@
-//! What the service owns of the Library: the Library core (the loaded
-//! index, the change generation and the single edit path) and a read-only
-//! connection for the few questions the index does not answer.
+//! What the service has of the Library: the Library core (the loaded
+//! index, the change generation and the single edit path). Its own when it
+//! runs by itself; the window's when the window hosts it.
 //!
 //! Queries are answered from the core's index with the same search the
 //! window uses, and an edit takes the core's one edit path, which the
@@ -9,10 +9,11 @@
 //! matches or about what an edit does.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use rbl_db::{DbError, LibraryLocation, OpenMode};
 use rbl_index::{SortColumn, TrackFilter, TrackSource, ViewSpec};
-use rbl_library::{History, LibraryCore, NoHost, Touched};
+use rbl_library::{History, Host, LibraryCore, NoHost, Touched};
 
 use crate::protocol::{
     codes, ChangeKind, LibraryChanged, RateTrack, RatedTrack, ServiceError, Track, TrackList,
@@ -24,10 +25,16 @@ use crate::server::open_error;
 const MAX_RATING: u8 = 5;
 
 pub(crate) struct OpenLibrary {
-    /// Read-only, and only read: every write opens its own connection
-    /// inside the core and closes it again.
-    db: rbl_db::Library,
-    core: LibraryCore,
+    /// The one in-memory Library. The service's own when it runs by itself;
+    /// the window's when the window hosts the service, so an edit from
+    /// either is the same edit under one generation.
+    core: Arc<LibraryCore>,
+    /// A read-only connection a service by itself keeps open; every write
+    /// opens its own inside the core and closes it again.
+    db: Option<rbl_db::Library>,
+    /// What the core borrows for an edit: nothing for a service by itself,
+    /// the window's recovery and edit history when the window hosts.
+    host: Arc<dyn Host + Send + Sync>,
 }
 
 impl OpenLibrary {
@@ -52,24 +59,52 @@ impl OpenLibrary {
             load_ms,
             location,
         );
-        Ok(Self { db, core })
+        Ok(Self {
+            core: Arc::new(core),
+            db: Some(db),
+            host: Arc::new(NoHost),
+        })
+    }
+
+    /// The Library a front end already has open, served as it stands: the
+    /// front end loads it, and reloads it, through the same core.
+    pub(crate) fn shared(core: Arc<LibraryCore>, host: Arc<dyn Host + Send + Sync>) -> Self {
+        Self {
+            core,
+            db: None,
+            host,
+        }
+    }
+
+    /// The Library core, for the service to watch for changes.
+    pub(crate) fn core(&self) -> Arc<LibraryCore> {
+        Arc::clone(&self.core)
     }
 
     /// Tracks in the Library, not counting deleted ones.
     pub(crate) fn track_count(&self) -> Result<u32, ServiceError> {
-        self.db.live_track_count().map_err(|e| open_error(&e))
+        Ok(u32::try_from(self.index()?.len()).unwrap_or(u32::MAX))
     }
 
-    /// The read-only connection, for what the index does not hold.
-    pub(crate) fn db(&self) -> &rbl_db::Library {
-        &self.db
+    /// Runs `read` on a read-only connection, for what the index does not
+    /// hold. A service by itself keeps one open; a service the window hosts
+    /// opens one for the read, as the window may replace the file under it
+    /// (a restore).
+    pub(crate) fn with_db<T>(
+        &self,
+        read: impl FnOnce(&rbl_db::Library) -> Result<T, ServiceError>,
+    ) -> Result<T, ServiceError> {
+        match &self.db {
+            Some(db) => read(db),
+            None => read(&self.core.open_read_only().map_err(|e| open_error(&e))?),
+        }
     }
 
     /// The index as it stands now: a snapshot an edit does not change.
-    pub(crate) fn index(&self) -> Result<std::sync::Arc<rbl_index::Library>, ServiceError> {
+    pub(crate) fn index(&self) -> Result<Arc<rbl_index::Library>, ServiceError> {
         self.core
             .library()
-            .map_err(|e| ServiceError::new(codes::SERVICE_FAILED, e.to_string()))
+            .map_err(|e| ServiceError::new(codes::LIBRARY_LOADING, e.to_string()))
     }
 
     /// The collection in its own order, narrowed as the window's search box
@@ -151,7 +186,7 @@ impl OpenLibrary {
         let (_recorded, change) = self
             .core
             .edit(
-                &NoHost,
+                &*self.host,
                 History::Outside,
                 Touched::Metadata(vec![id.clone()]),
                 |writer| writer.set_rating_with_undo(&id, stars),
@@ -170,14 +205,20 @@ impl OpenLibrary {
                 previous_rating: previous.rating,
                 generation: change.generation,
             },
-            LibraryChanged {
-                kind: match change.kind {
-                    rbl_library::ChangeKind::Library => ChangeKind::Library,
-                    rbl_library::ChangeKind::TagList => ChangeKind::TagList,
-                },
-                generation: change.generation,
-            },
+            change.into(),
         ))
+    }
+}
+
+impl From<rbl_library::Change> for LibraryChanged {
+    fn from(change: rbl_library::Change) -> Self {
+        Self {
+            kind: match change.kind {
+                rbl_library::ChangeKind::Library => ChangeKind::Library,
+                rbl_library::ChangeKind::TagList => ChangeKind::TagList,
+            },
+            generation: change.generation,
+        }
     }
 }
 

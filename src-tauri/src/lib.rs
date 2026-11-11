@@ -49,6 +49,7 @@ mod relocate;
 mod sync_window;
 mod report;
 mod scripting;
+pub mod service_host;
 mod device_settings;
 pub mod dto;
 mod error;
@@ -92,6 +93,10 @@ pub(crate) fn spawn_library_load(app: tauri::AppHandle) {
     tauri::async_runtime::spawn_blocking(move || {
         let started = std::time::Instant::now();
         if let Ok(location) = rbl_db::detect() {
+            // Before anything is read or recovered: from here on this window
+            // is the Library's one writer, and a service a command started
+            // by itself has stopped.
+            service_host::host(&app, &location);
             if let Err(e) = backups::recover(app.state::<Arc<state::AppState>>().backup_dir(), &location) {
                 report_problem(&app, dto::LibraryProblemDto::Failed { message: e.to_string() });
                 return;
@@ -558,6 +563,7 @@ pub fn run() {
             commands::library_summary,
             commands::disable_read_only,
             new_library::library_problem,
+            service_host::service_problem,
             new_library::create_library,
             new_library::use_default_library,
             new_library::database_drives,
@@ -782,6 +788,9 @@ pub fn run() {
                 // An update downloaded this run and waiting for the quit
                 // (Windows) is installed now, silently.
                 if matches!(event, tauri::RunEvent::Exit) {
+                    // Lets go of the Library's lock and socket, so a command
+                    // run next starts a service of its own.
+                    handle.state::<Arc<AppState>>().stop_service();
                     crate::screen_cache::save(handle);
                     crate::update::on_exit(handle);
                 }

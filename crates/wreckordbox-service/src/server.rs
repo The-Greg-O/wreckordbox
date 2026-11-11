@@ -12,18 +12,29 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use rbl_db::{DbError, LibraryLocation};
+use rbl_library::{Host, LibraryCore};
 use serde_json::{json, Value};
 
+use crate::client::Client;
 use crate::library::OpenLibrary;
 use crate::protocol::{
-    codes, commands, Event, LibraryStatus, Outcome, RateTrack, Request, Response, ServiceError,
-    Status, TrackQuery, PROTOCOL_VERSION,
+    codes, commands, Event, LibraryChanged, LibraryStatus, Outcome, RateTrack, Request, Response,
+    ServiceError, Status, TrackQuery, PROTOCOL_VERSION,
 };
 use crate::Config;
 
 /// How long a service started on demand stays up with no client, unless
 /// [`IDLE_EXIT_ENV`](crate::IDLE_EXIT_ENV) says otherwise.
 const SPAWNED_IDLE_EXIT: Duration = Duration::from_secs(300);
+
+/// How long a front end waits for a service running by itself to hand the
+/// Library over.
+const HANDOVER_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long one client may leave an event unread before it is cut off. An
+/// event is sent by whoever changed the Library, which may be the window; a
+/// client that stopped reading must not hold it up.
+const SEND_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// `sun_path` is 108 bytes on Linux and 104 on macOS, with a terminator.
 const SOCKET_PATH_MAX: usize = 100;
@@ -39,12 +50,22 @@ struct Shared {
     library: Mutex<Option<Owned>>,
     master_db: PathBuf,
     socket: PathBuf,
+    /// Whether a front end hosts this service on its own Library core. Such
+    /// a service does not stop for a client: its front end would go on
+    /// writing with nothing holding the Library's lock.
+    hosted: bool,
+    /// A client asked a service running by itself to stop; it does once that
+    /// client has its answer.
+    stop_requested: AtomicBool,
     stopping: AtomicBool,
     /// Set, and signalled, once the service has stopped.
     stopped: (Mutex<bool>, Condvar),
     connections: Mutex<HashMap<u64, Arc<Connection>>>,
     /// The hosting process's own subscriptions ([`Service::events`]).
     listeners: Mutex<Vec<Sender<Event>>>,
+    /// Where the Library core's changes wait to be sent to clients, off the
+    /// thread that made them. Closed when the service stops.
+    changes: Mutex<Option<Sender<Event>>>,
     /// When the last client left; `None` while one is connected.
     idle_since: Mutex<Option<Instant>>,
 }
@@ -68,6 +89,64 @@ impl Service {
     /// Fails with [`codes::SERVICE_ALREADY_RUNNING`] when another service
     /// has the Library, and with a `library_*` code when it cannot be opened.
     pub fn start(library: LibraryLocation, config: &Config) -> Result<Self, ServiceError> {
+        let recovery_dir = config.recovery_dir.clone();
+        Self::begin(library, config, false, |library| {
+            OpenLibrary::open(library, recovery_dir)
+        })
+    }
+
+    /// Starts the one service for `library` inside a front end, on the
+    /// front end's own Library core: there is one in-memory Library and one
+    /// change generation, so an edit from a client and an edit from the
+    /// front end are the same edit. `host` is what the front end lends an
+    /// edit (its recovery and its edit history).
+    ///
+    /// The front end reads the Library into `core` itself, before or after
+    /// this; until it has, commands answer [`codes::LIBRARY_LOADING`].
+    ///
+    /// A service running by itself for the same Library is asked to stop
+    /// and this one takes its place, so the front end is the Library's one
+    /// writer for as long as it holds the service. A service hosted by
+    /// another front end does not stop: this fails with
+    /// [`codes::STOP_REFUSED`], and the caller must not write.
+    pub fn host(
+        library: &LibraryLocation,
+        config: &Config,
+        core: &Arc<LibraryCore>,
+        host: &Arc<dyn Host + Send + Sync>,
+    ) -> Result<Self, ServiceError> {
+        let socket = config.socket_path(library);
+        let deadline = Instant::now() + HANDOVER_TIMEOUT;
+        loop {
+            let (core, host) = (Arc::clone(core), Arc::clone(host));
+            let started = Self::begin(library.clone(), config, true, |_| {
+                Ok(OpenLibrary::shared(core, host))
+            });
+            let busy = match started {
+                Err(error) if error.code == codes::SERVICE_ALREADY_RUNNING => error,
+                other => return other,
+            };
+            // Nothing answers while the other service is still opening the
+            // Library, or once it has begun to stop: ask again.
+            if let Ok(mut running) = Client::connect(&socket) {
+                match running.stop() {
+                    Err(refused) if refused.code == codes::STOP_REFUSED => return Err(refused),
+                    _ => {}
+                }
+            }
+            if Instant::now() >= deadline {
+                return Err(busy);
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    fn begin(
+        library: LibraryLocation,
+        config: &Config,
+        hosted: bool,
+        open: impl FnOnce(LibraryLocation) -> Result<OpenLibrary, ServiceError>,
+    ) -> Result<Self, ServiceError> {
         if !library.master_db.is_file() {
             return Err(ServiceError::new(
                 codes::LIBRARY_MISSING,
@@ -78,24 +157,53 @@ impl Service {
             ));
         }
         let socket = config.socket_path(&library);
-        let lock = take_lock(&library.master_db, &socket)?;
+        let library_lock = take_lock(&library.master_db, &socket)?;
         let master_db = library.master_db.clone();
-        let open = OpenLibrary::open(library, config.recovery_dir.clone())?;
+        let open = open(library)?;
+        let core = open.core();
         let listener = listen(&config.runtime_dir, &socket)?;
+        let (queue, queued) = std::sync::mpsc::channel();
 
         let shared = Arc::new(Shared {
             library: Mutex::new(Some(Owned {
                 library: open,
-                _lock: lock,
+                _lock: library_lock,
             })),
             master_db,
             socket,
+            hosted,
+            stop_requested: AtomicBool::new(false),
             stopping: AtomicBool::new(false),
             stopped: (Mutex::new(false), Condvar::new()),
             connections: Mutex::new(HashMap::new()),
             listeners: Mutex::new(Vec::new()),
+            changes: Mutex::new(Some(queue)),
             idle_since: Mutex::new(Some(Instant::now())),
         });
+        // Every change to the Library, whoever made it: a client's command,
+        // or the front end this service shares the core with. The core calls
+        // this under its own lock, so the change is only queued here.
+        {
+            let shared = Arc::downgrade(&shared);
+            core.watch(move |change| {
+                let Some(shared) = shared.upgrade() else {
+                    return false;
+                };
+                let queue = lock(&shared.changes);
+                queue
+                    .as_ref()
+                    .is_some_and(|queue| queue.send(LibraryChanged::from(change).event()).is_ok())
+            });
+        }
+        {
+            let shared = Arc::clone(&shared);
+            std::thread::spawn(move || {
+                // Ends when the service stops and closes the queue.
+                for event in queued {
+                    shared.send_to_clients(&event);
+                }
+            });
+        }
         if let Some(idle_exit) = config.idle_exit {
             let shared = Arc::clone(&shared);
             std::thread::spawn(move || stop_when_idle(&shared, idle_exit));
@@ -112,7 +220,9 @@ impl Service {
         self.shared.status()
     }
 
-    /// Sends `event` to every subscribed client.
+    /// Sends `event` to every subscribed client and to
+    /// [`events`](Self::events). A change to the Library needs no call: the
+    /// service sends `library_changed` itself.
     pub fn publish(&self, event: &Event) {
         self.shared.publish(event);
     }
@@ -130,8 +240,13 @@ impl Service {
         self.shared.dispatch(None, &request)
     }
 
-    /// Every event from now on, for the process hosting the service: what a
-    /// subscribed client is sent. Dropping the receiver ends it.
+    /// What the process hosting the service has not seen for itself, from
+    /// now on: each change a client's command (or [`call`](Self::call))
+    /// made, as the `library_changed` a subscribed client is sent, and
+    /// whatever is [`publish`](Self::publish)ed. A change the host makes
+    /// through the Library core it shares with the service is not repeated
+    /// here; the host made it and already knows. Dropping the receiver ends
+    /// it.
     pub fn events(&self) -> Receiver<Event> {
         let (sender, receiver) = std::sync::mpsc::channel();
         lock(&self.shared.listeners).push(sender);
@@ -146,6 +261,27 @@ impl Service {
     /// Blocks until the service has stopped: by [`stop`](Self::stop), or by
     /// itself after [`Config::idle_exit`] with no client.
     pub fn wait(self) {
+        self.stopped().wait();
+    }
+
+    /// Something to wait on, from another thread, for the service to stop:
+    /// how a hosting front end learns its service is gone.
+    #[must_use]
+    pub fn stopped(&self) -> Stopped {
+        Stopped {
+            shared: Arc::clone(&self.shared),
+        }
+    }
+}
+
+/// Waits for a [`Service`] to stop, without keeping it running.
+pub struct Stopped {
+    shared: Arc<Shared>,
+}
+
+impl Stopped {
+    /// Blocks until the service has stopped, for whatever reason.
+    pub fn wait(&self) {
         let (stopped, signal) = &self.shared.stopped;
         let mut stopped = lock(stopped);
         while !*stopped {
@@ -234,10 +370,23 @@ impl Shared {
             commands::TRACKS_RATE => {
                 let edit: RateTrack = required_arguments(request)?;
                 let (rated, changed) = self.with_library(|library| library.rate(&edit))??;
-                // After the Library's lock is let go: a slow client must not
-                // hold up the next command.
-                self.publish(&changed.event());
+                // Clients hear of it from the core, as they hear of every
+                // change; the hosting process is told here, of the changes
+                // it did not make.
+                self.tell_host(&changed.event());
                 to_value(&rated)
+            }
+            commands::STOP => {
+                if self.hosted || connection.is_none() {
+                    return Err(ServiceError::new(
+                        codes::STOP_REFUSED,
+                        "the wreckordbox window is hosting the Library service; it stops when the window is closed",
+                    ));
+                }
+                // Stopped by the connection's own thread, once this answer
+                // has been sent.
+                self.stop_requested.store(true, Ordering::Release);
+                Ok(json!({}))
             }
             reading if crate::reading::answers(reading) => self
                 .with_library(|library| crate::reading::answer(library, reading, &request.args))?,
@@ -259,6 +408,16 @@ impl Shared {
     }
 
     fn publish(&self, event: &Event) {
+        self.send_to_clients(event);
+        self.tell_host(event);
+    }
+
+    fn tell_host(&self, event: &Event) {
+        // A host that dropped its receiver is forgotten here.
+        lock(&self.listeners).retain(|listener| listener.send(event.clone()).is_ok());
+    }
+
+    fn send_to_clients(&self, event: &Event) {
         let Ok(line) = serde_json::to_string(event) else {
             return;
         };
@@ -268,11 +427,12 @@ impl Shared {
             .cloned()
             .collect();
         for connection in subscribers {
-            // A client that has gone is dropped by its own reader.
-            let _ = connection.send(&line);
+            // A client that has gone is dropped by its own reader; one that
+            // stopped reading is cut off, since half a line may have gone.
+            if connection.send(&line).is_err() {
+                let _ = lock(&connection.writer).shutdown(std::net::Shutdown::Both);
+            }
         }
-        // A host that dropped its receiver is forgotten here.
-        lock(&self.listeners).retain(|listener| listener.send(event.clone()).is_ok());
     }
 
     fn stop(&self) {
@@ -288,6 +448,8 @@ impl Shared {
         let _ = UnixStream::connect(&self.socket);
         // While the lock is still held, so this can only be our own socket.
         let _ = std::fs::remove_file(&self.socket);
+        // No more changes to send; the sending thread ends.
+        drop(lock(&self.changes).take());
         // Waits for a command in progress, then closes the Library before
         // letting another service have it.
         drop(lock(&self.library).take());
@@ -314,6 +476,7 @@ fn accept_clients(shared: &Arc<Shared>, listener: &UnixListener) {
         let Ok(writer) = stream.try_clone() else {
             continue;
         };
+        let _ = writer.set_write_timeout(Some(SEND_TIMEOUT));
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         let connection = Arc::new(Connection {
             writer: Mutex::new(writer),
@@ -363,6 +526,10 @@ fn serve_client(shared: &Shared, connection: &Connection, stream: UnixStream) {
             break;
         };
         if connection.send(&line).is_err() {
+            break;
+        }
+        if shared.stop_requested.load(Ordering::Acquire) {
+            shared.stop();
             break;
         }
     }

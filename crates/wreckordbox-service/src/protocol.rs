@@ -27,6 +27,11 @@ pub mod commands {
     /// subscribed client a [`LIBRARY_CHANGED`](super::events::LIBRARY_CHANGED)
     /// event.
     pub const TRACKS_RATE: &str = "tracks.rate";
+    /// Asks a service running by itself to stop and let go of the Library,
+    /// so a front end can host the service instead. Answers `{}` and then
+    /// closes every connection. A service hosted by the window answers
+    /// [`STOP_REFUSED`](super::codes::STOP_REFUSED).
+    pub const STOP: &str = "stop";
 }
 
 /// The names of the events the service sends.
@@ -65,6 +70,11 @@ pub mod codes {
     /// unfinished, or a test tried to write to a real Library. Nothing was
     /// changed.
     pub const WRITE_REFUSED: &str = "write_refused";
+    /// The window hosting the service is still reading the Library. Try
+    /// again in a moment.
+    pub const LIBRARY_LOADING: &str = "library_loading";
+    /// The service is hosted by the window, which stops it by closing.
+    pub const STOP_REFUSED: &str = "stop_refused";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

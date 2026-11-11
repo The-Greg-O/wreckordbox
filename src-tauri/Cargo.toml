@@ -42,6 +42,9 @@ rbl-db = { path = "../crates/rbl-db" }
 rbl-index = { path = "../crates/rbl-index" }
 # The Library core: the index, its views and the single edit path.
 rbl-library = { path = "../crates/rbl-library" }
+# The Library service, which the window hosts while it is open so the
+# `wreckordbox` command works on the window's own Library.
+wreckordbox-service = { path = "../crates/wreckordbox-service" }
 rbl-anlz = { path = "../crates/rbl-anlz" }
 rbl-analysis = { path = "../crates/rbl-analysis" }
 rbl-audio = { path = "../crates/rbl-audio" }

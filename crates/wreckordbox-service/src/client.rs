@@ -109,6 +109,12 @@ impl Client {
         self.call(commands::TRACKS_RATE, json!(edit))
     }
 
+    /// Asks a service running by itself to stop and let go of the Library.
+    /// A service the window hosts answers [`codes::STOP_REFUSED`].
+    pub fn stop(&mut self) -> Result<(), ServiceError> {
+        self.call::<Value>(commands::STOP, json!({})).map(|_| ())
+    }
+
     /// Asks the service to send this connection its events; read them with
     /// [`next_event`](Self::next_event).
     pub fn subscribe(&mut self) -> Result<(), ServiceError> {
