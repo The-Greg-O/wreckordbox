@@ -458,6 +458,8 @@ async function realBackend(): Promise<Backend> {
     onLibraryReady: (listener) => subscribe("library:ready", () => listener()),
     onLibraryProblem: (listener) => subscribe<LibraryProblem>("library:problem", listener),
     libraryProblem: () => invoke<LibraryProblem | null>("library_problem"),
+    onServiceStopped: (listener) => subscribe<string>("service:stopped", listener),
+    serviceProblem: () => invoke<string | null>("service_problem"),
     createLibrary: () => invoke<void>("create_library"),
     useDefaultLibrary: () => invoke<void>("use_default_library"),
     databaseDrives: () => invoke<DatabaseDrive[]>("database_drives"),

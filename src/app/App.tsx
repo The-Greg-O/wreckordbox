@@ -692,6 +692,24 @@ function AppBody() {
   const report = useCallback((text: string) => setNote({ text, failed: false }), []);
   const refuse = useCallback((text: string) => setNote({ text, failed: true }), []);
   const stopJob = useCallback((id: number) => jobs.stop(id), [jobs]);
+  // The Library service this window hosts has stopped, or another window
+  // has the Library: nothing more is saved, and the DJ is told why. Asked
+  // as well as heard, since it can happen before this has subscribed.
+  useEffect(() => {
+    let live = true;
+    let stop: (() => void) | undefined;
+    void (async () => {
+      const backend = await getBackend();
+      if (!live) return;
+      stop = backend.onServiceStopped(refuse);
+      const problem = await backend.serviceProblem().catch(() => null);
+      if (live && problem) refuse(problem);
+    })();
+    return () => {
+      live = false;
+      stop?.();
+    };
+  }, [refuse]);
   jobError.current = (job, error) => refuse(error instanceof Error ? error.message : `${job.label} failed.`);
   // A waveform click whose track could not be previewed says why.
   useEffect(() => onPreviewError(refuse), [refuse]);
