@@ -30,6 +30,10 @@ The property of a Stick that rekordbox on any machine can open it and show its t
 The DJ's own 1 to 5 judgement of how intense a track is, stored as the track's star rating. It is not a quality score.
 _Avoid_: Rating, stars (when the meaning is intended)
 
+**Intensity**:
+A measured, continuous Fact about how hard a track hits, including how it rises and falls over the track's length. Calibrated against Energy, which remains the DJ's own judgement.
+_Avoid_: Energy level, energy curve, loudness
+
 **MyTag category**:
 One of the four groups rekordbox allows MyTags to be organised into. A category holds any number of tags; the number of categories is fixed by rekordbox.
 _Avoid_: Tag group, tag folder
