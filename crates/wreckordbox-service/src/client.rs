@@ -13,7 +13,10 @@ use rbl_db::LibraryLocation;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
-use crate::protocol::{codes, commands, Event, Outcome, Request, Response, ServiceError, Status, TrackList, TrackQuery};
+use crate::protocol::{
+    codes, commands, Event, Outcome, RateTrack, RatedTrack, Request, Response, ServiceError,
+    Status, TrackList, TrackQuery,
+};
 use crate::{Config, IDLE_EXIT_ENV, RUNTIME_DIR_ENV};
 
 /// How long a started service has to answer on its socket.
@@ -50,7 +53,13 @@ impl Client {
             )
         })?;
         let writer = stream.try_clone().map_err(|e| lost(&e))?;
-        Ok(Self { reader: BufReader::new(stream), writer, next_id: 1, partial: String::new(), events: VecDeque::new() })
+        Ok(Self {
+            reader: BufReader::new(stream),
+            writer,
+            next_id: 1,
+            partial: String::new(),
+            events: VecDeque::new(),
+        })
     }
 
     /// Connects to the service for `library`, starting one with `launcher`
@@ -90,27 +99,51 @@ impl Client {
         self.call(commands::TRACKS_LIST, json!(query))
     }
 
+    /// Sets a track's rating, 0 to 5 stars, by its identifier. Every
+    /// subscribed client is told the Library changed.
+    pub fn rate_track(&mut self, id: &str, rating: u8) -> Result<RatedTrack, ServiceError> {
+        let edit = RateTrack {
+            id: id.to_owned(),
+            rating,
+        };
+        self.call(commands::TRACKS_RATE, json!(edit))
+    }
+
     /// Asks the service to send this connection its events; read them with
     /// [`next_event`](Self::next_event).
     pub fn subscribe(&mut self) -> Result<(), ServiceError> {
-        self.call::<Value>(commands::SUBSCRIBE, json!({})).map(|_| ())
+        self.call::<Value>(commands::SUBSCRIBE, json!({}))
+            .map(|_| ())
     }
 
     /// Sends one command and waits for its answer. Events that arrive
     /// meanwhile are kept for [`next_event`](Self::next_event).
-    pub fn call<T: DeserializeOwned>(&mut self, command: &str, args: Value) -> Result<T, ServiceError> {
+    pub fn call<T: DeserializeOwned>(
+        &mut self,
+        command: &str,
+        args: Value,
+    ) -> Result<T, ServiceError> {
         let id = self.next_id;
         self.next_id += 1;
-        let request = Request { id, command: command.to_owned(), args };
+        let request = Request {
+            id,
+            command: command.to_owned(),
+            args,
+        };
         let mut line = serde_json::to_string(&request).map_err(|e| lost(&e))?;
         line.push('\n');
-        self.writer.write_all(line.as_bytes()).map_err(|e| lost(&e))?;
+        self.writer
+            .write_all(line.as_bytes())
+            .map_err(|e| lost(&e))?;
         loop {
             match self.read_message(None)? {
                 Some(Message::Response(response)) if response.id == id => {
                     return match response.outcome {
                         Outcome::Result(result) => serde_json::from_value(result).map_err(|e| {
-                            ServiceError::new(codes::SERVICE_FAILED, format!("unexpected answer to {command}: {e}"))
+                            ServiceError::new(
+                                codes::SERVICE_FAILED,
+                                format!("unexpected answer to {command}: {e}"),
+                            )
                         }),
                         Outcome::Error(error) => Err(error),
                     };
@@ -143,7 +176,10 @@ impl Client {
 
     /// One message from the service; `None` when `timeout` passed first.
     fn read_message(&mut self, timeout: Option<Duration>) -> Result<Option<Message>, ServiceError> {
-        self.reader.get_ref().set_read_timeout(timeout).map_err(|e| lost(&e))?;
+        self.reader
+            .get_ref()
+            .set_read_timeout(timeout)
+            .map_err(|e| lost(&e))?;
         match self.reader.read_line(&mut self.partial) {
             Ok(0) => Err(lost(&"it closed the connection")),
             Ok(_) => {
@@ -168,23 +204,36 @@ enum Message {
 }
 
 fn lost(why: &dyn std::fmt::Display) -> ServiceError {
-    ServiceError::new(codes::SERVICE_FAILED, format!("lost the Library service: {why}"))
+    ServiceError::new(
+        codes::SERVICE_FAILED,
+        format!("lost the Library service: {why}"),
+    )
 }
 
 /// Runs the launcher as a service of its own, detached from this process,
 /// and waits for it to say whether it came up.
 fn start(config: &Config, launcher: &Launcher) -> Result<(), ServiceError> {
     let failed = |why: &dyn std::fmt::Display| {
-        ServiceError::new(codes::SERVICE_FAILED, format!("could not start the Library service: {why}"))
+        ServiceError::new(
+            codes::SERVICE_FAILED,
+            format!("could not start the Library service: {why}"),
+        )
     };
     crate::server::private_dir(&config.runtime_dir).map_err(|e| {
         ServiceError::new(
             codes::RUNTIME_DIR_UNUSABLE,
-            format!("could not make the runtime directory {}: {e}", config.runtime_dir.display()),
+            format!(
+                "could not make the runtime directory {}: {e}",
+                config.runtime_dir.display()
+            ),
         )
     })?;
     let log_path = config.runtime_dir.join("service.log");
-    let log = std::fs::File::options().create(true).append(true).open(&log_path).map_err(|e| failed(&e))?;
+    let log = std::fs::File::options()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|e| failed(&e))?;
 
     let mut command = Command::new(&launcher.program);
     command
@@ -200,11 +249,15 @@ fn start(config: &Config, launcher: &Launcher) -> Result<(), ServiceError> {
         command.env(IDLE_EXIT_ENV, idle_exit.as_secs().max(1).to_string());
     }
     let mut child = command.spawn().map_err(|e| failed(&e))?;
-    let Some(stdout) = child.stdout.take() else { return Err(failed(&"it has no standard output")) };
+    let Some(stdout) = child.stdout.take() else {
+        return Err(failed(&"it has no standard output"));
+    };
 
     // One line, then the service leaves its standard output alone.
     let mut line = String::new();
-    BufReader::new(stdout).read_line(&mut line).map_err(|e| failed(&e))?;
+    BufReader::new(stdout)
+        .read_line(&mut line)
+        .map_err(|e| failed(&e))?;
     let said: Value = serde_json::from_str(&line).unwrap_or(Value::Null);
     if said.get("ready").is_some() {
         return Ok(());
@@ -213,5 +266,10 @@ fn start(config: &Config, launcher: &Launcher) -> Result<(), ServiceError> {
     Err(said
         .get("error")
         .and_then(|error| serde_json::from_value::<ServiceError>(error.clone()).ok())
-        .unwrap_or_else(|| failed(&format_args!("it stopped without saying why; see {}", log_path.display()))))
+        .unwrap_or_else(|| {
+            failed(&format_args!(
+                "it stopped without saying why; see {}",
+                log_path.display()
+            ))
+        }))
 }

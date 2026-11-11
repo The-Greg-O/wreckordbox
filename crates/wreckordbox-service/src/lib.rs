@@ -21,7 +21,10 @@ use std::time::Duration;
 use rbl_db::LibraryLocation;
 
 pub use client::{Client, Launcher};
-pub use protocol::{codes, Event, ServiceError, Status, Track, TrackList, TrackQuery, DEFAULT_TRACK_LIMIT};
+pub use protocol::{
+    codes, events, ChangeKind, Event, LibraryChanged, RateTrack, RatedTrack, ServiceError, Status,
+    Track, TrackList, TrackQuery, DEFAULT_TRACK_LIMIT,
+};
 pub use server::{serve_spawned, Service};
 
 /// Names the directory the socket goes in, instead of the user's runtime
@@ -39,6 +42,9 @@ pub struct Config {
     /// which is what a front end hosting the service in its own process
     /// wants.
     pub idle_exit: Option<Duration>,
+    /// Where the Library's recovery journals are kept: the same folder the
+    /// window uses, so an unfinished restore stops an edit from either.
+    pub recovery_dir: PathBuf,
 }
 
 impl Config {
@@ -63,15 +69,25 @@ impl Config {
             .and_then(|secs| secs.parse::<u64>().ok())
             .filter(|secs| *secs > 0)
             .map(Duration::from_secs);
-        Ok(Self { runtime_dir, idle_exit })
+        Ok(Self {
+            runtime_dir,
+            idle_exit,
+            recovery_dir: rbl_backup::state_dir(),
+        })
     }
 
     /// The socket of the service for `library`: one per Library, so two
     /// Libraries can each have a service.
     #[must_use]
     pub fn socket_path(&self, library: &LibraryLocation) -> PathBuf {
-        let master_db = library.master_db.canonicalize().unwrap_or_else(|_| library.master_db.clone());
-        self.runtime_dir.join(format!("{:016x}.sock", fnv1a(master_db.as_os_str().as_encoded_bytes())))
+        let master_db = library
+            .master_db
+            .canonicalize()
+            .unwrap_or_else(|_| library.master_db.clone());
+        self.runtime_dir.join(format!(
+            "{:016x}.sock",
+            fnv1a(master_db.as_os_str().as_encoded_bytes())
+        ))
     }
 }
 
@@ -84,13 +100,17 @@ pub fn locate_library() -> Result<LibraryLocation, ServiceError> {
 /// A hash that is the same in every build, unlike the standard library's:
 /// a client and a service from different builds must agree on the socket.
 fn fnv1a(bytes: &[u8]) -> u64 {
-    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3))
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
+    })
 }
 
 /// The file whose lock says a service has the Library: beside `master.db`,
 /// so the rule holds whatever runtime directory a service was given.
 fn lock_path(master_db: &Path) -> PathBuf {
-    master_db.parent().map_or_else(|| PathBuf::from(LOCK_FILE), |dir| dir.join(LOCK_FILE))
+    master_db
+        .parent()
+        .map_or_else(|| PathBuf::from(LOCK_FILE), |dir| dir.join(LOCK_FILE))
 }
 
 const LOCK_FILE: &str = ".wreckordbox-service.lock";

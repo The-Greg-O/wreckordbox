@@ -14,6 +14,7 @@ Read the crate docs in [`src/lib.rs`](src/lib.rs), then [`src/protocol.rs`](src/
 | --- | --- |
 | [`lib.rs`](src/lib.rs) | `Config`: where the socket goes and how long an idle service lives. Finding the Library. |
 | [`protocol.rs`](src/protocol.rs) | Requests, responses, events, error codes, command names. |
+| [`library.rs`](src/library.rs) | What the service owns of the Library: an `rbl_library::LibraryCore` (index, generation, the single edit path). Queries and edits. |
 | [`server.rs`](src/server.rs) | `Service`: the Library's lock, the open Library, the socket, command dispatch, events. |
 | [`client.rs`](src/client.rs) | `Client`: connect, call, subscribe; starting a service on demand. |
 
@@ -24,6 +25,9 @@ Read the crate docs in [`src/lib.rs`](src/lib.rs), then [`src/protocol.rs`](src/
 - The socket is `<runtime dir>/<hash of the master.db path>.sock`. The runtime directory is `$XDG_RUNTIME_DIR/wreckordbox` unless `WRECKORDBOX_RUNTIME_DIR` names another; it is made with mode `0700` and the socket with `0600`.
 - A client that finds no service starts one (`Client::connect_or_start`) and waits for it. A service started that way stops after five minutes with no client connected; `WRECKORDBOX_IDLE_EXIT_SECS` changes that.
 - The Library is found with `rbl_db::detect`, exactly as the window finds it, so `rbl-db`'s write guards and its `RBXPORT_OPTIONS` test hook apply unchanged.
+- Every edit goes through `rbl_library::LibraryCore::edit`, the path the window's edits take, so `rbl-db`'s write guards apply to it and nothing here opens the Library for writing itself. A guard's refusal is the `write_refused` error carrying the guard's own message.
+- After an edit, every subscribed connection is sent `{"event": "library_changed", "data": {"kind": "library" | "tag_list", "generation": N}}`: what the window's own change events carry.
+- The process hosting a service calls it with `Service::call` and hears events with `Service::events`; both go through the same dispatch and publish as a socket client's.
 - Add a command in one place: a name in `protocol::commands` and an arm in `Shared::dispatch`.
 
 ## Run focused checks

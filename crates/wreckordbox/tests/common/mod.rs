@@ -19,11 +19,13 @@ pub struct Run {
 
 impl Run {
     pub fn json(&self) -> serde_json::Value {
-        serde_json::from_str(&self.stdout).unwrap_or_else(|e| panic!("stdout is not JSON ({e}): {}", self.stdout))
+        serde_json::from_str(&self.stdout)
+            .unwrap_or_else(|e| panic!("stdout is not JSON ({e}): {}", self.stdout))
     }
 
     pub fn error_json(&self) -> serde_json::Value {
-        serde_json::from_str(&self.stderr).unwrap_or_else(|e| panic!("stderr is not JSON ({e}): {}", self.stderr))
+        serde_json::from_str(&self.stderr)
+            .unwrap_or_else(|e| panic!("stderr is not JSON ({e}): {}", self.stderr))
     }
 }
 
@@ -44,7 +46,13 @@ impl Sandbox {
 
     /// A fixture Library with no tracks at all.
     pub fn empty() -> Self {
-        Self::with_shape(Shape { tracks: 0, playlists: 0, tracks_per_playlist: 0, history_sessions: 0, ..Shape::default() })
+        Self::with_shape(Shape {
+            tracks: 0,
+            playlists: 0,
+            tracks_per_playlist: 0,
+            history_sessions: 0,
+            ..Shape::default()
+        })
     }
 
     pub fn with_shape(shape: Shape) -> Self {
@@ -59,14 +67,20 @@ impl Sandbox {
         )
         .unwrap();
         std::fs::create_dir_all(dir.path().join("home")).unwrap();
-        Self { dir, location, idle_exit_secs: 5, pids: Mutex::new(Vec::new()) }
+        Self {
+            dir,
+            location,
+            idle_exit_secs: 5,
+            pids: Mutex::new(Vec::new()),
+        }
     }
 
     /// Changes the fixture Library with upstream's own writer, as the window
     /// would. Call it before anything starts a service: the service is the
     /// Library's only writer once it is up.
     pub fn edit(&self, change: impl FnOnce(&mut Writer)) {
-        let mut writer = Writer::open(self.location.clone(), self.dir.path().join("backups")).unwrap();
+        let mut writer =
+            Writer::open(self.location.clone(), self.dir.path().join("backups")).unwrap();
         writer.disable_automatic_backups();
         change(&mut writer);
     }
@@ -103,7 +117,11 @@ impl Sandbox {
 
     /// What a second client in this sandbox connects with.
     pub fn config(&self) -> Config {
-        Config { runtime_dir: self.runtime_dir(), idle_exit: None }
+        Config {
+            runtime_dir: self.runtime_dir(),
+            idle_exit: None,
+            recovery_dir: self.dir.path().join("home/recovery"),
+        }
     }
 
     /// A second client, connected to the service already running here.
@@ -123,7 +141,10 @@ impl Sandbox {
             .env("RBXPORT_OPTIONS", self.dir.path().join("options.json"))
             .env("RBXPORT_TEST_FIXTURE", self.dir.path().join("library"))
             .env("WRECKORDBOX_RUNTIME_DIR", self.runtime_dir())
-            .env("WRECKORDBOX_IDLE_EXIT_SECS", self.idle_exit_secs.to_string())
+            .env(
+                "WRECKORDBOX_IDLE_EXIT_SECS",
+                self.idle_exit_secs.to_string(),
+            )
             .stdin(Stdio::null());
         command
     }
@@ -152,7 +173,13 @@ impl Sandbox {
 
     /// Runs `wreckordbox serve` in the foreground and waits until it answers.
     pub fn serve(&self) -> Child {
-        let mut child = self.command().arg("serve").stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
+        let mut child = self
+            .command()
+            .arg("serve")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
         self.pids.lock().unwrap().push(child.id());
         let socket = self.config().socket_path(&self.location);
         let up = (0..400).any(|_| {
@@ -188,7 +215,10 @@ impl Drop for Sandbox {
         }
         // Belt and braces: a service also stops by itself when idle.
         for pid in self.pids.lock().unwrap().drain(..) {
-            let _ = Command::new("kill").arg(pid.to_string()).stderr(Stdio::null()).status();
+            let _ = Command::new("kill")
+                .arg(pid.to_string())
+                .stderr(Stdio::null())
+                .status();
         }
     }
 }
