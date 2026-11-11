@@ -239,6 +239,8 @@ impl Shared {
                 self.publish(&changed.event());
                 to_value(&rated)
             }
+            reading if crate::reading::answers(reading) => self
+                .with_library(|library| crate::reading::answer(library, reading, &request.args))?,
             unknown => Err(ServiceError::new(
                 codes::UNKNOWN_COMMAND,
                 format!("unknown command: {unknown}"),
