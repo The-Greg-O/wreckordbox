@@ -242,8 +242,17 @@ const MAIN_WINDOW: &str = "main";
 /// it when the page never gets that far (`startup::reveal_if_page_stalls`); a
 /// restore that included visibility called `show()` the moment the window was
 /// built, and the window came up as an empty frame until React drew into it.
+///
+/// On Linux the saved state does not carry decorations either: the window's
+/// are set in `tauri.linux.conf.json`, and a state saved by a decorated build
+/// put the title bar back on every launch.
+#[cfg(not(target_os = "linux"))]
 const WINDOW_STATE: tauri_plugin_window_state::StateFlags =
     tauri_plugin_window_state::StateFlags::all().difference(tauri_plugin_window_state::StateFlags::VISIBLE);
+#[cfg(target_os = "linux")]
+const WINDOW_STATE: tauri_plugin_window_state::StateFlags = tauri_plugin_window_state::StateFlags::all()
+    .difference(tauri_plugin_window_state::StateFlags::VISIBLE)
+    .difference(tauri_plugin_window_state::StateFlags::DECORATIONS);
 
 /// How long after the window appears its geometry is still corrected.
 ///
