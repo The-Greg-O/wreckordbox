@@ -90,7 +90,10 @@ pub struct ServiceError {
 
 impl ServiceError {
     pub fn new(code: &str, message: impl Into<String>) -> Self {
-        Self { code: code.to_owned(), message: message.into() }
+        Self {
+            code: code.to_owned(),
+            message: message.into(),
+        }
     }
 }
 

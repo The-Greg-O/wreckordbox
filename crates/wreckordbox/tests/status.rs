@@ -3,7 +3,12 @@
 //! Every test builds its own fixture Library in a temporary folder, with a
 //! private runtime directory and home, and drives the real `wreckordbox`
 //! binary. Nothing here can reach the installed Library.
-#![allow(clippy::pedantic, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::pedantic,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
 
 mod common;
 
@@ -17,7 +22,11 @@ fn status_starts_a_service_and_reports_the_library_it_has_open() {
 
     assert!(run.status.success(), "{}", run.stderr);
     assert!(run.stdout.contains("running"), "{}", run.stdout);
-    assert!(run.stdout.contains(sandbox.master_db().to_str().unwrap()), "{}", run.stdout);
+    assert!(
+        run.stdout.contains(sandbox.master_db().to_str().unwrap()),
+        "{}",
+        run.stdout
+    );
     assert!(run.stdout.contains("40 tracks"), "{}", run.stdout);
     assert_eq!(run.stderr, "");
 }
@@ -54,11 +63,17 @@ fn status_as_json_is_machine_readable() {
     assert!(run.status.success(), "{}", run.stderr);
     let status = run.json();
     assert_eq!(status["running"], true);
-    assert_eq!(status["library"]["path"], sandbox.master_db().to_str().unwrap());
+    assert_eq!(
+        status["library"]["path"],
+        sandbox.master_db().to_str().unwrap()
+    );
     assert_eq!(status["library"]["tracks"], 40);
     assert_eq!(status["protocol"], 1);
     assert!(status["pid"].as_u64().unwrap() > 0);
-    assert_ne!(status["pid"].as_u64().unwrap(), u64::from(std::process::id()));
+    assert_ne!(
+        status["pid"].as_u64().unwrap(),
+        u64::from(std::process::id())
+    );
     assert_eq!(run.stderr, "");
 }
 
@@ -69,11 +84,24 @@ fn a_second_service_for_the_same_library_refuses_to_run_and_says_why() {
 
     // Even from another runtime directory: the rule is one per Library.
     let elsewhere = sandbox.path().join("other-run");
-    let second = sandbox.run(sandbox.command().env("WRECKORDBOX_RUNTIME_DIR", &elsewhere).arg("serve"));
+    let second = sandbox.run(
+        sandbox
+            .command()
+            .env("WRECKORDBOX_RUNTIME_DIR", &elsewhere)
+            .arg("serve"),
+    );
 
     assert_eq!(second.status.code(), Some(1));
-    assert!(second.stderr.contains("already running"), "{}", second.stderr);
-    assert!(second.stderr.contains(&format!("pid {}", running["pid"])), "{}", second.stderr);
+    assert!(
+        second.stderr.contains("already running"),
+        "{}",
+        second.stderr
+    );
+    assert!(
+        second.stderr.contains(&format!("pid {}", running["pid"])),
+        "{}",
+        second.stderr
+    );
     assert_eq!(second.stdout, "");
     // The first is untouched.
     assert_eq!(sandbox.status()["pid"], running["pid"]);
@@ -114,7 +142,11 @@ fn the_socket_lives_in_the_users_runtime_directory_by_default() {
     std::fs::create_dir_all(&runtime).unwrap();
 
     let run = sandbox.run(
-        sandbox.command().env_remove("WRECKORDBOX_RUNTIME_DIR").env("XDG_RUNTIME_DIR", &runtime).args(["--json", "status"]),
+        sandbox
+            .command()
+            .env_remove("WRECKORDBOX_RUNTIME_DIR")
+            .env("XDG_RUNTIME_DIR", &runtime)
+            .args(["--json", "status"]),
     );
 
     assert!(run.status.success(), "{}", run.stderr);
@@ -146,8 +178,16 @@ fn a_missing_library_is_reported_as_missing() {
     let run = sandbox.cli(&["status"]);
 
     assert_eq!(run.status.code(), Some(1));
-    assert!(run.stderr.contains("the Library is missing"), "{}", run.stderr);
-    assert!(run.stderr.contains(sandbox.master_db().to_str().unwrap()), "{}", run.stderr);
+    assert!(
+        run.stderr.contains("the Library is missing"),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        run.stderr.contains(sandbox.master_db().to_str().unwrap()),
+        "{}",
+        run.stderr
+    );
     assert_eq!(run.stdout, "");
 }
 
@@ -159,7 +199,11 @@ fn a_damaged_library_is_reported_as_damaged() {
     let run = sandbox.cli(&["status"]);
 
     assert_eq!(run.status.code(), Some(1));
-    assert!(run.stderr.contains("the Library is damaged"), "{}", run.stderr);
+    assert!(
+        run.stderr.contains("the Library is damaged"),
+        "{}",
+        run.stderr
+    );
     assert_eq!(run.stdout, "");
 }
 
@@ -167,13 +211,21 @@ fn a_damaged_library_is_reported_as_damaged() {
 fn a_locked_library_is_reported_as_locked() {
     let sandbox = Sandbox::new();
     // Another program in the middle of writing the Library.
-    let writer = rbl_db::Library::open(sandbox.location().clone(), rbl_db::OpenMode::ReadWrite).unwrap();
-    writer.connection().execute_batch("BEGIN EXCLUSIVE").unwrap();
+    let writer =
+        rbl_db::Library::open(sandbox.location().clone(), rbl_db::OpenMode::ReadWrite).unwrap();
+    writer
+        .connection()
+        .execute_batch("BEGIN EXCLUSIVE")
+        .unwrap();
 
     let run = sandbox.cli(&["status"]);
 
     assert_eq!(run.status.code(), Some(1));
-    assert!(run.stderr.contains("the Library is locked"), "{}", run.stderr);
+    assert!(
+        run.stderr.contains("the Library is locked"),
+        "{}",
+        run.stderr
+    );
     assert_eq!(run.stdout, "");
 }
 
@@ -191,7 +243,10 @@ fn errors_as_json_go_to_standard_error_with_a_stable_code() {
     let damaged = sandbox.cli(&["--json", "status"]);
     assert_eq!(damaged.status.code(), Some(1));
     assert_eq!(damaged.error_json()["error"]["code"], "library_damaged");
-    assert!(damaged.error_json()["error"]["message"].as_str().unwrap().contains("damaged"));
+    assert!(damaged.error_json()["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("damaged"));
 }
 
 #[test]
@@ -220,7 +275,11 @@ fn help_describes_the_subcommands_and_options() {
 
     let status = sandbox.cli(&["status", "--help"]);
     assert!(status.status.success());
-    assert!(status.stdout.contains("which Library it"), "{}", status.stdout);
+    assert!(
+        status.stdout.contains("which Library it"),
+        "{}",
+        status.stdout
+    );
     assert!(status.stdout.contains("--json"), "{}", status.stdout);
     // Asking for help starts nothing.
     assert!(!sandbox.runtime_dir().exists());

@@ -43,8 +43,15 @@ impl OpenLibrary {
             filter: TrackFilter::default(),
         });
         let limit = query.limit.unwrap_or(DEFAULT_TRACK_LIMIT);
-        let tracks = view.window(0, limit).iter().map(|&row| self.track(row)).collect();
-        TrackList { tracks, total: view.len() }
+        let tracks = view
+            .window(0, limit)
+            .iter()
+            .map(|&row| self.track(row))
+            .collect();
+        TrackList {
+            tracks,
+            total: view.len(),
+        }
     }
 
     fn track(&self, row: rbl_index::Row) -> Track {
