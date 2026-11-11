@@ -30,6 +30,10 @@ The property of a Stick that rekordbox on any machine can open it and show its t
 The DJ's own 1 to 5 judgement of how intense a track is, stored as the track's star rating. It is not a quality score.
 _Avoid_: Rating, stars (when the meaning is intended)
 
+**MyTag category**:
+One of the four groups rekordbox allows MyTags to be organised into. A category holds any number of tags; the number of categories is fixed by rekordbox.
+_Avoid_: Tag group, tag folder
+
 **Prep colour**:
 The colour label on a track, used to record where it is in preparation (for example Clean, Problem, Delete, Sample, Buy), not to describe the music.
 _Avoid_: Colour tag, track colour
