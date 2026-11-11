@@ -26,6 +26,14 @@ _Avoid_: Test stick, disposable stick
 **Rekordbox-readable**:
 The property of a Stick that rekordbox on any machine can open it and show its tracks, playlists and cues, without wreckordbox present.
 
+**Energy**:
+The DJ's own 1 to 5 judgement of how intense a track is, stored as the track's star rating. It is not a quality score.
+_Avoid_: Rating, stars (when the meaning is intended)
+
+**Prep colour**:
+The colour label on a track, used to record where it is in preparation (for example Clean, Problem, Delete, Sample, Buy), not to describe the music.
+_Avoid_: Colour tag, track colour
+
 **Sidecar**:
 Wreckordbox's own store beside the Library, keyed by track, holding results from tools rekordbox does not have. It is never part of the rekordbox-format Library.
 _Avoid_: Extra tables, metadata db, cache
