@@ -106,6 +106,41 @@ fn the_linux_window_still_takes_the_linux_overrides() {
     let window = windows(&merged(LINUX))[0].clone();
     assert_eq!(window.get("titleBarStyle"), Some(&json!("Visible")));
     assert_eq!(window.get("hiddenTitle"), Some(&json!(false)));
-    assert_eq!(window.get("decorations"), Some(&json!(true)));
+    assert_eq!(window.get("decorations"), Some(&json!(false)));
     assert_eq!(window.get("dragDropEnabled"), Some(&json!(true)));
+}
+
+/// The config file is only half of it: the window-state plugin puts back what
+/// it saved, after the window is built. A state saved by a decorated build
+/// says `"decorated": true`, and restoring that brought the title bar back on
+/// every launch.
+#[test]
+fn the_linux_saved_window_state_leaves_decorations_to_the_config() {
+    use tauri_plugin_window_state::StateFlags;
+
+    let linux = rbxport_lib::saved_window_state("linux");
+    assert!(!linux.contains(StateFlags::DECORATIONS));
+    assert!(linux.contains(StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED));
+}
+
+/// Everywhere else the saved state still carries decorations, as it always
+/// has.
+#[test]
+fn the_saved_window_state_elsewhere_still_carries_decorations() {
+    use tauri_plugin_window_state::StateFlags;
+
+    for os in ["macos", "windows"] {
+        assert!(rbxport_lib::saved_window_state(os).contains(StateFlags::DECORATIONS), "{os}");
+    }
+}
+
+/// No platform restores visibility: every window is built hidden and shows
+/// itself once its page has rendered.
+#[test]
+fn no_platform_restores_whether_the_window_was_showing() {
+    use tauri_plugin_window_state::StateFlags;
+
+    for os in ["linux", "macos", "windows"] {
+        assert!(!rbxport_lib::saved_window_state(os).contains(StateFlags::VISIBLE), "{os}");
+    }
 }
