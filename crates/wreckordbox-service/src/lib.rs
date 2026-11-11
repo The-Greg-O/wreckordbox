@@ -15,6 +15,7 @@ mod library;
 pub mod protocol;
 pub mod reading;
 mod server;
+pub mod tracks;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;

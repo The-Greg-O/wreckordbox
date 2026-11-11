@@ -191,7 +191,7 @@ export function AudioPane({ limiter, onLimiterChange, reduction, vu, peakLeft = 
       />
     </Section>
 
-    <Section title="RBXport Master Limiter">
+    <Section title="Wreckordbox Master Limiter">
       <div className={limiterStyles.panel}>
       <div className={limiterStyles.header}>
         <Toggle label="Enable limiter" checked={limiter.enabled} onChange={(enabled) => onLimiterChange({ enabled })} />

@@ -432,7 +432,7 @@ async function realBackend(): Promise<Backend> {
       const { save } = await import("@tauri-apps/plugin-dialog");
       const picked = await save({
         title: "Save the log",
-        defaultPath: "rbxport log.txt",
+        defaultPath: "wreckordbox log.txt",
         filters: [{ name: "Text", extensions: ["txt", "log"] }],
       });
       if (typeof picked !== "string") return null;

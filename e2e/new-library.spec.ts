@@ -36,7 +36,7 @@ test("a library on a drive that is not connected asks rekordbox's question and n
 
   const dialog = page.getByRole("dialog", { name: /Cannot find Master Database\./ });
   await expect(dialog).toBeVisible();
-  await expect(dialog).toContainText("Launch RBXport after connecting a drive where Master Database is stored.");
+  await expect(dialog).toContainText("Launch wreckordbox after connecting a drive where Master Database is stored.");
   await expect(dialog).toContainText("Do you want to open Master Database in the default drive?");
   await expect(dialog.getByRole("button")).toHaveText(["Yes", "No"]);
   await expect(page.locator(rows)).toHaveCount(0);

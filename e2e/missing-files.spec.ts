@@ -122,10 +122,10 @@ test("Relocate over several tracks asks for the first file, then finds the rest 
   expect(asked.chooser).toHaveLength(1);
   expect(asked.chooser[0]).toMatch(/^Choose a new fullpath for : \d+\.mp3 \| $/);
   expect(asked.confirmed).toHaveLength(1);
-  expect(asked.confirmed[0]).toMatch(/^Would you like RBXport to find other missing file using the location of this track \?\n./);
+  expect(asked.confirmed[0]).toMatch(/^Would you like wreckordbox to find other missing file using the location of this track \?\n./);
   expect(asked.titles).toEqual(["Missing File Manager"]);
   expect(asked.labels).toEqual(["Yes/No"]);
-  expect(asked.told).toEqual(["Missing File Manager: RBXport found 1 files."]);
+  expect(asked.told).toEqual(["Missing File Manager: Wreckordbox found 1 files."]);
   expect(asked.by).toHaveLength(1);
   // Both [!] are gone.
   for (const at of [1, 3]) await expect(rowOf(page, at).getByRole("img", { name: "File is Missing" })).toHaveCount(0);
@@ -141,7 +141,7 @@ test("the manager's Relocate over every row reaches every missing track past the
   await manager.getByRole("button", { name: "Relocate", exact: true }).click();
   await expect(manager.locator("[aria-live=polite]")).toHaveText("0 Track");
   const told = await page.evaluate(() => (window as unknown as { __told: string[] }).__told);
-  expect(told).toEqual(["Missing File Manager: RBXport found 285 files."]);
+  expect(told).toEqual(["Missing File Manager: Wreckordbox found 285 files."]);
 });
 
 test("the manager's Relocate by hand, track by track, reaches every missing track past the first page", async ({ page }) => {

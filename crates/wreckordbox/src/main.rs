@@ -5,6 +5,7 @@
 //! `--json` as JSON; errors go to standard error with a non-zero status.
 
 mod reading;
+mod tracks;
 
 use std::fmt::Write as _;
 use std::io::Write;
@@ -98,6 +99,20 @@ enum TrackCommands {
         #[arg(value_name = "STARS")]
         stars: u8,
     },
+    /// Show everything the Library holds about one track.
+    Show(tracks::ShowArgs),
+    /// Find tracks by any of their fields, by MyTag and by playlist, a page
+    /// at a time. Every option given must hold.
+    ///
+    /// A number or a date is one value (`2021`) or an inclusive range
+    /// (`2019..2021`, `2019..`, `..2021`). Rows are each track's full
+    /// record with `--json`, as `tracks show` gives it. `tracks list` is
+    /// the short form: the same search, six columns.
+    #[allow(
+        clippy::doc_markdown,
+        reason = "this is the command's help, where MyTag is a word, not code"
+    )]
+    Query(Box<tracks::QueryArgs>),
 }
 
 fn main() -> ExitCode {
@@ -171,6 +186,12 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
                 command,
             )?);
         }
+        Commands::Tracks {
+            command: TrackCommands::Show(args),
+        } => print(&tracks::show(&mut connect(&config)?, args, cli.json)?),
+        Commands::Tracks {
+            command: TrackCommands::Query(args),
+        } => print(&tracks::query(&mut connect(&config)?, args, cli.json)?),
         Commands::Serve { spawned: true } => {
             return Ok(if wreckordbox_service::serve_spawned(config) {
                 ExitCode::SUCCESS

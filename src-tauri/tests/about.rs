@@ -55,4 +55,5 @@ fn about_shows_the_name_version_and_copyright_of_the_bundle() {
         config["bundle"]["copyright"].as_str()
     );
     assert!(metadata.name.is_some() && metadata.version.is_some());
+    assert_eq!(metadata.name.as_deref(), Some("wreckordbox"));
 }

@@ -73,7 +73,7 @@ export function NewLibraryDialog({ problem, onCreate, onUseDefault, onConfirm, o
         <form onSubmit={event => { event.preventDefault(); if (!busy) switchToDefault(); }}>
           <p id="master-db-missing-text" className={styles.message}>
             <span>{t("Cannot find Master Database.")}</span>
-            <span>{t("Launch RBXport after connecting a drive where Master Database is stored.")}</span>
+            <span>{t("Launch wreckordbox after connecting a drive where Master Database is stored.")}</span>
             <span>{t("Do you want to open Master Database in the default drive?")}</span>
           </p>
           {error ? <p className={styles.error} role="alert">{error}</p> : null}

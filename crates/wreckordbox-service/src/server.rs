@@ -241,6 +241,9 @@ impl Shared {
             }
             reading if crate::reading::answers(reading) => self
                 .with_library(|library| crate::reading::answer(library, reading, &request.args))?,
+            crate::tracks::TRACKS_GET | crate::tracks::TRACKS_QUERY => {
+                self.with_library(|library| crate::tracks::answer(library, request))?
+            }
             unknown => Err(ServiceError::new(
                 codes::UNKNOWN_COMMAND,
                 format!("unknown command: {unknown}"),

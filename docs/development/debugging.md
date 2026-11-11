@@ -9,8 +9,9 @@ which boundary failed before comparing results from another one.
 ## Logs
 
 The app writes stdout and a daily file under the OS data directory plus
-`rbxport/logs`. Typical paths are `~/Library/Application Support/rbxport/logs`
-on macOS and `%APPDATA%\rbxport\logs` on Windows. The newest five daily
+`wreckordbox/logs`. Typical paths are `~/.local/share/wreckordbox/logs` on Linux,
+`~/Library/Application Support/wreckordbox/logs`
+on macOS and `%APPDATA%\wreckordbox\logs` on Windows. The newest five daily
 files are retained. See `src-tauri/src/logging.rs` for filter and retention logic.
 
 The same lines, the newest 10,000 since the app started, are kept in memory

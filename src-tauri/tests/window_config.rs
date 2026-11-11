@@ -68,10 +68,10 @@ fn windows(config: &Value) -> Vec<Value> {
 }
 
 #[test]
-fn the_base_window_is_the_one_titled_rbxport() {
+fn the_base_window_is_the_one_titled_wreckordbox() {
     let base = windows(&merged("{}"));
     assert_eq!(base.len(), 1);
-    assert_eq!(base[0].get("title"), Some(&json!("rbxport")));
+    assert_eq!(base[0].get("title"), Some(&json!("wreckordbox")));
 }
 
 #[test]
@@ -85,7 +85,7 @@ fn every_platform_window_keeps_the_title_and_the_base_fields() {
 
         assert_eq!(
             window.get("title"),
-            Some(&json!("rbxport")),
+            Some(&json!("wreckordbox")),
             "{name}: window title"
         );
         for (key, value) in base_fields {

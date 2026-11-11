@@ -69,7 +69,7 @@ it("a missing drive asks rekordbox's question, Yes or No, with no other way out"
   await render(props({ problem: UNAVAILABLE }));
   expect(host.querySelector("p")?.textContent).toBe(
     "Cannot find Master Database."
-    + "Launch RBXport after connecting a drive where Master Database is stored."
+    + "Launch wreckordbox after connecting a drive where Master Database is stored."
     + "Do you want to open Master Database in the default drive?",
   );
   expect(buttons()).toEqual(["Yes", "No"]);

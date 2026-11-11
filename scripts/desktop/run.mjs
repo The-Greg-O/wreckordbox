@@ -133,7 +133,7 @@ async function start() {
   const port = server.address().port;
   await new Promise(resolve => server.close(resolve));
   const log = openSync(path.join(out, `app-${results.length}.log`), 'a');
-  child = spawn(path.join(repo, 'target/debug/rbxport'), [], {
+  child = spawn(path.join(repo, 'target/debug/wreckordbox-desktop'), [], {
     cwd: root, env: { ...env, RBXPORT_TEST_PORT: String(port) }, stdio: ['ignore', log, log],
   });
   closeSync(log);
@@ -193,7 +193,7 @@ async function scenario(name, body) {
 }
 try {
   console.log(`Evidence: ${out}\nTemporary library: ${library}`);
-  const signature = () => createHash('sha256').update(readFileSync(path.join(repo, 'target/debug/rbxport'))).update(readFileSync(path.join(repo, 'scripts/desktop/tauri.conf.json'))).digest('hex');
+  const signature = () => createHash('sha256').update(readFileSync(path.join(repo, 'target/debug/wreckordbox-desktop'))).update(readFileSync(path.join(repo, 'scripts/desktop/tauri.conf.json'))).digest('hex');
   const stamp = path.join(repo, 'target/debug/desktop-test-build.sha256');
   if (!reuse) {
     command('pnpm', ['tauri', 'build', '--debug', '--no-bundle', '--config', 'scripts/desktop/tauri.conf.json'], { stdio: 'inherit' });
@@ -202,7 +202,7 @@ try {
     command('/usr/bin/swiftc',['scripts/desktop/native-input.swift','-o',native]);
     writeFileSync(stamp, signature());
   } else assert.equal(readFileSync(stamp, 'utf8'), signature(), 'Rebuild with pnpm desktop:test; this binary was not built by the isolated desktop harness');
-  binarySha = createHash('sha256').update(readFileSync(path.join(repo, 'target/debug/rbxport'))).digest('hex');
+  binarySha = createHash('sha256').update(readFileSync(path.join(repo, 'target/debug/wreckordbox-desktop'))).digest('hex');
   command(path.join(repo, 'target/debug/examples/e2e_fixture'), [library, library]);
   await until(async()=>{
     try {const fd=openSync(lockFile,'wx');writeFileSync(fd,String(process.pid));closeSync(fd);ownsLock=true;return true;}

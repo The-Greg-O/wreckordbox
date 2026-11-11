@@ -30,9 +30,9 @@ pub struct Manifest {
 impl Manifest {
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         let manifest: Self = serde_json::from_slice(bytes)
-            .map_err(|_| refused("This file is not an RBXport backup."))?;
+            .map_err(|_| refused("This file is not a wreckordbox backup."))?;
         if !matches!(manifest.version, 1 | 2) {
-            return Err(refused("This backup was made by a newer version of RBXport. Update RBXport Restore to restore it."));
+            return Err(refused("This backup was made by a newer version of wreckordbox. Update wreckordbox Restore to restore it."));
         }
         if manifest.library_files.iter().any(|name| !LIBRARY_FILES.contains(&name.as_str())) {
             return Err(refused("Unsupported library file in backup."));
@@ -51,7 +51,7 @@ impl Manifest {
     /// As [`Manifest::read`], from an archive already open.
     pub fn read_from(zip: &mut crate::archive::Archive) -> Result<Self> {
         let bytes = crate::archive::read_small(zip, NAME, MAX_BYTES)?
-            .ok_or_else(|| refused("This file is not an RBXport backup."))?;
+            .ok_or_else(|| refused("This file is not a wreckordbox backup."))?;
         Self::parse(&bytes)
     }
 
