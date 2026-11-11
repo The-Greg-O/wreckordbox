@@ -21,8 +21,7 @@ nix run .#source
 
 From GitHub, use `nix run github:chrisle/rbxport#source`. The build takes longer
 because Nix compiles the Rust workspace and builds the frontend with pnpm. Like
-the AppImage package, the source build is managed by Nix and does not use the
-built-in updater.
+the AppImage package, the source build is managed by Nix.
 
 ## Install
 
@@ -69,11 +68,9 @@ nixpkgs), then reference its package from a module.
 
 ## How updates work under Nix
 
-Nix owns a Nix install, including its updates. The package runs the official
-AppImage straight from the read-only Nix store, and rbxport's built-in updater
-is unavailable: it does not check the download server, download, or replace
-anything. Check for updates in the app says the copy was installed with Nix
-and that updates come through your Nix channel.
+Nix owns a Nix install, including its updates. The package runs the AppImage
+straight from the read-only Nix store. The app has no updater of its own: it
+never checks a download server, downloads, or replaces anything.
 
 To update, move your flake input or profile to the newer release, for example:
 
@@ -83,14 +80,6 @@ nix flake update rbxport     # a system flake that lists rbxport as an input, th
 ```
 
 The version Nix records for the package is the version you run.
-
-Earlier Nix packages copied the AppImage into
-`${XDG_DATA_HOME:-$HOME/.local/share}/rbxport` and let the built-in updater
-replace that copy. The current launcher removes that copy on its first run, so
-the app you run is the one Nix installed, which can be older than the copy the
-updater had reached until your Nix channel catches up. A copy that an earlier
-launcher still starts recognises the copy it seeded and does not update itself
-either.
 
 ## Development
 

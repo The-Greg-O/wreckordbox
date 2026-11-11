@@ -57,7 +57,6 @@ cargo run --release -p rbl-analysis --example waveform_probe -- AUDIO OUTPUT_DIR
 
 Emulator and physical LINK investigations use the private evidence locations
 listed in [Hardware coverage](../reference/link-testing.md).
-[Sentry](sentry.md) covers optional crash reporting for packaged builds.
 
 ## Common setup failures
 

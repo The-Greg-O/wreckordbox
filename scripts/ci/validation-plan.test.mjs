@@ -36,7 +36,7 @@ test("desktop-related PR changes leave native regressions to deployment", () => 
 });
 
 test("Windows installer resources add the Windows-native check", () => {
-  assert.deepEqual(enabled("src-tauri/windows/install-update-task.ps1"), ["rust", "windows_rust"]);
+  assert.deepEqual(enabled("src-tauri/windows/test-common-controls-v6.manifest"), ["rust", "windows_rust"]);
 });
 
 test("Windows-only desktop Rust adds the Windows-native check", () => {

@@ -85,28 +85,6 @@ jobs:
             const [, version, base] = process.argv;
             const files = fs.readdirSync("out");
             const url = (file) => (base ? base + "/" + file : undefined);
-            const signed = (payload, optional = false) => {
-              const file = files.find(payload);
-              if (!file) return null;
-              const sig = file + ".sig";
-              if (!files.includes(sig)) {
-                if (optional) return null;
-                throw new Error("no updater signature beside " + file);
-              }
-              return { url: url(file), signature: fs.readFileSync("out/" + sig, "utf8").trim() };
-            };
-            const macArm = signed((f) => f.endsWith("-darwin-aarch64.app.tar.gz"));
-            const macIntel = signed((f) => f.endsWith("-darwin-x86_64.app.tar.gz"));
-            if (!macArm || !macIntel) throw new Error("both Mac updater builds are required");
-            const win = signed((f) => f.endsWith("-setup.exe"));
-            const linux = signed((f) => f.endsWith(".AppImage"));
-            const deb = signed((f) => f.endsWith(".deb"), true);
-            const platforms = {};
-            platforms["darwin-aarch64"] = macArm;
-            platforms["darwin-x86_64"] = macIntel;
-            if (win) platforms["windows-x86_64"] = win;
-            if (linux) platforms["linux-x86_64"] = linux;
-            if (deb) platforms["linux-x86_64-deb"] = deb;
             const downloads = {};
             for (const [slug, match] of [
               ["darwin-aarch64", (f) => f.endsWith("-darwin-aarch64.dmg")],
@@ -122,7 +100,6 @@ jobs:
               version,
               pub_date: new Date().toISOString(),
               notes: fs.readFileSync("release-notes.md", "utf8"),
-              platforms,
               downloads,
             };
             fs.writeFileSync("latest.json", JSON.stringify(feed, null, 2) + "\n");
@@ -154,7 +131,7 @@ jobs:
 
           for url in $(node -p '
             const feed = require("./published.json");
-            [...Object.values(feed.platforms), ...Object.values(feed.downloads)].map((p) => p.url).join("\n")
+            Object.values(feed.downloads).map((p) => p.url).join("\n")
           '); do
             curl -fsI --retry 5 --retry-all-errors --retry-delay 5 "$url" > /dev/null
           done
@@ -199,35 +176,6 @@ jobs:
             aws s3api delete-objects --bucket "$BUCKET" --endpoint-url "$ENDPOINT" \
               --delete file:///tmp/delete.json
           fi
-
-      - name: Send release notes to Discord
-        env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_WEBHOOK_URL }}
-        run: |
-          set -euo pipefail
-          test -n "$DISCORD_WEBHOOK_URL"
-          version="${RELEASE_TAG#v}"
-
-          node scripts/release-notes.mjs discord release-notes.json "$version" \
-            /tmp/discord-release.json https://rbxport.com/whats-new/
-
-          status="$(curl -sS -o /tmp/discord-response.txt -w '%{http_code}' \
-            -H 'Content-Type: application/json' \
-            --data-binary @/tmp/discord-release.json \
-            "$DISCORD_WEBHOOK_URL?wait=true")"
-          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
-            echo "Discord webhook failed with HTTP $status"
-            sed -n '1,10p' /tmp/discord-response.txt
-            exit 1
-          fi
-          echo "Release notes sent to Discord channel 1552182049832439838"
-
-      - name: Notify linked support threads of shipped fixes
-        continue-on-error: true
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          RBX_DISCORD_BOT_TOKEN: ${{ secrets.RBX_DISCORD_BOT_TOKEN }}
-        run: node scripts/support-sync.mjs --release
 
       # Point the Nix package at the AppImage just published, when this
       # repository ships it. The source hashes in the same file are maintained

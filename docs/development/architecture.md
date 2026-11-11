@@ -21,7 +21,7 @@ flowchart LR
 | Path | What is there |
 | --- | --- |
 | `src/` | The React interface. `views/` holds the screens, `store/` the hooks that hold state, `ipc/` the only code allowed to call the backend, `i18n/` the strings. |
-| `src-tauri/` | The app shell: Tauri commands, app state, windows, menus, updater, logging. `src-tauri/src/lib.rs` registers commands; many handlers live in `src-tauri/src/commands.rs`. |
+| `src-tauri/` | The app shell: Tauri commands, app state, windows, menus, logging. `src-tauri/src/lib.rs` registers commands; many handlers live in `src-tauri/src/commands.rs`. |
 | `crates/` | The Rust libraries that do the work, all prefixed `rbl-`. They know nothing about Tauri. |
 | `e2e/` | Playwright tests, run in Chromium and WebKit against the mock backend. |
 | `docs/` | Developer guides, user guides, and technical references. |
