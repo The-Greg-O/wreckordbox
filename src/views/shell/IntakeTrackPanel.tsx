@@ -168,6 +168,9 @@ export function IntakeTrackPanel(props: IntakeTrackPanelProps) {
         </button>
         {key(keys.markClean)}
         <span className={styles.open} data-testid="intake-panel-needs">{t(needsLine(track))}</span>
+        {clean === null
+          ? <span className={styles.noClean} data-testid="intake-no-clean">{t("No colour label is named Clean, so there is no Clean to mark.")}</span>
+          : null}
         <span className={styles.secondary}>
           {key(keys.markProblem)}
           <button type="button" className={styles.small} disabled={busy || colours?.problem == null} onClick={props.onMarkProblem}>

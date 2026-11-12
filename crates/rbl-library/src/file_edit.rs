@@ -5,8 +5,8 @@
 //! [`LibraryCore::write_then`] guards a database write. An edit that
 //! publishes files must be refused *before* the first file is published,
 //! not when its row is written after them, so it starts here instead:
-//! [`LibraryCore::file_edit`] takes the edit gate and the analysis-file
-//! lock and then makes, under both, every check `write_then` makes before a
+//! [`LibraryCore::file_edit`] takes the edit gate, Stick authorization and
+//! the analysis-file lock, and makes every check `write_then` makes before a
 //! write. Holding the answer for the whole edit keeps Library Protection
 //! from being turned on half-way through (a turn takes the same gate). A
 //! row written inside it through `write_then` is checked again, which
@@ -19,8 +19,10 @@ use crate::{protection, LibraryCore};
 /// the analysis-file lock. Dropping it ends the edit.
 #[must_use = "the edit is guarded only while this is held"]
 pub struct FileEdit<'a> {
-    _gate: parking_lot::ReentrantMutexGuard<'a, ()>,
+    pub(crate) core: &'a LibraryCore,
     _files: parking_lot::MutexGuard<'a, ()>,
+    _stick: wreckordbox_stick_protection::Authorization,
+    _gate: parking_lot::ReentrantMutexGuard<'a, ()>,
 }
 
 impl std::fmt::Debug for FileEdit<'_> {
@@ -30,8 +32,8 @@ impl std::fmt::Debug for FileEdit<'_> {
 }
 
 impl LibraryCore {
-    /// Starts an edit of the Library's files: takes the edit gate, then the
-    /// analysis-file lock, then refuses, before anything is written, what
+    /// Starts an edit of the Library's files: takes the edit gate, Stick
+    /// authorization, then the analysis-file lock. Refuses, before any write, what
     /// [`Self::write_then`] refuses: a holder that is not the Library's
     /// writer, Library Protection ([`protection::refusal`]), an unfinished
     /// restore, rekordbox running on the installed Library. Hold the answer
@@ -44,13 +46,16 @@ impl LibraryCore {
             .location()
             .map_err(|e| rbl_db::DbError::NotInstalled(e.to_string()))?;
         let gate = self.edit_gate().lock();
-        let files = self.analysis_write().lock();
         if let Some(reason) = self.write_refusal() {
             return Err(rbl_db::DbError::WriteRefused(reason));
         }
         if self.protection().protect_library {
             return Err(protection::refusal());
         }
+        // Same order and lifetime as row writes. File-only edits must not
+        // rely on a later row write (or the Ledger) to enforce this guard.
+        let stick = crate::stick::leave(self.recovery_dir(), &location)?;
+        let files = self.analysis_write().lock();
         if rbl_backup::journal::pending(self.recovery_dir()) {
             return Err(rbl_db::DbError::WriteRefused(
                 "A library restore is unfinished. Restart the app to recover it before editing."
@@ -65,8 +70,10 @@ impl LibraryCore {
             return Err(rbl_db::DbError::WriteRefused(reason.to_owned()));
         }
         Ok(FileEdit {
-            _gate: gate,
+            core: self,
             _files: files,
+            _stick: stick,
+            _gate: gate,
         })
     }
 }

@@ -22,6 +22,9 @@ use crate::commands::{blocking, reload, write_error};
 use crate::error::{AppError, AppResult, ErrorKind};
 use crate::state::AppState;
 
+#[path = "grid_ledger.rs"]
+mod ledger;
+
 /// Grids kept for undo per track, per session. A grid is at most a few
 /// hundred kilobytes, and a hundred steps is more than a hand edits.
 const HISTORY_CAP: usize = 100;
@@ -368,7 +371,7 @@ pub fn apply(
     action: GridAction,
     set_bpm: &mut dyn FnMut(u32) -> AppResult<()>,
 ) -> AppResult<GridOutcome> {
-    apply_options(editor, library, location, track, action, &GridOptions::default(), set_bpm)
+    apply_options(editor, library, location, track, action, &GridOptions::default(), set_bpm, None)
 }
 
 /// Records what just happened in the track's undo/redo history — the part
@@ -412,9 +415,11 @@ fn conflict(action: GridAction, label: &str) -> AppError {
         format!("Can't {what} {label}: the track's beat grid has changed since. The newer change was kept."))
 }
 
+#[allow(clippy::too_many_arguments, reason = "grid inputs and the optional owning file operation")]
 fn apply_options(editor: &GridEditor, library: &Library, location: &rbl_db::LibraryLocation,
     track: &str, action: GridAction, options: &GridOptions,
-    set_bpm: &mut dyn FnMut(u32) -> AppResult<()>) -> AppResult<GridOutcome> {
+    set_bpm: &mut dyn FnMut(u32) -> AppResult<()>,
+    recording: Option<(&mut rbl_library::file_edit::FileEdit<'_>, &AppState)>) -> AppResult<GridOutcome> {
     // The writer's own rule, applied to the files as well as the row: a
     // fixture in a tempdir is not the installed library, so its tests run
     // whether or not rekordbox is open.
@@ -480,6 +485,11 @@ fn apply_options(editor: &GridEditor, library: &Library, location: &rbl_db::Libr
         }
     };
 
+    let row_host = recording.as_ref().map(|(_, host)| *host);
+    let record = match recording {
+        Some((guard, _)) => Some(ledger::begin(guard, track, action, &files.relative, &beats, &next)?),
+        None => None,
+    };
     editor.back_up(&files.dat, &files.relative, "DAT")?;
     editor.back_up(&files.ext, &files.relative, "EXT")?;
     let mut changed_files = vec![(files.dat.clone(), parsed.with_beat_grid(&next))];
@@ -490,17 +500,25 @@ fn apply_options(editor: &GridEditor, library: &Library, location: &rbl_db::Libr
     let old_bpm = u32::from(tempo_x100(&beats));
     let new_bpm = u32::from(tempo_x100(&next));
     let bpm_changed = new_bpm != old_bpm;
-    let journal = crate::file_journal::FileJournal::prepare(&editor.journal_root, location, track,
-        new_bpm, None, true, &changed_files)?;
+    let journal = match crate::file_journal::FileJournal::prepare(&editor.journal_root, location, track,
+        new_bpm, None, true, &changed_files) {
+        Ok(journal) => journal,
+        Err(error) => { if let Some(record) = record { record.cancelled(); } return Err(error); }
+    };
     if let Err(e) = journal.publish() {
         journal.rollback()?;
+        if let Some(record) = record { record.cancelled(); }
         return Err(e);
     }
-    if let Err(refused) = set_bpm(new_bpm) {
+    let saved = if let (Some(record), Some(host)) = (&record, row_host) {
+        record.write_row(host, |writer| writer.save_grid_revision(track, new_bpm)).map_err(write_error)
+    } else { set_bpm(new_bpm) };
+    if let Err(refused) = saved {
         journal.reconcile(location)?;
         return Err(refused);
     }
     journal.commit()?;
+    if let Some(record) = record { record.written(); }
 
     record_history(editor, track, action, beats, next.clone(), options);
 
@@ -525,7 +543,7 @@ pub(crate) fn set_tempo(state: &AppState, editor: &GridEditor, track: &str, valu
     }
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "validated 40..=499 above")]
     let bpm_x100 = (bpm * 100.0).round() as u16;
-    let _edit = state.file_edit()?;
+    let mut guard = state.file_edit()?;
     let location = state.location()?;
     if database_locked(&location, track)? { return Err(AppError::new(ErrorKind::ReadOnly, "The beat grid is locked.")); }
     crate::file_journal::recover(state.backup_dir(), &location)?;
@@ -545,7 +563,7 @@ pub(crate) fn set_tempo(state: &AppState, editor: &GridEditor, track: &str, valu
         ..GridOptions::default()
     };
     let edit = GridAction::Edit { edit: GridEdit::Tempo { bpm_x100, anchor_ms: 0 }, from_ms: None };
-    let outcome = apply_options(editor, &library, &location, track, edit, &options, &mut set_bpm)?;
+    let outcome = apply_options(editor, &library, &location, track, edit, &options, &mut set_bpm, Some((&mut guard, state)))?;
     if !outcome.written {
         // The grid already stands at that tempo: nothing to record, but the
         // row still takes the typed value, as it did before #505.
@@ -563,9 +581,9 @@ fn wire_beats(beats: &[Beat]) -> Vec<(u32, u8)> {
 /// (Library Protection among it), then the files and the row as one edit.
 pub(crate) fn guarded(state: &AppState, editor: &GridEditor, library: &Library, location: &rbl_db::LibraryLocation,
     track: &str, action: GridAction, options: &GridOptions) -> AppResult<GridOutcome> {
-    let _edit = state.file_edit()?;
+    let mut guard = state.file_edit()?;
     let mut set_bpm = |bpm_x100: u32| state.write(|writer| writer.save_grid_revision(track, bpm_x100)).map_err(write_error);
-    apply_options(editor, library, location, track, action, options, &mut set_bpm)
+    apply_options(editor, library, location, track, action, options, &mut set_bpm, Some((&mut guard, state)))
 }
 
 /// Runs one action under `blocking` (a `spawn_blocking` thread: the files
@@ -852,7 +870,7 @@ mod tests {
         for bpm in [120.0, 121.25] {
             apply_options(&f.editor, &f.library, &f.location, &Fixture::track(), GridAction::Edit {
                 edit: GridEdit::Tap { bpm, anchor_ms: 1600 }, from_ms: None,
-            }, &options, &mut save).unwrap();
+            }, &options, &mut save, None).unwrap();
         }
         assert_eq!(f.editor.histories.lock()[&Fixture::track()].undo.len(), 1);
         let last_tap = f.dat().beat_grid().unwrap();
@@ -1066,7 +1084,7 @@ mod tests {
 
     fn confirmed(f: &Fixture, edit: GridEdit, from_ms: Option<u32>, allow_dynamic: bool) -> AppResult<GridOutcome> {
         let options = GridOptions { allow_dynamic, duration_ms: Some(9100), ..GridOptions::default() };
-        apply_options(&f.editor, &f.library, &f.location, &Fixture::track(), GridAction::Edit { edit, from_ms }, &options, &mut |_| Ok(()))
+        apply_options(&f.editor, &f.library, &f.location, &Fixture::track(), GridAction::Edit { edit, from_ms }, &options, &mut |_| Ok(()), None)
     }
 
     #[test]

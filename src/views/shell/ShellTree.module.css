@@ -91,8 +91,23 @@
   white-space: nowrap;
 }
 
-.stickLabel { flex: none; }
-.stick .name { text-transform: none; letter-spacing: 0; }
+/* A Stick's row gives way in order (wbx-45.15): the "Stick ·" word first,
+   then its protection word down to the padlock, and only then the name,
+   whose whole text is the row's title and its name to a reader. */
+.stickLabel {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+/* Never shrunk while the others can give way; clipped with an ellipsis only
+   past the room left beside the padlock and Eject. */
+.stick .name {
+  flex: 0 0 auto;
+  max-width: calc(100% - 3.5em);
+  text-transform: none;
+  letter-spacing: 0;
+}
 
 .count {
   flex: none;
@@ -101,10 +116,22 @@
 
 /* Stick Protection (wbx-45.11): said beside the Stick's name. */
 .protection {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 1em;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  overflow: hidden;
   font-size: 0.85em;
   color: var(--c-text-dim);
 }
+.protectionWord {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lock { flex: none; width: 1em; height: 1em; }
 
 .protection[data-stick-protection="unlocked"] {
   color: var(--c-warning, var(--c-text));

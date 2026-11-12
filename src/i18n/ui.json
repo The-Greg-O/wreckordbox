@@ -590,7 +590,6 @@
   "Intake",
   "Interface",
   "Invalid restore recovery paths.",
-  "It looks like you haven’t made a backup yet. We strongly recommend creating one before using wreckordbox.",
   "Italiano",
   "Jump Forward",
   "Jump Reverse",
@@ -1647,5 +1646,7 @@
   "Runs unavailable",
   "{count} Stick loads in progress",
   "Analyzing {done}/{total} tracks",
-  "{count} failed"
+  "{count} failed",
+  "Turning Library Protection off lets wreckordbox write to your Library. No backup of it was found, so an edit could only be put back with Undo while the window is open.",
+  "Make one under Preferences › Backups first, or unlock anyway."
 ]

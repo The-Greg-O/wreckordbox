@@ -17,6 +17,7 @@ pub mod ledger;
 pub mod my_tags;
 pub mod protection;
 pub mod file_edit;
+pub mod file_record;
 pub mod read;
 pub mod stick;
 
@@ -376,6 +377,20 @@ impl LibraryCore {
         edit: impl FnOnce(&mut rbl_db::write::Writer) -> Result<T, rbl_db::DbError>,
         refresh: impl FnOnce(&rbl_db::Library, T) -> Result<U, rbl_db::DbError>,
     ) -> Result<U, rbl_db::DbError> {
+        self.write_then_recording(host, history, preparation, edit, refresh, true)
+    }
+
+    // Only FileRecord may join its companion row to an existing intent.
+    #[allow(clippy::too_many_arguments, reason = "single edit path plus its intent ownership")]
+    fn write_then_recording<T, U>(
+        &self,
+        host: &(impl Host + ?Sized),
+        history: History,
+        preparation: &ledger::Preparation,
+        edit: impl FnOnce(&mut rbl_db::write::Writer) -> Result<T, rbl_db::DbError>,
+        refresh: impl FnOnce(&rbl_db::Library, T) -> Result<U, rbl_db::DbError>,
+        own_intent: bool,
+    ) -> Result<U, rbl_db::DbError> {
         let started = std::time::Instant::now();
         let location = self.location().map_err(|e| rbl_db::DbError::NotInstalled(e.to_string()))?;
         let _gate = self.edit_gate.lock();
@@ -403,7 +418,7 @@ impl LibraryCore {
         // Nothing is changed that the Ledger could not record: it records
         // durably that a write is begun, or the write is refused. Asked
         // with the history let go: the Ledger may block to write.
-        let ledger = self.history.lock().ledger();
+        let ledger = if own_intent { self.history.lock().ledger() } else { None };
         if let Some(ledger) = &ledger {
             ledger.begin().map_err(|why| {
                 rbl_db::DbError::WriteRefused(format!("The Ledger cannot record a change, so nothing was changed: {why}"))
@@ -445,7 +460,7 @@ impl LibraryCore {
             let ended = {
                 let mut history = self.history.lock();
                 let had = history.redo_label().is_some();
-                history.unrecorded(None);
+                if own_intent { history.unrecorded(None); } else { history.clear_redo(); }
                 had
             };
             host.wrote_outside_history();
