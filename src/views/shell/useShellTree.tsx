@@ -21,7 +21,7 @@ import { shellTreeQueueId, shellViewForRow, type IntakeQueue, type ShellStick, t
 import type { ShellView } from "@/lib/shellViews";
 import { ShellTree } from "./ShellTree";
 
-export function useShellTree({ library, sticks, selectedNode, onSelectNode, view, onViewChange }: {
+export function useShellTree({ library, sticks, selectedNode, onSelectNode, view, onViewChange, queueCounts }: {
   /** The Library's tree, as the backend sends it. */
   library: readonly TreeNode[];
   /** The mounted Sticks, as `useStickOutlines` reads them. */
@@ -30,7 +30,9 @@ export function useShellTree({ library, sticks, selectedNode, onSelectNode, view
   onSelectNode: (node: TreeNode) => void;
   view: ShellView;
   onViewChange: (view: ShellView) => void;
-}): { tree: ReactNode; intakeQueue: IntakeQueue } {
+  /** What waits in Intake and Problems, drawn beside them in the tree (wbx-62). */
+  queueCounts?: { intake: number | null; problems: number | null } | null | undefined;
+}): { tree: ReactNode; intakeQueue: IntakeQueue; showQueue: (queue: IntakeQueue) => void } {
   const [intakeQueue, setIntakeQueue] = useState<IntakeQueue>("intake");
   const [queueChosen, setQueueChosen] = useState(false);
 
@@ -41,7 +43,14 @@ export function useShellTree({ library, sticks, selectedNode, onSelectNode, view
     onViewChange(shellViewForRow(row.kind));
   }, [onSelectNode, onViewChange]);
 
+  /** Shows a queue in the Intake view as choosing it in the tree does (the empty queue's offer of Problems). */
+  const showQueue = useCallback((queue: IntakeQueue) => {
+    setQueueChosen(true);
+    setIntakeQueue(queue);
+    onViewChange("intake");
+  }, [onViewChange]);
+
   const selectedId = view === "intake" && queueChosen ? shellTreeQueueId(intakeQueue) : selectedNode?.id ?? null;
-  const tree = <ShellTree library={library} sticks={sticks} selectedId={selectedId} onOpen={open} />;
-  return { tree, intakeQueue };
+  const tree = <ShellTree library={library} sticks={sticks} selectedId={selectedId} onOpen={open} queueCounts={queueCounts} />;
+  return { tree, intakeQueue, showQueue };
 }

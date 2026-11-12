@@ -194,8 +194,10 @@ function stickRows(out: ShellTreeRow[], stick: ShellStick, collapsed: ReadonlySe
  * Folders are open unless their id is in `collapsed`: the open and closed
  * state the Library's nodes carry is the old tree's and is not read.
  */
-export function shellTreeRows({ library, sticks = [], setPlans = [], collapsed = new Set() }: {
+export function shellTreeRows({ library, sticks = [], setPlans = [], collapsed = new Set(), queueCounts }: {
   library: readonly TreeNode[];
+  /** What waits in Intake and Problems (wbx-62); `null` for a count not known. */
+  queueCounts?: { intake: number | null; problems: number | null } | null | undefined;
   sticks?: readonly ShellStick[];
   setPlans?: readonly ShellSetPlan[];
   collapsed?: ReadonlySet<string>;
@@ -209,8 +211,10 @@ export function shellTreeRows({ library, sticks = [], setPlans = [], collapsed =
       ...(all.childCount !== undefined ? { count: all.childCount } : {}),
     });
   }
-  out.push({ id: SHELL_TREE_INTAKE_ID, kind: "intake", name: "Intake", depth: 0, queue: "intake" });
-  out.push({ id: SHELL_TREE_PROBLEMS_ID, kind: "problems", name: "Problems", depth: 0, queue: "problems" });
+  const intakeCount = queueCounts?.intake ?? null;
+  const problemsCount = queueCounts?.problems ?? null;
+  out.push({ id: SHELL_TREE_INTAKE_ID, kind: "intake", name: "Intake", depth: 0, queue: "intake", ...(intakeCount !== null ? { count: intakeCount } : {}) });
+  out.push({ id: SHELL_TREE_PROBLEMS_ID, kind: "problems", name: "Problems", depth: 0, queue: "problems", ...(problemsCount !== null ? { count: problemsCount } : {}) });
 
   out.push(heading("playlists", "Playlists"));
   const lists: TreeNode[] = [];

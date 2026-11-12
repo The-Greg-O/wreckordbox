@@ -9,7 +9,7 @@
     reason = "MyTag is the glossary's word for the thing, not a code item"
 )]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use rbl_index::{Row, SortColumn, TrackFilter, TrackSource, ViewSpec, COLOR_NAMES};
@@ -17,7 +17,7 @@ use rbl_library::history::{LibraryEdit, TRACK_EDIT};
 use rbl_library::Touched;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use wreckordbox_sidecar::{Fact, Sidecar};
+use wreckordbox_sidecar::{Fact, FactsSnapshot};
 pub use wreckordbox_sidecar::{Source, SourceKind};
 
 use crate::library::OpenLibrary;
@@ -172,6 +172,12 @@ pub struct Queue {
     /// The Prep colour every track of the queue has: `null` for Intake,
     /// the DJ's Problem colour for Problems.
     pub prep_colour: Option<PrepColour>,
+    /// Why the page's proposed titles and artists could not be read (the
+    /// Sidecar is busy, unreadable, or at a schema only the service's own
+    /// opening may change); absent when they were. The page is still right
+    /// in every other respect; its `suggestions` are then empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggestions_unavailable: Option<String>,
 }
 
 /// A track in a queue: its full record, as `tracks.get` gives it, and
@@ -287,10 +293,13 @@ pub(crate) fn answer(
             .get(queue.offset..queue.offset + page_len(rows.len(), &queue))
             .unwrap_or(&[]);
         let known = Known::read(library, stems, &index, on_page)?;
+        queue
+            .suggestions_unavailable
+            .clone_from(&known.facts_unavailable);
         queue.tracks = on_page
             .iter()
             .map(|&row| known.describe(&index, row))
-            .collect::<Result<_, _>>()?;
+            .collect();
         to_value(&queue)
     };
     let answer = match request.command.as_str() {
@@ -554,6 +563,7 @@ fn queue(rows: &[Row], page: &Page, prep_colour: Option<PrepColour>) -> Queue {
         limit,
         next_offset: (end < total && end > offset).then_some(end),
         prep_colour,
+        suggestions_unavailable: None,
     }
 }
 
@@ -568,8 +578,11 @@ struct Known {
     dimensions: Vec<Dimension>,
     /// The identifiers of the page's tracks whose analysis is locked.
     locked: HashSet<String>,
-    /// The Sidecar, when there is one: where waiting Facts are.
-    sidecar: Option<Arc<Sidecar>>,
+    /// The page's `title` and `artist` Facts, by track and kind, newest
+    /// first: where waiting proposals are.
+    facts: PageFacts,
+    /// Why those could not be read, when they could not.
+    facts_unavailable: Option<String>,
 }
 
 impl Known {
@@ -594,26 +607,24 @@ impl Known {
             let locked = locked(db.connection(), &ids).map_err(|e| failed(&e))?;
             Ok((my_tags, locked))
         })?;
+        let (facts, facts_unavailable) = match page_facts(stems, &ids) {
+            Ok(facts) => (facts, None),
+            Err(why) => (HashMap::new(), Some(why)),
+        };
         Ok(Self {
             dimensions: dimensions_reaching_the_deck(&my_tags),
             locked,
-            // Reading a queue is not what first makes a Sidecar.
-            sidecar: stems.sidecar_if_made()?,
+            facts,
+            facts_unavailable,
         })
     }
 
-    fn describe(&self, index: &rbl_index::Library, row: Row) -> Result<QueuedTrack, ServiceError> {
+    fn describe(&self, index: &rbl_index::Library, row: Row) -> QueuedTrack {
         let track = crate::tracks::record(index, row);
         let mut suggestions = Vec::new();
-        if let Some(sidecar) = &self.sidecar {
-            for (field, held) in [(needs::TITLE, &track.title), (needs::ARTIST, &track.artist)] {
-                let facts = sidecar.facts(&track.id, field).map_err(|e| {
-                    ServiceError::new(
-                        crate::stems::codes::SIDECAR_FAILED,
-                        format!("the Sidecar failed: {e}"),
-                    )
-                })?;
-                suggestions.extend(waiting(&facts, field, held));
+        for (field, held) in [(needs::TITLE, &track.title), (needs::ARTIST, &track.artist)] {
+            if let Some(facts) = self.facts.get(&(track.id.clone(), field)) {
+                suggestions.extend(waiting(facts, field, held));
             }
         }
         let carried = index.my_tag_keys(row as usize);
@@ -651,14 +662,53 @@ impl Known {
         if grid != GridState::Confirmed {
             needs.push(needs::GRID);
         }
-        Ok(QueuedTrack {
+        QueuedTrack {
             track,
             needs: needs.into_iter().map(str::to_owned).collect(),
             empty_dimensions,
             grid,
             suggestions,
-        })
+        }
     }
+}
+
+/// A page's `title` and `artist` Facts, by track and kind, newest first.
+type PageFacts = HashMap<(String, &'static str), Vec<Fact>>;
+/// One track's Facts of one kind, from wherever they are read.
+type FactsOf<'a> = &'a dyn Fn(&str, &str) -> Result<Vec<Fact>, String>;
+
+/// The `title` and `artist` Facts of the page's tracks, read without ever
+/// being what creates, migrates or tidies a Sidecar (wbx-62 review): through
+/// the service's writer when it is already open, else through a read-only
+/// snapshot of the file, with the Sidecar slot held throughout so the writer
+/// cannot open under the read. `Err` says why they could not be read; the
+/// queue is still listed without them.
+fn page_facts(stems: &Stems, ids: &[String]) -> Result<PageFacts, String> {
+    let read = |facts: FactsOf<'_>| {
+        let mut out = HashMap::new();
+        for id in ids {
+            for field in [needs::TITLE, needs::ARTIST] {
+                let found = facts(id, field)?;
+                if !found.is_empty() {
+                    out.insert((id.clone(), field), found);
+                }
+            }
+        }
+        Ok(out)
+    };
+    stems
+        .with_current_sidecar(|open| match open {
+            Some(sidecar) => read(&|id, kind| sidecar.facts(id, kind).map_err(|e| e.to_string())),
+            None => match FactsSnapshot::open(stems.sidecar_dir()) {
+                Ok(FactsSnapshot::Absent) => Ok(HashMap::new()),
+                Ok(FactsSnapshot::Unknown(why)) => Err(why),
+                Ok(FactsSnapshot::Open(reader)) => {
+                    read(&|id, kind| reader.facts(id, kind).map_err(|e| e.to_string()))
+                }
+                Err(error) => Err(format!("the Sidecar could not be read: {error}")),
+            },
+        })
+        .unwrap_or_else(|| Err("the Sidecar is being opened; try again".to_owned()))
 }
 
 /// The Facts among `facts` (one track's, of the kind `field`, newest

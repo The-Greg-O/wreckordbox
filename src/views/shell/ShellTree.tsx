@@ -43,6 +43,8 @@ export interface ShellTreeProps {
   selectedId: string | null;
   /** A row was chosen. */
   onOpen: (row: ShellTreeRow) => void;
+  /** What waits in Intake and Problems, drawn beside them (wbx-62). */
+  queueCounts?: { intake: number | null; problems: number | null } | null | undefined;
 }
 
 /** Nothing produces Set plans yet; one empty list, so the rows are not remade each render. */
@@ -105,12 +107,12 @@ function readSizes(element: HTMLElement | null): TreeSizes {
   };
 }
 
-export function ShellTree({ library, sticks, setPlans = NO_SET_PLANS, selectedId, onOpen }: ShellTreeProps) {
+export function ShellTree({ library, sticks, setPlans = NO_SET_PLANS, selectedId, onOpen, queueCounts }: ShellTreeProps) {
   const t = useTranslation();
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const treeRows = useMemo(
-    () => shellTreeRows({ library, sticks, setPlans, collapsed }),
-    [library, sticks, setPlans, collapsed],
+    () => shellTreeRows({ library, sticks, setPlans, collapsed, queueCounts }),
+    [library, sticks, setPlans, collapsed, queueCounts],
   );
   const groups = useMemo(() => groupRows(treeRows, t), [treeRows, t]);
   const root = useRef<HTMLDivElement>(null);
