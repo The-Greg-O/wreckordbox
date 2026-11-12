@@ -2278,6 +2278,23 @@ function AppBody() {
     setSelectedTracks(tracks);
     setInfoSelection(tracks.map((t) => t.id));
   }, []);
+  /**
+   * The shell's view changes. The Library list is unmounted while another
+   * view shows and comes back with nothing selected, so what this window
+   * holds for it (the tracks Analyze and the panels act on, the highlighted
+   * row, the count) is dropped with it: what a command targets is always
+   * what the list shows as selected.
+   */
+  const changeShellView = useEventCallback((next: ShellView) => {
+    if (shellView === "library" && next !== "library") {
+      setSelectedTracks([]);
+      setInfoSelection([]);
+      setSelectedRow(null);
+      setSelectedCount(0);
+      setBarShowsSelection(false);
+    }
+    setShellView(next);
+  });
   const reportSubSelection = useCallback((tracks: { id: string; title: string }[]) => {
     setInfoSelection(tracks.map((t) => t.id));
   }, []);
@@ -3627,7 +3644,7 @@ function AppBody() {
         {titleBar}
         <ViewShell
           view={shellView}
-          onViewChange={setShellView}
+          onViewChange={changeShellView}
           platform={platform}
           keyOverrides={keyOverrides}
           player={deckA}

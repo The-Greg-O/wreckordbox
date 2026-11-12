@@ -96,6 +96,8 @@ test("keys 1 to 4 switch views", async ({ page }) => {
 const player = (page: Page) => page.getByRole("region", { name: "Preview player" });
 // The shell's player area holds the old player at its smallest for now.
 const deckTitle = (page: Page) => player(page).getByTestId("simple-player-title");
+/** A loop lit on the deck's waveform. */
+const activeLoop = (page: Page) => page.locator('[class*="loopBand"][data-active]');
 /** Where the playhead is across the overview, in pixels: it moves while the deck runs. */
 async function playhead(page: Page): Promise<number> {
   return (await player(page).getByTestId("simple-player-head").boundingBox())?.x ?? Number.NaN;
@@ -172,6 +174,79 @@ test("keys 1 to 4 are the views' and no longer set a hot cue or a beat loop on t
   // Give a cue write the time the old layout's takes to come back and draw.
   await page.waitForTimeout(1000);
   await expect(cues).toHaveCount(0);
+
+  // Nor does 4 start the deck's 1 Beat Loop. The first row has a beat grid,
+  // so a loop can be set on it (with the switch off, 4 lights one).
+  const gridded = await titles(page).nth(0).innerText();
+  await titles(page).nth(0).dblclick();
+  await expect(deckTitle(page)).toContainText(gridded);
+  await expect.poll(() => cues.count()).toBeGreaterThan(0);
+  await page.keyboard.press("4");
+  await expect(tab(page, "Stick")).toHaveAttribute("aria-selected", "true");
+  await page.waitForTimeout(1000);
+  await expect(activeLoop(page)).toHaveCount(0);
+  await expect(player(page).getByRole("button", { name: "Exit loop" })).toHaveCount(0);
+});
+
+const rows = (page: Page) => page.getByRole("row").filter({ has: page.getByRole("gridcell") });
+const selectedRows = (page: Page) => rows(page).and(page.locator("[data-selected]"));
+const analysis = (page: Page) => page.getByRole("dialog", { name: "Analysis Setting" });
+
+test("what Analyze targets is what the list shows as selected, before and after a view switch", async ({ page }) => {
+  await enableViewShell(page);
+  await page.goto("/?writable=1");
+  await expect(page.getByTestId("browser-title")).toContainText("Tracks)");
+
+  await rows(page).nth(2).click();
+  await rows(page).nth(4).click({ modifiers: ["Shift"] });
+  await expect(selectedRows(page)).toHaveCount(3);
+  await page.keyboard.press("Control+Shift+A");
+  await expect(analysis(page)).toContainText("3 tracks selected");
+  await analysis(page).getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(analysis(page)).toHaveCount(0);
+
+  // Away and back: the list comes back with nothing selected, so Analyze
+  // has nothing to act on. It must not reach the three chosen before.
+  await page.keyboard.press("2");
+  await expect(working(page).getByRole("heading", { name: "Intake" })).toBeVisible();
+  // Nor from another view, where no list is shown at all.
+  await page.keyboard.press("Control+Shift+A");
+  await page.waitForTimeout(500);
+  await expect(analysis(page)).toHaveCount(0);
+  await page.keyboard.press("1");
+  await expect(titles(page).first()).toBeVisible();
+  await expect(selectedRows(page)).toHaveCount(0);
+  await page.keyboard.press("Control+Shift+A");
+  await page.waitForTimeout(500);
+  await expect(analysis(page)).toHaveCount(0);
+
+  // A fresh selection is what Analyze takes.
+  await rows(page).nth(1).click();
+  await expect(selectedRows(page)).toHaveCount(1);
+  await page.keyboard.press("Control+Shift+A");
+  await expect(analysis(page)).toContainText("1 track selected");
+});
+
+test("a view key pressed in a confirmation prompt leaves the view alone", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("rbl.preferences", JSON.stringify({
+    advanced: { protectLibrary: false, deviceImportMissing: "ask" },
+    view: { viewShell: true },
+  })));
+  await page.goto("/?writable=1");
+  await expect(page.getByTestId("browser-title")).toContainText("Tracks)");
+  await page.getByRole("tablist", { name: "Library sources" }).getByRole("tab", { name: "Devices" }).click();
+  await page.getByRole("button", { name: "Expand TEST" }).dispatchEvent("mousedown");
+  await page.locator('[role="treeitem"][data-kind="devicePlaylist"]').filter({ hasText: /^\s*NP3-TEST-MP3/ }).nth(1).click({ button: "right" });
+  await page.getByRole("menu", { name: "Playlist" }).getByRole("menuitem", { name: "Import Playlist" }).click();
+  const question = page.getByRole("alertdialog", { name: "Import Playlist from Device" });
+  await expect(question).toBeVisible();
+
+  // The prompt has the keyboard: one of its buttons is focused.
+  await question.getByRole("button").first().focus();
+  await page.keyboard.press("2");
+  await expect(question).toBeVisible();
+  await expect(tab(page, "Library")).toHaveAttribute("aria-selected", "true");
+  await expect(tab(page, "Intake")).toHaveAttribute("aria-selected", "false");
 });
 
 test("the layout follows the window's own width: the tree gives way at 800 and below, and nothing overlaps", async ({ page }) => {

@@ -27,9 +27,11 @@ describe("the shell's views", () => {
     expect(shellViewForKey({ key: "2" }, linux, { isContentEditable: true })).toBeNull();
   });
 
-  it("leave the key alone inside a dialog", () => {
-    const inDialog = { tagName: "BUTTON", closest: (selector: string) => (selector.includes("dialog") ? {} : null) };
-    expect(shellViewForKey({ key: "2" }, linux, inDialog)).toBeNull();
+  it("leave the key alone inside a dialog or a confirmation prompt", () => {
+    for (const within of ['[role="dialog"]', '[role="alertdialog"]', "dialog"]) {
+      const target = { tagName: "BUTTON", closest: (selector: string) => (selector.split(", ").includes(within) ? {} : null) };
+      expect(shellViewForKey({ key: "2" }, linux, target), within).toBeNull();
+    }
   });
 
   it("are the bare key only: a modified digit is some other command's", () => {

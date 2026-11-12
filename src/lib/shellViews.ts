@@ -73,7 +73,8 @@ export function shellViewForKey(
 ): ShellView | null {
   if (isTyping(target)) return null;
   // A dialog over the window owns its keys; the view under it stays put.
-  if (target?.closest?.('[role="dialog"], dialog')) return null;
+  // A confirmation prompt is an alertdialog (`ConfirmHost` and its kin).
+  if (target?.closest?.('[role="dialog"], [role="alertdialog"], dialog')) return null;
   if (platform.mac ? chord.ctrlKey === true : chord.metaKey === true) return null;
   for (const view of SHELL_VIEWS) {
     if (chordMatches(shellViewChord(view.id, overrides), chord, platform)) return view.id;
