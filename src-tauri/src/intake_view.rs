@@ -123,6 +123,45 @@ pub fn counts(state: &Arc<AppState>) -> AppResult<Value> {
     ask(state, intake::commands::INTAKE_COUNTS, json!({}))?.map_err(|error| failed(&error))
 }
 
+/// The DJ's eight Prep colours and which mean Clean and Problem (wbx-63):
+/// the service's `intake.colours` answer as it gave it.
+pub fn colours(state: &Arc<AppState>) -> AppResult<Value> {
+    ask(state, intake::commands::INTAKE_COLOURS, json!({}))?.map_err(|error| failed(&error))
+}
+
+/// Sets one track's Prep colour, by colour label number (1 to 8), or clears
+/// it (`None`), through the hosted service's `tracks.set_prep_colour`: the
+/// Library's single edit path, one Track Edit the window's Undo takes back,
+/// refused under Library Protection. The service tells the window, so the
+/// queue and its counts re-read.
+pub fn set_prep_colour(state: &Arc<AppState>, id: &str, colour: Option<u8>) -> AppResult<Value> {
+    let named = match colour {
+        None => "none",
+        Some(number) => usize::from(number)
+            .checked_sub(1)
+            .and_then(|at| rbl_index::COLOR_NAMES.get(at))
+            .copied()
+            .ok_or_else(|| {
+                AppError::new(ErrorKind::Malformed, format!("There is no colour label {number}."))
+            })?,
+    };
+    ask(
+        state,
+        intake::commands::TRACKS_SET_PREP_COLOUR,
+        json!({ "id": id, "prep_colour": named }),
+    )?
+    .map_err(|error| {
+        // A refusal (Library Protection, rekordbox running) is the Library
+        // being read-only for now; anything else is a failure to say.
+        let kind = if error.code == "library_protected" || error.code == "write_refused" {
+            ErrorKind::ReadOnly
+        } else {
+            ErrorKind::Internal
+        };
+        AppError::new(kind, error.message.clone()).with_detail(error.code.clone())
+    })
+}
+
 fn failed(error: &ServiceError) -> AppError {
     AppError::new(
         ErrorKind::Internal,
@@ -159,4 +198,33 @@ pub async fn intake_queue(
 pub async fn intake_counts(state: tauri::State<'_, Arc<AppState>>) -> AppResult<Value> {
     let state = Arc::clone(&state);
     blocking("intake_counts", move || counts(&state)).await
+}
+
+/// The DJ's Prep colours (the Intake view's Prep colour buttons).
+#[tauri::command]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "a command is handed its state by value"
+)]
+pub async fn intake_colours(state: tauri::State<'_, Arc<AppState>>) -> AppResult<Value> {
+    let state = Arc::clone(&state);
+    blocking("intake_colours", move || colours(&state)).await
+}
+
+/// Sets or clears a track's Prep colour from the Intake view.
+#[tauri::command]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "a command is handed its state by value"
+)]
+pub async fn intake_set_prep_colour(
+    state: tauri::State<'_, Arc<AppState>>,
+    id: String,
+    colour: Option<u8>,
+) -> AppResult<Value> {
+    let state = Arc::clone(&state);
+    blocking("intake_set_prep_colour", move || {
+        set_prep_colour(&state, &id, colour)
+    })
+    .await
 }
