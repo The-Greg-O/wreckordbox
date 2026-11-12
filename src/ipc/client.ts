@@ -18,6 +18,7 @@ import type {
 } from "./types";
 import { tauriInvoke } from "./invoke";
 import { liftMyTags } from "./rowMyTags";
+import { fromServicePage, type ServiceQueuePage } from "@/lib/intakeQueue";
 
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -625,6 +626,12 @@ async function realBackend(): Promise<Backend> {
     explorerChildren: (path) => invoke<ExplorerChildren>("explorer_children", { path }),
     deviceLibraries: (path) => invoke<DeviceLibrary[]>("device_libraries", { path }),
     stickOutline: (path) => invoke<StickOutline>("stick_outline", { path }),
+    intakeQueue: async (queue, offset, limit) =>
+      fromServicePage(await invoke<ServiceQueuePage>("intake_queue", { queue, offset, limit })),
+    intakeCounts: async () => {
+      const counts = await invoke<{ intake: number; problems: number | null }>("intake_counts");
+      return { intake: counts.intake, problems: counts.problems };
+    },
     devicePlaylistCollectionTracks: (path, format, tracks) =>
       invoke<(string | null)[]>("device_playlist_collection_tracks", { path, format, tracks }),
     devicePlaylistEdit: (path, format, edit) =>

@@ -29,6 +29,7 @@ import { COLOR_NAMES, wholeBpm } from "@/lib/trackFilter";
 import { MY_TAG_LIMIT, newMyTagName } from "@/lib/myTags";
 import { referenceDeviceSettings } from "./mock-device-settings";
 import { createMockDeviceLibraries, type MockImportEntry } from "./mock-device-library";
+import { createMockIntake } from "./mock-intake";
 
 const ARTISTS = [
   "MORTEN", "ARTBAT", "Meduza", "Vintage Culture", "Tujamo", "UMEK", "Kryder", "Joel Corry",
@@ -2215,7 +2216,23 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     return path;
   };
 
+  // The Intake view's queues (wbx-62): `mock-intake.ts`.
+  const intake = createMockIntake({
+    all, colors, tagsOf: (row) => detailsOf(row).myTags, categories: myTagCategories,
+    gridLocked: (id) => gridStore.get(id)?.locked ?? false, wait, ready: () => ready,
+  });
+  if (typeof window !== "undefined") {
+    // `__setPrepColour(id, colourId)` (0 for none): an edit as the Library list makes it.
+    (window as unknown as { __setPrepColour: (id: string, colour: number) => Promise<unknown> }).__setPrepColour =
+      (id, colour) => edits.setTrackColor([id], colour === 0 ? null : String(colour));
+    // `__emitLibraryChanged(n)`: n changes announced at once, as a burst of an agent's edits.
+    (window as unknown as { __emitLibraryChanged: (times: number) => void }).__emitLibraryChanged =
+      (times) => { for (let i = 0; i < times; i += 1) void bump(false); };
+  }
+
   return {
+    intakeQueue: intake.intakeQueue,
+    intakeCounts: intake.intakeCounts,
     rekordboxBrowseSettings: () => Promise.resolve(null),
     librarySummary: () =>
       ready

@@ -74,6 +74,15 @@ describe("the shell's tree", () => {
     expect(rows.find((row) => row.kind === "intake")?.node).toBeUndefined();
   });
 
+  it("counts what waits in Intake and Problems when the counts are known (wbx-62)", () => {
+    const counted = shellTreeRows({ library: LIBRARY, queueCounts: { intake: 23, problems: 4 } });
+    expect(counted.find((row) => row.kind === "intake")?.count).toBe(23);
+    expect(counted.find((row) => row.kind === "problems")?.count).toBe(4);
+    const unknown = shellTreeRows({ library: LIBRARY, queueCounts: { intake: 2, problems: null } });
+    expect(unknown.find((row) => row.kind === "problems")?.count).toBeUndefined();
+    expect(shellTreeRows({ library: LIBRARY }).find((row) => row.kind === "intake")?.count).toBeUndefined();
+  });
+
   it("lists Set plans once there are some", () => {
     const rows = shellTreeRows({ library: LIBRARY, setPlans: [{ id: "plan-1", name: "Friday peak hour", count: 16 }] });
     expect(rows.slice(-2).map(line)).toEqual(["heading 0 Set plans", "setPlan 0 Friday peak hour 16"]);
