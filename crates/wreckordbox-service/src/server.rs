@@ -433,6 +433,17 @@ impl Shared {
                     self.with_library(|library| crate::stems::parent(library, id))?
                 })
             }
+            intake if crate::intake::answers(intake) => {
+                let (result, changed) = self.with_library(|library| {
+                    crate::intake::answer(library, &self.stems, request)
+                })??;
+                // Only its Prep colour edit changes the Library; the
+                // hosting process is told of it here, as of a rating.
+                if let Some(changed) = changed {
+                    self.tell_host(&changed.event());
+                }
+                Ok(result)
+            }
             unknown => Err(ServiceError::new(
                 codes::UNKNOWN_COMMAND,
                 format!("unknown command: {unknown}"),
