@@ -112,6 +112,32 @@ Browser and shift + command + 0 is a pad's clear in the Performance 2
 preset, which is why the reset carries option. The webview's built-in zoom
 hotkeys stay off (`src-tauri/tests/window_config.rs`).
 
+### View shell
+
+Only while the view shell is on (`view.viewShell` in the stored preferences,
+off by default; ticket #50). With it off these commands are not registered
+and their keys are the deck's, as in the tables here.
+
+| Command | Key | rekordbox id | Menu bar | Entry points | Registered by |
+| --- | --- | --- | --- | --- | --- |
+| Library View, Intake View, Review View, Stick View (`viewLibrary`, `viewIntake`, `viewReview`, `viewStick`) | 1, 2, 3, 4 (wreckordbox's own) | none | no | key; the view tabs in the shell's top bar | ViewShell, none |
+
+The Export key map gives the same four keys to Player A: 1 to 3 are Set Hot
+Cue A to C and 4 is 1 Beat Loop. With the shell on the views take them: the
+shell hears the press first (a capture listener on the window, reading
+`shellViewForKey` in `src/lib/shellViews.ts`) and stops it, so the deck
+never sees it. Set Hot Cue A to C and 1 Beat Loop are then reached from the
+pads and the loop control, not from a key. Shift + 1 to 4 (Player B) and
+command + 1 to 3 (Clear Hot Cue A to C) are not view keys and are unchanged.
+The view keys do nothing while a field has the focus or a dialog is open.
+
+The four views are deliberately not rows of `BINDINGS`: that table is one
+key map in which no two rows share a key, and it stays the old layout's
+until that layout is removed (ticket #77). The Keyboard pane therefore does
+not list them yet. A chord stored against `viewLibrary`, `viewIntake`,
+`viewReview` or `viewStick` in the Keyboard preferences' overrides is
+honoured, and an empty one takes the key away.
+
 ### Deck
 
 | Command | Key (Player A) | rekordbox id | rekordbox menu bar | On-screen control that calls the same function |
