@@ -31,6 +31,8 @@ export interface ListLook {
    * the row's rating edit, absent when the list cannot write.
    */
   cell?: (key: ColumnKey, row: RowDto, rate: ((stars: number) => void) | undefined) => ReactNode | undefined;
+  /** Key display inside the existing editable cell; replaces the old traffic light. */
+  keyCell?: (stored: string, loaded: string | null, text: string) => ReactNode;
   /** Drawn first in every row, over its left edge. */
   edge?: (row: RowDto) => ReactNode;
 }

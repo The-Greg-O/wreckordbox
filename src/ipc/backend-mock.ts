@@ -30,6 +30,7 @@ import { MY_TAG_LIMIT, newMyTagName } from "@/lib/myTags";
 import { referenceDeviceSettings } from "./mock-device-settings";
 import { createMockDeviceLibraries, type MockImportEntry } from "./mock-device-library";
 import { createMockIntake } from "./mock-intake";
+import { keyLightRows } from "./mock-key-lights";
 
 const ARTISTS = [
   "MORTEN", "ARTBAT", "Meduza", "Vintage Culture", "Tujamo", "UMEK", "Kryder", "Joel Corry",
@@ -447,7 +448,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       (on) => { recordProtection(on); };
   }
   const playlistFixture = options.playlistFixture ?? readPlaylistFixtureFromUrl();
-  const all = makeRows(trackCount);
+  const all = readFlagFromUrl("keyLights") ? keyLightRows(makeRows(12)) : makeRows(trackCount);
   // A disposable browser fixture for external file drops. It is opt-in and
   // survives a page reload so the collection view can verify the import.
   const dropFixture = readFlagFromUrl("dropFixture");

@@ -1,0 +1,7 @@
+/* Music colours from the design reference, fixed under every chrome theme. */
+.key {
+  padding: 2px 3px;
+  border-radius: 2px;
+}
+.key[data-light="match"] { background: #9ece6a; color: #0e0e14; }
+.key[data-light="boost"] { background: #e0af68; color: #0e0e14; }

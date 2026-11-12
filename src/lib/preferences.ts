@@ -414,7 +414,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
     uiScale: UI_SCALE_DEFAULT,
     viewShell: false,
     shellJumpBeats: COMPACT_JUMP_DEFAULT,
-    keyDisplay: "classic",
+    keyDisplay: "alphanumeric",
     keySort: "alphabetical",
     overviewWaveform: "half",
     explorer: true,
