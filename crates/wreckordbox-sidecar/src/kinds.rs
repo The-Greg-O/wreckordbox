@@ -352,6 +352,8 @@ impl Kinds {
                 ValueType::Object,
                 "Intensity: how hard the track hits and how that changes over its length.",
             ),
+            judgement("title", ValueType::Text, "The native title chosen by the DJ."),
+            judgement("artist", ValueType::Text, "The native artist chosen by the DJ."),
         ]
     }
 
@@ -516,6 +518,17 @@ impl Kinds {
                     &file,
                     format!("a kind's name is lower-case letters, digits and underscores, not \"{name}\""),
                 ));
+            }
+            // Before native edits recorded these kinds, DJs declared them
+            // themselves. Keep compatible declarations readable on upgrade.
+            if matches!(name.as_str(), "title" | "artist")
+                && entry.nature == Nature::Judgement
+                && entry.value == ValueType::Text
+                && entry.choices.is_empty()
+                && entry.min.is_none()
+                && entry.max.is_none()
+            {
+                continue;
             }
             if declared.iter().any(|kind| kind.name == name) {
                 return Err(refused(

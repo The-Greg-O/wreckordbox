@@ -38,8 +38,21 @@ impl FactsSnapshot {
     /// Looks at the Sidecar in `dir` without changing anything there.
     pub fn open(dir: &Path) -> Result<Self> {
         let path = dir.join("sidecar.db");
-        if !path.is_file() {
-            return Ok(Self::Absent);
+        match std::fs::metadata(&path) {
+            Ok(metadata) if metadata.is_file() => {}
+            Ok(_) => {
+                return Ok(Self::Unknown(format!(
+                    "{} is not a database file",
+                    path.display()
+                )))
+            }
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && path.symlink_metadata().is_err() =>
+            {
+                return Ok(Self::Absent)
+            }
+            Err(error) => return Err(crate::io("cannot inspect the Sidecar", &path)(error)),
         }
         for suffix in ["sidecar.db-wal", "sidecar.db-journal"] {
             if path.with_file_name(suffix).exists() {

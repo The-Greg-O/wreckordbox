@@ -97,6 +97,43 @@ pub struct Theme {
     pub mono_font_size: Option<f64>,
     /// The theme file's mistakes, each left out of what is shown.
     pub problems: Vec<ThemeProblem>,
+    /// The Omarchy theme's colours for the Theme waveform, if the look
+    /// follows a usable Omarchy theme. Never the theme file's: waveform
+    /// colours are not themeable by it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wave: Option<WaveColours>,
+    /// The theme file's waveform colour theme, which wins over Preferences.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waveform: Option<String>,
+}
+
+/// The three band colours of the Theme waveform, each `#rrggbb`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WaveColours {
+    /// The low band (outer): the theme's blue.
+    pub low: String,
+    /// The mid band: the theme's magenta.
+    pub mid: String,
+    /// The high band (core): the theme's bright foreground.
+    pub high: String,
+}
+
+/// The Theme waveform's colours in an Omarchy palette, or `None` unless the
+/// palette is usable (as for the roles) and gives all three, so the window
+/// never mixes the theme's colours with its fallbacks.
+fn wave_from_colors(text: &str) -> Option<WaveColours> {
+    let colours = parse_colors(text);
+    roles_from_palette(&colours)?;
+    let get = |keys: &[&str]| {
+        keys.iter()
+            .find_map(|key| colours.get(*key).and_then(|value| rgb(value)))
+            .map(hex)
+    };
+    Some(WaveColours {
+        low: get(&["blue", "color4"])?,
+        mid: get(&["magenta", "color5"])?,
+        high: get(&["bright_foreground", "color15"])?,
+    })
 }
 
 /// The theme the window shows. The base roles are resolved first: the
@@ -136,6 +173,8 @@ pub fn layered(
         mono_font: file.and_then(|file| file.mono_font.clone()),
         mono_font_size: file.and_then(|file| file.mono_font_size),
         problems: file.map(|file| file.problems.clone()).unwrap_or_default(),
+        wave: omarchy.filter(|_| follows).and_then(wave_from_colors),
+        waveform: file.and_then(|file| file.waveform.clone()),
     }
 }
 
@@ -1378,6 +1417,58 @@ color15 = "#ddc7a1"
                 .collect::<Vec<_>>(),
             [2]
         );
+    }
+
+    #[test]
+    fn the_theme_waveform_comes_from_the_omarchy_palette_alone() {
+        let theme = layered(Some(TOKYO_NIGHT), None, no_font);
+        let wave = theme
+            .wave
+            .expect("Tokyo Night has blue, magenta and bright_foreground");
+        assert_eq!(
+            (wave.low.as_str(), wave.mid.as_str(), wave.high.as_str()),
+            ("#7aa2f7", "#ad8ee6", "#c0caf5")
+        );
+        // The theme file's colours are the window's, not the waveform's.
+        let over =
+            file("bright_foreground = \"#ff0000\"\nblue = \"#00ff00\"\nmagenta = \"#0000ff\"\n");
+        assert_eq!(
+            layered(Some(TOKYO_NIGHT), Some(&over), no_font).wave,
+            Some(wave.clone())
+        );
+        // Only the numbered colours: they stand in, as they do for the roles.
+        let numbered = "background = \"#101010\"\nforeground = \"#e0e0e0\"\ncolor4 = \"#112233\"\ncolor5 = \"#445566\"\ncolor15 = \"#778899\"\n";
+        let wave = layered(Some(numbered), None, no_font).wave.unwrap();
+        assert_eq!(
+            (wave.low.as_str(), wave.mid.as_str(), wave.high.as_str()),
+            ("#112233", "#445566", "#778899")
+        );
+        // Not following, no Omarchy theme, or an unusable one: none, and the
+        // window falls back to its own.
+        assert_eq!(
+            layered(Some(TOKYO_NIGHT), Some(&file("follow = \"none\"")), no_font).wave,
+            None
+        );
+        assert_eq!(layered(None, None, no_font).wave, None);
+        assert_eq!(
+            layered(Some("blue = \"#7aa2f7\""), None, no_font).wave,
+            None
+        );
+    }
+
+    #[test]
+    fn the_files_waveform_choice_is_passed_on() {
+        assert_eq!(
+            layered(
+                Some(TOKYO_NIGHT),
+                Some(&file("waveform = \"rgb\"")),
+                no_font
+            )
+            .waveform
+            .as_deref(),
+            Some("rgb")
+        );
+        assert_eq!(layered(Some(TOKYO_NIGHT), None, no_font).waveform, None);
     }
 
     #[test]

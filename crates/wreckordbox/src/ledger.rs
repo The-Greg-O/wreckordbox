@@ -252,6 +252,12 @@ fn what_lines(entry: &LedgerEntry) -> Vec<String> {
     if let (Some(reverses), Some(first)) = (entry.reverses, lines.first_mut()) {
         let _ = write!(first, " (of entry {reverses})");
     }
+    for omitted in &entry.facts_not_recorded {
+        lines.push(format!(
+            "Fact not recorded: track {} {}: {}",
+            omitted.track, omitted.kind, omitted.reason
+        ));
+    }
     lines
 }
 

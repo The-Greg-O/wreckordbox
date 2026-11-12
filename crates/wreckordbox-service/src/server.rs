@@ -176,12 +176,13 @@ impl Service {
             return Err(missing());
         }
         let master_db = library.master_db.clone();
+        let ledger_location = library.clone();
         let open = open(library)?;
         let listener = listen(&config.runtime_dir, &socket)?;
         let (queue, queued) = std::sync::mpsc::channel();
         let (sidecar_events, sidecar_queued) = std::sync::mpsc::channel();
         let stems = crate::stems::Stems::from_env(&master_db, sidecar_events);
-        let ledger = crate::ledger::Keeper::new(Arc::clone(&stems));
+        let ledger = crate::ledger::Keeper::new(Arc::clone(&stems), ledger_location);
 
         let shared = Arc::new(Shared {
             library: Mutex::new(Some(Owned {
@@ -525,6 +526,11 @@ impl Shared {
                     crate::facts::answer(&self.stems, request, &|id| {
                         self.with_library(|library| crate::stems::parent(library, id))?
                     })
+                })
+            }
+            crate::standing::FACTS_STANDING => {
+                crate::standing::answer(&self.stems, request, &|id| {
+                    self.with_library(|library| crate::stems::parent(library, id))?
                 })
             }
             facts if crate::facts::answers(facts) => {

@@ -15,9 +15,10 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "rea
 import { drawPcmWave, drawWave, strideOf, waveformKindOf, type HalfWaveform, type WavePalette } from "@/canvas";
 import { getBackend } from "@/ipc/client";
 import type { WaveformKind } from "@/ipc/types";
-import { exactBackingSize } from "@/lib/canvasSize";
+import { coveredSize, exactBackingSize } from "@/lib/canvasSize";
+import { usePixelRatio } from "@/lib/pixelRatio";
 import { detailWaveOriginMs, detailWaveWindow, waveSlice } from "@/lib/player";
-import { usePreferences } from "@/store/usePreferences";
+import { useShownTheme, useWaveformTheme, waveColoursFrom, wellOf } from "@/lib/waveTheme";
 
 /** Raw waveform bytes per track. Small — a few hundred bytes each. */
 const bytesByTrack = new Map<string, Uint8Array>();
@@ -132,8 +133,15 @@ export const WaveformDetail = memo(function WaveformDetail({
   const pcmMode = requestedPcmWindow !== undefined;
   // Bumped when the track is re-analysed, so the bytes are fetched again.
   const [revision, setRevision] = useState(0);
-  // View › Color › Waveform color: each palette reads its own tags.
-  const palette = usePreferences().view.waveformColor;
+  // The waveform theme in force (the theme file's, else View › Color ›
+  // Waveform color): each palette reads its own tags.
+  const { palette } = useWaveformTheme();
+  // The Omarchy theme's colours for the Theme palette (read at draw time,
+  // legible on the well this canvas is drawn over).
+  const theme = useShownTheme();
+  // Device pixels per CSS pixel, kept current: a paused waveform is redrawn
+  // when the scale or the display's density changes with no resize.
+  const ratio = usePixelRatio();
   const pcmFromMs = requestedPcmWindow?.fromMs;
   const pcmToMs = requestedPcmWindow?.toMs;
   const pcmDrawFromMs = requestedPcmWindow?.drawFromMs;
@@ -227,12 +235,21 @@ export const WaveformDetail = memo(function WaveformDetail({
     // Exactly the device pixels the strip covers: this redraws on every size
     // change anyway, and a quantised store squeezed onto the strip resamples
     // every bar differently after each redraw — a flicker while playing (#346).
-    const { width: w, height: h } = exactBackingSize(width, height);
+    const { width: w, height: h } = exactBackingSize(width, height, ratio);
     // Assigning either clears the canvas, so only when it actually changed.
     if (canvas.width !== w) canvas.width = w;
     if (canvas.height !== h) canvas.height = h;
+    // Shown over exactly those device pixels. The strip's own size is often
+    // a fraction of one at a whole-interface scale, and a store stretched
+    // over the fraction is resampled: every row blended into the next.
+    const box = coveredSize({ width: w, height: h }, ratio, { width, height });
+    canvas.style.width = `${box.width}px`;
+    canvas.style.height = `${box.height}px`;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    // That palette's colours: the measured ones, or the Omarchy theme's,
+    // each band standing out from the well behind this canvas.
+    const colours = waveColoursFrom(palette, theme, wellOf(canvas));
 
     if (pcmWindow) {
       const loaded = pcmData?.trackId === trackId && pcmData.revision === revision ? pcmData : null;
@@ -244,7 +261,7 @@ export const WaveformDetail = memo(function WaveformDetail({
       drawPcmWave(ctx, loaded?.bytes ?? new Uint8Array(), w, h, palette, {
         from: (pcmWindow.drawFromMs - fromMs) / duration,
         to: (pcmWindow.drawToMs - fromMs) / duration,
-      });
+      }, colours);
       return;
     }
     if (!data || data.trackId !== trackId) {
@@ -272,9 +289,9 @@ export const WaveformDetail = memo(function WaveformDetail({
     drawWave(ctx, data.bytes.subarray(first, last), span_, h, data.palette, detail, half, {
       top: inset.top * scale,
       bottom: inset.bottom * scale,
-    });
+    }, colours);
     ctx.restore();
-  }, [data, pcmData, trackId, revision, progress, span, durationMs, firstBeatMs, width, height, half, detail, palette, inset.top, inset.bottom, pcmWindow]);
+  }, [data, pcmData, trackId, revision, progress, span, durationMs, firstBeatMs, width, height, half, detail, palette, theme, inset.top, inset.bottom, pcmWindow, ratio]);
 
   return <canvas ref={ref} style={{ width: "100%", height: "100%", display: "block" }} />;
 });

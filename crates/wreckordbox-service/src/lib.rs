@@ -34,6 +34,7 @@ pub mod run_status;
 pub mod schema;
 mod separation;
 mod server;
+pub mod standing;
 pub mod stems;
 pub mod track_filter;
 pub mod tracks;
@@ -204,3 +205,5 @@ fn lock_path(master_db: &Path) -> PathBuf {
 }
 
 const LOCK_FILE: &str = ".wreckordbox-service.lock";
+
+mod dj_facts;

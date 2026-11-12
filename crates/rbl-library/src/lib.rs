@@ -354,6 +354,18 @@ impl LibraryCore {
         edit: impl FnOnce(&mut rbl_db::write::Writer) -> Result<T, rbl_db::DbError>,
         refresh: impl FnOnce(&rbl_db::Library, T) -> Result<U, rbl_db::DbError>,
     ) -> Result<U, rbl_db::DbError> {
+        self.write_then_prepared(host, history, &ledger::Preparation::default(), edit, refresh)
+    }
+
+    /// The same edit path, with bounded recovery targets supplied by its caller.
+    pub fn write_then_prepared<T, U>(
+        &self,
+        host: &(impl Host + ?Sized),
+        history: History,
+        preparation: &ledger::Preparation,
+        edit: impl FnOnce(&mut rbl_db::write::Writer) -> Result<T, rbl_db::DbError>,
+        refresh: impl FnOnce(&rbl_db::Library, T) -> Result<U, rbl_db::DbError>,
+    ) -> Result<U, rbl_db::DbError> {
         let started = std::time::Instant::now();
         let location = self.location().map_err(|e| rbl_db::DbError::NotInstalled(e.to_string()))?;
         let _gate = self.edit_gate.lock();
@@ -394,6 +406,9 @@ impl LibraryCore {
             }
         };
         writer.disable_automatic_backups();
+        if history == History::Caller {
+            if let Some(ledger) = &ledger { ledger.prepare(writer.library(), preparation); }
+        }
         let open_ms = started.elapsed().as_millis();
         let result = edit(&mut writer);
         let edit_ms = started.elapsed().as_millis();
