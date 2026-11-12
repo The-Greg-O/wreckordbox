@@ -257,6 +257,38 @@ fn ledger_admission_failure_leaves_files_and_the_file_journal_alone() {
     assert!(!f.config.recovery_dir.join("analysis-journal").exists());
 }
 
+#[test]
+fn file_guard_on_a_protected_stick_refuses_before_publication() {
+    let f = Fixture::new(3);
+    let before = std::fs::read(&f.ext).unwrap();
+    // A temporary fixture stands for a Stick; no real Stick is opened or
+    // unlocked. Test the common guard independently of Ledger availability.
+    std::fs::write(
+        f.location
+            .master_db
+            .parent()
+            .unwrap()
+            .join(wreckordbox_stick_protection::STAND_IN_MARKER),
+        b"",
+    )
+    .unwrap();
+    let result = f.state.core().file_edit().map(|_edit| {
+        std::fs::write(&f.ext, b"a file-only change").unwrap();
+    });
+    assert!(
+        result.as_ref().is_err_and(rbl_library::stick::refused),
+        "{result:?}"
+    );
+    assert_eq!(std::fs::read(&f.ext).unwrap(), before);
+    assert!(!f
+        .location
+        .master_db
+        .parent()
+        .unwrap()
+        .join("wreckordbox-sidecar")
+        .exists());
+}
+
 // Each fault runs in a separate process: environment changes never affect
 // neighbouring tests, and a real process death tests the durable intent.
 #[test]
