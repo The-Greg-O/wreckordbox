@@ -140,6 +140,14 @@ export type Action =
   | "uiScaleSmaller"
   | "uiScaleLarger"
   | "uiScaleReset"
+  // The view shell's four views (wreckordbox's own): Library, Intake, Review
+  // and Stick. They have no row in `BINDINGS`: their keys (1 to 4) are the
+  // deck's in the Export key map, so the shell keeps its own small table and
+  // reads it only while it is on. See `shellViews.ts`.
+  | "viewLibrary"
+  | "viewIntake"
+  | "viewReview"
+  | "viewStick"
   // The GRID panel: `Adjust BPM/BeatGrid` (`command + G`) opens it, the
   // modified arrows are `Shift Beatgrid left/right`, and `Shift Beatgrid to
   // the center` (`option + command + \`) puts the nearest beat under the
@@ -395,7 +403,7 @@ function keyMatches(bound: string, chord: KeyChord): boolean {
  * platform's primary modifier; shift and option have to agree exactly, so
  * shift + cursor up is not cursor up.
  */
-function chordMatches(bound: KeyChord, chord: KeyChord, platform: Platform): boolean {
+export function chordMatches(bound: KeyChord, chord: KeyChord, platform: Platform): boolean {
   if (!keyMatches(bound.key, chord)) return false;
   if ((bound.metaKey === true) !== primary(chord, platform)) return false;
   if ((bound.shiftKey === true) !== (chord.shiftKey === true)) return false;

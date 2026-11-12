@@ -1,0 +1,34 @@
+[package]
+name = "wreckordbox-render"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+# Like `rbl-deck`: a default build links the vendored Rubber Band Library
+# through it, and the combined work is distributable only under the GPL. See
+# LICENSING.md; `--no-default-features` renders unedited audio only.
+license = "GPL-2.0-or-later"
+description = "The offline renderer behind Mutants: a track's audio, a key shift and a tempo in, an audio file out."
+
+[lints]
+workspace = true
+
+[features]
+default = ["rubberband"]
+# The deck's Rubber Band backend, and the only one that can shift a key.
+rubberband = ["rbl-deck/rubberband"]
+
+[dependencies]
+thiserror = { workspace = true }
+# Decoding: the same reader analysis uses, so a render is on the same timeline.
+rbl-audio = { path = "../rbl-audio" }
+# The stretcher, and its offline path. The player's engine, so a render and a
+# deck agree.
+rbl-deck = { path = "../rbl-deck", default-features = false }
+
+# The rename that refuses to replace (`renameat2(RENAME_NOREPLACE)`,
+# `renameatx_np(RENAME_EXCL)`). Already in the lock through tempfile.
+[target.'cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))'.dependencies]
+rustix = { version = "1", features = ["fs"] }
+
+[dev-dependencies]
+tempfile = "3"
