@@ -201,6 +201,10 @@ impl Preview {
     }
 
     /// Follows the master limiter, for the same reason as the level.
+    pub fn set_transport_edge(&self, edge: rbl_deck::TransportEdge) {
+        self.player.set_transport_edge(edge);
+    }
+
     pub fn set_limiter(&self, limiter: crate::dto::LimiterDto) {
         self.player.set_limiter(limiter);
     }

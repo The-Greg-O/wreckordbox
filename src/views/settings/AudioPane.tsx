@@ -12,7 +12,7 @@ import { useEffect, useState } from "react";
 
 import { getBackend } from "@/ipc/client";
 import type { AudioDevices, Limiter } from "@/ipc/types";
-import { BUFFER_SIZES, SAMPLE_RATES, type SampleRate } from "@/lib/preferences";
+import { BUFFER_SIZES, SAMPLE_RATES, type SampleRate, type TransportEdge } from "@/lib/preferences";
 import { CEILING_DB, DEFAULT_LIMITER, INPUT_GAIN_DB, RELEASE_MS } from "@/store/useLimiter";
 import { usePreferencesContext } from "@/store/usePreferences";
 import styles from "./Preferences.module.css";
@@ -163,6 +163,24 @@ export function AudioPane({ limiter, onLimiterChange, reduction, vu, peakLeft = 
         ends={[`${BUFFER_SIZES[0]}`, `${BUFFER_SIZES[BUFFER_SIZES.length - 1]}`]}
         onChange={(stop) => set({ bufferSize: BUFFER_SIZES[stop] ?? prefs.bufferSize })}
       />
+    </Section>
+
+    <Section title="Transport edge">
+      <Radios<TransportEdge>
+        label="Transport edge"
+        value={prefs.transportEdge}
+        choices={[
+          { value: "immediate", label: "Immediate" },
+          { value: "1ms", label: "1 ms" },
+          { value: "2ms", label: "2 ms" },
+        ]}
+        onChange={(transportEdge) => set({ transportEdge })}
+      />
+      <Note>
+        How play, pause, cue and beat jumps start and stop the sound.
+        Immediate cuts the music where it is; 1 ms and 2 ms fade it in and
+        out. Takes effect at once, while playing.
+      </Note>
     </Section>
 
     <Section title="Metronome">
