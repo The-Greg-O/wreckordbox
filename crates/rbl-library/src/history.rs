@@ -585,7 +585,7 @@ impl crate::LibraryCore {
         let _gate = self.edit_gate().lock();
         let entry = self.history.lock().next(undo).cloned().ok_or(StepError::Nothing)?;
         let touched = entry.edit.touched();
-        let mut preparation = crate::ledger::Preparation::touched(&touched);
+        let mut preparation = crate::ledger::Preparation::edit(&entry.edit);
         if undo { preparation.undo_of = entry.ledger; } else { preparation.redo_of = entry.ledger; }
         let result = self.write_then_prepared(
             host,

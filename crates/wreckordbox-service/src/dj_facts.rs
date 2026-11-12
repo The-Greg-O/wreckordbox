@@ -85,138 +85,174 @@ pub(crate) fn derive(
             }
         }
     } else if kind == "track_tags" {
-        let mapped = (|| {
-            let path = stems.sidecar_dir().join(TAG_SCHEMA_FILE);
-            let text = std::fs::read_to_string(&path)
-                .map_err(|e| format!("Tag schema unavailable: {e}"))?;
-            let schema =
-                TagSchema::parse(&text).map_err(|e| format!("invalid Tag schema: {e:?}"))?;
-            let kinds = Kinds::load_declared(stems.sidecar_dir())
-                .map_err(|e| e.to_string())?
-                .with_schema(&schema)
-                .map_err(|e| format!("invalid dimension: {e:?}"))?;
-            let db = database(&mut db, location)?;
-            let mut query=db.connection().prepare("SELECT tag.ID, category.Name, tag.Name FROM djmdMyTag tag JOIN djmdMyTag category ON category.ID=tag.ParentID WHERE tag.rb_local_deleted=0 AND category.rb_local_deleted=0").map_err(|e|e.to_string())?;
-            let catalogue = query
-                .query_map([], |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        (r.get::<_, String>(1)?, r.get::<_, String>(2)?),
-                    ))
-                })
-                .map_err(|e| e.to_string())?
-                .collect::<Result<BTreeMap<_, _>, _>>()
-                .map_err(|e| e.to_string())?;
-            Ok::<_, String>((schema, kinds, catalogue))
-        })();
-        for edit in payload["tags"].as_array().into_iter().flatten() {
-            let track = edit["track"].as_str().unwrap_or_default();
-            if edit["before"] == edit["after"] {
-                continue;
-            }
-            let (schema, kinds, catalogue) = match &mapped {
-                Ok(mapped) => mapped,
-                Err(why) => {
-                    result.skip(track, "mytags", why.clone());
-                    continue;
-                }
-            };
-            let before = ids(&edit["before"]);
-            let after = ids(&edit["after"]);
-            let changed: BTreeSet<_> = before.symmetric_difference(&after).copied().collect();
-            let views = schema.deck_view();
-            let mapping: BTreeMap<_, _> = catalogue
-                .iter()
-                .filter_map(|(id, (category, label))| {
-                    views
-                        .iter()
-                        .find(|view| view.label == *category)
-                        .and_then(|view| {
-                            view.tags.iter().find(|tag| tag.label == *label).map(|tag| {
-                                (id.as_str(), (view.dimension.as_str(), tag.id.as_str()))
-                            })
-                        })
-                })
-                .collect();
-            let mut dimensions = BTreeSet::new();
-            for id in changed {
-                match mapping.get(id) {
-                    Some((dimension, _)) => {
-                        dimensions.insert(*dimension);
-                    }
-                    None => result.skip(
-                        track,
-                        "mytags",
-                        format!("tag {id} is outside the Tag schema; no judgement inferred"),
-                    ),
-                }
-            }
-            for name in dimensions {
-                let Some(dimension) = schema.dimension(name) else {
-                    result.skip(track, name, "dimension is absent");
-                    continue;
-                };
-                let value = |selected: &BTreeSet<&str>, strict: bool| -> Result<Value, String> {
-                    let view = views
-                        .iter()
-                        .find(|view| view.dimension == name)
-                        .ok_or_else(|| "dimension has no deck view".to_owned())?;
-                    for id in selected {
-                        if catalogue
-                            .get(*id)
-                            .is_none_or(|(category, _)| category == &view.label)
-                            && !mapping.contains_key(*id)
-                        {
-                            return Err(format!("tag {id} cannot be mapped in dimension {name}"));
-                        }
-                    }
-                    let terms: BTreeSet<_> = selected
-                        .iter()
-                        .filter_map(|id| mapping.get(*id))
-                        .filter(|(d, _)| *d == name)
-                        .map(|(_, term)| *term)
-                        .collect();
-                    let parents: BTreeSet<_> = terms
-                        .iter()
-                        .flat_map(|id| dimension.ancestors(id))
-                        .collect();
-                    // Same order and ancestor reduction as schema.convert.
-                    let terms: Vec<_> = dimension
-                        .terms
-                        .iter()
-                        .filter(|term| {
-                            terms.contains(term.id.as_str()) && !parents.contains(term.id.as_str())
-                        })
-                        .map(|term| term.id.as_str())
-                        .collect();
-                    if strict && kinds.get(name).is_some_and(|k| k.value == ValueType::Text) {
-                        match terms.as_slice() {
-                            [] => Ok(Value::Null),
-                            [term] => Ok(json!(term)),
-                            _ => Err(format!(
-                                "{name} takes one term but the native edit chose several"
-                            )),
-                        }
-                    } else {
-                        Ok(json!(terms))
-                    }
-                };
-                match value(&after, true)
-                    .and_then(|after| value(&before, false).map(|before| (before, after)))
-                {
-                    Ok((before, value)) => result.values.push(NativeFact {
-                        track: track.into(),
-                        kind: name.into(),
-                        value,
-                        before: Some(before),
-                    }),
-                    Err(why) => result.skip(track, name, why),
-                }
-            }
-        }
+        derive_tags(location, stems, payload, &mut result);
     }
     result
 }
+
+struct TagMapping {
+    schema: TagSchema,
+    kinds: Kinds,
+    catalogue: BTreeMap<String, (String, String)>,
+    terms: BTreeMap<String, (String, String)>,
+    categories: BTreeMap<String, String>,
+}
+impl TagMapping {
+    fn load(location: &LibraryLocation, stems: &Stems) -> Result<Self, String> {
+        let path = stems.sidecar_dir().join(TAG_SCHEMA_FILE);
+        let text =
+            std::fs::read_to_string(&path).map_err(|e| format!("Tag schema unavailable: {e}"))?;
+        let schema = TagSchema::parse(&text).map_err(|e| format!("invalid Tag schema: {e:?}"))?;
+        let kinds = Kinds::load_declared(stems.sidecar_dir())
+            .map_err(|e| e.to_string())?
+            .with_schema(&schema)
+            .map_err(|e| format!("invalid dimension: {e:?}"))?;
+        let db = Library::open(location.clone(), OpenMode::ReadOnly).map_err(|e| e.to_string())?;
+        let mut query = db
+            .connection()
+            .prepare(
+                "SELECT tag.ID, category.Name, tag.Name FROM djmdMyTag tag
+             JOIN djmdMyTag category ON category.ID=tag.ParentID
+             WHERE tag.rb_local_deleted=0 AND category.rb_local_deleted=0",
+            )
+            .map_err(|e| e.to_string())?;
+        let catalogue: BTreeMap<String, (String, String)> = query
+            .query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?))))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<_, _>>()
+            .map_err(|e| e.to_string())?;
+        let views = schema.deck_view();
+        let terms = catalogue
+            .iter()
+            .filter_map(|(id, (category, label))| {
+                views
+                    .iter()
+                    .find(|view| view.label == *category)
+                    .and_then(|view| {
+                        view.tags
+                            .iter()
+                            .find(|tag| tag.label == *label)
+                            .map(|tag| (id.clone(), (view.dimension.clone(), tag.id.clone())))
+                    })
+            })
+            .collect();
+        let categories = views
+            .into_iter()
+            .map(|view| (view.dimension, view.label))
+            .collect();
+        Ok(Self {
+            schema,
+            kinds,
+            catalogue,
+            terms,
+            categories,
+        })
+    }
+
+    fn value(&self, name: &str, selected: &BTreeSet<&str>, strict: bool) -> Result<Value, String> {
+        let dimension = self
+            .schema
+            .dimension(name)
+            .ok_or_else(|| "dimension is absent".to_owned())?;
+        let category = self
+            .categories
+            .get(name)
+            .ok_or_else(|| "dimension has no deck view".to_owned())?;
+        for id in selected {
+            if self.catalogue.get(*id).is_none_or(|(c, _)| c == category)
+                && !self.terms.contains_key(*id)
+            {
+                return Err(format!("tag {id} cannot be mapped in dimension {name}"));
+            }
+        }
+        let terms: BTreeSet<_> = selected
+            .iter()
+            .filter_map(|id| self.terms.get(*id))
+            .filter(|(d, _)| d == name)
+            .map(|(_, term)| term.as_str())
+            .collect();
+        let parents: BTreeSet<_> = terms
+            .iter()
+            .flat_map(|id| dimension.ancestors(id))
+            .collect();
+        // Same order and ancestor reduction as schema.convert.
+        let terms: Vec<_> = dimension
+            .terms
+            .iter()
+            .filter(|term| terms.contains(term.id.as_str()) && !parents.contains(term.id.as_str()))
+            .map(|term| term.id.as_str())
+            .collect();
+        if strict
+            && self
+                .kinds
+                .get(name)
+                .is_some_and(|k| k.value == ValueType::Text)
+        {
+            match terms.as_slice() {
+                [] => Ok(Value::Null),
+                [term] => Ok(json!(term)),
+                _ => Err(format!(
+                    "{name} takes one term but the native edit chose several"
+                )),
+            }
+        } else {
+            Ok(json!(terms))
+        }
+    }
+}
+
+fn derive_tags(
+    location: &LibraryLocation,
+    stems: &Stems,
+    payload: &Value,
+    result: &mut NativeFacts,
+) {
+    let mapped = TagMapping::load(location, stems);
+    for edit in payload["tags"].as_array().into_iter().flatten() {
+        let track = edit["track"].as_str().unwrap_or_default();
+        if edit["before"] == edit["after"] {
+            continue;
+        }
+        let mapped = match &mapped {
+            Ok(mapped) => mapped,
+            Err(why) => {
+                result.skip(track, "mytags", why.clone());
+                continue;
+            }
+        };
+        let before = ids(&edit["before"]);
+        let after = ids(&edit["after"]);
+        let mut dimensions = BTreeSet::new();
+        for id in before.symmetric_difference(&after) {
+            match mapped.terms.get(*id) {
+                Some((dimension, _)) => {
+                    dimensions.insert(dimension.as_str());
+                }
+                None => result.skip(
+                    track,
+                    "mytags",
+                    format!("tag {id} is outside the Tag schema; no judgement inferred"),
+                ),
+            }
+        }
+        for name in dimensions {
+            match mapped.value(name, &after, true).and_then(|after| {
+                mapped
+                    .value(name, &before, false)
+                    .map(|before| (before, after))
+            }) {
+                Ok((before, value)) => result.values.push(NativeFact {
+                    track: track.into(),
+                    kind: name.into(),
+                    value,
+                    before: Some(before),
+                }),
+                Err(why) => result.skip(track, name, why),
+            }
+        }
+    }
+}
+
 fn ids(value: &Value) -> BTreeSet<&str> {
     value
         .as_array()
@@ -282,16 +318,26 @@ pub(crate) fn snapshot(db: &Library, preparation: &Preparation, command: Option<
             None => {}
         }
     }
-    if tracks.is_empty() {
+    let fields = if preparation.fields.is_empty() {
+        tracks
+            .into_iter()
+            .flat_map(|track| {
+                columns
+                    .iter()
+                    .map(move |column| (track.clone(), (*column).to_owned()))
+            })
+            .collect()
+    } else {
+        preparation.fields.clone()
+    };
+    if fields.is_empty() {
         return Value::Null;
     }
     let mut values = Vec::new();
-    for track in tracks {
-        for column in &columns {
-            match native(db, &track, column) {
-                Ok(value) => values.push(json!({"track":track,"column":column,"before":value})),
-                Err(why) => return json!({"version":2,"error":why}),
-            }
+    for (track, column) in fields {
+        match native(db, &track, &column) {
+            Ok(value) => values.push(json!({"track":track,"column":column,"before":value})),
+            Err(why) => return json!({"version":2,"error":why}),
         }
     }
     json!({"version":2,"values":values,"undo_of":preparation.undo_of,"redo_of":preparation.redo_of})
@@ -359,9 +405,9 @@ pub(crate) fn recover(
                 let edit =
                     json!({"track":track,"column":column,"before":row["before"],"after":after});
                 if column == "MyTags" {
-                    tags.push(edit)
+                    tags.push(edit);
                 } else {
-                    edits.push(edit)
+                    edits.push(edit);
                 }
             }
             Ok(_) => {}

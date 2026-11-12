@@ -65,6 +65,8 @@ pub struct Link {
 #[derive(Debug, Default)]
 pub struct Preparation {
     pub tracks: Vec<String>,
+    /// Exact track/column pairs when stepping an existing edit.
+    pub fields: Vec<(String, String)>,
     pub undo_of: Option<i64>,
     pub redo_of: Option<i64>,
 }
@@ -75,6 +77,29 @@ impl Preparation {
                 crate::Touched::Metadata(ids) => ids.clone(),
                 _ => Vec::new(),
             },
+            ..Self::default()
+        }
+    }
+    pub fn edit(edit: &LibraryEdit) -> Self {
+        let fields = match edit {
+            LibraryEdit::Track(edits) => edits
+                .iter()
+                .map(|edit| {
+                    let parts = edit.parts();
+                    (parts.track, parts.column)
+                })
+                .filter(|(_, column)| {
+                    matches!(column.as_str(), "Rating" | "ColorID" | "Title" | "ArtistID")
+                })
+                .collect(),
+            LibraryEdit::TrackTags { tags, .. } => tags
+                .iter()
+                .map(|tag| (tag.parts().track, "MyTags".to_owned()))
+                .collect(),
+            _ => Vec::new(),
+        };
+        Self {
+            fields,
             ..Self::default()
         }
     }

@@ -59,32 +59,51 @@ supply one track and kind and verify Measurement fingerprints before resolving.
 Projection must also validate values against the current Tag schema.
 
 Library hand edits made by the window, or by the CLI with `--source dj`,
-record matching DJ Facts through the existing Ledger recording point. Unnamed
-CLI edits remain `tool:wreckordbox`; an agent or Projection retains its own
-source and produces no DJ Facts.
+record matching DJ Facts through the existing Ledger recording point. The
+source is self-declared: agents and Projections must retain their own source.
+An ordinary CLI edit defaults to `tool:wreckordbox` and produces no DJ Fact.
 
-Native fields are Energy (star rating), Prep colour (the canonical colour,
-not its custom label), title, artist, and MyTags mapped through the current
-Tag schema's deck labels to dimension term identifiers. A tree records only
-the most specific terms. List dimensions use lists; single-text dimensions
-use one term. A cleared scalar is `null`; a cleared list is `[]`. These explicit
-clears supersede earlier DJ answers. MyTags need a Tag schema to identify the
-questions they answer. Compatible older title/artist declarations in
-`kinds.toml` remain readable now that those kinds are built in.
+Native fields are Energy (star rating), Prep colour (the canonical colour),
+title, artist, and MyTags mapped through the current Tag schema's deck labels
+to stable term identifiers. Only the fields and memberships changed by the
+recorded payload are considered. Renaming, moving or reordering vocabulary
+never changes track Facts. Terms follow dimension order, as in `schema convert`;
+a tree keeps only the most specific terms. Single-text dimensions use one term.
+Clearing a scalar withdraws the DJ opinion; it creates no standing null. Clearing
+a list explicitly records `[]`. Unchanged native terms may be retained only
+when an existing DJ Fact attributes them to the DJ; otherwise the dimension is
+skipped, rather than claiming an agent's other terms as the DJ's judgement.
 
-The Library and Sidecar have no shared transaction. Before the Library write,
-the Ledger commits its intent, retaining native pre-edit values and the schema
-used to interpret them. After the write, its single recording point commits
-the entry, DJ Facts, attachment/audio observations and Fact-to-entry links in
-one Sidecar transaction and clears the intent. A refused or failed Library
-write clears its intent without an entry or Fact. A failed Sidecar append
-retains the existing Ledger spill/intent for recovery; Fact queries report a
-pending edit instead of returning old standing data.
+Fact derivation cannot refuse an accepted Library edit or prevent its Ledger
+entry. Invalid or missing schemas, unmapped tags, incompatible dimensions and
+Fact insertion failures are recorded as `facts_not_recorded` (track, kind,
+reason) on the entry. `runs show` displays these reasons in JSON and text. A
+later repair edit remains possible. No schema is needed for rating, colour,
+title or artist. Native capture never opens audio, observes attachments or
+marks Measurements stale; a Judgement has no fingerprint requirement.
 
-On startup, an intent without a recorded entry becomes an `unconfirmed` entry.
-Its DJ Facts are reconciled from the Library's actual current native values,
-not from the interrupted command's arguments. `ledger_entry` identifies the
-entry and `reconciled: true` marks that recovery. Normal edits have
-`reconciled: false`. Undo and redo use the same path and supersede the prior
-DJ Facts. Linked native Facts are part of their Library entry, not duplicate
-edits in `runs show` or Run counts.
+The Library and Sidecar have no shared transaction. The Ledger commits its
+intent before the Library write. At the single recording point, it derives
+Facts from the entry's before/after payload and commits the entry, successful
+Facts, their links, undo effects and intent removal in one Sidecar transaction.
+Fact-batch failure rolls back that batch and records the entry with reasons.
+A refused or failed Library write clears its intent without an entry or Fact.
+Failure of the Ledger itself still uses the existing spill/replay mechanism.
+Unnamed writes settle their intent immediately. Reads return recorded Facts
+and never recover, write, or refuse merely because an intent exists.
+
+Recovery evidence is bounded to explicitly named tracks, read on the existing
+writer connection before the write, and used only if the entry was interrupted.
+Undo/redo names only the original edit's exact fields for this evidence.
+On startup, an outstanding intent becomes an `unconfirmed` entry. Recovery
+reconciles its bounded native fields with the actual Library; missing or legacy
+unbounded evidence is skipped with a reason. `ledger_entry` identifies a Fact's
+entry, and `reconciled: true` distinguishes recovery from a normal edit.
+
+Undo withdraws Facts the edit produced and restores the previous Fact rows,
+with their original identifiers, sources and Runs. It never asserts the previous
+Library value as the DJ's. Redo records the DJ judgement again. Undoing or
+redoing an agent edit does not promote it to a DJ judgement. Sidecar schema 8
+keeps these effects in `dj_fact_effect`; Unwind must follow both that journal
+and `dj_fact`. Linked native Facts belong to their Library entry and do not
+inflate Run counts with a second edit.
