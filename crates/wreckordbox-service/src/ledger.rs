@@ -343,7 +343,9 @@ pub mod stored {
             LibraryEdit::ReorderEntries(reorder) => {
                 let (playlist, before, after) = reorder.parts();
                 let run = |run: &[(String, i64)]| -> Vec<Value> {
-                    run.iter().map(|(entry, number)| json!({"entry": entry, "number": number})).collect()
+                    run.iter()
+                        .map(|(entry, number)| json!({"entry": entry, "number": number}))
+                        .collect()
                 };
                 Some(json!({ "playlist": playlist, "before": run(before), "after": run(after) }))
             }
@@ -405,14 +407,21 @@ pub mod stored {
                 let run = |run: &Value| -> Option<Vec<(String, i64)>> {
                     run.as_array()?
                         .iter()
-                        .map(|item| Some((item.get("entry")?.as_str()?.to_owned(), item.get("number")?.as_i64()?)))
+                        .map(|item| {
+                            Some((
+                                item.get("entry")?.as_str()?.to_owned(),
+                                item.get("number")?.as_i64()?,
+                            ))
+                        })
                         .collect()
                 };
-                Some(LibraryEdit::ReorderEntries(rbl_library::entry_order::EntryReorder::from_parts(
-                    payload.get("playlist")?.as_str()?.to_owned(),
-                    run(payload.get("before")?)?,
-                    run(payload.get("after")?)?,
-                )))
+                Some(LibraryEdit::ReorderEntries(
+                    rbl_library::entry_order::EntryReorder::from_parts(
+                        payload.get("playlist")?.as_str()?.to_owned(),
+                        run(payload.get("before")?)?,
+                        run(payload.get("after")?)?,
+                    ),
+                ))
             }
             _ => None,
         }
