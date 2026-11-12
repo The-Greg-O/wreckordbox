@@ -7,15 +7,18 @@
 //! through [`LibrarySource`] (the window's state, or the service's Library).
 
 use rbl_db::DbError;
-use rbl_library::LibraryCore;
 
 use crate::{Result as AppResult, StickWriteError};
 
-/// The Library a selection is read from: its core (the index's gates) and a
-/// read-only connection for what the index does not hold.
+/// The Library a selection is read from: the Library core's two gates (a
+/// selection is read holding both, so no edit or analysis write lands
+/// half-way through it) and a read-only connection for what the index does
+/// not hold. Nothing is written through it.
 pub trait LibrarySource {
-    /// The Library core.
-    fn core(&self) -> &LibraryCore;
+    /// The Library core's edit gate (`rbl_library::LibraryCore::edit_gate`).
+    fn edit_gate(&self) -> &parking_lot::ReentrantMutex<()>;
+    /// The Library core's analysis lock (`rbl_library::LibraryCore::analysis_write`).
+    fn analysis_write(&self) -> &parking_lot::Mutex<()>;
     /// Runs `read` on a read-only connection to the Library.
     fn read_db(
         &self,
@@ -244,8 +247,8 @@ impl ExportSelection {
         loose: &[u64],
         automatic: bool,
     ) -> AppResult<Self> {
-        let _editing = state.core().edit_gate().lock();
-        let _analysis = state.core().analysis_write().lock();
+        let _editing = state.edit_gate().lock();
+        let _analysis = state.analysis_write().lock();
         // Named first and read after: `source_rows` takes the playlists
         // itself, so the guard is let go before it is asked.
         let mut named: Vec<(u64, String, rbl_index::TrackSource)> =

@@ -1555,8 +1555,11 @@ pub(crate) use wreckordbox_stick_write::selection::{source_my_tag, ExportSelecti
 
 /// The window's state as the shared selection reads the Library.
 impl wreckordbox_stick_write::selection::LibrarySource for AppState {
-    fn core(&self) -> &rbl_library::LibraryCore {
-        AppState::core(self)
+    fn edit_gate(&self) -> &parking_lot::ReentrantMutex<()> {
+        AppState::edit_gate(self)
+    }
+    fn analysis_write(&self) -> &parking_lot::Mutex<()> {
+        AppState::analysis_write(self)
     }
     fn read_db(&self, read: &mut dyn FnMut(&rbl_db::Library) -> Result<(), rbl_db::DbError>) -> Result<(), rbl_db::DbError> {
         AppState::read_db(self, read)

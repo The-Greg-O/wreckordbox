@@ -15,9 +15,9 @@ rbl-core = { path = "../rbl-core" }
 rbl-db = { path = "../rbl-db" }
 rbl-export = { path = "../rbl-export" }
 rbl-index = { path = "../rbl-index" }
-rbl-library = { path = "../rbl-library" }
 wreckordbox-stick-outline = { path = "../wreckordbox-stick-outline" }
 wreckordbox-stick-protection = { path = "../wreckordbox-stick-protection" }
+parking_lot = "0.12"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }

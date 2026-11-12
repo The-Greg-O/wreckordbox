@@ -119,6 +119,18 @@ impl OpenLibrary {
         read()
     }
 
+    /// The index and its generation, read under one gate: a Stick load
+    /// checks its confirmation against exactly the snapshot it writes from
+    /// (wbx-70).
+    pub(crate) fn index_at_generation(
+        &self,
+    ) -> Result<(Arc<rbl_index::Library>, u64), ServiceError> {
+        self.core
+            .library_at_generation()
+            .map(|(index, generation)| (index, u64::from(generation)))
+            .map_err(|e| ServiceError::new(codes::LIBRARY_LOADING, e.to_string()))
+    }
+
     /// The folder the Library's analysis files are kept under.
     pub(crate) fn share_root(&self) -> std::path::PathBuf {
         self.core.share_root()
@@ -357,12 +369,16 @@ fn edit_error(error: &DbError) -> ServiceError {
 }
 
 /// The Library as the shared Stick write planner reads it (wbx-70): the
-/// core for its read gates (the edit gate and the analysis lock, which the
-/// export selection holds while it reads) and a read-only connection.
-/// Nothing writes through it.
+/// core's read gates (the edit gate and the analysis lock, which the export
+/// selection holds while it reads) and a read-only connection. The core is
+/// not handed out, and nothing writes through these.
 impl wreckordbox_stick_write::selection::LibrarySource for OpenLibrary {
-    fn core(&self) -> &LibraryCore {
-        &self.core
+    fn edit_gate(&self) -> &parking_lot::ReentrantMutex<()> {
+        self.core.edit_gate()
+    }
+
+    fn analysis_write(&self) -> &parking_lot::Mutex<()> {
+        self.core.analysis_write()
     }
 
     fn read_db(

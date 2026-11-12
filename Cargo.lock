@@ -7182,6 +7182,7 @@ name = "wreckordbox-service"
 version = "1.10.0"
 dependencies = [
  "dirs 5.0.1",
+ "parking_lot",
  "rbl-anlz",
  "rbl-backup",
  "rbl-core",
@@ -7250,12 +7251,12 @@ dependencies = [
 name = "wreckordbox-stick-write"
 version = "1.10.0"
 dependencies = [
+ "parking_lot",
  "rbl-backup",
  "rbl-core",
  "rbl-db",
  "rbl-export",
  "rbl-index",
- "rbl-library",
  "serde",
  "serde_json",
  "tempfile",

@@ -377,24 +377,17 @@ pub(crate) fn dry_run(
     with_library(with, |library| {
         // As the window's planner: the edit gate, then the Stick's lock;
         // nothing writes to the Stick or edits the Library meanwhile.
-        let _gate = library.core().edit_gate().lock();
+        let _gate = library.edit_gate().lock();
         let _lock = approval::lock(state_dir, &root).map_err(planning)?;
         let _lease = rbl_core::durable::read_lease(&root)
             .map_err(|e| ServiceError::new(codes::STICK_LOAD_FAILED, e.to_string()))?;
         if rbl_export::recovery_pending(&root) {
             return Err(unfinished());
         }
-        let (index, generation) = library
-            .core()
-            .library_at_generation()
-            .map_err(|e| ServiceError::new(service_codes::LIBRARY_LOADING, e.to_string()))?;
+        let (index, generation) = library.index_at_generation()?;
         let planned = plan_load(library, stems, &index, &root, &args.playlists)?;
-        let plan = approval::propose(
-            &root,
-            operation(&args.playlists),
-            Some(u64::from(generation)),
-        )
-        .map_err(planning)?;
+        let plan = approval::propose(&root, operation(&args.playlists), Some(generation))
+            .map_err(planning)?;
         Ok(DryRun {
             stick: sticks::describe(state_dir, &root),
             playlists: planned.playlists,
@@ -424,13 +417,10 @@ pub(crate) fn load(
         // Stick Protection, which takes the Stick's execution lock and holds
         // it to the end of the write, and refuses a Stick the DJ has not
         // unlocked (wbx-45.11).
-        let _gate = library.core().edit_gate().lock();
+        let _gate = library.edit_gate().lock();
         let authorized = wreckordbox_stick_protection::authorize_stick(state_dir, &root)
             .map_err(|refused| protection_refused(&refused))?;
-        let (index, generation) = library
-            .core()
-            .library_at_generation()
-            .map_err(|e| ServiceError::new(service_codes::LIBRARY_LOADING, e.to_string()))?;
+        let (index, generation) = library.index_at_generation()?;
         // The confirmation: the dry run's plan id, for exactly this load,
         // on the Stick and the Library as they were planned. Used up here,
         // whatever follows.
@@ -438,13 +428,8 @@ pub(crate) fn load(
             ServiceError::new(codes::STICK_LOAD_UNCONFIRMED, error.to_string())
         };
         let token = approval::approve(state_dir, &args.plan).map_err(unconfirmed)?;
-        approval::consume(
-            Some(&token),
-            &operation(&args.playlists),
-            &root,
-            u64::from(generation),
-        )
-        .map_err(unconfirmed)?;
+        approval::consume(Some(&token), &operation(&args.playlists), &root, generation)
+            .map_err(unconfirmed)?;
         let planned = plan_load(library, stems, &index, &root, &args.playlists)?;
         if let Some(short) = planned.space.shortfall_bytes {
             return Err(ServiceError::new(
