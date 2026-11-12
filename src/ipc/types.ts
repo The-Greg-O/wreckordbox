@@ -1061,6 +1061,12 @@ export interface Backend {
    * tree. A stick with neither answers with none.
    */
   deviceLibraries(path: string): Promise<DeviceLibrary[]>;
+  /**
+   * A stick's playlist trees, for showing them, read without writing to the
+   * stick: unlike `deviceLibraries` it never finishes an interrupted export
+   * first, and reports one as `pending` with no playlists instead.
+   */
+  stickOutline(path: string): Promise<StickOutline>;
   /** Maps collection track ids to rows already in one of a stick's libraries. */
   devicePlaylistCollectionTracks(path: string, format: DeviceFormat, tracks: string[]): Promise<(string | null)[]>;
   /**
@@ -1329,6 +1335,13 @@ export interface DeviceLibrary {
   tracks: number;
   /** Playlists and folders in tree order. */
   nodes: DeviceLibraryNode[];
+}
+
+/** A stick's playlist trees, read without writing to it (`stickOutline`). */
+export interface StickOutline {
+  /** An earlier write to the stick did not finish; nothing is listed until it is. */
+  pending: boolean;
+  libraries: { format: DeviceFormat; nodes: DeviceLibraryNode[] }[];
 }
 
 export interface DeviceLibraryNode {
