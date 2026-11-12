@@ -28,6 +28,14 @@ rbl-anlz = { path = "../rbl-anlz" }
 # drives because it owns the Sidecar the Stems are in.
 wreckordbox-native-stems = { path = "../wreckordbox-native-stems" }
 wreckordbox-stick-protection = { path = "../wreckordbox-stick-protection" }
+# Loading a Stick (wbx-70): the window's planner, export selection and
+# confirmation, shared; the export itself, unchanged (ADR 0003); the
+# volumes the window offers; the Stick read without recovering it.
+wreckordbox-stick-write = { path = "../wreckordbox-stick-write" }
+wreckordbox-stick-outline = { path = "../wreckordbox-stick-outline" }
+rbl-export = { path = "../rbl-export" }
+rbl-devices = { path = "../rbl-devices" }
+rbl-core = { path = "../rbl-core" }
 # The renderer's Stem set type: the service hands it only verified-current
 # Stems (`render_stems`). Without Rubber Band here; a binary that renders
 # key or tempo edits turns the feature on.

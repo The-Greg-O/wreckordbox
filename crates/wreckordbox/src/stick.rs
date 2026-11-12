@@ -46,6 +46,27 @@ pub enum StickCommands {
         /// Where the Stick is mounted.
         stick: PathBuf,
     },
+    /// List the mounted Sticks: each one's kind (a Spare stick carries the
+    /// Spare stick marker, an empty `.rbxport-disposable` file at its root;
+    /// any other is a Gig stick), whether it is protected, when it was last
+    /// loaded and how much room it has. Needs the Library service.
+    List,
+    /// Show what loading playlists onto a Stick would do, and write
+    /// nothing: tracks added, changed (by field) and removed; playlists
+    /// created, reordered and removed; Native stems written; the room
+    /// before and after. Answers the plan id `stick load` needs.
+    DryRun(crate::stick_load::DryRunArgs),
+    /// Load playlists onto a Stick: exactly what `stick dry-run` reported,
+    /// with the export the window uses. The Stick ends up holding these
+    /// playlists and no other playlist of the Library.
+    ///
+    /// Refused unless the Stick is unlocked (`stick unlock`) and `--plan`
+    /// carries the plan id of a dry run of this very load, made in the last
+    /// ten minutes, with nothing changed since. Refused before anything is
+    /// written when it would not fit. Prints each track as it is written;
+    /// afterwards says what the Stick holds of the plan and what it does
+    /// not, and fails unless everything planned was written.
+    Load(crate::stick_load::LoadArgs),
 }
 
 fn found(stick: &Path) -> Result<PathBuf, ServiceError> {
@@ -108,6 +129,12 @@ pub fn stick(
                     };
                     ServiceError::new(code, error.to_string())
                 })
+        }
+        StickCommands::List | StickCommands::DryRun(_) | StickCommands::Load(_) => {
+            Err(ServiceError::new(
+                codes::BAD_REQUEST,
+                "this stick command needs the Library service",
+            ))
         }
         StickCommands::Lock { stick } => {
             let root = found(stick)?;

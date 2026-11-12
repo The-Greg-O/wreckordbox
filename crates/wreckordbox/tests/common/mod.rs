@@ -58,6 +58,14 @@ pub struct Sandbox {
     /// `--delay SECONDS`, `--fail CATEGORY`. Set them before the first
     /// command, which is what starts the service.
     pub engine_options: Vec<String>,
+    /// The folders standing in for the mounted Sticks a service started here
+    /// sees (each must carry the stand-in marker to count as a Stick). Empty
+    /// (the default): none; a sandbox's service never looks at the
+    /// machine's real mounts. Set before the first command.
+    pub sticks: Vec<PathBuf>,
+    /// The free space every Stick reports, instead of what its folder's
+    /// file system has (test mode only). Set before the first command.
+    pub stick_free_bytes: Option<u64>,
     /// Services to stop when the test ends.
     pids: Mutex<Vec<u32>>,
 }
@@ -128,6 +136,8 @@ impl Sandbox {
             location,
             idle_exit_secs: 5,
             engine_options: Vec::new(),
+            sticks: Vec::new(),
+            stick_free_bytes: None,
             pids: Mutex::new(Vec::new()),
         }
     }
@@ -413,7 +423,14 @@ impl Sandbox {
                 "WRECKORDBOX_IDLE_EXIT_SECS",
                 self.idle_exit_secs.to_string(),
             )
+            .env(
+                "RB_LITE_FAKE_VOLUMES",
+                std::env::join_paths(&self.sticks).unwrap(),
+            )
             .stdin(Stdio::null());
+        if let Some(free) = self.stick_free_bytes {
+            command.env("WRECKORDBOX_TEST_STICK_FREE_BYTES", free.to_string());
+        }
         command
     }
 

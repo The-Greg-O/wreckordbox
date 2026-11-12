@@ -162,12 +162,57 @@ pub(crate) fn answer(
             format!("bad arguments to {}: {e}", request.command),
         )
     })?;
+    let answer = write_one(stems, state_dir, lookup(&args.id)?, &args.stick)?;
+    serde_json::to_value(answer)
+        .map_err(|e| ServiceError::new(service_codes::SERVICE_FAILED, e.to_string()))
+}
+
+impl Found {
+    /// The track.
+    pub(crate) fn track(&self) -> &Parent {
+        self.audio.parent()
+    }
+}
+
+/// Whether the track `found` has a complete set of current Stems to write:
+/// made from the audio it has now, every role there. Reads the Sidecar
+/// only: nothing is marked stale and nothing is written (a Stick load's
+/// dry run, wbx-70).
+pub(crate) fn has_current_stems(stems: &Stems, found: &Found) -> bool {
+    let Ok(Some(sidecar)) = stems.sidecar_if_made() else {
+        return false;
+    };
+    let track = found.audio.parent();
+    let Ok(fingerprint) = stems::fingerprint(track, found.audio.path()) else {
+        return false;
+    };
+    sidecar
+        .current_stems(&track.id, &fingerprint)
+        .ok()
+        .flatten()
+        .is_some_and(|set| {
+            Role::ALL.iter().all(|role| {
+                set.stems
+                    .iter()
+                    .any(|s| s.role == *role && s.path.is_file())
+            })
+        })
+}
+
+/// Writes the Native stems of the track `found` to the Stick at `stick`,
+/// with every check `stems.write` makes, Stick Protection first: what
+/// `stems.write` does, and a Stick load does for each of its tracks.
+pub(crate) fn write_one(
+    stems: &Stems,
+    state_dir: &Path,
+    found: Found,
+    stick: &Path,
+) -> Result<NativeStems, ServiceError> {
     let Found {
         audio: found,
         library_id,
-    } = lookup(&args.id)?;
+    } = found;
     let track = found.parent().clone();
-    let stick = args.stick.as_path();
     if !stick.is_absolute() {
         return Err(ServiceError::new(
             service_codes::BAD_REQUEST,
@@ -188,13 +233,16 @@ pub(crate) fn answer(
     // Stick), its execution lock taken (shared with the window, the CLI, a
     // lock and an eject) and held to the end of the write, and refused
     // unless the DJ unlocked this very mount.
-    let authorized = wreckordbox_stick_protection::authorize(state_dir, stick).map_err(|refused| {
-        let code = match refused {
-            wreckordbox_stick_protection::Refused::Protected { .. } => service_codes::STICK_PROTECTED,
-            _ => codes::STICK_NOT_FOUND,
-        };
-        ServiceError::new(code, refused.to_string())
-    })?;
+    let authorized =
+        wreckordbox_stick_protection::authorize(state_dir, stick).map_err(|refused| {
+            let code = match refused {
+                wreckordbox_stick_protection::Refused::Protected { .. } => {
+                    service_codes::STICK_PROTECTED
+                }
+                _ => codes::STICK_NOT_FOUND,
+            };
+            ServiceError::new(code, refused.to_string())
+        })?;
     if !wreckordbox_native_stems::is_spare_stick(stick) {
         return Err(refused(
             &track,
@@ -236,7 +284,9 @@ pub(crate) fn answer(
     let outcome = {
         let _one_at_a_time = WRITING.lock().unwrap_or_else(PoisonError::into_inner);
         // Still this mount, still unlocked, as the write starts.
-        authorized.recheck().map_err(|refused| ServiceError::new(service_codes::STICK_PROTECTED, refused.to_string()))?;
+        authorized.recheck().map_err(|refused| {
+            ServiceError::new(service_codes::STICK_PROTECTED, refused.to_string())
+        })?;
         wreckordbox_native_stems::write(&wreckordbox_native_stems::Request {
             stick,
             library_id,
@@ -287,8 +337,7 @@ pub(crate) fn answer(
             }),
         },
     };
-    serde_json::to_value(answer)
-        .map_err(|e| ServiceError::new(service_codes::SERVICE_FAILED, e.to_string()))
+    Ok(answer)
 }
 
 /// Refuses Stems that are not about as long as the track's own audio.

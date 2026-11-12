@@ -523,6 +523,13 @@ impl Shared {
                     self.with_library(|library| crate::native_stems::parent(library, id))?
                 })
             }
+            sticks if crate::stick_load::answers(sticks) => {
+                // Writes a Stick, not the Library: the Library is only read,
+                // to plan; the export runs with it free (wbx-70).
+                crate::stick_load::answer(&self.state_dir, &self.stems, request, &|f| {
+                    self.with_library(|library| f(library))
+                })
+            }
             stems if crate::stems::answers(stems) => {
                 // Only the lookup takes the Library; a separation runs
                 // with it free.
@@ -874,7 +881,9 @@ pub(crate) fn open_error(error: &DbError) -> ServiceError {
         // `rbl-db` folds the failure of its first read into a message, so
         // SQLite's own wording for SQLITE_BUSY is all there is to go on.
         DbError::Open(why) if why.contains("database is locked") => locked(),
-        DbError::WriteRefused(why) if rbl_library::stick::refused(&DbError::WriteRefused(why.clone())) => {
+        DbError::WriteRefused(why)
+            if rbl_library::stick::refused(&DbError::WriteRefused(why.clone())) =>
+        {
             ServiceError::new(codes::STICK_PROTECTED, why.clone())
         }
         DbError::WriteRefused(why) => ServiceError::new(

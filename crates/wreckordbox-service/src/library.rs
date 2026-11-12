@@ -355,3 +355,23 @@ fn edit_error(error: &DbError) -> ServiceError {
         other => open_error(other),
     }
 }
+
+/// The Library as the shared Stick write planner reads it (wbx-70): the
+/// core for its read gates (the edit gate and the analysis lock, which the
+/// export selection holds while it reads) and a read-only connection.
+/// Nothing writes through it.
+impl wreckordbox_stick_write::selection::LibrarySource for OpenLibrary {
+    fn core(&self) -> &LibraryCore {
+        &self.core
+    }
+
+    fn read_db(
+        &self,
+        read: &mut dyn FnMut(&rbl_db::Library) -> Result<(), DbError>,
+    ) -> Result<(), DbError> {
+        if let Some(db) = &self.db {
+            return read(db);
+        }
+        read(&self.core.open_read_only()?)
+    }
+}

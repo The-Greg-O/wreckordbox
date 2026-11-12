@@ -7133,6 +7133,7 @@ dependencies = [
  "wreckordbox-render",
  "wreckordbox-service",
  "wreckordbox-sidecar",
+ "wreckordbox-stick-outline",
  "wreckordbox-stick-protection",
 ]
 
@@ -7183,7 +7184,10 @@ dependencies = [
  "dirs 5.0.1",
  "rbl-anlz",
  "rbl-backup",
+ "rbl-core",
  "rbl-db",
+ "rbl-devices",
+ "rbl-export",
  "rbl-index",
  "rbl-library",
  "rusqlite",
@@ -7195,7 +7199,9 @@ dependencies = [
  "wreckordbox-native-stems",
  "wreckordbox-render",
  "wreckordbox-sidecar",
+ "wreckordbox-stick-outline",
  "wreckordbox-stick-protection",
+ "wreckordbox-stick-write",
 ]
 
 [[package]]
