@@ -4,11 +4,14 @@
 //! when none is running. Results go to standard output, as text or with
 //! `--json` as JSON; errors go to standard error with a non-zero status.
 
+mod decisions;
 mod facts;
 mod intake;
 mod ledger;
+mod mutants;
 mod mytag_edits;
 mod reading;
+mod schema;
 mod stems;
 mod stems_write;
 mod tracks;
@@ -88,6 +91,18 @@ enum Commands {
         #[command(subcommand)]
         command: facts::RunCommands,
     },
+    /// Ask, list and answer Decisions: recorded judgements between fixed
+    /// candidates, kept in the Sidecar. Never changes the Library.
+    Decisions {
+        #[command(subcommand)]
+        command: decisions::DecisionCommands,
+    },
+    /// Mutants: a playlist's own edited version of a track, kept for one
+    /// playlist entry and never written into the Library.
+    Mutants {
+        #[command(subcommand)]
+        command: mutants::MutantCommands,
+    },
     /// The Intake and Problems queues: tracks with no Prep colour, tracks
     /// marked Problem, and what each still needs.
     Intake {
@@ -95,6 +110,16 @@ enum Commands {
         run: ledger::RunOptions,
         #[command(subcommand)]
         command: intake::IntakeCommands,
+    },
+    /// Check the Tag schema, or write a first one from the Library's
+    /// MyTags.
+    #[allow(
+        clippy::doc_markdown,
+        reason = "this is the command's help, where MyTag is a word, not code"
+    )]
+    Schema {
+        #[command(subcommand)]
+        command: schema::SchemaCommands,
     },
     /// Run the Library service in the foreground until interrupted.
     ///
@@ -248,8 +273,21 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
         Commands::Runs { command } => {
             print(&facts::runs(&mut connect(&config)?, cli.json, command)?);
         }
+        Commands::Decisions { command } => {
+            print(&decisions::run(&mut connect(&config)?, cli.json, command)?);
+        }
+        Commands::Mutants { command } => {
+            print(&mutants::run(&mut connect(&config)?, cli.json, command)?);
+        }
         Commands::Intake { command, .. } => {
             print(&intake::run(&mut connect(&config)?, cli.json, command)?);
+        }
+        Commands::Schema { command } => {
+            let (text, ok) = schema::run(&mut connect(&config)?, cli.json, command)?;
+            print(&text);
+            if !ok {
+                return Ok(ExitCode::FAILURE);
+            }
         }
         Commands::Serve { spawned: true } => {
             return Ok(if wreckordbox_service::serve_spawned(config) {

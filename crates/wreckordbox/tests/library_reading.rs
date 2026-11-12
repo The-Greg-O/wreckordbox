@@ -351,6 +351,28 @@ fn playlists_tree_prints_the_tree_with_each_rule_on_its_line() {
 }
 
 #[test]
+fn playlists_tracks_gives_each_track_the_identifier_of_its_entrys_row() {
+    let sandbox = Sandbox::new();
+
+    let result = json_of(
+        &sandbox,
+        &["--json", "playlists", "tracks", &playlist_id(1)],
+    );
+
+    // The fixture's rows of playlist 1 have these identifiers, in order.
+    let entries: Vec<&str> = result["tracks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|track| track["entry_id"].as_str().unwrap())
+        .collect();
+    let rows: Vec<String> = (0..5)
+        .map(|t| format!("fixture-song-0001-{t:04}-4000-8000-000000000000"))
+        .collect();
+    assert_eq!(entries, rows);
+}
+
+#[test]
 fn playlists_tracks_gives_a_playlists_tracks_in_its_order() {
     let made = prepared();
 
@@ -369,11 +391,17 @@ fn playlists_tracks_gives_a_playlists_tracks_in_its_order() {
         ids(&result["tracks"]),
         [track_id(5), track_id(2), track_id(9)]
     );
+    // Each is an entry of the playlist, with an identifier of its own that
+    // is neither its position nor its track's.
+    let entry = result["tracks"][1]["entry_id"].as_str().unwrap().to_owned();
+    assert!(!entry.is_empty());
+    assert_ne!(entry, track_id(2));
+    assert_ne!(result["tracks"][0]["entry_id"], entry.as_str());
     assert_eq!(
         result["tracks"][1],
         json!({
-            "position": 2, "id": track_id(2), "title": "Track 002", "artist": "Ada Lovelace",
-            "bpm": 128.02, "key": "", "rating": 0,
+            "position": 2, "entry_id": entry, "id": track_id(2), "title": "Track 002",
+            "artist": "Ada Lovelace", "bpm": 128.02, "key": "", "rating": 0,
         })
     );
 

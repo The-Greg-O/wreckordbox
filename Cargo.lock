@@ -7091,6 +7091,7 @@ dependencies = [
  "rbl-db",
  "rbl-export",
  "rbl-onelibrary",
+ "rusqlite",
  "serde_json",
  "tempfile",
  "wreckordbox-service",

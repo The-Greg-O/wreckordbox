@@ -22,17 +22,25 @@ use serde_json::Value;
 
 use crate::{io, Fingerprint, Result, SidecarError};
 
-/// Raised when a stored shape changes. A store from a newer wreckordbox is
-/// refused rather than guessed at; an older one is brought up to date by
-/// [`MIGRATIONS`] when it is opened.
-pub const SCHEMA_VERSION: u32 = 2;
+/// The version of the stored shape this crate reads and writes. A store from
+/// a newer wreckordbox is refused rather than guessed at; an older one is
+/// brought up to date by [`MIGRATIONS`] when it is opened.
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// What each version after the first adds, in order: the version a store is
 /// at once the statements have run, and the statements. A new store is made
 /// at version 1 by [`SCHEMA`] and then taken through every one of these, so
 /// a new store and an old one brought up to date hold the same tables. Add
 /// a version at the end; never change one that has shipped.
-const MIGRATIONS: &[(u32, &str)] = &[(2, crate::ledger::SCHEMA)];
+const MIGRATIONS: &[(u32, &str)] = &[
+    (2, crate::mutants::SCHEMA),
+    (3, crate::decisions::SCHEMA),
+    (4, crate::ledger::SCHEMA),
+];
+
+// A migration added without raising `SCHEMA_VERSION`, or the reverse,
+// does not build.
+const _: () = assert!(MIGRATIONS[MIGRATIONS.len() - 1].0 == SCHEMA_VERSION);
 
 const DATABASE_FILE: &str = "sidecar.db";
 /// Where a tool writes before its result is accepted. Emptied on open.
@@ -389,27 +397,7 @@ impl Sidecar {
 
     /// One Run by its identifier.
     pub fn run(&self, run: RunId) -> Result<Option<Run>> {
-        Ok(self
-            .db()
-            .query_row(
-                "SELECT id, source_kind, source_name, description, started_at, finished_at, outcome
-                 FROM run WHERE id = ?1",
-                [run.0],
-                |row| {
-                    Ok(Run {
-                        id: RunId(row.get(0)?),
-                        source: Source {
-                            kind: SourceKind::from_stored(&row.get::<_, String>(1)?),
-                            name: row.get(2)?,
-                        },
-                        description: row.get(3)?,
-                        started_at: row.get(4)?,
-                        finished_at: row.get(5)?,
-                        outcome: row.get(6)?,
-                    })
-                },
-            )
-            .optional()?)
+        Ok(run_in(&self.db(), run)?)
     }
 
     /// An empty folder for `run` to write into before its result is
@@ -558,7 +546,7 @@ impl Sidecar {
 
 /// One Fact, inside a transaction: declares the kind, writes the Fact and
 /// supersedes the same source's earlier ones.
-fn record_in(tx: &rusqlite::Transaction, new: &NewFact) -> Result<Fact> {
+pub(crate) fn record_in(tx: &rusqlite::Transaction, new: &NewFact) -> Result<Fact> {
     if !(0.0..=1.0).contains(&new.confidence) {
         return Err(SidecarError::Invalid(format!(
             "a confidence is from 0 to 1, not {}",
@@ -664,6 +652,29 @@ pub(crate) fn read_fact(row: &Row) -> rusqlite::Result<Fact> {
         superseded_at: row.get(12)?,
         superseded_by: row.get(13)?,
     })
+}
+
+/// One Run, read on `db` (a transaction, to read what it has written).
+pub(crate) fn run_in(db: &Connection, run: RunId) -> rusqlite::Result<Option<Run>> {
+    db.query_row(
+        "SELECT id, source_kind, source_name, description, started_at, finished_at, outcome
+         FROM run WHERE id = ?1",
+        [run.0],
+        |row| {
+            Ok(Run {
+                id: RunId(row.get(0)?),
+                source: Source {
+                    kind: SourceKind::from_stored(&row.get::<_, String>(1)?),
+                    name: row.get(2)?,
+                },
+                description: row.get(3)?,
+                started_at: row.get(4)?,
+                finished_at: row.get(5)?,
+                outcome: row.get(6)?,
+            })
+        },
+    )
+    .optional()
 }
 
 pub(crate) fn now() -> i64 {

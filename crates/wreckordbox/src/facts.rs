@@ -369,7 +369,7 @@ fn facts_in(text: &str) -> Result<Vec<Value>, ServiceError> {
         .collect()
 }
 
-fn bad(message: String) -> ServiceError {
+pub(crate) fn bad(message: String) -> ServiceError {
     ServiceError::new(wreckordbox_service::codes::BAD_REQUEST, message)
 }
 

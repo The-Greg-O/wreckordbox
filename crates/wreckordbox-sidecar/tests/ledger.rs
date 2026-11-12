@@ -168,13 +168,13 @@ fn a_store_made_before_the_ledger_is_given_one_and_keeps_its_facts() {
             })
             .unwrap()
     };
-    // Back to what the first version of the store held.
+    // Back to what the store held before the Ledger (version 3).
     let raw = rusqlite::Connection::open(dir.path().join("sidecar.db")).unwrap();
     raw.execute_batch(
         "DROP TRIGGER ledger_is_never_changed;
          DROP TRIGGER ledger_is_never_removed;
          DROP TABLE ledger;
-         UPDATE meta SET value = '1' WHERE key = 'schema_version';",
+         UPDATE meta SET value = '3' WHERE key = 'schema_version';",
     )
     .unwrap();
     drop(raw);
@@ -194,7 +194,7 @@ fn a_store_made_before_the_ledger_is_given_one_and_keeps_its_facts() {
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(version, "2");
+    assert_eq!(version, "4");
 }
 
 #[test]
