@@ -107,10 +107,13 @@ mod tests {
         let run = sidecar.begin_run(&source, "fixture").unwrap();
         let count = Arc::new(AtomicUsize::new(0));
         let seen = count.clone();
-        sidecar.db().commit_hook(Some(move || {
-            seen.fetch_add(1, Ordering::Relaxed);
-            false
-        }));
+        sidecar
+            .db()
+            .commit_hook(Some(move || {
+                seen.fetch_add(1, Ordering::Relaxed);
+                false
+            }))
+            .unwrap();
         let ids = sidecar
             .reserve_bulk_ids(&mut OrderLease::default(), 300)
             .unwrap();

@@ -687,7 +687,7 @@ pub(crate) fn answer(
         let mut answer = read_ledger(sidecar, request)?;
         if request.command == commands::RUNS_SHOW {
             if let Some(run) = request.args["id"].as_i64() {
-                answer["pending_recording"] = bulk_spill::pending(stems.sidecar_dir(),run, answer["offset"].as_u64().unwrap_or(0) as usize, answer["limit"].as_u64().unwrap_or(DEFAULT_PAGE_LIMIT as u64) as usize)
+                answer["pending_recording"] = bulk_spill::pending(stems.sidecar_dir(), run, answer["offset"].as_u64().and_then(|n| usize::try_from(n).ok()).unwrap_or(0), answer["limit"].as_u64().and_then(|n| usize::try_from(n).ok()).unwrap_or(DEFAULT_PAGE_LIMIT))
                     .map_err(|why|ServiceError::new(crate::stems::codes::SIDECAR_FAILED,why))?;
             }
         }
@@ -1275,7 +1275,11 @@ impl Keeper {
         if state.closed {
             return Err("wreckordbox is stopping".into());
         }
-        if !state.settled || !state.unwritten.is_empty() || !state.bulk_waiting.is_empty() || state.op.is_some() {
+        if !state.settled
+            || !state.unwritten.is_empty()
+            || !state.bulk_waiting.is_empty()
+            || state.op.is_some()
+        {
             let sidecar = self.stems.sidecar().map_err(|e| e.message)?;
             self.settle(&sidecar, &mut state)?;
             self.write_waiting(&sidecar, &mut state)?;

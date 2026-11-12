@@ -372,6 +372,9 @@ fn protected_existing_sidecar_reports_the_startup_refusal() {
         std::fs::write(root.join(wreckordbox_stick_protection::STAND_IN_MARKER), "").unwrap();
     });
     let error = f.service.call("runs.list", json!({})).unwrap_err();
-    assert_eq!(error.code, "STICK_PROTECTED");
+    assert_eq!(
+        error.code,
+        wreckordbox_service::protocol::codes::STICK_PROTECTED
+    );
     assert!(!error.message.contains("appeared after"));
 }
