@@ -138,6 +138,19 @@ not list them yet. A chord stored against `viewLibrary`, `viewIntake`,
 `viewReview` or `viewStick` in the Keyboard preferences' overrides is
 honoured, and an empty one takes the key away.
 
+### Command palette
+
+Shift + command + P (shift + ctrl + P on Linux and Windows), or the
+Commands button in the top bar of either layout, opens the command palette
+(ticket #54). It lists every entry of `src/lib/palette.ts`: every item the
+native menus hold, the four views, the interface scale, Search, and the
+Preferences panes the views do not show (PRO DJ LINK, Device Settings,
+Backups, Keyboard). Each shows its key; one that cannot run now is greyed
+with the reason. On Linux there is no native menu row, and the palette's
+key handler also answers the menu's keys no other handler does: shift +
+ctrl + O (Import Folder), shift + ctrl + F (Full screen), ctrl + W (Close
+Window) and ctrl + Q (Quit).
+
 ### Deck
 
 | Command | Key (Player A) | rekordbox id | rekordbox menu bar | On-screen control that calls the same function |
