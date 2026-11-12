@@ -171,3 +171,5 @@ pub(crate) fn io<'a>(
 }
 
 pub mod dj_facts;
+
+mod bulk;

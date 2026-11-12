@@ -116,6 +116,9 @@ impl Preparation {
 /// already made: it is the implementation's to keep (and to refuse the
 /// next write for, in [`Self::ready`]).
 pub trait Ledger: Send + Sync {
+    /// A bounded operation recorder. Creating it does not write anything.
+    fn bulk(&self, _kind: crate::bulk::Kind) -> Option<std::sync::Arc<dyn crate::bulk::Recorder>> { None }
+
     /// A write is about to be made: record durably that it was begun, so a
     /// process that dies before its entry is written leaves a trace. Asked
     /// before every write through the core; an error refuses the write
