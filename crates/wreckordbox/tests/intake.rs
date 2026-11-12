@@ -391,3 +391,29 @@ fn intake_colours_lists_the_djs_labels_and_which_mean_clean_and_problem() {
          8   Purple  Delete"
     );
 }
+
+#[test]
+fn intake_colour_takes_the_colour_labels_number_when_names_overlap() {
+    let sandbox = Sandbox::with_shape(Shape {
+        tracks: 2,
+        ..Shape::default()
+    });
+    // Red is called "Green" and Green is called "Clean".
+    sandbox.name_colours(&[(2, "Green"), (5, "Clean")]);
+    let id = fixture::track_id(0);
+
+    let ambiguous = sandbox.cli(&["intake", "colour", &id, "Green"]);
+    assert!(!ambiguous.status.success());
+
+    let set = ok(&sandbox, &["intake", "colour", &id, "--colour-id", "5"]);
+    assert_eq!(set["prep_colour"]["label"], "Clean");
+    assert_eq!(set["prep_colour"]["colour"], "Green");
+
+    let both = sandbox.cli(&["intake", "colour", &id, "Clean", "--colour-id", "5"]);
+    assert!(
+        !both.status.success(),
+        "a name and a number together are refused"
+    );
+    let neither = sandbox.cli(&["intake", "colour", &id]);
+    assert!(!neither.status.success(), "one of them is needed");
+}

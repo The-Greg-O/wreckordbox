@@ -57,8 +57,13 @@ pub enum IntakeCommands {
         id: String,
         /// The Prep colour, in any case: your name for a colour label
         /// (`Clean`), the colour itself (`Green`), or `none` to clear it.
-        #[arg(value_name = "PREP_COLOUR")]
-        prep_colour: String,
+        #[arg(value_name = "PREP_COLOUR", required_unless_present = "colour_id")]
+        prep_colour: Option<String>,
+        /// The colour label by its number instead (1 to 8, 0 for none), as
+        /// `intake colours` lists them: for a label that is also another
+        /// colour's name.
+        #[arg(long, value_name = "N", conflicts_with = "prep_colour")]
+        colour_id: Option<u8>,
     },
 }
 
@@ -138,12 +143,17 @@ pub fn run(
                 colours_text(&colours)
             })
         }
-        IntakeCommands::Colour { id, prep_colour } => {
+        IntakeCommands::Colour {
+            id,
+            prep_colour,
+            colour_id,
+        } => {
             let set: PrepColourSet = client.call(
                 commands::TRACKS_SET_PREP_COLOUR,
                 json!(SetPrepColour {
                     id: id.clone(),
                     prep_colour: prep_colour.clone(),
+                    colour_id: *colour_id,
                 }),
             )?;
             Ok(if as_json {

@@ -124,7 +124,9 @@ pub struct Counts {
     pub problems_unavailable: Option<ServiceError>,
 }
 
-/// The arguments of `tracks.set_prep_colour`.
+/// The arguments of `tracks.set_prep_colour`: the track, and the Prep
+/// colour either by name (`prep_colour`) or by number (`colour_id`), never
+/// both.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SetPrepColour {
@@ -132,7 +134,13 @@ pub struct SetPrepColour {
     pub id: String,
     /// The Prep colour, in any case: the DJ's name for a colour label
     /// (`Clean`), the colour itself (`Green`), or `none` to clear it.
-    pub prep_colour: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prep_colour: Option<String>,
+    /// The colour label by the Library's number for it, 1 to 8, or 0 to
+    /// clear it: what a client that already holds the labels sends, since a
+    /// name can be one colour's label and another colour's name (wbx-63).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub colour_id: Option<u8>,
 }
 
 /// What `tracks.set_prep_colour` answers.
@@ -417,7 +425,16 @@ fn set_prep_colour(
     edit: &SetPrepColour,
 ) -> Result<(PrepColourSet, LibraryChanged), ServiceError> {
     let labels = labels(library)?;
-    let wanted = named_colour(&labels, &edit.prep_colour)?;
+    let wanted = match (&edit.prep_colour, edit.colour_id) {
+        (Some(text), None) => named_colour(&labels, text)?,
+        (None, Some(number)) => numbered_colour(&labels, number)?,
+        _ => {
+            return Err(ServiceError::new(
+                service_codes::BAD_REQUEST,
+                "say the Prep colour once: by name (prep_colour) or by number (colour_id)",
+            ))
+        }
+    };
     let before = library.index()?;
     let Some(row) = before.row_of(&edit.id) else {
         return Err(ServiceError::new(
@@ -457,6 +474,26 @@ fn set_prep_colour(
         },
         change,
     ))
+}
+
+/// The colour label numbered `number`; `None` for 0.
+fn numbered_colour(labels: &[PrepColour], number: u8) -> Result<Option<PrepColour>, ServiceError> {
+    if number == NO_COLOUR {
+        return Ok(None);
+    }
+    labels
+        .iter()
+        .find(|colour| colour.id == number)
+        .cloned()
+        .map(Some)
+        .ok_or_else(|| {
+            ServiceError::new(
+                codes::PREP_COLOUR_NOT_FOUND,
+                format!(
+                    "there is no colour label {number}: they are numbered 1 to 8, or 0 for none"
+                ),
+            )
+        })
 }
 
 /// The colour label `text` names: by the DJ's name for it or by the colour

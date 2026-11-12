@@ -135,23 +135,19 @@ pub fn colours(state: &Arc<AppState>) -> AppResult<Value> {
 /// refused under Library Protection. The service tells the window, so the
 /// queue and its counts re-read.
 pub fn set_prep_colour(state: &Arc<AppState>, id: &str, colour: Option<u8>) -> AppResult<Value> {
-    let named = match colour {
-        None => "none",
-        Some(number) => usize::from(number)
-            .checked_sub(1)
-            .and_then(|at| rbl_index::COLOR_NAMES.get(at))
-            .copied()
-            .ok_or_else(|| {
-                AppError::new(
-                    ErrorKind::Malformed,
-                    format!("There is no colour label {number}."),
-                )
-            })?,
-    };
+    // By number: a DJ's label can be another colour's name, so a name could
+    // be ambiguous where the number the view holds never is.
+    let number = colour.unwrap_or(0);
+    if number > 8 {
+        return Err(AppError::new(
+            ErrorKind::Malformed,
+            format!("There is no colour label {number}."),
+        ));
+    }
     ask(
         state,
         intake::commands::TRACKS_SET_PREP_COLOUR,
-        json!({ "id": id, "prep_colour": named }),
+        json!({ "id": id, "colour_id": number }),
     )?
     .map_err(|error| {
         // A refusal (Library Protection, rekordbox running) is the Library

@@ -676,3 +676,79 @@ fn the_colours_say_when_no_label_is_named_clean_or_problem() {
     assert_eq!(colours["clean"], Value::Null);
     assert_eq!(colours["problem"], Value::Null);
 }
+
+/// Labels that are other colours' names: Red is called "Green" and Green
+/// is called "Clean".
+fn overlapping_labels(fixture: &Fixture) {
+    fixture.edit(|writer| {
+        name_colour(writer, 2, "Green");
+        name_colour(writer, 5, "Clean");
+    });
+}
+
+#[test]
+fn a_prep_colour_is_set_by_its_number_whatever_the_labels_are_called() {
+    let fixture = Fixture::new(2);
+    overlapping_labels(&fixture);
+    let hosted = fixture.start();
+
+    // By name, "Green" is both Red's label and Green itself: refused.
+    let ambiguous = hosted
+        .service
+        .call(
+            "tracks.set_prep_colour",
+            json!({ "id": "10000", "prep_colour": "Green" }),
+        )
+        .unwrap_err();
+    assert_eq!(ambiguous.code, "prep_colour_not_found");
+
+    // By number there is no doubt.
+    let clean = hosted.call(
+        "tracks.set_prep_colour",
+        json!({ "id": "10000", "colour_id": 5 }),
+    );
+    assert_eq!(
+        clean["prep_colour"],
+        json!({ "id": 5, "colour": "Green", "label": "Clean" })
+    );
+    let red = hosted.call(
+        "tracks.set_prep_colour",
+        json!({ "id": "10000", "colour_id": 2 }),
+    );
+    assert_eq!(red["prep_colour"]["label"], "Green");
+    assert_eq!(red["previous"]["id"], 5);
+    // 0 clears it.
+    let none = hosted.call(
+        "tracks.set_prep_colour",
+        json!({ "id": "10000", "colour_id": 0 }),
+    );
+    assert_eq!(none["prep_colour"], Value::Null);
+}
+
+#[test]
+fn a_prep_colour_takes_a_name_or_a_number_never_both_or_neither() {
+    let hosted = Fixture::new(1).start();
+    for args in [
+        json!({ "id": "10000", "prep_colour": "Green", "colour_id": 5 }),
+        json!({ "id": "10000" }),
+    ] {
+        let refused = hosted
+            .service
+            .call("tracks.set_prep_colour", args.clone())
+            .unwrap_err();
+        assert_eq!(refused.code, "bad_request", "{args}");
+    }
+    let past = hosted
+        .service
+        .call(
+            "tracks.set_prep_colour",
+            json!({ "id": "10000", "colour_id": 9 }),
+        )
+        .unwrap_err();
+    assert_eq!(past.code, "prep_colour_not_found");
+    assert_eq!(
+        hosted.call("intake.counts", json!({}))["intake"],
+        1,
+        "nothing changed"
+    );
+}
