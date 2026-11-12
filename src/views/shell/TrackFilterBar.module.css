@@ -3,9 +3,9 @@
    something picked is outlined in the accent and names its picks. Colours
    are theme roles; the Prep colour swatches are rekordbox's track colours,
    which do not follow the theme. */
-/* `min-width: 0` and the controls' `contain: inline-size` keep the bar from
-   widening the list's grid column to fit every control: at half width the
-   controls scroll sideways inside the bar instead. */
+/* `min-width: 0` keeps the bar from widening the list's grid column to fit
+   every control: when the window is narrow the controls wrap onto more
+   lines instead (wbx-60), so none is ever cut off or hidden off the end. */
 .bar {
   min-width: 0;
   font-family: var(--f-shell);
@@ -17,6 +17,7 @@
 
 .row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--s-shell-space-3);
   padding: var(--s-shell-space-2) var(--s-shell-space-4);
@@ -31,17 +32,15 @@
   color: var(--c-text-dim);
 }
 
-/* The controls scroll sideways when the window is narrow; the count and
-   Clear stay in view beside them. */
+/* The controls wrap when the window is narrow (wbx-60); the count and
+   Clear follow them, on the last line. */
 .controls {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--s-shell-space-2);
   flex: 1 1 auto;
   min-width: 0;
-  contain: inline-size;
-  overflow-x: auto;
-  scrollbar-width: thin;
 }
 
 .control,
