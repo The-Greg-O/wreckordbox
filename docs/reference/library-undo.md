@@ -59,6 +59,13 @@ the code or observed, `[ASSUME]` is inferred, `[UNKNOWN]` is open.
   hosting window answers with `edit-history:changed`, which is what sets
   the Edit menu's Undo and Redo items. An edit that changed nothing (the
   rating the track already has) records nothing.
+  Recorded today: a rating (`tracks.rate`, Track Edit), a My Tag put on
+  or taken off tracks (`mytags.assign` / `mytags.unassign`, one Track Edit
+  entry for all the tracks) and a My Tag order (`mytags.move` /
+  `mytags.reorder`, Reorder My Tags). `mytags.delete` and `mytags.merge`
+  empty both stacks as the window's delete does
+  (`LibraryCore::permanent_edit`); `mytags.create` and `mytags.rename` end
+  the Redo branch, as the window's do.
 - **Three ways to write.** In `src-tauri/src/commands.rs`:
   - `recorded_edit` writes and pushes one entry, clearing Redo.
   - `edit` writes without recording and clears Redo: "a non-recorded edit
