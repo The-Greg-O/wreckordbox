@@ -216,7 +216,7 @@ describe("the whole artwork's list (#575)", () => {
     // only the shape of the Summary renderer.
     expect(first?.textContent).toBe("Something In The Air (Radio Edit)");
     expect([...(second?.children ?? [])].map((part) => part.textContent)).toEqual([
-      "The Temper Trap", "122.00", "Dbm",
+      "The Temper Trap", "122.00", "12A",
     ]);
     // An unanalysed row leaves both unavailable values empty.
     const missing = [...host.querySelectorAll<HTMLElement>('[data-col="summary"]')]
@@ -234,12 +234,12 @@ describe("the whole artwork's list (#575)", () => {
   });
 
   it("formats Summary's key with the selected key display", async () => {
-    render({ artworkMode: "full", onArtworkMode: noop, columns: fullColumns, keyDisplay: "alphanumeric" });
+    render({ artworkMode: "full", onArtworkMode: noop, columns: fullColumns, keyDisplay: "classic" });
     await settle();
     await settle();
     const summary = cell("summary");
     const line = summary?.children.item(1);
-    expect(line?.children.item(2)?.textContent).toBe("12A");
+    expect(line?.children.item(2)?.textContent).toBe("Dbm");
   });
 
   it("offers Summary rather than Artwork in the whole artwork's column menu", async () => {

@@ -50,7 +50,7 @@ The active theme's file is `~/.local/state/omarchy/current/theme/colors.toml`. I
 
 - **Prep colour:** rekordbox's own label colours, shown as a 3 px stripe at the row's left edge.
 - **Energy:** five pips coloured by level, cool to hot (1 blue, 2 cyan, 3 green, 4 orange, 5 red). Unset pips are a fixed slate (`--c-energy-0`). In upstream's layout, until it is removed, Energy is five stars in the same colours: lit stars in the track's level colour, unlit ones in the unset colour, never the theme's text colour.
-- **Key lights:** green fill for a key that mixes with the loaded track, yellow fill for an energy-boost move, no fill otherwise.
+- **Key lights:** green fill (`--c-key-match: #9ece6a`) with `=` for a key that mixes with the loaded track; yellow fill (`--c-key-boost: #e0af68`) with `↑` for an energy-boost move; no fill otherwise. Lit text and marks use `--c-key-text: #0e0e14`. These fixed component tokens do not follow theme roles. Each lit badge names the key and relationship for assistive technology.
 - **Tag dimensions:** one hue per dimension for set tags; an unset tag is outlined in the hairline colour; a suggested tag has a dashed yellow outline.
 - **Mutant:** magenta badge and banner. Magenta is used for nothing else in a list.
 - **Waveform themes:** 3Band (upstream's measured colours, the default), RGB, Blue, and Theme (drawn from the Omarchy theme's blue, magenta and bright foreground). Cue, playhead and phrase colours do not change with the waveform theme.
