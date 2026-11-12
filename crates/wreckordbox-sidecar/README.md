@@ -26,6 +26,18 @@ The Library service owns it and is its only writer.
 - Stem audio is kept as the tool wrote it (16-bit PCM WAV from the separation engine). Conversion for a Stick happens when the Stick is written.
 - The fingerprint hashes the encoded audio stream inside the file, not the file: a move, a rename or a retag changes nothing, and any change to the audio does.
 
+## Stale Measurements and re-attachment
+
+[`src/attachments.rs`](src/attachments.rs) keeps the latest observed audio identity and the history of Fact attachments. Schema version 4 adds this after Mutants (2) and Decisions (3). The original Fact rows, identifiers, sources, confidence and Runs stay intact; reads resolve their current track through the attachment history. Stale marks are permanent, including after re-attachment.
+
+`Sidecar::observe_audio` takes identifying fields, the current fingerprint when available, and a callback over a captured Library snapshot. It re-attaches only from a removed track, only to a track without Facts, and only on one unambiguous fingerprint match. Several fingerprint matches are held for review. Without an exact match, title, artist, mix name and duration can suggest review, never automatic attachment. Title and mix qualifiers are preserved. An existing track's Facts are never borrowed by a duplicate still in the Library.
+
+The service calls this path for ordinary Fact reads and recording, and for Stems reads, separation and Native stems export. `facts.of_track` checks audio on every read: `facts` contains standing Facts, `stale` reports outdated Measurements, `unverified` reports Measurements whose audio cannot be read, and `reattached`/`review` report attachment results. `all: true` includes the full Fact history in `facts`; it is not a source of standing Measurements. `check_audio` remains accepted for compatibility. The CLI shows these reports as text too.
+
+The store's `facts` and `facts_of_track` methods remain history readers. New consumers must verify audio and exclude stale, superseded and unverified Measurements before using them. New producers should capture identity through the service's observation path; raw recording cannot discover identifying fields from the Library. Detection happens when a command observes the track, not through a background filesystem watcher. Each check reads the audio once outside the Library lock.
+
+Migration seeds identities from legacy fingerprints unless a later stale mark makes that evidence unsafe. Old identifying fields cannot be reconstructed after removal; future observations capture them. Missing audio preserves the last known identity but cannot prove a new match. Review candidates are persisted and recalculated on observation; this ticket does not add a command to accept an uncertain attachment.
+
 ## Run focused checks
 
 ```sh

@@ -31,10 +31,22 @@ impl Stems {
             );
         }
         let stale = fingerprint
-            .map(|fingerprint| sidecar.mark_stale(track, fingerprint))
-            .transpose()
-            .map_err(|e| super::stems::sidecar_error(&e))?
+            .map(|fingerprint| self.mark_stale(track, fingerprint))
+            .transpose()?
             .unwrap_or_default();
+        Ok((attachments, stale))
+    }
+
+    /// Also used by producers that commit a Fact in their own transaction.
+    pub(crate) fn mark_stale(
+        &self,
+        track: &str,
+        fingerprint: &Fingerprint,
+    ) -> Result<Vec<i64>, ServiceError> {
+        let sidecar = self.sidecar()?;
+        let stale = sidecar
+            .mark_stale(track, fingerprint)
+            .map_err(|e| super::stems::sidecar_error(&e))?;
         let mut by_kind = std::collections::BTreeMap::<String, Vec<i64>>::new();
         for id in &stale {
             if let Some(fact) = sidecar
@@ -48,13 +60,13 @@ impl Stems {
             self.publish(
                 events::SIDECAR_CHANGED,
                 json!(SidecarChanged {
-                    track_id: track.clone(),
+                    track_id: track.to_owned(),
                     kind,
                     fact_id: None,
                     stale: ids,
                 }),
             );
         }
-        Ok((attachments, stale))
+        Ok(stale)
     }
 }

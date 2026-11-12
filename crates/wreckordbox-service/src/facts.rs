@@ -339,7 +339,7 @@ pub(crate) fn recorded(
     };
     facts.changed(&fact.track_id, &fact.kind, Some(fact.id), &[]);
     if let Some(fingerprint) = fingerprint {
-        facts.mark_stale(&fact.track_id, fingerprint)?;
+        stems.mark_stale(&fact.track_id, fingerprint)?;
     }
     Ok(())
 }

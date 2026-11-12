@@ -73,9 +73,15 @@ fn readd(s: &Sandbox, id: &str) -> String {
 fn ordinary_reads_report_stale_measurements_but_only_judgements_stand() {
     let s = Sandbox::new();
     let id = s.import_track("Track.wav", 1);
-    let recorded = record(&s, &id);
+    ok(&s, &["status"]);
     let mut watcher = s.client();
     watcher.subscribe().unwrap();
+    let recorded = record(&s, &id);
+    for fact in &recorded {
+        let event = watcher.next_event(Duration::from_secs(2)).unwrap().unwrap();
+        assert_eq!(event.event, "sidecar_changed");
+        assert_eq!(event.data["fact_id"], fact["id"]);
+    }
     change_audio(&s);
     let shown = ok(&s, &["facts", "show", &id]);
     assert_eq!(shown["facts"], json!([recorded[0]]));
