@@ -1063,6 +1063,8 @@ const NOT_STICK_WRITERS: &[&str] = &[
     "intake_counts",
     "intake_queue",
     "intake_set_prep_colour",
+    "intake_set_tag_fact",
+    "intake_tag_panel",
     "itunes_default_library",
     "itunes_library_at",
     "library_problem",
