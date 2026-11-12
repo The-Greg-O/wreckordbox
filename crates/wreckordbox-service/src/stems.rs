@@ -285,6 +285,15 @@ impl Stems {
         Ok(open)
     }
 
+    /// The Sidecar when there is one already, opened or on disk; a reader
+    /// that should not be what first makes it asks this way.
+    pub(crate) fn sidecar_if_made(&self) -> Result<Option<Arc<Sidecar>>, ServiceError> {
+        if lock(&self.sidecar).is_none() && !self.sidecar_dir.join("sidecar.db").is_file() {
+            return Ok(None);
+        }
+        self.sidecar().map(Some)
+    }
+
     /// Sends an event to subscribed clients and the host.
     pub(crate) fn publish(&self, event: &str, data: Value) {
         let _ = lock(&self.events).send(Event {
