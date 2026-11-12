@@ -97,23 +97,35 @@ impl Mutants<'_> {
 // Cache only header/capability verdicts. Hash currency is checked separately on
 // every request using the Sidecar's shared size/mtime/inode cache above.
 fn preflight(parent: &TrackRecord, edits: &Edits, set: Option<&StemSet>) -> Renderability {
-    type Cache = std::collections::HashMap<String, Renderability>;
+    #[derive(PartialEq, Eq, Hash)]
+    struct CheckKey {
+        parent: (
+            std::path::PathBuf,
+            Option<wreckordbox_sidecar::stems::FileStamp>,
+        ),
+        edits: String,
+        frames: Option<u64>,
+        stems: Vec<(
+            std::path::PathBuf,
+            Option<wreckordbox_sidecar::stems::FileStamp>,
+        )>,
+    }
+    type Cache = std::collections::HashMap<CheckKey, Renderability>;
     static CACHE: std::sync::OnceLock<std::sync::Mutex<Cache>> = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(Default::default);
     let path = Path::new(&parent.location);
-    let stamps = || {
-        format!(
-            "{:?}:{:?}:{edits:?}:{:?}",
-            path,
-            file_stamp(path),
-            set.map(|s| (
-                s.samples,
+    let stamps = || CheckKey {
+        parent: (path.to_path_buf(), file_stamp(path)),
+        edits: format!("{edits:?}"),
+        frames: set.map(|s| s.samples),
+        stems: set
+            .map(|s| {
                 s.stems
                     .iter()
-                    .map(|stem| (&stem.path, file_stamp(&stem.path)))
-                    .collect::<Vec<_>>()
-            ))
-        )
+                    .map(|stem| (stem.path.clone(), file_stamp(&stem.path)))
+                    .collect()
+            })
+            .unwrap_or_default(),
     };
     let before = stamps();
     if let Some(known) = cache

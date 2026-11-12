@@ -27,6 +27,8 @@ pub(super) fn metadata(
     let Some(row) = index.row_of(id) else {
         return Ok((None, Vec::new()));
     };
+    // Cue edits do not rebuild the track index; reload live rows here. Lists
+    // deduplicate this projection per parent, so this is not per Mutant.
     let comments = library.with_db(|db| {
         rbl_index::reload_cues_of(db, &index, id)
             .map_err(|e| ServiceError::new("library_failed", e.to_string()))?;
@@ -65,6 +67,11 @@ pub(super) fn source_readiness(parent: Option<&TrackRecord>) -> Renderability {
 }
 impl Mutants<'_> {
     pub(super) fn edit(&self, args: &EditMutant) -> Result<EditOutcome, ServiceError> {
+        let Value::Object(patch) = serde_json::to_value(&args.edits)
+            .map_err(|e| ServiceError::new("bad_request", e.to_string()))?
+        else {
+            return Err(ServiceError::new("bad_request", "edits must be an object"));
+        };
         self.change_edits(
             &RemoveMutant {
                 id: args.id,
@@ -73,11 +80,7 @@ impl Mutants<'_> {
                 source: args.source.clone(),
                 description: args.description.clone(),
             },
-            |edits| {
-                if let Ok(Value::Object(patch)) = serde_json::to_value(&args.edits) {
-                    edits.extend(patch);
-                }
-            },
+            |edits| edits.extend(patch),
             args.edits.stems.is_some(),
         )
     }

@@ -26,6 +26,7 @@
 //!   work folder, so a separation that fails, or a service that stops or
 //!   dies part-way, leaves the Sidecar as it was.
 
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -280,7 +281,7 @@ impl Stems {
             .filter(|command| !command.trim().is_empty())
             .map_or_else(default_command, |command| parse_command(&command));
         Arc::new(Self {
-            mutant_edits: Mutex::new(Default::default()),
+            mutant_edits: Mutex::new(HashMap::default()),
             run_status: Mutex::new(crate::run_status::RunStatus::new(&sidecar_dir)),
             sidecar_dir,
             command,
@@ -350,7 +351,8 @@ impl Stems {
 
     /// The Sidecar, opened on first use; refused once the service stopped.
     pub(crate) fn sidecar(&self) -> Result<Arc<Sidecar>, ServiceError> {
-        let mut sidecar = lock(&self.sidecar);
+        let mut sidecar =
+            crate::mutant_reads::wait_for_slot(&self.sidecar, std::time::Duration::from_secs(5))?;
         if let Some(open) = sidecar.as_ref() {
             return Ok(Arc::clone(open));
         }

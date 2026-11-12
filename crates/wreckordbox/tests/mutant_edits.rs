@@ -702,7 +702,10 @@ fn review_two_clients_each_make_150_edits_lists_and_shows_without_failure() {
 fn review_outdated_edits_are_isolated_and_repairable() {
     let s = Sandbox::new();
     let playlist = s.create_playlist("Set", &[2]);
+    let neighbour = s.create_playlist("Healthy", &[3]);
     let id = make(&s, &playlist);
+    let healthy = make(&s, &neighbour);
+    let healthy_before = ok(&s, &["mutants", "show", &healthy]);
     let db = rusqlite::Connection::open(s.sidecar_dir().join("sidecar.db")).unwrap();
     let break_it = || {
         db.execute(
@@ -713,7 +716,8 @@ fn review_outdated_edits_are_isolated_and_repairable() {
     };
     break_it();
     let listed = ok(&s, &["mutants", "list"]);
-    assert_eq!(listed["total"], 1);
+    assert_eq!(listed["total"], 2);
+    assert_eq!(listed["mutants"][1], healthy_before["mutant"]);
     assert_eq!(
         listed["mutants"][0]["renderability"]["reason"]["code"],
         "mutant_edits_invalid"
@@ -745,6 +749,16 @@ fn review_noop_edits_leave_no_run_change_or_event() {
     let playlist = s.create_playlist("Set", &[2]);
     let id = make(&s, &playlist);
     let before = ok(&s, &["mutants", "show", &id]);
+    let db = rusqlite::Connection::open(s.sidecar_dir().join("sidecar.db")).unwrap();
+    let counts = || {
+        db.query_row(
+            "SELECT (SELECT count(*) FROM run), (SELECT count(*) FROM mutant_change)",
+            [],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+        )
+        .unwrap()
+    };
+    let old_counts = counts();
     let mut watcher = s.client();
     watcher.subscribe().unwrap();
     while watcher
@@ -766,12 +780,19 @@ fn review_noop_edits_leave_no_run_change_or_event() {
     assert_eq!(cleared["changed"], false);
     assert_eq!(cleared["run"], Value::Null);
     assert_eq!(ok(&s, &["mutants", "show", &id]), before);
+    assert_eq!(counts(), old_counts);
     assert_eq!(
         watcher
             .next_event(std::time::Duration::from_millis(100))
             .unwrap(),
         None
     );
+    edit(&s, &id, json!({"key_shift":2}));
+    let changed_counts = counts();
+    let changed_history = ok(&s, &["mutants", "show", &id]);
+    assert_eq!(edit(&s, &id, json!({"key_shift":2}))["changed"], false);
+    assert_eq!(counts(), changed_counts);
+    assert_eq!(ok(&s, &["mutants", "show", &id]), changed_history);
 }
 
 #[test]
