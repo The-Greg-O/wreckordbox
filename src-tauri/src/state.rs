@@ -750,6 +750,7 @@ pub fn filter_from_wire(library: &Library, dto: &TrackFilterDto) -> TrackFilter 
             values: b.values.clone(),
             tolerance_pct: b.tolerance_pct.min(6),
             master_bpm_x100: b.master_bpm_x100.filter(|&bpm| bpm > 0),
+            ranges_x100: Vec::new(),
         }),
         keys: dto.keys.as_ref().map(|names| library.key_ids_named(names)),
         ratings: dto.ratings.clone(),

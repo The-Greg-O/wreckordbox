@@ -410,6 +410,7 @@ fn track_filter(
                 values: vec![whole],
                 tolerance_pct: 0,
                 master_bpm_x100: None,
+                ranges_x100: Vec::new(),
             });
         }
     }
