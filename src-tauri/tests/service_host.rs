@@ -213,7 +213,7 @@ fn unreadable_run_status_does_not_mean_the_service_stopped() {
             let db = rusqlite::Connection::open(dir.join("sidecar.db")).unwrap();
             db.execute_batch("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT); INSERT INTO meta VALUES ('schema_version', '999');").unwrap();
             if kind == "locked" {
-                db.execute_batch("UPDATE meta SET value = '5'; CREATE TABLE run (id INTEGER PRIMARY KEY, description TEXT, finished_at INTEGER); CREATE INDEX run_unfinished ON run (id) WHERE finished_at IS NULL; INSERT INTO run VALUES (1, 'Existing', NULL); BEGIN EXCLUSIVE; UPDATE run SET description = 'Uncommitted';").unwrap();
+                db.execute_batch("UPDATE meta SET value = '6'; CREATE TABLE run (id INTEGER PRIMARY KEY, description TEXT, finished_at INTEGER); CREATE INDEX run_unfinished ON run (id) WHERE finished_at IS NULL; INSERT INTO run VALUES (1, 'Existing', NULL); BEGIN EXCLUSIVE; UPDATE run SET description = 'Uncommitted';").unwrap();
             }
             Some(db)
         };

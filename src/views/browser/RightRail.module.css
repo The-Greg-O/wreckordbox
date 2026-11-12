@@ -42,8 +42,9 @@
    shadow paints under the border, so the white outline stays visible. */
 .button[aria-pressed="true"] {
   --lit-right: calc(var(--s-right-rail-w) - var(--s-right-rail-inset) - var(--s-right-rail-button));
-  border-color: var(--c-icon-on);
+  border-color: var(--c-on-accent, var(--c-icon-on));
   background: var(--c-rail-lit);
+  color: var(--c-on-accent, var(--c-icon-on));
   box-shadow:
     calc(-1 * (var(--s-right-rail-lit-pad-left) - var(--s-right-rail-lit-pad-y))) 0 0 var(--s-right-rail-lit-pad-y) var(--c-rail-lit),
     calc(var(--lit-right) - var(--s-right-rail-lit-pad-y)) 0 0 var(--s-right-rail-lit-pad-y) var(--c-rail-lit);

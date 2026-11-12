@@ -45,6 +45,7 @@ pub mod player;
 pub mod preview;
 mod preferences;
 mod browse_settings;
+pub mod omarchy_theme;
 mod protocol;
 mod relocate;
 mod sync_window;
@@ -457,6 +458,8 @@ pub fn run() {
                 Err(e) => tracing::warn!(error = %e, "could not read the webview's version"),
             }
             screen_cache::initialize(app.handle());
+            // The chrome follows the Omarchy theme; a switch reaches every window.
+            omarchy_theme::follow(app.handle());
             // A write outside the library history (a player over LINK, a cue,
             // analysis) that ends its Redo branch updates the Edit menu.
             {
@@ -501,7 +504,7 @@ pub fn run() {
                 });
                 app.manage(mounts);
             }
-            app.set_menu(crate::menu::build(app.handle())?)?;
+            crate::menu::install(app.handle())?;
             // Windows: paths of files dropped from Explorer onto a playlist.
             #[cfg(windows)]
             if let Some(main) = app.get_webview_window("main") {
@@ -540,6 +543,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             browse_settings::rekordbox_browse_settings,
+            omarchy_theme::theme_roles,
             startup::startup_milestone,
             startup::show_window,
             screen_cache::remember_screen_assets,
@@ -548,6 +552,8 @@ pub fn run() {
             menu::set_history_menu,
             menu::set_menu_labels,
             menu::set_menu_enabled,
+            menu::run_menu_item,
+            menu::run_edit_command,
             commands::library_summary,
             commands::disable_read_only,
             new_library::library_problem,

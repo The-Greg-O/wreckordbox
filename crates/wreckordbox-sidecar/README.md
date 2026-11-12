@@ -27,10 +27,17 @@ The Library service owns it and is its only writer.
 - Stem audio is kept as the tool wrote it (16-bit PCM WAV from the separation engine). Conversion for a Stick happens when the Stick is written.
 - The fingerprint hashes the encoded audio stream inside the file, not the file: a move, a rename or a retag changes nothing, and any change to the audio does.
 
-## Run focused checks
+## Stale Measurements and re-attachment
 
 ```sh
 cargo test -p wreckordbox-sidecar
 ```
 
-- Current Run status uses the schema version 5 partial `run_unfinished` index and cached statements. A status read never creates, migrates, or tidies a Sidecar: absent means no Runs; an unreadable, older, newer, or journaled unopened store means unknown.
+- Current Run status uses the schema version 6 partial `run_unfinished` index and cached statements. A status read never creates, migrates, or tidies a Sidecar: absent means no Runs; an unreadable, older, newer, or journaled unopened store means unknown.
+[`src/attachments.rs`](src/attachments.rs) keeps the latest observed audio identity and the history of Fact attachments. Schema version 5 adds this after Mutants (2), Decisions (3) and the Ledger (4). The original Fact rows, identifiers, sources, confidence and Runs stay intact; reads resolve their current track through indexed `fact_track` ownership. Attachment history remains separate and records the supplied Run, or a finished housekeeping Run. Attachments and stale/current changes are recorded in the Ledger in the same transaction as their state changes. Matching audio clears stale marks, including after re-attachment; supersession is unchanged.
+
+`Sidecar::observe_audio` takes identifying fields, the current fingerprint when available, and a callback over a captured Library snapshot. It re-attaches only from a removed track, only to a track without Facts, and only on one unambiguous fingerprint match. Several fingerprint matches are held for review. Without an exact match, title, artist, mix name and duration can suggest review, never automatic attachment. Title and mix qualifiers are preserved. A still-present track never supplies Facts. After that source is removed, a duplicate can inherit its Facts. An occupied target is held as `target_has_facts`, never silently skipped.
+
+The service's shared `before_record` path observes before every Fact producer, including MyTag conversion, Decision answers and Stems separation. Shared track lookup reads mix names from the index snapshot without opening the Library database. Default `facts.of_track` reads no audio and writes nothing: Judgements stand, non-stale Measurements are `unverified`, and stored `review` candidates remain visible. Explicit `check_audio: true` / CLI `--check-audio` verifies audio and updates attachments and staleness. Stems reads and Native stems export verify before use. `all: true` includes the full archive and is not a source of standing Measurements.
+
+Attachment notifications use the distinct typed `facts_reattached` event (`from_track`, `to_track`, `fact_ids`, `run`); `sidecar_changed` continues reporting recorded/stale Facts by kind. Cross-Library held-match listing and safe acceptance/rejection are follow-up wbx-14.3; Decisions following attachments are wbx-14.4, and Mutants are wbx-87.

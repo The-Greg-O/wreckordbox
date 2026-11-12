@@ -332,7 +332,8 @@ pub fn load_with_cue_reader(
         lib.date_created.push(&text_or_default(r, 29)?);
         // `"on"`, `""` or NULL on the reference library; only `"on"` ticks
         // the box, as `rbl_db::details` reads it for the same column.
-        lib.publish.push(u8::from(text(r, 30)?.as_deref() == Some("on")));
+        lib.publish
+            .push(u8::from(text(r, 30)?.as_deref() == Some("on")));
         lib.message.push(&text_or_default(r, 31)?);
 
         // Keyed by the parsed id, not the text: the map is only ever looked
@@ -474,7 +475,9 @@ fn read_cue(r: &rusqlite::Row<'_>, first: usize) -> rusqlite::Result<Cue> {
     // NULL and 0 both mean "no colour chosen"; the writer stores 0 too.
     let colour = u8::try_from(num(r, first + 4)?).unwrap_or(0);
     // A memory cue's eight-colour `Color`; anything outside 0-7 is none.
-    let memory_colour = u8::try_from(num(r, first + 5)?).ok().filter(|value| *value <= 7);
+    let memory_colour = u8::try_from(num(r, first + 5)?)
+        .ok()
+        .filter(|value| *value <= 7);
     let mut cue = Cue {
         id,
         position_ms,
@@ -720,20 +723,26 @@ fn read_my_tags(conn: &Connection) -> rusqlite::Result<Vec<TagCategory>> {
 /// `myTag` conditions: one `(row, tag)` pair per live `djmdSongMyTag` row
 /// whose track is in the collection, the tag id read as rekordbox compares
 /// it ([`crate::smart::my_tag_key`]). A library without the table has none.
-fn read_track_my_tags(conn: &Connection, content_row: &HashMap<u64, Row>) -> rusqlite::Result<Vec<(Row, i32)>> {
+fn read_track_my_tags(
+    conn: &Connection,
+    content_row: &HashMap<u64, Row>,
+) -> rusqlite::Result<Vec<(Row, i32)>> {
     if !has_table(conn, "djmdSongMyTag") {
         return Ok(Vec::new());
     }
-    let mut stmt = conn.prepare(
-        "SELECT ContentID, MyTagID FROM djmdSongMyTag WHERE rb_local_deleted = 0",
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT ContentID, MyTagID FROM djmdSongMyTag WHERE rb_local_deleted = 0")?;
     let mut rows = stmt.query([])?;
     let mut out = Vec::new();
     while let Some(r) = rows.next()? {
         let (Some(content), Some(tag)) = (text(r, 0)?, text(r, 1)?) else {
             continue;
         };
-        if let Some(&row) = content.parse::<u64>().ok().and_then(|id| content_row.get(&id)) {
+        if let Some(&row) = content
+            .parse::<u64>()
+            .ok()
+            .and_then(|id| content_row.get(&id))
+        {
             out.push((row, crate::smart::my_tag_key(&tag)));
         }
     }
@@ -969,7 +978,10 @@ mod refresh_tests {
             )
             .unwrap();
         db.connection()
-            .execute("UPDATE djmdContent SET DeliveryControl = '' WHERE ID = ?1", [&second])
+            .execute(
+                "UPDATE djmdContent SET DeliveryControl = '' WHERE ID = ?1",
+                [&second],
+            )
             .unwrap();
         let (library, _) = load(&db).unwrap();
         let found = library.row_of(&first).unwrap();
@@ -983,10 +995,16 @@ mod refresh_tests {
         assert_eq!(library.publish[row], 1);
         assert_eq!(library.message.get(row), "hello");
         let other = library.row_of(&second).unwrap() as usize;
-        assert_eq!(library.publish[other], 0, "an empty DeliveryControl is unticked");
+        assert_eq!(
+            library.publish[other], 0,
+            "an empty DeliveryControl is unticked"
+        );
         let spec = |sort| crate::ViewSpec {
-            source: crate::TrackSource::Collection, sort, descending: false,
-            query: String::new(), filter: crate::TrackFilter::default(),
+            source: crate::TrackSource::Collection,
+            sort,
+            descending: false,
+            query: String::new(),
+            filter: crate::TrackFilter::default(),
         };
         let view = library.open_view(&spec(crate::SortColumn::PublishTrackInfo));
         assert_eq!(view.rows.first().copied(), Some(found));
@@ -1039,10 +1057,16 @@ mod refresh_tests {
             rbl_db::fixture::build(dir.path(), rbl_db::fixture::Shape::default()).unwrap();
         let db = Db::open(location, rbl_db::OpenMode::ReadWrite).unwrap();
         let id = rbl_db::fixture::track_id(1);
-        db.connection().execute("DELETE FROM djmdCue WHERE ContentID = ?1", [&id]).unwrap();
+        db.connection()
+            .execute("DELETE FROM djmdCue WHERE ContentID = ?1", [&id])
+            .unwrap();
         for (cue, kind, at, colour) in [
-            ("901", 0, 25_804, Some(6)), ("902", 0, 60_023, Some(4)), ("903", 4, 93_773, Some(0)),
-            ("904", 0, 127_992, Some(-1)), ("905", 0, 130_000, None), ("906", 0, 140_000, Some(255)),
+            ("901", 0, 25_804, Some(6)),
+            ("902", 0, 60_023, Some(4)),
+            ("903", 4, 93_773, Some(0)),
+            ("904", 0, 127_992, Some(-1)),
+            ("905", 0, 130_000, None),
+            ("906", 0, 140_000, Some(255)),
             ("907", 1, 150_000, Some(3)),
         ] {
             db.connection().execute(
@@ -1053,7 +1077,11 @@ mod refresh_tests {
         let (library, _) = load(&db).unwrap();
         let row = library.row_of(&id).unwrap();
         let colours = |library: &Library| -> Vec<Option<u8>> {
-            library.cues_of(row).iter().map(|cue| cue.memory_colour).collect()
+            library
+                .cues_of(row)
+                .iter()
+                .map(|cue| cue.memory_colour)
+                .collect()
         };
         let want = vec![Some(6), Some(4), Some(0), None, None, None, None];
         assert_eq!(colours(&library), want);

@@ -30,6 +30,6 @@
   white-space: nowrap;
   cursor: default;
 }
-.item:hover { background: var(--c-accent); color: var(--c-icon-on); }
+.item:hover { background: var(--c-accent); color: var(--c-on-accent, var(--c-icon-on)); }
 
 .tick { display: inline-block; width: 14px; text-align: center; flex: none; }

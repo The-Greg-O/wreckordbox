@@ -1,0 +1,120 @@
+/* The command palette (ticket #54). Not drawn in the design yet
+   (docs/design/README.md, "Still open"), so it takes the shell's own type
+   and spacing and the chrome colours every theme replaces (#47): a panel
+   dropped from the top of the window, a field, and one line per action
+   with its menu, its reason when greyed, and its key as a key cap. */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 10vh;
+  background: var(--c-modal-scrim);
+}
+
+.palette {
+  display: flex;
+  flex-direction: column;
+  width: 560px;
+  max-width: calc(100vw - 2 * var(--s-shell-space-6));
+  max-height: 70vh;
+  border: var(--s-shell-border) solid var(--c-raised);
+  border-radius: var(--s-shell-radius);
+  background: var(--c-panel);
+  color: var(--c-text);
+  font-family: var(--f-shell);
+  font-size: var(--f-size-shell);
+  font-variant-numeric: tabular-nums;
+}
+
+.field {
+  height: calc(var(--s-shell-row-h) + var(--s-shell-space-4));
+  padding: 0 var(--s-shell-space-5);
+  border: 0;
+  border-bottom: var(--s-shell-border) solid var(--c-raised);
+  background: var(--c-top);
+  color: var(--c-text);
+  font: inherit;
+  outline: none;
+}
+.field::placeholder { color: var(--c-text-dim); }
+
+.list {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: var(--s-shell-space-1) 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  gap: var(--s-shell-space-4);
+  min-height: var(--s-shell-row-h);
+  padding: 0 var(--s-shell-space-5);
+  cursor: default;
+}
+.option[aria-selected="true"] {
+  background: var(--c-select);
+  box-shadow: inset calc(2 * var(--s-shell-border)) 0 0 var(--c-accent);
+}
+.option[aria-disabled="true"] { color: var(--c-text-dim); }
+
+.label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.group,
+.why {
+  flex: none;
+  color: var(--c-text-dim);
+  font-size: var(--f-size-shell-label);
+  letter-spacing: var(--f-tracking-shell-label);
+  text-transform: uppercase;
+}
+.why { text-transform: none; letter-spacing: 0; font-style: italic; }
+
+.key {
+  flex: none;
+  margin-left: auto;
+  padding: 0 var(--s-shell-space-2);
+  border: var(--s-shell-border) solid currentColor;
+  border-radius: var(--s-shell-radius);
+  color: var(--c-text-dim);
+  font-family: inherit;
+  font-size: var(--f-size-shell-label);
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.empty {
+  margin: 0;
+  padding: var(--s-shell-space-4) var(--s-shell-space-5);
+  color: var(--c-text-dim);
+}
+
+/* The opener: a quiet button with its key, in the shell's top bar and the
+   old layout's. */
+.opener {
+  display: flex;
+  align-items: center;
+  gap: var(--s-shell-space-3);
+  height: calc(var(--s-shell-top-bar-h) - var(--s-shell-space-3));
+  padding: 0 var(--s-shell-space-4);
+  border: var(--s-shell-border) solid var(--c-raised);
+  border-radius: var(--s-shell-radius);
+  background: none;
+  color: var(--c-text-dim);
+  font-family: var(--f-shell);
+  font-size: var(--f-size-shell);
+  white-space: nowrap;
+  cursor: default;
+}
+.opener:hover { border-color: var(--c-accent); color: var(--c-text); }
+.opener .key { margin-left: 0; }

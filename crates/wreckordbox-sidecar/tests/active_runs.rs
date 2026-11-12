@@ -10,9 +10,6 @@ fn unfinished_runs_use_a_partial_index_after_migration() {
         .unwrap();
     drop(db);
     let sidecar = wreckordbox_sidecar::Sidecar::open(dir.path()).unwrap();
-    sidecar
-        .finish_run(wreckordbox_sidecar::RunId(1), "fixture")
-        .unwrap();
     let source = wreckordbox_sidecar::Source::new(wreckordbox_sidecar::SourceKind::Tool, "test");
     let active = sidecar.begin_run(&source, "Active").unwrap();
     let finished = sidecar.begin_run(&source, "Finished").unwrap();

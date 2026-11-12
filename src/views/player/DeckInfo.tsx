@@ -34,7 +34,7 @@ export const DeckInfo = memo(function DeckInfo({
     <div className={styles.info} data-testid="deck-info">
       <div className={styles.rating} aria-label={`Rating ${info.rating} of 5`}>
         {[1, 2, 3, 4, 5].map((star) => (
-          <span key={star} aria-hidden><RatingStar lit={info.rating >= star} className={styles.starIcon} /></span>
+          <span key={star} aria-hidden><RatingStar star={star} rating={info.rating} className={styles.starIcon} /></span>
         ))}
       </div>
       <div className={styles.color} data-testid="deck-info-color">

@@ -151,60 +151,29 @@ fn an_entry_is_never_changed_or_removed_and_survives_reopening() {
     assert_eq!(entries[0].label, "Track Edit");
 }
 
-/// Takes a store back to what an older wreckordbox made: the shape of
-/// `version`, with what it held then.
-fn downgrade(dir: &std::path::Path, version: u32) {
-    let raw = rusqlite::Connection::open(dir.join("sidecar.db")).unwrap();
-    let mut drop = String::new();
-    if version < 5 {
-        drop.push_str("DROP INDEX run_unfinished;");
-    }
-    if version < 4 {
-        drop.push_str(
-            "DROP TRIGGER fact_takes_its_place_in_order;
-             DROP TABLE ledger_intent; DROP TABLE ledger_owned_run;
-             DROP TABLE ledger; DROP TABLE ledger_order;
-             DROP INDEX fact_by_successor;",
-        );
-    }
-    if version < 3 {
-        drop.push_str("DROP TABLE decision_answer; DROP TABLE decision;");
-    }
-    if version < 2 {
-        drop.push_str("DROP TABLE mutant_change; DROP TABLE mutant;");
-    }
-    drop.push_str(&format!(
-        "UPDATE meta SET value = '{version}' WHERE key = 'schema_version';"
-    ));
-    raw.execute_batch(&drop).unwrap();
-}
-
 #[test]
 fn a_store_from_each_earlier_version_is_given_the_ledger_and_keeps_its_facts_in_order() {
     for version in [1, 2, 3, 4] {
         let dir = tempfile::tempdir().unwrap();
         let source = agent();
-        let (run, facts) = {
-            let sidecar = Sidecar::open(dir.path()).unwrap();
-            let run = sidecar.begin_run(&source, "Tag").unwrap();
-            let fact = |value: &str| {
-                sidecar
-                    .record(&NewFact {
-                        track_id: "10001",
-                        fingerprint: None,
-                        kind: Kind::judgement("genre"),
-                        value: json!(value),
-                        source: &source,
-                        confidence: 1.0,
-                        run,
-                    })
-                    .unwrap()
-                    .id
-            };
-            (run, vec![fact("Dub"), fact("Dub Techno")])
-        };
-        downgrade(dir.path(), version);
-
+        let db = rusqlite::Connection::open(dir.path().join("sidecar.db")).unwrap();
+        db.execute_batch(include_str!("fixtures/sidecar-v1.sql"))
+            .unwrap();
+        if version >= 2 {
+            db.execute_batch(include_str!("fixtures/sidecar-v2.sql"))
+                .unwrap();
+        }
+        if version >= 3 {
+            db.execute_batch(include_str!("fixtures/sidecar-v3.sql"))
+                .unwrap();
+        }
+        if version >= 4 {
+            db.execute_batch(include_str!("fixtures/sidecar-v4.sql"))
+                .unwrap();
+        }
+        drop(db);
+        let run = RunId(7);
+        let facts = [3, 4];
         let sidecar = Sidecar::open(dir.path()).unwrap();
         let payload = json!({"values": []});
         let id = sidecar
@@ -223,7 +192,11 @@ fn a_store_from_each_earlier_version_is_given_the_ledger_and_keeps_its_facts_in_
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(stored, "5", "from version {version}");
+        assert_eq!(
+            stored,
+            wreckordbox_sidecar::SCHEMA_VERSION.to_string(),
+            "from version {version}"
+        );
     }
 }
 

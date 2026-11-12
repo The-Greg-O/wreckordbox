@@ -120,7 +120,7 @@
 .syncButton:disabled { color: var(--c-pad-label); }
 /* BEAT SYNC lit while the deck follows the master: the capture has deck A's
    filled the pad blue, (53,113,227), and deck B's on the button grey. */
-.syncButton[data-on] { background: var(--c-pad-active); color: var(--c-icon-on); }
+.syncButton[data-on] { background: var(--c-pad-active); color: var(--c-on-accent, var(--c-icon-on)); }
 
 /* MASTER is an outlined box on the panel until this deck is the master, when
    it fills the pad blue: the capture has both, one per deck. */
@@ -132,7 +132,7 @@
 .masterButton[data-on] {
   background: var(--c-pad-active);
   border-color: var(--c-pad-active);
-  color: var(--c-icon-on);
+  color: var(--c-on-accent, var(--c-icon-on));
 }
 
 .keyShift {
@@ -238,7 +238,7 @@
 .tempoStep { width: var(--s-player-dual-mark-w); font-size: var(--f-size-ui); font-weight: 400; }
 .tempoButton { width: var(--s-player-dual-tempo-btn-w); }
 .tempoButton:disabled { color: var(--c-pad-label); }
-.tempoButton[data-on] { background: var(--c-pad-active); color: var(--c-icon-on); }
+.tempoButton[data-on] { background: var(--c-pad-active); color: var(--c-on-accent, var(--c-icon-on)); }
 .step:disabled,
 .tempoStep:disabled { color: var(--c-pad-label); }
 
@@ -252,10 +252,10 @@
 .chip[data-on] {
   background: var(--c-pad-active);
   border-color: var(--c-pad-active);
-  color: var(--c-icon-on);
+  color: var(--c-on-accent, var(--c-icon-on));
 }
 .controls button:hover:not(:disabled) { background: #383838; color: #fff; }
-.controls button[data-on]:hover:not(:disabled) { background: #4a82ed; border-color: #4a82ed; }
+.controls button[data-on]:hover:not(:disabled) { background: var(--c-lit-hover); border-color: var(--c-lit-hover); color: var(--c-on-accent, #fff); }
 
 /* The two fields print their number in a regular face a size up. */
 .loopField,
@@ -367,6 +367,6 @@
 
 /* A playing loop, or an IN that waits for its OUT: the pad blue. */
 .loopField[data-on],
-.icon[data-on] { background: var(--c-pad-active); color: var(--c-icon-on); }
+.icon[data-on] { background: var(--c-pad-active); color: var(--c-on-accent, var(--c-icon-on)); }
 .icon[data-on] .loopGlyph { color: var(--c-icon-on); }
 .loopField:disabled { color: var(--c-pad-label); }
