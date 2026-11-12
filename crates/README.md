@@ -38,6 +38,7 @@ These crates are independent of Tauri; application coordination belongs in
 | [wreckordbox-service](wreckordbox-service/README.md) | The Library service, its client and their protocol. |
 | [wreckordbox](wreckordbox/README.md) | The headless `wreckordbox` command. |
 | [wreckordbox-sidecar](wreckordbox-sidecar/README.md) | The Sidecar: a store of Facts beside the Library, with Stems as its first kind. |
+| [wreckordbox-native-stems](wreckordbox-native-stems/README.md) | Native stems: a track's Stems written to a Spare stick in the layout a modded XDJ-AZ plays. |
 
 ## Link Export and diagnostics
 
