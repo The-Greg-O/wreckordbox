@@ -1095,3 +1095,26 @@ fn the_windows_run_ends_when_the_window_closes() {
     assert_eq!(runs["runs"][0]["outcome"], "wreckordbox stopped");
     assert_eq!(runs["runs"][0]["changes"], 1);
 }
+
+/// wbx-89 review 5: a restore is refused while the window owns the Library,
+/// before it reads the backup or changes anything: the restore takes the
+/// same lock the window's hosted service holds.
+#[test]
+fn a_restore_from_the_command_is_refused_while_the_window_owns_the_library() {
+    let window = window();
+    window.host().unwrap();
+    let before = std::fs::read(&window.location.master_db).unwrap();
+    let backup = window.dir.path().join("rbexport-20261112-1200.zip");
+    std::fs::write(&backup, b"not read").unwrap();
+
+    let refused = window.cli(&["--json", "backup", "restore", backup.to_str().unwrap(), "--yes"]);
+
+    assert!(!refused.ok);
+    let error: serde_json::Value = serde_json::from_str(&refused.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "restore_refused", "{error}");
+    assert!(error["error"]["message"].as_str().unwrap().contains("Quit the wreckordbox window"), "{error}");
+    assert_eq!(std::fs::read(&window.location.master_db).unwrap(), before);
+    // The window is still the writer.
+    window.cli(&["tracks", "rate", &track_id(1), "3"]).succeeded();
+    assert_eq!(window.rating(&track_id(1)), 3);
+}
