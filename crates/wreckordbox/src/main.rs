@@ -7,6 +7,7 @@
 mod facts;
 mod intake;
 mod mytag_edits;
+mod protection;
 mod reading;
 mod stems;
 mod tracks;
@@ -65,6 +66,15 @@ enum Commands {
         #[command(subcommand)]
         command: reading::HistoryCommands,
     },
+    /// Say whether Library Protection is on, or turn it on or off.
+    ///
+    /// While it is on, every command that changes the Library is refused,
+    /// here and in the window; reading is not affected. It is the window's
+    /// Preferences switch, and is on until someone turns it off.
+    Protection {
+        #[command(subcommand)]
+        command: Option<protection::ProtectionCommands>,
+    },
     /// Separate a track into Stems, kept in the Sidecar beside the Library.
     Stems {
         #[command(subcommand)]
@@ -117,7 +127,8 @@ enum TrackCommands {
     ///
     /// The window and every other client of the Library service see the
     /// change at once. Nothing is changed when the track is not in the
-    /// Library, or while rekordbox is running.
+    /// Library, while rekordbox is running, or while Library Protection is
+    /// on (see `wreckordbox protection`).
     Rate {
         /// The track's identifier: the ID column of `tracks list`.
         #[arg(value_name = "ID")]
@@ -151,7 +162,9 @@ fn main() -> ExitCode {
             let _ = if cli.json {
                 writeln!(stderr, "{}", json!({ "error": error }))
             } else {
-                writeln!(stderr, "wreckordbox: {error}")
+                writeln!(stderr, "wreckordbox: {error}").and_then(|()| {
+                    protection::hint(&error).map_or(Ok(()), |hint| writeln!(stderr, "{hint}"))
+                })
             };
             ExitCode::FAILURE
         }
@@ -219,6 +232,13 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
         Commands::Tracks {
             command: TrackCommands::Query(args),
         } => print(&tracks::query(&mut connect(&config)?, args, cli.json)?),
+        Commands::Protection { command } => {
+            print(&protection::protection(
+                &mut connect(&config)?,
+                cli.json,
+                command.as_ref(),
+            )?);
+        }
         Commands::Stems { command } => {
             print(&stems::run(&mut connect(&config)?, cli.json, command)?);
         }
@@ -266,7 +286,11 @@ fn connect(config: &Config) -> Result<Client, ServiceError> {
         program,
         args: vec!["serve".into(), "--spawned".into()],
     };
-    Client::connect_or_start(config, &library, &launcher)
+    let mut client = Client::connect_or_start(config, &library, &launcher)?;
+    // A window that has only just opened is still reading the Library:
+    // wait for it, for a bounded time, instead of failing at once.
+    client.wait_while_loading(wreckordbox_service::loading_wait_from_env());
+    Ok(client)
 }
 
 fn status_text(status: &Status) -> String {

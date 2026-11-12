@@ -79,7 +79,43 @@ impl Sandbox {
         })
     }
 
+    /// A fixture Library on a machine where nothing has said whether
+    /// Library Protection is on: no window has run and nobody has turned it
+    /// off. Every other sandbox starts with protection off, as on the
+    /// machine of a DJ who edits.
+    pub fn untouched() -> Self {
+        let sandbox = Self::new();
+        std::fs::remove_file(sandbox.protection_file()).unwrap();
+        sandbox
+    }
+
+    /// The folder the window and the service share their state in.
+    pub fn state_dir(&self) -> PathBuf {
+        self.dir.path().join("state")
+    }
+
+    /// Where Library Protection is kept for the service to read.
+    pub fn protection_file(&self) -> PathBuf {
+        self.state_dir().join("library-protection.json")
+    }
+
+    /// Turns Library Protection on or off as the window records it.
+    pub fn protect(&self, on: bool) {
+        std::fs::create_dir_all(self.state_dir()).unwrap();
+        std::fs::write(
+            self.protection_file(),
+            format!("{{\"protect_library\":{on}}}"),
+        )
+        .unwrap();
+    }
+
     pub fn with_shape(shape: Shape) -> Self {
+        let sandbox = Self::with_shape_untouched(shape);
+        sandbox.protect(false);
+        sandbox
+    }
+
+    fn with_shape_untouched(shape: Shape) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let library = dir.path().join("library");
         std::fs::create_dir_all(&library).unwrap();
@@ -353,7 +389,7 @@ impl Sandbox {
         Config {
             runtime_dir: self.runtime_dir(),
             idle_exit: None,
-            recovery_dir: self.dir.path().join("home/recovery"),
+            recovery_dir: self.state_dir(),
         }
     }
 
@@ -371,6 +407,7 @@ impl Sandbox {
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("HOME", self.dir.path().join("home"))
             .env("RBXPORT_TEST", "1")
+            .env("RBXPORT_STATE_DIR", self.state_dir())
             .env("RBXPORT_OPTIONS", self.dir.path().join("options.json"))
             .env("RBXPORT_TEST_FIXTURE", self.dir.path().join("library"))
             .env("WRECKORDBOX_RUNTIME_DIR", self.runtime_dir())

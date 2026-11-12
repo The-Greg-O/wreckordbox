@@ -162,7 +162,6 @@ impl Service {
         let library_lock = take_lock(&library.master_db, &socket)?;
         let master_db = library.master_db.clone();
         let open = open(library)?;
-        let core = open.core();
         let listener = listen(&config.runtime_dir, &socket)?;
         let (queue, queued) = std::sync::mpsc::channel();
         let (sidecar_events, sidecar_queued) = std::sync::mpsc::channel();
@@ -201,16 +200,18 @@ impl Service {
         // or the front end this service shares the core with. The core calls
         // this under its own lock, so the change is only queued here.
         {
-            let shared = Arc::downgrade(&shared);
-            core.watch(move |change| {
-                let Some(shared) = shared.upgrade() else {
-                    return false;
-                };
-                let queue = lock(&shared.changes);
-                queue
-                    .as_ref()
-                    .is_some_and(|queue| queue.send(LibraryChanged::from(change).event()).is_ok())
-            });
+            let watching = Arc::downgrade(&shared);
+            if let Some(owned) = lock(&shared.library).as_ref() {
+                owned.library.watch(move |change| {
+                    let Some(shared) = watching.upgrade() else {
+                        return false;
+                    };
+                    let queue = lock(&shared.changes);
+                    queue.as_ref().is_some_and(|queue| {
+                        queue.send(LibraryChanged::from(change).event()).is_ok()
+                    })
+                });
+            }
         }
         {
             let shared = Arc::clone(&shared);
@@ -404,6 +405,25 @@ impl Shared {
                 // has been sent.
                 self.stop_requested.store(true, Ordering::Release);
                 Ok(json!({}))
+            }
+            crate::protection::commands::GET => {
+                let protect_library = self.with_library(OpenLibrary::protected)?;
+                to_value(&crate::protection::Protection { protect_library })
+            }
+            crate::protection::commands::SET => {
+                let set: crate::protection::SetProtection = required_arguments(request)?;
+                let protect_library = set.protect_library;
+                let previous = self.with_library(|library| library.protect(protect_library))??;
+                // The window takes the switch up as its own preference, so
+                // its status bar and its own edits agree with the service.
+                self.publish(&Event {
+                    event: crate::protection::PROTECTION_CHANGED.to_owned(),
+                    data: json!(crate::protection::Protection { protect_library }),
+                });
+                to_value(&crate::protection::ProtectionSet {
+                    protect_library,
+                    previous,
+                })
             }
             reading if crate::reading::answers(reading) => self
                 .with_library(|library| crate::reading::answer(library, reading, &request.args))?,

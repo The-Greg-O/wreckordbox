@@ -15,6 +15,7 @@ pub mod facts;
 pub mod intake;
 mod library;
 pub mod mytag_edits;
+pub mod protection;
 pub mod protocol;
 pub mod reading;
 mod separation;
@@ -27,7 +28,7 @@ use std::time::Duration;
 
 use rbl_db::LibraryLocation;
 
-pub use client::{Client, Launcher};
+pub use client::{Client, Launcher, DEFAULT_LOADING_WAIT, LOADING_RETRY};
 pub use protocol::{
     codes, events, ChangeKind, Event, LibraryChanged, RateTrack, RatedTrack, ServiceError, Status,
     Track, TrackList, TrackQuery, DEFAULT_TRACK_LIMIT,
@@ -39,6 +40,21 @@ pub use server::{serve_spawned, Service, Stopped};
 pub const RUNTIME_DIR_ENV: &str = "WRECKORDBOX_RUNTIME_DIR";
 /// Seconds a service stays up with no client connected. `0` means forever.
 pub const IDLE_EXIT_ENV: &str = "WRECKORDBOX_IDLE_EXIT_SECS";
+
+/// Seconds a `wreckordbox` command waits for a window that is still reading
+/// the Library, instead of [`DEFAULT_LOADING_WAIT`]. `0` does not wait.
+pub const LOADING_WAIT_ENV: &str = "WRECKORDBOX_LOADING_WAIT_SECS";
+
+/// How long a command waits while the Library is being read:
+/// [`LOADING_WAIT_ENV`] when it is set to a number of seconds, else
+/// [`DEFAULT_LOADING_WAIT`].
+#[must_use]
+pub fn loading_wait_from_env() -> Duration {
+    std::env::var(LOADING_WAIT_ENV)
+        .ok()
+        .and_then(|secs| secs.trim().parse::<u64>().ok())
+        .map_or(DEFAULT_LOADING_WAIT, Duration::from_secs)
+}
 
 /// Where a service listens and how long it outlives its clients.
 #[derive(Debug, Clone)]

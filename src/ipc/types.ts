@@ -373,6 +373,15 @@ export interface Backend {
   onServiceStopped(listener: (message: string) => void): () => void;
   /** What `onServiceStopped` said, for a window that was not listening yet. */
   serviceProblem(): Promise<string | null>;
+  /**
+   * Library Protection as it is recorded for the Library service, which
+   * cannot read the window's preferences; `null` when nothing is recorded.
+   */
+  libraryProtection(): Promise<boolean | null>;
+  /** Records Library Protection for the Library service. */
+  recordLibraryProtection(on: boolean): Promise<void>;
+  /** Library Protection was turned from the command line. */
+  onLibraryProtectionChanged(listener: (on: boolean) => void): () => void;
 
   /**
    * Makes a new, empty library where rekordbox keeps one and loads it;
