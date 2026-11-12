@@ -17,11 +17,21 @@ const pad = (page: Page, letter: string) =>
   player(page).locator('[aria-label="Hot cues"]').getByRole("button", { name: `Hot cue ${letter}`, exact: true });
 
 /** Reads a token from the running page, so the test and the app agree. */
+/**
+ * A length token in pixels, as the browser resolves it. Read through a
+ * probe element: a token can be an expression (the font sizes are
+ * `calc(10px * var(--role-font-scale, 1))` since the theme's font scale,
+ * wbx-45.6), and a custom property's own value is its unresolved text.
+ */
 async function token(page: Page, name: string): Promise<number> {
-  const value = await page.evaluate(
-    (n) => getComputedStyle(document.documentElement).getPropertyValue(n),
-    name,
-  );
+  const value = await page.evaluate((n) => {
+    const probe = document.createElement("div");
+    probe.style.cssText = `position:absolute;visibility:hidden;width:var(${n})`;
+    document.body.appendChild(probe);
+    const width = getComputedStyle(probe).width;
+    probe.remove();
+    return width;
+  }, name);
   return Number.parseFloat(value);
 }
 

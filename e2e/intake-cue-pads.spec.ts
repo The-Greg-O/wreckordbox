@@ -593,10 +593,11 @@ test("the palette's Tap Tempo is greyed under Library Protection, as the button 
     .toHaveAttribute("aria-disabled", "true");
 });
 
-test("640px: the pads and grid fit beside each other without spilling", async ({ page }) => {
-  await page.setViewportSize({ width: 640, height: 800 });
+test("640px: the pads fit without spilling, and the grid tools are behind the palette", async ({ page }) => {
+  // Chosen in the queue's list at full width; at 640 the queue is a counter.
   await openIntake(page);
   await chooseTrack(page, () => true);
+  await page.setViewportSize({ width: 640, height: 800 });
   const row = player(page).getByTestId("intake-cue-row");
   const box = (await row.boundingBox())!;
   expect(box.x).toBeGreaterThanOrEqual(0);
@@ -605,6 +606,6 @@ test("640px: the pads and grid fit beside each other without spilling", async ({
     const b = (await pad(page, letter).boundingBox())!;
     expect(b.x + b.width).toBeLessThanOrEqual(640);
   }
-  const t = (await tap(page).boundingBox())!;
-  expect(t.x + t.width).toBeLessThanOrEqual(640);
+  // docs/design/screens/intake "Sizes" (wbx-69): see intake-half-width.spec.ts.
+  await expect(grid(page)).toBeHidden();
 });

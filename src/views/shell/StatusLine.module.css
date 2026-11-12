@@ -12,7 +12,7 @@
   font-variant-numeric: tabular-nums;
 }
 .connection { flex: none; white-space: nowrap; }
-.service { display: flex; align-items: center; gap: var(--s-shell-space-4); min-width: 0; }
+.service { display: flex; align-items: center; gap: var(--s-shell-space-4); min-width: 0; overflow: hidden; }
 .service:empty { display: none; }
 .version { flex: none; }
 .runs { flex: 1 1 auto; color: var(--c-text); }
@@ -47,4 +47,8 @@
 @container shell (max-width: 800px) {
   .selection { display: none; }
   .version { max-width: 7ch; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  /* A narrow line (wbx-69): the connection shortens with an ellipsis, never
+     below "Service co…" / "Service no…", rather than running under what
+     follows it. */
+  .connection { flex: 0 1 auto; min-width: 11ch; overflow: hidden; text-overflow: ellipsis; }
 }
