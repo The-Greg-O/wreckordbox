@@ -662,7 +662,8 @@ impl Shared {
         // A Stick load is asked to stop where it safely can, and waited for
         // until its caller has its answer: never cut off mid-publication,
         // never without saying what is on the Stick (wbx-70).
-        self.loads.shut(Duration::from_secs(180));
+        self.loads
+            .shut(crate::stick_load::shutdown_patience(&self.state_dir));
         for connection in lock(&self.connections).values() {
             let _ = lock(&connection.writer).shutdown(std::net::Shutdown::Both);
         }

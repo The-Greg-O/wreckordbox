@@ -142,6 +142,10 @@ pub struct Skipped {
 /// it held before, apart from a `STEMS` folder that may have been made.
 #[derive(Debug, thiserror::Error)]
 pub enum NativeStemsError {
+    /// The Stems changed after they were staged, before publication
+    /// ([`write_checked`]). Nothing was published.
+    #[error("the Stems changed while they were being written ({0}); nothing was published")]
+    InputChanged(String),
     /// The Stick does not carry the Spare stick marker. Nothing was written.
     #[error(
         "{} is not marked as a Spare stick, so nothing was written to it. A Stick is only written \
@@ -237,6 +241,16 @@ impl NativeStemsError {
 /// out whole, so the deck never sees half of one, and the deck's own
 /// waveform cache for the old audio goes with it.
 pub fn write(request: &Request<'_>) -> Result<Outcome, NativeStemsError> {
+    write_checked(request, &|| Ok(()))
+}
+
+/// [`write`], with `check` run once the set is staged and before it is
+/// published: an error from it (the inputs are no longer the ones the
+/// caller approved) leaves nothing published, the staging removed.
+pub fn write_checked(
+    request: &Request<'_>,
+    check: &dyn Fn() -> Result<(), String>,
+) -> Result<Outcome, NativeStemsError> {
     let stick = request.stick;
     if !is_spare_stick(stick) {
         return Err(NativeStemsError::NotSpareStick {
@@ -308,6 +322,10 @@ pub fn write(request: &Request<'_>) -> Result<Outcome, NativeStemsError> {
     let frames = stage(&working.staging, request, &origin).inspect_err(|_| {
         let _ = std::fs::remove_dir_all(&working.staging);
     })?;
+    if let Err(why) = check() {
+        let _ = std::fs::remove_dir_all(&working.staging);
+        return Err(NativeStemsError::InputChanged(why));
+    }
     let dir = stems_dir.join(&folder);
     work::publish(&stems_dir, &working, &dir, existing.as_deref()).inspect_err(|_| {
         let _ = std::fs::remove_dir_all(&working.staging);

@@ -162,7 +162,14 @@ pub(crate) fn answer(
             format!("bad arguments to {}: {e}", request.command),
         )
     })?;
-    let answer = write_one(stems, state_dir, lookup(&args.id)?, &args.stick)?;
+    let (answer, _) = write_one(
+        stems,
+        state_dir,
+        lookup(&args.id)?,
+        &args.stick,
+        None,
+        &|| {},
+    )?;
     serde_json::to_value(answer)
         .map_err(|e| ServiceError::new(service_codes::SERVICE_FAILED, e.to_string()))
 }
@@ -209,6 +216,7 @@ pub(crate) fn current_stems_read_only(stems: &Stems, found: &Found) -> Option<Cu
         })
         .collect();
     Some(CurrentStems {
+        set: set.clone(),
         identity: format!(
             "Stems Fact {}, {} frames, made from {:?}: {}",
             set.fact_id,
@@ -234,6 +242,8 @@ fn modified(metadata: &std::fs::Metadata) -> String {
 
 /// A track's current Stems, as a Stick load plans them.
 pub(crate) struct CurrentStems {
+    /// The set itself, as read.
+    pub(crate) set: StemSet,
     /// Which set, and each Stem file's size and modification time: another
     /// separation, or a Stem file changed, is another identity.
     pub(crate) identity: String,
@@ -244,12 +254,21 @@ pub(crate) struct CurrentStems {
 /// Writes the Native stems of the track `found` to the Stick at `stick`,
 /// with every check `stems.write` makes, Stick Protection first: what
 /// `stems.write` does, and a Stick load does for each of its tracks.
+///
+/// `approved` is the exact Stem set to write (a Stick load's, as its plan
+/// approved it); `None` writes the track's current Stems (`stems.write`).
+/// Either way the set's files are checked again once staged, before the
+/// set is published: a file changed or gone in between publishes nothing.
+/// `staged` runs at that moment first (a test seam). Answers what was
+/// written and the Stems Fact it was written from.
 pub(crate) fn write_one(
     stems: &Stems,
     state_dir: &Path,
     found: Found,
     stick: &Path,
-) -> Result<NativeStems, ServiceError> {
+    approved: Option<&StemSet>,
+    staged: &dyn Fn(),
+) -> Result<(NativeStems, i64), ServiceError> {
     let Found {
         audio: found,
         library_id,
@@ -294,7 +313,13 @@ pub(crate) fn write_one(
             },
         ));
     }
-    let set = current_stems(stems, &found)?;
+    // The exact set approved, when there is one: never the current Stems
+    // selected again, which a separation finishing meanwhile can replace.
+    let set = match approved {
+        Some(approved) => approved.clone(),
+        None => current_stems(stems, &found)?,
+    };
+    let stamps = stem_stamps(&set);
     let file = |role: Role| -> Result<&Path, ServiceError> {
         set.stems
             .iter()
@@ -329,13 +354,23 @@ pub(crate) fn write_one(
         authorized.recheck().map_err(|refused| {
             ServiceError::new(service_codes::STICK_PROTECTED, refused.to_string())
         })?;
-        wreckordbox_native_stems::write(&wreckordbox_native_stems::Request {
-            stick,
-            library_id,
-            track_id,
-            stems: files,
-            frames: Some(set.samples),
-        })
+        wreckordbox_native_stems::write_checked(
+            &wreckordbox_native_stems::Request {
+                stick,
+                library_id,
+                track_id,
+                stems: files,
+                frames: Some(set.samples),
+            },
+            &|| {
+                staged();
+                if stem_stamps(&set) == stamps {
+                    Ok(())
+                } else {
+                    Err("a Stem file changed or went missing".to_owned())
+                }
+            },
+        )
         .map_err(|error| refused(&track, stick, &error))?
     };
     let answer = match outcome {
@@ -379,7 +414,20 @@ pub(crate) fn write_one(
             }),
         },
     };
-    Ok(answer)
+    Ok((answer, set.fact_id))
+}
+
+/// Each Stem file's size and modification time, or that it is gone.
+fn stem_stamps(set: &StemSet) -> Vec<String> {
+    set.stems
+        .iter()
+        .map(|stem| {
+            std::fs::metadata(&stem.path).map_or_else(
+                |_| format!("{} missing", stem.path.display()),
+                |m| format!("{} {} {}", stem.path.display(), m.len(), modified(&m)),
+            )
+        })
+        .collect()
 }
 
 /// Refuses Stems that are not about as long as the track's own audio.

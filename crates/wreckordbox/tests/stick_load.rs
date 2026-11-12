@@ -1039,3 +1039,192 @@ fn a_window_taking_over_during_publication_waits_for_it_and_reports_it() {
         other => panic!("{other}: {load}"),
     }
 }
+
+/// Waits for `child` to end, up to `limit`; kills it and answers `None`
+/// when it does not (a hang, not a slow test).
+fn finished_within(child: std::process::Child, limit: Duration) -> Option<std::process::Output> {
+    let mut child = child;
+    let until = std::time::Instant::now() + limit;
+    loop {
+        if child.try_wait().unwrap().is_some() {
+            return Some(child.wait_with_output().unwrap());
+        }
+        if std::time::Instant::now() >= until {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn release_pause(rig: &Rig) {
+    std::fs::remove_file(
+        rig.sandbox
+            .state_dir()
+            .join(wreckordbox_service::stick_load::TEST_PAUSE_AT_FILE),
+    )
+    .unwrap();
+}
+
+#[test]
+fn the_stem_set_written_is_the_one_approved_even_if_another_is_made_after_it_was_checked() {
+    let rig = Rig::new(&["SPARE*"]);
+    let alpha = rig.sandbox.path().join("audio").join("Alpha.wav");
+    record_stems(&rig.sandbox, &rig.a, &alpha);
+    rig.unlock(0);
+    let dry = rig.dry_run(0, &[&rig.set]);
+    assert_eq!(titles(&dry["changes"]["native_stems"]), ["Alpha"], "{dry}");
+    // The load stops right after it has checked the approved set.
+    let child = paused_load(&rig, "native_stems_verified", dry["plan"].as_str().unwrap());
+    // Meanwhile the track's audio changes and a replacement separation
+    // finishes: the approved set is now stale, another is current.
+    let mut bytes = std::fs::read(&alpha).unwrap();
+    let last = bytes.len() - 1;
+    bytes[last] ^= 0x55;
+    std::fs::write(&alpha, bytes).unwrap();
+    let separated = rig.json(&["stems", "separate", &rig.a]);
+    let approved = separated["marked_stale"][0]
+        .as_i64()
+        .expect(&separated.to_string());
+    let replacement = separated["stems"]["fact_id"].as_i64().unwrap();
+    assert_ne!(approved, replacement);
+    release_pause(&rig);
+
+    let output = finished_within(child, Duration::from_secs(60)).expect("the load ends");
+    let load: Value = serde_json::from_slice(&output.stdout).unwrap();
+
+    assert_eq!(load["native_stems"][0]["outcome"], "written", "{load}");
+    assert_eq!(
+        load["native_stems"][0]["stems_fact"], approved,
+        "the approved set, never the replacement: {load}"
+    );
+}
+
+#[test]
+fn a_stem_file_changed_once_staged_publishes_nothing() {
+    let rig = Rig::new(&["SPARE*"]);
+    let alpha = rig.sandbox.path().join("audio").join("Alpha.wav");
+    record_stems(&rig.sandbox, &rig.a, &alpha);
+    rig.unlock(0);
+    let dry = rig.dry_run(0, &[&rig.set]);
+    let child = paused_load(&rig, "native_stems_staged", dry["plan"].as_str().unwrap());
+    // A Stem file of the approved set changes after it was staged.
+    let stems = rig.json(&["stems", "show", &rig.a]);
+    let vocals = stems["stems"]["stems"]
+        .as_array()
+        .or_else(|| stems["stems"].as_array())
+        .expect(&stems.to_string())
+        .iter()
+        .find(|s| s["role"] == "vocals")
+        .unwrap()["path"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut bytes = std::fs::read(&vocals).unwrap();
+    bytes.extend_from_slice(&[0, 0, 0, 0]);
+    std::fs::write(&vocals, bytes).unwrap();
+    release_pause(&rig);
+
+    let output = finished_within(child, Duration::from_secs(60)).expect("the load ends");
+    let load: Value = serde_json::from_slice(&output.stdout).unwrap();
+
+    assert_eq!(load["native_stems"][0]["outcome"], "failed", "{load}");
+    assert!(
+        load["native_stems"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("changed"),
+        "{load}"
+    );
+    assert!(
+        !rig.paths[0].join("STEMS").join("Alpha").exists(),
+        "nothing published"
+    );
+}
+
+#[test]
+fn a_dry_run_from_another_client_during_a_load_never_deadlocks_with_its_read_back() {
+    let rig = Rig::new(&["FRIDAY"]);
+    rig.unlock(0);
+    let dry = rig.dry_run(0, &[&rig.set]);
+    let service = rig.sandbox.status()["pid"].as_u64().unwrap();
+    // The load holds the Stick's lock, about to read the Stick back.
+    let load = paused_load(&rig, "read_back", dry["plan"].as_str().unwrap());
+    // A second client asks for a dry run of the same Stick: it waits for
+    // the Stick's lock.
+    let other = rig
+        .sandbox
+        .command()
+        .args(["--json", "stick", "dry-run", rig.path(0), &rig.other])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    release_pause(&rig);
+
+    let load = finished_within(load, Duration::from_secs(30));
+    let other = finished_within(other, Duration::from_secs(30));
+    if load.is_none() || other.is_none() {
+        // A deadlocked service answers nobody, not even the sandbox's
+        // clean-up: end it so the test fails rather than hangs.
+        let _ = std::process::Command::new("kill")
+            .args(["-9", &service.to_string()])
+            .status();
+    }
+
+    let load = load.expect("the load hung: its read-back waited for the Library the dry run held");
+    let other = other.expect("the dry run hung waiting for the Stick's lock");
+    assert!(
+        load.status.success(),
+        "{}",
+        String::from_utf8_lossy(&load.stderr)
+    );
+    assert!(
+        other.status.success(),
+        "{}",
+        String::from_utf8_lossy(&other.stderr)
+    );
+}
+
+#[test]
+fn stopping_the_service_waits_past_its_patience_for_a_load_and_its_report() {
+    let rig = Rig::new(&["FRIDAY"]);
+    std::fs::write(
+        rig.sandbox
+            .state_dir()
+            .join(wreckordbox_service::stick_load::TEST_SHUTDOWN_PATIENCE_FILE),
+        "200",
+    )
+    .unwrap();
+    rig.unlock(0);
+    let dry = rig.dry_run(0, &[&rig.set]);
+    // A publication that stalls (a slow device), longer than the patience.
+    let mut child = paused_load(&rig, "publishing", dry["plan"].as_str().unwrap());
+    rig.sandbox.client().stop().unwrap();
+    std::thread::sleep(Duration::from_millis(1_500));
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "the load was cut off when the patience ran out"
+    );
+    release_pause(&rig);
+
+    let output = finished_within(child, Duration::from_secs(60)).expect("the load ends");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let load: Value = serde_json::from_str(stdout.trim()).unwrap_or_else(|_| {
+        panic!(
+            "the caller gets its report: {stdout:?} {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
+    assert!(
+        ["loaded", "failed"].contains(&load["outcome"].as_str().unwrap()),
+        "{load}"
+    );
+    assert!(
+        load["written"].is_object() && load["not_written"].is_object(),
+        "{load}"
+    );
+    assert!(!rig.paths[0].join(".rbxport-publication").exists());
+}

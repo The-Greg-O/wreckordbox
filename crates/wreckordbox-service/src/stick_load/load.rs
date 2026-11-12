@@ -14,7 +14,7 @@ use std::time::Duration;
 use serde_json::json;
 use wreckordbox_stick_protection::{Refused, Volume};
 use wreckordbox_stick_write::approval::{self, Bound, StickOperation};
-use wreckordbox_stick_write::plan::{export_plan, ExportPlan, PlaylistChange, EXPORT_CACHE};
+use wreckordbox_stick_write::plan::{export_plan_of, ExportPlan, PlaylistChange, EXPORT_CACHE};
 use wreckordbox_stick_write::selection::{ExportSelection, LibrarySource};
 use wreckordbox_stick_write::StickWriteError;
 
@@ -216,6 +216,10 @@ struct Planned {
     /// What the load writes and the identity of each input it depends on:
     /// what its plan id is bound to.
     bound: Bound,
+    /// The Library's identifier and the index snapshot planned from: the
+    /// read-back plans against them, without taking the Library again.
+    db_id: u64,
+    index: Arc<rbl_index::Library>,
 }
 
 /// Works out a load of `playlists` to the Stick at `root`. Call holding
@@ -231,7 +235,7 @@ fn plan_load(
     state_dir: &Path,
     library: &OpenLibrary,
     stems: &Stems,
-    index: &rbl_index::Library,
+    index: &Arc<rbl_index::Library>,
     root: &Path,
     playlists: &[String],
 ) -> Result<Planned, ServiceError> {
@@ -242,7 +246,8 @@ fn plan_load(
         .for_stick_inspected(library, index, &share, root, false)
         .map_err(planning)?
         .into_owned();
-    let plan = export_plan(library, index, root, &selection, None).map_err(planning)?;
+    let db_id = wreckordbox_stick_write::selection::library_db_id(library);
+    let plan = export_plan_of(db_id, index, root, &selection, None).map_err(planning)?;
 
     // Native stems, on a Spare stick only: each track loaded that has a
     // complete set of current Stems, read without opening a writer.
@@ -295,6 +300,8 @@ fn plan_load(
         space,
         stems: planned_stems,
         bound,
+        db_id,
+        index: Arc::clone(index),
     })
 }
 
@@ -901,6 +908,7 @@ pub(crate) fn load(
     // run reported, with every check `stems.write` makes, Stick Protection
     // first.
     let mut native = Vec::new();
+    let mut written_fact = None;
     let total = planned.stems.len();
     for (done, set) in planned.stems.into_iter().enumerate() {
         let track = TrackLine {
@@ -922,10 +930,21 @@ pub(crate) fn load(
                 Some("its Stems changed since the dry run; make a new dry run".to_owned()),
             )
         } else {
+            pause_for_test(state_dir, pause_at.as_deref(), "native_stems_verified");
             progress("native_stems", done, total, json!(track));
-            match native_stems::write_one(stems, state_dir, set.found, &root) {
-                Ok(written) if written.outcome == "written" => ("written", None),
-                Ok(skipped) => ("skipped", skipped.skipped.map(|s| s.reason)),
+            match native_stems::write_one(
+                stems,
+                state_dir,
+                set.found,
+                &root,
+                Some(&set.current.set),
+                &|| pause_for_test(state_dir, pause_at.as_deref(), "native_stems_staged"),
+            ) {
+                Ok((written, fact)) if written.outcome == "written" => {
+                    written_fact = Some(fact);
+                    ("written", None)
+                }
+                Ok((skipped, _)) => ("skipped", skipped.skipped.map(|s| s.reason)),
                 Err(error) => ("failed", Some(error.message)),
             }
         };
@@ -933,15 +952,22 @@ pub(crate) fn load(
             track,
             outcome: outcome.to_owned(),
             reason,
+            stems_fact: written_fact.take(),
         });
     }
 
     // Read back: the Stick compared with the plan again.
-    let after = with_library(with, |library| {
-        let _gate = library.edit_gate().lock();
-        let (index, _) = library.index_at_generation()?;
-        export_plan(library, &index, &root, &planned.selection, None).map_err(planning)
-    });
+    pause_for_test(state_dir, pause_at.as_deref(), "read_back");
+    // Without taking the Library again: this load holds the Stick's lock,
+    // and the lock order is the Library first, then the Stick (a dry run
+    // holding the Library waits for this Stick).
+    let after = export_plan_of(
+        planned.db_id,
+        &planned.index,
+        &root,
+        &planned.selection,
+        None,
+    );
     let report = read_back(&planned.selection, &planned.changes, after.ok().as_ref());
     let outcome = if error.is_some() {
         "failed"

@@ -19,7 +19,7 @@ use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
 
-use crate::selection::{held_on_stick, ExportSelection, LibrarySource};
+use crate::selection::{held_on_stick_of, library_db_id, ExportSelection, LibrarySource};
 use crate::{Result, StickWriteError};
 
 /// The cache of converted audio every export shares, the window's and the
@@ -133,6 +133,30 @@ pub fn export_plan(
     selection: &ExportSelection,
     compatibility: Option<rbl_export::CompatibilityFormat>,
 ) -> Result<ExportPlan> {
+    export_plan_of(
+        library_db_id(state),
+        library,
+        destination,
+        selection,
+        compatibility,
+    )
+}
+
+/// [`export_plan`] for the Library whose identifier is `db_id` and whose
+/// index snapshot is `library`: reads only the Stick and the selection's
+/// files, never the Library, so it needs none of its locks (a load reading
+/// a Stick back while it holds the Stick's lock, wbx-70).
+#[allow(
+    clippy::too_many_lines,
+    reason = "the plan's parts, each read from the Stick once"
+)]
+pub fn export_plan_of(
+    db_id: u64,
+    library: &rbl_index::Library,
+    destination: &Path,
+    selection: &ExportSelection,
+    compatibility: Option<rbl_export::CompatibilityFormat>,
+) -> Result<ExportPlan> {
     let options = rbl_export::ExportOptions {
         sync: Some(&selection.sync),
         compatibility,
@@ -169,7 +193,7 @@ pub fn export_plan(
     } else {
         None
     };
-    let (held, _) = held_on_stick(state, library, destination);
+    let (held, _) = held_on_stick_of(db_id, library, destination);
     let manifest = rbl_export::Manifest::load(destination);
 
     // Each playlist: created, or written again with what it gains and loses.

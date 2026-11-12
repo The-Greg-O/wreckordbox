@@ -35,6 +35,28 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 pub use load::{TEST_FAIL_AFTER_FILE, TEST_PAUSED_FILE, TEST_PAUSE_AT_FILE};
+
+/// In the state folder, in test mode only: how long, in milliseconds,
+/// stopping the service waits for a running load before it says so in
+/// the log (it goes on waiting).
+pub const TEST_SHUTDOWN_PATIENCE_FILE: &str = "test-stick-load-shutdown-patience-ms";
+
+/// How long stopping the service is patient with a running load.
+pub(crate) fn shutdown_patience(state_dir: &std::path::Path) -> std::time::Duration {
+    sticks::testing()
+        .then(|| {
+            std::fs::read_to_string(state_dir.join(TEST_SHUTDOWN_PATIENCE_FILE))
+                .ok()?
+                .trim()
+                .parse()
+                .ok()
+        })
+        .flatten()
+        .map_or(
+            std::time::Duration::from_secs(180),
+            std::time::Duration::from_millis,
+        )
+}
 pub use sticks::{Stick, Sticks};
 pub use sticks::{TEST_CLUSTER_BYTES_FILE, TEST_FREE_BYTES_FILE};
 
@@ -262,6 +284,9 @@ pub struct NativeStemsLine {
     pub outcome: String,
     /// Why, when not written.
     pub reason: Option<String>,
+    /// The Stems Fact of the set written, when one was: the set the dry
+    /// run approved.
+    pub stems_fact: Option<i64>,
 }
 
 /// A load's error, once it had started writing.
@@ -346,27 +371,30 @@ impl Loads {
         self.stopping.load(std::sync::atomic::Ordering::Acquire)
     }
 
-    /// Asks every load to stop and waits, up to `bound`, until each has
-    /// ended and sent its answer.
-    pub(crate) fn shut(&self, bound: std::time::Duration) {
+    /// Asks every load to stop where it safely can, and waits until each
+    /// has ended and sent its answer, however long that takes: a load is
+    /// never abandoned, so its caller always gets the full report. Once
+    /// `patience` has gone by (a stalled device), it is said in the log,
+    /// and again each time as much more goes by.
+    pub(crate) fn shut(&self, patience: std::time::Duration) {
         self.stopping
             .store(true, std::sync::atomic::Ordering::Release);
-        let until = std::time::Instant::now() + bound;
+        let patience = patience.max(std::time::Duration::from_millis(1));
+        let started = std::time::Instant::now();
         let mut active = self.lock();
         while *active > 0 {
-            let left = until.saturating_duration_since(std::time::Instant::now());
-            if left.is_zero() {
+            let (next, waited) = self
+                .idle
+                .wait_timeout(active, patience)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            active = next;
+            if waited.timed_out() && *active > 0 {
                 tracing::warn!(
                     loads = *active,
-                    "a Stick load did not end before the service stopped"
+                    waited_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                    "the service is waiting to stop for a Stick load still finishing"
                 );
-                return;
             }
-            active = self
-                .idle
-                .wait_timeout(active, left)
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .0;
         }
     }
 }

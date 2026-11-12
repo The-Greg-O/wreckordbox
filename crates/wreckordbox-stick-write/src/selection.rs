@@ -57,10 +57,24 @@ pub fn held_on_stick(
     library: &rbl_index::Library,
     stick: &std::path::Path,
 ) -> (Vec<String>, bool) {
+    held_on_stick_of(library_db_id(state), library, stick)
+}
+
+/// The Library's own identifier (`DBID`), `0` when it cannot be read.
+pub fn library_db_id(state: &dyn LibrarySource) -> u64 {
+    read_db(state, |db| rbl_db::export_info::db_id(db.connection())).unwrap_or(0)
+}
+
+/// [`held_on_stick`] for the Library whose identifier is `db_id` and whose
+/// index is `library`: reads the Stick only, not the Library.
+pub fn held_on_stick_of(
+    db_id: u64,
+    library: &rbl_index::Library,
+    stick: &std::path::Path,
+) -> (Vec<String>, bool) {
     let Some(manifest) = rbl_export::Manifest::load(stick) else {
         return (Vec::new(), false);
     };
-    let db_id = read_db(state, |db| rbl_db::export_info::db_id(db.connection())).unwrap_or(0);
     let record = rbl_export::sync_record::read(stick);
     let ours = manifest.db_id == db_id
         || (manifest.db_id == 0 && db_id != 0 && record.as_ref().is_some_and(|r| r.db_id == db_id));
