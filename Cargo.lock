@@ -7041,6 +7041,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "wreckordbox-intensity"
+version = "1.10.0"
+dependencies = [
+ "rbl-audio",
+ "realfft",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "wreckordbox-service"
 version = "1.10.0"
 dependencies = [
