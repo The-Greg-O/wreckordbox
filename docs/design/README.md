@@ -39,7 +39,7 @@ The DJ has seen every render in `screens/` and agreed the frame, the four views,
 ## Still open
 
 - The hot cue convention (what each pad letter means). The pads show letters until it is defined; role labels and "which roles are unset" follow from it.
-- Whether a Stick's playlist entry can carry a Mutant without a second audio file. The design assumes it cannot and renders a file at export; this needs checking against the export crates.
+- Phrases: the analysis crate does not detect phrases (it is a declared stub), so only tracks that rekordbox analysed have them. Tracks analysed by wreckordbox will show no phrase strip until that exists.
 - What "other things" belong in the per-track tools beyond Stems, key shift and tempo.
 - Memory cue list and waveform zoom in the large player: agreed as needed, not yet drawn.
 - The Camelot wheel popover: agreed, not yet drawn.

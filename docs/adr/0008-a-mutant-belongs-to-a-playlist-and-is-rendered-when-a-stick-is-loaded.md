@@ -5,7 +5,7 @@ The DJ wants a playlist to hold its own version of a track (vocals muted, key sh
 ## Considered Options
 
 - **Duplicate the audio file in the Library when the edit is made.** Rejected: every tweak would render a file, the Library would fill with near-copies, and the copies would lose their tie to the parent's tags and Energy.
-- **Store the edits on the playlist entry on the Stick and let the player apply them.** Believed impossible: a playlist entry on a Stick refers to a track and, as far as we know, carries no per-entry audio changes. This has not been checked against the export crates and should be before implementation.
+- **Store the edits on the playlist entry on the Stick and let the player apply them.** Not possible: checked against the export crates on 2026-11-11, a playlist entry is only a position, a track and a playlist in both Stick formats (three numbers in the older database, three columns in the newer one), with nowhere to carry a per-entry change.
 
 ## Consequences
 
