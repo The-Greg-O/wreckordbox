@@ -18,19 +18,20 @@ import { COLOR_NAMES } from "@/lib/trackFilter";
 
 /**
  * Every column the Library view offers, in the order a column turned on
- * takes its place. Widths are at 100% scale for 12 px type.
+ * takes its place. Widths are at 100% scale for 12 px type; the defaults sum
+ * to under 1000 px so they fit beside the tree in a 1280 px window.
  */
 export const LIBRARY_CATALOGUE: readonly ColumnSpec[] = [
   { key: "trackNo", label: "#", width: 36, align: "right", sortable: true, fixed: true },
   { key: "artwork", label: "Artwork", width: 32, sortable: false },
-  { key: "title", label: "Title", width: 300, sortable: true },
-  { key: "artist", label: "Artist", width: 180, sortable: true },
+  { key: "title", label: "Title", width: 260, sortable: true },
+  { key: "artist", label: "Artist", width: 160, sortable: true },
   { key: "album", label: "Album", width: 180, sortable: true },
   { key: "label", label: "Label", width: 140, sortable: true },
   { key: "bpm", label: "BPM", width: 52, align: "right", sortable: true },
   { key: "key", label: "Key", width: 48, sortable: true },
   { key: "rating", label: "Energy", width: 76, sortable: true },
-  { key: "myTag", label: "MyTags", width: 240, sortable: false },
+  { key: "myTag", label: "MyTags", width: 200, sortable: false },
   { key: "duration", label: "Time", width: 56, align: "right", sortable: true },
   { key: "bitrate", label: "Bitrate", width: 80, align: "right", sortable: true },
   { key: "dateAdded", label: "Date added", width: 100, align: "right", sortable: true },

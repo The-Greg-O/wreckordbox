@@ -18,6 +18,11 @@ describe("the Library view's columns", () => {
     expect(labels()).toEqual(["#", "Title", "Artist", "BPM", "Key", "Energy", "MyTags", "Time", "Date added"]);
   });
 
+  it("fits its default columns beside the tree in a 1280 px window", () => {
+    const total = resolveLibrary(libraryDefaultLayout()).reduce((sum, column) => sum + column.width, 0);
+    expect(total).toBeLessThanOrEqual(1000);
+  });
+
   it("offers artwork, album, label, bitrate and the preview waveform, all off by default", () => {
     expect(LIBRARY_OPTIONAL.map((column) => column.label).sort()).toEqual(
       ["Album", "Artwork", "Bitrate", "Label", "Preview"],
