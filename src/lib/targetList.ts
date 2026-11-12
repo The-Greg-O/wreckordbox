@@ -12,7 +12,7 @@
  * apply to them exactly as they do anywhere else.
  */
 import type { TreeNode } from "@/ipc/types";
-import { chordMatches, type Action, type KeyChord, type Platform } from "./shortcuts";
+import { chordMatches, isTyping, OWN_ACTIVATION, type Action, type FocusTarget, type KeyChord, type Platform } from "./shortcuts";
 
 /** The second list's commands, their names in the command palette, and their keys. */
 export const TARGET_ACTIONS: readonly { action: Action; label: string; chord: KeyChord }[] = [
@@ -25,10 +25,17 @@ export const TARGET_ACTIONS: readonly { action: Action; label: string; chord: Ke
 
 type KeyLike = Pick<KeyboardEvent, "key" | "code" | "ctrlKey" | "metaKey" | "shiftKey" | "altKey">;
 
-/** The second list's command a key press asks for, or `null`. */
-export function targetKeyAction(event: KeyLike, platform: Platform): Action | null {
+/**
+ * The second list's command a key press asks for, or `null`: some other
+ * key, a field or a dialog has the keyboard, or Enter is pressed on a
+ * control that owns it (an Energy pip, a button, the Track Filter bar).
+ */
+export function targetKeyAction(event: KeyLike, platform: Platform, focus?: FocusTarget | null): Action | null {
   // The other platform's modifier is never this platform's command key.
   if (platform.mac ? event.ctrlKey : event.metaKey) return null;
+  if (isTyping(focus)) return null;
+  if (focus?.closest?.('[role="dialog"], [role="alertdialog"], dialog')) return null;
+  if (event.key === "Enter" && focus?.closest?.(`[${OWN_ACTIVATION}], button, a[href]`)) return null;
   const chord: KeyChord = {
     key: event.key, code: event.code, ctrlKey: event.ctrlKey, metaKey: event.metaKey, shiftKey: event.shiftKey, altKey: event.altKey,
   };

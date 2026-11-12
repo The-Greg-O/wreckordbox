@@ -21,7 +21,7 @@ import { shellTreeQueueId, shellViewForRow, type IntakeQueue, type ShellStick, t
 import type { ShellView } from "@/lib/shellViews";
 import { ShellTree } from "./ShellTree";
 
-export function useShellTree({ library, sticks, selectedNode, onSelectNode, view, onViewChange, queueCounts }: {
+export function useShellTree({ library, sticks, selectedNode, onSelectNode, view, onViewChange, queueCounts, targetId }: {
   /** The Library's tree, as the backend sends it. */
   library: readonly TreeNode[];
   /** The mounted Sticks, as `useStickOutlines` reads them. */
@@ -32,6 +32,8 @@ export function useShellTree({ library, sticks, selectedNode, onSelectNode, view
   onViewChange: (view: ShellView) => void;
   /** What waits in Intake and Problems, drawn beside them in the tree (wbx-62). */
   queueCounts?: { intake: number | null; problems: number | null } | null | undefined;
+  /** The second list's target playlist, marked in the tree (wbx-59). */
+  targetId?: string | null | undefined;
 }): { tree: ReactNode; intakeQueue: IntakeQueue; showQueue: (queue: IntakeQueue) => void } {
   const [intakeQueue, setIntakeQueue] = useState<IntakeQueue>("intake");
   const [queueChosen, setQueueChosen] = useState(false);
@@ -51,6 +53,6 @@ export function useShellTree({ library, sticks, selectedNode, onSelectNode, view
   }, [onViewChange]);
 
   const selectedId = view === "intake" && queueChosen ? shellTreeQueueId(intakeQueue) : selectedNode?.id ?? null;
-  const tree = <ShellTree library={library} sticks={sticks} selectedId={selectedId} onOpen={open} queueCounts={queueCounts} />;
+  const tree = <ShellTree library={library} sticks={sticks} selectedId={selectedId} onOpen={open} queueCounts={queueCounts} targetId={targetId ?? null} />;
   return { tree, intakeQueue, showQueue };
 }

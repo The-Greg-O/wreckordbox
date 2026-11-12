@@ -46,6 +46,8 @@ export interface ShellTreeProps {
   onOpen: (row: ShellTreeRow) => void;
   /** What waits in Intake and Problems, drawn beside them (wbx-62). */
   queueCounts?: { intake: number | null; problems: number | null } | null | undefined;
+  /** The second list's target playlist, marked in orange (wbx-59). */
+  targetId?: string | null;
 }
 
 /** Nothing produces Set plans yet; one empty list, so the rows are not remade each render. */
@@ -108,7 +110,7 @@ function readSizes(element: HTMLElement | null): TreeSizes {
   };
 }
 
-export function ShellTree({ library, sticks, setPlans = NO_SET_PLANS, selectedId, onOpen, queueCounts }: ShellTreeProps) {
+export function ShellTree({ library, sticks, setPlans = NO_SET_PLANS, selectedId, onOpen, queueCounts, targetId = null }: ShellTreeProps) {
   const t = useTranslation();
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const treeRows = useMemo(
@@ -211,6 +213,8 @@ export function ShellTree({ library, sticks, setPlans = NO_SET_PLANS, selectedId
         aria-level={row.depth + 1}
         aria-selected={selected}
         aria-expanded={row.branch ? row.open : undefined}
+        aria-description={row.id === targetId ? t("Target playlist") : undefined}
+        data-target={row.id === targetId || undefined}
         data-kind={row.kind}
         data-row-id={row.id}
         tabIndex={row.id === tabStop ? 0 : -1}

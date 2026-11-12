@@ -70,6 +70,7 @@ import { DEFAULT_SHELL_VIEW, type ShellView } from "@/lib/shellViews";
 import { useLibraryColumns } from "@/store/useLibraryColumns";
 import { SHELL_PLAYER_LAYOUT, ViewShell } from "@/views/shell/ViewShell";
 import { useShellTree } from "@/views/shell/useShellTree";
+import { useTargetList } from "@/views/shell/useTargetList";
 import { IntakeView } from "@/views/shell/IntakeView";
 import { useIntakeCounts } from "@/views/shell/useIntakeCounts";
 import { useStickOutlines } from "@/store/useStickOutlines";
@@ -3504,9 +3505,16 @@ function AppBody() {
     if (message !== null) setNote({ text: message, failed: true });
     else if (before !== null) setNote((current) => (current?.text === before ? null : current));
   }, []);
+  // The Library view's second list (wbx-59): its state, keys and edits.
+  const targetList = useTargetList({
+    active: shellOn && shellView === "library", platform, tree, source: selectedNode, sourceKind: spec.source.kind,
+    onOpen: setSelectedNode, selection: selectedTracks, locked: readOnly, explainLock: explainEditLock, refuse,
+    add: addToPlaylist, reorder: reorderPlaylist, dragged: draggedTracks, endDrag: () => setDraggedTracks(null),
+    keyDisplay: viewPrefs.keyDisplay, loadedKey: trafficKey || null,
+  });
   const shellTree = useShellTree({
     library: tree, sticks: shellSticks, selectedNode, onSelectNode: setSelectedNode,
-    view: shellView, onViewChange: changeShellView, queueCounts: intakeCounts,
+    view: shellView, onViewChange: changeShellView, queueCounts: intakeCounts, targetId: targetList.targetId,
   });
   const library = (
         selectedDevice ? (
@@ -3790,6 +3798,7 @@ function AppBody() {
           )}
           stick={selectedDevice ? library : undefined}
           library={library}
+          libraryTarget={targetList.pane}
           status={<>{linkStrip}{statusBar}</>}
           topBarEnd={<CommandPaletteButton platform={platform} />}
         />

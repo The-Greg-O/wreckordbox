@@ -56,6 +56,11 @@
   border-left-color: var(--c-accent);
   color: var(--c-text);
 }
+/* The second list's target (wbx-59): an orange edge, as the design marks it. */
+.row[data-target] {
+  border-left-color: var(--c-comment-orange);
+  color: var(--c-text);
+}
 .row:focus-visible, .stick:focus-visible {
   outline: var(--s-shell-border) solid var(--c-accent);
   outline-offset: calc(-1 * var(--s-shell-border));

@@ -54,6 +54,8 @@ export interface ViewShellProps {
   status: ReactNode;
   /** The Library view's list. */
   library: ReactNode;
+  /** The Library view's second list, the target playlist (wbx-59), when shown. */
+  libraryTarget?: ReactNode;
   /** The right-hand end of the top bar. */
   topBarEnd?: ReactNode;
   platform: Platform;
@@ -74,7 +76,7 @@ function tabId(view: ShellView): string {
 }
 
 export function ViewShell({
-  view, onViewChange, tree, player, status, library, topBarEnd, platform, keyOverrides, intakeQueue, stick, tabCounts, intake,
+  view, onViewChange, tree, player, status, library, libraryTarget, topBarEnd, platform, keyOverrides, intakeQueue, stick, tabCounts, intake,
 }: ViewShellProps) {
   const t = useTranslation();
 
@@ -147,7 +149,7 @@ export function ViewShell({
           aria-labelledby={tabId(view)}
           data-testid="shell-working"
         >
-          {view === "library" ? <LibraryView list={library} /> : null}
+          {view === "library" ? <LibraryView list={library} target={libraryTarget} /> : null}
           {view === "intake" ? intake?.(intakeQueue ?? "intake") ?? null : null}
           {view === "review" ? <ReviewView /> : null}
           {view === "stick" ? <StickView stick={stick} /> : null}

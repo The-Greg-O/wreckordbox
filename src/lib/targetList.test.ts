@@ -105,4 +105,14 @@ describe("targetKeyAction", () => {
     expect(targetKeyAction(key({ key: "ArrowUp" }), linux)).toBeNull();
     expect(targetKeyAction(key({ key: "\\", code: "Backslash", ctrlKey: true, altKey: true }), linux)).toBeNull();
   });
+  it("leaves keys to a field, a dialog, and a control that owns its Enter", () => {
+    const inside = (selector: string) => ({ tagName: "DIV", isContentEditable: false, closest: (s: string) => (s.includes(selector) ? {} : null) });
+    const field = { tagName: "INPUT", isContentEditable: false, closest: () => null };
+    expect(targetKeyAction(key({ key: "Enter" }), linux, field)).toBeNull();
+    expect(targetKeyAction(key({ key: "\\", code: "Backslash", ctrlKey: true }), linux, field)).toBeNull();
+    expect(targetKeyAction(key({ key: "Enter" }), linux, inside('[role="dialog"]'))).toBeNull();
+    expect(targetKeyAction(key({ key: "Enter" }), linux, inside("[data-own-activation]"))).toBeNull();
+    // Only Enter is a control's own: the second list's other keys still reach it.
+    expect(targetKeyAction(key({ key: "ArrowUp", altKey: true }), linux, inside("[data-own-activation]"))).toBe("moveTargetUp");
+  });
 });
