@@ -316,7 +316,11 @@ pub async fn adopt_library_protection(
 ) -> AppResult<ProtectionDto> {
     let state = Arc::clone(&state);
     crate::commands::blocking("adopt_library_protection", move || {
-        state.core().adopt_protection(window_preference).map(ProtectionDto::from).map_err(|error| not_recorded(&error))
+        state.as_protection_writer(|core| core.adopt_protection(window_preference)).map_or_else(
+            // Not the writer: what stands, taken up from nobody.
+            |_| Ok(state.core().protection().into()),
+            |adopted| adopted.map(ProtectionDto::from).map_err(|error| not_recorded(&error)),
+        )
     })
     .await
 }
@@ -330,9 +334,40 @@ pub async fn set_library_protection(
 ) -> AppResult<ProtectionDto> {
     let state = Arc::clone(&state);
     crate::commands::blocking("set_library_protection", move || {
-        state.core().set_protection(protect_library).map(|turned| turned.now.into()).map_err(|error| not_recorded(&error))
+        state
+            .as_protection_writer(|core| core.set_protection(protect_library))
+            .map_err(|reason| not_the_writer(&reason))?
+            .map(|turned| turned.now.into())
+            .map_err(|error| not_recorded(&error))
     })
     .await
+}
+
+impl AppState {
+    /// Runs `turn` on this window's core only while this window may be the
+    /// Library's writer: holding the hosting slot, so hosting is not part-way
+    /// through or changing meanwhile. A window that has found it is not the
+    /// writer (another window or service has the Library) gets `Err` with
+    /// why, and `turn` is not run: a turn through its own core would not take
+    /// the writer's edit gate, and the writer's interface would not hear it.
+    fn as_protection_writer<T>(&self, turn: impl FnOnce(&rbl_library::LibraryCore) -> T) -> Result<T, String> {
+        let _hosting = self.service.lock();
+        if let Some(reason) = self.core().write_refusal() {
+            return Err(reason);
+        }
+        Ok(turn(self.core()))
+    }
+}
+
+/// What a window that is not the Library's writer is told when the DJ turns
+/// Library Protection in it.
+fn not_the_writer(reason: &str) -> crate::error::AppError {
+    crate::error::AppError::new(
+        crate::error::ErrorKind::ReadOnly,
+        "This window cannot turn Library Protection: it is not the window changing this Library. \
+         Turn it in that window, or with `wreckordbox protection on` or `wreckordbox protection off`.",
+    )
+    .with_detail(reason.to_owned())
 }
 
 /// What the DJ is told when the switch could not be saved: said plainly,

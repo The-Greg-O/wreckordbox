@@ -374,6 +374,47 @@ fn a_second_window_on_the_same_library_cannot_write_and_says_so() {
     assert_eq!(first.rating(&track_id(1)), 1);
 }
 
+/// wbx-43 review C: a second window on the same Library is not its writer,
+/// so it cannot turn Library Protection through its own core (whose edit
+/// gate the writer's edits do not take, and whose turns the writer's
+/// interface would not hear). It is told why; the switch, the first
+/// window's interface and the first window's edits are untouched. Its
+/// start-up adoption writes nothing either.
+#[test]
+fn a_window_that_is_not_the_writer_cannot_turn_library_protection_and_says_so() {
+    let first = window();
+    first.host().unwrap();
+    let (app, _, _) = app_on(&first.dir, &first.location);
+    service_host::host_with(app.handle(), &first.location, &first.config()).unwrap_err();
+    let second = || app.state::<Arc<AppState>>();
+    let heard = first.heard_protection();
+    let recorded = service_host::library_protection(first.state());
+    assert!(!recorded.protect_library);
+
+    let refused = run(service_host::set_library_protection(second(), true)).unwrap_err();
+
+    assert_eq!(refused.kind, ErrorKind::ReadOnly);
+    assert!(refused.message.contains("cannot turn Library Protection"), "{}", refused.message);
+    assert!(refused.message.contains("wreckordbox protection"), "{}", refused.message);
+    assert_eq!(service_host::library_protection(first.state()), recorded);
+    assert_eq!(first.cli(&["--json", "protection"]).json()["protect_library"], false);
+    first.cli(&["tracks", "rate", &track_id(1), "2"]).succeeded();
+    assert_eq!(first.rating(&track_id(1)), 2);
+
+    // With nothing recorded, its stored preference is not taken up either.
+    std::fs::remove_file(first.dir.path().join("backups/library-protection.json")).unwrap();
+    let answered = run(service_host::adopt_library_protection(second(), false)).unwrap();
+    assert!(answered.protect_library);
+    assert!(!first.dir.path().join("backups/library-protection.json").exists());
+
+    // The writer's own switch still turns, and its interface hears only that.
+    first.protect(false);
+    eventually("library-protection:changed", || !heard.lock().unwrap().is_empty());
+    let heard = heard.lock().unwrap().clone();
+    assert_eq!(heard.len(), 1, "{heard:?}");
+    assert!(!heard[0].protect_library);
+}
+
 #[test]
 fn the_dj_is_told_when_the_service_stops_and_nothing_more_is_written() {
     let window = window();
@@ -620,6 +661,39 @@ fn a_restarted_window_keeps_what_was_recorded_whatever_its_preference_says() {
     assert!(now.protect_library);
     let adopted = restarted.core().adopt_protection(false).unwrap();
     assert!(adopted.protect_library);
+}
+
+/// wbx-43 review D, as the window sees it: after a restart the window shows
+/// the recorded revision; the record is then damaged, and the DJ's next
+/// turn is told to the interface with a revision beyond the one it shows,
+/// so the interface applies it rather than dropping it as stale.
+#[test]
+fn a_turn_after_the_record_was_damaged_reaches_a_window_that_showed_a_higher_revision() {
+    let window = window();
+    for on in [true, false, true, false, true] {
+        window.protect(on);
+    }
+    // The app again, on the same state folder, hosting.
+    let (app, _, _) = app_on(&window.dir, &window.location);
+    service_host::announce_protection(app.handle());
+    service_host::host_with(app.handle(), &window.location, &window.config()).unwrap();
+    let restarted = || app.state::<Arc<AppState>>();
+    let shown = service_host::library_protection(restarted());
+    assert!(shown.protect_library);
+    assert!(shown.revision >= 6, "{shown:?}");
+    let heard: Heard<service_host::ProtectionDto> = Arc::default();
+    let told = Arc::clone(&heard);
+    app.listen(service_host::PROTECTION_CHANGED, move |event| {
+        told.lock().unwrap().push(serde_json::from_str(event.payload()).unwrap());
+    });
+    std::fs::write(window.dir.path().join("backups/library-protection.json"), b"{damaged").unwrap();
+
+    let off = run(service_host::set_library_protection(restarted(), false)).unwrap();
+
+    assert!(!off.protect_library);
+    assert!(off.revision > shown.revision, "{off:?} after {shown:?}");
+    eventually("library-protection:changed", || !heard.lock().unwrap().is_empty());
+    assert_eq!(*heard.lock().unwrap(), [off]);
 }
 
 #[test]
