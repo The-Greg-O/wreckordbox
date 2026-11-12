@@ -11,6 +11,7 @@
 //! running and, under `RBXPORT_TEST`, for a detected real Library.
 
 pub mod history;
+pub mod ledger;
 pub mod my_tags;
 pub mod read;
 

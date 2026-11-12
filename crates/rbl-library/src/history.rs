@@ -5,12 +5,16 @@
 //! edit made in the window are entries of the same history. Not saved.
 //!
 //! [`EditHistory::record`] is the one place every recorded edit passes
-//! through.
+//! through. A [`Ledger`] given to the history
+//! ([`EditHistory::keep_ledger`]) is told of each edit there, and of each
+//! Undo and Redo, so the durable record does not depend on the history
+//! being kept.
 
 use std::sync::Arc;
 
 use rbl_db::DbError;
 
+use crate::ledger::{Ledger, Step};
 use crate::Touched;
 
 /// The history label of an Info panel, rating, colour or comment edit.
@@ -330,6 +334,9 @@ fn step_track_edits(
 pub struct HistoryEntry {
     pub edit: LibraryEdit,
     pub label: &'static str,
+    /// What the history's [`Ledger`] called this edit, or its latest Undo
+    /// or Redo, when there is a Ledger and it recorded it.
+    pub ledger: Option<i64>,
 }
 
 /// Bounded session history for reversible library edits. The payloads retain
@@ -339,6 +346,8 @@ pub struct HistoryEntry {
 pub struct EditHistory {
     undo: Vec<HistoryEntry>,
     redo: Vec<HistoryEntry>,
+    /// Told of every edit recorded here and every step of one.
+    ledger: Option<Arc<dyn Ledger>>,
 }
 
 impl EditHistory {
@@ -351,7 +360,8 @@ impl EditHistory {
     /// slice of one Add Tracks to Playlist extends the entry its first
     /// slice recorded here; see [`Self::record_addition`].)
     pub fn record(&mut self, edit: LibraryEdit, label: &'static str) {
-        self.undo.push(HistoryEntry { edit, label });
+        let ledger = self.ledger.as_ref().and_then(|ledger| ledger.record(Step::Edit, &edit, label, None));
+        self.undo.push(HistoryEntry { edit, label, ledger });
         if self.undo.len() > Self::LIMIT {
             self.undo.remove(0);
         }
@@ -376,10 +386,22 @@ impl EditHistory {
         {
             if open_id == id && open.absorb(&addition) {
                 self.redo.clear();
+                // The Ledger records each slice as it is made; Undo still
+                // takes back the whole add.
+                if let Some(ledger) = &self.ledger {
+                    let slice = LibraryEdit::AddPlaylistTracks { addition, transaction };
+                    ledger.record(Step::Edit, &slice, label, None);
+                }
                 return;
             }
         }
         self.record(LibraryEdit::AddPlaylistTracks { addition, transaction }, label);
+    }
+
+    /// Gives the history a [`Ledger`] to tell of every edit and step from
+    /// now on, or takes it away (`None`).
+    pub fn keep_ledger(&mut self, ledger: Option<Arc<dyn Ledger>>) {
+        self.ledger = ledger;
     }
 
     pub fn clear_redo(&mut self) {
@@ -416,8 +438,12 @@ impl EditHistory {
 
     /// Moves an entry that has just been undone (`undone`) to Redo, or one
     /// redone back to Undo. Not a recording: the edit is already in the
-    /// history.
-    fn stepped(&mut self, entry: HistoryEntry, undone: bool) {
+    /// history. The Ledger is told of the step.
+    fn stepped(&mut self, mut entry: HistoryEntry, undone: bool) {
+        if let Some(ledger) = &self.ledger {
+            let step = if undone { Step::Undo } else { Step::Redo };
+            entry.ledger = ledger.record(step, &entry.edit, entry.label, entry.ledger).or(entry.ledger);
+        }
         if undone { self.redo.push(entry); } else { self.undo.push(entry); }
     }
 }
