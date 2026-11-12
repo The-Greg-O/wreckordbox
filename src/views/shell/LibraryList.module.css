@@ -41,12 +41,13 @@
 .prep[data-prep="Purple"] { background: var(--c-comment-purple); }
 
 /* Energy: five pips, lit ones in the level's colour, unset ones in the
-   hairline colour (screens/mock.html: 6 x 10 with 2 px between). */
+   fixed unset colour (screens/mock.html: 6 x 10 with 2 px between). Neither
+   follows the theme. */
 .pips {
   display: inline-flex;
   gap: var(--s-shell-space-1);
   vertical-align: middle;
-  --c-pip: var(--c-raised);
+  --c-pip: var(--c-energy-0);
 }
 .pips[data-level="1"] { --c-pip: var(--c-energy-1); }
 .pips[data-level="2"] { --c-pip: var(--c-energy-2); }
@@ -59,7 +60,7 @@
   padding: 0;
   border: 0;
   border-radius: 0;
-  background: var(--c-raised);
+  background: var(--c-energy-0);
 }
 button.pip { cursor: pointer; }
 button.pip:focus-visible {

@@ -67,8 +67,9 @@ pub struct TagFilter {
 ///
 /// `djmdColor` on the reference library, read-only: ids 1 to 8, `Commnt`
 /// Pink, Red, Orange, Yellow, Green, Aqua, Blue, Purple, in `SortKey` order.
-pub const COLOR_NAMES: [&str; 8] =
-    ["Pink", "Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple"];
+pub const COLOR_NAMES: [&str; 8] = [
+    "Pink", "Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple",
+];
 
 impl TrackFilter {
     /// Whether the filter constrains anything at all.
@@ -84,10 +85,13 @@ impl TrackFilter {
     /// The filter in a shape the row loop can test without allocating.
     pub(crate) fn compile(&self) -> Compiled {
         let ratings = self.ratings.as_ref().map(|list| {
-            list.iter().fold(0_u8, |mask, &stars| mask | (1_u8 << stars.min(7)))
+            list.iter()
+                .fold(0_u8, |mask, &stars| mask | (1_u8 << stars.min(7)))
         });
         let colors = self.colors.as_ref().map(|list| {
-            list.iter().fold(0_u16, |mask, &color| mask | (1_u16 << u32::from(color.min(15))))
+            list.iter().fold(0_u16, |mask, &color| {
+                mask | (1_u16 << u32::from(color.min(15)))
+            })
         });
         let mut keys = self.keys.clone();
         if let Some(keys) = keys.as_mut() {
@@ -103,19 +107,31 @@ impl TrackFilter {
                 if let Some(master) = b.master_bpm_x100 {
                     ranges.push(band(master, b.tolerance_pct));
                 }
-                BpmRule { ranges, whole: Vec::new(), any: b.master_bpm_x100.is_none() }
+                BpmRule {
+                    ranges,
+                    whole: Vec::new(),
+                    any: b.master_bpm_x100.is_none(),
+                }
             } else if b.tolerance_pct == 0 {
                 // A picked whole BPM at ±0% is the bucket the list grouped it
                 // into, not the exact hundredth: 127.98 sits under 128.
                 let mut whole = b.values.clone();
                 whole.sort_unstable();
                 whole.dedup();
-                BpmRule { ranges, whole, any: false }
+                BpmRule {
+                    ranges,
+                    whole,
+                    any: false,
+                }
             } else {
                 for &value in &b.values {
                     ranges.push(band(value.saturating_mul(100), b.tolerance_pct));
                 }
-                BpmRule { ranges, whole: Vec::new(), any: false }
+                BpmRule {
+                    ranges,
+                    whole: Vec::new(),
+                    any: false,
+                }
             }
         });
         let tags = self
@@ -135,7 +151,13 @@ impl TrackFilter {
                 any: t.any,
             })
             .collect();
-        Compiled { bpm, keys, ratings, colors, tags }
+        Compiled {
+            bpm,
+            keys,
+            ratings,
+            colors,
+            tags,
+        }
     }
 }
 
@@ -143,7 +165,10 @@ impl TrackFilter {
 fn band(centre_x100: u32, pct: u8) -> (u32, u32) {
     let spread = u64::from(centre_x100) * u64::from(pct) / 100;
     let spread = u32::try_from(spread).unwrap_or(u32::MAX);
-    (centre_x100.saturating_sub(spread), centre_x100.saturating_add(spread))
+    (
+        centre_x100.saturating_sub(spread),
+        centre_x100.saturating_add(spread),
+    )
 }
 
 /// The nearest whole BPM. `[ASSUME]` rekordbox groups its BPM list by the
@@ -171,7 +196,9 @@ impl BpmRule {
         if !self.whole.is_empty() {
             return self.whole.binary_search(&whole_bpm(bpm_x100)).is_ok();
         }
-        self.ranges.iter().any(|&(lo, hi)| bpm_x100 >= lo && bpm_x100 <= hi)
+        self.ranges
+            .iter()
+            .any(|&(lo, hi)| bpm_x100 >= lo && bpm_x100 <= hi)
     }
 }
 
@@ -320,8 +347,10 @@ impl Library {
             }
         }
 
-        let mut bpms: Vec<Counted<u32>> =
-            bpm_counts.into_iter().map(|(value, count)| Counted { value, count }).collect();
+        let mut bpms: Vec<Counted<u32>> = bpm_counts
+            .into_iter()
+            .map(|(value, count)| Counted { value, count })
+            .collect();
         bpms.sort_unstable_by_key(|c| c.value);
         bpms.truncate(MAX_BPM_VALUES);
 
@@ -334,11 +363,18 @@ impl Library {
         }
         let mut keys: Vec<Counted<String>> = by_name
             .into_iter()
-            .map(|(name, count)| Counted { value: name.to_owned(), count })
+            .map(|(name, count)| Counted {
+                value: name.to_owned(),
+                count,
+            })
             .collect();
         keys.sort_by_cached_key(|c| (camelot_rank(&c.value), crate::strings::fold(&c.value)));
 
-        FilterValues { bpms, keys, tags: self.my_tags().to_vec() }
+        FilterValues {
+            bpms,
+            keys,
+            tags: self.my_tags().to_vec(),
+        }
     }
 
     /// The picks for a My Tag column: the category at `category` (an index
@@ -396,10 +432,16 @@ impl Library {
     #[must_use]
     pub fn source_rows_on(&self, source: &TrackSource, today: &crate::smart::Date) -> Vec<Row> {
         match source {
-            TrackSource::History(index) => {
-                self.histories().members.get(*index).cloned().unwrap_or_default()
-            }
-            TrackSource::Collection | TrackSource::Playlist(_) | TrackSource::PlaylistFolder(_) | TrackSource::SmartPlaylist(_) => {
+            TrackSource::History(index) => self
+                .histories()
+                .members
+                .get(*index)
+                .cloned()
+                .unwrap_or_default(),
+            TrackSource::Collection
+            | TrackSource::Playlist(_)
+            | TrackSource::PlaylistFolder(_)
+            | TrackSource::SmartPlaylist(_) => {
                 let playlists = self.playlists();
                 self.source_rows_unlocked_on(&playlists, source, today)
             }
@@ -412,7 +454,11 @@ impl Library {
     /// playlists, which the lock would otherwise wait on for ever. A history
     /// source is not answered here.
     #[must_use]
-    pub fn source_rows_unlocked(&self, playlists: &crate::Playlists, source: &TrackSource) -> Vec<Row> {
+    pub fn source_rows_unlocked(
+        &self,
+        playlists: &crate::Playlists,
+        source: &TrackSource,
+    ) -> Vec<Row> {
         self.source_rows_unlocked_on(playlists, source, &crate::smart::Date::today())
     }
 
@@ -429,7 +475,9 @@ impl Library {
             TrackSource::Collection | TrackSource::History(_) => {
                 (0..u32::try_from(self.len()).unwrap_or(u32::MAX)).collect()
             }
-            TrackSource::Playlist(index) => playlists.members.get(*index).cloned().unwrap_or_default(),
+            TrackSource::Playlist(index) => {
+                playlists.members.get(*index).cloned().unwrap_or_default()
+            }
             TrackSource::PlaylistFolder(folder) => {
                 if !playlists.is_folder(*folder) {
                     return Vec::new();
@@ -455,7 +503,11 @@ impl Library {
                             rows.extend(members.into_iter().filter(|row| seen.insert(*row)));
                             break;
                         }
-                        parent = playlists.parent.get(parent as usize).copied().unwrap_or(NO_ID);
+                        parent = playlists
+                            .parent
+                            .get(parent as usize)
+                            .copied()
+                            .unwrap_or(NO_ID);
                         depth += 1;
                     }
                 }
@@ -463,12 +515,10 @@ impl Library {
             }
             // A rule that does not parse admits nothing, which is what
             // rekordbox shows for a rule it cannot read.
-            TrackSource::SmartPlaylist(index) => {
-                playlists
-                    .smart_rule(*index)
-                    .map(|rule| rule.evaluate_on(self, today))
-                    .unwrap_or_default()
-            }
+            TrackSource::SmartPlaylist(index) => playlists
+                .smart_rule(*index)
+                .map(|rule| rule.evaluate_on(self, today))
+                .unwrap_or_default(),
             TrackSource::Related { track, criterion } => self.related_rows(*track, *criterion),
             TrackSource::TagList => self.tag_list(),
         }
@@ -481,9 +531,12 @@ impl Library {
 ///
 /// The same table as `src/lib/camelot.ts`, including its aliases.
 fn camelot_rank(name: &str) -> (u8, u8) {
-    const MINOR: [&str; 12] =
-        ["Abm", "Ebm", "Bbm", "Fm", "Cm", "Gm", "Dm", "Am", "Em", "Bm", "F#m", "Dbm"];
-    const MAJOR: [&str; 12] = ["B", "F#", "Db", "Ab", "Eb", "Bb", "F", "C", "G", "D", "A", "E"];
+    const MINOR: [&str; 12] = [
+        "Abm", "Ebm", "Bbm", "Fm", "Cm", "Gm", "Dm", "Am", "Em", "Bm", "F#m", "Dbm",
+    ];
+    const MAJOR: [&str; 12] = [
+        "B", "F#", "Db", "Ab", "Eb", "Bb", "F", "C", "G", "D", "A", "E",
+    ];
     let name = match name.trim() {
         "G#m" => "Abm",
         "D#m" => "Ebm",
@@ -529,9 +582,14 @@ mod tests {
 
     #[test]
     fn camelot_order_matches_the_capture() {
-        let mut names = vec!["Cm", "F#", "B", "Ebm", "Abm", "Db", "Fm", "Ab", "Bbm", "zz", "A"];
+        let mut names = vec![
+            "Cm", "F#", "B", "Ebm", "Abm", "Db", "Fm", "Ab", "Bbm", "zz", "A",
+        ];
         names.sort_by_key(|n| (camelot_rank(n), n.to_lowercase()));
-        assert_eq!(names, ["Abm", "B", "Ebm", "F#", "Bbm", "Db", "Fm", "Ab", "Cm", "A", "zz"]);
+        assert_eq!(
+            names,
+            ["Abm", "B", "Ebm", "F#", "Bbm", "Db", "Fm", "Ab", "Cm", "A", "zz"]
+        );
         assert_eq!(camelot_rank("G#m"), camelot_rank("Abm"));
     }
 }

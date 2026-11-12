@@ -77,6 +77,9 @@
 .tab[aria-selected="true"] {
   background: var(--c-panel);
   border-top-color: var(--c-accent);
+  /* The one gradient in the window: the theme's two-colour line (docs/design/tokens.md).
+     Without a theme both ends are the accent and it is a plain line. */
+  border-image: linear-gradient(90deg, var(--role-tab-from), var(--role-tab-to)) 1;
   color: var(--c-text);
 }
 

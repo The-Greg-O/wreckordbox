@@ -150,7 +150,7 @@
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.pane[aria-selected="true"] { background: var(--c-pref-select); color: var(--c-icon-on); }
+.pane[aria-selected="true"] { background: var(--c-pref-select); color: var(--c-on-accent, var(--c-icon-on)); }
 .pane svg {
   position: absolute;
   left: var(--s-pref-item-icon-x);
@@ -192,7 +192,7 @@
   font-size: var(--f-size-pref-tab);
   cursor: default;
 }
-.tab[aria-selected="true"] { background: var(--c-pref-select); color: var(--c-icon-on); }
+.tab[aria-selected="true"] { background: var(--c-pref-select); color: var(--c-on-accent, var(--c-icon-on)); }
 
 /* The sections scroll together; the scrollbar's track sits beside them. */
 .scroller {
@@ -280,6 +280,7 @@
   transform: translateY(-50%);
 }
 .toggle:checked { background: var(--c-pref-select); }
+.toggle:checked::after { background: var(--c-on-accent, var(--c-icon-on)); }
 .toggle:checked::after {
   left: auto;
   right: calc((var(--s-pref-toggle-h) - var(--s-pref-toggle-knob)) / 2);
@@ -307,7 +308,7 @@
   width: var(--s-pref-radio-dot);
   height: var(--s-pref-radio-dot);
   border-radius: 50%;
-  background: var(--c-icon-on);
+  background: var(--c-on-accent, var(--c-icon-on));
 }
 .row[data-dim] .radio { background: var(--c-device-disabled-ring); }
 .row[data-dim] .radio:checked::after { background: var(--c-device-disabled); }
@@ -333,7 +334,7 @@
   top: 1.5px;
   width: 4px;
   height: 8px;
-  border: solid var(--c-icon-on);
+  border: solid var(--c-on-accent, var(--c-icon-on));
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
 }
@@ -507,7 +508,7 @@
    one showing a key of the person's own rather than the preset's. */
 button.keyBadge { cursor: default; }
 button.keyBadge:hover { background: var(--c-button-hover, var(--c-raised)); }
-.keyBadge[data-listening] { background: var(--c-pad-active); color: var(--c-icon-on); }
+.keyBadge[data-listening] { background: var(--c-pad-active); color: var(--c-on-accent, var(--c-icon-on)); }
 .keyBadge[data-changed] { color: var(--c-icon-on); }
 
 /* The device tabs' list pair, borrowed for DJ System › Category and Sort.

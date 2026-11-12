@@ -33,7 +33,10 @@ const RECENT_DAYS: i64 = 30;
 fn bpm_window(centre_x100: u32, diff: u32) -> (u32, u32) {
     let pct = f64::from(diff) * 0.01;
     let centre = f64::from(centre_x100);
-    (round_even(centre * (1.0 - pct)), round_even(centre * (pct + 1.0)))
+    (
+        round_even(centre * (1.0 - pct)),
+        round_even(centre * (pct + 1.0)),
+    )
 }
 
 /// `x` floored at zero and rounded to the nearest whole number, ties to
@@ -110,7 +113,10 @@ impl Library {
                 // the deck's key-shifted "Current key" is [UNKNOWN] (the UI
                 // offers "Track's key" and "Current key"). This uses the
                 // track's key, which is the same with no key shift.
-                let key = self.key.get(at).map_or(u32::MAX, |&id| camelot_rank(self.keys.name(id)));
+                let key = self
+                    .key
+                    .get(at)
+                    .map_or(u32::MAX, |&id| camelot_rank(self.keys.name(id)));
                 // A track with no BPM or no key is matched on what it has:
                 // [OBS] rekordbox's BPM search returns without narrowing when
                 // the track's BPM is 0, and its key search does the same
@@ -131,7 +137,10 @@ impl Library {
                         }
                     }
                     if key != u32::MAX {
-                        let theirs = self.key.get(other).map_or(u32::MAX, |&id| camelot_rank(self.keys.name(id)));
+                        let theirs = self
+                            .key
+                            .get(other)
+                            .map_or(u32::MAX, |&id| camelot_rank(self.keys.name(id)));
                         if !keys_go_together(key, theirs) {
                             return false;
                         }
@@ -152,7 +161,8 @@ impl Library {
                     }
                     let other = usize::try_from(r).unwrap_or(usize::MAX);
                     self.genre.get(other).copied() == Some(genre)
-                        && Date::parse(self.date_added.get(other)).is_some_and(|added| added.days() >= since)
+                        && Date::parse(self.date_added.get(other))
+                            .is_some_and(|added| added.days() >= since)
                 })
                 .collect()
             }
@@ -161,8 +171,15 @@ impl Library {
                 if artist == 0 {
                     return Vec::new();
                 }
-                rows.filter(|&r| r != track && self.artist.get(usize::try_from(r).unwrap_or(usize::MAX)).copied() == Some(artist))
-                    .collect()
+                rows.filter(|&r| {
+                    r != track
+                        && self
+                            .artist
+                            .get(usize::try_from(r).unwrap_or(usize::MAX))
+                            .copied()
+                            == Some(artist)
+                })
+                .collect()
             }
             RelatedCriterion::Suggestion => {
                 let followed = self.followed_in_history(track);
@@ -180,7 +197,8 @@ impl Library {
     /// by date, so a later session is a later play.
     fn followed_in_history(&self, track: Row) -> Vec<Row> {
         let histories = self.histories();
-        let mut count: std::collections::HashMap<Row, (u32, usize)> = std::collections::HashMap::new();
+        let mut count: std::collections::HashMap<Row, (u32, usize)> =
+            std::collections::HashMap::new();
         for (session, members) in histories.members.iter().enumerate() {
             for pair in members.windows(2) {
                 if pair[0] == track && pair[1] != track {
@@ -251,7 +269,14 @@ mod tests {
     #[test]
     fn bpm_and_key_takes_half_and_double_tempo_tracks_in_a_related_key() {
         use crate::testing::{library_from, TestTrack};
-        let track = |id: u64, bpm: u32, key: &'static str| TestTrack { id, title: "t", artist: "a", bpm_x100: bpm, key, ..TestTrack::default() };
+        let track = |id: u64, bpm: u32, key: &'static str| TestTrack {
+            id,
+            title: "t",
+            artist: "a",
+            bpm_x100: bpm,
+            key,
+            ..TestTrack::default()
+        };
         let lib = library_from(&[
             track(1, 17400, "Am"), // the track: 174, 8A
             track(2, 8700, "Am"),  // half tempo, same key
@@ -262,13 +287,23 @@ mod tests {
             track(7, 18270, "Dm"), // 182.7 is the top of the window, 7A
             track(8, 18271, "Am"), // just past it
         ]);
-        assert_eq!(lib.related_rows(0, RelatedCriterion::BpmAndKey), vec![1, 2, 3, 6]);
+        assert_eq!(
+            lib.related_rows(0, RelatedCriterion::BpmAndKey),
+            vec![1, 2, 3, 6]
+        );
     }
 
     #[test]
     fn a_suggestion_is_what_followed_the_track_in_past_sets_or_its_bpm_and_key_matches() {
         use crate::testing::{add_history, library_from, TestTrack};
-        let track = |id: u64, bpm: u32, key: &'static str| TestTrack { id, title: "t", artist: "a", bpm_x100: bpm, key, ..TestTrack::default() };
+        let track = |id: u64, bpm: u32, key: &'static str| TestTrack {
+            id,
+            title: "t",
+            artist: "a",
+            bpm_x100: bpm,
+            key,
+            ..TestTrack::default()
+        };
         let mut lib = library_from(&[
             track(1, 12800, "Am"),
             track(2, 12800, "Am"),
@@ -281,7 +316,10 @@ mod tests {
         add_history(&mut lib, "one", &[0, 3, 4]);
         add_history(&mut lib, "two", &[2, 0, 1]);
         add_history(&mut lib, "three", &[0, 3]);
-        assert_eq!(lib.related_rows(0, RelatedCriterion::Suggestion), vec![3, 1]);
+        assert_eq!(
+            lib.related_rows(0, RelatedCriterion::Suggestion),
+            vec![3, 1]
+        );
         // Never played after anything: what goes with it by BPM and key.
         let fallback = lib.related_rows(1, RelatedCriterion::Suggestion);
         assert_eq!(fallback, lib.related_rows(1, RelatedCriterion::BpmAndKey));

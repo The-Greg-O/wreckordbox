@@ -1,6 +1,11 @@
 //! The on-disk snapshot: it must reproduce the library exactly, refuse a stale
 //! one, and survive a damaged file without panicking.
-#![allow(clippy::pedantic, clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+#![allow(
+    clippy::pedantic,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing
+)]
 
 use rbl_index::cache::{decode, encode, Fingerprint};
 use rbl_index::testing::{add_folder, add_history, add_playlist, library_from, TestTrack};
@@ -22,18 +27,61 @@ fn fingerprint() -> Fingerprint {
 fn sample() -> Vec<TestTrack> {
     vec![
         TestTrack {
-            id: 1, title: "Zebra", artist: "ARTBAT", bpm_x100: 12800, rating: 4, comment: "hi",
+            id: 1,
+            title: "Zebra",
+            artist: "ARTBAT",
+            bpm_x100: 12800,
+            rating: 4,
+            comment: "hi",
             cues: vec![
-                Cue { id: 12, position_ms: 165_046, out_ms: 0, kind: 2, colour: 21, memory_colour: None },
-                Cue { id: 11, position_ms: 46, out_ms: 0, kind: 1, colour: 46, memory_colour: None },
-                Cue { id: 10, position_ms: 46, out_ms: 8_046, kind: 0, colour: 0, memory_colour: Some(6) },
+                Cue {
+                    id: 12,
+                    position_ms: 165_046,
+                    out_ms: 0,
+                    kind: 2,
+                    colour: 21,
+                    memory_colour: None,
+                },
+                Cue {
+                    id: 11,
+                    position_ms: 46,
+                    out_ms: 0,
+                    kind: 1,
+                    colour: 46,
+                    memory_colour: None,
+                },
+                Cue {
+                    id: 10,
+                    position_ms: 46,
+                    out_ms: 8_046,
+                    kind: 0,
+                    colour: 0,
+                    memory_colour: Some(6),
+                },
             ],
             ..TestTrack::default()
         },
-        TestTrack { id: 2, title: "apple", artist: "Meduza", bpm_x100: 13000, ..TestTrack::default() },
         TestTrack {
-            id: 3, title: "Ébano", artist: "Tujamo", bpm_x100: 12400, rating: 2,
-            cues: vec![Cue { id: 30, position_ms: 24, out_ms: 0, kind: 6, colour: 18, memory_colour: None }],
+            id: 2,
+            title: "apple",
+            artist: "Meduza",
+            bpm_x100: 13000,
+            ..TestTrack::default()
+        },
+        TestTrack {
+            id: 3,
+            title: "Ébano",
+            artist: "Tujamo",
+            bpm_x100: 12400,
+            rating: 2,
+            cues: vec![Cue {
+                id: 30,
+                position_ms: 24,
+                out_ms: 0,
+                kind: 6,
+                colour: 18,
+                memory_colour: None,
+            }],
             ..TestTrack::default()
         },
     ]
@@ -61,7 +109,10 @@ fn a_snapshot_reproduces_the_library_it_came_from() {
     for row in 0..original.len() {
         assert_eq!(restored.title.get(row), original.title.get(row));
         assert_eq!(restored.comment.get(row), original.comment.get(row));
-        assert_eq!(restored.artist_name(row as u32), original.artist_name(row as u32));
+        assert_eq!(
+            restored.artist_name(row as u32),
+            original.artist_name(row as u32)
+        );
         assert_eq!(restored.rating[row], original.rating[row]);
         assert_eq!(restored.bpm_x100[row], original.bpm_x100[row]);
     }
@@ -89,13 +140,37 @@ fn a_snapshot_keeps_every_track_s_cues_with_their_colours() {
     assert_eq!(
         restored.cues_of(0),
         &[
-            Cue { id: 10, position_ms: 46, out_ms: 8_046, kind: 0, colour: 0, memory_colour: Some(6) },
-            Cue { id: 11, position_ms: 46, out_ms: 0, kind: 1, colour: 46, memory_colour: None },
-            Cue { id: 12, position_ms: 165_046, out_ms: 0, kind: 2, colour: 21, memory_colour: None },
+            Cue {
+                id: 10,
+                position_ms: 46,
+                out_ms: 8_046,
+                kind: 0,
+                colour: 0,
+                memory_colour: Some(6)
+            },
+            Cue {
+                id: 11,
+                position_ms: 46,
+                out_ms: 0,
+                kind: 1,
+                colour: 46,
+                memory_colour: None
+            },
+            Cue {
+                id: 12,
+                position_ms: 165_046,
+                out_ms: 0,
+                kind: 2,
+                colour: 21,
+                memory_colour: None
+            },
         ]
     );
     assert!(restored.cues_of(1).is_empty());
-    assert_eq!((restored.cues_of(2)[0].colour, restored.cues_of(2)[0].id), (18, 30));
+    assert_eq!(
+        (restored.cues_of(2)[0].colour, restored.cues_of(2)[0].id),
+        (18, 30)
+    );
     assert_eq!(restored.cues_of(0)[0].out_ms, 8_046, "a loop keeps its end");
 }
 
@@ -127,18 +202,38 @@ fn the_persisted_ranks_and_search_still_work() {
         .map(|&r| restored.title.get(r as usize))
         .collect();
     assert_eq!(by_title, vec!["apple", "Ébano", "Zebra"]);
-    assert_eq!(restored.open_view(&spec(SortColumn::Title, "artbat")).rows.len(), 1);
+    assert_eq!(
+        restored
+            .open_view(&spec(SortColumn::Title, "artbat"))
+            .rows
+            .len(),
+        1
+    );
 }
 
 #[test]
 fn a_snapshot_keeps_the_detail_columns_the_browser_sorts_by() {
     let tracks = vec![
         TestTrack {
-            id: 1, title: "One", track_number: 7, disc_no: 2, file_type: 11, bit_depth: 24,
-            lyricist: "Words", date_created: "2024-05-01", publish: true, message: "hello",
+            id: 1,
+            title: "One",
+            track_number: 7,
+            disc_no: 2,
+            file_type: 11,
+            bit_depth: 24,
+            lyricist: "Words",
+            date_created: "2024-05-01",
+            publish: true,
+            message: "hello",
             ..TestTrack::default()
         },
-        TestTrack { id: 2, title: "Two", track_number: 3, file_type: 1, ..TestTrack::default() },
+        TestTrack {
+            id: 2,
+            title: "Two",
+            track_number: 3,
+            file_type: 1,
+            ..TestTrack::default()
+        },
     ];
     let original = library_from(&tracks);
     let restored = decode(&encode(&original, fingerprint()), fingerprint()).expect("decodes");
@@ -149,12 +244,18 @@ fn a_snapshot_keeps_the_detail_columns_the_browser_sorts_by() {
     assert_eq!(restored.publish, original.publish);
     for row in 0..original.len() {
         assert_eq!(restored.lyricist.get(row), original.lyricist.get(row));
-        assert_eq!(restored.date_created.get(row), original.date_created.get(row));
+        assert_eq!(
+            restored.date_created.get(row),
+            original.date_created.get(row)
+        );
         assert_eq!(restored.message.get(row), original.message.get(row));
     }
     let spec = ViewSpec {
-        source: TrackSource::Collection, sort: SortColumn::TrackNumber, descending: false,
-        query: String::new(), filter: Default::default(),
+        source: TrackSource::Collection,
+        sort: SortColumn::TrackNumber,
+        descending: false,
+        query: String::new(),
+        filter: Default::default(),
     };
     assert_eq!(restored.open_view(&spec).rows, vec![1, 0]);
 }
@@ -164,8 +265,17 @@ fn prepared_snapshot_requires_live_validation() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("library.snapshot");
     rbl_index::cache::save(&path, &built(), fingerprint()).unwrap();
-    assert!(rbl_index::cache::prepare(&path).unwrap().validated(Fingerprint { content: 99, ..fingerprint() }).is_none());
-    assert!(rbl_index::cache::prepare(&path).unwrap().validated(fingerprint()).is_some());
+    assert!(rbl_index::cache::prepare(&path)
+        .unwrap()
+        .validated(Fingerprint {
+            content: 99,
+            ..fingerprint()
+        })
+        .is_none());
+    assert!(rbl_index::cache::prepare(&path)
+        .unwrap()
+        .validated(fingerprint())
+        .is_some());
 }
 
 #[test]
@@ -184,12 +294,27 @@ fn a_snapshot_of_a_different_database_is_refused() {
     // Every field on its own must be enough to reject it: this is the whole
     // defence against showing somebody a library that has moved on.
     for changed in [
-        Fingerprint { content: 43, ..fingerprint() },
-        Fingerprint { db_version: 6001, ..fingerprint() },
-        Fingerprint { format: rbl_index::cache::FORMAT + 1, ..fingerprint() },
-        Fingerprint { database: 8, ..fingerprint() },
+        Fingerprint {
+            content: 43,
+            ..fingerprint()
+        },
+        Fingerprint {
+            db_version: 6001,
+            ..fingerprint()
+        },
+        Fingerprint {
+            format: rbl_index::cache::FORMAT + 1,
+            ..fingerprint()
+        },
+        Fingerprint {
+            database: 8,
+            ..fingerprint()
+        },
     ] {
-        assert!(decode(&bytes, changed).is_none(), "{changed:?} should have been refused");
+        assert!(
+            decode(&bytes, changed).is_none(),
+            "{changed:?} should have been refused"
+        );
     }
 }
 
@@ -200,12 +325,27 @@ fn a_rewritten_log_alone_does_not_throw_the_snapshot_away() {
     // rekordbox happened to be running for, which is most of them.
     let bytes = encode(&built(), fingerprint());
     for same_content in [
-        Fingerprint { wal_len: 8, ..fingerprint() },
-        Fingerprint { wal_modified_ns: 999, ..fingerprint() },
-        Fingerprint { db_len: 9999, ..fingerprint() },
-        Fingerprint { db_modified_ns: 100, ..fingerprint() },
+        Fingerprint {
+            wal_len: 8,
+            ..fingerprint()
+        },
+        Fingerprint {
+            wal_modified_ns: 999,
+            ..fingerprint()
+        },
+        Fingerprint {
+            db_len: 9999,
+            ..fingerprint()
+        },
+        Fingerprint {
+            db_modified_ns: 100,
+            ..fingerprint()
+        },
     ] {
-        assert!(decode(&bytes, same_content).is_some(), "{same_content:?} should still match");
+        assert!(
+            decode(&bytes, same_content).is_some(),
+            "{same_content:?} should still match"
+        );
     }
 }
 
@@ -213,10 +353,16 @@ fn a_rewritten_log_alone_does_not_throw_the_snapshot_away() {
 fn a_damaged_snapshot_is_refused_rather_than_trusted() {
     let bytes = encode(&built(), fingerprint());
     assert!(decode(&[], fingerprint()).is_none(), "empty");
-    assert!(decode(b"not a snapshot at all", fingerprint()).is_none(), "wrong magic");
+    assert!(
+        decode(b"not a snapshot at all", fingerprint()).is_none(),
+        "wrong magic"
+    );
     // Truncated at every length, which is what a half-written file looks like.
     for cut in (1..bytes.len()).step_by(7) {
-        assert!(decode(&bytes[..cut], fingerprint()).is_none(), "truncated to {cut}");
+        assert!(
+            decode(&bytes[..cut], fingerprint()).is_none(),
+            "truncated to {cut}"
+        );
     }
 }
 

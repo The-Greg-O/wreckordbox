@@ -109,7 +109,7 @@ test("Energy is five pips coloured by level, and an unrated track shows unset pi
   const green = await token(page, "--c-energy-3");
   for (const i of [0, 1, 2]) expect(await background(pips.nth(i))).toBe(green);
   const unset = await background(pips.nth(3));
-  expect(unset).not.toBe(green);
+  expect(unset).toBe(await token(page, "--c-energy-0"));
   expect(await background(pips.nth(4))).toBe(unset);
 
   const hot = energy(working(page), "Energy 5 of 5").first();

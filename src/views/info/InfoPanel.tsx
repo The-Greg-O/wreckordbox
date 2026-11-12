@@ -801,7 +801,7 @@ function Stars({
           // rekordbox behaves and the only way to get back to none.
           onClick={() => onRate(rating === star ? 0 : star)}
         >
-          <RatingStar lit={star <= rating} className={styles.starIcon} />
+          <RatingStar star={star} rating={rating} className={styles.starIcon} />
         </button>
       ))}
     </span>

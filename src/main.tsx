@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import "./styles/base.css";
 import { Localization } from "./i18n";
 import { syncRekordboxBrowseAtStartup } from "./lib/rekordboxBrowse";
+import { followTheme } from "./lib/themeRoles";
 import { followUiScale } from "./lib/uiScale";
 
 // Suppress the webview's Reload/Inspect menu in every app window. Leave
@@ -12,6 +13,9 @@ window.addEventListener("contextmenu", (event) => event.preventDefault());
 // The whole-interface scale, in every window this bundle draws, before any of
 // them paints: each opens at the stored scale and follows a change to it.
 followUiScale();
+
+// The chrome's colours and face follow the Omarchy theme, in every window.
+followTheme();
 
 const el = document.getElementById("root");
 if (!el) throw new Error("#root missing from index.html");

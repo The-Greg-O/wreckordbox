@@ -60,7 +60,7 @@
   font: inherit;
   cursor: default;
 }
-.range[data-on] { background: var(--c-pad-active); color: var(--c-icon-on); }
+.range[data-on] { background: var(--c-pad-active); color: var(--c-on-accent, var(--c-icon-on)); }
 
 .readout { font-variant-numeric: tabular-nums; color: var(--c-text); }
 

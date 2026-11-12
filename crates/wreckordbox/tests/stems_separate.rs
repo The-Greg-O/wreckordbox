@@ -512,7 +512,7 @@ fn stems_facts_and_mutants_add_no_table_column_or_row_to_the_library_and_live_in
         "0.8",
     ]);
     assert!(fact.status.success(), "{}", fact.stderr);
-    let listed = sandbox.cli(&["--json", "facts", "show", &track]);
+    let listed = sandbox.cli(&["--json", "facts", "show", &track, "--check-audio"]);
     assert!(listed.status.success(), "{}", listed.stderr);
     let kinds: Vec<String> = listed.json()["facts"]
         .as_array()
