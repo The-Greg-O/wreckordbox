@@ -21,15 +21,12 @@
 //! Nothing here writes or settles anything. A Stick with an unfinished
 //! write is reported `pending`, with nothing planned.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::commands::{
-    blocking, held_on_stick, track_export_selection, ExportSelection, EXPORT_CACHE,
-};
+use crate::commands::{blocking, held_on_stick, track_export_selection, ExportSelection};
 use crate::device_library::DeviceEditDto;
 use crate::device_settings::DeviceSettingsDto;
 use crate::device_settings::StickDefaultsDto;
@@ -104,39 +101,7 @@ pub enum PlannedOperation {
     Settle,
 }
 
-/// How a playlist on the Stick is changed by the write.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum PlaylistChange {
-    /// Not on the Stick from this Library yet.
-    Created,
-    /// On the Stick already, written again with what the Library holds now.
-    Resynchronised,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PlannedPlaylist {
-    pub name: String,
-    pub folder: bool,
-    pub change: PlaylistChange,
-    /// Entries it gains and loses against what the Stick holds; `None` when
-    /// the Stick does not record its entries (an older export) or for a folder.
-    pub added: Option<usize>,
-    pub removed: Option<usize>,
-    /// The entries it keeps are in another order than on the Stick; `None`
-    /// when that cannot be compared (as `added`).
-    pub reordered: Option<bool>,
-}
-
-/// A track already on the Stick whose exported data the write changes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TrackChange {
-    pub title: String,
-    /// The fields that differ, in the window's words (`Energy`, `Title`, `MyTags`).
-    pub fields: Vec<String>,
-}
+pub use wreckordbox_stick_write::plan::{PlannedPlaylist, PlaylistChange, TrackChange};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -509,12 +474,8 @@ fn playlist_selection(
     )
 }
 
-/// The audio from the export's own preview, and the rest from comparing the
-/// selection with what the Stick holds.
-#[allow(
-    clippy::too_many_lines,
-    reason = "the plan's parts, each read from the Stick once"
-)]
+/// The shared planner's reckoning (`wreckordbox_stick_write::plan`, the
+/// one the service's Stick load uses too), in the window's plan.
 fn export_plan(
     state: &AppState,
     library: &rbl_index::Library,
@@ -522,253 +483,24 @@ fn export_plan(
     selection: &ExportSelection,
     compatibility: Option<rbl_export::CompatibilityFormat>,
 ) -> AppResult<StickWritePlan> {
-    let options = rbl_export::ExportOptions {
-        sync: Some(&selection.sync),
+    let found = wreckordbox_stick_write::plan::export_plan(
+        state,
+        library,
+        destination,
+        selection,
         compatibility,
-        keep_unlisted: selection.keep_unlisted,
-        cache: Some(&EXPORT_CACHE),
-        ..Default::default()
-    };
-    // The Stick's databases are read through the non-recovering reader
-    // (wbx-45.5): its off-Stick copies, validated when the read finishes.
-    let read = wreckordbox_stick_outline::StickRead::begin(destination)
-        .map_err(|e| crate::stick_recovery::read_error(destination, e))?;
-    let mirror = read
-        .mirror()
-        .map_err(|e| crate::stick_recovery::read_error(destination, e))?;
-    let snapshot = rbl_export::snapshot::Snapshot::read(mirror.path()).ok();
-    read.finish()
-        .map_err(|e| crate::stick_recovery::read_error(destination, e))?;
-    // The audio preview is the export's own code, which opens the Stick's
-    // `exportLibrary.db` in place: on a Stick where that could create files,
-    // it is not run, and the plan says the audio was not estimated, as the
-    // Sync Manager's estimate does (wbx-45.5).
-    let audio_estimated = !wreckordbox_stick_outline::one_library::sqlite_untouchable(destination);
-    let preview = if audio_estimated {
-        Some(
-            rbl_export::plan::preview(
-                destination,
-                &selection.tracks,
-                &selection.playlists,
-                &selection.my_tags,
-                &options,
-            )
-            .map_err(|e| AppError::internal(e.to_string()))?,
-        )
-    } else {
-        None
-    };
-    let (held, _) = held_on_stick(state, library, destination);
-    let manifest = rbl_export::Manifest::load(destination);
-
-    // Each playlist: created, or written again with what it gains and loses.
-    let entries_on_stick: HashMap<u64, Option<Vec<String>>> = manifest
-        .as_ref()
-        .map(|m| {
-            m.playlists
-                .iter()
-                .filter(|p| !p.device_only)
-                .map(|p| (p.library_id, p.library_entries.clone()))
-                .collect()
-        })
-        .unwrap_or_default();
-    let playlists = selection
-        .playlists
-        .iter()
-        .map(|p| {
-            let change = if held.iter().any(|id| *id == p.id.to_string()) {
-                PlaylistChange::Resynchronised
-            } else {
-                PlaylistChange::Created
-            };
-            // Keyed as the export records them (`rbl_export::track_key`).
-            let next: Vec<String> = p
-                .track_indices
-                .iter()
-                .filter_map(|i| selection.tracks.get(*i))
-                .map(|t| rbl_export::track_key(t.id, &t.source_path.to_string_lossy()))
-                .collect();
-            let (added, removed, reordered) = if p.folder {
-                (None, None, None)
-            } else if change == PlaylistChange::Created {
-                (Some(next.len()), Some(0), Some(false))
-            } else if let Some(Some(before)) = entries_on_stick.get(&p.id) {
-                let (gained, lost) = multiset_difference(before, &next);
-                (Some(gained), Some(lost), Some(reordered(before, &next)))
-            } else {
-                (None, None, None)
-            };
-            PlannedPlaylist {
-                name: p.name.clone(),
-                folder: p.folder,
-                change,
-                added,
-                removed,
-                reordered,
-            }
-        })
-        .collect();
-
-    // Tracks already on the Stick whose data differs.
-    let on_stick: HashMap<u64, u32> = manifest
-        .as_ref()
-        .map(|m| {
-            m.tracks
-                .iter()
-                .map(|t| (t.library_id, t.export_id))
-                .collect()
-        })
-        .unwrap_or_default();
-    let stick_tracks: HashMap<u32, &rbl_export::snapshot::Track> = snapshot
-        .as_ref()
-        .and_then(|s| s.legacy.as_ref())
-        .map(|l| l.tracks.iter().map(|t| (t.id, t)).collect())
-        .unwrap_or_default();
-    let stick_tag_names: HashMap<u64, &str> = snapshot
-        .as_ref()
-        .map(|s| s.my_tags.iter().map(|t| (t.id, t.name.as_str())).collect())
-        .unwrap_or_default();
-    let library_tag_names: HashMap<u64, &str> = selection
-        .my_tags
-        .iter()
-        .map(|t| (t.id, t.name.as_str()))
-        .collect();
-    let mut track_changes = Vec::new();
-    for track in &selection.tracks {
-        let Some(export_id) = on_stick.get(&track.id) else {
-            continue;
-        };
-        let Some(was) = stick_tracks.get(export_id) else {
-            continue;
-        };
-        let mut fields: Vec<String> = Vec::new();
-        for (name, same) in [
-            ("Title", was.title == track.title),
-            ("Artist", was.artist == track.artist),
-            ("Album", was.album == track.album),
-            ("Genre", was.genre == track.genre),
-            ("Label", was.label == track.label),
-            ("Comment", was.comment == track.comment),
-            ("BPM", was.bpm == track.bpm_x100),
-            ("Key", was.key == track.key),
-            ("Energy", was.rating == u32::from(track.rating)),
-            ("Colour", was.color == u32::from(track.color_id)),
-        ] {
-            if !same {
-                fields.push(name.to_owned());
-            }
-        }
-        if let Some(memberships) = snapshot.as_ref().map(|s| &s.tag_memberships) {
-            let before: BTreeSet<&str> = memberships
-                .get(export_id)
-                .map(|ids| {
-                    ids.iter()
-                        .filter_map(|id| stick_tag_names.get(id).copied())
-                        .collect()
-                })
-                .unwrap_or_default();
-            let after: BTreeSet<&str> = track
-                .my_tags
-                .iter()
-                .filter_map(|id| library_tag_names.get(id).copied())
-                .collect();
-            if before != after {
-                fields.push("MyTags".to_owned());
-            }
-        }
-        if !fields.is_empty() {
-            track_changes.push(TrackChange {
-                title: track.title.clone(),
-                fields,
-            });
-        }
-    }
-    let found = preview
-        .as_ref()
-        .map(|p| p.estimate.clone())
-        .unwrap_or_default();
+    )?;
     Ok(StickWritePlan {
-        audio_estimated,
+        audio_estimated: found.audio_estimated,
         tracks_new: found.tracks_new,
         tracks_changed: found.tracks_changed,
-        audio_reused: found.tracks_kept,
+        audio_reused: found.audio_reused,
         tracks_removed: found.tracks_removed,
         tracks_missing: found.tracks_missing,
-        track_changes,
-        analysis_written: selection.tracks.len().saturating_sub(found.tracks_missing),
-        playlists,
-        net_additional_bytes: preview.as_ref().map_or(0, |p| p.net_additional_bytes),
+        track_changes: found.track_changes,
+        analysis_written: found.analysis_written,
+        playlists: found.playlists,
+        net_additional_bytes: found.net_additional_bytes,
         ..StickWritePlan::default()
     })
-}
-
-/// Whether the entries `before` and `next` share are in another order in
-/// `next`: each list reduced to the entries the other also has (counting
-/// repeats), then compared in order.
-fn reordered(before: &[String], next: &[String]) -> bool {
-    fn kept<'a>(from: &'a [String], other: &[String]) -> Vec<&'a str> {
-        let mut left: BTreeMap<&str, usize> = BTreeMap::new();
-        for id in other {
-            *left.entry(id).or_default() += 1;
-        }
-        from.iter()
-            .filter(|id| {
-                left.get_mut(id.as_str()).is_some_and(|n| {
-                    let had = *n > 0;
-                    *n = n.saturating_sub(1);
-                    had
-                })
-            })
-            .map(String::as_str)
-            .collect()
-    }
-    kept(before, next) != kept(next, before)
-}
-
-/// How many entries `next` has that `before` does not, and the reverse, counting repeats.
-fn multiset_difference(before: &[String], next: &[String]) -> (usize, usize) {
-    let mut counts: BTreeMap<&str, i64> = BTreeMap::new();
-    for id in before {
-        *counts.entry(id).or_default() -= 1;
-    }
-    for id in next {
-        *counts.entry(id).or_default() += 1;
-    }
-    let gained: u64 = counts
-        .values()
-        .filter(|n| **n > 0)
-        .map(|n| n.unsigned_abs())
-        .sum();
-    let lost: u64 = counts
-        .values()
-        .filter(|n| **n < 0)
-        .map(|n| n.unsigned_abs())
-        .sum();
-    (
-        usize::try_from(gained).unwrap_or(usize::MAX),
-        usize::try_from(lost).unwrap_or(usize::MAX),
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::reordered;
-
-    fn ids(list: &[&str]) -> Vec<String> {
-        list.iter().map(|s| (*s).to_owned()).collect()
-    }
-
-    #[test]
-    fn a_playlist_whose_kept_entries_change_order_is_reordered() {
-        assert!(!reordered(
-            &ids(&["a", "b", "c"]),
-            &ids(&["a", "b", "c", "d"])
-        ));
-        assert!(
-            !reordered(&ids(&["a", "b", "c"]), &ids(&["a", "c"])),
-            "a removal alone"
-        );
-        assert!(reordered(&ids(&["a", "b", "c"]), &ids(&["c", "a", "b"])));
-        assert!(reordered(&ids(&["a", "b"]), &ids(&["x", "b", "a"])));
-    }
 }
