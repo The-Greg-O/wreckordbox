@@ -477,6 +477,32 @@ impl crate::LibraryCore {
         Ok((value, change))
     }
 
+    /// One edit that Undo must never traverse, whole: the guarded write and
+    /// the refresh of what it `touched`, then both stacks emptied, because
+    /// an older entry could name rows the write removed for good. The host
+    /// is told when there was a history to empty.
+    ///
+    /// Blocking.
+    pub fn permanent_edit<T>(
+        &self,
+        host: &(impl crate::Host + ?Sized),
+        touched: Touched,
+        action: impl FnOnce(&mut rbl_db::write::Writer) -> Result<T, DbError>,
+    ) -> Result<(T, crate::Change), DbError> {
+        let _gate = self.edit_gate().lock();
+        let done = self.edit(host, crate::History::Caller, touched, action)?;
+        let had = {
+            let mut history = self.history.lock();
+            let had = history.undo_label().is_some() || history.redo_label().is_some();
+            history.clear();
+            had
+        };
+        if had {
+            host.history_changed();
+        }
+        Ok(done)
+    }
+
     /// Runs the next Undo (`undo`) or Redo entry of the history, and
     /// re-reads what it touched.
     ///

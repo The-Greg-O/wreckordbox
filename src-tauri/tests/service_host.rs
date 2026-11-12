@@ -403,6 +403,80 @@ fn a_rating_the_track_already_has_leaves_nothing_to_undo() {
     assert!(window.history.lock().unwrap().is_empty(), "the Edit menu was not told of an edit that changed nothing");
 }
 
+impl Window {
+    /// The fixture's My Tags, in the order the command lists them.
+    fn my_tags(&self) -> Vec<String> {
+        let listed = self.cli(&["--json", "mytags", "list"]).json();
+        listed["categories"][0]["tags"].as_array().unwrap().iter().map(|tag| tag["id"].as_str().unwrap().to_owned()).collect()
+    }
+
+    fn my_tags_of(&self, track: &str) -> Vec<String> {
+        let shown = self.cli(&["--json", "mytags", "show", track]).json();
+        shown["my_tags"].as_array().unwrap().iter().map(|tag| tag["id"].as_str().unwrap().to_owned()).collect()
+    }
+
+    fn undo(&self) -> Result<rbxport_lib::dto::EditHistoryDto, rbxport_lib::AppError> {
+        run(commands::undo_edit(self.app.handle().clone(), self.state()))
+    }
+
+    fn redo(&self) -> Result<rbxport_lib::dto::EditHistoryDto, rbxport_lib::AppError> {
+        run(commands::redo_edit(self.app.handle().clone(), self.state()))
+    }
+}
+
+#[test]
+fn a_my_tag_put_on_tracks_from_the_command_is_one_undo_in_the_window() {
+    let window = window();
+    window.host().unwrap();
+    let tag = window.my_tags()[0].clone();
+    let (one, two) = (track_id(1), track_id(2));
+    let before = (window.my_tags_of(&one), window.my_tags_of(&two));
+    assert!(!before.0.contains(&tag) && !before.1.contains(&tag));
+
+    window.cli(&["mytags", "assign", &tag, &one, &two]).succeeded();
+    assert!(window.my_tags_of(&one).contains(&tag));
+
+    let undone = window.undo().unwrap();
+
+    assert_eq!((window.my_tags_of(&one), window.my_tags_of(&two)), before, "both tracks, in one step");
+    assert_eq!(undone.redo_label.as_deref(), Some("Track Edit"));
+    window.redo().unwrap();
+    assert!(window.my_tags_of(&one).contains(&tag) && window.my_tags_of(&two).contains(&tag));
+}
+
+#[test]
+fn a_my_tag_moved_from_the_command_is_undone_from_the_window() {
+    let window = window();
+    window.host().unwrap();
+    let before = window.my_tags();
+    assert!(before.len() >= 2, "{before:?}");
+
+    window.cli(&["mytags", "move", &before[0], "2"]).succeeded();
+    assert_ne!(window.my_tags(), before);
+
+    let undone = window.undo().unwrap();
+
+    assert_eq!(window.my_tags(), before);
+    assert_eq!(undone.redo_label.as_deref(), Some("Reorder My Tags"));
+}
+
+#[test]
+fn a_my_tag_deleted_from_the_command_clears_the_history_as_the_windows_delete_does() {
+    let window = window();
+    window.host().unwrap();
+    let tag = window.my_tags()[0].clone();
+    window.cli(&["mytags", "assign", &tag, &track_id(1)]).succeeded();
+    window.history.lock().unwrap().clear();
+
+    window.cli(&["mytags", "delete", &tag]).succeeded();
+
+    // An older entry could name the tag that is gone for good.
+    eventually("edit-history:changed", || !window.history.lock().unwrap().is_empty());
+    let offered = window.history.lock().unwrap().last().cloned().unwrap();
+    assert_eq!((offered["canUndo"].clone(), offered["canRedo"].clone()), (false.into(), false.into()));
+    assert_eq!(window.undo().unwrap_err().kind, ErrorKind::NotFound);
+}
+
 impl Run {
     /// A command that must succeed, whatever it printed.
     fn succeeded(&self) {
