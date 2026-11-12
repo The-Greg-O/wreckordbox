@@ -1176,6 +1176,22 @@ export interface Backend {
    * one step of Edit › Undo, refused under Library Protection (wbx-63).
    */
   intakeSetPrepColour(id: string, colour: number | null): Promise<void>;
+  /**
+   * The Intake tag panel's description (wbx-65; the service's
+   * `intake.tag_panel`): every dimension in the panel's order, which reach
+   * the deck, their tags, and, given a track, which of them it carries.
+   */
+  intakeTagPanel(track: string | null): Promise<import("@/lib/tagPanel").TagPanel>;
+  /**
+   * One click of the tag panel (wbx-65; the service's `intake.set_tags`):
+   * `dimension` of `track` set to exactly `terms` from the panel at
+   * `version`. One step of Edit › Undo whichever store it touched; refused
+   * under Library Protection, and with code `tag_panel_stale` (the error's
+   * `detail`) when the panel was not current.
+   */
+  intakeSetTags(track: string, dimension: string, terms: readonly string[], version: string, dropUnmapped: readonly string[], comments: boolean): Promise<import("@/lib/tagPanel").TagsSet>;
+  /** A Fact changed in the Sidecar (any client): `{ trackId, kind }`. */
+  onSidecarChanged(listener: (change: { trackId: string; kind: string }) => void): () => void;
   /** Maps collection track ids to rows already in one of a stick's libraries. */
   devicePlaylistCollectionTracks(path: string, format: DeviceFormat, tracks: string[]): Promise<(string | null)[]>;
   /**

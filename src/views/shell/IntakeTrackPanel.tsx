@@ -14,7 +14,7 @@
  * The edits themselves are `IntakeView`'s (`onTitle` and so on): they go
  * through the window's single edit path and Library Protection.
  */
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import { useTranslation } from "@/i18n";
 import type { IntakeColours, PrepColour } from "@/lib/intakeEdits";
@@ -52,6 +52,8 @@ export interface IntakeTrackPanelProps {
   platform: Platform;
   /** Why proposed titles and artists could not be read; `null` when they were. */
   suggestionsUnavailable: string | null;
+  /** The tag panel (wbx-65), between the pickers and the actions. */
+  tags?: ReactNode;
 }
 
 export function IntakeTrackPanel(props: IntakeTrackPanelProps) {
@@ -145,6 +147,8 @@ export function IntakeTrackPanel(props: IntakeTrackPanelProps) {
           )}
         </div>
       </div>
+
+      {props.tags}
 
       {props.suggestionsUnavailable !== null ? (
         <p className={styles.hint} data-testid="intake-suggestions-unavailable">{t("Proposed titles and artists could not be read")}: {props.suggestionsUnavailable}</p>

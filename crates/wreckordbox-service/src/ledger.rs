@@ -322,6 +322,7 @@ pub mod stored {
             LibraryEdit::PlaylistEdit(_) => "playlist_edit",
             LibraryEdit::Relocate(_) => "relocate",
             LibraryEdit::ListRemoval(_) => "list_removal",
+            LibraryEdit::Judgements(_) => "dj_judgements",
         }
     }
 
@@ -361,6 +362,21 @@ pub mod stored {
                         .collect()
                 };
                 Some(json!({ "playlist": playlist, "before": run(before), "after": run(after) }))
+            }
+            LibraryEdit::Judgements(judgements) => {
+                let value = |text: &str| serde_json::from_str::<Value>(text).unwrap_or(Value::Null);
+                Some(json!({
+                    "changes": judgements
+                        .changes
+                        .iter()
+                        .map(|change| json!({
+                            "track": change.track,
+                            "kind": change.kind,
+                            "before": value(&change.before),
+                            "after": value(&change.after),
+                        }))
+                        .collect::<Vec<Value>>(),
+                }))
             }
             _ => None,
         }
@@ -436,6 +452,22 @@ pub mod stored {
                     ),
                 ))
             }
+            "dj_judgements" => {
+                let changes = payload
+                    .get("changes")?
+                    .as_array()?
+                    .iter()
+                    .map(|change| {
+                        Some(rbl_library::judgements::JudgementChange {
+                            track: change.get("track")?.as_str()?.to_owned(),
+                            kind: change.get("kind")?.as_str()?.to_owned(),
+                            before: change.get("before")?.to_string(),
+                            after: change.get("after")?.to_string(),
+                        })
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                Some(LibraryEdit::Judgements(rbl_library::judgements::Judgements { changes }))
+            }
             _ => None,
         }
     }
@@ -503,6 +535,16 @@ pub mod stored {
                     after: ids("after"),
                 });
             }
+            "dj_judgements" => values.extend(list("changes").iter().map(|change| ValueChange {
+                subject: track(change),
+                field: change
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .unwrap_or("?")
+                    .to_owned(),
+                before: field(change, "before"),
+                after: field(change, "after"),
+            })),
             _ => {}
         }
         if undone {
@@ -610,6 +652,7 @@ pub mod stored {
 pub(crate) fn takes_run(command: &str) -> bool {
     command == crate::protocol::commands::TRACKS_RATE
         || command == crate::intake::commands::TRACKS_SET_PREP_COLOUR
+        || command == crate::tag_panel::commands::INTAKE_SET_TAGS
         || crate::mytag_edits::answers(command)
         || crate::playlist_edits::answers(command)
 }

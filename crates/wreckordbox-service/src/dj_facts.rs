@@ -86,6 +86,21 @@ pub(crate) fn derive(
         }
     } else if kind == "track_tags" {
         derive_tags(location, stems, payload, &mut result);
+    } else if kind == "dj_judgements" {
+        // The DJ's own judgements, set as such (wbx-65): each is the whole
+        // answer for its kind, so no provenance of unchanged terms is
+        // asked for; `null` withdraws the opinion.
+        for change in payload["changes"].as_array().into_iter().flatten() {
+            if change["before"] == change["after"] {
+                continue;
+            }
+            result.values.push(NativeFact {
+                track: change["track"].as_str().unwrap_or_default().into(),
+                kind: change["kind"].as_str().unwrap_or_default().into(),
+                value: change["after"].clone(),
+                before: None,
+            });
+        }
     }
     result
 }

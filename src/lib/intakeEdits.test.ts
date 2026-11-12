@@ -42,6 +42,7 @@ describe("intakeActionForKey", () => {
     expect(actions).toEqual([
       "intakeMarkClean", "intakeMarkProblem", "intakeSkip",
       "intakeEnergy1", "intakeEnergy2", "intakeEnergy3", "intakeEnergy4", "intakeEnergy5",
+      "intakeTag",
     ]);
   });
 });

@@ -275,7 +275,8 @@ pub struct Dimension {
     /// The MyTag category's identifier.
     pub id: String,
     pub name: String,
-    /// What the dimension is in the Library: `mytag_category`.
+    /// What the dimension is: `mytag_category` (no Tag schema), or
+    /// `tag_schema_dimension` (a deck category of the Tag schema).
     pub kind: String,
     /// The tags of the dimension, as a track's MyTags are keyed.
     #[serde(skip)]
@@ -703,7 +704,7 @@ impl Known {
             Err(why) => (HashMap::new(), Some(why)),
         };
         Ok(Self {
-            dimensions: dimensions_reaching_the_deck(&my_tags),
+            dimensions: dimensions_reaching_the_deck(&my_tags, stems.sidecar_dir()),
             locked,
             facts,
             facts_unavailable,
@@ -830,31 +831,23 @@ fn waiting(facts: &[Fact], field: &str, held: &str) -> Vec<Suggestion> {
 }
 
 /// The dimensions of the DJ's tags that reach the deck, in the order the
-/// deck lists them. The one place that decides it.
-///
-/// Today a dimension reaches the deck exactly when it is a MyTag category
-/// (the Track Filter reads MyTags and nothing else of the kind), so these
-/// are the Library's MyTag categories. A category holding no tags is left
-/// out: there is nothing in it a track could be given. When the Tag schema
-/// says which of its dimensions are projected to the deck, this is what
-/// changes.
-fn dimensions_reaching_the_deck(my_tags: &[rbl_db::export_info::MyTagRow]) -> Vec<Dimension> {
-    let catalogue = rbl_library::read::my_tag_catalogue(my_tags);
-    catalogue
-        .categories
-        .iter()
-        .map(|category| Dimension {
-            id: category.id.clone(),
-            name: category.name.clone(),
-            kind: "mytag_category".to_owned(),
-            tags: catalogue
-                .tags
-                .iter()
-                .filter(|tag| tag.parent == category.id)
-                .map(|tag| rbl_index::smart::my_tag_key(&tag.id))
-                .collect(),
+/// deck lists them: the tag panel's own resolution (wbx-65), so the queue
+/// asks for tags in exactly the dimensions the panel offers as deck-facing:
+/// the Tag schema's deck categories when there is a valid schema, else the
+/// Library's MyTag categories that hold tags. A schema category with no
+/// MyTags in the Library yet is empty for every track.
+fn dimensions_reaching_the_deck(
+    my_tags: &[rbl_db::export_info::MyTagRow],
+    sidecar_dir: &std::path::Path,
+) -> Vec<Dimension> {
+    crate::tag_panel::deck_dimensions(my_tags, sidecar_dir)
+        .into_iter()
+        .map(|(id, name, kind, tags)| Dimension {
+            id,
+            name,
+            kind: kind.to_owned(),
+            tags,
         })
-        .filter(|dimension| !dimension.tags.is_empty())
         .collect()
 }
 

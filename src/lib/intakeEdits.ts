@@ -54,7 +54,8 @@ export function fromServiceColours(raw: ServiceColours): IntakeColours {
 
 export type IntakeAction =
   | "intakeMarkClean" | "intakeMarkProblem" | "intakeSkip"
-  | "intakeEnergy1" | "intakeEnergy2" | "intakeEnergy3" | "intakeEnergy4" | "intakeEnergy5";
+  | "intakeEnergy1" | "intakeEnergy2" | "intakeEnergy3" | "intakeEnergy4" | "intakeEnergy5"
+  | "intakeTag";
 
 export interface IntakeActionInfo {
   action: IntakeAction & Action;
@@ -79,6 +80,9 @@ export const INTAKE_ACTIONS: readonly IntakeActionInfo[] = [
   { action: "intakeMarkProblem", label: "Mark Problem and Next", chord: { key: "p" }, writes: true },
   { action: "intakeSkip", label: "Skip to Next Track", chord: { key: "]" }, writes: false },
   energy(1), energy(2), energy(3), energy(4), energy(5),
+  // The tag picker (wbx-65): any dimension's tag by search. Opening it
+  // writes nothing; the click it makes goes through the edit path.
+  { action: "intakeTag", label: "Tag Track…", chord: { key: "t" }, writes: false },
 ];
 
 /** An action's key, with the DJ's own applied; its `key` is empty when it has none. */
