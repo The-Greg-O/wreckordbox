@@ -997,6 +997,7 @@ const NOT_STICK_WRITERS: &[&str] = &[
     "cancel_export",
     "clear_artwork",
     "clear_tag_list",
+    "collection_removal_mutants",
     "convert_memory_cues_to_hot",
     "create_folder",
     "create_library",
