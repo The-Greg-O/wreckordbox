@@ -56,9 +56,29 @@
   letter-spacing: normal;
   font-size: var(--f-size-shell);
   color: var(--c-text);
-  background: var(--c-black);
   border: var(--s-shell-border) solid var(--c-raised);
   border-radius: var(--s-shell-radius);
+  /* Drawn by us, not by the toolkit: WebKitGTK paints a select with native
+     appearance in the GTK theme's light colours whatever this says, which
+     left the placeholder light on white (wbx-45.15). The arrow is ours too. */
+  appearance: none;
+  -webkit-appearance: none;
+  color-scheme: inherit;
+  padding: var(--s-shell-space-2) calc(var(--s-shell-space-5) + 10px) var(--s-shell-space-2) var(--s-shell-space-3);
+  background:
+    linear-gradient(45deg, transparent 50%, var(--c-text-dim) 50%) right calc(var(--s-shell-space-3) + 5px) center / 5px 5px no-repeat,
+    linear-gradient(-45deg, transparent 50%, var(--c-text-dim) 50%) right var(--s-shell-space-3) center / 5px 5px no-repeat,
+    var(--c-black);
+  cursor: pointer;
+}
+.choose select:focus-visible {
+  outline: var(--s-shell-border) solid var(--c-accent);
+  outline-offset: calc(-1 * var(--s-shell-border));
+}
+/* The list that drops down is the toolkit's: give it the theme's colours. */
+.choose select option {
+  color: var(--c-text);
+  background-color: var(--c-black);
 }
 
 .notice, .failed {

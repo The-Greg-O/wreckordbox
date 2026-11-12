@@ -3,6 +3,7 @@
  * (wbx-45.15), each pinned here where a mock-backed browser can show it.
  */
 import { expect, test, type Page } from "@playwright/test";
+import { BROWSER_THEME_EVENT, type ThemeRoles } from "../src/lib/themeRoles";
 import { overview, player, titles } from "./compactPlayer";
 
 /** The rightmost overview column with anything drawn in it, as a fraction; 0 with no waveform. */
@@ -171,4 +172,64 @@ test("a Mark Clean with no Clean to mark is drawn unlit, and says why", async ({
   // The reason is on the panel, not only in a tooltip.
   await expect(panel.getByTestId("intake-no-clean")).toHaveText("No colour label is named Clean, so there is no Clean to mark.");
   await page.screenshot({ path: test.info().outputPath("mark-clean-disabled.png") });
+});
+
+/** WCAG contrast of two computed `rgb(...)` colours. */
+function contrast(a: string, b: string): number {
+  const lum = (c: string) => {
+    const [r, g, bl] = (c.match(/[\d.]+/g) ?? []).slice(0, 3).map((v) => {
+      const x = Number(v) / 255;
+      return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * (r ?? 0) + 0.7152 * (g ?? 0) + 0.0722 * (bl ?? 0);
+  };
+  const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+  return ((hi ?? 0) + 0.05) / ((lo ?? 0) + 0.05);
+}
+
+const LIGHT: ThemeRoles = {
+  mode: "light", ground: "#f4f1ea", panel: "#ebe7dd", working: "#e2ddd1", hairline: "#cfc8b8",
+  selection: "#d8d0bf", border: "#a89f8c", text: "#3b3a36", textDim: "#6d6a62", textBright: "#1c1b18",
+  accent: "#2f6fb0", onAccent: "#ffffff", tabFrom: "#8a4fb0", tabTo: "#b0602f",
+};
+/** A theme file's foreground laid over a dark theme, as the integration pass had it. */
+const OVERRIDDEN: ThemeRoles = {
+  mode: "dark", ground: "#1a1020", panel: "#22152a", working: "#2a1a33", hairline: "#3a2645",
+  selection: "#4a2f58", border: "#5a3d6b", text: "#ffcc00", textDim: "#9a8aa8", textBright: "#fff3c4",
+  accent: "#ff6ac1", onAccent: "#1a1020", tabFrom: "#ff6ac1", tabTo: "#ffcc00",
+};
+
+test("the second list's playlist chooser is drawn in the theme's colours, its placeholder readable, under any theme", async ({ page }) => {
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem("defects-seeded")) return;
+    sessionStorage.setItem("defects-seeded", "1");
+    localStorage.setItem("rbl.preferences", JSON.stringify({ advanced: { protectLibrary: false }, view: { viewShell: true } }));
+  });
+  await page.goto("/");
+  await expect(page.getByTestId("browser-title")).toContainText("Tracks)");
+  await page.keyboard.press("Control+Backslash");
+  const chooser = page.getByRole("combobox", { name: "Target playlist" });
+  await expect(chooser).toHaveValue("");
+
+  for (const roles of [null, LIGHT, OVERRIDDEN]) {
+    if (roles) {
+      await page.evaluate(([name, detail]) => void window.dispatchEvent(new CustomEvent(name as string, { detail })),
+        [BROWSER_THEME_EVENT, { roles, font: "monospace" }] as const);
+    }
+    await expect.poll(async () => {
+      const drawn = await chooser.evaluate((el) => {
+        const style = getComputedStyle(el);
+        const option = getComputedStyle(el.querySelector("option")!);
+        // WebKitGTK draws a select with native appearance in the GTK theme's
+        // own light colours, whatever its CSS says: ours must opt out.
+        return { appearance: style.appearance, scheme: style.colorScheme, text: style.color, ground: style.backgroundColor,
+          optionText: option.color, optionGround: option.backgroundColor };
+      });
+      return drawn.appearance === "none"
+        && contrast(drawn.text, drawn.ground) >= 4.5
+        && contrast(drawn.optionText, drawn.optionGround) >= 4.5
+        ? "readable" : JSON.stringify(drawn);
+    }, { message: `under ${roles?.mode ?? "the default"} theme` }).toBe("readable");
+  }
+  await page.screenshot({ path: test.info().outputPath("target-chooser.png") });
 });
