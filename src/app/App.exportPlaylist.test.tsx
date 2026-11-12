@@ -115,8 +115,8 @@ async function holdToWrite() {
   const typed = document.querySelector<HTMLInputElement>('[role="alertdialog"] input[aria-label^="Type"]');
   if (typed !== null) {
     await act(async () => {
-      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-      set?.call(typed, "TEST");
+      // React's own value setter, so the change is heard as typing.
+      Reflect.set(HTMLInputElement.prototype, "value", "TEST", typed);
       typed.dispatchEvent(new Event("input", { bubbles: true }));
       await Promise.resolve();
     });
