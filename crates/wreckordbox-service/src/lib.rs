@@ -17,6 +17,7 @@ pub mod intake;
 mod library;
 pub mod mutants;
 pub mod mytag_edits;
+pub mod native_stems;
 pub mod protocol;
 pub mod reading;
 mod separation;
