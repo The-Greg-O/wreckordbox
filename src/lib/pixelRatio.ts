@@ -16,6 +16,7 @@
  * Kept apart from `uiScale.ts` so `canvasSize.ts` and the deck need nothing
  * of the preferences to ask.
  */
+import { useSyncExternalStore } from "react";
 
 let zoom = 1;
 let zoomInDevicePixelRatio = false;
@@ -51,10 +52,46 @@ export function pixelRatioChanged(): void {
   for (const listener of listeners) listener();
 }
 
+/**
+ * Watches the display's own ratio while anything listens: moving the window
+ * to a display of another density changes `devicePixelRatio` with no resize
+ * and no zoom, and nothing else says so. A `resolution` media query matches
+ * only the ratio it was made for, so it is made again after each change.
+ */
+let displayWatch: (() => void) | null = null;
+
+function watchDisplay(): void {
+  if (displayWatch || typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+  const arm = () => {
+    const query = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+    const changed = () => {
+      query.removeEventListener("change", changed);
+      displayWatch = null;
+      if (listeners.size > 0) watchDisplay();
+      pixelRatioChanged();
+    };
+    query.addEventListener("change", changed);
+    displayWatch = () => query.removeEventListener("change", changed);
+  };
+  arm();
+}
+
 /** Subscribes to `pixelRatioChanged`; the shape `useSyncExternalStore` takes. */
 export function onPixelRatioChange(listener: () => void): () => void {
   listeners.add(listener);
+  watchDisplay();
   return () => {
     listeners.delete(listener);
+    if (listeners.size === 0) {
+      displayWatch?.();
+      displayWatch = null;
+    }
   };
+}
+
+const serverRatio = () => 1;
+
+/** `pixelRatio()`, kept current: a redraw follows a scale or display change. */
+export function usePixelRatio(): number {
+  return useSyncExternalStore(onPixelRatioChange, pixelRatio, serverRatio);
 }

@@ -51,8 +51,14 @@ pub struct ThemeFile {
     /// The face for text whose digits line up: BPM, key, times, dates.
     pub mono_font: Option<String>,
     pub mono_font_size: Option<f64>,
+    /// The waveform colour theme (`3band`, `rgb`, `blue` or `theme`). When
+    /// set it wins over the one chosen in Preferences.
+    pub waveform: Option<String>,
     pub problems: Vec<ThemeProblem>,
 }
+
+/// The waveform colour themes, as the window names them.
+pub const WAVEFORM_THEMES: &[&str] = &["3band", "rgb", "blue", "theme"];
 
 /// The colour keys of an Omarchy `colors.toml`. All are accepted, so a
 /// pasted palette is not reported; the roles read some of them directly and
@@ -79,6 +85,7 @@ pub fn accepted_keys() -> Vec<&'static str> {
         "font_size",
         "mono_font",
         "mono_font_size",
+        "waveform",
     ]
     .into_iter()
     .chain(COLOUR_KEYS.iter().copied())
@@ -246,6 +253,19 @@ pub fn parse(text: &str) -> ThemeFile {
                     quoted(value),
                     SIZES.start(),
                     SIZES.end()
+                )),
+            },
+            "waveform" => match as_text
+                .map(str::to_ascii_lowercase)
+                .filter(|name| WAVEFORM_THEMES.contains(&name.as_str()))
+            {
+                Some(name) => {
+                    file.waveform = Some(name);
+                    None
+                }
+                None => Some(format!(
+                    "waveform is {}; it must be \"3band\", \"rgb\", \"blue\" or \"theme\"",
+                    quoted(value)
                 )),
             },
             colour if COLOUR_KEYS.contains(&colour) => {
@@ -487,6 +507,26 @@ mod tests {
             (bad.font, bad.font_size, bad.mono_font, bad.mono_font_size),
             (None, None, None, None)
         );
+    }
+
+    #[test]
+    fn the_waveform_theme_is_one_of_four() {
+        for (written, chosen) in [
+            ("3band", "3band"),
+            ("3Band", "3band"),
+            ("rgb", "rgb"),
+            ("RGB", "rgb"),
+            ("blue", "blue"),
+            ("theme", "theme"),
+        ] {
+            let file = parse(&format!("waveform = \"{written}\"\n"));
+            assert_eq!(file.problems, [], "{written}");
+            assert_eq!(file.waveform.as_deref(), Some(chosen), "{written}");
+        }
+        let wrong = parse("accent = \"#ff8800\"\nwaveform = \"rainbow\"\n");
+        assert_eq!(wrong.waveform, None);
+        assert_eq!(lines(&wrong), [2]);
+        assert_eq!(parse("").waveform, None);
     }
 
     /// Takes read permission away from `path` for the length of `check`,

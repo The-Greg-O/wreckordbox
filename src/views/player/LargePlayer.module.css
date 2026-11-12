@@ -83,3 +83,9 @@
 @container shell (max-width: 800px) {
   .large { --lp-wave-h: 120px; }
 }
+
+/* A dark halo on each marker under the Theme waveform: see Player.module.css. */
+:global(:root[data-wave-theme="theme"]) :is(.phrase) {
+  /* A box's outline, a CSS pixel all round; its own colour untouched. */
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.85);
+}

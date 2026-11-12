@@ -90,6 +90,7 @@ import type { HotCueColor } from "@/lib/preferences";
 import { hotCueColour } from "@/lib/hotCueColours";
 import { memoryCueMarkerColour } from "@/lib/memoryCueColours";
 import { formatKey, quantizeFraction } from "@/lib/preferences";
+import { useEffectiveWaveform } from "@/lib/waveTheme";
 import { pixelRatio } from "@/lib/pixelRatio";
 import { loadDeckQuantize, saveDeckQuantize } from "@/lib/deckQuantize";
 import {
@@ -1039,6 +1040,7 @@ export const Player = memo(function Player({
     }).catch(() => onError?.("The metronome volume could not be changed."));
   }, [preferences.audio.metronomeVolume, preferences.audio.metronomeSound, updatePreferences, onError]);
   const { view: viewPrefs, advanced: advancedPrefs } = preferences;
+  const waveform = useEffectiveWaveform(viewPrefs.waveformColor);
   // The ≡ menu at the foot of the deck.
   const [deckMenuAt, setDeckMenuAt] = useState<{ x: number; y: number } | null>(null);
   const chooseFromDeckMenu = useCallback(
@@ -1056,6 +1058,7 @@ export const Player = memo(function Player({
         case "waveformBlue": updatePreferences("view", { waveformColor: "blue" }); break;
         case "waveformRgb": updatePreferences("view", { waveformColor: "rgb" }); break;
         case "waveform3band": updatePreferences("view", { waveformColor: "3band" }); break;
+        case "waveformTheme": updatePreferences("view", { waveformColor: "theme" }); break;
         case "beatPosition": updatePreferences("view", { beatCount: "position" }); break;
         case "beatToMemoryBars": updatePreferences("view", { beatCount: "toMemoryBars" }); break;
         case "beatToMemoryBeats": updatePreferences("view", { beatCount: "toMemoryBeats" }); break;
@@ -3180,7 +3183,8 @@ export const Player = memo(function Player({
             x={deckMenuAt.x}
             y={deckMenuAt.y}
             rows={deckMenu({
-              waveformColor: viewPrefs.waveformColor,
+              waveformColor: waveform.palette,
+              waveformColorFromFile: waveform.fromFile,
               beatCount: viewPrefs.beatCount,
               waveformClick: viewPrefs.waveformClick,
               hasLoop: playback.loop !== null && track !== null,

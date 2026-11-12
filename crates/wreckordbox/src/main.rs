@@ -15,6 +15,7 @@ mod mytag_edits;
 mod protection;
 mod reading;
 mod schema;
+mod standing;
 mod stems;
 mod stems_write;
 mod stick;

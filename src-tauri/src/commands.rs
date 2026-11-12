@@ -791,7 +791,9 @@ where
         let _gate = state.edit_gate().lock();
         // The refresh's failure is kept aside: the edit is made by then and
         // goes into the history (and the Ledger) whatever it says.
-        let (refreshed, reversible) = state.write_history_then(
+        let preparation = rbl_library::ledger::Preparation::touched(&touched);
+        let (refreshed, reversible) = state.core().write_then_prepared(
+            state.as_ref(), rbl_library::History::Caller, &preparation,
             action,
             |db, reversible| Ok((refresh_after_edit(&state, db, touched), reversible)),
         ).map_err(write_error)?;

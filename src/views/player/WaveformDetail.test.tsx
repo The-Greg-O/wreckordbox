@@ -23,6 +23,7 @@ vi.mock("@/canvas", () => ({
 
 import { __setBackend } from "@/ipc/client";
 import type { Backend } from "@/ipc/types";
+import { setPixelZoom } from "@/lib/pixelRatio";
 import { WaveformDetail } from "./WaveformDetail";
 
 declare global {
@@ -106,7 +107,7 @@ describe("wheel crossing from PCM back to PWV7", () => {
     await settle();
     pcm.resolve(pcmBytes);
     await settle();
-    expect(drawn.pcm).toHaveBeenCalledWith(expect.anything(), pcmBytes, expect.any(Number), expect.any(Number), "3band", expect.anything());
+    expect(drawn.pcm).toHaveBeenCalledWith(expect.anything(), pcmBytes, expect.any(Number), expect.any(Number), "3band", expect.anything(), expect.anything());
 
     // This is the render a wheel event produces on its first tick out of the
     // PCM range. Layout effects run before the normal PWV7 fetch can settle.
@@ -117,7 +118,7 @@ describe("wheel crossing from PCM back to PWV7", () => {
     pwv7.resolve(pwvBytes);
     await settle();
     expect(drawn.wave).toHaveBeenLastCalledWith(
-      expect.anything(), pwvBytes, expect.any(Number), expect.any(Number), "3band", true, false, expect.anything(),
+      expect.anything(), pwvBytes, expect.any(Number), expect.any(Number), "3band", true, false, expect.anything(), expect.anything(),
     );
   });
 });
@@ -142,7 +143,7 @@ describe("PCM read-ahead", () => {
     expect(fetchPcm).toHaveBeenLastCalledWith("wheel-race-track", 1500, 7500, 7500);
     expect(drawn.pcm).toHaveBeenLastCalledWith(expect.anything(), first, expect.any(Number), expect.any(Number), "3band", {
       from: 3500 / 6000, to: 5500 / 6000,
-    });
+    }, expect.anything());
     render({ fromMs: 1600, toMs: 7600, drawFromMs: 3600, drawToMs: 5600 });
     await settle();
     expect(fetchPcm).toHaveBeenCalledTimes(2);
@@ -151,7 +152,7 @@ describe("PCM read-ahead", () => {
     await settle();
     expect(drawn.pcm).toHaveBeenLastCalledWith(expect.anything(), next, expect.any(Number), expect.any(Number), "3band", {
       from: (3600 - 1500) / 6000, to: (5600 - 1500) / 6000,
-    });
+    }, expect.anything());
   });
 
   it("ignores a late read after a seek outside its window", async () => {
@@ -171,7 +172,7 @@ describe("PCM read-ahead", () => {
     render({ fromMs: 30100, toMs: 36100, drawFromMs: 32100, drawToMs: 34100 });
     expect(drawn.pcm).toHaveBeenLastCalledWith(expect.anything(), current, expect.any(Number), expect.any(Number), "3band", {
       from: 2100 / 6000, to: 4100 / 6000,
-    });
+    }, expect.anything());
   });
 });
 
@@ -222,7 +223,7 @@ describe("overview without the palette's tag (#372)", () => {
     await settle();
     expect(asked).toEqual(["bands", "mono"]);
     expect(drawn.wave).toHaveBeenLastCalledWith(
-      expect.anything(), pwav, expect.any(Number), expect.any(Number), "blue", false, false, expect.anything(),
+      expect.anything(), pwav, expect.any(Number), expect.any(Number), "blue", false, false, expect.anything(), expect.anything(),
     );
   });
 
@@ -233,7 +234,7 @@ describe("overview without the palette's tag (#372)", () => {
     await settle();
     expect(asked).toEqual(["bands"]);
     expect(drawn.wave).toHaveBeenLastCalledWith(
-      expect.anything(), pwv6, expect.any(Number), expect.any(Number), "3band", false, false, expect.anything(),
+      expect.anything(), pwv6, expect.any(Number), expect.any(Number), "3band", false, false, expect.anything(), expect.anything(),
     );
   });
 
@@ -268,7 +269,7 @@ describe("a waveform being drawn by an analysis", () => {
     fetches[0]?.resolve(quarter);
     await settle();
     expect(drawn.wave).toHaveBeenLastCalledWith(
-      expect.anything(), quarter, expect.any(Number), expect.any(Number), "3band", false, false, expect.anything(),
+      expect.anything(), quarter, expect.any(Number), expect.any(Number), "3band", false, false, expect.anything(), expect.anything(),
     );
 
     // Another track's progress is not this deck's.
@@ -288,7 +289,26 @@ describe("a waveform being drawn by an analysis", () => {
     fetches[1]?.resolve(half);
     await settle();
     expect(drawn.wave).toHaveBeenLastCalledWith(
-      expect.anything(), half, expect.any(Number), expect.any(Number), "3band", false, false, expect.anything(),
+      expect.anything(), half, expect.any(Number), expect.any(Number), "3band", false, false, expect.anything(), expect.anything(),
     );
+  });
+});
+
+describe("at a whole-interface scale where the strip covers a fraction of a device pixel", () => {
+  afterEach(() => setPixelZoom(1));
+
+  it("shows the canvas over exactly its own device pixels, so no row of it is blended", async () => {
+    // 1.25: a 30pt overview covers 37.5 device pixels.
+    setPixelZoom(1.25);
+    __setBackend({
+      trackWaveform: () => Promise.resolve(new Uint8Array(1_200 * 3).fill(20)),
+      onAnalysisChanged: () => () => {},
+      onAnalysisProgress: () => () => {},
+    } as unknown as Backend);
+    act(() => root.render(<WaveformDetail trackId="scaled-track" progress={0.5} span={1} width={1080} height={30} />));
+    await settle();
+    const canvas = host.querySelector("canvas");
+    expect([canvas?.width, canvas?.height]).toEqual([1350, 38]);
+    expect([canvas?.style.width, canvas?.style.height]).toEqual(["1080px", "30.4px"]);
   });
 });

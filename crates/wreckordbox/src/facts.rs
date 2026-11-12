@@ -87,6 +87,14 @@ pub enum FactCommands {
     /// stale once the audio changes. Other kinds are declared in the kinds
     /// file this command names.
     Kinds,
+    /// Show which Fact stands for a question, why, and the superseded answers.
+    /// Reads current audio for Measurements; never changes either store.
+    Standing {
+        #[arg(value_name = "TRACK_ID")]
+        track: String,
+        #[arg(value_name = "KIND")]
+        kind: String,
+    },
 }
 
 #[derive(Args)]
@@ -227,6 +235,9 @@ pub fn facts(
             } else {
                 shown_text(&shown)
             })
+        }
+        FactCommands::Standing { track, kind } => {
+            crate::standing::show(client, as_json, track, kind)
         }
         FactCommands::Kinds => {
             let kinds: DeclaredKinds = client.call(commands::FACTS_KINDS, json!({}))?;
