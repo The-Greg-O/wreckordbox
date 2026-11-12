@@ -223,10 +223,7 @@ fn stems_are_verified_and_stale_edits_remain_clearable() {
         &id,
         json!({"stems":["melody","bass","drums"],"key_shift":1,"tempo":1.1}),
     );
-    assert_eq!(
-        result["mutant"]["renderability"]["reason"]["code"],
-        "key_shift_unavailable"
-    );
+    assert_stretcher_readiness(&s.path().join("audio/Parent.wav"), &result, 1, 1.1);
     assert!(result["mutant"]["derived"]["description"]
         .as_str()
         .unwrap()
@@ -258,10 +255,7 @@ fn stems_are_verified_and_stale_edits_remain_clearable() {
         "mutant_stems_stale"
     );
     let cleared = ok(&s, &["mutants", "clear", &id, "stems", "--source", "dj"]);
-    assert_eq!(
-        cleared["mutant"]["renderability"]["reason"]["code"],
-        "key_shift_unavailable"
-    );
+    assert_stretcher_readiness(&s.path().join("audio/Parent.wav"), &cleared, 2, 1.1);
     assert_eq!(
         cleared["mutant"]["edits"],
         json!({"key_shift":2,"tempo":1.1})
@@ -446,18 +440,30 @@ fn review_renderer_length_and_capability_refusals_are_reported() {
         "stems_do_not_fit_parent"
     );
     ok(&s, &["mutants", "clear", &id, "stems", "--source", "dj"]);
-    assert_eq!(
-        edit(&s, &id, json!({"key_shift":1}))["mutant"]["renderability"]["reason"]["code"],
-        "key_shift_unavailable"
-    );
+    assert_stretcher_readiness(&path, &edit(&s, &id, json!({"key_shift":1})), 1, 1.0);
     ok(
         &s,
         &["mutants", "clear", &id, "key_shift", "--source", "dj"],
     );
-    assert_eq!(
-        edit(&s, &id, json!({"tempo":1.1}))["mutant"]["renderability"]["reason"]["code"],
-        "tempo_unavailable"
-    );
+    assert_stretcher_readiness(&path, &edit(&s, &id, json!({"tempo":1.1})), 0, 1.1);
+}
+
+fn assert_stretcher_readiness(path: &std::path::Path, response: &Value, key_shift: i8, tempo: f64) {
+    use wreckordbox_render::{preflight, Edits, Kept, RenderError};
+    // Cargo unifies features when the renderer and CLI suites run together.
+    // The CLI must describe whichever capabilities that binary actually has.
+    let expected = match preflight(path, Kept::ALL, None, Edits { key_shift, tempo }) {
+        Ok(()) => json!({"renderable":true,"reason":null}),
+        Err(error) => {
+            let code = match error {
+                RenderError::KeyShiftUnavailable => "key_shift_unavailable",
+                RenderError::TempoUnavailable => "tempo_unavailable",
+                other => panic!("unexpected fixture preflight error: {other}"),
+            };
+            json!({"renderable":false,"reason":{"code":code,"message":error.to_string()}})
+        }
+    };
+    assert_eq!(response["mutant"]["renderability"], expected);
 }
 
 fn stop(s: &Sandbox) {
