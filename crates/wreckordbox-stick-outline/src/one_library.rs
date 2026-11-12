@@ -40,7 +40,7 @@ pub fn has_companions(path: &Path) -> bool {
 
 /// Applies the cipher settings an `exportLibrary.db` needs, as
 /// `rbl_onelibrary` does (the cipher and legacy mode before the key), once
-/// SQLCipher's process-wide setup has finished.
+/// `SQLCipher`'s process-wide setup has finished.
 ///
 /// # Errors
 ///
@@ -57,7 +57,7 @@ pub fn keyed(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-/// Waits out SQLCipher's process-wide setup, as `rbl_onelibrary` does: a
+/// Waits out `SQLCipher`'s process-wide setup, as `rbl_onelibrary` does: a
 /// connection keyed on another thread while it runs fails.
 fn ready() -> Result<(), String> {
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -147,9 +147,12 @@ fn immutable(path: &Path) -> Result<Connection, String> {
     for byte in absolute.to_string_lossy().bytes() {
         match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'-' | b'_' | b'.' | b'~' => {
-                uri.push(char::from(byte))
+                uri.push(char::from(byte));
             }
-            other => uri.push_str(&format!("%{other:02X}")),
+            other => {
+                use std::fmt::Write as _;
+                let _ = write!(uri, "%{other:02X}");
+            }
         }
     }
     uri.push_str("?immutable=1");
@@ -179,10 +182,15 @@ pub fn is_wal_mode(path: &Path) -> Result<bool, String> {
     let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
     let copy = dir.path().join("exportLibrary.db");
     std::fs::copy(path, &copy).map_err(|e| e.to_string())?;
-    let conn = Connection::open_with_flags(&copy, OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX)
-        .map_err(|e| e.to_string())?;
+    let conn = Connection::open_with_flags(
+        &copy,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|e| e.to_string())?;
     keyed(&conn)?;
-    let mode: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0)).map_err(|e| e.to_string())?;
+    let mode: String = conn
+        .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
     Ok(mode.eq_ignore_ascii_case("wal"))
 }
 

@@ -175,7 +175,9 @@ impl StickRead {
             if !path.is_file() {
                 continue;
             }
-            let relative = path.strip_prefix(&self.root).map_err(std::io::Error::other)?;
+            let relative = path
+                .strip_prefix(&self.root)
+                .map_err(std::io::Error::other)?;
             let copy = dir.path().join(relative);
             if let Some(parent) = copy.parent() {
                 std::fs::create_dir_all(parent)?;
