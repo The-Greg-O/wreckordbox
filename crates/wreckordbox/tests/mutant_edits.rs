@@ -350,7 +350,8 @@ fn lossy_parent_stem_edits_are_stored_but_explicitly_not_renderable() {
         s.edit(|w| {
             w.relocate(&track, &path).unwrap();
             playlist = w.create_playlist("Set", "root").unwrap();
-            w.add_tracks(&playlist, &[track.clone()]).unwrap();
+            w.add_tracks(&playlist, std::slice::from_ref(&track))
+                .unwrap();
         });
         seed_stems(&s, &track, &path, 44_100);
         let id = make(&s, &playlist);
@@ -431,7 +432,8 @@ fn review_renderer_length_and_capability_refusals_are_reported() {
     let mut playlist = String::new();
     s.edit(|w| {
         playlist = w.create_playlist("Set", "root").unwrap();
-        w.add_tracks(&playlist, &[track.clone()]).unwrap();
+        w.add_tracks(&playlist, std::slice::from_ref(&track))
+            .unwrap();
     });
     seed_stems(&s, &track, &path, 44101);
     let id = make(&s, &playlist);
@@ -865,6 +867,7 @@ fn review_cues_respect_length_and_round_trip_real_parent_rows() {
 
 #[test]
 #[ignore = "explicit 500-Mutant latency measurement"]
+#[allow(clippy::print_stdout)] // This explicitly invoked benchmark reports its measurements.
 fn review_benchmark_listing_500_mutants() {
     let s = Sandbox::new();
     let track = s.import_track("Parent.wav", 1);
@@ -900,7 +903,8 @@ fn review_reads_do_not_scan_audio_and_plain_edits_do_not_fingerprint() {
     let mut playlist = String::new();
     s.edit(|w| {
         playlist = w.create_playlist("Set", "root").unwrap();
-        w.add_tracks(&playlist, &[track.clone()]).unwrap();
+        w.add_tracks(&playlist, std::slice::from_ref(&track))
+            .unwrap();
     });
     let id = make(&s, &playlist);
     ok(&s, &["stems", "separate", &track]);
@@ -938,7 +942,8 @@ fn review_wav_contents_with_mp3_name_are_renderable() {
     s.edit(|w| {
         w.relocate(&track, &path).unwrap();
         playlist = w.create_playlist("Set", "root").unwrap();
-        w.add_tracks(&playlist, &[track.clone()]).unwrap();
+        w.add_tracks(&playlist, std::slice::from_ref(&track))
+            .unwrap();
     });
     let id = make(&s, &playlist);
     ok(&s, &["stems", "separate", &track]);
