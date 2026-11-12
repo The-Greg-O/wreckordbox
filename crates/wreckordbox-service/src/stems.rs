@@ -358,7 +358,7 @@ impl Stems {
                 *running = Some(Arc::clone(&job));
                 let (stems, work) = (Arc::clone(self), Arc::clone(&job));
                 std::thread::spawn(move || {
-                    let outcome = stems.run(&sidecar, &work, found, &fingerprint, marked_stale);
+                    let outcome = stems.run(&sidecar, &work, &found, &fingerprint, marked_stale);
                     *lock(&stems.running) = None;
                     *lock(&work.outcome) = Some(outcome);
                     work.done.notify_all();
@@ -384,7 +384,7 @@ impl Stems {
         &self,
         sidecar: &Sidecar,
         job: &Job,
-        found: ParentAudio,
+        found: &ParentAudio,
         fingerprint: &Fingerprint,
         marked_stale: Vec<i64>,
     ) -> Result<Separated, ServiceError> {
@@ -422,7 +422,7 @@ impl Stems {
                     .iter()
                     .filter_map(|(name, file)| Some((Role::named(name)?, file.clone())))
                     .collect();
-                self.before_record(&found, Some(fingerprint), Some(run))?;
+                self.before_record(found, Some(fingerprint), Some(run))?;
                 sidecar
                     .record_stems(&NewStems {
                         track_id: &parent.id,

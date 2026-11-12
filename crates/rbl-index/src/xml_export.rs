@@ -183,7 +183,7 @@ fn location(path: &str) -> String {
     for byte in path.bytes() {
         match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
-                out.push(char::from(byte))
+                out.push(char::from(byte));
             }
             _ => {
                 let _ = write!(out, "%{byte:02X}");

@@ -620,7 +620,7 @@ impl Library {
             // By the key's own rule, not the fold: the fold drops `#`,
             // which put F and F# on top of each other.
             SortColumn::Key => {
-                order.sort_by(|&a, &b| crate::key::cmp_names(self.key_name(a), self.key_name(b)))
+                order.sort_by(|&a, &b| crate::key::cmp_names(self.key_name(a), self.key_name(b)));
             }
             SortColumn::KeyCamelot => order.sort_by(|&a, &b| {
                 crate::key::camelot_rank(self.key_name(a))

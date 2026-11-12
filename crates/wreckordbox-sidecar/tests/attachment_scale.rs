@@ -1,6 +1,7 @@
 //! Reproducible costs on the crate's bundled SQLite, 200,000 Facts / 20,000 tracks.
 #![allow(
     clippy::pedantic,
+    clippy::print_stdout,
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic
