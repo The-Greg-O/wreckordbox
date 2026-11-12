@@ -509,6 +509,12 @@ impl Shared {
                     self.with_library(|library| crate::stems::parent(library, id))?
                 })
             }
+            intensity if crate::intensity::answers(intensity) => {
+                // As for Stems: only finding the tracks takes the Library.
+                crate::intensity::answer(&self.stems, request, &|wanted| {
+                    self.with_library(|library| crate::intensity::targets(library, wanted))?
+                })
+            }
             decisions if crate::decisions::answers(decisions) => {
                 // The Sidecar's too: the Library is only read, to find a
                 // track a Decision or its Fact is about.
@@ -594,6 +600,10 @@ impl Shared {
         let _ = std::fs::remove_file(&self.socket);
         // A separation in progress is abandoned; nothing of it is kept.
         self.stems.cancel();
+        // A measuring of Intensity keeps the tracks it has finished, and
+        // is waited for: nothing of it may be recorded once another service
+        // can have the Library and the Sidecar.
+        crate::intensity::shut(&self.stems);
         // No more changes to send; the sending thread ends.
         drop(lock(&self.changes).take());
         // No write is begun from now on; one already begun is recorded.
