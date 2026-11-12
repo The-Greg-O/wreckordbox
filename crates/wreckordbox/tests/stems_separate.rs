@@ -457,7 +457,7 @@ fn library_shape(sandbox: &Sandbox) -> Vec<(String, String, i64)> {
 }
 
 #[test]
-fn stems_add_no_table_column_or_row_to_the_library_and_live_in_a_folder_beside_it() {
+fn stems_and_facts_add_no_table_column_or_row_to_the_library_and_live_in_a_folder_beside_it() {
     let sandbox = Sandbox::new();
     let track = import(&sandbox, "Night Bus.wav", 4_410);
     let before = library_shape(&sandbox);
@@ -482,6 +482,31 @@ fn stems_add_no_table_column_or_row_to_the_library_and_live_in_a_folder_beside_i
         assert!(path.starts_with(&sidecar), "{}", path.display());
         assert!(path.is_file());
     }
+    // A Fact recorded by hand goes the same way: into the Sidecar beside
+    // the Library, and nowhere in it.
+    let fact = sandbox.cli(&[
+        "--json",
+        "facts",
+        "record",
+        &track,
+        "genre",
+        "Dub Techno",
+        "--source",
+        "agent:tagger",
+        "--confidence",
+        "0.8",
+    ]);
+    assert!(fact.status.success(), "{}", fact.stderr);
+    let listed = sandbox.cli(&["--json", "facts", "show", &track]);
+    assert!(listed.status.success(), "{}", listed.stderr);
+    let kinds: Vec<String> = listed.json()["facts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|fact| fact["kind"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(kinds, ["genre", "stems"]);
+
     assert!(!sandbox.sidecar_dir().exists());
     assert_eq!(library_shape(&sandbox), before);
 }
