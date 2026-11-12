@@ -128,6 +128,36 @@ pub fn rekordbox_lead_frames<R: Read + Seek>(reader: &mut R) -> i64 {
 }
 
 fn lead_frames<R: Read + Seek>(reader: &mut R) -> std::io::Result<i64> {
+    Ok(lead_in(&head(reader)?))
+}
+
+/// Whether the stream opens with a Xing, Info or VBRI frame that says how
+/// many frames follow it. Only then is the length symphonia gives an MP3 a
+/// count of what the file holds; otherwise it is estimated from the file's
+/// size, which is as short as the file is.
+pub fn tag_counts_frames<R: Read + Seek>(reader: &mut R) -> bool {
+    head(reader).is_ok_and(|bytes| counts_frames(&bytes))
+}
+
+fn counts_frames(bytes: &[u8]) -> bool {
+    let frames = first_frames(bytes);
+    let Some((at, header)) = frames.first() else { return false };
+    let Some(frame) = bytes.get(*at..*at + header.length) else { return false };
+    if !is_tag_frame(frame, header) {
+        return false;
+    }
+    let tag = 4 + header.side_info();
+    match frame.get(tag..tag + 8) {
+        // Xing and Info: a flags word whose lowest bit says the frame count
+        // is present.
+        Some([b'X', b'i', b'n', b'g', .., flags]) | Some([b'I', b'n', b'f', b'o', .., flags]) => flags & 1 == 1,
+        // VBRI always carries it.
+        _ => frame.get(36..40) == Some(b"VBRI"),
+    }
+}
+
+/// The bytes that follow the ID3 tags, as far as [`SCAN_BYTES`].
+fn head<R: Read + Seek>(reader: &mut R) -> std::io::Result<Vec<u8>> {
     let mut at = 0u64;
     // ID3v2 tags, one after another, as rekordbox's analyzer skips them.
     loop {
@@ -143,7 +173,7 @@ fn lead_frames<R: Read + Seek>(reader: &mut R) -> std::io::Result<i64> {
     reader.seek(SeekFrom::Start(at))?;
     let mut bytes = Vec::with_capacity(SCAN_BYTES);
     reader.take(SCAN_BYTES as u64).read_to_end(&mut bytes)?;
-    Ok(lead_in(&bytes))
+    Ok(bytes)
 }
 
 /// [`rekordbox_lead_frames`] over the bytes that follow the ID3 tag.
@@ -247,6 +277,17 @@ mod tests {
     fn audio_rekordbox_restarts_after_is_audio_symphonia_plays_and_rekordbox_does_not() {
         let bytes = stream(&[audio(STEREO), audio(JOINT), audio(JOINT), audio(JOINT), audio(JOINT), audio(JOINT)]);
         assert_eq!(lead_in(&bytes), -1152);
+    }
+
+    #[test]
+    fn only_a_tag_frame_with_a_frame_count_counts_the_frames() {
+        let counted = stream(&[info(JOINT), audio(JOINT), audio(JOINT)]);
+        assert!(counts_frames(&counted));
+        let mut body = vec![0u8; 32];
+        body.extend_from_slice(b"Xing\0\0\0\x0e");
+        let uncounted = stream(&[frame(JOINT, &body), audio(JOINT), audio(JOINT)]);
+        assert!(!counts_frames(&uncounted));
+        assert!(!counts_frames(&stream(&[audio(JOINT), audio(JOINT), audio(JOINT)])));
     }
 
     #[test]

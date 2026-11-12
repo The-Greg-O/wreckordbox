@@ -116,9 +116,11 @@ pub struct MonoStream {
     /// How many frames the container says the file holds, lead included,
     /// when it says.
     expected: Option<u64>,
-    /// Whether `expected` is a count of what the file must hold (PCM and
-    /// FLAC) rather than an estimate (an MP3's, from its header or its size).
-    exact: bool,
+    /// When `expected` is a count of what the file must hold, how many
+    /// frames short of it the audio may still end: `Some(0)` for PCM and
+    /// FLAC, a frame for an MP3 whose tag counts its frames. `None` when it
+    /// is an estimate (an MP3's from its size).
+    slack: Option<u64>,
     /// Frames handed out so far, lead included.
     handed: u64,
 }
@@ -182,7 +184,7 @@ impl MonoStream {
         let expected = path
             .and_then(aifc::declared_frames)
             .or_else(|| track.codec_params.n_frames.map(|frames| frames.saturating_add_signed(lead)));
-        let exact = declares_exact_length(track.codec_params.codec);
+        let slack = slack(&track.codec_params, path);
         Ok(Self {
             format,
             decoder,
@@ -194,7 +196,7 @@ impl MonoStream {
             stereo: Vec::new(),
             lead,
             expected,
-            exact,
+            slack,
             handed: 0,
         })
     }
@@ -235,8 +237,11 @@ impl MonoStream {
     /// - the decoder gave up on the stream ([`AudioError::Unsupported`]);
     /// - the file ran out before the frames its container declares, for a
     ///   container whose count is exact: PCM (WAV, AIFF) and FLAC
-    ///   ([`AudioError::Truncated`]). An MP3 or AAC file cut short cannot be
-    ///   told from a shorter one and ends as it would have.
+    ///   ([`AudioError::Truncated`]); and, to within one frame, for an MP3
+    ///   whose Xing, Info or VBRI frame counts its frames. An MP3 with no
+    ///   such frame cut short cannot be told from a shorter one (its length
+    ///   is an estimate from its size) and ends as it would have. (AAC in
+    ///   MP4 cut short does not open at all.)
     ///
     /// A damaged packet inside the stream is still its own length of
     /// silence, as in rekordbox and on a deck: the audio keeps its place.
@@ -283,7 +288,9 @@ impl MonoStream {
                 // Whether that is the end of the audio is for the count.
                 Err(Error::IoError(error)) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
                     return match self.expected {
-                        Some(expected) if self.exact && self.handed < expected => {
+                        Some(expected)
+                            if self.slack.is_some_and(|slack| self.handed.saturating_add(slack) < expected) =>
+                        {
                             Err(AudioError::Truncated { expected, decoded: self.handed })
                         }
                         _ => Ok(false),
@@ -352,10 +359,34 @@ impl MonoStream {
     }
 }
 
+/// How far short of the container's frame count a whole file may end, or
+/// `None` when the count is only an estimate and a shorter file cannot be
+/// told from a cut one.
+///
+/// Uncompressed PCM's count is the size of its data and FLAC's header
+/// carries it: exact. An MP3's is exact when its Xing, Info or VBRI frame
+/// counts the frames (symphonia then gives that count times the frame's
+/// samples) and an estimate from the file's size otherwise; one frame is
+/// allowed for an encoder that counts its tag frame among them. AAC needs
+/// no count: in MP4 (the only AAC the Library holds) symphonia refuses to
+/// open a file cut anywhere.
+fn slack(params: &symphonia::core::codecs::CodecParameters, path: Option<&Path>) -> Option<u64> {
+    use symphonia::core::codecs::CODEC_TYPE_MP3;
+    if declares_exact_length(params.codec) {
+        return Some(0);
+    }
+    if params.codec == CODEC_TYPE_MP3 {
+        let file = std::fs::File::open(path?).ok();
+        return file
+            .is_some_and(|mut file| rbl_core::mpeg::tag_counts_frames(&mut file))
+            .then_some(1_152);
+    }
+    None
+}
+
 /// Whether a container's frame count for this codec is what the file must
 /// hold: uncompressed PCM, whose count is the size of its data, and FLAC,
-/// whose header carries it. Anything else is an estimate or carries encoder
-/// padding, and is not held to.
+/// whose header carries it.
 fn declares_exact_length(codec: symphonia::core::codecs::CodecType) -> bool {
     use symphonia::core::codecs::{
         CODEC_TYPE_FLAC, CODEC_TYPE_PCM_ALAW, CODEC_TYPE_PCM_F32BE, CODEC_TYPE_PCM_F32LE, CODEC_TYPE_PCM_F64BE,
@@ -892,6 +923,56 @@ mod tests {
             mono.extend(buffer.samples().chunks(2).map(|f| f.iter().sum::<f32>() / 2.0));
         }
         mono
+    }
+
+    #[test]
+    fn an_mp3_whose_tag_counts_its_frames_is_held_to_that_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = lame_mp3(dir.path());
+        let whole = std::fs::read(&mp3).unwrap();
+        let expected = MonoStream::open(&mp3).unwrap().expected_frames().unwrap();
+        assert_eq!(drain(&mut MonoStream::open(&mp3).unwrap()).unwrap() as u64, expected);
+
+        // Cut after its twentieth frame: the Info frame still says how many
+        // frames there were.
+        std::fs::write(&mp3, &whole[..frame_at(&whole, 20)]).unwrap();
+        let (error, before) = drain(&mut MonoStream::open(&mp3).unwrap()).unwrap_err();
+        assert!(
+            matches!(error, AudioError::Truncated { expected: e, decoded } if e == expected && decoded as usize == before),
+            "{error:?}"
+        );
+        // Analysis's reader still plays what is there.
+        assert!(frames_of(&mp3).1.len() >= before);
+    }
+
+    #[test]
+    fn an_mp3_without_a_counting_tag_cut_short_cannot_be_told_from_a_shorter_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = lame_mp3(dir.path());
+        let whole = std::fs::read(&mp3).unwrap();
+        // The audio frames alone: no Info frame, so the length is only an
+        // estimate from the file's size.
+        let untagged = &whole[frame_at(&whole, 1)..];
+        std::fs::write(&mp3, &untagged[..frame_at(untagged, 20)]).unwrap();
+        let mut stream = MonoStream::open(&mp3).unwrap();
+        assert_eq!(drain(&mut stream).unwrap(), 20 * 1152);
+    }
+
+    #[test]
+    fn an_aac_file_in_mp4_cut_short_is_an_error_not_a_shorter_file() {
+        let m4a = Path::new(env!("CARGO_MANIFEST_DIR")).join("../rbl-db/tests/fixtures/silent.m4a");
+        let expected = MonoStream::open(&m4a).unwrap().expected_frames().unwrap();
+        assert_eq!(drain(&mut MonoStream::open(&m4a).unwrap()).unwrap() as u64, expected);
+
+        // symphonia reads every box of an MP4 to its stated end before it
+        // hands out audio, so a file cut anywhere, before its sample table
+        // or inside its audio, is refused when it is opened.
+        let dir = tempfile::tempdir().unwrap();
+        let cut = dir.path().join("cut.m4a");
+        let whole = std::fs::read(&m4a).unwrap();
+        let audio = whole.windows(4).position(|w| w == b"mdat").unwrap() + 4;
+        std::fs::write(&cut, &whole[..audio + 12]).unwrap();
+        assert!(MonoStream::open(&cut).is_err(), "a cut MP4 does not open");
     }
 
     #[test]

@@ -184,3 +184,28 @@ fn the_rendered_length_is_the_parents_scaled_by_the_tempo_in_every_format() {
         }
     }
 }
+
+#[test]
+fn an_mp3_parent_cut_short_is_refused_not_rendered_shorter() {
+    let bench = Bench::new();
+    let source = burst_source(&bench.path("source.wav"), RATE as usize, 22_050, 0.2);
+    let parent = bench.path("parent.mp3");
+    render_file(&source, Edits::default(), &parent, Format::Mp3);
+    let bytes = std::fs::read(&parent).unwrap();
+    std::fs::write(&parent, &bytes[..bytes.len() / 2]).unwrap();
+
+    let out = bench.path("out.mp3");
+    let mut track = TrackSource::open(&parent).unwrap();
+    let error = render(&mut track, Edits::default(), &Destination::mp3(&out), &mut |_| {
+        Proceed::Continue
+    })
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            wreckordbox_render::RenderError::Source(rbl_audio::AudioError::Truncated { .. })
+        ),
+        "{error:?}"
+    );
+    assert!(!out.exists());
+}
