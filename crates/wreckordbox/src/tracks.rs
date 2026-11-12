@@ -9,6 +9,8 @@ use std::fmt::Write as _;
 
 use clap::{Args, ValueEnum};
 use serde_json::json;
+use wreckordbox_service::protocol::codes;
+use wreckordbox_service::track_filter::MyTagPick;
 use wreckordbox_service::tracks::{
     TrackId, TrackPage, TrackRecord, TrackSelection, DEFAULT_PAGE_LIMIT, TRACKS_GET, TRACKS_QUERY,
 };
@@ -58,15 +60,17 @@ pub struct QueryArgs {
     /// lists under 128, `128.03` is exact, `124..128.5` is a range.
     #[arg(long, value_name = "BPM")]
     bpm: Option<String>,
-    /// Only tracks in this key, spelled as the Library spells it.
+    /// Only tracks in this key, spelled as the Library spells it. Give it
+    /// more than once for tracks in any of them.
     #[arg(long, value_name = "KEY")]
-    key: Option<String>,
+    key: Vec<String>,
     /// Only tracks with this Energy (the star rating), 1 to 5, or a range;
     /// 0 is a track with none.
     #[arg(long, visible_alias = "rating", value_name = "ENERGY")]
     energy: Option<String>,
     /// Only tracks with this Prep colour (the colour label): Pink, Red,
-    /// Orange, Yellow, Green, Aqua, Blue or Purple, or `none`.
+    /// Orange, Yellow, Green, Aqua, Blue or Purple, or `none`. Give it more
+    /// than once for tracks with any of them.
     #[arg(
         long,
         visible_alias = "colour",
@@ -74,7 +78,7 @@ pub struct QueryArgs {
         alias = "color",
         value_name = "COLOUR"
     )]
-    prep_colour: Option<String>,
+    prep_colour: Vec<String>,
     /// Only tracks this long: seconds or M:SS, or a range of either.
     #[arg(long, value_name = "TIME")]
     duration: Option<String>,
@@ -91,6 +95,16 @@ pub struct QueryArgs {
     /// for tracks carrying every one.
     #[arg(long, value_name = "TAG")]
     mytag: Vec<String>,
+    /// Only tracks carrying this MyTag of this category, as the Track
+    /// Filter picks one: `CATEGORY:TAG`, e.g. `Situation:Peak time`. Tags
+    /// picked in one category must all be carried, unless the category is
+    /// named by --mytag-any; every category picked must agree.
+    #[arg(long, value_name = "CATEGORY:TAG")]
+    mytag_in: Vec<String>,
+    /// Tracks carrying any of the tags picked by --mytag-in in this
+    /// category pass, not only those carrying every one.
+    #[arg(long, value_name = "CATEGORY")]
+    mytag_any: Vec<String>,
     /// Only the tracks of this playlist, by name or identifier, in its
     /// order. A folder is every track beneath it.
     #[arg(long, value_name = "PLAYLIST")]
@@ -108,6 +122,44 @@ pub struct QueryArgs {
 enum YesNo {
     Yes,
     No,
+}
+
+/// `--mytag-in CATEGORY:TAG` and `--mytag-any CATEGORY` as one pick per
+/// category, in the order the categories were first named.
+fn my_tag_picks(picked: &[String], any: &[String]) -> Result<Vec<MyTagPick>, ServiceError> {
+    let mut picks: Vec<MyTagPick> = Vec::new();
+    for text in picked {
+        let (category, tag) = text.split_once(':').ok_or_else(|| {
+            ServiceError::new(
+                codes::BAD_REQUEST,
+                format!("{text:?} names no category: give --mytag-in CATEGORY:TAG"),
+            )
+        })?;
+        let at = picks.iter().position(|p| p.category == category);
+        let at = at.unwrap_or_else(|| {
+            picks.push(MyTagPick {
+                category: category.to_owned(),
+                ..MyTagPick::default()
+            });
+            picks.len() - 1
+        });
+        if let Some(pick) = picks.get_mut(at) {
+            pick.tags.push(tag.to_owned());
+        }
+    }
+    for category in any {
+        // A category switched to "any" with nothing picked is sent as it
+        // is, and the service refuses it.
+        match picks.iter_mut().find(|p| &p.category == category) {
+            Some(pick) => pick.any = true,
+            None => picks.push(MyTagPick {
+                category: category.clone(),
+                tags: Vec::new(),
+                any: true,
+            }),
+        }
+    }
+    Ok(picks)
 }
 
 /// What `tracks show` prints.
@@ -136,11 +188,14 @@ pub fn query(client: &mut Client, args: &QueryArgs, as_json: bool) -> Result<Str
         label: args.label.clone(),
         comment: args.comment.clone(),
         location: args.location.clone(),
-        key: args.key.clone(),
+        key: None,
+        keys: args.key.clone(),
         year: args.year.clone(),
         bpm: args.bpm.clone(),
         energy: args.energy.clone(),
-        prep_colour: args.prep_colour.clone(),
+        prep_colour: None,
+        prep_colours: args.prep_colour.clone(),
+        my_tag_picks: my_tag_picks(&args.mytag_in, &args.mytag_any)?,
         duration: args.duration.clone(),
         date_added: args.date_added.clone(),
         play_count: args.play_count.clone(),

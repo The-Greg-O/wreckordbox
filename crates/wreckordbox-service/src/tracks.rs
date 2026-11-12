@@ -173,6 +173,16 @@ pub struct TrackSelection {
     /// MyTags by name; the track must carry every one.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub my_tags: Vec<String>,
+    /// Keys by name, a track in any of them (the Track Filter bar's pick;
+    /// see [`crate::track_filter`]).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub keys: Vec<String>,
+    /// Prep colours by colour name, a track with any of them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub prep_colours: Vec<String>,
+    /// MyTags picked within a category, one entry per category.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub my_tag_picks: Vec<crate::track_filter::MyTagPick>,
     /// A playlist, by identifier or by name: only its tracks, in its order.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub playlist: Option<String>,
@@ -422,6 +432,7 @@ fn track_filter(
             any: false,
         });
     }
+    crate::track_filter::extend(index, selection, &mut filter)?;
     Ok(filter)
 }
 

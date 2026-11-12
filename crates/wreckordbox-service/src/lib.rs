@@ -32,6 +32,7 @@ pub mod schema;
 mod separation;
 mod server;
 pub mod stems;
+pub mod track_filter;
 pub mod tracks;
 
 use std::path::{Path, PathBuf};
