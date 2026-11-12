@@ -498,7 +498,7 @@ pub fn run() {
                 });
                 app.manage(mounts);
             }
-            app.set_menu(crate::menu::build(app.handle())?)?;
+            crate::menu::install(app.handle())?;
             // Windows: paths of files dropped from Explorer onto a playlist.
             #[cfg(windows)]
             if let Some(main) = app.get_webview_window("main") {
@@ -545,6 +545,7 @@ pub fn run() {
             menu::set_history_menu,
             menu::set_menu_labels,
             menu::set_menu_enabled,
+            menu::run_menu_item,
             commands::library_summary,
             commands::disable_read_only,
             new_library::library_problem,

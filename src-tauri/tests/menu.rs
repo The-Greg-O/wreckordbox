@@ -24,8 +24,76 @@ fn main() {
         the_menu_rebuilds_with_translated_labels();
         println!("3 menu checks passed");
     }
-    #[cfg(not(target_os = "macos"))]
-    println!("skipped: the menu bar is macOS-shaped and untested elsewhere");
+    // Linux has no menu row at all (wbx-54): the command palette lists what
+    // the menus held, and the line goes to the music.
+    #[cfg(target_os = "linux")]
+    {
+        linux_installs_no_menu_row();
+        linux_keeps_no_menu_row_when_the_labels_arrive();
+        the_palette_reaches_what_only_the_shell_can_do();
+        println!("3 menu checks passed");
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    println!("skipped: the menu bar is untested on this platform");
+}
+
+#[cfg(target_os = "linux")]
+fn linux_installs_no_menu_row() {
+    let app = tauri::test::mock_app();
+    rbxport_lib::menu::install(app.handle()).expect("install succeeds");
+    assert!(!rbxport_lib::menu::has_menu_row());
+    assert!(app.menu().is_none(), "Linux must have no native menu row");
+}
+
+#[cfg(target_os = "linux")]
+fn linux_keeps_no_menu_row_when_the_labels_arrive() {
+    use std::collections::HashMap;
+
+    // The window sends its translated labels at start and on every language
+    // change; that used to rebuild and install the menu.
+    let app = tauri::test::mock_app();
+    rbxport_lib::menu::install(app.handle()).expect("install succeeds");
+    let labels = HashMap::from([("File".to_owned(), "Datei".to_owned())]);
+    rbxport_lib::menu::set_menu_labels(app.handle().clone(), labels).expect("labels are accepted");
+    rbxport_lib::menu::set_menu_enabled(
+        app.handle().clone(),
+        HashMap::from([("relocate".to_owned(), true)]),
+    )
+    .expect("enabled states are accepted");
+    rbxport_lib::menu::set_history_menu(app.handle().clone(), Some("Rating".to_owned()), None)
+        .expect("history labels are accepted");
+    assert!(app.menu().is_none(), "the labels must not bring the menu row back");
+}
+
+#[cfg(target_os = "linux")]
+fn the_palette_reaches_what_only_the_shell_can_do() {
+    use tauri::Listener;
+
+    // Full screen, Close Window and Quit were native items the window never
+    // heard about; the palette asks the shell for them by id. Anything else
+    // goes to the window as the same event a menu click sent.
+    assert!(rbxport_lib::menu::SHELL_ITEMS.contains(&"fullscreen"));
+    assert!(rbxport_lib::menu::SHELL_ITEMS.contains(&"close-window"));
+    assert!(rbxport_lib::menu::SHELL_ITEMS.contains(&"quit"));
+
+    let app = tauri::test::mock_app();
+    let (sent, heard) = std::sync::mpsc::channel::<String>();
+    app.listen(rbxport_lib::menu::EVENT, move |event| {
+        let _ = sent.send(event.payload().to_owned());
+    });
+    // With no main window, Full screen is a no-op and not an error.
+    rbxport_lib::menu::run_menu_item(app.handle().clone(), "fullscreen".to_owned())
+        .expect("full screen is accepted");
+    rbxport_lib::menu::run_menu_item(app.handle().clone(), "missing".to_owned())
+        .expect("a window item is accepted");
+    let payload = heard
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the window hears the item");
+    assert_eq!(payload, "\"missing\"");
+    assert!(
+        heard.try_recv().is_err(),
+        "full screen is the shell's own and must not reach the window"
+    );
 }
 
 /// Every id the menu emits, in the order the menus are laid out.

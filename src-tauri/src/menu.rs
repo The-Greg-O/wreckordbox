@@ -128,6 +128,57 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     build_with_labels(app, &Labels::new())
 }
 
+/// Whether this platform draws the native menu at all.
+///
+/// Linux does not (wbx-54, ADR 0007): GTK's menu is a row inside the window
+/// that takes a line from the music and does not follow the interface scale.
+/// Every item it held is a command in the window's command palette
+/// (`src/lib/palette.ts`, whose test reads this file's ids), and the keys
+/// it answered are the window's own. macOS keeps its menu bar unchanged.
+#[must_use]
+pub const fn has_menu_row() -> bool {
+    !cfg!(target_os = "linux")
+}
+
+/// Installs the native menu where the platform has one.
+pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
+    if has_menu_row() {
+        app.set_menu(build(app)?)?;
+    }
+    Ok(())
+}
+
+/// The items only the shell can do, which the window therefore never hears
+/// of: the command palette asks for them through [`run_menu_item`].
+pub const SHELL_ITEMS: &[&str] = &["fullscreen", "close-window", "quit"];
+
+/// Runs a menu item by id for the command palette, which is how a platform
+/// with no menu row reaches what the menu's native items did. An id that is
+/// not one of [`SHELL_ITEMS`] goes to the window as a menu click would.
+#[tauri::command]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Tauri's extractors are injected by value"
+)]
+pub fn run_menu_item<R: Runtime>(app: AppHandle<R>, id: String) -> Result<(), String> {
+    match id.as_str() {
+        // Closing the main window is quitting (see the window-event handler
+        // in `lib.rs`), so asking it to close takes the same way out as its
+        // close box does.
+        "close-window" | "quit" => match app.get_webview_window("main") {
+            Some(window) => window.close().map_err(|error| error.to_string()),
+            None => {
+                app.exit(0);
+                Ok(())
+            }
+        },
+        _ => {
+            on_event(&app, &id);
+            Ok(())
+        }
+    }
+}
+
 fn build_with_labels<R: Runtime>(app: &AppHandle<R>, labels: &Labels) -> tauri::Result<Menu<R>> {
     let settings = MenuItemBuilder::with_id("settings", label(labels, "Settings…"))
         .accelerator("CmdOrCtrl+,")
@@ -489,8 +540,10 @@ fn apply_enabled<R: Runtime>(kinds: Vec<MenuItemKind<R>>, items: &Enabled) -> Re
     reason = "Tauri's AppHandle extractor is injected by value"
 )]
 pub fn set_menu_labels<R: Runtime>(app: AppHandle<R>, labels: Labels) -> Result<(), String> {
-    let menu = build_with_labels(&app, &labels).map_err(|error| error.to_string())?;
-    app.set_menu(menu).map_err(|error| error.to_string())?;
+    if has_menu_row() {
+        let menu = build_with_labels(&app, &labels).map_err(|error| error.to_string())?;
+        app.set_menu(menu).map_err(|error| error.to_string())?;
+    }
     if let Ok(mut saved) = saved_labels().write() {
         *saved = labels;
     }
