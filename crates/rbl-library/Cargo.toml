@@ -13,6 +13,9 @@ workspace = true
 rbl-db = { path = "../rbl-db" }
 rbl-index = { path = "../rbl-index" }
 rbl-backup = { path = "../rbl-backup" }
+rbl-core = { path = "../rbl-core" }
+# The same build of SQLite the writer links; `entry_order` writes through its connection.
+rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
 # A Library on a Stick is written only while the Stick is unlocked (wbx-45.11).
 wreckordbox-stick-protection = { path = "../wreckordbox-stick-protection" }
 parking_lot = "0.12"

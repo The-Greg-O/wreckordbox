@@ -1,0 +1,144 @@
+/* The second list (wbx-59): docs/design/screens/library and mock.html's
+   `.pane.tgt`. 336 px wide on the panel colour, beside the main list. The
+   orange that marks the target is a meaning colour (rekordbox's own track
+   orange), not a theme role, the same one the tree uses for the target. */
+.pane {
+  --c-target: var(--c-comment-orange);
+  flex: 0 0 336px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--c-panel);
+  border-left: var(--s-shell-border) solid var(--c-raised);
+  font-family: var(--f-shell);
+  font-size: var(--f-size-shell);
+  color: var(--c-text-dim);
+}
+
+.heading {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-shell-space-5);
+  margin: 0;
+  padding: var(--s-shell-space-4) var(--s-shell-space-5) var(--s-shell-space-2);
+  font-size: var(--f-size-shell);
+  font-weight: normal;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.mark { color: var(--c-target); }
+.name {
+  color: var(--c-text);
+  font-size: var(--f-size-shell-title);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.totals { font-family: var(--f-shell-mono); font-variant-numeric: tabular-nums; }
+
+.choose {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-shell-space-3);
+  padding: 0 var(--s-shell-space-5) var(--s-shell-space-4);
+  border-bottom: var(--s-shell-border) solid var(--c-raised);
+  font-size: var(--f-size-shell-label);
+  letter-spacing: var(--f-tracking-shell-label);
+  text-transform: uppercase;
+}
+.choose select {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: var(--f-size-shell);
+  color: var(--c-text);
+  background: var(--c-black);
+  border: var(--s-shell-border) solid var(--c-raised);
+  border-radius: var(--s-shell-radius);
+}
+
+.notice, .failed {
+  flex: none;
+  margin: 0;
+  padding: var(--s-shell-space-3) var(--s-shell-space-5);
+  color: var(--c-text);
+  border-bottom: var(--s-shell-border) solid var(--c-raised);
+}
+.failed { color: var(--c-missing); }
+.failed button {
+  font: inherit;
+  color: var(--c-text);
+  background: none;
+  border: var(--s-shell-border) solid var(--c-raised);
+  border-radius: var(--s-shell-radius);
+}
+
+.grid {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  outline: none;
+  font-variant-numeric: tabular-nums;
+}
+.grid:focus-visible { box-shadow: inset 0 0 0 1px var(--c-accent); }
+.grid[data-dropping] { box-shadow: inset 0 0 0 1px var(--c-target); }
+.grid[data-stale] .row { opacity: 0.55; }
+
+.head, .row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 52px 44px 46px;
+  align-items: center;
+  gap: var(--s-shell-space-3);
+  padding: 0 var(--s-shell-space-5);
+}
+.head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  height: var(--s-shell-heading-h);
+  background: var(--c-panel);
+  border-bottom: var(--s-shell-border) solid var(--c-raised);
+  font-size: var(--f-size-shell-label);
+  letter-spacing: var(--f-tracking-shell-label);
+  text-transform: uppercase;
+}
+.row {
+  height: var(--s-shell-row-h);
+  color: var(--c-text);
+  cursor: default;
+  position: relative;
+}
+.row[aria-selected="true"] {
+  background: var(--c-select);
+  box-shadow: inset 2px 0 var(--c-accent);
+}
+.row[data-drop="before"] { box-shadow: inset 0 2px var(--c-target); }
+.row[data-drop="after"] { box-shadow: inset 0 -2px var(--c-target); }
+
+.title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.num, .key { font-family: var(--f-shell-mono); font-size: var(--f-size-shell-mono); }
+.num { text-align: right; }
+
+.empty {
+  margin: 0;
+  padding: var(--s-shell-space-6) var(--s-shell-space-5);
+  line-height: 1.6;
+}
+
+.hint {
+  flex: none;
+  margin: 0;
+  padding: var(--s-shell-space-4) var(--s-shell-space-5);
+  border-top: var(--s-shell-border) solid var(--c-raised);
+  line-height: 1.8;
+}
+.hint kbd {
+  font-family: var(--f-shell-mono);
+  padding: 0 var(--s-shell-space-1);
+  border: var(--s-shell-border) solid var(--c-raised);
+  border-radius: var(--s-shell-radius);
+}

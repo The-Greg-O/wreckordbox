@@ -4074,8 +4074,10 @@ version = "1.10.0"
 dependencies = [
  "parking_lot",
  "rbl-backup",
+ "rbl-core",
  "rbl-db",
  "rbl-index",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
@@ -4210,6 +4212,7 @@ dependencies = [
  "windows-core 0.61.2",
  "windows-sys 0.61.2",
  "wreckordbox-service",
+ "wreckordbox-sidecar",
  "wreckordbox-stick-outline",
  "wreckordbox-stick-protection",
  "zip",

@@ -26,6 +26,7 @@ import type { BrowserSide } from "./browserFocus";
 import type { CommandScope } from "./commands";
 import { menuBarItem } from "./menuBar";
 import { SHELL_VIEWS, shellViewChord } from "./shellViews";
+import { TARGET_ACTIONS } from "./targetList";
 import {
   BINDINGS, chordMatches, type Action, type Binding, type KeyChord, type KeyOverrides, type Platform,
 } from "./shortcuts";
@@ -147,6 +148,17 @@ const EXPLICIT_ENTRIES: readonly PaletteEntry[] = [
     keywords: ["view", "tab"],
     run: { kind: "command", action: view.action },
     key: { from: "view", action: view.action },
+  })),
+  // The Library view's second list (wbx-59): registered by the shell while
+  // the Library view shows, so greyed elsewhere.
+  ...TARGET_ACTIONS.map((entry): PaletteEntry => ({
+    id: `target-${entry.action}`,
+    label: entry.label,
+    group: "Library",
+    keywords: ["second list", "target"],
+    run: { kind: "command", action: entry.action },
+    key: chord(entry.chord, "window"),
+    ...(entry.action === "toggleTargetList" || entry.action === "swapTargetLists" ? {} : { writes: true }),
   })),
 
   // The Intake view's actions (wbx-63): live while the view shows.

@@ -58,6 +58,8 @@ export interface ShellTreeProps {
   stickRefusal?: ((path: string) => string | null) | undefined;
   /** What waits in Intake and Problems, drawn beside them (wbx-62). */
   queueCounts?: { intake: number | null; problems: number | null } | null | undefined;
+  /** The second list's target playlist, marked in orange (wbx-59). */
+  targetId?: string | null;
 }
 
 /** No actions: a tree that only opens rows. */
@@ -127,7 +129,7 @@ function readSizes(element: HTMLElement | null): TreeSizes {
 
 export function ShellTree({
   library, sticks, setPlans = NO_SET_PLANS, selectedId, onOpen, queueCounts, actions = NO_ACTIONS, selectedNode = null,
-  collapsed: keptCollapsed, onFolderOpen, stickRefusal,
+  collapsed: keptCollapsed, onFolderOpen, stickRefusal, targetId = null,
 }: ShellTreeProps) {
   const t = useTranslation();
   const [ownCollapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
@@ -265,6 +267,8 @@ export function ShellTree({
         aria-level={row.depth + 1}
         aria-selected={selected}
         aria-expanded={row.branch ? row.open : undefined}
+        aria-description={row.id === targetId ? t("Target playlist") : undefined}
+        data-target={row.id === targetId || undefined}
         data-kind={row.kind}
         data-row-id={row.id}
         tabIndex={row.id === tabStop ? 0 : -1}

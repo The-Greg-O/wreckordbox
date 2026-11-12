@@ -64,6 +64,9 @@ pub enum LibraryEdit {
     },
     /// One reorder or Renumber Track Order of a playlist (#499).
     ReorderPlaylist(rbl_db::write::PlaylistReorder),
+    /// One reorder of a playlist by entry (wbx-59): each row of a track
+    /// that is in the playlist twice moves on its own.
+    ReorderEntries(crate::entry_order::EntryReorder),
     Track(Vec<rbl_db::write::TrackEdit>),
     /// A key edit that also wrote the key into audio files, with "Write the
     /// value to the ID3 tag" on (#507): the library's steps, as `Track`, and
@@ -110,6 +113,7 @@ impl LibraryEdit {
             Self::ReplacePlaylistContents(edits) => edits.is_empty(),
             Self::AddPlaylistTracks { addition, .. } => addition.is_empty(),
             Self::ReorderPlaylist(edit) => edit.is_empty(),
+            Self::ReorderEntries(edit) => edit.is_empty(),
             Self::Track(edits) | Self::KeyEdit { tracks: edits, .. } => {
                 edits.is_empty() || edits.iter().all(rbl_db::write::TrackEdit::is_empty)
             }
@@ -133,7 +137,7 @@ impl LibraryEdit {
             Self::DeletePlaylist(_) | Self::RenamePlaylist(_) |
             Self::MovePlaylist(_) | Self::SortPlaylists(_) | Self::RemovePlaylistTracks(_) |
             Self::CreatePlaylist(_) | Self::PlaylistEdit(_) |
-            Self::AddPlaylistTracks { .. } | Self::ReorderPlaylist(_) |
+            Self::AddPlaylistTracks { .. } | Self::ReorderPlaylist(_) | Self::ReorderEntries(_) |
             // The tracks a replacement imported stay in the collection.
             Self::ReplacePlaylist(_) | Self::ReplacePlaylistContents(_) => Touched::Playlists,
             // Tokens keep their database row ids private; a full reload after an
@@ -168,7 +172,7 @@ impl LibraryEdit {
             }
             Self::DeletePlaylist(_) | Self::RenamePlaylist(_) | Self::MovePlaylist(_)
             | Self::ReplacePlaylist(_) | Self::SortPlaylists(_) | Self::RemovePlaylistTracks(_)
-            | Self::AddPlaylistTracks { .. } | Self::ReorderPlaylist(_)
+            | Self::AddPlaylistTracks { .. } | Self::ReorderPlaylist(_) | Self::ReorderEntries(_)
             // Checked in the one transaction that writes it (#508).
             | Self::ListRemoval(_)
             // Checked in the transaction that writes it.
@@ -212,6 +216,7 @@ impl LibraryEdit {
             Self::RemovePlaylistTracks(value) => if undo { writer.undo_track_removal(value) } else { writer.redo_track_removal(value) }.map(|_| ()),
             Self::AddPlaylistTracks { addition, .. } => if undo { writer.undo_track_addition(addition) } else { writer.redo_track_addition(addition) }.map(|_| ()),
             Self::ReorderPlaylist(value) => if undo { writer.undo_reorder(value) } else { writer.redo_reorder(value) }.map(|_| ()),
+            Self::ReorderEntries(value) => crate::entry_order::step(writer, value, undo),
             Self::Track(values) => {
                 let ordered: Box<dyn Iterator<Item = _>> = if undo {
                     Box::new(values.iter().rev())

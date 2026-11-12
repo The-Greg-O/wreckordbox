@@ -27,7 +27,7 @@ import type { StickWriteGate } from "./StickWriteGate";
 
 export function useShellTree({
   library, sticks, selectedNode, onSelectNode, view, onViewChange, queueCounts, actions, fromStick = false, expansion, onExpansionChange,
-  stickGate, confirmDelete,
+  stickGate, confirmDelete, targetId,
 }: {
   /** The Library's tree, as the backend sends it. */
   library: readonly TreeNode[];
@@ -54,6 +54,8 @@ export function useShellTree({
   confirmDelete?: (question: string) => Promise<boolean>;
   /** What waits in Intake and Problems, drawn beside them in the tree (wbx-62). */
   queueCounts?: { intake: number | null; problems: number | null } | null | undefined;
+  /** The second list's target playlist, marked in the tree (wbx-59). */
+  targetId?: string | null | undefined;
 }): { tree: ReactNode; intakeQueue: IntakeQueue; showQueue: (queue: IntakeQueue) => void } {
   const [intakeQueue, setIntakeQueue] = useState<IntakeQueue>("intake");
   const [queueChosen, setQueueChosen] = useState(false);
@@ -98,7 +100,7 @@ export function useShellTree({
     <ShellTree
       library={library} sticks={sticks} selectedId={selectedId} onOpen={open}
       actions={treeActions} selectedNode={selectedNode} collapsed={collapsed} onFolderOpen={folderOpen}
-      stickRefusal={stickGate?.refusal} queueCounts={queueCounts}
+      stickRefusal={stickGate?.refusal} queueCounts={queueCounts} targetId={targetId ?? null}
     />
   );
   return { tree, intakeQueue, showQueue };
