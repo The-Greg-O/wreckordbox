@@ -14,7 +14,7 @@ import type {
   DatabaseDrive, EditHistoryState, ItunesLibrary, LibraryProblem, LibrarySummary, LinkPeerSeen, Meters,
   LinkStatus, MissingExportFile, MissingTrack, MissingTracks, PreviewState, UnanalysedTracks, ReferenceStickSettings, RelocateReport, RowDto, ScriptRequest, Tick,
   TreeNode, ViewHandle,
-  SelectionDetails, TrackDetails, TrackLookups, RelatedPlaylist, StickOutline,
+  PlaylistEntry, SelectionDetails, TrackDetails, TrackLookups, RelatedPlaylist, StickOutline,
 } from "./types";
 import { tauriInvoke } from "./invoke";
 import { liftMyTags } from "./rowMyTags";
@@ -199,6 +199,7 @@ async function realBackend(): Promise<Backend> {
     disableReadOnly: () => invoke<void>("disable_read_only"),
     rememberScreenAssets: (ids, waveformKind) => invoke<void>("remember_screen_assets", { ids, waveformKind }),
     playlistTree: () => invoke<TreeNode[]>("playlist_tree"),
+    playlistEntries: (playlist) => invoke<PlaylistEntry[]>("playlist_entries", { playlist }),
     openView: (spec) => invoke<ViewHandle>("open_view", { spec }),
     fetchRows: (viewId, offset, len, extraColumns) =>
       invoke<RowDto[]>("fetch_rows", { viewId, offset, len, extraColumns }).then(liftMyTags),
@@ -708,6 +709,8 @@ async function realBackend(): Promise<Backend> {
       removeFromCollection: (tracks) => invoke<number>("remove_from_collection", { tracks }),
       reorderPlaylist: (playlist, tracks) =>
         invoke<number>("reorder_playlist", { playlist, tracks }),
+      reorderPlaylistEntries: (playlist, entries) =>
+        invoke<number>("reorder_playlist_entries", { playlist, entries }),
       setTrackRating: (tracks, stars) => invoke<EditHistoryState>("set_track_rating", { tracks, stars }),
       setTrackComment: (tracks, comment) => invoke<EditHistoryState>("set_track_comment", { tracks, comment }),
       setTrackColor: (tracks, color) => invoke<EditHistoryState>("set_track_color", { tracks, color }),

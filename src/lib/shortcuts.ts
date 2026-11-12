@@ -148,6 +148,14 @@ export type Action =
   | "viewIntake"
   | "viewReview"
   | "viewStick"
+  // The Library view's second list, a target playlist (wbx-59). No row in
+  // `BINDINGS`: the keys are the shell's own while the list is shown. See
+  // `TARGET_ACTIONS` in `targetList.ts`.
+  | "toggleTargetList"
+  | "addToTarget"
+  | "moveTargetUp"
+  | "moveTargetDown"
+  | "swapTargetLists"
   // The Intake view's own (wbx-63): mark Clean and next, mark Problem and
   // next, skip, and Energy 1 to 5. No row in `BINDINGS` for the same reason
   // as the views: their keys are the view's while it shows, read ahead of

@@ -70,6 +70,7 @@ import { DEFAULT_SHELL_VIEW, type ShellView } from "@/lib/shellViews";
 import { useLibraryColumns } from "@/store/useLibraryColumns";
 import { SHELL_PLAYER_LAYOUT, ViewShell } from "@/views/shell/ViewShell";
 import { useShellTree } from "@/views/shell/useShellTree";
+import { useTargetList } from "@/views/shell/useTargetList";
 import { IntakeView } from "@/views/shell/IntakeView";
 import { useIntakeCounts } from "@/views/shell/useIntakeCounts";
 import { useStickOutlines } from "@/store/useStickOutlines";
@@ -1968,6 +1969,15 @@ function AppBody() {
     },
     [write],
   );
+  // The second list's reorder (wbx-59): by entry, so one of two entries of
+  // a track moves alone. Resolves whether it was written.
+  const reorderPlaylistEntries = useCallback(
+    (playlist: string, entries: readonly string[]) => writeNow(async (backend) => {
+      await backend.edits.reorderPlaylistEntries(playlist, [...entries]);
+      return "Playlist reordered.";
+    }),
+    [writeNow],
+  );
   const reorderPlaylistTracks = useCallback(
     (order: readonly string[]) => {
       if (spec.source.kind === "playlist") reorderPlaylist(spec.source.id, order);
@@ -3690,9 +3700,17 @@ function AppBody() {
     if (message !== null) setNote({ text: message, failed: true });
     else if (before !== null) setNote((current) => (current?.text === before ? null : current));
   }, []);
+  // The Library view's second list (wbx-59): its state, keys and edits.
+  const targetList = useTargetList({
+    active: shellOn && shellView === "library", platform, tree, source: selectedNode, sourceKind: spec.source.kind,
+    onOpen: setSelectedNode, selection: selectedTracks, locked: readOnly, explainLock: explainEditLock, refuse,
+    add: addToPlaylist, reorderEntries: reorderPlaylistEntries, keyOverrides,
+    dragged: draggedTracks, endDrag: () => setDraggedTracks(null),
+    keyDisplay: viewPrefs.keyDisplay, loadedKey: trafficKey || null,
+  });
   const shellTree = useShellTree({
     library: tree, sticks: shellSticksShown, selectedNode, onSelectNode: setSelectedNode,
-    view: shellView, onViewChange: changeShellView, queueCounts: intakeCounts,
+    view: shellView, onViewChange: changeShellView, queueCounts: intakeCounts, targetId: targetList.targetId,
     // The old tree's handlers (wbx-45.4); a Stick's own tracks may go on its playlists, as in the main tree.
     actions: subTree, fromStick: draggedTracks !== null, expansion: treeExpansion, onExpansionChange: setTreeExpansion,
     stickGate, confirmDelete: confirmRemoval,
@@ -3990,6 +4008,7 @@ function AppBody() {
           )}
           stick={selectedDevice ? library : undefined}
           library={library}
+          libraryTarget={targetList.pane}
           status={<>{linkStrip}{statusBar}</>}
           topBarEnd={<CommandPaletteButton platform={platform} />}
         />
