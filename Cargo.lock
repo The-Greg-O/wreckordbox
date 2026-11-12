@@ -7087,10 +7087,14 @@ name = "wreckordbox"
 version = "1.10.0"
 dependencies = [
  "clap",
+ "lewton",
  "rbl-db",
+ "rbl-export",
+ "rbl-onelibrary",
  "serde_json",
  "tempfile",
  "wreckordbox-service",
+ "wreckordbox-sidecar",
 ]
 
 [[package]]
@@ -7121,6 +7125,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "wreckordbox-native-stems",
  "wreckordbox-sidecar",
 ]
 
