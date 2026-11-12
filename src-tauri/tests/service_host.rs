@@ -195,19 +195,45 @@ fn the_command_works_on_the_open_windows_library() {
 
 #[test]
 fn unreadable_run_status_does_not_mean_the_service_stopped() {
-    let window = window();
-    window.host().unwrap();
-    let dir = window.location.master_db.parent().unwrap().join("wreckordbox-sidecar");
-    std::fs::create_dir_all(dir.join("work")).unwrap();
-    std::fs::write(dir.join("work/keep"), b"keep").unwrap();
-    std::fs::write(dir.join("sidecar.db"), b"corrupt fixture").unwrap();
-    let status = tauri::async_runtime::block_on(rbxport_lib::service_status::service_activity(window.app.state())).unwrap();
-    let status = serde_json::to_value(status).unwrap();
-    assert_eq!(status["connected"], true);
-    assert_eq!(status["runsUnavailable"], true);
-    assert_eq!(status["problem"], serde_json::Value::Null);
-    assert!(dir.join("work/keep").exists());
-    assert!(window.cli(&["--json", "tracks", "list"]).ok);
+    for kind in ["corrupt", "newer", "locked"] {
+        let window = window();
+        window.host().unwrap();
+        let dir = window
+            .location
+            .master_db
+            .parent()
+            .unwrap()
+            .join("wreckordbox-sidecar");
+        std::fs::create_dir_all(dir.join("work")).unwrap();
+        std::fs::write(dir.join("work/keep"), b"keep").unwrap();
+        let lock = if kind == "corrupt" {
+            std::fs::write(dir.join("sidecar.db"), b"corrupt fixture").unwrap();
+            None
+        } else {
+            let db = rusqlite::Connection::open(dir.join("sidecar.db")).unwrap();
+            db.execute_batch("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT); INSERT INTO meta VALUES ('schema_version', '999');").unwrap();
+            if kind == "locked" {
+                db.execute_batch("UPDATE meta SET value = '4'; CREATE TABLE run (id INTEGER PRIMARY KEY, description TEXT, finished_at INTEGER); CREATE INDEX run_unfinished ON run (id) WHERE finished_at IS NULL; INSERT INTO run VALUES (1, 'Existing', NULL); BEGIN EXCLUSIVE; UPDATE run SET description = 'Uncommitted';").unwrap();
+            }
+            Some(db)
+        };
+        let start = Instant::now();
+        let status = tauri::async_runtime::block_on(rbxport_lib::service_status::service_activity(
+            window.app.state(),
+        ))
+        .unwrap();
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "{kind}: status waited behind a writer"
+        );
+        let status = serde_json::to_value(status).unwrap();
+        assert_eq!(status["connected"], true, "{kind}");
+        assert_eq!(status["runsUnavailable"], true, "{kind}");
+        assert_eq!(status["problem"], serde_json::Value::Null);
+        assert!(dir.join("work/keep").exists());
+        assert!(window.cli(&["--json", "tracks", "list"]).ok);
+        drop(lock);
+    }
 }
 
 #[test]

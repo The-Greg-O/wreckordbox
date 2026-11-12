@@ -160,3 +160,29 @@ fn a_status_read_of_a_current_sidecar_preserves_work_and_database_files() {
     assert!(!dir.join("sidecar.db-wal").exists());
     assert!(!dir.join("sidecar.db-shm").exists());
 }
+
+#[test]
+fn unavailable_status_backs_off_at_the_service_and_recovers() {
+    let sandbox = Sandbox::new();
+    let dir = sandbox.sidecar_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("sidecar.db"), b"corrupt fixture").unwrap();
+    sandbox.status();
+    let mut client = sandbox.client();
+    assert_eq!(
+        client.call::<Value>("runs.active", json!({})).unwrap(),
+        Value::Null
+    );
+    // Repair the fixture: the service must not retry every client's poll.
+    std::fs::remove_file(dir.join("sidecar.db")).unwrap();
+    drop(wreckordbox_sidecar::Sidecar::open(&dir).unwrap());
+    assert_eq!(
+        client.call::<Value>("runs.active", json!({})).unwrap(),
+        Value::Null
+    );
+    std::thread::sleep(Duration::from_millis(10100));
+    assert_eq!(
+        client.call::<Value>("runs.active", json!({})).unwrap(),
+        json!([])
+    );
+}
