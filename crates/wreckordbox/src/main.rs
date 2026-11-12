@@ -9,6 +9,7 @@ mod intake;
 mod mutants;
 mod mytag_edits;
 mod reading;
+mod schema;
 mod stems;
 mod stems_write;
 mod tracks;
@@ -95,6 +96,16 @@ enum Commands {
     Intake {
         #[command(subcommand)]
         command: intake::IntakeCommands,
+    },
+    /// Check the Tag schema, or write a first one from the Library's
+    /// MyTags.
+    #[allow(
+        clippy::doc_markdown,
+        reason = "this is the command's help, where MyTag is a word, not code"
+    )]
+    Schema {
+        #[command(subcommand)]
+        command: schema::SchemaCommands,
     },
     /// Run the Library service in the foreground until interrupted.
     ///
@@ -242,6 +253,13 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
         }
         Commands::Intake { command } => {
             print(&intake::run(&mut connect(&config)?, cli.json, command)?);
+        }
+        Commands::Schema { command } => {
+            let (text, ok) = schema::run(&mut connect(&config)?, cli.json, command)?;
+            print(&text);
+            if !ok {
+                return Ok(ExitCode::FAILURE);
+            }
         }
         Commands::Serve { spawned: true } => {
             return Ok(if wreckordbox_service::serve_spawned(config) {
