@@ -36,6 +36,11 @@ pub struct Journal {
     /// of the program recovering names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sidecar: Option<PathBuf>,
+    /// Work the program that restored still owes once the files are in
+    /// place ([`crate::restore::restore_owing`]). A committed journal with
+    /// this is kept, with no swaps left, until [`discharge`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owed: Option<serde_json::Value>,
 }
 
 pub fn path(root: &Path) -> PathBuf {
@@ -140,6 +145,46 @@ pub fn recover(root: &Path, location: &rbl_db::LibraryLocation) -> Result<()> {
         remove(&swap.previous)?;
         rbl_core::durable::sync_dir(swap.target.parent().ok_or_else(|| refused("Invalid restore path"))?)?;
     }
+    if journal.committed && journal.owed.is_some() {
+        // The files are done; what is owed is the restorer's to do.
+        if !journal.swaps.is_empty() {
+            save(root, &Journal { swaps: Vec::new(), ..journal })?;
+        }
+        return Ok(());
+    }
+    remove(&path(root))?;
+    Ok(rbl_core::durable::sync_dir(root)?)
+}
+
+/// What a committed restore still owes, once [`recover`] has finished its
+/// files: `None` when no journal is kept, or it is not committed.
+pub fn owed(root: &Path) -> Result<Option<serde_json::Value>> {
+    let bytes = match fs::read(path(root)) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    let journal: Journal = serde_json::from_slice(&bytes)?;
+    Ok(if journal.committed && journal.swaps.is_empty() { journal.owed } else { None })
+}
+
+/// Replaces what a committed restore owes, as the work progresses (an
+/// identifier reserved, say). Refused unless a committed, finished journal
+/// owes something.
+pub fn update_owed(root: &Path, owed: serde_json::Value) -> Result<()> {
+    let journal: Journal = serde_json::from_slice(&fs::read(path(root))?)?;
+    if !(journal.committed && journal.swaps.is_empty() && journal.owed.is_some()) {
+        return Err(refused("No finished restore owes anything."));
+    }
+    save(root, &Journal { owed: Some(owed), ..journal })
+}
+
+/// Removes a committed, finished journal once what it owed is done. Does
+/// nothing to one still in progress.
+pub fn discharge(root: &Path) -> Result<()> {
+    if owed(root)?.is_none() {
+        return Ok(());
+    }
     remove(&path(root))?;
     Ok(rbl_core::durable::sync_dir(root)?)
 }
@@ -202,6 +247,7 @@ mod tests {
                 committed,
                 swaps: vec![Swap { target: target.clone(), staged: staged.clone(), previous: previous.clone(), existed: true }],
                 sidecar: None,
+                owed: None,
             };
             save(&root, &journal).unwrap();
             assert!(pending(&root));
@@ -223,10 +269,10 @@ mod tests {
         let outside = dir.path().join("elsewhere.txt");
         fs::write(&outside, b"keep").unwrap();
         let swap = Swap { target: outside.clone(), staged: dir.path().join(".rbxport-restore-x-new"), previous: dir.path().join(".rbxport-restore-x-old"), existed: true };
-        save(&root, &Journal { library: location.master_db.clone(), committed: false, swaps: vec![swap], sidecar: None }).unwrap();
+        save(&root, &Journal { library: location.master_db.clone(), committed: false, swaps: vec![swap], sidecar: None, owed: None }).unwrap();
         assert!(recover(&root, &location).is_err());
         assert_eq!(fs::read(&outside).unwrap(), b"keep");
-        save(&root, &Journal { library: dir.path().join("other.db"), committed: false, swaps: Vec::new(), sidecar: None }).unwrap();
+        save(&root, &Journal { library: dir.path().join("other.db"), committed: false, swaps: Vec::new(), sidecar: None, owed: None }).unwrap();
         assert!(recover(&root, &location).is_err());
     }
 
@@ -241,7 +287,7 @@ mod tests {
         fs::write(&db_orphan, b"old").unwrap();
         let unrelated = parent.join(".rbxport-before-restore-keep");
         fs::create_dir_all(&unrelated).unwrap();
-        save(&root, &Journal { library: location.master_db.clone(), committed: true, swaps: Vec::new(), sidecar: None }).unwrap();
+        save(&root, &Journal { library: location.master_db.clone(), committed: true, swaps: Vec::new(), sidecar: None, owed: None }).unwrap();
         remove_orphans_in(&root, &location, None).unwrap();
         assert!(db_orphan.exists());
         recover(&root, &location).unwrap();

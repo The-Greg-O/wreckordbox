@@ -80,6 +80,17 @@ pub type Progress<'a> = dyn FnMut(Phase, u64, u64, &str) -> Result<()> + 'a;
 /// is written and again just before the library's files are replaced; an
 /// error from it stops the restore with nothing changed.
 pub fn restore(request: &Request<'_>, guard: &dyn Fn() -> Result<()>, progress: &mut Progress<'_>) -> Result<()> {
+    restore_owing(request, None, guard, progress)
+}
+
+/// [`restore`], with work the caller still owes once the files are in
+/// place (`owed`, any JSON). It is saved in the journal before anything is
+/// replaced, and the journal is kept after the restore has committed, its
+/// files done, until the caller has done that work and calls
+/// [`journal::discharge`]. Recovery of a committed journal keeps it the same
+/// way ([`journal::owed`] reads it); a rolled-back one drops it, since the
+/// restore did not happen. While it is kept, a new restore is refused.
+pub fn restore_owing(request: &Request<'_>, owed: Option<serde_json::Value>, guard: &dyn Fn() -> Result<()>, progress: &mut Progress<'_>) -> Result<()> {
     let (location, state_dir) = (request.location, request.state_dir);
     if request.parts.is_empty() {
         return Err(refused("Choose what to restore."));
@@ -91,6 +102,9 @@ pub fn restore(request: &Request<'_>, guard: &dyn Fn() -> Result<()>, progress: 
         return Err(refused("Wreckordbox has an analysis edit it has not finished. Open wreckordbox once so it can finish it, quit it, then restore."));
     }
     journal::recover(state_dir, location)?;
+    if journal::pending(state_dir) {
+        return Err(refused("An earlier restore has not been recorded yet. Open wreckordbox once so it can record it, quit it, then restore."));
+    }
     journal::remove_orphans(state_dir, location)?;
     let manifest = Manifest::read(request.archive)?;
     if !manifest.belongs_to(location) {
@@ -141,7 +155,7 @@ pub fn restore(request: &Request<'_>, guard: &dyn Fn() -> Result<()>, progress: 
         if let Some(destination) = &destination {
             destination.verify()?;
         }
-        plan.replace(state_dir, location, destination.as_ref())
+        plan.replace(state_dir, location, destination.as_ref(), owed)
     })();
     if let Err(error) = result {
         #[cfg(any(test, feature = "testing"))]
@@ -340,10 +354,11 @@ impl Plan {
         Ok(done)
     }
 
-    fn replace(&self, state_dir: &Path, location: &rbl_db::LibraryLocation, sidecar: Option<&crate::sidecar_part::Destination>) -> Result<()> {
+    fn replace(&self, state_dir: &Path, location: &rbl_db::LibraryLocation, sidecar: Option<&crate::sidecar_part::Destination>, owed: Option<serde_json::Value>) -> Result<()> {
         let mut journal = Journal {
             library: location.master_db.clone(),
             sidecar: sidecar.map(|sidecar| sidecar.path.clone()),
+            owed,
             committed: false,
             swaps: self
                 .stages
@@ -360,6 +375,8 @@ impl Plan {
             if swap.existed {
                 fs::rename(&swap.target, &swap.previous)?;
             }
+            #[cfg(any(test, feature = "testing"))]
+            crate::testing::step_inside(done)?;
             if swap.staged.exists() {
                 fs::rename(&swap.staged, &swap.target)?;
             }
@@ -393,6 +410,22 @@ impl Plan {
             for entry in present {
                 if let Some(name) = entry?.file_name().to_str().filter(|name| crate::sidecar_part::backed_up(name, contents.stems)) {
                     held.entry(name.to_owned()).or_default();
+                }
+            }
+        }
+        // A database's write-ahead log, shared memory or rollback journal is
+        // never in a backup (databases travel as whole snapshots): one in
+        // an archive would change the database after it was checked.
+        let files: Vec<String> = names
+            .iter()
+            .filter(|name| !name.ends_with('/'))
+            .filter_map(|name| crate::sidecar_part::entry(name))
+            .map(|path| path.to_string_lossy().replace('\\', "/"))
+            .collect();
+        for file in &files {
+            if let Some(base) = crate::sidecar_part::companion_of(file) {
+                if base == crate::sidecar_part::DATABASE_FILE || contents.databases.iter().any(|database| database == base) {
+                    return Err(refused(format!("The backup's Sidecar holds {file}, a database's companion file, which a backup never holds.")));
                 }
             }
         }
@@ -437,6 +470,15 @@ impl Plan {
     /// make a database a plain file.
     fn validate_sidecar(&self, contents: &crate::sidecar_part::Contents) -> Result<()> {
         let damaged = |name: &str| refused(format!("The backup's Sidecar database {name} is damaged."));
+        // A companion of a database the record does not name (a backup
+        // made before databases were recorded): found by what its base is.
+        for (name, _) in &self.sidecar_files {
+            if let Some(base) = crate::sidecar_part::companion_of(name) {
+                if self.sidecar_files.iter().any(|(other, staged)| other == base && crate::sidecar_part::is_database(staged)) {
+                    return Err(refused(format!("The backup's Sidecar holds {name}, a database's companion file, which a backup never holds.")));
+                }
+            }
+        }
         for name in &contents.databases {
             if !self.sidecar_files.iter().any(|(path, _)| path == name) {
                 return Err(refused(format!("The backup's Sidecar database {name} is missing.")));
@@ -444,8 +486,15 @@ impl Plan {
         }
         for (name, staged) in &self.sidecar_files {
             if name == crate::sidecar_part::DATABASE_FILE {
-                if !crate::sidecar_part::sidecar_store(staged)? {
-                    return Err(damaged(name));
+                match crate::sidecar_part::store_version(staged)? {
+                    Some(version) if version > crate::sidecar_part::SCHEMA_SUPPORTED => {
+                        return Err(refused(format!(
+                            "The backup's Sidecar was written by a newer wreckordbox (its schema is version {version}; this one reads up to {}). Update wreckordbox, then restore.",
+                            crate::sidecar_part::SCHEMA_SUPPORTED
+                        )));
+                    }
+                    Some(_) => {}
+                    None => return Err(damaged(name)),
                 }
             } else if (contents.databases.contains(name) || crate::sidecar_part::is_database(staged)) && !(crate::sidecar_part::is_database(staged) && crate::sidecar_part::sound(staged)?) {
                 return Err(damaged(name));

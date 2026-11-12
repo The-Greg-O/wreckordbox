@@ -133,7 +133,7 @@ pub mod testing {
     use zip::{write::SimpleFileOptions, ZipWriter};
 
     thread_local! {
-        static STOP: std::cell::Cell<Option<(usize, bool)>> = const { std::cell::Cell::new(None) };
+        static STOP: std::cell::Cell<Option<(usize, bool, bool)>> = const { std::cell::Cell::new(None) };
         static CRASHED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
 
@@ -143,13 +143,29 @@ pub mod testing {
     /// the journal is left for the next program to recover. Without, it
     /// fails as an error there would, and puts everything back itself.
     pub fn stop_before_swap(swaps: usize, crash: bool) {
-        STOP.with(|stop| stop.set(Some((swaps, crash))));
+        STOP.with(|stop| stop.set(Some((swaps, crash, false))));
+        CRASHED.with(|crashed| crashed.set(false));
+    }
+
+    /// As [`stop_before_swap`], but between the two renames of target
+    /// number `swaps`: its current file is set aside and its replacement
+    /// not yet in place, so the target is missing.
+    pub fn stop_between_renames(swaps: usize, crash: bool) {
+        STOP.with(|stop| stop.set(Some((swaps, crash, true))));
         CRASHED.with(|crashed| crashed.set(false));
     }
 
     pub(crate) fn step(done: usize) -> crate::Result<()> {
+        stop_at(done, false)
+    }
+
+    pub(crate) fn step_inside(done: usize) -> crate::Result<()> {
+        stop_at(done, true)
+    }
+
+    fn stop_at(done: usize, inside: bool) -> crate::Result<()> {
         match STOP.with(std::cell::Cell::get) {
-            Some((at, crash)) if at == done => {
+            Some((at, crash, between)) if at == done && between == inside => {
                 STOP.with(|stop| stop.set(None));
                 CRASHED.with(|crashed| crashed.set(crash));
                 Err(crate::refused(if crash { "Simulated crash." } else { "Simulated failure." }))

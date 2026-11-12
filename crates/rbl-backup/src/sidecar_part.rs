@@ -391,13 +391,33 @@ impl Walk<'_> {
 /// The Sidecar's own database, by name, at the top of its folder.
 pub const DATABASE_FILE: &str = "sidecar.db";
 
+/// The newest Sidecar schema (`meta.schema_version` in `sidecar.db`) this
+/// build reads: `wreckordbox_sidecar::SCHEMA_VERSION`, which this crate
+/// does not depend on; a test holds the two together. A backup whose
+/// Sidecar is newer is refused before anything is replaced.
+pub const SCHEMA_SUPPORTED: u32 = 6;
+
+/// The database `name` (a path in the Sidecar) is a companion of, when its
+/// name is a database's write-ahead log, shared memory or rollback journal.
+#[must_use]
+pub fn companion_of(name: &str) -> Option<&str> {
+    COMPANIONS.iter().find_map(|suffix| name.strip_suffix(suffix)).filter(|base| !base.is_empty() && !base.ends_with('/'))
+}
+
 /// Whether the database at `path` is a Sidecar store: SQLite, sound, and
 /// with the schema version the Sidecar writes when it makes one. An empty
 /// file is a valid SQLite database, but not a store. Leaves no companion
 /// file beside it.
 pub(crate) fn sidecar_store(path: &Path) -> Result<bool> {
+    Ok(store_version(path)?.is_some())
+}
+
+/// The schema version of the Sidecar store at `path`, or `None` when it is
+/// not one (not SQLite, damaged, or with no schema version of 1 or more).
+/// Leaves no companion file beside it.
+pub(crate) fn store_version(path: &Path) -> Result<Option<u32>> {
     if !is_database(path) || !sound(path)? {
-        return Ok(false);
+        return Ok(None);
     }
     let version = (|| -> rusqlite::Result<Option<String>> {
         use rusqlite::OptionalExtension as _;
@@ -408,7 +428,7 @@ pub(crate) fn sidecar_store(path: &Path) -> Result<bool> {
     for suffix in COMPANIONS {
         crate::journal::remove(&crate::sidecar(path, suffix))?;
     }
-    Ok(version.ok().flatten().and_then(|version| version.parse::<u32>().ok()).is_some_and(|version| version >= 1))
+    Ok(version.ok().flatten().and_then(|version| version.parse::<u32>().ok()).filter(|version| *version >= 1))
 }
 
 /// Whether SQLite's own check passes on the database at `path`. Leaves no

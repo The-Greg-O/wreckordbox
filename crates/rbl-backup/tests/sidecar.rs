@@ -550,6 +550,7 @@ fn journal(fixture: &Fixture, committed: bool, target: &Path) -> (PathBuf, PathB
         committed,
         swaps: vec![Swap { target: target.to_path_buf(), staged: staged.clone(), previous: previous.clone(), existed: true }],
         sidecar: Some(fixture.sidecar_dir.canonicalize().unwrap()),
+        owed: None,
     };
     fs::create_dir_all(fixture.state()).unwrap();
     fs::write(rbl_backup::journal::path(&fixture.state()), serde_json::to_vec(&journal).unwrap()).unwrap();
@@ -814,6 +815,19 @@ fn a_restore_that_fails_or_stops_between_any_two_replacements_ends_with_the_libr
         rbl_backup::journal::recover(&fixture.state(), &fixture.location).unwrap();
         rbl_backup::journal::recover(&fixture.state(), &fixture.location).unwrap();
         unchanged(&format!("crash before replacement {swaps}"));
+        // Between the two renames of the same target: it is missing.
+        testing::stop_between_renames(swaps, false);
+        assert!(fixture.restore(&fixture.archive, Parts::ALL).is_err());
+        unchanged(&format!("failure inside replacement {swaps}"));
+        testing::stop_between_renames(swaps, true);
+        assert!(fixture.restore(&fixture.archive, Parts::ALL).is_err());
+        assert!(rbl_backup::journal::pending(&fixture.state()));
+        if swaps == 0 {
+            assert!(!fixture.location.master_db.exists());
+        }
+        rbl_backup::journal::recover(&fixture.state(), &fixture.location).unwrap();
+        rbl_backup::journal::recover(&fixture.state(), &fixture.location).unwrap();
+        unchanged(&format!("crash inside replacement {swaps}"));
         swaps += 1;
     }
     // The last run went through: the database, its WAL and SHM, the two
@@ -821,4 +835,101 @@ fn a_restore_that_fails_or_stops_between_any_two_replacements_ends_with_the_libr
     assert!(swaps > 6, "{swaps}");
     assert_eq!(testing::rating(&fixture.location), 4);
     assert_eq!(fs::read_to_string(&kinds).unwrap(), KINDS);
+}
+
+/// A backup holding `sidecar.db` with its `meta.schema_version` set to
+/// `version`; the archive's own record stays at a version this build reads.
+fn with_schema(fixture: &Fixture, version: u32) -> PathBuf {
+    let copy = fixture.dir.path().join(format!("schema-{version}.db"));
+    fs::copy(fixture.sidecar_dir.join("sidecar.db"), &copy).unwrap();
+    let db = rusqlite::Connection::open(&copy).unwrap();
+    db.execute("UPDATE meta SET value = ?1 WHERE key = 'schema_version'", [version.to_string()]).unwrap();
+    db.execute_batch("PRAGMA journal_mode=DELETE;").unwrap();
+    drop(db);
+    rewritten(fixture, "sidecar/sidecar.db", &fs::read(&copy).unwrap())
+}
+
+#[test]
+fn a_backup_whose_sidecar_schema_is_newer_than_this_build_reads_is_refused_before_anything_is_replaced() {
+    assert_eq!(rbl_backup::sidecar_part::SCHEMA_SUPPORTED, wreckordbox_sidecar::SCHEMA_VERSION);
+    let fixture = fixture();
+    testing::archive(&fixture.location, &fixture.archive, None);
+    fixture.change();
+    let changed = fixture.known();
+    let newer = with_schema(&fixture, wreckordbox_sidecar::SCHEMA_VERSION + 1);
+    assert_eq!(Contents::read(&newer).unwrap().unwrap().version, 1);
+    let message = refused(&fixture, &newer, &changed);
+    assert!(message.contains("newer wreckordbox"), "{message}");
+    // The version this build writes restores.
+    let same = with_schema(&fixture, wreckordbox_sidecar::SCHEMA_VERSION);
+    fixture.restore(&same, Parts::ALL).unwrap();
+    assert_eq!(testing::rating(&fixture.location), 4);
+}
+
+#[test]
+fn a_databases_companion_files_in_a_backup_are_refused_at_any_depth() {
+    let fixture = fixture();
+    let nested = fixture.sidecar_dir.join("recipes/index.db");
+    rusqlite::Connection::open(&nested).unwrap().execute_batch("CREATE TABLE recipe (name TEXT);").unwrap();
+    testing::archive(&fixture.location, &fixture.archive, None);
+    fixture.change();
+    let changed = fixture.known();
+    for companion in ["sidecar/sidecar.db-wal", "sidecar/sidecar.db-shm", "sidecar/sidecar.db-journal", "sidecar/recipes/index.db-wal", "sidecar/recipes/index.db-journal"] {
+        let bad = fixture.tampered(&[(companion, b"pages")]);
+        let message = refused(&fixture, &bad, &changed);
+        assert!(message.contains("companion"), "{companion}: {message}");
+    }
+    // Recorded before databases were listed: found by what the base is.
+    let mut record = Contents::read(&fixture.archive).unwrap().unwrap();
+    record.databases.clear();
+    let unlisted = rewritten(&fixture, "sidecar.json", &serde_json::to_vec(&record).unwrap());
+    fs::copy(&unlisted, &fixture.archive).unwrap();
+    let bad = fixture.tampered(&[("sidecar/recipes/index.db-wal", b"pages")]);
+    let message = refused(&fixture, &bad, &changed);
+    assert!(message.contains("companion"), "{message}");
+    // A file of the DJ's whose name only ends like one travels.
+    fs::write(fixture.sidecar_dir.join("recipes/notes.txt"), "a").unwrap();
+    fs::write(fixture.sidecar_dir.join("recipes/notes.txt-journal"), "b").unwrap();
+    testing::archive(&fixture.location, &fixture.archive, None);
+    assert!(entries(&fixture.archive).contains(&"sidecar/recipes/notes.txt-journal".to_owned()));
+    fixture.restore(&fixture.archive, Parts::ALL).unwrap();
+    assert_eq!(fs::read_to_string(fixture.sidecar_dir.join("recipes/notes.txt-journal")).unwrap(), "b");
+}
+
+#[test]
+fn what_a_restore_owes_is_kept_in_its_journal_after_the_files_are_in_place_until_it_is_discharged() {
+    let fixture = fixture();
+    testing::archive(&fixture.location, &fixture.archive, None);
+    fixture.change();
+    let owe = serde_json::json!({ "ledger": "restore" });
+    let restore_owing = |owed: serde_json::Value| {
+        rbl_backup::restore::restore_owing(
+            &Request { archive: &fixture.archive, parts: Parts::ALL, location: &fixture.location, state_dir: &fixture.state(), sizes: None },
+            Some(owed),
+            &|| Ok(()),
+            &mut |_, _, _, _| Ok(()),
+        )
+    };
+    restore_owing(owe.clone()).unwrap();
+    assert_eq!(testing::rating(&fixture.location), 4);
+    assert_eq!(fixture.leftovers(), [] as [String; 0]);
+    assert_eq!(rbl_backup::journal::owed(&fixture.state()).unwrap(), Some(owe.clone()));
+    // Recovery keeps it; a new restore is refused until it is done.
+    rbl_backup::journal::recover(&fixture.state(), &fixture.location).unwrap();
+    assert_eq!(rbl_backup::journal::owed(&fixture.state()).unwrap(), Some(owe.clone()));
+    let error = fixture.restore(&fixture.archive, Parts::ALL).unwrap_err().to_string();
+    assert!(error.contains("not been recorded"), "{error}");
+    rbl_backup::journal::update_owed(&fixture.state(), serde_json::json!({ "ledger": "restore", "id": 7 })).unwrap();
+    assert_eq!(rbl_backup::journal::owed(&fixture.state()).unwrap().unwrap()["id"], 7);
+    rbl_backup::journal::discharge(&fixture.state()).unwrap();
+    assert!(!rbl_backup::journal::pending(&fixture.state()));
+
+    // Stopped between replacements: rolled back, nothing is owed.
+    fixture.change();
+    testing::stop_before_swap(2, true);
+    assert!(restore_owing(owe.clone()).is_err());
+    assert_eq!(rbl_backup::journal::owed(&fixture.state()).unwrap(), None);
+    rbl_backup::journal::recover(&fixture.state(), &fixture.location).unwrap();
+    assert!(!rbl_backup::journal::pending(&fixture.state()));
+    assert_eq!(testing::rating(&fixture.location), 1);
 }
