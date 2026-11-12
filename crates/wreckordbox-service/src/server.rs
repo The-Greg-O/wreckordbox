@@ -151,17 +151,30 @@ impl Service {
         hosted: bool,
         open: impl FnOnce(LibraryLocation) -> Result<OpenLibrary, ServiceError>,
     ) -> Result<Self, ServiceError> {
-        if !library.master_db.is_file() {
-            return Err(ServiceError::new(
+        let missing = || {
+            ServiceError::new(
                 codes::LIBRARY_MISSING,
                 format!(
                     "the Library is missing: there is no {}",
                     library.master_db.display()
                 ),
-            ));
+            )
+        };
+        // A restore stopped between its renames leaves no `master.db` and a
+        // journal to recover it by: that Library is owned and recovered
+        // first, and only then must the database be there.
+        if !library.master_db.is_file() && !rbl_backup::journal::pending(&config.recovery_dir) {
+            return Err(missing());
         }
         let socket = config.socket_path(&library);
         let library_lock = take_lock(&library.master_db, &socket)?;
+        // A restore that stopped midway is finished or rolled back now,
+        // while this process owns the Library and before the Library or the
+        // Sidecar is opened, so neither is ever read half restored.
+        crate::backup::recover(&config.recovery_dir, &library)?;
+        if !library.master_db.is_file() {
+            return Err(missing());
+        }
         let master_db = library.master_db.clone();
         let open = open(library)?;
         let listener = listen(&config.runtime_dir, &socket)?;
@@ -731,8 +744,10 @@ fn stop_when_idle(shared: &Shared, idle_exit: Duration) {
     }
 }
 
-/// Takes the Library's lock, or says which service has it.
-fn take_lock(master_db: &Path, socket: &Path) -> Result<File, ServiceError> {
+/// Takes the Library's lock, or says which service has it. `socket` is
+/// written into the lock file for a person to read: where the holder
+/// listens, or what it is doing.
+pub(crate) fn take_lock(master_db: &Path, socket: &Path) -> Result<File, ServiceError> {
     let path = crate::lock_path(master_db);
     let failed = |e: &dyn std::fmt::Display| {
         ServiceError::new(
