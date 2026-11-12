@@ -1,4 +1,5 @@
 //! `stems separate` and `stems show`: a track's Stems in the Sidecar.
+//! (`stems write` is in `stems_write.rs`.)
 
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -34,6 +35,29 @@ pub enum StemCommands {
         /// The track's identifier: the ID column of `tracks list`.
         #[arg(value_name = "TRACK_ID")]
         id: String,
+    },
+    /// Write a track's Stems to a Spare stick as Native stems: the form a
+    /// modded XDJ-AZ plays on its pads.
+    ///
+    /// The Stick must already hold an export of the track, and must carry
+    /// the Spare stick marker: an empty file named `.rbxport-disposable` at
+    /// its root, which says the Stick is safe to overwrite. A Stick without
+    /// it is refused and nothing is written; never put one on a Gig stick.
+    ///
+    /// The track must have Stems made from the audio it has now (see
+    /// `stems separate`). They are written as four Ogg Vorbis files in
+    /// `STEMS/<the track's file name on the Stick>/`. Players without the
+    /// mod ignore that folder, and the Stick's exported library is not
+    /// touched. A track whose file name cannot be a folder name there is
+    /// reported and skipped, which is not a failure. The Library is not
+    /// changed.
+    Write {
+        /// The track's identifier: the ID column of `tracks list`.
+        #[arg(value_name = "TRACK_ID")]
+        id: String,
+        /// Where the Stick is mounted.
+        #[arg(value_name = "STICK")]
+        stick: std::path::PathBuf,
     },
 }
 
@@ -81,6 +105,7 @@ pub fn run(
                 separated_text(&separated)
             })
         }
+        StemCommands::Write { id, stick } => crate::stems_write::run(client, as_json, id, stick),
         StemCommands::Show { id } => {
             let stems: TrackStems =
                 client.call(commands::STEMS_SHOW, json!(TrackId { id: id.clone() }))?;
