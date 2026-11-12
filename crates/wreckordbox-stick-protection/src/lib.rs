@@ -3,29 +3,43 @@
 //!
 //! The backstop under every Stick write, whoever asks (the window in either
 //! layout, the Library service, the command line, a script, background
-//! work). The window's staged plan and hold are the per-operation
-//! confirmation on top of it; this is the guarantee.
+//! work). The window's staged plan and hold are a per-operation
+//! confirmation in the interface on top of it; this is the guarantee.
 //!
-//! - **Protected by default.** A Stick is unlocked only while an unlock
-//!   recorded for it matches the mount it is on now: its path, the mounted
-//!   folder's device and inode, and (on Linux) the kernel's mount id. So an
-//!   unlock ends when the Stick is ejected, pulled out or put back, or when
-//!   the DJ locks it again; nothing is remembered across a re-insert.
-//! - **Unlocking names the Stick.** A Spare stick (it carries
-//!   [`SPARE_MARKER`]) unlocks with a plain confirmation. Any other Stick is
-//!   treated as a Gig stick: its name must be typed, and is checked here.
-//! - **Kept like Library Protection** (`rbl_library::protection`): one
-//!   file, [`FILE`], in the state folder the window and the service share;
-//!   every change under an exclusive lock on [`LOCK_FILE`], written to a
-//!   temporary file and renamed over the old, with a revision higher than
-//!   any before. A missing, unreadable or corrupt file unlocks nothing.
-//!
-//! Which destinations are on a Stick is [`stick_root_of`]: a mounted
-//! device's folder, or (for tests) a folder carrying [`STAND_IN_MARKER`].
-//! An ordinary folder is not a Stick and is never refused here.
+//! - **What is a Stick** ([`classify`]) is decided from the volume itself,
+//!   never from a list the interface was shown: the volume (mount) holding
+//!   the path carries a player export (a `PIONEER` folder or the Spare stick
+//!   marker at its root), or, when its root cannot be read, it is removable
+//!   or mounted under the media folders (fail closed). Any other volume,
+//!   an ordinary external disk with no player export included, is not a
+//!   Stick. With `RBXPORT_TEST=1` a folder carrying [`STAND_IN_MARKER`]
+//!   stands in for a Stick; without it, no test override is honoured.
+//! - **One Stick, one identity**: status, unlock, lock and every writer
+//!   resolve a path to its containing Stick's root; a folder inside a Stick
+//!   is never unlocked on its own.
+//! - **Protected by default.** An unlock is recorded for one mount
+//!   incarnation ([`Identity`]): the boot it happened in, the kernel's
+//!   never-reused mount id, and the root's device and inode. It ends when
+//!   the Stick is ejected, pulled out or put back, when the machine
+//!   restarts, or when the DJ locks it. When the identity cannot be
+//!   established, the Stick stays protected.
+//! - **Unlocking names the Stick.** A Spare stick ([`SPARE_MARKER`])
+//!   unlocks with a plain confirmation; any other Stick needs its name typed,
+//!   checked here.
+//! - **One execution protocol** ([`exec_lock`]): every writer holds the
+//!   Stick's execution lock, an exclusive lock on a file in the state folder
+//!   (never on the Stick), for its whole life, across processes. Locking a
+//!   Stick and ejecting it take the same lock first, so neither is
+//!   acknowledged while a write runs. A long writer re-checks
+//!   ([`Authorization::recheck`]) before each step and stops when the Stick
+//!   was replaced.
+//! - **Kept like Library Protection**: one record, [`FILE`], in the shared
+//!   state folder; changes under an exclusive lock on [`LOCK_FILE`], written
+//!   to a temporary file and renamed over the old, with a rising revision. A
+//!   missing, unreadable or corrupt record unlocks nothing.
 
 use std::io::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -33,22 +47,39 @@ use serde::{Deserialize, Serialize};
 pub const FILE: &str = "stick-protection.json";
 /// The file every writer of [`FILE`] holds an exclusive lock on.
 pub const LOCK_FILE: &str = "stick-protection.lock";
+/// The folder of the Sticks' execution locks, inside the state folder.
+pub const EXEC_LOCKS: &str = "stick-locks";
 /// The marker at a Stick's root that declares it a Spare stick.
 pub const SPARE_MARKER: &str = ".rbxport-disposable";
-/// A folder carrying this file is treated as a mounted Stick: what tests
-/// use to stand in for one. A real Stick never needs it.
+/// With `RBXPORT_TEST=1`, a folder carrying this file stands in for a
+/// mounted Stick. Ignored otherwise.
 pub const STAND_IN_MARKER: &str = ".rbxport-stands-for-stick";
 /// The stable error code of a write refused on a protected Stick.
 pub const CODE: &str = "stick_protected";
 
-/// One mount of a Stick: an unlock holds for exactly this one.
+/// `statx`'s `STATX_MNT_ID_UNIQUE` (Linux 6.8): a mount id never reused
+/// while the machine runs.
+const STATX_MNT_ID_UNIQUE: u32 = 0x4000;
+
+/// What a path is on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Volume {
+    /// Not a Stick: never refused here.
+    Ordinary,
+    /// On the Stick whose root (mount point) is `root`.
+    Stick { root: PathBuf },
+}
+
+/// One mount incarnation of a Stick: an unlock holds for exactly this one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Mount {
-    pub path: PathBuf,
+pub struct Identity {
+    pub root: PathBuf,
+    /// `/proc/sys/kernel/random/boot_id`: a restart ends every unlock.
+    pub boot: String,
+    /// The kernel's unique mount id, never reused within a boot.
+    pub mount: u64,
     pub dev: u64,
     pub ino: u64,
-    /// The kernel's id of this mount (Linux), new for every mount.
-    pub mount_id: Option<u64>,
 }
 
 /// Whether a Stick is protected, as the DJ is shown it.
@@ -58,7 +89,7 @@ pub struct Status {
     pub protected: bool,
     /// It carries the Spare stick marker: it unlocks with a confirmation.
     pub spare: bool,
-    /// The name the DJ types to unlock a Gig stick: the mounted folder's.
+    /// The name the DJ types to unlock a Gig stick: its root folder's.
     pub name: String,
     pub revision: u64,
 }
@@ -70,8 +101,11 @@ pub enum UnlockError {
     NameRequired { name: String },
     /// The typed name is not the Stick's.
     NameMismatch { name: String },
-    /// There is no Stick there.
-    NotFound,
+    /// There is no Stick there (an ordinary folder, or nothing).
+    NotAStick,
+    /// This mount of the Stick cannot be told apart from another: it stays
+    /// protected.
+    NoIdentity,
     /// The record could not be written; the Stick stays protected.
     Io(String),
 }
@@ -79,40 +113,72 @@ pub enum UnlockError {
 impl std::fmt::Display for UnlockError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NameRequired { name } => write!(
-                f,
-                "{name} is a Gig stick: type its name, {name}, to unlock it."
+            Self::NameRequired { name } => write!(f, "{name} is a Gig stick: type its name, {name}, to unlock it."),
+            Self::NameMismatch { name } => write!(f, "That is not this Stick's name. Type {name} exactly to unlock it."),
+            Self::NotAStick => f.write_str("That is not a Stick, so there is nothing to unlock."),
+            Self::NoIdentity => f.write_str(
+                "This Stick's mount cannot be identified, so it stays protected. Eject it and plug it in again.",
             ),
-            Self::NameMismatch { name } => write!(
-                f,
-                "That is not this Stick's name. Type {name} exactly to unlock it."
-            ),
-            Self::NotFound => f.write_str("There is no Stick there."),
-            Self::Io(why) => write!(
-                f,
-                "The Stick could not be unlocked, so it stays protected: {why}"
-            ),
+            Self::Io(why) => write!(f, "The Stick could not be unlocked, so it stays protected: {why}"),
         }
     }
 }
 
 impl std::error::Error for UnlockError {}
 
+/// Why a write was refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Refused {
+    /// The Stick is protected.
+    Protected { root: PathBuf },
+    /// The Stick was removed, or replaced by another, since the write began.
+    Replaced { root: PathBuf },
+    /// The Stick's execution lock could not be taken.
+    Io { root: PathBuf, why: String },
+}
+
+impl Refused {
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        match self {
+            Self::Protected { root } | Self::Replaced { root } | Self::Io { root, .. } => root,
+        }
+    }
+}
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Protected { root } => f.write_str(&refusal(root)),
+            Self::Replaced { root } => write!(
+                f,
+                "{} was removed or replaced while it was being written to: the write stopped there. \
+                 Anything not yet written was not written.",
+                name_of(root)
+            ),
+            Self::Io { root, why } => write!(
+                f,
+                "{} could not be reserved for writing, so nothing was written: {why}",
+                name_of(root)
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Refused {}
+
 #[derive(Default, Serialize, Deserialize)]
 struct Stored {
     #[serde(default)]
     revision: u64,
     #[serde(default)]
-    unlocked: Vec<Mount>,
+    unlocked: Vec<Identity>,
 }
 
-/// The Stick's name: its mounted folder's.
+/// The Stick's name: its root folder's.
 #[must_use]
 pub fn name_of(root: &Path) -> String {
-    root.file_name().map_or_else(
-        || root.display().to_string(),
-        |n| n.to_string_lossy().into_owned(),
-    )
+    root.file_name().map_or_else(|| root.display().to_string(), |n| n.to_string_lossy().into_owned())
 }
 
 /// Whether the Stick carries the Spare stick marker.
@@ -121,78 +187,214 @@ pub fn is_spare(root: &Path) -> bool {
     root.join(SPARE_MARKER).is_file()
 }
 
-/// The mount the Stick at `root` is on now.
-///
-/// # Errors
-///
-/// When nothing is mounted there.
-pub fn mount_of(root: &Path) -> std::io::Result<Mount> {
-    let path = root.canonicalize()?;
-    let meta = std::fs::metadata(&path)?;
-    let (dev, ino) = identity(&meta);
-    Ok(Mount {
-        mount_id: mount_id(&path),
-        path,
-        dev,
-        ino,
-    })
+fn test_mode() -> bool {
+    std::env::var_os("RBXPORT_TEST").is_some_and(|v| v == "1")
 }
 
-#[cfg(unix)]
-fn identity(meta: &std::fs::Metadata) -> (u64, u64) {
-    use std::os::unix::fs::MetadataExt;
-    (meta.dev(), meta.ino())
+// ---------------------------------------------------------------------------
+// What is a Stick
+
+/// What is known about the volume (mount) holding a path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumeFacts {
+    /// Its mount point.
+    pub root: PathBuf,
+    /// Removable or USB storage; `None` when it cannot be told.
+    pub removable: Option<bool>,
+    /// Mounted under the media folders (`/run/media`, `/media`, `/Volumes`).
+    pub media: bool,
+    /// A player export (or the Spare stick marker) at its root; `None` when
+    /// its root cannot be read.
+    pub export: Option<bool>,
 }
 
-#[cfg(not(unix))]
-fn identity(meta: &std::fs::Metadata) -> (u64, u64) {
-    let created = meta
-        .created()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map_or(0, |d| d.as_secs());
-    (0, created)
+/// The rule: a player export makes a Stick; a root that cannot be read is
+/// a Stick when the volume is removable (or may be) or under the media
+/// folders; anything else is not.
+#[must_use]
+pub fn is_stick(facts: &VolumeFacts) -> bool {
+    match facts.export {
+        Some(export) => export,
+        None => facts.media || facts.removable != Some(false),
+    }
 }
 
-/// The id of the mount whose mount point is the longest prefix of `path`.
-fn mount_id(path: &Path) -> Option<u64> {
-    let table = std::fs::read_to_string("/proc/self/mountinfo").ok()?;
-    let mut best: Option<(usize, u64)> = None;
-    for line in table.lines() {
-        let mut fields = line.split(' ');
-        let id = fields.next()?.parse::<u64>().ok()?;
-        let point = fields.nth(3)?.replace("\\040", " ");
-        if path.starts_with(&point) && best.is_none_or(|(len, _)| point.len() > len) {
-            best = Some((point.len(), id));
+/// Whether `path` is on a Stick, and which: decided from the volume.
+#[must_use]
+pub fn classify(path: &Path) -> Volume {
+    let Some(resolved) = resolve(path) else {
+        return Volume::Ordinary;
+    };
+    if test_mode() {
+        if let Some(root) = resolved.ancestors().find(|dir| dir.join(STAND_IN_MARKER).is_file()) {
+            return Volume::Stick { root: root.to_path_buf() };
         }
     }
-    best.map(|(_, id)| id)
-}
-
-fn read_stored(state_dir: &Path) -> Stored {
-    std::fs::read(state_dir.join(FILE))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
-}
-
-/// Whether the Stick at `root` is protected now, read from `state_dir`.
-#[must_use]
-pub fn status(state_dir: &Path, root: &Path) -> Status {
-    let stored = read_stored(state_dir);
-    let unlocked = mount_of(root).is_ok_and(|now| stored.unlocked.contains(&now));
-    Status {
-        protected: !unlocked,
-        spare: is_spare(root),
-        name: name_of(root),
-        revision: stored.revision,
+    match facts_of(&resolved) {
+        Some(facts) if is_stick(&facts) => Volume::Stick { root: facts.root },
+        // An ordinary volume, or not even a mount found: nothing to protect it by.
+        _ => Volume::Ordinary,
     }
 }
 
-/// Whether a write to the Stick at `root` may go ahead.
+/// The facts of the volume holding `resolved` (canonical).
+fn facts_of(resolved: &Path) -> Option<VolumeFacts> {
+    let mount = containing_mount(resolved)?;
+    let media = ["/run/media", "/media", "/Volumes"].iter().any(|dir| mount.point.starts_with(dir));
+    Some(VolumeFacts { export: player_export(&mount.point), removable: removable(&mount.device), media, root: mount.point })
+}
+
+fn player_export(root: &Path) -> Option<bool> {
+    let entries = std::fs::read_dir(root).ok()?;
+    let mut found = false;
+    for entry in entries {
+        let name = entry.ok()?.file_name();
+        let name = name.to_string_lossy();
+        if name.eq_ignore_ascii_case("PIONEER") || name == SPARE_MARKER {
+            found = true;
+        }
+    }
+    Some(found)
+}
+
+struct Mount {
+    point: PathBuf,
+    /// `major:minor`.
+    device: String,
+}
+
+/// The mount whose mount point is the longest prefix of `path`.
+fn containing_mount(path: &Path) -> Option<Mount> {
+    let table = std::fs::read_to_string("/proc/self/mountinfo").ok()?;
+    let mut best: Option<Mount> = None;
+    for line in table.lines() {
+        let fields: Vec<&str> = line.split(' ').collect();
+        let (Some(device), Some(point)) = (fields.get(2), fields.get(4)) else { continue };
+        let point = PathBuf::from(unescape(point));
+        if path.starts_with(&point)
+            && best.as_ref().is_none_or(|b| point.components().count() >= b.point.components().count())
+        {
+            best = Some(Mount { point, device: (*device).to_owned() });
+        }
+    }
+    best
+}
+
+/// `/proc/self/mountinfo`'s octal escapes (`\040` for a space).
+fn unescape(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'\\' && at + 3 < bytes.len() && bytes[at + 1..at + 4].iter().all(u8::is_ascii_digit) {
+            if let Some(code) = std::str::from_utf8(&bytes[at + 1..at + 4]).ok().and_then(|s| u8::from_str_radix(s, 8).ok()) {
+                out.push(code);
+                at += 4;
+                continue;
+            }
+        }
+        out.push(bytes[at]);
+        at += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Whether the block device `major:minor` is removable or on USB.
+fn removable(device: &str) -> Option<bool> {
+    if device.starts_with("0:") {
+        // No block device behind it (tmpfs, a network or virtual filesystem).
+        return Some(false);
+    }
+    let node = Path::new("/sys/dev/block").join(device).canonicalize().ok()?;
+    let usb = node.to_string_lossy().contains("/usb");
+    let flag = |dir: &Path| std::fs::read_to_string(dir.join("removable")).ok().map(|text| text.trim() == "1");
+    // A partition's own folder has no `removable`: its disk's says.
+    match flag(&node).or_else(|| node.parent().and_then(flag)) {
+        Some(removable) => Some(removable || usb),
+        None if usb => Some(true),
+        None => None,
+    }
+}
+
+/// `path` made absolute and canonical through its nearest existing
+/// ancestor, the rest appended (with `..` and `.` resolved).
+fn resolve(path: &Path) -> Option<PathBuf> {
+    let absolute = if path.is_absolute() { path.to_path_buf() } else { std::env::current_dir().ok()?.join(path) };
+    let mut rest = Vec::new();
+    let mut existing = absolute.as_path();
+    loop {
+        if let Ok(found) = existing.canonicalize() {
+            let mut out = found;
+            for part in rest.iter().rev() {
+                match part {
+                    Component::ParentDir => {
+                        out.pop();
+                    }
+                    Component::Normal(name) => out.push(name),
+                    _ => {}
+                }
+            }
+            return Some(out);
+        }
+        let component = existing.components().next_back()?;
+        rest.push(component);
+        existing = existing.parent()?;
+    }
+}
+
+/// The root of the Stick `path` is on, if it is on one.
 #[must_use]
-pub fn is_unlocked(state_dir: &Path, root: &Path) -> bool {
-    !status(state_dir, root).protected
+pub fn stick_root(path: &Path) -> Option<PathBuf> {
+    match classify(path) {
+        Volume::Stick { root } => Some(root),
+        Volume::Ordinary => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Identity
+
+fn boot_id() -> Option<String> {
+    let id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?;
+    let id = id.trim();
+    (!id.is_empty()).then(|| id.to_owned())
+}
+
+/// This mount incarnation of the Stick at `root`; `None` when it cannot be
+/// established (the Stick is then protected).
+#[must_use]
+pub fn identity(root: &Path) -> Option<Identity> {
+    identity_in(root, boot_id())
+}
+
+fn identity_in(root: &Path, boot: Option<String>) -> Option<Identity> {
+    use std::os::unix::fs::MetadataExt as _;
+    let boot = boot?;
+    let root = root.canonicalize().ok()?;
+    let mask = rustix::fs::StatxFlags::from_bits_retain(STATX_MNT_ID_UNIQUE) | rustix::fs::StatxFlags::INO;
+    let found = rustix::fs::statx(rustix::fs::CWD, &root, rustix::fs::AtFlags::empty(), mask).ok()?;
+    if found.stx_mask & STATX_MNT_ID_UNIQUE == 0 {
+        return None;
+    }
+    let meta = std::fs::metadata(&root).ok()?;
+    Some(Identity { root, boot, mount: found.stx_mnt_id, dev: meta.dev(), ino: meta.ino() })
+}
+
+// ---------------------------------------------------------------------------
+// The record
+
+fn read_stored(state_dir: &Path) -> Stored {
+    std::fs::read(state_dir.join(FILE)).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default()
+}
+
+/// Whether the Stick holding `path` is protected now. A path on no Stick
+/// is reported as its own folder, protected (there is nothing to unlock).
+#[must_use]
+pub fn status(state_dir: &Path, path: &Path) -> Status {
+    let stored = read_stored(state_dir);
+    let root = stick_root(path).unwrap_or_else(|| path.to_path_buf());
+    let unlocked = identity(&root).is_some_and(|now| stored.unlocked.contains(&now));
+    Status { protected: !unlocked, spare: is_spare(&root), name: name_of(&root), revision: stored.revision }
 }
 
 /// What the DJ is told when a write is refused because the Stick is protected.
@@ -206,46 +408,48 @@ pub fn refusal(root: &Path) -> String {
     )
 }
 
-/// Unlocks the Stick at `root` for its current mount. A Gig stick needs
+/// Unlocks the Stick holding `path` for its current mount. A Gig stick needs
 /// `typed` to be its name (surrounding spaces aside).
 ///
 /// # Errors
 ///
 /// See [`UnlockError`]; the Stick stays protected.
-pub fn unlock(state_dir: &Path, root: &Path, typed: Option<&str>) -> Result<Status, UnlockError> {
-    let mount = mount_of(root).map_err(|_| UnlockError::NotFound)?;
-    let name = name_of(root);
-    if !is_spare(root) {
+pub fn unlock(state_dir: &Path, path: &Path, typed: Option<&str>) -> Result<Status, UnlockError> {
+    let root = stick_root(path).ok_or(UnlockError::NotAStick)?;
+    let name = name_of(&root);
+    if !is_spare(&root) {
         match typed.map(str::trim) {
             None | Some("") => return Err(UnlockError::NameRequired { name }),
             Some(typed) if typed != name => return Err(UnlockError::NameMismatch { name }),
             Some(_) => {}
         }
     }
+    let now = identity(&root).ok_or(UnlockError::NoIdentity)?;
     change(state_dir, |stored| {
-        stored.unlocked.retain(|m| m.path != mount.path);
-        stored.unlocked.push(mount.clone());
+        stored.unlocked.retain(|m| m.root != now.root);
+        stored.unlocked.push(now.clone());
     })
     .map_err(|e| UnlockError::Io(e.to_string()))?;
-    Ok(status(state_dir, root))
+    Ok(status(state_dir, &root))
 }
 
-/// Protects the Stick at `root` again (the DJ's lock, an eject).
+/// Protects the Stick holding `path` again (the DJ's lock, an eject). Waits
+/// for any write to it to finish first (its execution lock), so a lock is
+/// never acknowledged while something is still writing.
 ///
 /// # Errors
 ///
 /// When the record cannot be written. A Stick whose unlock cannot be
 /// written away is still protected once it is removed or put back.
-pub fn lock(state_dir: &Path, root: &Path) -> std::io::Result<Status> {
-    let path = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    change(state_dir, |stored| {
-        stored.unlocked.retain(|m| m.path != path)
-    })?;
-    Ok(status(state_dir, root))
+pub fn lock(state_dir: &Path, path: &Path) -> std::io::Result<Status> {
+    let root = stick_root(path).unwrap_or_else(|| path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
+    let _drained = exec_lock(state_dir, &root)?;
+    change(state_dir, |stored| stored.unlocked.retain(|m| m.root != root))?;
+    Ok(status(state_dir, &root))
 }
 
-/// One change of the record, under the lock, with a higher revision; mounts
-/// that are no longer there are dropped as it goes.
+/// One change of the record, under the lock, with a higher revision;
+/// unlocks of mounts that are no longer there are dropped as it goes.
 fn change(state_dir: &Path, edit: impl FnOnce(&mut Stored)) -> std::io::Result<()> {
     std::fs::create_dir_all(state_dir)?;
     let turn = std::fs::OpenOptions::new()
@@ -256,9 +460,7 @@ fn change(state_dir: &Path, edit: impl FnOnce(&mut Stored)) -> std::io::Result<(
         .open(state_dir.join(LOCK_FILE))?;
     turn.lock()?;
     let mut stored = read_stored(state_dir);
-    stored
-        .unlocked
-        .retain(|m| mount_of(&m.path).is_ok_and(|now| now == *m));
+    stored.unlocked.retain(|m| identity(&m.root).is_some_and(|now| now == *m));
     edit(&mut stored);
     stored.revision += 1;
     let partial = state_dir.join(format!("{FILE}.{}.partial", std::process::id()));
@@ -274,63 +476,154 @@ fn change(state_dir: &Path, edit: impl FnOnce(&mut Stored)) -> std::io::Result<(
     Ok(())
 }
 
-/// The root of the Stick that `destination` (a folder or a file, existing
-/// or not yet) is on, or `None` for an ordinary folder.
-///
-/// The destination is resolved first (its nearest existing folder made
-/// canonical), then matched against the mounted Sticks' folders and,
-/// walking up, against a folder carrying [`STAND_IN_MARKER`].
-#[must_use]
-pub fn stick_root_of(destination: &Path, mounted: &[PathBuf]) -> Option<PathBuf> {
-    let resolved = resolve(destination)?;
-    let mut best: Option<PathBuf> = None;
-    for mount in mounted {
-        let Ok(mount) = mount.canonicalize() else {
-            continue;
-        };
-        if resolved.starts_with(&mount)
-            && best
-                .as_ref()
-                .is_none_or(|b| mount.as_os_str().len() > b.as_os_str().len())
-        {
-            best = Some(mount);
-        }
-    }
-    if best.is_some() {
-        return best;
-    }
-    resolved
-        .ancestors()
-        .find(|dir| dir.join(STAND_IN_MARKER).is_file())
-        .map(Path::to_path_buf)
+// ---------------------------------------------------------------------------
+// The execution protocol
+
+/// The Stick's execution lock: an exclusive lock on a file in the state
+/// folder, held across processes. Released when dropped.
+#[derive(Debug)]
+pub struct ExecLock {
+    _file: std::fs::File,
 }
 
-/// `path` made absolute and canonical through its nearest existing
-/// ancestor, the rest appended (with `..` and `.` resolved).
-fn resolve(path: &Path) -> Option<PathBuf> {
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir().ok()?.join(path)
-    };
-    let mut rest = Vec::new();
-    let mut existing = absolute.as_path();
-    loop {
-        if let Ok(found) = existing.canonicalize() {
-            let mut out = found;
-            for part in rest.iter().rev() {
-                match part {
-                    std::path::Component::ParentDir => {
-                        out.pop();
-                    }
-                    std::path::Component::Normal(name) => out.push(name),
-                    _ => {}
-                }
-            }
-            return Some(out);
+fn exec_file(state_dir: &Path, root: &Path) -> std::io::Result<std::fs::File> {
+    use std::hash::{Hash as _, Hasher as _};
+    let dir = state_dir.join(EXEC_LOCKS);
+    std::fs::create_dir_all(&dir)?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    root.as_os_str().hash(&mut hasher);
+    std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(dir.join(format!("{:016x}.lock", hasher.finish())))
+}
+
+/// Takes the execution lock of the Stick whose root is `root`, waiting for
+/// whoever holds it.
+///
+/// # Errors
+///
+/// When the lock file cannot be opened.
+pub fn exec_lock(state_dir: &Path, root: &Path) -> std::io::Result<ExecLock> {
+    let file = exec_file(state_dir, root)?;
+    file.lock()?;
+    Ok(ExecLock { _file: file })
+}
+
+/// [`exec_lock`] without waiting: `None` while someone holds it.
+///
+/// # Errors
+///
+/// When the lock file cannot be opened.
+pub fn try_exec_lock(state_dir: &Path, root: &Path) -> std::io::Result<Option<ExecLock>> {
+    let file = exec_file(state_dir, root)?;
+    match file.try_lock() {
+        Ok(()) => Ok(Some(ExecLock { _file: file })),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Err(std::fs::TryLockError::Error(error)) => Err(error),
+    }
+}
+
+/// Leave to write to `path`: nothing to hold for an ordinary folder; for a
+/// Stick, its execution lock and the identity it was unlocked for, held for
+/// as long as this lives.
+#[derive(Debug)]
+pub struct Authorization {
+    stick: Option<(Identity, ExecLock)>,
+    state_dir: PathBuf,
+}
+
+impl Authorization {
+    /// The Stick written to, or `None` for an ordinary folder.
+    #[must_use]
+    pub fn stick(&self) -> Option<&Path> {
+        self.stick.as_ref().map(|(identity, _)| identity.root.as_path())
+    }
+
+    /// Whether the write may go on: the same mount of the Stick is still
+    /// there, and still unlocked. Call before each step of a long write.
+    ///
+    /// # Errors
+    ///
+    /// [`Refused::Replaced`] or [`Refused::Protected`].
+    pub fn recheck(&self) -> Result<(), Refused> {
+        let Some((held, _)) = &self.stick else { return Ok(()) };
+        if identity(&held.root).as_ref() != Some(held) {
+            return Err(Refused::Replaced { root: held.root.clone() });
         }
-        let component = existing.components().next_back()?;
-        rest.push(component);
-        existing = existing.parent()?;
+        if !read_stored(&self.state_dir).unlocked.contains(held) {
+            return Err(Refused::Protected { root: held.root.clone() });
+        }
+        Ok(())
+    }
+}
+
+/// Authorizes a write to `path`: classified from its volume; on a Stick, the
+/// execution lock is taken (waiting for another writer, or a lock or eject
+/// in progress), then the Stick must be unlocked for this very mount.
+///
+/// # Errors
+///
+/// [`Refused`]: nothing may be written.
+pub fn authorize(state_dir: &Path, path: &Path) -> Result<Authorization, Refused> {
+    match classify(path) {
+        Volume::Ordinary => Ok(Authorization { stick: None, state_dir: state_dir.to_path_buf() }),
+        Volume::Stick { root } => authorize_stick(state_dir, &root),
+    }
+}
+
+/// [`authorize`] for a path that is a Stick whatever its volume says (a
+/// Stick's own playlists, settings, format): its root is `root`.
+///
+/// # Errors
+///
+/// [`Refused`]: nothing may be written.
+pub fn authorize_stick(state_dir: &Path, root: &Path) -> Result<Authorization, Refused> {
+    let root = stick_root(root).unwrap_or_else(|| root.canonicalize().unwrap_or_else(|_| root.to_path_buf()));
+    let held = exec_lock(state_dir, &root).map_err(|e| Refused::Io { root: root.clone(), why: e.to_string() })?;
+    let Some(now) = identity(&root) else {
+        return Err(Refused::Protected { root });
+    };
+    if !read_stored(state_dir).unlocked.contains(&now) {
+        return Err(Refused::Protected { root });
+    }
+    Ok(Authorization { stick: Some((now, held)), state_dir: state_dir.to_path_buf() })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn facts(export: Option<bool>, removable: Option<bool>, media: bool) -> VolumeFacts {
+        VolumeFacts { root: PathBuf::from("/x"), removable, media, export }
+    }
+
+    #[test]
+    fn the_rule_reads_the_volume_and_fails_closed_on_removable_media() {
+        assert!(is_stick(&facts(Some(true), Some(false), false)), "a player export, even on a fixed disk");
+        assert!(!is_stick(&facts(Some(false), Some(true), true)), "an external disk with no player export");
+        assert!(is_stick(&facts(None, Some(true), false)), "unreadable and removable");
+        assert!(is_stick(&facts(None, Some(false), true)), "unreadable and under the media folders");
+        assert!(is_stick(&facts(None, None, false)), "unreadable and may be removable");
+        assert!(!is_stick(&facts(None, Some(false), false)), "unreadable fixed disk outside the media folders");
+    }
+
+    #[test]
+    fn without_a_boot_id_a_mount_has_no_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(identity_in(dir.path(), None).is_none());
+        assert!(identity_in(dir.path(), Some("b".into())).is_some(), "statx's unique mount id is available here");
+    }
+
+    #[test]
+    fn mount_points_with_spaces_are_read() {
+        assert_eq!(unescape("/run/media/go/DJ\\040STICK"), "/run/media/go/DJ STICK");
+    }
+
+    #[test]
+    fn the_root_filesystem_is_not_a_stick() {
+        assert_eq!(classify(Path::new("/usr/share")), Volume::Ordinary);
     }
 }

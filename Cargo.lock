@@ -7227,6 +7227,7 @@ dependencies = [
 name = "wreckordbox-stick-protection"
 version = "1.10.0"
 dependencies = [
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",
