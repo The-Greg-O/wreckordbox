@@ -296,11 +296,7 @@ pub(crate) fn answer(
     request: &Request,
     lookup: &dyn Fn(&str) -> Result<ParentAudio, ServiceError>,
 ) -> Result<Value, ServiceError> {
-    let decisions = Decisions {
-        sidecar: stems.sidecar()?,
-        stems,
-        lookup,
-    };
+    let decisions = Decisions::new(stems, lookup)?;
     let answer = match request.command.as_str() {
         commands::DECISIONS_CREATE => {
             serde_json::to_value(decisions.create(facts::arguments(request)?)?)
@@ -346,7 +342,20 @@ struct Given<'a> {
     then: &'a Then,
 }
 
-impl Decisions<'_> {
+impl<'a> Decisions<'a> {
+    /// The Decisions of the service's Sidecar, opening it if need be.
+    /// `lookup` finds a track in the Library.
+    pub(crate) fn new(
+        stems: &'a Arc<Stems>,
+        lookup: &'a dyn Fn(&str) -> Result<ParentAudio, ServiceError>,
+    ) -> Result<Self, ServiceError> {
+        Ok(Self {
+            sidecar: stems.sidecar()?,
+            stems,
+            lookup,
+        })
+    }
+
     fn existing(&self, id: i64) -> Result<Decision, ServiceError> {
         self.sidecar
             .decision(id)
@@ -354,6 +363,7 @@ impl Decisions<'_> {
             .ok_or_else(|| sidecar_error(&SidecarError::NoDecision(id)))
     }
 
+    /// Asks a Decision, as `decisions.create` does, and announces it.
     pub(crate) fn create(&self, create: CreateDecision) -> Result<Decision, ServiceError> {
         let track_id = match &create.track {
             Some(track) => Some((self.lookup)(track)?.parent().id.clone()),
@@ -403,7 +413,10 @@ impl Decisions<'_> {
         })
     }
 
-    fn answer(&self, answer: AnswerDecision) -> Result<Answered, ServiceError> {
+    /// Answers a Decision as the Decider named, as `decisions.answer`
+    /// does: checked, recorded with its Fact if one is asked for, and
+    /// announced.
+    pub(crate) fn answer(&self, answer: AnswerDecision) -> Result<Answered, ServiceError> {
         let decision = self.existing(answer.id)?;
         let decider = facts::source(&answer.decider)?;
         // The DJ's answer is the DJ's word, as the DJ's Fact is.

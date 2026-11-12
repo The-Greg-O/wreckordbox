@@ -81,14 +81,27 @@ fn a_store_from_before_decisions_is_brought_up_to_date_and_keeps_its_facts() {
             })
             .unwrap();
     }
-    // Take the store back to what version 1 held: no Decision tables.
+    // Take the store back to what version 1 held: only its four tables.
     {
         let db = rusqlite::Connection::open(folder.join("sidecar.db")).unwrap();
-        db.execute_batch(
-            "DROP TABLE decision_answer; DROP TABLE decision;
-             UPDATE meta SET value = '1' WHERE key = 'schema_version';",
-        )
-        .unwrap();
+        let later: Vec<String> = db
+            .prepare(
+                "SELECT name FROM sqlite_master WHERE type = 'table'
+                 AND name NOT IN ('meta', 'kind', 'run', 'fact') AND name NOT LIKE 'sqlite_%'",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert!(later.contains(&"decision".to_owned()), "{later:?}");
+        db.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
+        for table in later {
+            db.execute_batch(&format!("DROP TABLE \"{table}\""))
+                .unwrap();
+        }
+        db.execute_batch("UPDATE meta SET value = '1' WHERE key = 'schema_version'")
+            .unwrap();
     }
 
     let sidecar = Sidecar::open(&folder).unwrap();
@@ -104,7 +117,7 @@ fn a_store_from_before_decisions_is_brought_up_to_date_and_keeps_its_facts() {
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(version, "2");
+    assert!(version.parse::<u32>().unwrap() >= 2, "{version}");
 }
 
 #[test]
