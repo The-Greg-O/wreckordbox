@@ -27,6 +27,7 @@
 //! No dependency on the desktop framework, the Library service or any
 //! rekordbox-format crate.
 
+pub mod attachments;
 mod audio;
 mod fingerprint;
 mod kinds;

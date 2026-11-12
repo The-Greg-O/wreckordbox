@@ -168,6 +168,8 @@ pub(crate) fn answers(command: &str) -> bool {
 pub(crate) struct ParentAudio {
     parent: Parent,
     path: PathBuf,
+    pub(crate) identity: wreckordbox_sidecar::attachments::IdentifyingFields,
+    pub(crate) index: Arc<rbl_index::Library>,
 }
 
 impl ParentAudio {
@@ -191,7 +193,23 @@ pub(crate) fn parent(library: &OpenLibrary, id: &str) -> Result<ParentAudio, Ser
         ));
     };
     let at = row as usize;
+    let mix_name = library.with_db(|db| {
+        db.connection()
+            .query_row(
+                "SELECT COALESCE(Subtitle, '') FROM djmdContent WHERE ID = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .map_err(|e| ServiceError::new(service_codes::SERVICE_FAILED, e.to_string()))
+    })?;
     Ok(ParentAudio {
+        identity: wreckordbox_sidecar::attachments::IdentifyingFields {
+            title: index.title.get(at).to_owned(),
+            artist: index.artist_name(row).to_owned(),
+            mix_name,
+            duration: index.length_sec.get(at).copied().unwrap_or(0),
+        },
+        index: Arc::clone(&index),
         parent: Parent {
             id: index.ids.get(at).copied().unwrap_or(0).to_string(),
             title: index.title.get(at).to_owned(),
@@ -303,7 +321,9 @@ impl Stems {
     }
 
     fn separate(self: &Arc<Self>, found: ParentAudio) -> Result<Separated, ServiceError> {
-        let ParentAudio { parent, path } = found;
+        let fingerprint = fingerprint(found.parent(), found.path())?;
+        let (_, marked_stale) = self.observe_audio(&found, Some(&fingerprint))?;
+        let ParentAudio { parent, path, .. } = found;
         let job = {
             // Held while deciding, so two requests for one track cannot
             // both decide to separate it.
@@ -321,13 +341,6 @@ impl Stems {
                 Arc::clone(job)
             } else {
                 let sidecar = self.sidecar()?;
-                let fingerprint = fingerprint(&parent, &path)?;
-                let marked_stale = sidecar
-                    .mark_stale(&parent.id, &fingerprint)
-                    .map_err(|e| sidecar_error(&e))?;
-                if !marked_stale.is_empty() {
-                    self.changed(&parent.id, None, &marked_stale);
-                }
                 let current = sidecar
                     .current_stems(&parent.id, &fingerprint)
                     .map_err(|e| sidecar_error(&e))?
@@ -452,19 +465,10 @@ impl Stems {
     }
 
     fn show(&self, found: ParentAudio) -> Result<TrackStems, ServiceError> {
-        let ParentAudio { parent, path } = found;
+        let fingerprint = fingerprint(found.parent(), found.path()).ok();
+        self.observe_audio(&found, fingerprint.as_ref())?;
+        let ParentAudio { parent, .. } = found;
         let sidecar = self.sidecar()?;
-        // With the audio at hand, Stems made from other audio are found
-        // out here too, so nothing reads stale Stems as current.
-        let fingerprint = fingerprint(&parent, &path).ok();
-        if let Some(fingerprint) = &fingerprint {
-            let marked_stale = sidecar
-                .mark_stale(&parent.id, fingerprint)
-                .map_err(|e| sidecar_error(&e))?;
-            if !marked_stale.is_empty() {
-                self.changed(&parent.id, None, &marked_stale);
-            }
-        }
         let (current, previous): (Vec<StemSet>, Vec<StemSet>) = sidecar
             .stems(&parent.id)
             .map_err(|e| sidecar_error(&e))?
@@ -472,7 +476,9 @@ impl Stems {
             .partition(|set| set.is_current() && fingerprint.as_ref() == Some(&set.fingerprint));
         Ok(TrackStems {
             track: parent,
-            stems: current.into_iter().find(|set| set.stems.iter().all(|stem| stem.path.is_file())),
+            stems: current
+                .into_iter()
+                .find(|set| set.stems.iter().all(|stem| stem.path.is_file())),
             previous,
         })
     }
@@ -514,7 +520,7 @@ pub(crate) fn fingerprint(parent: &Parent, path: &Path) -> Result<Fingerprint, S
     })
 }
 
-fn sidecar_error(error: &SidecarError) -> ServiceError {
+pub(crate) fn sidecar_error(error: &SidecarError) -> ServiceError {
     let code = match error {
         SidecarError::StemLength { .. } => codes::STEM_LENGTH_MISMATCH,
         SidecarError::StemSet(_) | SidecarError::Audio { .. } => codes::SEPARATION_FAILED,

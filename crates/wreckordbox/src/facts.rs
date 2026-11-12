@@ -393,7 +393,11 @@ fn recorded_text(recorded: &Recorded) -> String {
 
 fn shown_text(shown: &TrackFacts) -> String {
     let track = &shown.track;
-    if shown.facts.is_empty() && shown.stale.is_empty() && shown.unverified.is_empty() {
+    if shown.facts.is_empty()
+        && shown.stale.is_empty()
+        && shown.unverified.is_empty()
+        && shown.review.is_empty()
+    {
         return format!("Track {} \"{}\" has no Facts.", track.id, track.title);
     }
     let mut rows = vec![[
@@ -417,7 +421,23 @@ fn shown_text(shown: &TrackFacts) -> String {
             rows.push(row);
         }
     }
-    format!("Track {} \"{}\"\n{}", track.id, track.title, table(&rows))
+    let mut text = format!("Track {} \"{}\"\n{}", track.id, track.title, table(&rows));
+    for candidate in &shown.review {
+        let _ = write!(
+            text,
+            "\nAttachment held for review from track {}: {}.",
+            candidate.from_track, candidate.reason
+        );
+    }
+    for attached in &shown.reattached {
+        let _ = write!(
+            text,
+            "\nRe-attached {} Facts from track {} by fingerprint.",
+            attached.fact_ids.len(),
+            attached.from_track
+        );
+    }
+    text
 }
 
 fn fact_row(fact: &Fact) -> [String; 8] {

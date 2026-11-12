@@ -24,7 +24,9 @@ use crate::{io, Fingerprint, Result, SidecarError};
 
 /// Raised when a stored shape changes. A store from a newer wreckordbox is
 /// refused rather than guessed at.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
+
+const MIGRATIONS: &[(u32, &str)] = &[(2, crate::attachments::SCHEMA)];
 
 const DATABASE_FILE: &str = "sidecar.db";
 /// Where a tool writes before its result is accepted. Emptied on open.
@@ -311,7 +313,7 @@ impl Sidecar {
             [],
             |row| row.get(0),
         )?;
-        if has_meta {
+        let found = if has_meta {
             let found: u32 = db
                 .query_row(
                     "SELECT value FROM meta WHERE key = 'schema_version'",
@@ -328,15 +330,28 @@ impl Sidecar {
                     supported: SCHEMA_VERSION,
                 });
             }
+            found
         } else {
             let tx = db.transaction()?;
             tx.execute_batch(SCHEMA)?;
             tx.execute(
                 "INSERT INTO meta (key, value) VALUES ('schema_version', ?1)",
-                [SCHEMA_VERSION.to_string()],
+                ["1"],
             )?;
             tx.commit()?;
+            1
+        };
+        let tx = db.transaction()?;
+        for &(version, sql) in MIGRATIONS {
+            if version > found {
+                tx.execute_batch(sql)?;
+                tx.execute(
+                    "UPDATE meta SET value = ?1 WHERE key = 'schema_version'",
+                    [version.to_string()],
+                )?;
+            }
         }
+        tx.commit()?;
         Ok(Self {
             dir,
             db: Mutex::new(db),
@@ -439,7 +454,7 @@ impl Sidecar {
     pub fn facts(&self, track_id: &str, kind: &str) -> Result<Vec<Fact>> {
         let db = self.db();
         let mut statement = db.prepare(&select(
-            "WHERE fact.track_id = ?1 AND fact.kind = ?2 ORDER BY fact.id DESC",
+            "WHERE fact.effective_track_id = ?1 AND fact.kind = ?2 ORDER BY fact.id DESC",
         ))?;
         let facts = statement
             .query_map(params![track_id, kind], read_fact)?
@@ -450,8 +465,9 @@ impl Sidecar {
     /// Every Fact of every kind recorded for the track, newest first.
     pub fn facts_of_track(&self, track_id: &str) -> Result<Vec<Fact>> {
         let db = self.db();
-        let mut statement =
-            db.prepare(&select("WHERE fact.track_id = ?1 ORDER BY fact.id DESC"))?;
+        let mut statement = db.prepare(&select(
+            "WHERE fact.effective_track_id = ?1 ORDER BY fact.id DESC",
+        ))?;
         let facts = statement
             .query_map([track_id], read_fact)?
             .collect::<rusqlite::Result<Vec<Fact>>>()?;
@@ -474,7 +490,7 @@ impl Sidecar {
         let db = self.db();
         let mut statement = db.prepare(
             "UPDATE fact SET stale_at = ?1
-             WHERE track_id = ?2 AND stale_at IS NULL
+             WHERE id IN (SELECT id FROM attached_fact WHERE effective_track_id = ?2) AND stale_at IS NULL
                AND fingerprint IS NOT NULL AND fingerprint <> ?3
                AND kind IN (SELECT name FROM kind WHERE nature = 'measurement')
              RETURNING id",
@@ -486,7 +502,7 @@ impl Sidecar {
         Ok(ids)
     }
 
-    fn db(&self) -> MutexGuard<'_, Connection> {
+    pub(crate) fn db(&self) -> MutexGuard<'_, Connection> {
         // Nothing is left half-done under this lock: a write is one
         // statement or one transaction.
         self.db.lock().unwrap_or_else(PoisonError::into_inner)
@@ -555,7 +571,7 @@ fn record_in(tx: &rusqlite::Transaction, new: &NewFact) -> Result<Fact> {
     let id = tx.last_insert_rowid();
     tx.execute(
         "UPDATE fact SET superseded_at = ?1, superseded_by = ?2
-         WHERE track_id = ?3 AND kind = ?4 AND source_kind = ?5 AND source_name = ?6
+         WHERE id IN (SELECT id FROM attached_fact WHERE effective_track_id = ?3) AND kind = ?4 AND source_kind = ?5 AND source_name = ?6
            AND superseded_at IS NULL AND id <> ?2",
         params![
             at,
@@ -572,10 +588,10 @@ fn record_in(tx: &rusqlite::Transaction, new: &NewFact) -> Result<Fact> {
 
 fn select(rest: &str) -> String {
     format!(
-        "SELECT fact.id, fact.track_id, fact.fingerprint, fact.kind, kind.nature, fact.value,
+        "SELECT fact.id, fact.effective_track_id, fact.fingerprint, fact.kind, kind.nature, fact.value,
                 fact.source_kind, fact.source_name, fact.confidence, fact.run_id, fact.recorded_at,
                 fact.stale_at, fact.superseded_at, fact.superseded_by
-         FROM fact JOIN kind ON kind.name = fact.kind {rest}"
+         FROM attached_fact AS fact JOIN kind ON kind.name = fact.kind {rest}"
     )
 }
 
@@ -603,7 +619,7 @@ fn read_fact(row: &Row) -> rusqlite::Result<Fact> {
     })
 }
 
-fn now() -> i64 {
+pub(crate) fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .ok()
