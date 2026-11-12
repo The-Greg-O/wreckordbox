@@ -96,6 +96,29 @@ impl KeyTagWrite {
     }
 }
 
+/// The files one key edit wrote, as its history entry holds them: the
+/// part of the entry the Library core steps without knowing what it is.
+pub(crate) struct KeyTagWrites(pub(crate) Vec<KeyTagWrite>);
+
+impl rbl_library::history::OutsideSteps for KeyTagWrites {
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn check(&self, undo: bool, label: &str) -> Result<(), rbl_db::DbError> {
+        check_restore(&self.0, undo, label)
+    }
+
+    fn step(&self, undo: bool, label: &str) -> Result<(), rbl_db::DbError> {
+        restore(&self.0, undo, label)
+    }
+
+    fn revert(&self, undo: bool) -> (usize, usize) {
+        let written: Vec<_> = if undo { self.0.iter().rev().collect() } else { self.0.iter().collect() };
+        (revert(&written, undo), self.0.len())
+    }
+}
+
 /// [`write_logged`] for an Info panel key edit, keeping what the history
 /// needs to put each file back (#507): only the files whose tag this wrote.
 /// A file passed over (no path, a format rekordbox writes no key into, a

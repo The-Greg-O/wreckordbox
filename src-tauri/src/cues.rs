@@ -248,7 +248,7 @@ async fn edit_cues<R: tauri::Runtime>(
             Err(refused) => return Err(write_error(refused)),
         };
         match record {
-            Record::Entry if !revision.is_empty() => state.edit_history.lock().record(LibraryEdit::Cues(revision), label),
+            Record::Entry if !revision.is_empty() => state.edit_history().lock().record(LibraryEdit::Cues(revision), label),
             Record::Entry => {}
             Record::Into(whole) => match &mut *whole.lock() {
                 Some(earlier) => earlier.extend(revision),
@@ -414,7 +414,7 @@ pub async fn convert_memory_cues_to_hot<R: tauri::Runtime>(
         let writing = Arc::clone(&state);
         blocking("convert_memory_cues_to_hot", move || {
             let _gate = writing.edit_gate().lock();
-            writing.edit_history.lock().record(LibraryEdit::Cues(revision), "Convert Memory Cues to Hot Cues");
+            writing.edit_history().lock().record(LibraryEdit::Cues(revision), "Convert Memory Cues to Hot Cues");
             Ok(())
         })
         .await?;

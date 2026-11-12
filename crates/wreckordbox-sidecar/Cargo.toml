@@ -13,6 +13,8 @@ workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+# The kinds file, which the DJ edits by hand.
+toml = "0.8"
 # The Sidecar's own small database. The same build of SQLite the Library
 # crates use, so the workspace compiles one; the Sidecar's file is plain.
 rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }

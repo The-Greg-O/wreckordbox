@@ -18,7 +18,7 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import { artworkUrl, attemptUrl, retryDelay } from "@/ipc/artwork";
+import { artworkCrossOrigin, artworkUrl, attemptUrl, retryDelay } from "@/ipc/artwork";
 
 export interface ArtworkProps {
   trackId: string;
@@ -83,11 +83,15 @@ export function Artwork({ trackId, className, lazy = false }: ArtworkProps) {
 
   // Outside Tauri there is no scheme to fetch from, so there is no image.
   if (src === undefined) return null;
+  const crossOrigin = artworkCrossOrigin(src);
 
   return (
     <img
       ref={ref}
       className={className}
+      // Before `src`, so the first request is already made with it: the Linux
+      // webview refuses a plain one to a page from the dev server (#44).
+      {...(crossOrigin ? { crossOrigin } : {})}
       src={attemptUrl(src, attempt)}
       alt=""
       // Read by CSS: hidden unless shown, and the ground behind it is only

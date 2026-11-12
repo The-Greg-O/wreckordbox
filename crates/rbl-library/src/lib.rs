@@ -10,6 +10,7 @@
 //! opens an [`rbl_db::write::Writer`], which refuses while rekordbox is
 //! running and, under `RBXPORT_TEST`, for a detected real Library.
 
+pub mod history;
 pub mod my_tags;
 pub mod read;
 
@@ -91,7 +92,7 @@ pub enum History {
     /// The caller keeps the history itself (recording an entry, Undo, Redo).
     Caller,
     /// The write is outside the history: if it changed any row, the
-    /// [`Host`] is told, so the history's Redo branch can end.
+    /// history's Redo branch ends and the [`Host`] is told.
     Outside,
 }
 
@@ -106,8 +107,16 @@ pub trait Host {
         Ok(())
     }
 
-    /// A write outside the edit history changed at least one row.
+    /// A write outside the edit history changed at least one row. The core
+    /// has ended the history's Redo branch itself.
     fn wrote_outside_history(&self) {}
+
+    /// What the edit history offers changed without a command of the
+    /// holder's own doing it: a write outside the history ended a Redo
+    /// branch, or [`LibraryCore::recorded_edit`] recorded an entry (a
+    /// client's edit, for a window hosting the service). Called under the
+    /// edit gate with no other lock of the core's held.
+    fn history_changed(&self) {}
 
     /// The index is about to be replaced by `next`, read afresh. Called
     /// before the core takes its own lock.
@@ -205,6 +214,9 @@ pub struct LibraryCore {
     /// Why nothing may be written through this core, when its holder has
     /// said so. See [`Self::refuse_writes`].
     refusal: parking_lot::Mutex<Option<String>>,
+    /// Undo and Redo of the edits made through this core, whoever made
+    /// them. A leaf lock; see [`Self::history`].
+    history: parking_lot::Mutex<history::EditHistory>,
 }
 
 type Watcher = Box<dyn FnMut(Change) -> bool + Send>;
@@ -221,6 +233,7 @@ impl LibraryCore {
             inner: RwLock::new(Inner { next_view_id: 1, generation: 1, ..Inner::default() }),
             watchers: parking_lot::Mutex::new(Vec::new()),
             refusal: parking_lot::Mutex::new(None),
+            history: parking_lot::Mutex::new(history::EditHistory::default()),
         }
     }
 
@@ -317,8 +330,9 @@ impl LibraryCore {
     /// refresh, so a small edit neither pays for another key derivation nor
     /// races a writer.
     ///
-    /// With [`History::Outside`], a write that changed any row tells the
-    /// host, as after any edit the history does not record ("a non-recorded
+    /// With [`History::Outside`], a write that changed any row ends the
+    /// history's Redo branch and tells the host, as after any edit the
+    /// history does not record ("a non-recorded
     /// edit after an undo starts a new branch"). That holds for every such
     /// writer at once (cue edits, analysis, grid saves, players over LINK,
     /// imports) rather than each having to remember (#506).
@@ -361,7 +375,19 @@ impl LibraryCore {
             edit_ms = edit_ms - open_ms, refresh_ms = started.elapsed().as_millis() - edit_ms,
             "library write phases");
         if wrote && history == History::Outside {
+            // A Redo replayed over this write would put back values it has
+            // since changed. Undo stays: each entry refuses to run over rows
+            // changed since.
+            let ended = {
+                let mut history = self.history.lock();
+                let had = history.redo_label().is_some();
+                history.clear_redo();
+                had
+            };
             host.wrote_outside_history();
+            if ended {
+                host.history_changed();
+            }
         }
         result
     }

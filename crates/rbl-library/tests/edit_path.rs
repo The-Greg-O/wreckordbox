@@ -26,6 +26,7 @@ fn rating_of(core: &LibraryCore, track: &str) -> u8 {
 struct Recorder {
     recoveries: AtomicUsize,
     outside_history: AtomicUsize,
+    history_changes: AtomicUsize,
     replaced: AtomicUsize,
     refuse_recovery: AtomicBool,
 }
@@ -37,6 +38,9 @@ impl Host for Recorder {
     }
     fn wrote_outside_history(&self) {
         self.outside_history.fetch_add(1, Ordering::SeqCst);
+    }
+    fn history_changed(&self) {
+        self.history_changes.fetch_add(1, Ordering::SeqCst);
     }
     fn library_replaced(&self, _another_library: bool) {
         self.replaced.fetch_add(1, Ordering::SeqCst);
@@ -291,4 +295,68 @@ fn writes_are_refused_with_the_holders_reason_until_it_allows_them_again() {
     core.refuse_writes(None);
     core.edit(&NoHost, History::Outside, Touched::Metadata(vec![track.clone()]), |w| w.set_rating(&track, 5)).unwrap();
     assert_eq!(rating_of(&core, &track), 5);
+}
+
+#[test]
+fn a_recorded_edit_is_undone_and_redone_and_an_outside_write_ends_the_redo_branch() {
+    use rbl_library::history::{LibraryEdit, StepError, TRACK_EDIT};
+
+    let dir = tempfile::tempdir().unwrap();
+    let core = core_in(dir.path());
+    let host = Recorder::default();
+    let (track, other) = (rbl_db::fixture::track_id(1), rbl_db::fixture::track_id(2));
+    let rate = |stars: u8| {
+        core.recorded_edit(&host, Touched::Metadata(vec![track.clone()]), TRACK_EDIT, |w| {
+            let (_, edit) = w.set_rating_with_undo(&track, stars)?;
+            Ok(((), LibraryEdit::Track(vec![edit])))
+        })
+        .unwrap()
+    };
+
+    rate(4);
+    assert_eq!(core.history().lock().undo_label(), Some(TRACK_EDIT));
+    assert_eq!(host.history_changes.load(Ordering::SeqCst), 1, "the host is told an entry was recorded");
+    // The stars it already has: nothing to record, nobody told.
+    rate(4);
+    assert_eq!(host.history_changes.load(Ordering::SeqCst), 1);
+
+    let undone = core.step_history(&host, true).unwrap();
+    assert_eq!((rating_of(&core, &track), undone.label, undone.generation), (0, TRACK_EDIT, core.generation()));
+    assert!(matches!(core.step_history(&host, true), Err(StepError::Nothing)));
+    core.step_history(&host, false).unwrap();
+    assert_eq!(rating_of(&core, &track), 4);
+    assert_eq!(host.history_changes.load(Ordering::SeqCst), 1, "a step is the caller's own to announce");
+
+    // A write the history does not record ends the Redo branch, and only
+    // then is the host told the history changed.
+    core.step_history(&host, true).unwrap();
+    core.edit(&host, History::Outside, Touched::Metadata(vec![other.clone()]), |w| w.set_rating(&other, 1)).unwrap();
+    assert_eq!(core.history().lock().redo_label(), None);
+    assert_eq!(host.history_changes.load(Ordering::SeqCst), 2);
+    core.edit(&host, History::Outside, Touched::Metadata(vec![other.clone()]), |w| w.set_rating(&other, 2)).unwrap();
+    assert_eq!(host.history_changes.load(Ordering::SeqCst), 2, "no Redo branch to end");
+}
+
+#[test]
+fn undo_refuses_a_value_changed_outside_the_history_and_drops_only_that_entry() {
+    use rbl_library::history::{LibraryEdit, StepError, TRACK_EDIT};
+
+    let dir = tempfile::tempdir().unwrap();
+    let core = core_in(dir.path());
+    let (first, second) = (rbl_db::fixture::track_id(1), rbl_db::fixture::track_id(2));
+    for track in [&first, &second] {
+        core.recorded_edit(&NoHost, Touched::Metadata(vec![track.clone()]), TRACK_EDIT, |w| {
+            let (_, edit) = w.set_rating_with_undo(track, 4)?;
+            Ok(((), LibraryEdit::Track(vec![edit])))
+        })
+        .unwrap();
+    }
+    core.edit(&NoHost, History::Outside, Touched::Metadata(vec![second.clone()]), |w| w.set_rating(&second, 1)).unwrap();
+
+    let refused = core.step_history(&NoHost, true).unwrap_err();
+
+    assert!(matches!(refused, StepError::Conflict { label: TRACK_EDIT, .. }), "{refused:?}");
+    assert_eq!(rating_of(&core, &second), 1, "the newer value stays");
+    core.step_history(&NoHost, true).unwrap();
+    assert_eq!(rating_of(&core, &first), 0, "the entry before it still runs");
 }

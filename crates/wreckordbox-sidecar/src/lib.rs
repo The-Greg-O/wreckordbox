@@ -13,6 +13,10 @@
 //! - [`Sidecar::open`] opens (or makes) the store in a folder.
 //! - [`Sidecar::begin_run`], [`Sidecar::record`], [`Sidecar::facts`] and
 //!   [`Sidecar::mark_stale`] are the general interface a new kind uses.
+//! - [`Kinds`] is the declared kinds: the built-in ones and the DJ's own
+//!   in the Sidecar folder's [`KINDS_FILE`], each with the type of its
+//!   value. [`Sidecar::record`] itself takes any kind; whoever records a
+//!   Fact for someone else checks it against [`Kinds`] first.
 //! - [`Sidecar::record_stems`] and [`Sidecar::stems`] are the Stems kind.
 //! - [`fingerprint_file`] fingerprints a track's audio.
 //!
@@ -25,6 +29,7 @@
 
 mod audio;
 mod fingerprint;
+mod kinds;
 pub mod stems;
 mod store;
 
@@ -32,7 +37,8 @@ use std::path::{Path, PathBuf};
 
 pub use audio::{audio_info, AudioInfo};
 pub use fingerprint::{fingerprint_file, Fingerprint};
-pub use store::{Fact, Kind, Nature, NewFact, RunId, Sidecar, Source, SourceKind};
+pub use kinds::{Declaration, Kinds, ValueType, KINDS_FILE};
+pub use store::{Fact, Kind, Nature, NewFact, Run, RunId, Sidecar, Source, SourceKind};
 
 /// The Sidecar's folder when nothing says otherwise: beside the Library's
 /// `master.db`, in the same folder.
@@ -72,6 +78,9 @@ pub enum SidecarError {
         declared: Nature,
         asked: Nature,
     },
+    /// The kinds file does not parse, or declares a kind badly.
+    #[error("the kinds file {} is refused: {why}", path.display())]
+    KindsFile { path: PathBuf, why: String },
     /// A Fact that cannot be recorded as it stands.
     #[error("{0}")]
     Invalid(String),

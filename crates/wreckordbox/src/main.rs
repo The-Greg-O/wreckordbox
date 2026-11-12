@@ -4,6 +4,8 @@
 //! when none is running. Results go to standard output, as text or with
 //! `--json` as JSON; errors go to standard error with a non-zero status.
 
+mod facts;
+mod intake;
 mod mytag_edits;
 mod reading;
 mod stems;
@@ -67,6 +69,23 @@ enum Commands {
     Stems {
         #[command(subcommand)]
         command: stems::StemCommands,
+    },
+    /// Record and read Facts: what is known about a track, kept in the
+    /// Sidecar with its source and confidence. Never changes the Library.
+    Facts {
+        #[command(subcommand)]
+        command: facts::FactCommands,
+    },
+    /// Start and end Runs: pieces of work whose changes belong together.
+    Runs {
+        #[command(subcommand)]
+        command: facts::RunCommands,
+    },
+    /// The Intake and Problems queues: tracks with no Prep colour, tracks
+    /// marked Problem, and what each still needs.
+    Intake {
+        #[command(subcommand)]
+        command: intake::IntakeCommands,
     },
     /// Run the Library service in the foreground until interrupted.
     ///
@@ -202,6 +221,15 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
         } => print(&tracks::query(&mut connect(&config)?, args, cli.json)?),
         Commands::Stems { command } => {
             print(&stems::run(&mut connect(&config)?, cli.json, command)?);
+        }
+        Commands::Facts { command } => {
+            print(&facts::facts(&mut connect(&config)?, cli.json, command)?);
+        }
+        Commands::Runs { command } => {
+            print(&facts::runs(&mut connect(&config)?, cli.json, command)?);
+        }
+        Commands::Intake { command } => {
+            print(&intake::run(&mut connect(&config)?, cli.json, command)?);
         }
         Commands::Serve { spawned: true } => {
             return Ok(if wreckordbox_service::serve_spawned(config) {
