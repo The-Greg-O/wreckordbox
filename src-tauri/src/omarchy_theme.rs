@@ -106,7 +106,9 @@ pub fn layered(
         .filter(|_| follows)
         .map(parse_colors)
         .filter(|palette| roles_from_palette(palette).is_some());
-    let over = file.map(|file| &file.colours).filter(|colours| !colours.is_empty());
+    let over = file
+        .map(|file| &file.colours)
+        .filter(|colours| !colours.is_empty());
     let roles = match (base, over) {
         (base, None) => base.as_ref().and_then(roles_from_palette),
         (base, Some(over)) => {
@@ -890,17 +892,23 @@ color15 = "#ddc7a1"
 
     #[test]
     fn with_no_theme_file_the_omarchy_theme_is_shown_as_it_is() {
-        let theme = layered(Some(TOKYO_NIGHT), None, || Some("JetBrainsMono Nerd Font".into()));
+        let theme = layered(Some(TOKYO_NIGHT), None, || {
+            Some("JetBrainsMono Nerd Font".into())
+        });
         assert_eq!(theme.roles, roles_from_colors(TOKYO_NIGHT));
         assert_eq!(theme.font.as_deref(), Some("JetBrainsMono Nerd Font"));
-        assert!(theme.problems.is_empty());
+        assert_eq!(theme.problems, []);
         assert_eq!(layered(None, None, no_font).roles, None);
     }
 
     #[test]
     fn a_file_overriding_one_colour_changes_only_that_role() {
         let omarchy = roles_from_colors(TOKYO_NIGHT).unwrap();
-        let theme = layered(Some(TOKYO_NIGHT), Some(&file("muted = \"#ff00ff\"\n")), no_font);
+        let theme = layered(
+            Some(TOKYO_NIGHT),
+            Some(&file("muted = \"#ff00ff\"\n")),
+            no_font,
+        );
         assert_eq!(
             theme.roles,
             Some(ThemeRoles {
@@ -957,7 +965,11 @@ color15 = "#ddc7a1"
 
     #[test]
     fn follow_none_with_no_colours_is_exactly_the_built_in_look() {
-        let theme = layered(Some(TOKYO_NIGHT), Some(&file("follow = \"none\"\n")), no_font);
+        let theme = layered(
+            Some(TOKYO_NIGHT),
+            Some(&file("follow = \"none\"\n")),
+            no_font,
+        );
         // No roles: the stylesheet's fallbacks, which are the built-in look.
         assert_eq!(theme.roles, None);
     }
@@ -978,7 +990,10 @@ color15 = "#ddc7a1"
             Some(&file("selection = \"#445566\"\n")),
             no_font,
         );
-        assert_eq!(theme.roles.map(|roles| roles.accent), Some("#1373eb".into()));
+        assert_eq!(
+            theme.roles.map(|roles| roles.accent),
+            Some("#1373eb".into())
+        );
     }
 
     #[test]
@@ -986,20 +1001,29 @@ color15 = "#ddc7a1"
         let pair = |one: &str, other: &str| {
             contrast(rgb(one).unwrap_or_default(), rgb(other).unwrap_or_default())
         };
-        for accent in ["#a9b1d6", "#808080", "#ffff00", "#000000", "#0e0e14", "#ffffff", "#7f7f7f"] {
+        for accent in [
+            "#a9b1d6", "#808080", "#ffff00", "#000000", "#0e0e14", "#ffffff", "#7f7f7f",
+        ] {
             let text = format!("accent = \"{accent}\"\n");
             for omarchy in [Some(TOKYO_NIGHT), None] {
                 let roles = layered(omarchy, Some(&file(&text)), no_font).roles.unwrap();
                 assert_eq!(roles.accent, accent);
-                assert!(pair(&roles.on_accent, &roles.accent) >= 4.5, "{} on {accent}", roles.on_accent);
+                assert!(
+                    pair(&roles.on_accent, &roles.accent) >= 4.5,
+                    "{} on {accent}",
+                    roles.on_accent
+                );
             }
         }
     }
 
     #[test]
     fn the_files_faces_and_sizes_are_passed_on() {
-        let text = "font = \"Inter\"\nfont_size = 13\nmono_font = \"Iosevka\"\nmono_font_size = 11.5\n";
-        let theme = layered(Some(TOKYO_NIGHT), Some(&file(text)), || Some("JetBrainsMono Nerd Font".into()));
+        let text =
+            "font = \"Inter\"\nfont_size = 13\nmono_font = \"Iosevka\"\nmono_font_size = 11.5\n";
+        let theme = layered(Some(TOKYO_NIGHT), Some(&file(text)), || {
+            Some("JetBrainsMono Nerd Font".into())
+        });
         assert_eq!(theme.font.as_deref(), Some("Inter"));
         assert_eq!(theme.interface_font.as_deref(), Some("Inter"));
         assert_eq!(theme.interface_font_size, Some(13.0));
@@ -1008,7 +1032,9 @@ color15 = "#ddc7a1"
         // Fonts alone leave the colours on the Omarchy theme.
         assert_eq!(theme.roles, roles_from_colors(TOKYO_NIGHT));
         // Without them the system face stays upstream's, and the shell's own.
-        let theme = layered(Some(TOKYO_NIGHT), Some(&file("")), || Some("JetBrainsMono Nerd Font".into()));
+        let theme = layered(Some(TOKYO_NIGHT), Some(&file("")), || {
+            Some("JetBrainsMono Nerd Font".into())
+        });
         assert_eq!(theme.font.as_deref(), Some("JetBrainsMono Nerd Font"));
         assert_eq!(theme.interface_font, None);
         assert_eq!(theme.interface_font_size, None);
@@ -1021,9 +1047,22 @@ color15 = "#ddc7a1"
             Some(&file("accent = \"#ff8800\"\nmuted = \"grey\"\n")),
             no_font,
         );
-        assert_eq!(theme.roles.as_ref().map(|roles| roles.accent.as_str()), Some("#ff8800"));
-        assert_eq!(theme.roles.map(|roles| roles.border), Some("#414868".into()));
-        assert_eq!(theme.problems.iter().map(|problem| problem.line).collect::<Vec<_>>(), [2]);
+        assert_eq!(
+            theme.roles.as_ref().map(|roles| roles.accent.as_str()),
+            Some("#ff8800")
+        );
+        assert_eq!(
+            theme.roles.map(|roles| roles.border),
+            Some("#414868".into())
+        );
+        assert_eq!(
+            theme
+                .problems
+                .iter()
+                .map(|problem| problem.line)
+                .collect::<Vec<_>>(),
+            [2]
+        );
     }
 
     #[test]

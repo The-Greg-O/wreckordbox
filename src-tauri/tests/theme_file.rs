@@ -15,9 +15,7 @@ use std::path::Path;
 use std::sync::mpsc::{channel, Receiver};
 use std::time::Duration;
 
-use rbxport_lib::omarchy_theme::{
-    follow, follow_sources, Sources, CHANGED_EVENT, COLORS_FILE_ENV,
-};
+use rbxport_lib::omarchy_theme::{follow, follow_sources, Sources, CHANGED_EVENT, COLORS_FILE_ENV};
 use rbxport_lib::theme_file::THEME_FILE_ENV;
 use tauri::Listener;
 

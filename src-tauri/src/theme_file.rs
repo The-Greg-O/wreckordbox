@@ -57,6 +57,7 @@ pub struct ThemeFile {
 /// The colour keys of an Omarchy `colors.toml`. All are accepted, so a
 /// pasted palette is not reported; the roles read some of them directly and
 /// the rest stand in where those are missing.
+#[rustfmt::skip]
 const COLOUR_KEYS: &[&str] = &[
     "accent", "cursor", "selection", "muted",
     "background", "dark_background", "darker_background", "lighter_background",
@@ -121,7 +122,12 @@ fn table(text: &str, problems: &mut Vec<ThemeProblem>) -> Table {
             Err(error) => error,
         };
         let line = error.span().map_or(1, |span| line_of(&text, span.start));
-        let reason = error.message().lines().next().unwrap_or("not valid TOML").trim();
+        let reason = error
+            .message()
+            .lines()
+            .next()
+            .unwrap_or("not valid TOML")
+            .trim();
         problems.push(ThemeProblem {
             line,
             message: format!("this line is not valid TOML ({reason}); it is left out"),
@@ -137,7 +143,9 @@ fn table(text: &str, problems: &mut Vec<ThemeProblem>) -> Table {
 /// A family name that can be written into a CSS `font-family` as it is.
 fn family(value: &str) -> Option<String> {
     let value = value.trim();
-    (!value.contains(',')).then(|| crate::omarchy_theme::css_family(value)).flatten()
+    (!value.contains(','))
+        .then(|| crate::omarchy_theme::css_family(value))
+        .flatten()
 }
 
 fn size(value: &toml::Value) -> Option<f64> {
@@ -178,18 +186,28 @@ pub fn parse(text: &str) -> ThemeFile {
                     file.follow = Follow::None;
                     None
                 }
-                _ => Some(format!("follow is {}; it must be \"omarchy\" or \"none\"", quoted(value))),
+                _ => Some(format!(
+                    "follow is {}; it must be \"omarchy\" or \"none\"",
+                    quoted(value)
+                )),
             },
             "mode" => match as_text {
                 Some(mode @ ("dark" | "light")) => {
                     file.colours.insert(key.clone(), mode.to_owned());
                     None
                 }
-                _ => Some(format!("mode is {}; it must be \"dark\" or \"light\"", quoted(value))),
+                _ => Some(format!(
+                    "mode is {}; it must be \"dark\" or \"light\"",
+                    quoted(value)
+                )),
             },
             "font" | "mono_font" => match as_text.and_then(family) {
                 Some(name) => {
-                    *if key == "font" { &mut file.font } else { &mut file.mono_font } = Some(name);
+                    *if key == "font" {
+                        &mut file.font
+                    } else {
+                        &mut file.mono_font
+                    } = Some(name);
                     None
                 }
                 None => Some(format!(
@@ -199,7 +217,11 @@ pub fn parse(text: &str) -> ThemeFile {
             },
             "font_size" | "mono_font_size" => match size(value) {
                 Some(px) => {
-                    *if key == "font_size" { &mut file.font_size } else { &mut file.mono_font_size } = Some(px);
+                    *if key == "font_size" {
+                        &mut file.font_size
+                    } else {
+                        &mut file.mono_font_size
+                    } = Some(px);
                     None
                 }
                 None => Some(format!(
@@ -299,21 +321,31 @@ mod tests {
         let file = parse(&pasted);
         assert_eq!(file.problems, []);
         assert_eq!(file.follow, Follow::Omarchy);
-        assert_eq!(file.colours.get("accent").map(String::as_str), Some("#7aa2f7"));
+        assert_eq!(
+            file.colours.get("accent").map(String::as_str),
+            Some("#7aa2f7")
+        );
         assert_eq!(file.colours.get("mode").map(String::as_str), Some("dark"));
     }
 
     #[test]
     fn colours_are_kept_in_lower_case() {
         let file = parse("accent = \"#7AA2F7\"\n");
-        assert_eq!(file.colours.get("accent").map(String::as_str), Some("#7aa2f7"));
+        assert_eq!(
+            file.colours.get("accent").map(String::as_str),
+            Some("#7aa2f7")
+        );
     }
 
     #[test]
     fn an_invalid_colour_is_reported_with_its_line_and_left_out() {
         let file = parse("# my theme\n\naccent = \"#7aa2f7\"\nmuted = \"#12345\"\nselection = 4\n");
         assert_eq!(lines(&file), [4, 5]);
-        assert!(file.problems[0].message.contains("muted"), "{}", file.problems[0].message);
+        assert!(
+            file.problems[0].message.contains("muted"),
+            "{}",
+            file.problems[0].message
+        );
         assert!(file.colours.contains_key("accent"));
         assert!(!file.colours.contains_key("muted"));
         assert!(!file.colours.contains_key("selection"));
@@ -331,16 +363,28 @@ mod tests {
     fn a_line_that_is_not_toml_is_reported_and_the_rest_applies() {
         let file = parse("accent = \"#7aa2f7\"\nmuted = \"#414868\nforeground = \"#a9b1d6\"\nthis is not toml\nbackground = \"#1a1b26\"\n");
         assert_eq!(lines(&file), [2, 4]);
-        assert_eq!(file.colours.get("accent").map(String::as_str), Some("#7aa2f7"));
-        assert_eq!(file.colours.get("foreground").map(String::as_str), Some("#a9b1d6"));
-        assert_eq!(file.colours.get("background").map(String::as_str), Some("#1a1b26"));
+        assert_eq!(
+            file.colours.get("accent").map(String::as_str),
+            Some("#7aa2f7")
+        );
+        assert_eq!(
+            file.colours.get("foreground").map(String::as_str),
+            Some("#a9b1d6")
+        );
+        assert_eq!(
+            file.colours.get("background").map(String::as_str),
+            Some("#1a1b26")
+        );
     }
 
     #[test]
     fn a_key_given_twice_is_reported_and_the_first_stands() {
         let file = parse("accent = \"#7aa2f7\"\naccent = \"#ff0000\"\n");
         assert_eq!(lines(&file), [2]);
-        assert_eq!(file.colours.get("accent").map(String::as_str), Some("#7aa2f7"));
+        assert_eq!(
+            file.colours.get("accent").map(String::as_str),
+            Some("#7aa2f7")
+        );
     }
 
     #[test]
@@ -363,7 +407,10 @@ mod tests {
         assert_eq!(good.mono_font_size, Some(11.5));
         let bad = parse("font = \"Inter, sans\"\nfont_size = 200\nmono_font = \"Evil\\\"; } body {\"\nmono_font_size = \"12px\"\nfont_size = 3\n");
         assert_eq!(lines(&bad), [1, 2, 3, 4, 5]);
-        assert_eq!((bad.font, bad.font_size, bad.mono_font, bad.mono_font_size), (None, None, None, None));
+        assert_eq!(
+            (bad.font, bad.font_size, bad.mono_font, bad.mono_font_size),
+            (None, None, None, None)
+        );
     }
 
     #[test]
