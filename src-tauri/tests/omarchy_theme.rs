@@ -48,6 +48,7 @@ fn omarchy(root: &Path) -> Sources {
         colors: Some(root.join("current/theme/colors.toml")),
         theme_folder_is_replaced: true,
         font_folder: None,
+        theme_file: None,
     }
 }
 
@@ -184,6 +185,7 @@ fn a_font_folder_that_appears_later_is_watched_without_a_false_announcement() {
             colors: Some(file.clone()),
             theme_folder_is_replaced: false,
             font_folder: Some(root.path().join("config/fontconfig")),
+            theme_file: None,
         },
     );
     started();

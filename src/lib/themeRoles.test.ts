@@ -55,12 +55,46 @@ describe("themeProperties", () => {
       "--role-tab-from": "#bb9af7",
       "--role-tab-to": "#ff9e64",
       "--role-font": '"JetBrainsMono Nerd Font", ui-monospace, monospace',
+      "--role-font-interface": null,
+      "--role-font-size": null,
+      "--role-font-mono": null,
+      "--role-font-mono-size": null,
+      "--role-font-scale": null,
+      "--role-shell-tree-w": null,
+      "--role-shell-row-h": null,
+      "--role-shell-heading-h": null,
+      "--role-shell-status-h": null,
+      "--role-shell-top-bar-h": null,
     });
+  });
+
+  it("sets the theme file's faces and sizes, and only those it gives", () => {
+    const properties = themeProperties({
+      roles: null, font: "Inter", interfaceFont: "Inter", interfaceFontSize: 14, monoFont: "Iosevka", monoFontSize: 11.5,
+    });
+    expect(properties["--role-font"]).toBe('"Inter", ui-monospace, monospace');
+    expect(properties["--role-font-interface"]).toBe('"Inter", ui-monospace, monospace');
+    expect(properties["--role-font-size"]).toBe("14px");
+    expect(properties["--role-font-mono"]).toBe('"Iosevka", ui-monospace, monospace');
+    expect(properties["--role-font-mono-size"]).toBe("11.5px");
+    expect(properties["--role-font-scale"]).toBe(String(14 / 12));
+    expect(properties["--role-shell-row-h"]).toBe("28px");
+    const sizeOnly = themeProperties({ roles: null, font: null, interfaceFontSize: 13 });
+    expect(sizeOnly["--role-font-size"]).toBe("13px");
+    expect(sizeOnly["--role-font-interface"]).toBeNull();
+    expect(sizeOnly["--role-font-mono-size"]).toBeNull();
+  });
+
+  it("passes over a size that is not a sensible number and a face that could not be quoted", () => {
+    for (const size of [Number.NaN, 0, 3, 200, Number.POSITIVE_INFINITY]) {
+      expect(themeProperties({ roles: null, font: null, interfaceFontSize: size, monoFontSize: size })["--role-font-size"], String(size)).toBeNull();
+    }
+    expect(themeProperties({ roles: null, font: null, monoFont: 'Mono"; } body { display: none' })["--role-font-mono"]).toBeNull();
   });
 
   it("leaves every role to the stylesheet's fallback when there is no theme and no font", () => {
     const properties = themeProperties({ roles: null, font: null });
-    expect(Object.keys(properties)).toHaveLength(16);
+    expect(Object.keys(properties)).toHaveLength(26);
     expect(Object.values(properties).every((value) => value === null)).toBe(true);
   });
 
@@ -79,6 +113,30 @@ describe("themeProperties", () => {
     expect(properties["--role-accent-hover"]).toBeNull();
     expect(properties["--role-font"]).toBeNull();
     expect(properties["--role-text"]).toBe("#a9b1d6");
+  });
+});
+
+describe("the built-in look under a theme file", () => {
+  const BUILT_IN: ThemeRoles = {
+    mode: "dark", ground: "#000000", panel: "#0f0f0f", working: "#1e1e1e", hairline: "#323232",
+    selection: "#314b67", border: "#ff00ff", text: "#e6e6e6", textDim: "#9a9a9a", textBright: "#ffffff",
+    accent: "#1373eb", onAccent: "#f0f0f0", tabFrom: "#1373eb", tabTo: "#1373eb",
+    control: "#2b2b2b", accentHover: "#4a82ed", builtIn: true,
+  };
+
+  it("keeps the built-in control fill and lit hover the app shell names", () => {
+    const properties = themeProperties({ roles: BUILT_IN, font: null });
+    expect(properties["--role-control"]).toBe("#2b2b2b");
+    expect(properties["--role-accent-hover"]).toBe("#4a82ed");
+    expect(properties["--role-border"]).toBe("#ff00ff");
+  });
+
+  it("does not switch upstream's lit chrome to the accent, as a theme does", () => {
+    const root = fakeRoot();
+    applyTheme({ roles: BUILT_IN, font: null }, root);
+    expect(root.attributes.has("data-theme-mode")).toBe(false);
+    applyTheme({ roles: { ...BUILT_IN, mode: "light" }, font: null }, root);
+    expect(root.attributes.get("data-theme-mode")).toBe("light");
   });
 });
 
@@ -192,7 +250,12 @@ describe("tokens under a theme", () => {
   it("only the chrome tokens refer to a role", () => {
     const referring = (selectors: string[]) =>
       [...declared(selectors)].filter(([name, value]) => !name.startsWith("--role-") && value.includes("--role-")).map(([name]) => name).sort();
-    expect(referring([":root"])).toEqual([...CHROME].sort());
+    // The type sizes follow the theme file's font_size, not a colour.
+    const sizes = [...declared([":root"])].filter(([name]) => name.startsWith("--f-size-")).map(([name]) => name);
+    expect(sizes.length).toBeGreaterThan(30);
+    const scaled = referring([":root"]).filter((name) => name.startsWith("--f-size-"));
+    expect(scaled).toEqual(sizes.filter((name) => name !== "--f-size-preview-cue").sort());
+    expect(referring([":root"]).filter((name) => !name.startsWith("--f-size-"))).toEqual([...CHROME].sort());
     expect(referring([":root[data-theme-mode]"])).toEqual([...LIT].sort());
     expect([...CHROME, ...LIT].filter((name) => MEANING.test(name))).toEqual([]);
   });

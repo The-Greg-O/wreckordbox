@@ -63,6 +63,8 @@ rbl-backup = { path = "../crates/rbl-backup" }
 sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 parking_lot = "0.12"
 dirs = "5"
+# The window's own theme file (theme_file.rs), with the line of each mistake.
+toml = "0.8"
 uuid = { version = "1", features = ["v4"] }
 # Matching a dropped `File.name` to its pasteboard path (file_drop.rs).
 unicode-normalization = "0.1"
@@ -121,6 +123,8 @@ webview2-com = "0.38"
 windows-core = "0.61"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# Opening the theme file without blocking on a FIFO (theme_file.rs).
+libc = "0.2"
 # The webview's own editing commands (Cut, Copy, Paste) for the command
 # palette, where there is no native Edit menu (#54). The version wry and
 # Tauri already use, so nothing new is built.

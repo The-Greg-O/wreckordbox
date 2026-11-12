@@ -1712,5 +1712,8 @@
   "Runs unavailable": "Запуски недоступны",
   "{count} Stick loads in progress": "Загрузок на USB в процессе: {count}",
   "Analyzing {done}/{total} tracks": "Анализ треков: {done}/{total}",
-  "{count} failed": "Ошибок: {count}"
+  "{count} failed": "Ошибок: {count}",
+  "Dismiss": "Dismiss",
+  "Theme file": "Theme file",
+  "line {line}": "line {line}"
 }
