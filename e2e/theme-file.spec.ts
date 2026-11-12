@@ -129,29 +129,76 @@ test("meaning colours are identical with and without a theme file", async ({ pag
   expect(await read()).toEqual(without);
 });
 
-test("mistakes in the theme file are shown with their lines, and go when the file is fixed", async ({ page }) => {
+test("mistakes in the theme file are shown in the status line with their lines, and go when the file is fixed", async ({ page }) => {
   await openShell(page);
-  const notice = page.getByRole("status", { name: "Theme file" });
-  await expect(notice).toHaveCount(0);
-  await announce(page, {
-    roles: TOKYO_NIGHT, font: FACE,
-    problems: [
-      { line: 3, message: "\"accent\" is not a colour; write it as \"#rrggbb\"" },
-      { line: 7, message: "unknown key \"acent\"" },
-    ],
-  });
-  await expect(notice).toBeVisible();
-  await expect(notice).toContainText("line 3");
-  await expect(notice).toContainText("line 7");
-  await expect(notice).toContainText("unknown key \"acent\"");
+  const status = page.getByTestId("status-line").getByRole("status", { name: "Theme file" });
+  await expect(status).toHaveCount(0);
+  const problems = [
+    { line: 3, message: "\"accent\" is not a colour; write it as \"#rrggbb\"" },
+    { line: 7, message: "unknown key \"acent\"" },
+  ];
+  await announce(page, { roles: TOKYO_NIGHT, font: FACE, problems });
+  await expect(status).toBeVisible();
+  await expect(status).toContainText("line 3");
+  await expect(status).toHaveAttribute("title", /line 7: unknown key "acent"/);
 
-  await announce(page, { roles: TOKYO_NIGHT, font: FACE, problems: [] });
-  await expect(notice).toHaveCount(0);
-
-  // It can be put away until the file changes again.
-  await announce(page, { roles: TOKYO_NIGHT, font: FACE, problems: [{ line: 2, message: "unknown key \"x\"" }] });
-  await notice.getByRole("button", { name: "Dismiss" }).click();
-  await expect(notice).toHaveCount(0);
+  // Put away, it stays away while the same mistakes come with another colour.
+  await status.getByRole("button", { name: "Dismiss" }).click();
+  await expect(status).toHaveCount(0);
+  await announce(page, { roles: TEXT_OVERRIDDEN, font: FACE, problems: problems.map((problem) => ({ ...problem })) });
+  await expect(status).toHaveCount(0);
+  // Another mistake brings it back.
   await announce(page, { roles: TOKYO_NIGHT, font: FACE, problems: [{ line: 4, message: "unknown key \"y\"" }] });
-  await expect(notice).toContainText("line 4");
+  await expect(status).toContainText("line 4");
+  await announce(page, { roles: TOKYO_NIGHT, font: FACE, problems: [] });
+  await expect(status).toHaveCount(0);
+});
+
+/**
+ * The texts in `cells` that do not fit their box: the rendered text's own
+ * box, not a computed size, so a clipped or ellipsised value is caught.
+ */
+async function overflowing(cells: Locator): Promise<string[]> {
+  return cells.evaluateAll((elements) => elements.flatMap((element) => {
+    const text = (element.textContent ?? "").trim();
+    if (!text) return [];
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const ink = range.getBoundingClientRect();
+    const box = element.getBoundingClientRect();
+    const fits = ink.left >= box.left - 1 && ink.right <= box.right + 1 && ink.top >= box.top - 1 && ink.bottom <= box.bottom + 1;
+    return fits ? [] : [`${element.getAttribute("data-col") ?? element.getAttribute("role")}: "${text}" ${Math.round(ink.width)}x${Math.round(ink.height)} in ${Math.round(box.width)}x${Math.round(box.height)}`];
+  }));
+}
+
+for (const size of [12, 16, 24]) {
+  test(`at ${size} px the list's values and headings and the tree's rows fit`, async ({ page }) => {
+    await page.setViewportSize({ width: 2600, height: 1200 });
+    const { list } = await openShell(page);
+    await announce(page, {
+      roles: TOKYO_NIGHT, font: FACE, interfaceFont: "DejaVu Sans", interfaceFontSize: size,
+      monoFont: "DejaVu Sans Mono", monoFontSize: size,
+    });
+    const numbers = ["trackNo", "bpm", "key", "duration", "bitrate", "dateAdded"]
+      .map((col) => `[role="gridcell"][data-col="${col}"]`).join(", ");
+    await expect(list.locator('[role="gridcell"][data-col="bpm"]').first()).toBeVisible();
+    expect(await overflowing(list.locator(numbers))).toEqual([]);
+    expect(await overflowing(list.getByRole("columnheader"))).toEqual([]);
+    expect(await overflowing(page.getByRole("tree", { name: "Tree" }).getByRole("treeitem"))).toEqual([]);
+    expect(await overflowing(page.getByRole("tablist", { name: "Views" }).getByRole("tab"))).toEqual([]);
+  });
+}
+
+test("the file's base size applies to the old layout too", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByTestId("browser-title")).toContainText("Tracks)", { timeout: 15_000 });
+  const cell = page.locator('[role="gridcell"][data-col="title"]').first();
+  await expect(cell).toBeVisible();
+  const before = Number.parseFloat(await drawn(cell, "font-size"));
+  await announce(page, { roles: TOKYO_NIGHT, font: FACE, interfaceFontSize: 18 });
+  const after = Number.parseFloat(await drawn(cell, "font-size"));
+  expect(after / before).toBeCloseTo(1.5, 2);
+  expect(await overflowing(page.locator('[role="gridcell"][data-col="bpm"], [role="gridcell"][data-col="duration"]'))).toEqual([]);
+  await announce(page, { roles: TOKYO_NIGHT, font: FACE });
+  expect(Number.parseFloat(await drawn(cell, "font-size"))).toBe(before);
 });

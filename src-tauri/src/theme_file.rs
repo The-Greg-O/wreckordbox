@@ -59,15 +59,24 @@ pub struct ThemeFile {
 /// the rest stand in where those are missing.
 #[rustfmt::skip]
 const COLOUR_KEYS: &[&str] = &[
-    "accent", "cursor", "selection", "muted",
+    "accent", "selection", "muted",
     "background", "dark_background", "darker_background", "lighter_background",
     "foreground", "dark_foreground", "light_foreground", "bright_foreground",
     "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white", "orange", "brown",
-    "bright_black", "bright_red", "bright_green", "bright_yellow", "bright_blue",
-    "bright_magenta", "bright_cyan", "bright_white",
+    "bright_red", "bright_green", "bright_yellow", "bright_blue", "bright_magenta", "bright_cyan",
     "color0", "color1", "color2", "color3", "color4", "color5", "color6", "color7",
     "color8", "color9", "color10", "color11", "color12", "color13", "color14", "color15",
 ];
+
+/// Every key a theme file may set (`docs/user/theme.example.toml` documents
+/// exactly these).
+#[must_use]
+pub fn accepted_keys() -> Vec<&'static str> {
+    ["follow", "mode", "font", "font_size", "mono_font", "mono_font_size"]
+        .into_iter()
+        .chain(COLOUR_KEYS.iter().copied())
+        .collect()
+}
 
 /// Settings an Omarchy palette may carry for other programs. Passed over in
 /// silence: their values are often not `#rrggbb`.
@@ -524,6 +533,34 @@ mod tests {
         let read = read(&file).unwrap();
         assert_eq!(read.colours.len(), 0);
         assert!(read.problems[0].message.contains("larger than"), "{:?}", read.problems);
+    }
+
+    #[test]
+    fn the_shipped_example_lists_exactly_the_accepted_keys_and_changes_nothing() {
+        let example = include_str!("../../docs/user/theme.example.toml");
+        // As shipped, all comment: nothing set, nothing reported.
+        assert_eq!(parse(example), ThemeFile::default());
+        // Each `# key = value` line, uncommented.
+        let assignments: Vec<&str> = example
+            .lines()
+            .filter_map(|line| line.strip_prefix("# "))
+            .filter(|line| {
+                line.split_once(" = ").is_some_and(|(key, _)| {
+                    !key.is_empty() && key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+                })
+            })
+            .collect();
+        let keys: Vec<&str> = assignments.iter().map(|line| line.split_once(" = ").unwrap().0).collect();
+        let mut sorted = keys.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), keys.len(), "a key is documented twice");
+        let mut accepted = accepted_keys();
+        accepted.sort_unstable();
+        assert_eq!(sorted, accepted);
+        // Every documented value is one the parser takes.
+        let uncommented = parse(&assignments.join("\n"));
+        assert_eq!(uncommented.problems, []);
     }
 
     #[test]

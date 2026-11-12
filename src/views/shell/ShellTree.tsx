@@ -24,6 +24,7 @@
  * the focus is kept apart from which is selected: the keyboard moves the
  * one and only Enter changes the other.
  */
+import { useFontScales } from "@/lib/themeRoles";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 
 import { useTranslation } from "@/i18n";
@@ -127,6 +128,11 @@ export function ShellTree({ library, sticks, setPlans = NO_SET_PLANS, selectedId
     observer.observe(element);
     return () => { observer.disconnect(); };
   }, []);
+  // The theme file's text size changes the row heights (wbx-45.6).
+  const fontScales = useFontScales();
+  useLayoutEffect(() => {
+    if (root.current !== null) setSizes(readSizes(root.current));
+  }, [fontScales]);
   const layout = useMemo(
     () => treeLayout(groups.map((group) => [group.heading !== undefined, group.rows.length] as const), sizes),
     [groups, sizes],

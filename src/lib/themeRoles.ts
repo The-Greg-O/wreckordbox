@@ -15,6 +15,8 @@
  * set and the stylesheet's fallbacks, upstream's own colours, apply.
  */
 
+import { useMemo, useSyncExternalStore } from "react";
+
 /** The roles of `docs/design/tokens.md`, each `#rrggbb`. */
 export type ThemeRoles = {
   mode: "dark" | "light";
@@ -42,6 +44,12 @@ export type ThemeRoles = {
   /** The two ends of the active view tab's line. */
   tabFrom: string;
   tabTo: string;
+  /** A control's fill where it is not the hairline colour (the built-in look under a theme file). */
+  control?: string;
+  /** A lit control under the pointer, where the look gives its own rather than one derived from the accent. */
+  accentHover?: string;
+  /** The built-in look with the theme file's keys over it, not a theme: upstream's lit chrome keeps its own colours. */
+  builtIn?: boolean;
 };
 
 /** A mistake in the DJ's theme file, left out of what is shown. */
@@ -63,7 +71,7 @@ export type Theme = {
   problems?: ThemeProblem[];
 };
 
-const COLOUR_PROPERTIES: Record<Exclude<keyof ThemeRoles, "mode">, string> = {
+const COLOUR_PROPERTIES: Record<Exclude<keyof ThemeRoles, "mode" | "control" | "accentHover" | "builtIn">, string> = {
   ground: "--role-ground",
   panel: "--role-panel",
   working: "--role-working",
@@ -86,9 +94,35 @@ const INTERFACE_FONT_PROPERTY = "--role-font-interface";
 const INTERFACE_SIZE_PROPERTY = "--role-font-size";
 const MONO_FONT_PROPERTY = "--role-font-mono";
 const MONO_SIZE_PROPERTY = "--role-font-mono-size";
+/** Set only by the theme file's `font_size`: its ratio to the 12 px base, for upstream's measured sizes. */
+const FONT_SCALE_PROPERTY = "--role-font-scale";
+/** The view shell's fixed sizes at the theme file's size (`styles/tokens-shell.css`), at 100% scale. */
+const SHELL_HEIGHTS: Record<string, number> = {
+  "--role-shell-tree-w": 186,
+  "--role-shell-row-h": 24,
+  "--role-shell-heading-h": 22,
+  "--role-shell-status-h": 22,
+  "--role-shell-top-bar-h": 30,
+};
 /** The sizes the theme file may give, in CSS pixels at 100% scale. */
 const SMALLEST = 8;
 const LARGEST = 24;
+/** The interface's base text size without a theme file (`--f-size-shell`). */
+export const BASE_FONT_SIZE = 12;
+
+const validSize = (size: number | null | undefined): number | null =>
+  typeof size === "number" && Number.isFinite(size) && size >= SMALLEST && size <= LARGEST ? size : null;
+
+/**
+ * How much larger than the built-in sizes the theme file makes the text:
+ * `text` for the interface, `numbers` for the values whose digits line up
+ * (the interface's when the file gives no monospace size). 1 without a file.
+ */
+export function fontScales(theme: Theme): { text: number; numbers: number } {
+  const text = (validSize(theme.interfaceFontSize) ?? BASE_FONT_SIZE) / BASE_FONT_SIZE;
+  const mono = validSize(theme.monoFontSize);
+  return { text, numbers: mono === null ? text : mono / BASE_FONT_SIZE };
+}
 
 const COLOUR = /^#[0-9a-f]{6}$/i;
 
@@ -114,8 +148,10 @@ const FAMILY = /^[\p{L}\p{N} ._+()-]{1,100}$/u;
 
 const face = (family: string | null | undefined): string | null =>
   family && FAMILY.test(family) ? `"${family}", ui-monospace, monospace` : null;
-const pixels = (size: number | null | undefined): string | null =>
-  typeof size === "number" && Number.isFinite(size) && size >= SMALLEST && size <= LARGEST ? `${size}px` : null;
+const pixels = (size: number | null | undefined): string | null => {
+  const valid = validSize(size);
+  return valid === null ? null : `${valid}px`;
+};
 
 /**
  * Each role's custom property and the value a theme gives it; null where the
@@ -129,15 +165,22 @@ export function themeProperties(theme: Theme): Record<string, string | null> {
   }
   // A control's fill is the hairline colour in a theme; only upstream's
   // fallbacks tell the two apart.
-  properties[CONTROL_PROPERTY] = properties[COLOUR_PROPERTIES.hairline] ?? null;
+  const own = (value: string | undefined) => (typeof value === "string" && COLOUR.test(value) ? value : null);
+  properties[CONTROL_PROPERTY] = own(theme.roles?.control) ?? properties[COLOUR_PROPERTIES.hairline] ?? null;
   const accent = properties[COLOUR_PROPERTIES.accent];
   const onAccent = properties[COLOUR_PROPERTIES.onAccent];
-  properties[ACCENT_HOVER_PROPERTY] = accent && onAccent ? accentHover(accent, onAccent) : null;
+  properties[ACCENT_HOVER_PROPERTY] = own(theme.roles?.accentHover) ?? (accent && onAccent ? accentHover(accent, onAccent) : null);
   properties[FONT_PROPERTY] = face(theme.font);
   properties[INTERFACE_FONT_PROPERTY] = face(theme.interfaceFont);
   properties[INTERFACE_SIZE_PROPERTY] = pixels(theme.interfaceFontSize);
   properties[MONO_FONT_PROPERTY] = face(theme.monoFont);
   properties[MONO_SIZE_PROPERTY] = pixels(theme.monoFontSize);
+  const size = validSize(theme.interfaceFontSize);
+  const scale = size === null ? null : size / BASE_FONT_SIZE;
+  properties[FONT_SCALE_PROPERTY] = scale === null ? null : String(scale);
+  for (const [property, height] of Object.entries(SHELL_HEIGHTS)) {
+    properties[property] = scale === null ? null : `${Math.ceil(height * scale)}px`;
+  }
   return properties;
 }
 
@@ -157,7 +200,11 @@ export function applyTheme(theme: Theme, root: Root = document.documentElement):
     if (value === null) root.style.removeProperty(property);
     else root.style.setProperty(property, value);
   }
-  if (theme.roles) root.setAttribute("data-theme-mode", theme.roles.mode === "light" ? "light" : "dark");
+  // The built-in look keeps upstream's lit chrome (only a theme turns it to
+  // the accent), unless the file makes it light, where upstream's layout
+  // needs its guard.
+  const mode = theme.roles?.mode === "light" ? "light" : "dark";
+  if (theme.roles && (!theme.roles.builtIn || mode === "light")) root.setAttribute("data-theme-mode", mode);
   else root.removeAttribute("data-theme-mode");
 }
 
@@ -197,6 +244,13 @@ export function subscribeShownTheme(listener: () => void): () => void {
 /** The theme this window last showed. */
 export function shownTheme(): Theme {
   return shown;
+}
+
+/** `fontScales` of the theme this window shows, for what lays text out in script (the lists). */
+export function useFontScales(): { text: number; numbers: number } {
+  const theme = useSyncExternalStore(subscribeShownTheme, shownTheme);
+  const { text, numbers } = fontScales(theme);
+  return useMemo(() => ({ text, numbers }), [text, numbers]);
 }
 
 /** The app shell: the `theme_roles` command and the `theme:changed` event. */

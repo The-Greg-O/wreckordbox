@@ -5,13 +5,16 @@
    Sizes only. The shell takes its colours from the tokens in tokens.css
    until ticket #47 replaces the chrome colours with roles read from the
    Omarchy theme; nothing in the shell names a colour value of its own. */
+/* The top bar, status line, tree rows and headings grow with the theme
+   file's font_size (wbx-45.6), as does the tree's width: themeRoles.ts sets the --role-shell-* sizes
+   then, in px, since a script reads some of them back. */
 :root {
-  --s-shell-top-bar-h: 30px; /* docs/design/tokens.md, Density: top bar */
+  --s-shell-top-bar-h: var(--role-shell-top-bar-h, 30px); /* docs/design/tokens.md, Density: top bar */
   --s-shell-player-h: 58px; /* docs/design/tokens.md, Density: compact player, phrase strip included; the least the player area takes until ticket #51 builds the compact player */
-  --s-shell-status-h: 22px; /* docs/design/tokens.md, Density: status line */
-  --s-shell-tree-w: 186px; /* docs/design/tokens.md, Density: tree */
-  --s-shell-row-h: 24px; /* docs/design/tokens.md, Density: list row */
-  --s-shell-heading-h: 22px; /* docs/design/tokens.md, Density: column heading row */
+  --s-shell-status-h: var(--role-shell-status-h, 22px); /* docs/design/tokens.md, Density: status line */
+  --s-shell-tree-w: var(--role-shell-tree-w, 186px); /* docs/design/tokens.md, Density: tree */
+  --s-shell-row-h: var(--role-shell-row-h, 24px); /* docs/design/tokens.md, Density: list row */
+  --s-shell-heading-h: var(--role-shell-heading-h, 22px); /* docs/design/tokens.md, Density: column heading row */
   --s-shell-space-1: 2px; /* docs/design/tokens.md, Density: spacing steps 2, 4, 6, 8, 10, 14 */
   --s-shell-space-2: 4px;
   --s-shell-space-3: 6px;
