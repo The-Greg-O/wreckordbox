@@ -50,3 +50,26 @@
 }
 .hold[data-holding] .fill { transform: scaleX(1); transition: transform var(--hold-ms) linear; }
 .holdLabel { position: relative; }
+
+/* Stick Protection (wbx-45.11): the unlock and lock control. */
+.protection {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin: 8px 0;
+}
+
+.protection > span {
+  flex: 1 1 100%;
+}
+
+.protection input {
+  flex: 1 1 8em;
+  min-width: 0;
+}
+
+.unlockError {
+  flex: 1 1 100%;
+  color: var(--danger, #e5484d);
+}

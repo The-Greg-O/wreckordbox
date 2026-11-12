@@ -48,7 +48,7 @@ import { transposeKey } from "@/lib/camelot";
 import { stepMasterGain, toggleMute } from "@/lib/volume";
 import { clampWidth, TREE_BOUNDS } from "@/lib/splitter";
 import { exportSummary } from "@/lib/exportSummary";
-import { prepareDevicePlaylistDrop } from "@/lib/devicePlaylistDrop";
+import { askDevicePlaylistDrop } from "@/lib/devicePlaylistDrop";
 import { deviceId, devicePath, renamedDevice } from "@/lib/devices";
 import { DEVICE_ASKS, deviceNodeId, deviceParentFor, devicePlaylistsOf, isDeviceLibraryKind, LIBRARY_NAMES, parseDeviceNodeId } from "@/lib/deviceLibrary";
 import { useDeviceLibraries } from "@/store/useDeviceLibraries";
@@ -73,6 +73,8 @@ import { useShellTree } from "@/views/shell/useShellTree";
 import { IntakeView } from "@/views/shell/IntakeView";
 import { useIntakeCounts } from "@/views/shell/useIntakeCounts";
 import { useStickOutlines } from "@/store/useStickOutlines";
+import { useStickProtection } from "@/store/useStickProtection";
+import { StickProtectionDialog } from "@/views/shell/StickProtectionDialog";
 import { StickWriteGateProvider, useStickWriteGate } from "@/views/shell/StickWriteGate";
 import { shellOpensNode, stickPlaylistsUnder } from "@/lib/stickWrites";
 import { FIELD_LABEL } from "@/views/info/fieldLabel";
@@ -101,7 +103,7 @@ import type { LibraryQuestion } from "@/views/library/NewLibraryDialog";
 import type { QueueItem } from "@/lib/queue";
 import { TrackFilter } from "@/views/browser/TrackFilter";
 import { EMPTY_FILTER, toSpecFilter, type FilterState } from "@/lib/trackFilter";
-import type { AnalysisResult, DeviceFormat, DeviceImportMissing, DevicePlaylistEdit, DevicePlaylistImportPlan, FilterValues, LinkPeerSeen, LinkStatus, ListTotals, RelocateSearch, SmartRule, TrackLookups, UnanalysedTracks } from "@/ipc/types";
+import type { AnalysisResult, DeviceFormat, DeviceImportMissing, DevicePlaylistEdit, DevicePlaylistImportPlan, FilterValues, LinkPeerSeen, LinkStatus, ListTotals, RelocateSearch, SmartRule, StickWriteOperation, TrackLookups, UnanalysedTracks } from "@/ipc/types";
 import { statusBarListText } from "@/lib/format";
 import { StatusLine } from "@/views/shell/StatusLine";
 import { autoRelocated, missingAmong, relocateSteps, relocateTracks } from "@/lib/relocate";
@@ -583,6 +585,13 @@ function AppBody() {
   // (ticket #52); only drawn, so only read, with the shell on.
   // Read in both layouts: the Stick write gate checks every Stick write against them (wbx-45.4).
   const shellSticks = useStickOutlines(devices, deviceLibraries.revision);
+  // Stick Protection (wbx-45.11), shown in the tree, the status line and the Stick's panel.
+  const stickProtection = useStickProtection(devices);
+  const [stickProtectionOpen, setStickProtectionOpen] = useState(false);
+  const shellSticksShown = useMemo(() => shellSticks.map((stick) => {
+    const found = stickProtection.get(stick.path);
+    return found === undefined ? stick : { ...stick, protection: found.protected ? "protected" as const : "unlocked" as const };
+  }), [shellSticks, stickProtection]);
   const layout: PlayerLayout = shellOn ? SHELL_PLAYER_LAYOUT : chosenLayout;
   /** The view in the shell's working area. Here, so it outlives nothing it should not. */
   const [shellView, setShellView] = useState<ShellView>(DEFAULT_SHELL_VIEW);
@@ -2240,10 +2249,14 @@ function AppBody() {
       path,
       title: `Export ${ids.length} track${ids.length === 1 ? "" : "s"} to ${name}`,
       lines: [],
-      plan: { kind: "exportTracks", tracks: [...ids], ...(compatibilityFormat ? { compatibilityFormat } : {}) },
+      // Every argument the write takes, so the confirmation is for exactly it.
+      plan: {
+        kind: "exportTracks", tracks: [...ids],
+        ...(stickDefaults ? { defaults: stickDefaults } : {}), ...(compatibilityFormat ? { compatibilityFormat } : {}),
+      },
       run: (approval) => exportTrackToNow(path, ids, approval) ?? Promise.resolve(),
     });
-  }, [devices, stickGate, compatibilityFormat, exportTrackToNow]);
+  }, [devices, stickGate, stickDefaults, compatibilityFormat, exportTrackToNow]);
 
   // Tracks dropped on a stick in the Devices tree: Export Track to it, as
   // rekordbox exports what is dragged there (manual 7.2.18 p. 108).
@@ -2482,6 +2495,10 @@ function AppBody() {
   // and the keyboard reaches it the same way on the platforms where the
   // webview keeps the accelerators from the native menu.
   const runMenu = useCallback((id: string) => {
+    if (id === "stick-protection") {
+      setStickProtectionOpen(true);
+      return;
+    }
     if (id === "undo" || id === "redo") {
       const action = id;
       const canRunLibrary = action === "undo" ? editHistory.canUndo : editHistory.canRedo;
@@ -2934,7 +2951,7 @@ function AppBody() {
   // drop is over.
   const addDraggedToDeviceNow = useCallback((
     node: TreeNode,
-    approve: (change: { adding: number; exportFirst: readonly string[]; files: boolean; duplicates: boolean }) => Promise<string | null>,
+    approve: (change: { adding: number; exportFirst: number; plan: StickWriteOperation }) => Promise<string | null>,
   ): Promise<void> | undefined => {
     const drag = draggedTracks;
     setDraggedTracks(null);
@@ -2949,7 +2966,10 @@ function AppBody() {
       try {
         const backend = await getBackend();
         if (drag.sourceKind === "folder" && drag.ids.some((id) => id.startsWith("file:"))) {
-          const approval = await approve({ adding: drag.ids.length, exportFirst: [], files: true, duplicates: false });
+          const approval = await approve({
+            adding: drag.ids.length, exportFirst: 0,
+            plan: { kind: "addFiles", format: ref.format, playlist: ref.id, files: [...drag.ids] },
+          });
           if (approval === null) return;
           const result = await backend.devicePlaylistAddFiles(ref.path, ref.format, ref.id, [...drag.ids], approval);
           if (result.changed > 0) report(t("Added to {name}.", { name: node.name }));
@@ -2957,27 +2977,38 @@ function AppBody() {
           setDevices(await backend.listDevices());
           return;
         }
-        const prepared = drag.sourceKind === "device"
-          ? await (async () => {
-            const tracks = [...drag.ids];
-            const held = await backend.devicePlaylistDuplicates(ref.path, ref.format, ref.id, tracks);
-            const duplicates = await askDuplicates(held.length, tracks.length, node.name);
-            if (duplicates === null) return null;
-            const heldSet = new Set(held);
-            const adding = duplicates ? tracks : tracks.filter((track) => !heldSet.has(track));
-            if (adding.length === 0) return null;
-            const approval = await approve({ adding: adding.length, exportFirst: [], files: false, duplicates });
-            return approval === null ? null : { edit: { kind: "add" as const, playlist: ref.id, tracks: adding, duplicates }, approval };
-          })()
-          : await prepareDevicePlaylistDrop(
-            backend, ref.path, ref.format, ref.id, drag.ids, stickDefaults, compatibilityFormat,
-            askDuplicates, node.name,
-            (missing, adding, duplicates) => approve({ adding, exportFirst: missing, files: false, duplicates }),
-          );
-        if (prepared === null) return;
-        if (prepared.edit.tracks.length === 0) return;
-        const result = await deviceLibraries.edit(ref.path, ref.format, prepared.edit, prepared.approval);
+        if (drag.sourceKind === "device") {
+          const tracks = [...drag.ids];
+          const held = await backend.devicePlaylistDuplicates(ref.path, ref.format, ref.id, tracks);
+          const duplicates = await askDuplicates(held.length, tracks.length, node.name);
+          if (duplicates === null) return;
+          const heldSet = new Set(held);
+          const adding = duplicates ? tracks : tracks.filter((track) => !heldSet.has(track));
+          if (adding.length === 0) return;
+          const edit = { kind: "add" as const, playlist: ref.id, tracks: adding, duplicates };
+          const approval = await approve({ adding: adding.length, exportFirst: 0, plan: { kind: "playlistEdit", format: ref.format, edit } });
+          if (approval === null) return;
+          const result = await deviceLibraries.edit(ref.path, ref.format, edit, approval);
+          if (result.changed > 0) report(t("Added to {name}.", { name: node.name }));
+          return;
+        }
+        // Library tracks: the reads and the question, then one approved
+        // write bound to these tracks in this order (wbx-45.4, third review).
+        const drop = await askDevicePlaylistDrop(backend, ref.path, ref.format, ref.id, drag.ids, askDuplicates, node.name);
+        if (drop === null) return;
+        const approval = await approve({
+          adding: drop.adding, exportFirst: drop.missing,
+          plan: {
+            kind: "addLibraryTracks", format: ref.format, playlist: ref.id, tracks: drop.tracks, duplicates: drop.duplicates,
+            ...(stickDefaults ? { defaults: stickDefaults } : {}), ...(compatibilityFormat ? { compatibilityFormat } : {}),
+          },
+        });
+        if (approval === null) return;
+        const result = await backend.devicePlaylistAddLibraryTracks(
+          ref.path, ref.format, ref.id, drop.tracks, drop.duplicates, stickDefaults, compatibilityFormat, approval,
+        );
         if (result.changed > 0) report(t("Added to {name}.", { name: node.name }));
+        await deviceLibraries.refresh(ref.path);
         // Export Track can add loose files before the playlist edit. Re-read
         // both the volume list and the playlist tree after the full operation.
         setDevices(await backend.listDevices());
@@ -2997,17 +3028,12 @@ function AppBody() {
       title: `Add ${tracks(change.adding)} to “${node.name}” on ${stickName(ref.path)}`,
       lines: [
         `${library}: ${tracks(change.adding)} added at the end of “${node.name}”`,
-        ...(change.files ? [`The ${change.adding === 1 ? "file is" : "files are"} copied to the Stick first`] : []),
-        ...(change.exportFirst.length > 0 ? [`${tracks(change.exportFirst.length)} not on the Stick yet, exported first:`] : []),
+        ...(change.plan.kind === "addFiles" ? [`The ${change.adding === 1 ? "file is" : "files are"} analysed on the Stick first`] : []),
+        ...(change.exportFirst > 0 ? [`${tracks(change.exportFirst)} not on the Stick yet, exported first:`] : []),
       ],
-      plan: change.files
-        ? { kind: "addFiles", format: ref.format, playlist: ref.id, files: [...(draggedTracks?.ids ?? [])] }
-        : {
-          kind: "addToPlaylist", format: ref.format, playlist: ref.id, exportFirst: [...change.exportFirst],
-          count: change.adding, duplicates: change.duplicates, ...(compatibilityFormat ? { compatibilityFormat } : {}),
-        },
+      plan: change.plan,
     })) ?? Promise.resolve());
-  }, [stickGate, addDraggedToDeviceNow, stickName, compatibilityFormat, draggedTracks]);
+  }, [stickGate, addDraggedToDeviceNow, stickName]);
   const createOnDevice = useCallback(
     (parent: TreeNode, folder: boolean) => {
       const at = deviceParentFor(parent);
@@ -3275,7 +3301,7 @@ function AppBody() {
         lines: [],
         plan: {
           kind: "exportPlaylist", playlist: playlistId, deleteUnlistedMusic,
-          ...(compatibilityFormat ? { compatibilityFormat } : {}),
+          ...(stickDefaults ? { defaults: stickDefaults } : {}), ...(compatibilityFormat ? { compatibilityFormat } : {}),
         },
         run: async (approval) => {
           said = await writeToDevice(playlistId, device, approval).catch(() => null);
@@ -3283,7 +3309,7 @@ function AppBody() {
       });
       return said;
     },
-    [tree, stickGate, deleteUnlistedMusic, compatibilityFormat, writeToDevice],
+    [tree, stickGate, deleteUnlistedMusic, stickDefaults, compatibilityFormat, writeToDevice],
   );
 
   const syncToDevice = useCallback(
@@ -3639,7 +3665,7 @@ function AppBody() {
     else if (before !== null) setNote((current) => (current?.text === before ? null : current));
   }, []);
   const shellTree = useShellTree({
-    library: tree, sticks: shellSticks, selectedNode, onSelectNode: setSelectedNode,
+    library: tree, sticks: shellSticksShown, selectedNode, onSelectNode: setSelectedNode,
     view: shellView, onViewChange: changeShellView, queueCounts: intakeCounts,
     // The old tree's handlers (wbx-45.4); a Stick's own tracks may go on its playlists, as in the main tree.
     actions: subTree, fromStick: draggedTracks !== null, expansion: treeExpansion, onExpansionChange: setTreeExpansion,
@@ -3736,6 +3762,9 @@ function AppBody() {
       <Suspense fallback={null}>
       {/* Every staged Stick write, from any part of the window (wbx-45.4). */}
       {stickGate.element}
+      {stickProtectionOpen ? (
+        <StickProtectionDialog devices={devices} protection={stickProtection} onClose={() => { setStickProtectionOpen(false); }} />
+      ) : null}
       {/* The command palette (#54): in both layouts, since Linux has no menu row. */}
       <CommandPaletteHost platform={platform} keyOverrides={keyOverrides} shell={shellOn} readOnly={readOnly}
         history={paletteHistory} loaded={paletteLoaded}
@@ -3883,6 +3912,11 @@ function AppBody() {
           ? () => openPreferences("libraryProtection") : undefined}
         onCancelAnalysis={analysis.running ? analysis.cancel : undefined}
         analysisFailures={analysis.state.failed.length}
+        sticks={devices.flatMap((device) => {
+          const found = stickProtection.get(device.path);
+          return found === undefined ? [] : [{ path: device.path, name: device.name, protected: found.protected }];
+        })}
+        onStickProtection={() => { setStickProtectionOpen(true); }}
         analysisFailed={analysis.state.failed}
         selection={selectionText}
         readOnly={readOnly}

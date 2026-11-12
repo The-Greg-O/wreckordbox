@@ -111,6 +111,21 @@ async function holdToWrite() {
       .find((b) => b.textContent?.includes("Hold to write"));
   }
   expect(button).toBeDefined();
+  // A Gig stick is protected until its name is typed (wbx-45.11): the hold waits for it.
+  const typed = document.querySelector<HTMLInputElement>('[role="alertdialog"] input[aria-label^="Type"]');
+  if (typed !== null) {
+    await act(async () => {
+      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      set?.call(typed, "TEST");
+      typed.dispatchEvent(new Event("input", { bubbles: true }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      typed.form?.requestSubmit();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+  }
+  expect(button?.disabled).toBe(false);
   await act(async () => {
     button?.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
     await new Promise((resolve) => setTimeout(resolve, 2200));

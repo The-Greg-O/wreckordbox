@@ -6,7 +6,8 @@ import { describeStickPlan, stickHoldMs, stickKind, stickRefusal } from "./stick
 
 const plan = (over: Partial<StickWritePlan> = {}): StickWritePlan => ({
   spare: false, pending: false, audioEstimated: true, tracksNew: 0, tracksChanged: 0, audioReused: 0, tracksRemoved: 0, tracksMissing: 0,
-  trackChanges: [], analysisWritten: 0, playlists: [], netAdditionalBytes: 0, approval: "t", ...over,
+  trackChanges: [], analysisWritten: 0, playlists: [], netAdditionalBytes: 0,
+  onStick: true, stickName: "USB", protected: false, adding: null, plan: "p", ...over,
 });
 const stick = (outline: ShellStick["outline"]): ShellStick => ({ path: "/media/USB", name: "USB", outline });
 
@@ -37,11 +38,13 @@ describe("describeStickPlan", () => {
       tracksNew: 2, tracksChanged: 1, audioReused: 40, analysisWritten: 43,
       trackChanges: [{ title: "Ritual", fields: ["Energy", "MyTags"] }],
       playlists: [
-        { name: "Warmup", folder: false, change: "resynchronised", added: 1, removed: 2 },
-        { name: "Peak", folder: false, change: "created", added: 5, removed: 0 },
-        { name: "Crate", folder: true, change: "created", added: null, removed: null },
-        { name: "Old", folder: false, change: "resynchronised", added: 0, removed: 0 },
-        { name: "Unknown", folder: false, change: "resynchronised", added: null, removed: null },
+        { name: "Warmup", folder: false, change: "resynchronised", added: 1, removed: 2, reordered: false },
+        { name: "Peak", folder: false, change: "created", added: 5, removed: 0, reordered: false },
+        { name: "Crate", folder: true, change: "created", added: null, removed: null, reordered: null },
+        { name: "Old", folder: false, change: "resynchronised", added: 0, removed: 0, reordered: false },
+        { name: "Moved", folder: false, change: "resynchronised", added: 0, removed: 0, reordered: true },
+        { name: "Grown", folder: false, change: "resynchronised", added: 2, removed: 0, reordered: true },
+        { name: "Unknown", folder: false, change: "resynchronised", added: null, removed: null, reordered: null },
       ],
       netAdditionalBytes: 16_000_000,
     }))).toEqual([
@@ -54,7 +57,9 @@ describe("describeStickPlan", () => {
       "Folder “Crate” created",
       "Playlist “Warmup” written again: 1 track added, 2 removed",
       "Playlist “Old” written again, its tracks unchanged",
-      "Playlist “Unknown” written again with the tracks the Library holds",
+      "Playlist “Moved” written again: the same tracks in another order",
+      "Playlist “Grown” written again: 2 tracks added, 0 removed, and the tracks it keeps in another order",
+      "Playlist “Unknown” written again with the tracks the Library holds (its entries on the Stick could not be compared)",
       "About 16 MB more used on the Stick",
     ]);
   });
@@ -63,6 +68,9 @@ describe("describeStickPlan", () => {
     const lines = describeStickPlan(plan({ trackChanges: many }));
     expect(lines).toHaveLength(11);
     expect(lines.at(-1)).toBe("…and 2 more tracks whose data changes");
+  });
+  it("says how many entries an add to a Stick playlist puts in, as the backend resolved them", () => {
+    expect(describeStickPlan(plan({ adding: 3 }))).toEqual(["3 entries go into the playlist"]);
   });
   it("names removals and missing files, and a write that frees space", () => {
     expect(describeStickPlan(plan({ tracksRemoved: 3, tracksMissing: 1, netAdditionalBytes: -5_000_000 }))).toEqual([

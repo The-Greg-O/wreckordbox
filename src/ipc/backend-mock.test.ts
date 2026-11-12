@@ -629,7 +629,10 @@ describe("mock Relocate Undo (#502)", () => {
 
 /** The approval a staged write gets from the plan (wbx-45.4): every Stick write needs one. */
 async function approve(backend: Backend, destination: string, operation: StickWriteOperation): Promise<string> {
+  // Unlocked as the DJ does (wbx-45.11), then planned and confirmed.
+  const protection = await backend.stickProtection(destination);
+  if (protection.protected) await backend.stickUnlock(destination, protection.name);
   const plan = await backend.stickWritePlan({ destination, operation });
-  if (plan.approval === null) throw new Error("no approval");
-  return plan.approval;
+  if (plan.plan === null) throw new Error("no plan");
+  return backend.stickWriteApprove(plan.plan);
 }

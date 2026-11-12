@@ -1,12 +1,20 @@
 /**
- * The mock's Stick safety, as the real backend's (wbx-45.4, wbx-45.5).
+ * The mock's Stick safety, as the real backend's (wbx-45.4, wbx-45.5,
+ * wbx-45.11).
  *
- * Approval tokens: `stickWritePlan` issues one for the planned operation,
- * bound to the Stick's volume and revision; every Stick-writing call must
- * carry a matching, unused one, or it is refused with the backend's own
- * words and nothing is written. Each write that runs moves the Stick's
- * revision on; replacing the Stick at the same place (`__replaceStick`, or
- * a remount) changes its volume.
+ * Stick Protection: every Stick is protected until unlocked
+ * (`stickUnlock`: a Spare stick as it is, a Gig stick with its name, the
+ * last part of its path, typed); the unlock holds for that volume only, so
+ * a remount, `__replaceStick` or an eject ends it. Every Stick write to a
+ * protected Stick is refused with `stickProtected`, before its token is
+ * looked at.
+ *
+ * Confirmation: `stickWritePlan` answers a plan id bound to the planned
+ * operation (every argument), the Stick's volume and revision;
+ * `stickWriteApprove` turns it into a token, `stickWriteRevoke` cancels it.
+ * Every Stick-writing call must carry a matching, unused token, or it is
+ * refused with the backend's own words and nothing is written. Each write
+ * that runs moves the Stick's revision on.
  *
  * Logs, for the specs: every Stick write that ran (`__stickWrites`, with
  * its arguments), every refused one (`__stickRefusedWrites`), and every
@@ -16,7 +24,7 @@
  * settled (`__stickRecovered`). A Stick marked with `__setStickSpare`
  * carries the Spare stick marker.
  */
-import type { Backend, StickWriteOperation, StickWritePlan, ViewSpec } from "./types";
+import type { Backend, StickProtection, StickWriteOperation, StickWritePlan, ViewSpec } from "./types";
 
 export interface StickCall {
   method: string;
@@ -37,19 +45,17 @@ interface Log {
   revision: Map<string, number>;
   volume: Map<string, number>;
   tokens: Map<string, Approval>;
+  /** Unlocked Sticks, with the volume they were unlocked for. */
+  unlocked: Map<string, number>;
 }
-
-type Grant =
-  | { exact: string }
-  | { exportSome: ReadonlySet<string> }
-  | { addTo: { format: string; playlist: string; max: number; duplicates: boolean } };
 
 interface Approval {
   path: string;
   volume: number;
-  /** The Stick's revision the next step is bound to; -1 while a step is being written. */
   revision: number;
-  steps: Grant[];
+  op: string;
+  /** Confirmed by the DJ's hold: only then is it a token. */
+  approved: boolean;
 }
 
 /** Kept across a reload, as a Stick's state survives the window restarting. */
@@ -82,7 +88,7 @@ function log(): Log {
     holder.__stickSafetyLog = {
       writes: [], refused: [], recovering: [], recovered: [],
       pending: new Set(restored.pending), spare: new Set(restored.spare), failing: new Set(),
-      revision: new Map(), volume: new Map(), tokens: new Map(),
+      revision: new Map(), volume: new Map(), tokens: new Map(), unlocked: new Map(),
     };
   }
   return holder.__stickSafetyLog;
@@ -117,12 +123,15 @@ function canonical(value: unknown): string {
   return JSON.stringify(value);
 }
 
-/** One operation as the write call that performs it describes it (the backend's `StickOperation`). */
+const bound = (value: unknown) => value ?? null;
+
+/** One operation as the write call that performs it describes it (the backend's `StickOperation`): every argument. */
 function key(op: StickWriteOperation): string {
   switch (op.kind) {
-    case "exportPlaylist": return canonical({ kind: op.kind, playlist: op.playlist, deleteUnlistedMusic: op.deleteUnlistedMusic === true });
-    case "exportTracks": return canonical({ kind: op.kind, tracks: op.tracks });
-    case "sync": return canonical({ kind: op.kind, playlists: op.playlists, deleteUnlistedMusic: op.deleteUnlistedMusic === true, automatic: op.automatic === true });
+    case "exportPlaylist": return canonical({ kind: op.kind, playlist: op.playlist, deleteUnlistedMusic: op.deleteUnlistedMusic === true, defaults: bound(op.defaults), compatibility: bound(op.compatibilityFormat) });
+    case "exportTracks": return canonical({ kind: op.kind, tracks: op.tracks, defaults: bound(op.defaults), compatibility: bound(op.compatibilityFormat) });
+    case "sync": return canonical({ kind: op.kind, playlists: op.playlists, deleteUnlistedMusic: op.deleteUnlistedMusic === true, automatic: op.automatic === true, defaults: bound(op.defaults), compatibility: bound(op.compatibilityFormat) });
+    case "addLibraryTracks": return canonical({ kind: op.kind, format: op.format, playlist: op.playlist, tracks: op.tracks, duplicates: op.duplicates, defaults: bound(op.defaults), compatibility: bound(op.compatibilityFormat) });
     case "playlistEdit": {
       const edit = op.edit.kind === "add" ? { ...op.edit, duplicates: op.edit.duplicates === true } : op.edit;
       return canonical({ kind: op.kind, format: op.format, edit });
@@ -130,30 +139,33 @@ function key(op: StickWriteOperation): string {
     case "addFiles": return canonical({ kind: op.kind, format: op.format, playlist: op.playlist, files: op.files });
     case "saveSettings": return canonical({ kind: op.kind, settings: op.settings });
     case "format": return canonical({ kind: op.kind, layout: op.layout });
-    case "settle":
-    case "ensureLibrary":
-    case "addToPlaylist":
-      return canonical({ kind: op.kind });
+    case "ensureLibrary": return canonical({ kind: op.kind, defaults: bound(op.defaults) });
+    case "settle": return canonical({ kind: op.kind });
   }
 }
 
-function grants(op: StickWriteOperation): Grant[] {
-  if (op.kind !== "addToPlaylist") return [{ exact: key(op) }];
-  return [
-    ...(op.exportFirst.length > 0 ? [{ exportSome: new Set(op.exportFirst) }] : []),
-    { addTo: { format: op.format, playlist: op.playlist, max: op.count, duplicates: op.duplicates } },
-  ];
-}
-
-function allows(grant: Grant, op: StickWriteOperation): boolean {
-  if ("exact" in grant) return key(op) === grant.exact;
-  if ("exportSome" in grant) return op.kind === "exportTracks" && op.tracks.length > 0 && op.tracks.every((t) => grant.exportSome.has(t));
-  const want = grant.addTo;
-  return op.kind === "playlistEdit" && op.format === want.format && op.edit.kind === "add" && op.edit.playlist === want.playlist &&
-    (op.edit.duplicates === true) === want.duplicates && op.edit.tracks.length > 0 && op.edit.tracks.length <= want.max;
-}
-
 const REFUSED = "Nothing was written to the Stick. Look at what the write would do again and confirm it.";
+
+/** The Stick's name, as the backend reads it: its mounted folder's. */
+const nameOf = (path: string) => path.split("/").filter(Boolean).at(-1) ?? path;
+
+function protection(state: Log, path: string): StickProtection {
+  const unlockedFor = state.unlocked.get(path);
+  return {
+    protected: unlockedFor === undefined || unlockedFor !== (state.volume.get(path) ?? 0),
+    spare: state.spare.has(path),
+    name: nameOf(path),
+    revision: 0,
+  };
+}
+
+function protectedError(path: string): Error {
+  const name = nameOf(path);
+  return Object.assign(
+    new Error(`${name} is protected: nothing is written to it until it is unlocked. Nothing was written. Unlock it in its panel, from the command palette, or with \`wreckordbox stick unlock ${path}\`.`),
+    { kind: "stickProtected" },
+  );
+}
 
 /** Uses up `token` for `op` on `path`, as the backend's `consume`: the reason it is refused, or null. */
 function consume(state: Log, token: string | undefined | null, op: StickWriteOperation, path: string): string | null {
@@ -161,35 +173,27 @@ function consume(state: Log, token: string | undefined | null, op: StickWriteOpe
   const approval = state.tokens.get(token);
   state.tokens.delete(token);
   if (!approval) return `This confirmation was already used, or is unknown. ${REFUSED}`;
+  if (!approval.approved) return `This write to the Stick was planned but not confirmed. ${REFUSED}`;
   if (approval.path !== path) return `This confirmation was for another Stick. ${REFUSED}`;
   if ((state.volume.get(path) ?? 0) !== approval.volume) return `The Stick at this place is not the one the write was confirmed for. ${REFUSED}`;
   if ((state.revision.get(path) ?? 0) !== approval.revision) return `The Stick changed since the write was confirmed. ${REFUSED}`;
-  while (approval.steps.length > 0) {
-    const step = approval.steps.shift() as Grant;
-    if (allows(step, op)) {
-      if (approval.steps.length > 0) state.tokens.set(token, { ...approval, revision: -1 });
-      return null;
-    }
-    if (!("exportSome" in step)) break;
-  }
-  return `This confirmation was for a different write. ${REFUSED}`;
-}
-
-/** After a step of a two-step approval: its next step is bound to the Stick as it is now. */
-function advance(state: Log, token: string | undefined | null, path: string) {
-  const next = token ? state.tokens.get(token) : undefined;
-  if (token && next && next.revision === -1) state.tokens.set(token, { ...next, revision: state.revision.get(path) ?? 0 });
+  if (approval.op !== key(op)) return `This confirmation was for a different write. ${REFUSED}`;
+  return null;
 }
 
 /** Each Stick-writing call: where its Stick is, which argument carries the approval, and what it does. */
 const WRITES: Record<string, { path: number; approval: number; op: (a: unknown[]) => StickWriteOperation }> = {
-  exportPlaylist: { path: 1, approval: 5, op: (a) => ({ kind: "exportPlaylist", playlist: a[0] as string, deleteUnlistedMusic: a[3] === true }) },
-  exportTracksToDevice: { path: 1, approval: 4, op: (a) => ({ kind: "exportTracks", tracks: [...(a[0] as string[])] }) },
+  exportPlaylist: { path: 1, approval: 5, op: (a) => ({ kind: "exportPlaylist", playlist: a[0] as string, deleteUnlistedMusic: a[3] === true, defaults: a[2] as never, compatibilityFormat: a[4] as never }) },
+  exportTracksToDevice: { path: 1, approval: 4, op: (a) => ({ kind: "exportTracks", tracks: [...(a[0] as string[])], defaults: a[2] as never, compatibilityFormat: a[3] as never }) },
+  devicePlaylistAddLibraryTracks: {
+    path: 0, approval: 7,
+    op: (a) => ({ kind: "addLibraryTracks", format: a[1] as never, playlist: a[2] as string, tracks: [...(a[3] as string[])], duplicates: a[4] === true, defaults: a[5] as never, compatibilityFormat: a[6] as never }),
+  },
   devicePlaylistEdit: { path: 0, approval: 3, op: (a) => ({ kind: "playlistEdit", format: a[1] as never, edit: a[2] as never }) },
   devicePlaylistAddFiles: { path: 0, approval: 4, op: (a) => ({ kind: "addFiles", format: a[1] as never, playlist: a[2] as string, files: [...(a[3] as string[])] }) },
   saveDeviceSettings: { path: 0, approval: 2, op: (a) => ({ kind: "saveSettings", settings: a[1] as never }) },
   settleStick: { path: 0, approval: 1, op: () => ({ kind: "settle" }) },
-  ensureDeviceLibrary: { path: 0, approval: 2, op: () => ({ kind: "ensureLibrary" }) },
+  ensureDeviceLibrary: { path: 0, approval: 2, op: (a) => ({ kind: "ensureLibrary", defaults: a[1] as never }) },
   formatDevice: { path: 0, approval: 2, op: (a) => ({ kind: "format", layout: a[1] as never }) },
 };
 
@@ -221,6 +225,8 @@ function installHooks(): void {
     __failNextStickWrite: (path: string) => void;
     __touchStick: (path: string) => void;
     __replaceStick: (path: string) => void;
+    __setStickUnlocked: (path: string, unlocked: boolean) => void;
+    __stickProtected: (path: string) => boolean;
   };
   hooks.__stickWrites = () => [...log().writes];
   hooks.__stickRefusedWrites = () => [...log().refused];
@@ -241,6 +247,12 @@ function installHooks(): void {
   // Something else changed the Stick (a player, another computer).
   hooks.__touchStick = (path) => { bump(log(), path); };
   hooks.__replaceStick = (path) => { mockStickReplaced(path); };
+  hooks.__setStickUnlocked = (path, unlocked) => {
+    const state = log();
+    if (unlocked) state.unlocked.set(path, state.volume.get(path) ?? 0);
+    else state.unlocked.delete(path);
+  };
+  hooks.__stickProtected = (path) => protection(log(), path).protected;
 }
 
 type Call = (...args: unknown[]) => unknown;
@@ -254,22 +266,66 @@ export function withStickSafetyLog(backend: Backend): Backend {
     return typeof found === "function" ? (found as Call).bind(backend) : undefined;
   };
 
-  // Plans issue the tokens.
+  // Plans answer a plan id; the DJ's confirmation turns it into a token.
   const plan = original("stickWritePlan");
   wrapped.stickWritePlan = async (request: { destination: string; operation: StickWriteOperation }) => {
     const found = await (plan?.(request) as Promise<StickWritePlan>);
-    // Settling is the one write a Stick with an unfinished write takes.
-    if (found.pending && request.operation.kind !== "settle") return { ...found, approval: null };
     const state = log();
-    const token = `mock-${Math.random().toString(36).slice(2)}-${Date.now()}`;
-    state.tokens.set(token, {
+    const now = protection(state, request.destination);
+    const stick = { ...found, onStick: true, stickName: now.name, protected: now.protected };
+    // Settling is the one write a Stick with an unfinished write takes.
+    if (found.pending && request.operation.kind !== "settle") return { ...stick, plan: null };
+    const id = `plan-${Math.random().toString(36).slice(2)}-${Date.now()}`;
+    state.tokens.set(id, {
       path: request.destination,
       volume: state.volume.get(request.destination) ?? 0,
       revision: state.revision.get(request.destination) ?? 0,
-      steps: grants(request.operation),
+      op: key(request.operation),
+      approved: false,
     });
-    return { ...found, approval: token };
+    return { ...stick, plan: id };
   };
+  wrapped.stickWriteApprove = (id: string) => {
+    const state = log();
+    const planned = state.tokens.get(id);
+    state.tokens.delete(id);
+    if (!planned || planned.approved) return Promise.reject(new Error(`This plan was already confirmed, cancelled, or is unknown. ${REFUSED}`));
+    if ((state.volume.get(planned.path) ?? 0) !== planned.volume) return Promise.reject(new Error(`The Stick at this place is not the one the plan was made for. ${REFUSED}`));
+    if ((state.revision.get(planned.path) ?? 0) !== planned.revision) return Promise.reject(new Error(`The Stick changed since the plan was made. ${REFUSED}`));
+    const token = `mock-${Math.random().toString(36).slice(2)}-${Date.now()}`;
+    state.tokens.set(token, { ...planned, approved: true });
+    return Promise.resolve(token);
+  };
+  wrapped.stickWriteRevoke = (id: string) => {
+    const state = log();
+    if (state.tokens.get(id)?.approved === false) state.tokens.delete(id);
+    return Promise.resolve();
+  };
+  wrapped.stickProtection = (path: string) => Promise.resolve(protection(log(), path));
+  wrapped.stickUnlock = (path: string, name?: string) => {
+    const state = log();
+    const now = protection(state, path);
+    if (!now.spare) {
+      const typed = name?.trim() ?? "";
+      if (typed === "") return Promise.reject(Object.assign(new Error(`${now.name} is a Gig stick: type its name, ${now.name}, to unlock it.`), { kind: "malformed" }));
+      if (typed !== now.name) return Promise.reject(Object.assign(new Error(`That is not this Stick's name. Type ${now.name} exactly to unlock it.`), { kind: "malformed" }));
+    }
+    state.unlocked.set(path, state.volume.get(path) ?? 0);
+    return Promise.resolve(protection(state, path));
+  };
+  wrapped.stickLock = (path: string) => {
+    const state = log();
+    state.unlocked.delete(path);
+    return Promise.resolve(protection(state, path));
+  };
+  // An eject ends the unlock.
+  const eject = original("ejectDevice");
+  if (eject) {
+    wrapped.ejectDevice = (path: string) => {
+      log().unlocked.delete(path);
+      return eject(path);
+    };
+  }
 
   const settle = (state: Log, path: string) => {
     if (state.pending.has(path)) {
@@ -289,6 +345,10 @@ export function withStickSafetyLog(backend: Backend): Backend {
       const token = args[at.approval] as string | undefined;
       // The arguments as the spec reads them back: a few ids and names, not rows.
       const call: StickCall = { method: name, path, args: args.slice(0, at.approval) };
+      if (protection(state, path).protected) {
+        state.refused.push(call);
+        return Promise.reject(protectedError(path));
+      }
       const refusal = consume(state, token, at.op(args), path);
       if (refusal !== null) {
         state.refused.push(call);
@@ -304,7 +364,6 @@ export function withStickSafetyLog(backend: Backend): Backend {
       state.writes.push(call);
       return Promise.resolve(run(...args)).then((result) => {
         bump(state, path);
-        advance(state, token, path);
         return result;
       });
     };
@@ -314,14 +373,14 @@ export function withStickSafetyLog(backend: Backend): Backend {
   const sync = original("syncDevices");
   wrapped.syncDevices = async (...args: unknown[]) => {
     const state = log();
-    const [playlists, destinations, , automatic, , deleteUnlistedMusic, , , approvals] = args as [
-      string[], string[], unknown, boolean | undefined, unknown, boolean | undefined, unknown, unknown, Record<string, string> | undefined,
+    const [playlists, destinations, defaults, automatic, , deleteUnlistedMusic, compatibilityFormat, , approvals] = args as [
+      string[], string[], never, boolean | undefined, unknown, boolean | undefined, never, unknown, Record<string, string> | undefined,
     ];
-    const op: StickWriteOperation = { kind: "sync", playlists, deleteUnlistedMusic: deleteUnlistedMusic === true, automatic: automatic === true };
+    const op: StickWriteOperation = { kind: "sync", playlists, deleteUnlistedMusic: deleteUnlistedMusic === true, automatic: automatic === true, defaults, compatibilityFormat };
     const approved: string[] = [];
     const refused: { path: string; error: string }[] = [];
     for (const path of destinations) {
-      const refusal = consume(state, approvals?.[path], op, path);
+      const refusal = protection(state, path).protected ? protectedError(path).message : consume(state, approvals?.[path], op, path);
       const call: StickCall = { method: "syncDevices", path, args: { playlists, deleteUnlistedMusic: deleteUnlistedMusic === true } };
       if (refusal === null) {
         settle(state, path);

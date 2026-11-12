@@ -94,6 +94,17 @@
   color: var(--c-text-dim);
 }
 
+/* Stick Protection (wbx-45.11): said beside the Stick's name. */
+.protection {
+  flex: none;
+  font-size: 0.85em;
+  color: var(--c-text-dim);
+}
+
+.protection[data-stick-protection="unlocked"] {
+  color: var(--c-warning, var(--c-text));
+}
+
 /* A group with nothing in it says so, in the dim colour, not as a place. */
 .empty, .library {
   height: var(--s-shell-row-h);

@@ -85,10 +85,17 @@ export function describeStickPlan(plan: StickWritePlan): string[] {
     if (p.change !== "resynchronised") continue;
     const kind = p.folder ? "Folder" : "Playlist";
     if (p.folder) out.push(`${kind} “${p.name}” written again`);
-    else if (p.added === null || p.removed === null) out.push(`${kind} “${p.name}” written again with the tracks the Library holds`);
-    else if (p.added === 0 && p.removed === 0) out.push(`${kind} “${p.name}” written again, its tracks unchanged`);
-    else out.push(`${kind} “${p.name}” written again: ${tracks(p.added)} added, ${p.removed} removed`);
+    else if (p.added === null || p.removed === null) {
+      out.push(`${kind} “${p.name}” written again with the tracks the Library holds (its entries on the Stick could not be compared)`);
+    } else if (p.added === 0 && p.removed === 0) {
+      out.push(p.reordered === true
+        ? `${kind} “${p.name}” written again: the same tracks in another order`
+        : `${kind} “${p.name}” written again, its tracks unchanged`);
+    } else {
+      out.push(`${kind} “${p.name}” written again: ${tracks(p.added)} added, ${p.removed} removed${p.reordered === true ? ", and the tracks it keeps in another order" : ""}`);
+    }
   }
+  if (plan.adding !== null) out.push(`${plan.adding} ${plan.adding === 1 ? "entry goes" : "entries go"} into the playlist`);
   if (plan.netAdditionalBytes > 0) out.push(`About ${megabytes(plan.netAdditionalBytes)} more used on the Stick`);
   if (plan.netAdditionalBytes < 0) out.push(`About ${megabytes(plan.netAdditionalBytes)} freed on the Stick`);
   return out;

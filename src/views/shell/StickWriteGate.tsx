@@ -1,15 +1,23 @@
 /**
  * Every write to a Stick, from any part of the window, is staged here
- * (wbx-45.4, both reviews).
+ * (wbx-45.4, all three reviews).
  *
- * The backend refuses every Stick write that does not carry an approval
- * token, and only `stickWritePlan` issues one: for one operation, on the
- * Stick as it is now, from the Library as it is now. So every surface that
- * writes to a Stick asks here: the plan is fetched (the export's own dry
- * run where there is one), the DJ is shown which Stick (Gig stick or Spare
- * stick), and what changes, and the write runs with the token only after
- * the deliberate hold the Stick load asks for: about one second for a Spare
- * stick, two for a Gig stick (docs/design/requirements.md, "Stick").
+ * What this is: the DJ's per-operation confirmation, enforced in the
+ * interface (and checked by the backend, which refuses a Stick write that
+ * carries no confirmed token). It is not the guarantee that a Stick is
+ * safe: that is Stick Protection (wbx-45.11), which the backend checks
+ * first in every writer, whoever asks. A protected Stick is unlocked here
+ * (or in its panel, the palette, or `wreckordbox stick unlock`) before the
+ * hold can be made.
+ *
+ * Every surface that writes to a Stick asks here: the plan is fetched (the
+ * export's own dry run where there is one), the DJ is shown which Stick
+ * (Gig stick or Spare stick), whether it is protected, and what changes;
+ * after the deliberate hold (about one second for a Spare stick, two for a
+ * Gig stick: docs/design/requirements.md, "Stick") the plan's id is
+ * exchanged for the write's token (`stickWriteApprove`), and the write runs
+ * with it. A cancelled plan is revoked. An export to an ordinary folder,
+ * not a Stick, needs no plan, hold or token.
  *
  * The hold: started by one press (a pointer or Enter/Space on the button),
  * finished only by holding that same input; key repeat is ignored; letting
@@ -27,10 +35,14 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import { getBackend } from "@/ipc/client";
-import type { StickOutline, StickWriteOperation, StickWritePlan } from "@/ipc/types";
+import type { StickOutline, StickProtection, StickWriteOperation, StickWritePlan } from "@/ipc/types";
 import type { ShellStick } from "@/lib/shellTree";
 import { describeStickPlan, stickHoldMs, stickKind, stickRefusal } from "@/lib/stickWrites";
 import styles from "./StickWriteGate.module.css";
+import { StickUnlock } from "./StickUnlock";
+
+/** The "token" of a write to an ordinary folder, which needs none. */
+export const NO_STICK_TOKEN = "";
 
 /** What a staged write shows and plans. */
 export interface StickWriteQuestion {
@@ -80,8 +92,11 @@ export interface StickWriteGate {
 
 interface Asking {
   id: number;
+  path: string;
   name: string;
   spare: boolean;
+  /** Stick Protection as planned; the dialog unlocks it before the hold. */
+  protection: StickProtection;
   title: string;
   lines: readonly string[];
   answer: (yes: boolean) => void;
@@ -154,17 +169,20 @@ export function useStickWriteGate({ sticks, refresh, refuse }: {
       return null;
     }
     if (latest.current !== id) return null;
-    if ((plan.pending && question.plan.kind !== "settle") || plan.approval === null) {
+    // An ordinary folder: nothing to confirm (wbx-45.4, third review).
+    if (!plan.onStick) return NO_STICK_TOKEN;
+    if ((plan.pending && question.plan.kind !== "settle") || plan.plan === null) {
       refuse(stickRefusal({ path, name: stick?.name ?? path, outline: { pending: true, libraries: [] } }, false) ?? "");
       void refresh(path);
       return null;
     }
-    const approval = plan.approval;
+    const planId = plan.plan;
     // A Spare stick only when both readings say so; anything else is held for as a Gig stick.
     const spare = stick?.outline?.spare === true && plan.spare;
     const lines = [...question.lines, ...describeStickPlan(plan)];
+    const protection: StickProtection = { protected: plan.protected, spare: plan.spare, name: plan.stickName, revision: 0 };
     const yes = await new Promise<boolean>((answer) => {
-      const entry: Asking = { id, name: stick?.name ?? path, spare, title: question.title, lines, answer };
+      const entry: Asking = { id, path, name: stick?.name ?? path, spare, protection, title: question.title, lines, answer };
       shown.current = entry;
       setAsking(entry);
     });
@@ -172,9 +190,20 @@ export function useStickWriteGate({ sticks, refresh, refuse }: {
       shown.current = null;
       setAsking(null);
     }
-    if (!yes) return null;
+    const backend = await getBackend();
+    if (!yes) {
+      void backend.stickWriteRevoke(planId).catch(() => undefined);
+      return null;
+    }
+    let token: string;
+    try {
+      token = await backend.stickWriteApprove(planId);
+    } catch (error) {
+      refuse(error instanceof Error ? error.message : "The write could not be confirmed, so nothing was written.");
+      return null;
+    }
     setChecking((current) => new Map(current).set(path, stick?.outline ?? null));
-    return approval;
+    return token;
   }, [refresh, refuse]);
 
   /** A Stick just mounted or opened may not be read yet: its first outline is waited for, briefly. */
@@ -242,8 +271,11 @@ const KEY_GRACE_MS = 400;
 type Holder = { pointer: number } | { key: string };
 
 /** The staged write, and the hold that confirms it. */
-function HoldDialog({ name, spare, title, lines, answer }: Asking) {
+function HoldDialog({ path, name, spare, protection, title, lines, answer }: Asking) {
   const hold = stickHoldMs(spare);
+  // Protected until unlocked here or elsewhere: the hold cannot be made.
+  const [guard, setGuard] = useState(protection);
+  const locked = guard.protected;
   const [holding, setHolding] = useState(false);
   const [interrupted, setInterrupted] = useState(false);
   const timer = useRef<number | null>(null);
@@ -294,7 +326,7 @@ function HoldDialog({ name, spare, title, lines, answer }: Asking) {
   }, [stop]);
 
   const start = (who: Holder) => {
-    if (holder.current !== null || settled.current) return;
+    if (holder.current !== null || settled.current || locked) return;
     holder.current = who;
     setInterrupted(false);
     setHolding(true);
@@ -321,7 +353,7 @@ function HoldDialog({ name, spare, title, lines, answer }: Asking) {
     }
     if (event.key === "Tab") {
       // The focus stays in the dialog.
-      const stops = [...(dialog.current?.querySelectorAll<HTMLElement>("button:not(:disabled)") ?? [])];
+      const stops = [...(dialog.current?.querySelectorAll<HTMLElement>("button:not(:disabled), input") ?? [])];
       if (stops.length === 0) return;
       const at = stops.indexOf(document.activeElement as HTMLElement);
       const next = stops[(at + (event.shiftKey ? -1 : 1) + stops.length) % stops.length];
@@ -358,8 +390,11 @@ function HoldDialog({ name, spare, title, lines, answer }: Asking) {
             {lines.map((line, at) => <li key={`${at}:${line}`}>{line}</li>)}
           </ul>
         </div>
+        <StickUnlock path={path} protection={guard} onChange={setGuard} />
         <p className={styles.note} role="status">
-          {interrupted
+          {locked
+            ? `Unlock ${guard.name} to write to it.`
+            : interrupted
             ? "The hold was interrupted. Press and hold again to write."
             : `Hold the button for ${seconds} second${seconds === 1 ? "" : "s"} to write. Letting go early writes nothing.`}
         </p>
@@ -378,6 +413,7 @@ function HoldDialog({ name, spare, title, lines, answer }: Asking) {
           <button
             type="button"
             className={styles.hold}
+            disabled={locked}
             data-holding={holding || undefined}
             style={{ "--hold-ms": `${hold}ms` } as React.CSSProperties}
             onPointerDown={(event) => {

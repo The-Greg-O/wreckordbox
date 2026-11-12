@@ -16,7 +16,9 @@
  * settles it only when the DJ presses that button (wbx-45.5).
  */
 import { useStickWriteGateContext } from "@/views/shell/StickWriteGate";
-import { useCallback, useEffect, useState } from "react";
+import { StickUnlock } from "@/views/shell/StickUnlock";
+import { useStickProtection } from "@/store/useStickProtection";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { getBackend } from "@/ipc/client";
 import type { Device, DeviceSettings, TreeNode } from "@/ipc/types";
@@ -70,6 +72,10 @@ export function DevicePanel({
   busy = false,
 }: DevicePanelProps) {
   const [tab, setTab] = useState<DeviceTab>("general");
+  // Stick Protection (wbx-45.11): shown, unlocked and locked here.
+  const sticks = useMemo(() => [device], [device]);
+  const protection = useStickProtection(sticks).get(device.path);
+  const protectionRow = protection === undefined ? null : <StickUnlock path={device.path} protection={protection} />;
   const [settings, setSettings] = useState<DeviceSettings | null>(null);
   // The stick's last write did not finish; nothing is read until it is settled.
   const [unfinished, setUnfinished] = useState(false);
@@ -162,6 +168,7 @@ export function DevicePanel({
     const wording = unfinishedWriteWording(device.name);
     return (
       <section className={styles.panel} aria-label={`Device ${device.name}`}>
+        {protectionRow}
         <div className={styles.body}>
           <div role="group" aria-label={wording.label} className={styles.unfinished}>
             <p className={styles.unfinishedTitle}>{UNFINISHED_WRITE}</p>
@@ -179,6 +186,7 @@ export function DevicePanel({
 
   return (
     <section className={styles.panel} aria-label={`Device ${device.name}`}>
+      {protectionRow}
       <div className={styles.strip} role="tablist" aria-label="Device settings">
         {TABS.map((t) => (
           <button

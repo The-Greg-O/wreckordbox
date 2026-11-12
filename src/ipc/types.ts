@@ -269,7 +269,7 @@ export interface AppErrorDto {
    * report this instead of settling it; `settleStick` is the action that
    * does (wbx-45.5).
    */
-  kind: "readOnly" | "notFound" | "malformed" | "cancelled" | "conflict" | "unfinishedWrite" | "internal";
+  kind: "readOnly" | "notFound" | "malformed" | "cancelled" | "conflict" | "unfinishedWrite" | "stickProtected" | "internal";
   message: string;
   detail?: string;
 }
@@ -1018,6 +1018,15 @@ export interface Backend {
    * shows it before the DJ confirms the write.
    */
   stickWritePlan(request: StickWriteRequest): Promise<StickWritePlan>;
+  /** The DJ held to confirm the plan: the token its write carries. Refused when the Stick changed since. */
+  stickWriteApprove(plan: string): Promise<string>;
+  /** The DJ cancelled the plan: it can no longer be confirmed. */
+  stickWriteRevoke(plan: string): Promise<void>;
+  /** Stick Protection (wbx-45.11) of the Stick at `path`. */
+  stickProtection(path: string): Promise<StickProtection>;
+  /** Unlocks the Stick until it is ejected, removed or locked; a Gig stick needs its `name` typed. */
+  stickUnlock(path: string, name?: string): Promise<StickProtection>;
+  stickLock(path: string): Promise<StickProtection>;
 
   estimateSync(
     playlists: string[],
@@ -1159,6 +1168,21 @@ export interface Backend {
   devicePlaylistEdit(path: string, format: DeviceFormat, edit: DevicePlaylistEdit, approval?: string): Promise<DevicePlaylistEditResult>;
   /** Analyse files already on this stick and add them to an existing device playlist in one publication. */
   devicePlaylistAddFiles(path: string, format: DeviceFormat, playlist: string, tracks: string[], approval?: string): Promise<DevicePlaylistEditResult>;
+  /**
+   * Library tracks, in this order, into a Stick playlist as one approved
+   * write: those the Stick lacks exported first, each resolved to the
+   * Stick's own row by the backend, those it holds left out unless `duplicates`.
+   */
+  devicePlaylistAddLibraryTracks(
+    path: string,
+    format: DeviceFormat,
+    playlist: string,
+    tracks: string[],
+    duplicates: boolean,
+    defaults?: StickDefaults,
+    compatibilityFormat?: StickCompat,
+    approval?: string,
+  ): Promise<DevicePlaylistEditResult>;
   /**
    * The rows of `tracks` whose track a stick playlist already holds, each
    * once: what rekordbox asks Add or Skip about before adding. Only reads.
@@ -1566,17 +1590,27 @@ type StickCompat = "wav" | "aiff" | "mp3";
 
 /** A Stick write the window asks to plan (`stickWritePlan`); each matches one Stick-writing call. */
 export type StickWriteOperation =
-  | { kind: "exportPlaylist"; playlist: string; deleteUnlistedMusic?: boolean; compatibilityFormat?: StickCompat }
-  | { kind: "exportTracks"; tracks: string[]; compatibilityFormat?: StickCompat }
-  | { kind: "sync"; playlists: string[]; deleteUnlistedMusic?: boolean; automatic?: boolean; compatibilityFormat?: StickCompat }
-  /** Tracks into a Stick playlist: `exportFirst` (Library ids) go on the Stick first, then at most `count` entries. */
-  | { kind: "addToPlaylist"; format: DeviceFormat; playlist: string; exportFirst: string[]; count: number; duplicates: boolean; compatibilityFormat?: StickCompat }
+  | { kind: "exportPlaylist"; playlist: string; deleteUnlistedMusic?: boolean; defaults?: StickDefaults; compatibilityFormat?: StickCompat }
+  | { kind: "exportTracks"; tracks: string[]; defaults?: StickDefaults; compatibilityFormat?: StickCompat }
+  | { kind: "sync"; playlists: string[]; deleteUnlistedMusic?: boolean; automatic?: boolean; defaults?: StickDefaults; compatibilityFormat?: StickCompat }
+  /** Library tracks, in this order, into a Stick playlist; those the Stick lacks are exported to it first. */
+  | { kind: "addLibraryTracks"; format: DeviceFormat; playlist: string; tracks: string[]; duplicates: boolean; defaults?: StickDefaults; compatibilityFormat?: StickCompat }
   | { kind: "playlistEdit"; format: DeviceFormat; edit: DevicePlaylistEdit }
   | { kind: "addFiles"; format: DeviceFormat; playlist: string; files: string[] }
   | { kind: "saveSettings"; settings: DeviceSettings }
   | { kind: "settle" }
-  | { kind: "ensureLibrary" }
+  | { kind: "ensureLibrary"; defaults?: StickDefaults }
   | { kind: "format"; layout: FormatLayout };
+
+/** Stick Protection (wbx-45.11): whether a Stick may be written to now. */
+export interface StickProtection {
+  protected: boolean;
+  /** Carries the Spare stick marker: unlocks with a confirmation. */
+  spare: boolean;
+  /** The Stick's name, typed to unlock a Gig stick. */
+  name: string;
+  revision: number;
+}
 
 export interface StickWriteRequest {
   destination: string;
@@ -1584,11 +1618,17 @@ export interface StickWriteRequest {
 }
 
 /**
- * What a Stick write would do, and the approval the write must carry.
- * `pending`: the Stick holds an unfinished write; nothing is planned and
- * there is no approval.
+ * What a Stick write would do, and the id of the plan the DJ confirms
+ * (`stickWriteApprove` turns it into the write's token after the hold).
+ * `pending`: the Stick holds an unfinished write; nothing is planned.
+ * `onStick` false: an ordinary folder, which needs no plan or unlock.
  */
 export interface StickWritePlan {
+  onStick: boolean;
+  /** The Stick's name, typed to unlock a Gig stick. */
+  stickName: string;
+  /** Stick Protection refuses any write now: the DJ must unlock it first. */
+  protected: boolean;
   spare: boolean;
   pending: boolean;
   /** Whether the audio counts were worked out (not on a Stick whose library could not be read for them without writing). */
@@ -1604,9 +1644,11 @@ export interface StickWritePlan {
   trackChanges: { title: string; fields: string[] }[];
   /** Tracks whose cues and analysis are written from the Library (not itemised). */
   analysisWritten: number;
-  playlists: { name: string; folder: boolean; change: "created" | "resynchronised"; added: number | null; removed: number | null }[];
+  playlists: { name: string; folder: boolean; change: "created" | "resynchronised"; added: number | null; removed: number | null; reordered: boolean | null }[];
   netAdditionalBytes: number;
-  approval: string | null;
+  /** Library tracks added to a Stick playlist: how many entries go in. */
+  adding: number | null;
+  plan: string | null;
 }
 
 export interface SyncPlaylist {

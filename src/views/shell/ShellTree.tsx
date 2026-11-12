@@ -293,6 +293,12 @@ export function ShellTree({
         {row.kind === "stick" ? <span className={styles.stickLabel} aria-hidden>{t("Stick")} ·</span> : null}
         {act.rename(row, name) ?? <span className={styles.name} data-name>{name}</span>}
         {row.count !== undefined ? <span className={styles.count} aria-hidden>{row.count}</span> : null}
+        {row.protection === undefined ? null : (
+          <span className={styles.protection} data-stick-protection={row.protection}
+            title={row.protection === "protected" ? t("Protected: nothing is written to it until it is unlocked") : t("Unlocked until it is ejected or removed")}>
+            {row.protection === "protected" ? t("Protected") : t("Unlocked")}
+          </span>
+        )}
         {act.end(row)}
       </div>
     );

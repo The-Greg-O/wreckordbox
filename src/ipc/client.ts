@@ -7,7 +7,7 @@
 import { detectPlatform } from "@/lib/shortcuts";
 import { confirmHandler } from "./confirmHost";
 import type {
-  AnalysisStageDescriptor, AnalysisResult, AudioDevices, Backend, Backup, BackupProgress, BackupSizes, ConfirmReplace, Cue, SyncEstimate, StickWritePlan, DeckEvent, Device, DeviceLibrary,
+  AnalysisStageDescriptor, AnalysisResult, AudioDevices, Backend, Backup, BackupProgress, BackupSizes, ConfirmReplace, Cue, SyncEstimate, StickWritePlan, StickProtection, DeckEvent, Device, DeviceLibrary,
   DevicePlaylistEditResult, DevicePlaylistImportPlan, DevicePlaylistImportResult, DeviceSettings, DeviceSyncState,
   Diagnostics, Duplicates, LibraryProtection, LogPage, GridState, Limiter, PreferencesRequest, SmartRule, SyncDeviceReport, SyncProgress, XmlImportReport,
   ExportProgress, ExportReport, ExplorerChildren, ExplorerRoot, FilterValues, FolderPlaylistReport, Phrase, ImportReport,
@@ -607,6 +607,16 @@ async function realBackend(): Promise<Backend> {
         approvals: approvals ?? {},
       }),
     stickWritePlan: (request) => invoke<StickWritePlan>("stick_write_plan", { request }),
+    stickWriteApprove: (plan) => invoke<string>("stick_write_approve", { plan }),
+    stickWriteRevoke: (plan) => invoke<void>("stick_write_revoke", { plan }),
+    stickProtection: (path) => invoke<StickProtection>("stick_protection", { path }),
+    stickUnlock: (path, name) => invoke<StickProtection>("stick_unlock", { path, name: name ?? null }),
+    stickLock: (path) => invoke<StickProtection>("stick_lock", { path }),
+    devicePlaylistAddLibraryTracks: (path, format, playlist, tracks, duplicates, defaults, compatibilityFormat, approval) =>
+      invoke<DevicePlaylistEditResult>("device_playlist_add_library_tracks", {
+        path, format, playlist, tracks, duplicates,
+        defaults: defaults ?? null, compatibilityFormat: compatibilityFormat ?? null, approval: approval ?? null,
+      }),
     estimateSync: (playlists, destinations, deleteUnlistedMusic, compatibilityFormat) =>
       invoke<SyncEstimate[]>("estimate_sync", {
         playlists,

@@ -761,7 +761,10 @@ export function SyncManager({ windowed = false, onClose, onSynced, onReady, onOp
           const approval = await gate.approve(path, {
             title: `Sync ${playlists.length} playlist${playlists.length === 1 ? "" : "s"} to ${nameOf(path)}`,
             lines: [],
-            plan: { kind: "sync", playlists, deleteUnlistedMusic, automatic: false, ...(compatibilityFormat ? { compatibilityFormat } : {}) },
+            plan: {
+              kind: "sync", playlists, deleteUnlistedMusic, automatic: false,
+              ...(stickDefaults ? { defaults: stickDefaults } : {}), ...(compatibilityFormat ? { compatibilityFormat } : {}),
+            },
           });
           if (approval !== null) approvals[path] = approval;
         }
