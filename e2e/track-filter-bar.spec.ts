@@ -66,7 +66,7 @@ test("the bar offers MyTags by category, Energy, Prep colour, BPM, key and text"
   for (const name of ["Situation", "Components", "Energy", "Prep colour", "BPM", "Key"]) {
     await expect(control(page, name)).toBeVisible();
   }
-  await expect(bar(page).getByRole("searchbox", { name: "Filter text" })).toBeVisible();
+  await expect(bar(page).getByRole("textbox", { name: "Filter text" })).toBeVisible();
 });
 
 test("Energy and BPM ranges narrow All Tracks to exactly the rows that fit, with the count", async ({ page }) => {
@@ -145,7 +145,7 @@ test("a Prep colour keeps only rows with that stripe", async ({ page }) => {
 test("text narrows together with the fields, and is the list's search", async ({ page }) => {
   await open(page);
   const total = await listed(page);
-  const text = bar(page).getByRole("searchbox", { name: "Filter text" });
+  const text = bar(page).getByRole("textbox", { name: "Filter text" });
   await text.fill("Single");
   const matching = await listed(page);
   expect(matching).toBeLessThan(total);

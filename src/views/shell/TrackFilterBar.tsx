@@ -103,7 +103,7 @@ export function TrackFilterBar({ model, onChange, values, valuesError, count, ke
           {control({ kind: "key" }, "Key", said.keys)}
           <input
             className={styles.text}
-            type="search"
+            type="text"
             aria-label="Filter text"
             placeholder="Text"
             value={model.text}
