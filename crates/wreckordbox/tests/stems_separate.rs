@@ -125,6 +125,20 @@ fn separating_a_track_keeps_four_stems_in_the_sidecar_each_as_long_as_their_pare
     assert_eq!(sandbox.engine_runs(), 1);
 }
 
+#[test]
+fn stems_are_kept_while_library_protection_is_on_for_the_sidecar_is_not_the_library() {
+    let sandbox = Sandbox::new();
+    let track = import(&sandbox, "Protected.wav", 800);
+    sandbox.protect(true);
+
+    let stems = separate(&sandbox, &track);
+
+    assert_eq!(roles(&stems["stems"]).len(), 4);
+    // The Library itself is still closed to change.
+    let rate = sandbox.cli(&["--json", "tracks", "rate", &track, "3"]);
+    assert_eq!(rate.error_json()["error"]["code"], "library_protected");
+}
+
 fn show(sandbox: &Sandbox, track: &str) -> serde_json::Value {
     let run = sandbox.cli(&["--json", "stems", "show", track]);
     assert!(run.status.success(), "{}", run.stderr);
