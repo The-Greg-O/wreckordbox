@@ -249,14 +249,11 @@ impl OpenLibrary {
         let previous = track(&before, row);
         let id = previous.id.clone();
         let stars = edit.rating;
-        let ((), change) = self.recorded_edit(
-            Touched::Metadata(vec![id.clone()]),
-            TRACK_EDIT,
-            |writer| {
+        let ((), change) =
+            self.recorded_edit(Touched::Metadata(vec![id.clone()]), TRACK_EDIT, |writer| {
                 let (_, recorded) = writer.set_rating_with_undo(&id, stars)?;
                 Ok(((), LibraryEdit::Track(vec![recorded])))
-            },
-        )?;
+            })?;
         // Read back from the index the edit refreshed, not assumed.
         let after = self.index()?;
         let rating = after

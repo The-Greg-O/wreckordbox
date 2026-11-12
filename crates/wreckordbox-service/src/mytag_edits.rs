@@ -12,8 +12,8 @@
 use rbl_db::export_info::MyTagRow;
 use rbl_db::write::MY_TAG_LIMIT;
 use rbl_index::smart::my_tag_key;
-use rbl_library::read::my_tag_catalogue;
 use rbl_library::history::{LibraryEdit, TRACK_EDIT};
+use rbl_library::read::my_tag_catalogue;
 use rbl_library::{my_tags, Touched};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

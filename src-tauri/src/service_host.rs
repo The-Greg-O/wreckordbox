@@ -26,7 +26,9 @@ use std::sync::{Arc, Weak};
 
 use rbl_db::LibraryLocation;
 use rbl_library::Host;
-use wreckordbox_service::{codes, events, protection, ChangeKind, Config, LibraryChanged, Service, ServiceError};
+use wreckordbox_service::{
+    codes, events, protection, ChangeKind, Config, LibraryChanged, Service, ServiceError,
+};
 
 use crate::state::AppState;
 
@@ -149,7 +151,9 @@ impl AppState {
                             front.library_changed(change);
                         }
                     } else if event.event == protection::PROTECTION_CHANGED {
-                        if let Ok(now) = serde_json::from_value::<protection::Protection>(event.data) {
+                        if let Ok(now) =
+                            serde_json::from_value::<protection::Protection>(event.data)
+                        {
                             front.protection_changed(now.protect_library);
                         }
                     }
@@ -278,7 +282,10 @@ pub fn service_problem(state: tauri::State<'_, Arc<AppState>>) -> Option<String>
 /// the service cannot read; this file, in the folder the two share, is
 /// what the service obeys (`wreckordbox_service::protection`).
 #[tauri::command]
-#[allow(clippy::needless_pass_by_value, reason = "a command is handed its state by value")]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "a command is handed its state by value"
+)]
 pub fn library_protection(state: tauri::State<'_, Arc<AppState>>) -> Option<bool> {
     protection::stored(state.core().recovery_dir())
 }
@@ -286,8 +293,15 @@ pub fn library_protection(state: tauri::State<'_, Arc<AppState>>) -> Option<bool
 /// Records Library Protection for the Library service, when the DJ turns
 /// it in Preferences.
 #[tauri::command]
-#[allow(clippy::needless_pass_by_value, reason = "a command is handed its state by value")]
-pub fn record_library_protection(state: tauri::State<'_, Arc<AppState>>, on: bool) -> Result<(), crate::error::AppError> {
-    protection::store(state.core().recovery_dir(), on)
-        .map_err(|error| crate::error::AppError::internal(format!("could not record Library Protection: {error}")))
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "a command is handed its state by value"
+)]
+pub fn record_library_protection(
+    state: tauri::State<'_, Arc<AppState>>,
+    on: bool,
+) -> Result<(), crate::error::AppError> {
+    protection::store(state.core().recovery_dir(), on).map_err(|error| {
+        crate::error::AppError::internal(format!("could not record Library Protection: {error}"))
+    })
 }
