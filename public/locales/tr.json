@@ -1708,5 +1708,8 @@
   "Runs unavailable": "Çalışmalar kullanılamıyor",
   "{count} Stick loads in progress": "{count} USB yüklemesi sürüyor",
   "Analyzing {done}/{total} tracks": "{done}/{total} parça analiz ediliyor",
-  "{count} failed": "{count} başarısız"
+  "{count} failed": "{count} başarısız",
+  "Dismiss": "Dismiss",
+  "Theme file": "Theme file",
+  "line {line}": "line {line}"
 }

@@ -296,6 +296,18 @@ impl Service {
         self.shared.answer(None, &request).0
     }
 
+    /// A track's Stems for the renderer, verified current for its audio as
+    /// it is now (fingerprinted, with stale marking): the only way the
+    /// service hands Stems to `wreckordbox_render`. See `render_stems`.
+    pub fn current_stems_for_render(
+        &self,
+        track_id: &str,
+    ) -> Result<crate::render_stems::StemsForRender, ServiceError> {
+        let shared = &self.shared;
+        let found = shared.with_library(|library| crate::stems::parent(library, track_id))??;
+        crate::render_stems::current(&shared.stems, &found)
+    }
+
     /// What the process hosting the service has not seen for itself, from
     /// now on: each change a client's command (or [`call`](Self::call))
     /// made, as the `library_changed` a subscribed client is sent, and

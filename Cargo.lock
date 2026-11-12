@@ -4198,6 +4198,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "time",
+ "toml 0.8.2",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -7158,6 +7159,7 @@ dependencies = [
 name = "wreckordbox-render"
 version = "1.10.0"
 dependencies = [
+ "mp3lame-encoder",
  "rbl-audio",
  "rbl-deck",
  "rustix",
@@ -7182,6 +7184,7 @@ dependencies = [
  "tracing",
  "wreckordbox-intensity",
  "wreckordbox-native-stems",
+ "wreckordbox-render",
  "wreckordbox-sidecar",
 ]
 

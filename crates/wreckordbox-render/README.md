@@ -1,7 +1,7 @@
 # wreckordbox-render
 
-The offline renderer behind Mutants (ADR 0008): decoded audio, a key shift and
-a tempo in; an audio file out. It has no Tauri, service or Library dependency.
+The offline renderer behind Mutants (ADR 0008): decoded audio (a track, or the
+kept Stems of one), a key shift and a tempo in; an audio file out. It has no Tauri, service or Library dependency.
 The Stick load and the audition command both call it, so a Mutant sounds the
 same in both.
 
@@ -20,15 +20,28 @@ let rendered = render(
 - `Source` is where audio comes from: interleaved stereo `f32` a block at a
   time, a sample rate, and a length hint. `TrackSource` is a whole file decoded
   through `rbl-audio`, on rekordbox's timeline, so the parent's grid fits the
-  render. `MemorySource` is samples in memory. A sum of kept Stems is another
-  `Source`; nothing else changes.
+  render. `MemorySource` is samples in memory. `StemSum` is the kept Stems of
+  a set (`Stems`: the parent's length and a file per Stem), added sample for
+  sample, checked against the parent file (`StemSum::open(parent, stems,
+  kept)`). `MutantSource::open(parent, kept, stems)` is what a Mutant renders
+  from: the parent itself when every Stem is kept (no Stem edit; the Stems
+  are not opened), the `StemSum` otherwise (`StemsMissing` without Stems,
+  `NothingKept` when none is kept).
 - `Edits` is a key shift in semitones (pitch moves, tempo does not) and a tempo
   ratio (1.06 is six percent fast and a file that much shorter; pitch does not
   move). The limits here are the stretcher's (an octave, half to double); a
   Mutant's narrower limits are the caller's rule.
-- `Destination` is a path and a `Format`. `Format::Wav` is 16-bit PCM stereo at
-  the source's rate. Other formats are new `Format` variants behind the
-  crate's `Encoder` trait.
+- `Destination` is a path and a `Format`: `Wav`, `Aiff` or `Mp3`, always
+  16-bit stereo at the source's rate. `Format::for_parent(path)` is the
+  default and always lossless: AIFF for an AIFF parent, WAV for every other
+  (MP3, FLAC and M4A parents included). `Destination::for_parent(parent,
+  name)` adds the matching extension to `name`. MP3 only when a caller names
+  `Format::Mp3`: the export's LAME settings, 320 kbit/s constant, best
+  quality, with an Info frame, at 32, 44.1 or 48 kHz (another rate is
+  refused rather than resampled).
+- `Rendered` says what was written: `frames` (every frame the render made,
+  all in the file), `sample_rate`, and, apart, `encoder_delay` and `padding`
+  (0 and 0 for WAV and AIFF; for MP3 as the LAME tag records them).
 - The callback hears `Progress` (source frames done, and the total when known)
   about twice per second of source audio, and may answer `Proceed::Cancel`.
 
@@ -49,7 +62,39 @@ let rendered = render(
   then renames. A source is only ever opened for reading.
 - **A broken source is an error, not a shorter render.** A read that fails, a
   decoder that gives up, or a WAV, AIFF or FLAC file that ends before the
-  frames it declares (`Source(AudioError::Truncated)`) writes nothing.
+  frames it declares, or an MP3 that ends a frame or more before the count in
+  its Xing, Info or VBRI frame, or an M4A that ends a packet or more before
+  its sample table (`Source(AudioError::Truncated)`), writes nothing. Most
+  cut M4As do not open at all; one whose `mdat` runs to the end of the file
+  does, and is refused here.
+- **Stems fit their parent or are refused.** Every kept Stem must be exactly
+  `Stems::frames` long (`StemLength`, from its header before anything is
+  written, or from what it decodes to) and at 44.1 kHz (`StemRate`). The
+  parent file itself must last as long: exactly `Stems::frames` at 44.1 kHz,
+  within one 44.1 kHz frame at another rate (`StemsDoNotFitParent`). A lossy
+  parent (MP3, M4A) is refused (`StemAlignmentUnknown`): its decoded length
+  carries encoder delay and padding and where its Stems sit on its timeline
+  is not established (wbx-49.1). Whether the Stems were made from this audio
+  (and not from other audio of the same length) is not the renderer's to
+  know: the service hands over only verified-current Stems
+  (`Service::current_stems_for_render`).
+- **A Stem sum is exact.** Kept Stems are added as 16-bit integers: one kept
+  Stem unedited renders as itself, several as their exact sum, and a muted
+  one is not in the file at all. The sum is not scaled; past full scale it
+  clips, as any render does. Stem-derived audio is at the Stems' rate.
+- **WAV and AIFF are exact to the frame.** They decode to exactly
+  `Rendered::frames`, sample for sample what was rendered.
+- **An MP3 keeps every frame and says what it added.** Nothing is dropped or
+  moved to make up for encoder delay. The file holds LAME's delay (576
+  frames), then every rendered frame, then padding to a whole MPEG frame;
+  `Rendered` reports the three apart. `rbl-audio` decodes it to the Info
+  frame (1,152 frames of silence in its model of rekordbox) plus delay plus
+  frames plus padding, and the decoder adds its own 529-frame delay inside
+  that. **Where a deck or rekordbox puts the first rendered frame, and so
+  where the parent's beat grid lands on an MP3 Mutant, is not known**: it
+  depends on whether the player honours the LAME tag's delay and how it
+  treats the Info frame, which needs a deck to check. Use WAV or AIFF (the
+  default) wherever the grid matters.
 - **No edits, no change.** With a zero key shift and a tempo of exactly 1.0 the
   stretcher is not in the path, as on a deck, and the render matches the source
   sample for sample: the same frame count and, for a 16-bit source, the same
@@ -69,11 +114,17 @@ let rendered = render(
   (measured at 0.68 of the level over the first 20 ms for a tempo change, 0.42
   with a key shift three semitones down). Nothing is lost or moved.
 - **16-bit.** `TrackSource` hands out the 16-bit frames `rbl-audio` decodes and
-  `Format::Wav` writes 16-bit, whatever the source's depth.
-- **A lossy file cut short is not detected.** An MP3 or AAC file's length is
-  an estimate, so one that was truncated renders as the shorter file it now
-  is. A damaged packet inside any file is its own length of silence, as in
-  rekordbox and on a deck.
+  every format is written at 16 bits, whatever the source's depth. Stems are
+  16-bit already.
+- **An MP3 with no counting tag cut short is not detected.** Its length is an
+  estimate from its size, so one that was truncated renders as the shorter
+  file it now is. An MP3 whose tag's count is stale (cut by hand without
+  rewriting the tag) is refused although it plays. A damaged packet inside
+  any file is its own length of silence, as in rekordbox and on a deck.
+- **An MP3 render is lossy and not exact in length** (see above). It is only
+  written when asked for by name.
+- **A Stem edit of a lossy parent is refused** until wbx-49.1 measures where
+  the separation engine's decode sits on the parent's timeline.
 - **The rate is the source's.** A deck stretches at the device's rate after
   resampling; a render stretches at the file's. Same engine, same settings.
 
@@ -93,7 +144,8 @@ and a file in the wrong key is worse than no file.
 ## Tests and cost
 
 `cargo test -p wreckordbox-render` renders generated tones and measures the
-files, read back through `rbl-audio` (`tests/render.rs`), and checks what a
+files, read back through `rbl-audio` (`tests/render.rs`; Stems in
+`tests/stems.rs`, formats in `tests/formats.rs`), and checks what a
 render does to files and to broken sources (`tests/safety.rs`, through the
 `render_on` seam). `cargo run --release -p wreckordbox-render
 --example rendercost` times four minutes of generated audio, in wall time and
