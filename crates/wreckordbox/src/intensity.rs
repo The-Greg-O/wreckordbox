@@ -107,6 +107,13 @@ pub fn run(
         IntensityCommands::Measure(args) => {
             // Progress comes as events, which a connection must ask for.
             client.subscribe()?;
+            let line = |done: usize, total: usize, status: &str, id: &str, title: &str| {
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "[{done}/{total}] {status}: {id} \"{title}\""
+                );
+            };
+            let mut shown = std::collections::HashSet::new();
             let measured: Measured = client.call_watching(
                 commands::INTENSITY_MEASURE,
                 json!(args.request()),
@@ -119,20 +126,35 @@ pub fn run(
                         return;
                     };
                     // One line per track settled.
-                    if progress.status != "measuring" {
-                        let mut stderr = std::io::stderr();
-                        let _ = writeln!(
-                            stderr,
-                            "[{}/{}] {}: {} \"{}\"",
+                    if progress.status != "measuring" && shown.insert(progress.track_id.clone()) {
+                        line(
                             progress.done,
                             progress.total,
-                            progress.status,
-                            progress.track_id,
-                            progress.title
+                            &progress.status,
+                            &progress.track_id,
+                            &progress.title,
                         );
                     }
                 },
             )?;
+            // Events travel apart from the answer and may come after it:
+            // the tracks settled but not yet shown are shown from it.
+            if !as_json {
+                let mut done = shown.len();
+                for track in &measured.tracks {
+                    if track.status == Status::Cancelled || shown.contains(&track.track.id) {
+                        continue;
+                    }
+                    done += 1;
+                    line(
+                        done,
+                        measured.total,
+                        status_word(track.status),
+                        &track.track.id,
+                        &track.track.title,
+                    );
+                }
+            }
             Ok(if as_json {
                 json!(measured).to_string()
             } else {
