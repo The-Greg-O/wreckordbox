@@ -7,7 +7,12 @@
 //! A fixture Library in a temporary folder, a mock app in place of the
 //! window, and the command given that fixture and a private runtime folder:
 //! nothing here can reach the installed Library.
-#![allow(clippy::pedantic, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::pedantic,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -28,7 +33,10 @@ fn wreckordbox() -> &'static PathBuf {
     static BINARY: OnceLock<PathBuf> = OnceLock::new();
     BINARY.get_or_init(|| {
         let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        let built = Command::new(cargo).args(["build", "-p", "wreckordbox"]).status().expect("run cargo");
+        let built = Command::new(cargo)
+            .args(["build", "-p", "wreckordbox"])
+            .status()
+            .expect("run cargo");
         assert!(built.success(), "could not build the wreckordbox command");
         let deps = std::env::current_exe().unwrap();
         let binary = deps.parent().unwrap().parent().unwrap().join("wreckordbox");
@@ -51,9 +59,18 @@ fn hosting_window(labels: &[(u8, &str)]) -> Window {
     let dir = tempfile::tempdir().unwrap();
     let library = dir.path().join("library");
     std::fs::create_dir_all(&library).unwrap();
-    let location = fixture::build(&library, Shape { tracks: 5, ..Shape::default() }).unwrap();
+    let location = fixture::build(
+        &library,
+        Shape {
+            tracks: 5,
+            ..Shape::default()
+        },
+    )
+    .unwrap();
     {
-        let mut writer = rbl_db::write::Writer::open(location.clone(), dir.path().join("fixture-backups")).unwrap();
+        let mut writer =
+            rbl_db::write::Writer::open(location.clone(), dir.path().join("fixture-backups"))
+                .unwrap();
         writer.disable_automatic_backups();
         for (colour, name) in labels {
             writer
@@ -67,7 +84,12 @@ fn hosting_window(labels: &[(u8, &str)]) -> Window {
                 .unwrap();
         }
     }
-    fixture::write_options_json(&dir.path().join("options.json"), location.master_db.to_str().unwrap(), &location.passphrase).unwrap();
+    fixture::write_options_json(
+        &dir.path().join("options.json"),
+        location.master_db.to_str().unwrap(),
+        &location.passphrase,
+    )
+    .unwrap();
     std::fs::create_dir_all(dir.path().join("home")).unwrap();
     let state = AppState::with_backups(dir.path().join("backups"));
     let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
@@ -78,10 +100,19 @@ fn hosting_window(labels: &[(u8, &str)]) -> Window {
     let changes: Arc<Mutex<Vec<u32>>> = Arc::default();
     let seen = Arc::clone(&changes);
     app.listen("library:changed", move |event| {
-        seen.lock().unwrap().push(serde_json::from_str::<u32>(event.payload()).unwrap());
+        seen.lock()
+            .unwrap()
+            .push(serde_json::from_str::<u32>(event.payload()).unwrap());
     });
-    let window = Window { dir, app, location, changes };
-    let protection = tauri::async_runtime::block_on(service_host::set_library_protection(window.state(), false)).unwrap();
+    let window = Window {
+        dir,
+        app,
+        location,
+        changes,
+    };
+    let protection =
+        tauri::async_runtime::block_on(service_host::set_library_protection(window.state(), false))
+            .unwrap();
     assert!(!protection.protect_library);
     service_host::host_with(window.app.handle(), &window.location, &window.config()).unwrap();
     window
@@ -92,7 +123,11 @@ const DJ_LABELS: &[(u8, &str)] = &[(2, "Problem"), (5, "Clean")];
 
 impl Window {
     fn config(&self) -> Config {
-        Config { runtime_dir: self.dir.path().join("run"), idle_exit: None, recovery_dir: self.dir.path().join("backups") }
+        Config {
+            runtime_dir: self.dir.path().join("run"),
+            idle_exit: None,
+            recovery_dir: self.dir.path().join("backups"),
+        }
     }
 
     fn state(&self) -> State<'_, Arc<AppState>> {
@@ -126,18 +161,29 @@ impl Window {
             .output()
             .unwrap();
         let stdout = String::from_utf8(output.stdout).unwrap();
-        assert!(output.status.success(), "{args:?}: {}", String::from_utf8_lossy(&output.stderr));
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("not JSON ({e}): {stdout}"))
     }
 
     fn undo(&self) {
-        tauri::async_runtime::block_on(commands::undo_edit(self.app.handle().clone(), self.state())).unwrap();
+        tauri::async_runtime::block_on(commands::undo_edit(
+            self.app.handle().clone(),
+            self.state(),
+        ))
+        .unwrap();
     }
 
     /// The Intake queue's page as the view reads it.
     fn intake(&self) -> (Vec<Value>, Vec<rbxport_lib::dto::RowDto>) {
         let page = intake_view::queue_page(&self.shared(), IntakeQueueName::Intake, 0, 50).unwrap();
-        (page.queue.unwrap()["tracks"].as_array().unwrap().clone(), page.rows)
+        (
+            page.queue.unwrap()["tracks"].as_array().unwrap().clone(),
+            page.rows,
+        )
     }
 }
 
@@ -158,9 +204,15 @@ fn the_view_sets_a_prep_colour_by_number_when_the_djs_labels_are_other_colours_n
     assert_eq!(colours["clean"]["id"], 5);
 
     let clean = intake_view::set_prep_colour(&state, &track_id(1), Some(5)).unwrap();
-    assert_eq!(clean["prep_colour"], json!({ "id": 5, "colour": "Green", "label": "Clean" }));
+    assert_eq!(
+        clean["prep_colour"],
+        json!({ "id": 5, "colour": "Green", "label": "Clean" })
+    );
     let labelled_green = intake_view::set_prep_colour(&state, &track_id(2), Some(2)).unwrap();
-    assert_eq!(labelled_green["prep_colour"], json!({ "id": 2, "colour": "Red", "label": "Green" }));
+    assert_eq!(
+        labelled_green["prep_colour"],
+        json!({ "id": 2, "colour": "Red", "label": "Green" })
+    );
     assert_eq!(intake_view::counts(&state).unwrap()["intake"], 3);
 }
 
@@ -175,21 +227,37 @@ fn a_cli_edit_reaches_the_hosting_window_and_a_second_client_and_the_queue_the_v
     window.cli(&["tracks", "rate", &id, "4"]);
 
     // The window is told (the view re-reads on `library:changed`) ...
-    eventually("library:changed in the window", || window.changes.lock().unwrap().len() > before);
+    eventually("library:changed in the window", || {
+        window.changes.lock().unwrap().len() > before
+    });
     // ... and so is another client of the service.
-    let heard = watching.next_event(Duration::from_secs(5)).unwrap().unwrap();
+    let heard = watching
+        .next_event(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
     assert_eq!(heard.event, "library_changed");
     // What the view reads next has the new Energy, with no reload.
     let (tracks, rows) = window.intake();
-    let at = tracks.iter().position(|track| track["id"] == id.as_str()).unwrap();
+    let at = tracks
+        .iter()
+        .position(|track| track["id"] == id.as_str())
+        .unwrap();
     assert_eq!(rows[at].rating, 4);
-    assert!(!tracks[at]["needs"].as_array().unwrap().contains(&json!("energy")));
+    assert!(!tracks[at]["needs"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("energy")));
 
     // A Prep colour from the command takes the track out of the queue the view reads.
     window.cli(&["intake", "colour", &id, "Clean"]);
-    let heard = watching.next_event(Duration::from_secs(5)).unwrap().unwrap();
+    let heard = watching
+        .next_event(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
     assert_eq!(heard.event, "library_changed");
-    eventually("the second library:changed", || window.changes.lock().unwrap().len() > before + 1);
+    eventually("the second library:changed", || {
+        window.changes.lock().unwrap().len() > before + 1
+    });
     let (tracks, _) = window.intake();
     assert!(tracks.iter().all(|track| track["id"] != id.as_str()));
 }
@@ -211,7 +279,13 @@ fn a_title_energy_and_prep_colour_edit_from_the_view_are_ledger_entries_and_undo
         None,
     ))
     .unwrap();
-    tauri::async_runtime::block_on(commands::set_track_rating(app(), window.state(), vec![id.clone()], 3)).unwrap();
+    tauri::async_runtime::block_on(commands::set_track_rating(
+        app(),
+        window.state(),
+        vec![id.clone()],
+        3,
+    ))
+    .unwrap();
     intake_view::set_prep_colour(&window.shared(), &id, Some(5)).unwrap();
 
     let runs = window.cli(&["runs", "list"]);
@@ -222,7 +296,12 @@ fn a_title_energy_and_prep_colour_edit_from_the_view_are_ledger_entries_and_undo
         .find(|run| run["source"] == json!({"kind": "dj", "name": "dj"}))
         .expect("the window's Run")
         .clone();
-    let entries = || window.cli(&["runs", "show", &djs["id"].to_string()])["entries"].as_array().unwrap().clone();
+    let entries = || {
+        window.cli(&["runs", "show", &djs["id"].to_string()])["entries"]
+            .as_array()
+            .unwrap()
+            .clone()
+    };
     let edits = entries();
     assert_eq!(edits.len(), 3, "{edits:#?}");
     let subject = format!("track {id}");
@@ -250,7 +329,10 @@ fn a_title_energy_and_prep_colour_edit_from_the_view_are_ledger_entries_and_undo
     }
     // The track is as it was: in Intake, untitled by the DJ, no Energy.
     let (tracks, rows) = window.intake();
-    let at = tracks.iter().position(|track| track["id"] == id.as_str()).expect("back in Intake");
+    let at = tracks
+        .iter()
+        .position(|track| track["id"] == id.as_str())
+        .expect("back in Intake");
     assert_eq!(rows[at].rating, 0);
     assert_ne!(rows[at].title, "Fixed Title");
 }
