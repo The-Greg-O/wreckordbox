@@ -195,6 +195,30 @@ impl Source {
 #[serde(transparent)]
 pub struct RunId(pub i64);
 
+/// A Run as the Sidecar holds it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Run {
+    pub id: RunId,
+    /// Who the work is by.
+    pub source: Source,
+    /// What the work is, for a person.
+    pub description: String,
+    /// Milliseconds since the Unix epoch.
+    pub started_at: i64,
+    /// Set once the Run has ended.
+    pub finished_at: Option<i64>,
+    /// How it went, in a word or a sentence. Set with `finished_at`.
+    pub outcome: Option<String>,
+}
+
+impl Run {
+    /// Whether the Run has ended: nothing more is recorded in it.
+    #[must_use]
+    pub fn is_finished(&self) -> bool {
+        self.finished_at.is_some()
+    }
+}
+
 /// A Fact to record.
 #[derive(Debug, Clone)]
 pub struct NewFact<'a> {
@@ -344,6 +368,31 @@ impl Sidecar {
         Ok(())
     }
 
+    /// One Run by its identifier.
+    pub fn run(&self, run: RunId) -> Result<Option<Run>> {
+        Ok(self
+            .db()
+            .query_row(
+                "SELECT id, source_kind, source_name, description, started_at, finished_at, outcome
+                 FROM run WHERE id = ?1",
+                [run.0],
+                |row| {
+                    Ok(Run {
+                        id: RunId(row.get(0)?),
+                        source: Source {
+                            kind: SourceKind::from_stored(&row.get::<_, String>(1)?),
+                            name: row.get(2)?,
+                        },
+                        description: row.get(3)?,
+                        started_at: row.get(4)?,
+                        finished_at: row.get(5)?,
+                        outcome: row.get(6)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
     /// An empty folder for `run` to write into before its result is
     /// accepted. Inside the Sidecar, so accepting a file is a rename.
     pub fn workspace(&self, run: RunId) -> Result<PathBuf> {
@@ -363,81 +412,25 @@ impl Sidecar {
     /// source is marked superseded by it. Facts from other sources stand
     /// beside it untouched.
     pub fn record(&self, new: &NewFact) -> Result<Fact> {
-        if !(0.0..=1.0).contains(&new.confidence) {
-            return Err(SidecarError::Invalid(format!(
-                "a confidence is from 0 to 1, not {}",
-                new.confidence
-            )));
-        }
-        if new.kind.name.is_empty() || new.track_id.is_empty() {
-            return Err(SidecarError::Invalid(
-                "a Fact needs a kind and a track".to_owned(),
-            ));
-        }
-        if new.kind.nature == Nature::Measurement && new.fingerprint.is_none() {
-            return Err(SidecarError::Invalid(format!(
-                "{} is a Measurement, so it needs the fingerprint of the audio it was made from",
-                new.kind.name
-            )));
-        }
         let mut db = self.db();
         let tx = db.transaction()?;
-        let declared: Option<String> = tx
-            .query_row(
-                "SELECT nature FROM kind WHERE name = ?1",
-                [new.kind.name],
-                |row| row.get(0),
-            )
-            .optional()?;
-        match declared.as_deref().map(Nature::from_stored) {
-            None => {
-                tx.execute(
-                    "INSERT INTO kind (name, nature) VALUES (?1, ?2)",
-                    params![new.kind.name, new.kind.nature.as_str()],
-                )?;
-            }
-            Some(declared) if declared != new.kind.nature => {
-                return Err(SidecarError::KindConflict {
-                    kind: new.kind.name.to_owned(),
-                    declared,
-                    asked: new.kind.nature,
-                });
-            }
-            Some(_) => {}
-        }
-        let at = now();
-        tx.execute(
-            "INSERT INTO fact (track_id, fingerprint, kind, value, source_kind, source_name, confidence, run_id, recorded_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                new.track_id,
-                new.fingerprint.map(Fingerprint::as_str),
-                new.kind.name,
-                new.value.to_string(),
-                new.source.kind.as_str(),
-                new.source.name,
-                new.confidence,
-                new.run.0,
-                at,
-            ],
-        )?;
-        let id = tx.last_insert_rowid();
-        tx.execute(
-            "UPDATE fact SET superseded_at = ?1, superseded_by = ?2
-             WHERE track_id = ?3 AND kind = ?4 AND source_kind = ?5 AND source_name = ?6
-               AND superseded_at IS NULL AND id <> ?2",
-            params![
-                at,
-                id,
-                new.track_id,
-                new.kind.name,
-                new.source.kind.as_str(),
-                new.source.name
-            ],
-        )?;
-        let fact = tx.query_row(&select("WHERE fact.id = ?1"), [id], read_fact)?;
+        let fact = record_in(&tx, new)?;
         tx.commit()?;
         Ok(fact)
+    }
+
+    /// Records several Facts as [`record`](Self::record) records one, all
+    /// of them or, if any is refused, none. They are answered in the order
+    /// given.
+    pub fn record_many(&self, new: &[NewFact]) -> Result<Vec<Fact>> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let facts = new
+            .iter()
+            .map(|new| record_in(&tx, new))
+            .collect::<Result<Vec<Fact>>>()?;
+        tx.commit()?;
+        Ok(facts)
     }
 
     /// Every Fact of `kind` ever recorded for the track, newest first,
@@ -498,6 +491,83 @@ impl Sidecar {
         // statement or one transaction.
         self.db.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// One Fact, inside a transaction: declares the kind, writes the Fact and
+/// supersedes the same source's earlier ones.
+fn record_in(tx: &rusqlite::Transaction, new: &NewFact) -> Result<Fact> {
+    if !(0.0..=1.0).contains(&new.confidence) {
+        return Err(SidecarError::Invalid(format!(
+            "a confidence is from 0 to 1, not {}",
+            new.confidence
+        )));
+    }
+    if new.kind.name.is_empty() || new.track_id.is_empty() {
+        return Err(SidecarError::Invalid(
+            "a Fact needs a kind and a track".to_owned(),
+        ));
+    }
+    if new.kind.nature == Nature::Measurement && new.fingerprint.is_none() {
+        return Err(SidecarError::Invalid(format!(
+            "{} is a Measurement, so it needs the fingerprint of the audio it was made from",
+            new.kind.name
+        )));
+    }
+    let declared: Option<String> = tx
+        .query_row(
+            "SELECT nature FROM kind WHERE name = ?1",
+            [new.kind.name],
+            |row| row.get(0),
+        )
+        .optional()?;
+    match declared.as_deref().map(Nature::from_stored) {
+        None => {
+            tx.execute(
+                "INSERT INTO kind (name, nature) VALUES (?1, ?2)",
+                params![new.kind.name, new.kind.nature.as_str()],
+            )?;
+        }
+        Some(declared) if declared != new.kind.nature => {
+            return Err(SidecarError::KindConflict {
+                kind: new.kind.name.to_owned(),
+                declared,
+                asked: new.kind.nature,
+            });
+        }
+        Some(_) => {}
+    }
+    let at = now();
+    tx.execute(
+        "INSERT INTO fact (track_id, fingerprint, kind, value, source_kind, source_name, confidence, run_id, recorded_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            new.track_id,
+            new.fingerprint.map(Fingerprint::as_str),
+            new.kind.name,
+            new.value.to_string(),
+            new.source.kind.as_str(),
+            new.source.name,
+            new.confidence,
+            new.run.0,
+            at,
+        ],
+    )?;
+    let id = tx.last_insert_rowid();
+    tx.execute(
+        "UPDATE fact SET superseded_at = ?1, superseded_by = ?2
+         WHERE track_id = ?3 AND kind = ?4 AND source_kind = ?5 AND source_name = ?6
+           AND superseded_at IS NULL AND id <> ?2",
+        params![
+            at,
+            id,
+            new.track_id,
+            new.kind.name,
+            new.source.kind.as_str(),
+            new.source.name
+        ],
+    )?;
+    let fact = tx.query_row(&select("WHERE fact.id = ?1"), [id], read_fact)?;
+    Ok(fact)
 }
 
 fn select(rest: &str) -> String {

@@ -77,9 +77,9 @@ impl Host for WindowHost {
         }
     }
 
-    fn wrote_outside_history(&self) {
+    fn history_changed(&self) {
         if let Some(state) = self.0.upgrade() {
-            state.wrote_outside_history();
+            state.history_changed();
         }
     }
 

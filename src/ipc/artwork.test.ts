@@ -3,7 +3,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ARTWORK_RETRIES, ARTWORK_RETRY_MS, attemptUrl, retryDelay } from "./artwork";
+import { ARTWORK_RETRIES, ARTWORK_RETRY_MS, artworkCrossOrigin, attemptUrl, retryDelay } from "./artwork";
 
 describe("retryDelay", () => {
   it("backs off, doubling each time", () => {
@@ -76,5 +76,33 @@ describe("artworkUrl", () => {
     vi.resetModules();
     const { artworkUrl } = await import("./artwork");
     expect(artworkUrl("7")).toBeUndefined();
+  });
+});
+
+describe("artworkCrossOrigin", () => {
+  // As WebKitGTK, WKWebView and WebView2 name themselves.
+  const linux = "Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/60.5 Safari/605.1.15";
+  const mac = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)";
+  const windows = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0";
+  // What the Linux webview is asked for: a Stick's track and a Library's.
+  const stick = "rbl://localhost/artwork/file%3A%2Frun%2Fmedia%2Fdj%2FSTICK%2FContents%2FA%20B%2Fx%20y.aiff";
+  const library = "rbl://localhost/artwork/10000";
+
+  it("asks with CORS from a page the dev server serves on Linux", () => {
+    // WebKitGTK 2.54.0 and 2.54.1 refuse a plain image from the scheme to a
+    // page at `http://localhost:1420` before the request is ever made (#44).
+    expect(artworkCrossOrigin(stick, "http:", linux)).toBe("anonymous");
+    expect(artworkCrossOrigin(library, "http:", linux)).toBe("anonymous");
+    expect(artworkCrossOrigin(library, "https:", linux)).toBe("anonymous");
+  });
+
+  it("leaves the built app on Linux as it was", () => {
+    expect(artworkCrossOrigin(stick, "tauri:", linux)).toBeUndefined();
+  });
+
+  it("leaves macOS and Windows as they were, in development too", () => {
+    expect(artworkCrossOrigin(library, "http:", mac)).toBeUndefined();
+    expect(artworkCrossOrigin(library, "tauri:", mac)).toBeUndefined();
+    expect(artworkCrossOrigin("http://rbl.localhost/artwork/10000", "http:", windows)).toBeUndefined();
   });
 });

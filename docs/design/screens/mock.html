@@ -1,0 +1,263 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>
+@font-face{font-family:"JBM";src:local("JetBrainsMono Nerd Font"),local("JetBrains Mono")}
+:root{--bg:#0e0e14;--panel:#13141c;--base:#1a1b26;--raise:#24283b;--sel:#292e42;--muted:#414868;--fg:#a9b1d6;--dim:#565f89;--bright:#c0caf5;--accent:#7aa2f7;--red:#f7768e;--yellow:#e0af68;--orange:#ff9e64;--green:#9ece6a;--cyan:#0db9d7;--magenta:#bb9af7}
+*{box-sizing:border-box}
+body{margin:0;background:#000}
+#stage{height:800px;container-type:inline-size}
+.m{height:100%;background:var(--base);color:var(--fg);overflow:hidden;display:flex;flex-direction:column;font:12px/1 "JBM",monospace;font-variant-numeric:tabular-nums}
+canvas{position:absolute;inset:0;width:100%;height:100%}.cv{position:relative;overflow:hidden;background:var(--bg)}
+.cell{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:none}.grow{flex:1 1 0;min-width:0}.r{text-align:right}
+kbd{font:inherit;font-size:10.5px;color:var(--accent);border:1px solid var(--muted);border-radius:2px;padding:1px 4px}
+.lbl{font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em}
+.prep-Clean{--p:var(--green)}.prep-Problem{--p:var(--red)}.prep-Delete{--p:var(--dim)}.prep-Sample{--p:var(--magenta)}.prep-Buy{--p:var(--yellow)}.prep-{--p:transparent}
+.tg-0{--t:var(--magenta)}.tg-1{--t:var(--cyan)}.tg-2{--t:var(--yellow)}.tg-3{--t:var(--green)}.tg-4,.tg-5{--t:var(--fg)}
+.chip{color:var(--t);border:1px solid color-mix(in srgb,var(--t) 35%,transparent);padding:2px 5px;border-radius:2px;font-size:10.5px;white-space:nowrap;line-height:1.1}
+.chip.off{color:var(--dim);border-color:var(--raise)}
+.pips{display:inline-flex;gap:2px}.pips i{width:6px;height:10px;background:var(--raise)}.pips i.on{background:var(--e)}.e1{--e:#7aa2f7}.e2{--e:#0db9d7}.e3{--e:#9ece6a}.e4{--e:#ff9e64}.e5{--e:#f7768e}.e0{--e:#414868}
+.btn{border:1px solid var(--muted);padding:5px 8px;border-radius:2px;color:var(--bright);white-space:nowrap}
+.btn.on{background:var(--accent);border-color:var(--accent);color:var(--bg)}.btn.go{border-color:var(--green);color:var(--green)}.btn.no{border-color:var(--red);color:var(--red)}
+/* top */
+.top{flex:none;height:30px;display:flex;align-items:center;gap:4px;padding:0 8px;background:var(--bg);white-space:nowrap}
+.tab{padding:6px 10px;color:var(--dim);display:flex;gap:7px;align-items:center}.tab.on{color:var(--bright);background:var(--base);background-image:linear-gradient(90deg,var(--magenta),var(--orange));background-size:100% 2px;background-repeat:no-repeat}
+.tab em{font-style:normal;color:var(--yellow)}
+.top .rt{margin-left:auto;display:flex;gap:14px;color:var(--dim);align-items:center}
+/* player */
+.player{flex:none;background:linear-gradient(var(--bg),var(--panel));border-bottom:1px solid var(--raise)}
+.strip{display:flex;align-items:center;gap:10px;padding:6px 8px}
+.meta{flex:none;width:300px;white-space:nowrap;display:flex;flex-direction:column;gap:5px;min-width:0}.meta b{color:var(--bright);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.meta span{color:var(--dim)}
+.ovw{flex:1;min-width:0}.ov{height:32px}
+.phr{display:flex;gap:1px;height:12px;margin-top:2px;font-size:9px;line-height:12px;color:#fff}.phr i{font-style:normal;padding-left:4px;overflow:hidden;white-space:nowrap;min-width:0}
+.bj{display:flex;gap:2px;align-items:center}.bj span{padding:5px 6px;border:1px solid var(--raise);color:var(--dim)}.bj .on{color:var(--bg);background:var(--fg);border-color:var(--fg)}
+.big .dt{height:122px;border-top:1px solid var(--raise)}
+.big .ctl{display:flex;gap:9px;align-items:center;padding:7px 8px;border-top:1px solid var(--raise);flex-wrap:wrap}
+.pad{display:inline-flex;flex-direction:column;gap:3px;align-items:center;width:46px;padding:4px 0;border:1px solid var(--raise);font-size:10px;color:var(--dim)}
+.pad b{font-size:12px;color:var(--dim)}.pad.set{border-color:var(--c);color:var(--fg)}.pad.set b{color:var(--c)}
+.grp{display:flex;gap:4px;align-items:center}
+.mut{background:var(--magenta);color:var(--bg);padding:3px 6px;font-weight:700;border-radius:2px;font-size:10.5px}
+/* body */
+.body{flex:1;min-height:0;display:grid;grid-template-columns:186px 1fr}
+.tree{border-right:1px solid var(--raise);background:var(--panel);padding:4px 0;overflow:hidden}
+.tree div{display:flex;justify-content:space-between;gap:6px;padding:4.5px 10px;white-space:nowrap}
+.tree .h{color:var(--dim);text-transform:uppercase;letter-spacing:.08em;font-size:10.5px;padding-top:10px}
+.tree .l2{padding-left:22px}.tree .sel{background:var(--sel);color:var(--bright);box-shadow:inset 2px 0 var(--accent)}.tree .tgt{box-shadow:inset 2px 0 var(--orange);color:var(--bright)}
+.tree em{font-style:normal;color:var(--dim)}
+.main{min-width:0;min-height:0;display:flex}
+.pane{flex:1;min-width:0;display:flex;flex-direction:column}.pane+.pane{border-left:1px solid var(--raise)}
+.pane.tgt{flex:0 0 336px;background:var(--panel)}
+.ph{flex:none;display:flex;align-items:center;gap:10px;padding:8px 10px;color:var(--dim);border-bottom:1px solid var(--raise);white-space:nowrap}.ph b{color:var(--bright);font-weight:700;font-size:13px}
+.fb{flex:none;display:flex;align-items:center;gap:6px;padding:6px 10px;border-bottom:1px solid var(--raise);flex-wrap:nowrap;overflow:hidden;white-space:nowrap}
+.f{border:1px solid var(--raise);padding:4px 7px;border-radius:2px;color:var(--dim)}.f.on{border-color:var(--accent);color:var(--bright)}.f.on i{font-style:normal;color:var(--accent)}
+.row{display:flex;align-items:center;height:24px;gap:10px;padding-right:10px;border-left:3px solid var(--p)}
+.row.hd{color:var(--dim);font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;height:22px}
+.row.sel{background:linear-gradient(90deg,var(--sel),color-mix(in srgb,var(--accent) 16%,var(--sel)));color:var(--bright)}.row.ld{box-shadow:inset 0 0 0 1px var(--muted)}
+.rows{flex:1;overflow:hidden}
+.c-n{width:24px;color:var(--dim)}.c-ar{width:112px;color:var(--dim)}.c-bpm{width:26px}.c-key{width:34px}.c-t{width:34px;color:var(--dim)}.c-ad{width:40px;color:var(--dim)}.c-en{width:48px}.c-tag{width:236px;overflow:hidden;display:flex;gap:4px}
+.ky{padding:2px 3px;border-radius:2px;color:var(--dim)}.ky.ok{background:var(--green);color:var(--bg)}.ky.bo{background:var(--yellow);color:var(--bg)}
+.st{flex:none;height:22px;display:flex;align-items:center;gap:14px;padding:0 10px;background:var(--bg);color:var(--dim);font-size:11px;white-space:nowrap;overflow:hidden}
+.st .ok{color:var(--green)}.st .run{color:var(--yellow)}
+.tray{margin-left:auto;display:flex;gap:8px;align-items:center;color:var(--bright)}.tray .bar{width:120px;height:8px;background:var(--raise)}.tray .bar i{display:block;height:100%;width:58%;background:linear-gradient(90deg,var(--magenta),var(--orange))}
+/* intake */
+.q{flex:0 0 280px;border-right:1px solid var(--raise);display:flex;flex-direction:column}
+.qr{padding:7px 10px;border-left:3px solid transparent;display:flex;flex-direction:column;gap:5px}.qr.sel{background:var(--sel);border-left-color:var(--accent)}.qr b{color:var(--bright);font-weight:400;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.qr span{color:var(--dim);font-size:11px}
+.miss{color:var(--yellow)}
+.form{flex:1;min-width:0;padding:10px 14px;display:flex;flex-direction:column;gap:10px;overflow:hidden}
+.fld{display:grid;grid-template-columns:58px 1fr;gap:6px 10px;align-items:center}
+.in{border:1px solid var(--muted);padding:6px 8px;color:var(--bright);background:var(--bg)}
+.sug{grid-column:2;border:1px dashed var(--muted);padding:5px 8px;display:flex;gap:10px;align-items:center;color:var(--fg)}.sug small{color:var(--dim);font-size:10.5px}.sug .x{margin-left:auto;display:flex;gap:6px}
+.dims{display:grid;grid-template-columns:repeat(3,1fr);gap:11px 22px}
+.tgl{display:flex;flex-wrap:wrap;gap:5px}.tgl .chip{font-size:11.5px;padding:4px 7px}.tgl .chip:not(.off){background:color-mix(in srgb,var(--t) 16%,transparent)}.chip.sg{border-style:dashed;border-color:var(--yellow);color:var(--yellow)}
+.dim h4{margin:0 0 6px;font:inherit;white-space:nowrap}.dim h4 i{font-style:normal;color:var(--accent);margin-left:4px}
+.dim div{display:flex;gap:6px;padding:3px 0;color:var(--dim);white-space:nowrap}.dim .on{color:var(--t)}.dim kbd{width:18px;text-align:center;padding:1px 0;flex:none}
+.en5{display:flex;gap:4px}.en5 span{width:26px;padding:5px 0;text-align:center;border:1px solid var(--raise)}.en5 .on{background:#9ece6a;color:var(--bg);border-color:#9ece6a}
+.sw{display:inline-flex;align-items:center;gap:5px;padding:4px 6px;border:1px solid var(--raise);border-radius:2px}.sw::before{content:"";width:8px;height:8px;background:var(--p)}
+.done{margin-top:auto;white-space:nowrap;display:flex;gap:12px;align-items:center;border-top:1px solid var(--raise);padding-top:10px}
+.done .big2{background:var(--green);color:var(--bg);padding:9px 14px;font-weight:700;border-radius:2px}
+/* review */
+.rv .c-f{width:110px;color:var(--dim)}.rv .c-cur{width:120px;color:var(--dim)}.rv .c-new{width:150px;color:var(--bright)}.rv .c-cf{width:86px;display:flex;gap:6px;align-items:center}.rv .c-act{width:52px;display:flex;gap:8px}
+.cf{flex:1;height:6px;background:var(--raise)}.cf i{display:block;height:100%;background:var(--accent)}
+.runh{display:flex;gap:10px;align-items:center;padding:8px 10px;background:var(--panel);border-block:1px solid var(--raise);white-space:nowrap}.runh b{color:var(--bright);font-weight:500}.runh .x{margin-left:auto;display:flex;gap:6px}
+.rl{padding:8px 10px;border-bottom:1px solid var(--raise);display:flex;flex-direction:column;gap:6px}.rl b{color:var(--bright);font-weight:400}.rl span{color:var(--dim);font-size:11px}
+/* stick */
+.sk{flex:1;display:grid;grid-template-columns:1fr 440px;min-width:0}
+.sum{padding:14px 16px;display:flex;flex-direction:column;gap:14px;overflow:hidden}
+.sum h3{margin:0;font:500 15px "JBM",monospace;color:var(--bright)}
+.chg{display:grid;grid-template-columns:auto 1fr;gap:8px 12px;align-items:baseline}.chg b{font-size:20px;font-weight:500}
+.space{height:12px;background:var(--raise);display:flex}.space i{display:block;height:100%}
+.launch{border-left:1px solid var(--raise);background:var(--panel);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;text-align:center}
+.hold{width:230px;height:230px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(var(--orange) 0 38%,var(--raise) 38%);padding:10px}
+.hold div{width:100%;height:100%;border-radius:50%;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:var(--bright);font-size:22px;font-weight:700;letter-spacing:.06em}.hold small{font-size:11px;color:var(--dim);font-weight:400;letter-spacing:0}
+.load{flex:1;position:relative;overflow:hidden;background:var(--bg)}
+.load .ttl{position:absolute;left:28px;top:22px;font-size:13px;color:var(--dim);line-height:1.6}
+.load .pct{position:absolute;left:20px;bottom:36px;font-size:220px;font-weight:700;line-height:.8;letter-spacing:-.06em;color:var(--bright);mix-blend-mode:difference}
+.load .now{position:absolute;right:28px;bottom:44px;text-align:right;line-height:1.7;color:var(--bright);font-size:14px}.load .now span{color:var(--dim);font-size:12px}
+.load .min{position:absolute;right:20px;top:18px}
+/* set plan */
+.curve{flex:none;height:150px;border-bottom:1px solid var(--raise)}
+.why{height:19px;display:flex;gap:14px;align-items:center;padding-left:40px;color:var(--dim);font-size:10.5px;white-space:nowrap}.why b{font-weight:400;color:var(--fg)}.why .w{color:var(--yellow)}
+.narrow{display:none}
+.two .c-ad{display:none}.two .c-tag{width:176px}
+@container (max-width:800px){
+ .body{grid-template-columns:1fr}.tree,.pane.tgt,.c-ar,.c-tag,.c-ad,.c-n,.wide,.q{display:none}.narrow{display:flex}
+ .meta{width:170px}.dims{grid-template-columns:repeat(2,1fr)}.big .dt{height:64px}.form{gap:8px;padding:8px 12px}.row{padding-left:8px}.pad{width:44px}.pad span{display:none}.fb .f:nth-child(n+5){display:none}
+}
+</style></head><body><div id="stage"></div>
+<script>
+const T=[
+ ["Glass Harbour (Extended Mix)","Mara Venn",124,"8A","6:55",4,"Clean",[["Euphoric"],["Vocal","Piano"],["Peak time"],["Melodic House"]]],
+ ["Low Sun","Ostrava Club",122,"5A","6:34",2,"Clean",[["Dreamy"],["Pads"],["Opener"],["Progressive"]]],
+ ["Paper Lanterns (Club Mix)","Hale & Wren",126,"9A","4:40",4,"Problem",[["Driving"],["Acid"],["Tension builder"],["Tech House"]]],
+ ["Nine Bridges","Kessler Park",123,"8A","6:01",0,"",[[],[],[],[]]],
+ ["Saltwater Choir (Original Mix)","Mara Venn",125,"7A","5:48",3,"Clean",[["Dark","Driving"],["Vocal","Strings"],["Tension builder"],["Melodic Techno"]]],
+ ["Tin Roof Rain","Dovecote",124,"6A","4:21",1,"Sample",[["Dreamy"],["Piano"],["Reset moment"],["Organic House"]]],
+ ["Second Floor Light","Ostrava Club",120,"10A","3:54",2,"Clean",[["Dreamy"],["Vocal"],["Opener"],["Deep House"]]],
+ ["Arc Lamp (Extended Mix)","Juno Halde",127,"4A","5:09",3,"Clean",[["Dark"],["Acid"],["Tension builder"],["Melodic Techno"]]],
+ ["Harbour Wall","Kessler Park",122,"7B","4:57",0,"Buy",[[],[],[],[]]],
+ ["Quiet Engine","Dovecote",132,"2A","6:53",5,"Clean",[["Driving"],["Strings"],["Peak time"],["Techno"]]],
+ ["Cold Start (Club Mix)","Juno Halde",127,"7A","3:48",4,"Clean",[["Dark"],["Vocal"],["Peak time"],["Melodic Techno"]]],
+ ["Lighthouse Keeper","Hale & Wren",129,"9A","3:39",0,"",[[],[],[],[]]],
+ ["Morning Shift","Mara Venn",128,"8A","5:31",3,"Clean",[["Euphoric"],["Piano"],["Energy drop"],["Progressive"]]],
+ ["Static Bloom","Ostrava Club",126,"5A","4:55",3,"Delete",[["Dark"],["Acid"],["Tension builder"],["Tech House"]]],
+ ["Wide Water (Extended Mix)","Dovecote",121,"3A","7:12",2,"Clean",[["Dreamy"],["Pads","Vocal"],["Closer"],["Organic House"]]],
+ ["Signal Fire","Juno Halde",130,"6A","6:01",5,"Clean",[["Euphoric","Driving"],["Strings"],["Peak time"],["Melodic Techno"]]],
+ ["Half Past Blue","Kessler Park",124,"8A","5:24",0,"",[[],[],[],[]]],
+ ["Open Field","Hale & Wren",123,"7A","6:40",2,"Clean",[["Dreamy"],["Piano"],["Reset moment"],["Progressive"]]],
+ ["Undertow (Club Mix)","Mara Venn",126,"9A","5:02",4,"Clean",[["Dark"],["Vocal"],["Peak time"],["Melodic House"]]],
+ ["Last Tram Home","Ostrava Club",118,"11A","4:48",1,"Clean",[["Dreamy"],["Pads"],["Closer"],["Deep House"]]],
+ ["Kiln","Juno Halde",131,"4A","5:55",5,"Problem",[["Driving"],["Acid"],["Peak time"],["Techno"]]],
+ ["Fernlight","Dovecote",122,"6A","6:18",2,"Clean",[["Euphoric"],["Strings"],["Opener"],["Organic House"]]],
+ ["North Stair","Kessler Park",125,"8A","4:33",3,"Clean",[["Dark"],["Vocal"],["Tension builder"],["Tech House"]]],
+ ["Slow Orbit","Hale & Wren",120,"10A","7:02",1,"Clean",[["Dreamy"],["Pads"],["Reset moment"],["Progressive"]]],
+ ["Brass Tacks","Juno Halde",126,"6A","5:40",4,"Clean",[["Playful"],["Acid"],["Peak time"],["Tech House"]]],
+ ["Ember Row","Mara Venn",124,"7A","6:12",3,"Clean",[["Dark"],["Strings"],["Tension builder"],["Melodic Techno"]]]
+].map((a,i)=>({n:i+1,title:a[0],artist:a[1],bpm:a[2],key:a[3],time:a[4],en:a[5],prep:a[6],tags:a[7],ad:"11-"+String(10-(i%9)).padStart(2,"0")}));
+const SEL=4,S=T[SEL];
+const DIM=[["Mood/Emotion",1,["Dark","Euphoric","Dreamy","Driving","Playful"]],["Sound Elements",1,["Vocal","Acid","Piano","Strings","Pads"]],["Situation",1,["Opener","Tension builder","Peak time","Energy drop","Reset moment","Closer"]],["Sub-genre",1,["Melodic Techno","Melodic House","Tech House","Progressive","Organic House","Deep House","Techno"]],["Vocals",0,["None","Male","Female","Chops"]],["Version",0,["Original","Extended","Remix","Edit"]]];
+const KEYS=["asdfg","qwert","zxcvbn","yuiophj","1234","7890"];
+const wf=(seed,kind,th="3band",plain="")=>`<canvas data-seed="${seed}" data-kind="${kind}" data-theme="${th}" ${plain?"data-plain=1":""}></canvas>`;
+const PH=[["Intro",.1,"#B83F1D"],["Up 1",.12,"#8138F6"],["Chorus 1",.2,"#4EA730"],["Down",.1,"#95753A"],["Up 2",.08,"#6B36F6"],["Chorus 2",.22,"#4EA730"],["Outro",.18,"#6886AB"]];
+const phr=(a=PH)=>`<div class="phr">${a.map(p=>`<i style="flex:${p[1]};background:${p[2]}">${p[0]}</i>`).join("")}</div>`;
+const pips=n=>`<span class="pips e${n}">${[1,2,3,4,5].map(i=>`<i class="${i<=n?"on":""}"></i>`).join("")}</span>`;
+const chips=(t,max=3)=>t.tags.flatMap((a,c)=>a.map(x=>`<span class="chip tg-${c}">${x}</span>`)).slice(0,max).join("");
+function ky(k){const n=+k.slice(0,-1),l=k.slice(-1),d=((n-7)%12+12)%12;let c="";if(l=="A"&&(d==0||d==1||d==11))c="ok";else if(l=="B"&&d==0)c="ok";else if(l=="A"&&d==2)c="bo";return `<span class="ky ${c}">${k}</span>`;}
+const TREE=[["h","Library"],["","All Tracks",412],["","Intake",23,"y"],["","Problems",4,"y"],["h","Playlists"],["","CURRENT",""],["l2","Melodic Vox",30],["l2","Hardstyle",18],["l2","Drum and Bass",44],["l2","Fresh 128s",27],["","GIGS",""],["l2","Friday warm-up",14],["l2","Rooftop closing",22],["h","Set plans"],["","Friday peak hour",16],["h","Stick · GIGSTICK"],["","Main",140],["","Main: Vocal",58],["","Melodic Techno",73],["","Techno",49],["","Trance",35],["","Groovy",40]];
+const tree=(sel,tgt)=>`<div class="tree">${TREE.map(t=>t[0]=="h"?`<div class="h">${t[1]}</div>`:`<div class="${t[0]} ${t[1]==sel?"sel":""} ${t[1]==tgt?"tgt":""}"><span>${t[1]}</span><em ${t[3]?'style="color:var(--yellow)"':""}>${t[2]}</em></div>`).join("")}</div>`;
+const topbar=(v)=>`<div class="top">${[["Library",""],["Intake","23"],["Review","212"],["Stick",""]].map((t,i)=>`<span class="tab ${t[0]==v?"on":""}"><kbd>${i+1}</kbd>${t[0]}${t[1]?`<em>${t[1]}</em>`:""}</span>`).join("")}<span class="rt"><span class="wide">wave 3Band ▾</span><span class="wide">scale 100%</span><span><kbd>Ctrl K</kbd> commands</span></span></div>`;
+const bj=`<span class="bj"><span>◀</span><span>4</span><span>8</span><span class="on">16</span><span>32</span><span>▶</span></span>`;
+const strip=(mut)=>`<div class="strip"><span class="btn">CUE</span><span class="btn go">▶</span><div class="meta"><b>${mut?'<span class="mut">MUTANT</span> ':""}${S.title}</b><span>${S.artist} · ${S.bpm}.00 · ${S.key} · 1:42 / ${S.time}</span></div><div class="ovw"><div class="ov cv">${wf(5,"over")}</div>${phr()}</div><span class="wide">${bj}</span></div>`;
+const st=(tray)=>`<div class="st"><span class="ok">● service</span><span class="wide">Library · 412 tracks</span><span class="run">Run: agent tagging 12/30</span>${tray?`<span class="tray">Loading GIGSTICK <span class="bar"><i></i></span> 37/64 · 2 min left</span>`:`<span class="wide" style="margin-left:auto">Tokyo Night</span>`}</div>`;
+const hd=(x="")=>`<div class="row hd prep-"><span class="cell c-n r">#</span><span class="cell grow">Title</span><span class="cell c-ar">Artist</span><span class="cell c-bpm r">BPM</span><span class="cell c-key">Key</span><span class="cell c-en">Energy</span><span class="cell c-tag">MyTags</span><span class="cell c-t r">Time</span><span class="cell c-ad r">Added</span></div>`;
+const row=(t,i)=>`<div class="row prep-${t.prep} ${i==SEL?"sel":""}"><span class="cell c-n r">${t.n}</span><span class="cell grow">${t.title}</span><span class="cell c-ar">${t.artist}</span><span class="cell c-bpm r">${t.bpm}</span><span class="cell c-key">${ky(t.key)}</span><span class="cell c-en">${pips(t.en)}</span><span class="cell c-tag">${chips(t)}</span><span class="cell c-t r">${t.time}</span><span class="cell c-ad r">${t.ad}</span></div>`;
+const shell=(v,player,body,tray,sel,tgt)=>`<div class="m">${topbar(v)}<div class="player ${player.big?"big":""}">${player.html}</div><div class="body">${tree(sel,tgt)}<div class="main">${body}</div></div>${st(tray)}</div>`;
+
+const V={};
+V.library=()=>{
+  const tg=[T[1],T[6],T[21],T[17],T[4],T[7],T[25],T[2],T[18],T[0],T[10],T[15],T[12],T[14]];
+  return shell("Library",{html:strip()},`
+  <div class="pane two"><div class="ph"><span>CURRENT /</span><b>Melodic Vox</b><span>30 · 2h24m</span><span style="margin-left:auto" class="wide"><kbd>Ctrl \\</kbd> second list</span></div>
+   <div class="fb"><span class="lbl">Track Filter</span><span class="f on"><i>Situation</i> Tension builder, Peak time</span><span class="f on"><i>Energy</i> 3–5</span><span class="f">Mood ▾</span><span class="f">Sound ▾</span><span class="f">Sub-genre ▾</span><span class="f">Prep ▾</span><span class="f">BPM ±6%</span><span class="f on"><i>Key</i> match 7A</span><span class="f" style="margin-left:auto">/ search</span></div>
+   ${hd()}<div class="rows">${T.map(row).join("")}</div></div>
+  <div class="pane tgt"><div class="ph"><span style="color:var(--orange)">▸ target</span><b>Friday warm-up</b><span>14 · 1h18m</span></div>
+   <div class="row hd prep-"><span class="cell grow">Title</span><span class="cell c-bpm r">BPM</span><span class="cell c-key">Key</span><span class="cell c-en">Energy</span></div>
+   <div class="rows">${tg.map((t,i)=>`<div class="row prep-${t.prep}"><span class="cell grow">${i==4?'<span class="mut">M</span> ':""}${t.title}${i==4?' <span style="color:var(--magenta)">no vocals · +1 st</span>':""}</span><span class="cell c-bpm r">${t.bpm}</span><span class="cell c-key">${ky(t.key)}</span><span class="cell c-en">${pips(t.en)}</span></div>`).join("")}
+   <div style="padding:12px 10px;color:var(--dim);line-height:1.9"><kbd>⏎</kbd> add selected &nbsp;<kbd>M</kbd> mutate<br><kbd>Alt ↑↓</kbd> reorder</div></div></div>`,false,"Melodic Vox","Friday warm-up");
+};
+const bigplayer=(mut)=>({big:1,html:strip(mut)+`${phr([["Up 2 · bar 3 of 4",.625,"#6B36F6"],["Chorus 2 · bar 1 of 16",.375,"#4EA730"]])}<div class="dt cv">${wf(5,"detail")}</div>
+  <div class="ctl"><div class="grp">${"ABCDEFGH".split("").map((p,i)=>`<span class="pad ${i<4?"set":""}" style="--c:${["var(--green)","var(--cyan)","var(--magenta)","var(--yellow)"][i]||""}"><b>${p}</b><span>${i<4?["0:00.4","0:32.1","1:04.4","2:40.9"][i]:"unset"}</span></span>`).join("")}</div>
+   <div class="grp"><span class="lbl">Jump</span>${bj}</div>
+   <div class="grp wide"><span class="lbl">Grid</span><span class="btn">◀</span><span class="btn">${S.bpm}.00</span><span class="btn">▶</span><span class="btn">Tap</span></div>
+   <div class="grp wide"><span class="lbl">Stems</span>${["Vocals","Melody","Bass","Drums"].map((s,i)=>`<span class="btn ${mut&&i==0?"":"on"}">${s}</span>`).join("")}</div>
+   <div class="grp wide"><span class="lbl">Key</span><span class="btn">−</span><span class="btn">${mut?"+1 st · 8A":"0 st"}</span><span class="btn">+</span></div></div>`});
+V.intake=()=>{
+  const Q=[T[3],T[4],T[11],T[16],T[8],T[24],T[25],T[9],T[13]];
+  const miss=["title · tags · Energy · cues","Situation · cue E","everything","tags · Energy","grid · tags","cues","Energy","tags","grid"];
+  return shell("Intake",bigplayer(),`
+  <div class="q"><div class="ph"><b>Intake</b><span>2 of 23</span></div>${Q.map((t,i)=>`<div class="qr ${i==1?"sel":""}"><b>${t.title}</b><span>${t.artist} · ${t.bpm} · ${t.key}</span><span class="miss">needs ${miss[i]}</span></div>`).join("")}</div>
+  <div class="form">
+   <div class="narrow ph" style="padding:0 0 8px"><b>Intake</b><span>2 of 23</span><span class="miss" style="margin-left:auto">needs Situation · cue E</span></div>
+   <div class="fld"><span class="lbl">Title</span><span class="in">Saltwater Choir (Original Mix) [FREE DL]</span>
+    <div class="sug"><span>Saltwater Choir (Original Mix)</span><small>agent · 0.94</small><span class="x"><kbd>Tab</kbd> accept</span></div>
+    <span class="lbl">Artist</span><span class="in">Mara Venn</span></div>
+   <div style="display:flex;gap:28px;flex-wrap:wrap"><div><div class="lbl" style="margin-bottom:6px">Energy</div><div class="en5">${[1,2,3,4,5].map(i=>`<span class="${i==3?"on":""}">${i}</span>`).join("")}</div></div>
+    <div><div class="lbl" style="margin-bottom:6px">Prep colour</div><div style="display:flex;gap:4px;flex-wrap:wrap">${["Clean","Problem","Delete","Sample","Buy"].map(p=>`<span class="sw prep-${p}">${p}</span>`).join("")}</div></div></div>
+   <div class="lbl" style="margin-bottom:-6px"><span style="color:var(--accent)">◆</span> shows in the Track Filter on the deck</div><div class="dims">${DIM.map((d,c)=>`<div class="dim tg-${c}"><h4 class="lbl">${d[0]}${d[1]?"<i>◆</i>":""}</h4><div class="tgl">${d[2].map((v,i)=>`<span class="chip ${(S.tags[c]||(c==4?["Female"]:["Original"])).includes(v)?"":"off"} ${c==2&&v=="Peak time"?"sg":""}">${v}${c==2&&v=="Peak time"?" · agent 0.72":""}</span>`).join("")}</div></div>`).join("")}</div>
+   <div class="done"><span class="big2">Mark Clean and next</span><kbd>Ctrl ⏎</kbd><span class="miss wide">open: Situation suggested · cue E unset</span><span style="margin-left:auto;color:var(--dim)" class="wide"><kbd>P</kbd> mark Problem &nbsp;<kbd>]</kbd> skip</span></div>
+  </div>`,false,"Intake");
+};
+V.mutant=()=>shell("Library",bigplayer(1),`<div class="pane"><div class="ph" style="background:color-mix(in srgb,var(--magenta) 14%,transparent)"><span class="mut">EDITING A MUTANT</span><b>Saltwater Choir</b><span>in Friday warm-up only · core track untouched · no vocals · +1 st · cue B moved</span><span style="margin-left:auto" class="btn">Back to core track</span></div>
+  <div class="row hd prep-"><span class="cell c-n r">#</span><span class="cell grow">Title</span><span class="cell c-ar">Artist</span><span class="cell c-bpm r">BPM</span><span class="cell c-key">Key</span><span class="cell c-en">Energy</span><span class="cell c-tag">MyTags</span><span class="cell c-t r">Time</span></div>
+  <div class="rows">${[T[1],T[6],T[21],T[17],T[4],T[7],T[25],T[2],T[18],T[0],T[10]].map((t,i)=>`<div class="row prep-${t.prep} ${i==4?"sel":""}"><span class="cell c-n r">${i+1}</span><span class="cell grow">${i==4?'<span class="mut">M</span> ':""}${t.title}${i==4?' <span style="color:var(--magenta)">no vocals · +1 st</span>':""}</span><span class="cell c-ar">${t.artist}</span><span class="cell c-bpm r">${t.bpm}</span><span class="cell c-key">${i==4?'<span class="ky" style="color:var(--magenta)">8A</span>':`<span class="ky">${t.key}</span>`}</span><span class="cell c-en">${pips(t.en)}</span><span class="cell c-tag">${chips(t)}</span><span class="cell c-t r">${t.time}</span></div>`).join("")}</div></div>`,false,"Friday warm-up");
+V.review=()=>{
+  const F=[[0,"Situation","—","Peak time",.91],[1,"Sub-genre","Progressive","Organic House",.62],[3,"Energy","—","3",.74],[3,"Mood/Emotion","—","Dark",.83],[3,"Situation","—","Tension builder",.79],[8,"Energy","—","2",.58],[8,"Sound Elements","—","Piano, Pads",.88],[11,"Energy","—","4",.81],[11,"Sub-genre","—","Melodic Techno",.93],[11,"Situation","—","Peak time",.86],[16,"Mood/Emotion","—","Dreamy",.77],[16,"Energy","—","2",.69],[19,"Situation","Closer","Reset moment",.44],[22,"Sound Elements","Vocal","Vocal, Strings",.9],[24,"Sub-genre","Tech House","Tech House",.97],[25,"Situation","Tension builder","Peak time",.51]];
+  return shell("Review",{html:strip()},`<div class="pane rv">
+   <div class="ph"><b>Waiting for you</b><span>212 Facts in 3 Runs</span><span style="margin-left:auto"><kbd>Y</kbd> accept <kbd>N</kbd> reject <kbd>Space</kbd> listen</span></div>
+   <div class="runh"><b>Run · tagging pass</b><span>agent · today 02:14 · 186 waiting · 412 tracks read</span><span class="x"><span class="btn go">Accept ≥ 0.80 · 141</span><span class="btn">Accept selected</span><span class="btn no">Reject all</span></span></div>
+   <div class="row hd prep-"><span class="cell grow">Track</span><span class="cell c-f">Field</span><span class="cell c-cur">Now</span><span class="cell c-new">Proposed</span><span class="cell c-cf">Sure</span><span class="cell c-act"></span></div>
+   <div class="rows">${F.map((f,i)=>`<div class="row prep-${T[f[0]].prep} ${i==3?"sel":""}"><span class="cell grow">${T[f[0]].title}</span><span class="cell c-f">${f[1]}</span><span class="cell c-cur">${f[2]}</span><span class="cell c-new">${f[3]}</span><span class="cell c-cf"><span class="cf"><i style="width:${f[4]*100}%;${f[4]<.6?"background:var(--yellow)":""}"></i></span>${f[4].toFixed(2)}</span><span class="cell c-act"><span style="color:var(--green)">✓</span><span style="color:var(--red)">✕</span></span></div>`).join("")}
+   <div class="runh" style="margin-top:6px"><b>Run · title clean-up</b><span>agent · yesterday 21:40 · 19 waiting</span><span class="x"><span class="btn go">Accept ≥ 0.80 · 17</span></span></div>
+   <div class="runh"><b>Run · Beatport lookup</b><span>agent · web · Nov 08 · 7 held: duration mismatch</span></div></div></div>
+  <div class="pane tgt"><div class="ph"><b>Past Runs</b><span>Ledger</span></div>
+   ${[["Projection · MyTags from schema v7","you · today 09:02 · 96 tracks changed"],["Tagging pass, accepted","agent → you · Nov 09 · 141 Facts · 88 tracks"],["Intensity measurement","tool · Nov 08 · 412 tracks"],["Round-trip from GIGSTICK","Stick · Nov 07 · 31 cues, 58 plays"],["Energy proposals","agent · Nov 05 · 64 tracks · 3 changed since"],["Import · 23 tracks","you · Nov 04"]].map((r,i)=>`<div class="rl"><b>${r[0]}</b><span>${r[1]}</span><span style="display:flex;gap:6px"><span class="btn">Show changes</span><span class="btn ${i==4?"no":""}">Unwind${i==4?" · 3 flagged":""}</span></span></div>`).join("")}</div>`,false,"");
+};
+V.stick=()=>shell("Stick",{html:strip()},`<div class="sk"><div class="sum">
+   <div><h3>GIGSTICK <span class="chip" style="--t:var(--red);vertical-align:middle">Gig stick</span></h3><div style="margin-top:8px;color:var(--dim)">Last loaded Nov 07 · rekordbox-readable · 1,204 tracks · 38 playlists</div></div>
+   <div><div class="lbl" style="margin-bottom:6px">Space · 96.4 of 128 GB after this load</div><div class="space"><i style="width:68%;background:var(--muted)"></i><i style="width:7%;background:var(--orange)"></i></div></div>
+   <div class="lbl">This load will</div>
+   <div class="chg"><b style="color:var(--green)">+64</b><span>tracks added, across Friday warm-up, Rooftop closing and Melodic Vox</span>
+    <b style="color:var(--magenta)">3</b><span>Mutants rendered to their own files · Saltwater Choir (no vocals, +1 st) and 2 more</span>
+    <b style="color:var(--cyan)">12</b><span>tracks get Native stems for the XDJ-AZ pads</span>
+    <b style="color:var(--yellow)">~118</b><span>tracks updated · MyTags 96 · Energy 31 · cues 22 · grids 4</span>
+    <b style="color:var(--accent)">2</b><span>playlists created · 5 reordered</span>
+    <b style="color:var(--red)">−6</b><span>tracks removed because their Prep colour is Delete</span></div>
+   <div style="display:flex;gap:8px"><span class="btn">Show every change</span><span class="btn">Choose playlists</span></div>
+   <div style="margin-top:auto;color:var(--dim);line-height:1.7">Nothing is written until you hold the button. Play history and cue edits made on the deck were brought back on Nov 07.</div></div>
+  <div class="launch"><div class="lbl">about 4 minutes</div><div class="hold"><div>HOLD<br>TO LOAD<small>hold 2 s · Gig stick</small></div></div><div style="color:var(--dim);line-height:1.8"><kbd>Hold L</kbd> or press and hold<br>release early to cancel</div></div></div>`,false,"");
+V.loading=()=>shell("Stick",{html:strip()},`<div class="load cv">${wf(11,"hype")}
+   <div class="ttl">LOADING GIGSTICK<br>37 of 64 tracks · 3 Mutants rendered · 2 min left</div>
+   <div class="min"><span class="btn"><kbd>Esc</kbd> shrink to tray and keep working</span></div>
+   <div class="pct">58%</div>
+   <div class="now">Signal Fire<br><span>Juno Halde · 130 · 6A · writing Native stems</span><br><span>next: Undertow (Club Mix)</span></div></div>`,false,"");
+V.waves=()=>shell("Intake",bigplayer(),`<div class="pane" style="padding:14px 16px;gap:12px;overflow:hidden">${[["3band","3Band · rekordbox's own colours, the default"],["rgb","RGB · colour follows the frequency balance"],["blue","Blue · one colour, like the CDJ"],["theme","Theme · follows the Omarchy theme"]].map(([k,l])=>`<div class="lbl">${l}</div><div class="cv" style="height:74px;flex:none">${wf(5,"detail",k)}</div>`).join("")}</div>`,false,"Intake");
+V.tray=()=>V.library().replace(/<div class="st">[\s\S]*?<\/div><\/div>$/,st(true)+"</div>");
+V.plan=()=>{ // Set plan view
+  const P=[T[1],T[21],T[6],T[17],T[4],T[25],T[7],T[10],T[18],T[0],T[15],T[9],T[12],T[14]];
+  const why=[["122→122","5A→6A","+1","Intensity +0.3","out 5:58 → in 0:31"],["122→120","6A→10A","key clash","Intensity +0.2","out 5:40 → in 0:16"],["120→123","10A→7A","key clash","Intensity +0.5","out 3:22 → in 0:48"],["123→125","7A→7A","same","Intensity +0.6","out 6:08 → in 1:04"],["125→124","7A→7A","same","Intensity +0.2","out 5:12 → in 0:32"],["124→127","7A→4A","key clash","Intensity +0.4","out 5:44 → in 0:30"],["127→127","4A→7A","key clash","Intensity +0.7","out 4:40 → in 0:15"],["127→126","7A→9A","boost","Intensity +0.3","out 3:20 → in 0:32"],["126→124","9A→8A","−1","Intensity +0.2","out 4:31 → in 1:02"],["124→130","8A→6A","boost","Intensity +0.9","out 6:20 → in 0:30"],["130→132","6A→2A","key clash","Intensity +0.2","out 5:32 → in 0:14"],["132→128","2A→8A","key clash","Intensity −1.8","out 6:24 → in 0:45"],["128→121","8A→3A","key clash","Intensity −1.1","out 5:00 → in 0:30"]];
+  return shell("Library",{html:strip()},`<div class="pane"><div class="ph"><span>SET PLAN /</span><b>Friday peak hour</b><span>14 tracks · 1h19m · from recipe peak-hour.recipe</span><span style="margin-left:auto"><span style="color:var(--yellow)">3 transitions break the recipe</span> · 2 moved by you</span></div>
+   <div class="curve cv">${wf(3,"curve")}</div>
+   <div class="rows">${P.map((t,i)=>`<div class="row prep-${t.prep} ${i==4?"sel":""}"><span class="cell c-n r">${i+1}</span><span class="cell grow">${t.title}</span><span class="cell c-ar">${t.artist}</span><span class="cell c-bpm r">${t.bpm}</span><span class="cell c-key"><span class="ky">${t.key}</span></span><span class="cell c-en">${pips(t.en)}</span><span class="cell c-tag">${t.tags[2].map(x=>`<span class="chip tg-2">${x}</span>`).join("")}</span><span class="cell c-t r">${t.time}</span></div>${why[i]?`<div class="why"><span>↓</span><b>${why[i][0]}</b><span class="${why[i][2]=="key clash"?"w":""}">${why[i][1]} · ${why[i][2]}</span><b>${why[i][3]}</b><span>mix ${why[i][4]}</span></div>`:""}`).join("")}</div></div>`,false,"Friday peak hour");
+};
+function draw(){document.querySelectorAll("canvas").forEach(c=>{
+  const w=c.clientWidth,h=c.clientHeight;if(!w||!h)return;c.width=w*2;c.height=h*2;const g=c.getContext("2d");g.scale(2,2);
+  let s=+c.dataset.seed*9301+49297;const rnd=()=>(s=(s*9301+49297)%233280)/233280;const kind=c.dataset.kind;
+  if(kind=="curve"){const en=[2,2,2,2,3,3,3,4,4,4,5,5,3,2],n=en.length,x=i=>30+i*(w-60)/(n-1),y=v=>h-18-(v/5.4)*(h-34);
+    g.strokeStyle="#24283b";g.lineWidth=1;[1,2,3,4,5].forEach(v=>{g.beginPath();g.moveTo(30,y(v));g.lineTo(w-30,y(v));g.stroke();g.fillStyle="#565f89";g.font="10px monospace";g.fillText(v,12,y(v)+3);});
+    g.setLineDash([5,5]);g.strokeStyle="#565f89";g.lineWidth=1.5;g.beginPath();for(let i=0;i<=100;i++){const p=i/100,v=1.6+3.4*Math.pow(Math.sin(Math.min(p/.82,1)*Math.PI/2),1.4)-(p>.82?(p-.82)/.18*3:0);i?g.lineTo(30+p*(w-60),y(v)):g.moveTo(30+p*(w-60),y(v));}g.stroke();g.setLineDash([]);
+    const iv=en.map((e,i)=>e+[-.3,.1,.2,.3,-.1,.3,.2,-.2,.1,.2,-.1,.1,.4,.2][i]);
+    g.beginPath();iv.forEach((v,i)=>i?g.lineTo(x(i),y(v)):g.moveTo(x(i),y(v)));g.lineTo(x(n-1),h);g.lineTo(x(0),h);g.fillStyle="rgba(255,158,100,.12)";g.fill();
+    g.beginPath();iv.forEach((v,i)=>i?g.lineTo(x(i),y(v)):g.moveTo(x(i),y(v)));g.strokeStyle="#ff9e64";g.lineWidth=2;g.stroke();
+    iv.forEach((v,i)=>{g.fillStyle=i==4?"#c0caf5":"#ff9e64";g.beginPath();g.arc(x(i),y(v),i==4?5:3,0,7);g.fill();});
+    g.fillStyle="#565f89";g.fillText("Intensity across the set  ·  dashed: what the recipe asks for",30,12);return;}
+  const W=c.width,H=c.height,det=kind=="detail",hy=kind=="hype",th=c.dataset.theme||"3band";
+  const N=k=>{const a=[];let q=(+c.dataset.seed+k)*9301+49297;for(let i=0;i<512;i++){q=(q*9301+49297)%233280;a.push(q/233280);}return x=>{const i=Math.floor(x),f=x-i,u=f*f*(3-2*f);return a[i%512]*(1-u)+a[(i+1)%512]*u;};};
+  const n1=N(1),n2=N(2),n3=N(3),lvl=t=>t<.1?.35:t<.22?.6:t<.42?1:t<.52?.3:t<.6?.65:t<.82?1:.42;
+  const PAL={"3band":["#0055E1","#FFA600","#FFFFFF"],theme:["#7aa2f7","#bb9af7","#c0caf5"],blue:["#1f4fbf","#4d8dff","#cfe0ff"]}[th];
+  g.setTransform(1,0,0,1,0,0);
+  if(det){for(let i=0;i<=16;i++){g.fillStyle=i%4?"#24283b":"#565f89";g.fillRect(Math.round(i*W/16),0,i%4?1:2,H);}}
+  const mid=(det||hy)?H/2:H;
+  for(let x=0;x<W;x++){const t=x/W;let lo,mi,hi;
+    if(det||hy){const bp=(t*16)%1,k=Math.exp(-bp*5);lo=.2+.75*k*(.85+.15*n1(t*60));mi=.22+.3*n2(t*140)+.25*Math.exp(-((t*16+.5)%1)*6);hi=.08+.3*Math.exp(-((t*32)%1)*9)+.12*n3(t*420);if(hy){const e=.5+.5*n1(t*9);lo*=e;mi*=e;hi*=e;}}
+    else{const e=lvl(t);lo=e*(.68+.32*n1(t*300));mi=lo*(.45+.35*n2(t*220));hi=mi*(.35+.45*n3(t*400));}
+    const done=!hy||t<.58,dr=(v,col)=>{g.fillStyle=col;const hh=Math.max(1,v*mid*.94);(det||hy)?g.fillRect(x,mid-hh,1,hh*2):g.fillRect(x,H-hh,1,hh);};
+    if(!done){dr(Math.max(lo,mi),"#24283b");continue;}
+    if(th=="rgb"){const m=Math.max(lo,mi,hi);dr(m,`rgb(${Math.round(60+195*lo/m)},${Math.round(40+215*mi/m)},${Math.round(255*Math.min(1,hi/m*1.8))})`);}
+    else if(hy){dr(lo,"#bb9af7");dr(mi*.8,"#ff9e64");dr(hi*.7,"#c0caf5");}
+    else{dr(lo,PAL[0]);dr(Math.min(mi,lo*.98)*.8,PAL[1]);dr(hi*.55,PAL[2]);}
+  }
+  if(hy){g.fillStyle="#f7768e";g.fillRect(.58*W,0,5,H);return;}
+  if(c.dataset.plain)return;
+  (det?[.1875,.625]:[.02,.09,.19,.47]).forEach((p,i)=>{g.fillStyle=["#3CEB50","#0db9d7","#bb9af7","#e0af68"][det?i+1:i];g.fillRect(p*W,0,det?4:3,H);g.fillRect(p*W,0,14,10);});
+  g.shadowColor="#ff3b3b";g.shadowBlur=12;g.fillStyle="#ff4d4d";g.fillRect((det?.5:.29)*W,0,3,H);g.shadowBlur=0;
+});}
+const [v,w]=(location.hash.slice(1)||"library-1280").split("-");
+document.getElementById("stage").style.width=w+"px";document.getElementById("stage").innerHTML=V[v]();requestAnimationFrame(draw);
+</script></body></html>

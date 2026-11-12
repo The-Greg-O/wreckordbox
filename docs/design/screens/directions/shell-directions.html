@@ -1,0 +1,321 @@
+<title>Wreckordbox Shell Directions</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+/* Layout: a review bench. Controls on top, one live mock-up on a stage that scales to fit, notes beneath. Single dark look: the mock-ups are drawn in the Tokyo Night theme the laptop runs. */
+:root{
+  color-scheme:dark;
+  --bg:#0e0e14; --panel:#13141c; --base:#1a1b26; --raise:#24283b; --sel:#292e42; --muted:#414868;
+  --fg:#a9b1d6; --dim:#565f89; --bright:#c0caf5; --accent:#7aa2f7;
+  --red:#f7768e; --yellow:#e0af68; --orange:#ff9e64; --green:#9ece6a; --cyan:#0db9d7; --magenta:#bb9af7;
+  --sans:"Inter",system-ui,sans-serif; --mono:"JetBrains Mono",ui-monospace,"DejaVu Sans Mono",monospace;
+}
+html,body{background:var(--bg);color:var(--fg)}
+body{font:14px/1.5 var(--sans);padding-block:20px 48px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.page{max-width:1320px;margin:0 auto;display:flex;flex-direction:column;gap:16px}
+h1{font:500 20px/1.2 var(--mono);color:var(--bright);margin:0}
+.lede{margin:0;max-width:68ch;color:var(--fg)}
+.bar{display:flex;flex-wrap:wrap;gap:12px 24px;align-items:center}
+.seg{display:flex;border:1px solid var(--muted);border-radius:4px;overflow:hidden}
+.seg button{font:500 13px var(--mono);background:none;color:var(--fg);border:0;padding:7px 12px;cursor:pointer;border-right:1px solid var(--muted)}
+.seg button:last-child{border-right:0}
+.seg button[aria-pressed=true]{background:var(--accent);color:var(--bg)}
+.seg button:focus-visible{outline:2px solid var(--bright);outline-offset:-2px}
+.lab{font:12px var(--mono);color:var(--dim);text-transform:uppercase;letter-spacing:.08em;margin-right:8px}
+.grp{display:flex;align-items:center}
+.stagewrap{background:repeating-linear-gradient(45deg,#101018 0 10px,#0e0e14 10px 20px);border:1px solid var(--raise);padding:12px;overflow:hidden}
+#scaler{margin:0 auto;position:relative}
+#stage{transform-origin:0 0;height:800px;position:absolute;left:0;top:0;outline:1px solid var(--muted)}
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:20px}
+.notes h2{font:500 12px var(--mono);color:var(--dim);text-transform:uppercase;letter-spacing:.08em;margin:0 0 6px}
+.notes p,.notes ul{margin:0;padding:0;list-style:none}
+.notes li{padding-left:14px;position:relative;margin-bottom:4px}
+.notes li::before{content:"·";position:absolute;left:3px;color:var(--accent)}
+.fine{color:var(--dim);font-size:12.5px;margin:0}
+
+/* ---------- shared mock parts ---------- */
+.m{height:100%;container-type:inline-size;background:var(--base);color:var(--fg);overflow:hidden;display:flex;flex-direction:column;font-variant-numeric:tabular-nums}
+.m *{box-sizing:border-box}
+.m canvas{position:absolute;inset:0;width:100%;height:100%}
+.cv{position:relative;overflow:hidden}
+.cell{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:none}
+.grow{flex:1 1 0;min-width:0}
+.r{text-align:right}
+.prep-Clean{--p:var(--green)}.prep-Problem{--p:var(--red)}.prep-Delete{--p:var(--dim)}.prep-Sample{--p:var(--magenta)}.prep-Buy{--p:var(--yellow)}.prep-{--p:transparent}
+.tg-mood{--t:var(--magenta)}.tg-sound{--t:var(--cyan)}.tg-sit{--t:var(--yellow)}.tg-genre{--t:var(--green)}
+
+/* ---------- A: reskin ---------- */
+.A{font:13px/1 var(--sans)}
+.A .top{height:26px;background:var(--bg);display:flex;align-items:center;gap:12px;padding:0 10px;color:var(--dim);flex:none;font-size:12px}
+.A .deck{flex:none;height:188px;display:grid;grid-template-columns:92px 1fr 236px;background:#000;border-bottom:3px solid var(--bg)}
+.A .ctl{background:var(--panel);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px}
+.A .rnd{width:44px;height:44px;border-radius:50%;border:2px solid var(--yellow);display:grid;place-items:center;font-weight:600;font-size:11px;color:var(--fg)}
+.A .rnd.play{border-color:var(--green)}
+.A .wv{display:flex;flex-direction:column;min-width:0}
+.A .wv .d{flex:1;min-height:0}.A .wv .o{height:30px;border-top:1px solid var(--raise)}
+.A .pads{height:34px;background:var(--panel);display:flex;align-items:center;gap:5px;padding:0 10px;overflow:hidden}
+.A .pad{width:26px;height:24px;background:var(--bg);color:var(--dim);display:grid;place-items:center;font-weight:600;border-radius:2px;flex:none}
+.A .pad.on{color:var(--bg);background:var(--green)}
+.A .btn{padding:5px 10px;background:var(--raise);border-radius:2px;font-size:11px;font-weight:600;flex:none}
+.A .btn.on{background:var(--accent);color:var(--bg)}
+.A .mem{background:var(--panel);border-left:3px solid var(--bg);display:flex;flex-direction:column;padding:6px;gap:3px;font-size:11px}
+.A .mem div{display:flex;justify-content:space-between;padding:4px 6px;background:var(--base)}
+.A .mem .tabs{margin-top:auto;background:none;padding:0;gap:4px}
+.A .mem .tabs span{flex:1;text-align:center;padding:5px 0;border:1px solid var(--muted);font-weight:600}
+.A .mem .tabs span:first-child{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+.A .br{flex:1;min-height:0;display:grid;grid-template-columns:58px 196px 1fr}
+.A .rail{background:var(--panel);display:flex;flex-direction:column;gap:2px;font-size:10.5px;color:var(--dim);text-align:center;padding-top:4px}
+.A .rail div{padding:9px 0}.A .rail div:first-child{background:var(--raise);color:var(--bright)}
+.A .rail i{display:block;font-style:normal;font-size:15px;margin-bottom:3px}
+.A .tree{background:var(--base);border-left:1px solid var(--bg);border-right:3px solid var(--bg);overflow:hidden;padding-top:4px}
+.A .tree div{padding:6px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.A .tree .l1{padding-left:22px}.A .tree .l2{padding-left:38px}
+.A .tree .sel{background:var(--sel);color:var(--bright)}
+.A .tree .srch{margin:2px 6px 4px;background:var(--bg);color:var(--dim);padding:6px 8px}
+.A .list{display:flex;flex-direction:column;min-width:0}
+.A .lh{height:30px;display:flex;align-items:center;padding:0 10px;gap:10px;color:var(--bright);font-size:14px;flex:none}
+.A .lh .btn{font-size:10.5px}
+.A .row{display:flex;align-items:center;height:25px;gap:0}
+.A .row:nth-child(odd){background:var(--panel)}
+.A .row.hd{background:var(--raise);color:var(--bright);height:24px}
+.A .row.sel{background:var(--sel);color:var(--bright)}
+.A .row .cell{padding:0 8px;border-right:1px solid var(--bg)}
+.A .c-n{width:38px}.A .c-pv{width:128px;height:100%;background:#000}.A .c-ar{width:150px}.A .c-key{width:52px}.A .c-bpm{width:64px}.A .c-t{width:56px}.A .c-en{width:98px;color:var(--bright);letter-spacing:1px}.A .c-tag{width:190px;color:var(--dim)}
+.A .c-col{width:10px;padding:0!important;height:100%;background:var(--p)}
+.A .st{height:24px;flex:none;background:var(--bg);display:flex;align-items:center;gap:12px;padding:0 10px;font-size:11.5px;color:var(--dim)}
+.A .st b{color:var(--bright)}
+@container (max-width:900px){.A .deck{grid-template-columns:72px 1fr}.A .mem,.A .c-tag,.A .c-ar{display:none}.A .br{grid-template-columns:58px 150px 1fr}.A .c-pv{width:64px}.A .c-t{display:none}.A .deck{height:150px}}
+@container (max-width:560px){.A .deck{height:104px;grid-template-columns:52px 1fr}.A .pads,.A .tree,.A .c-pv,.A .c-t,.A .rail span,.A .ctl .rnd:first-child,.A .st .x{display:none}.A .br{grid-template-columns:38px 1fr}.A .rnd{width:36px;height:36px}}
+
+/* ---------- B: omarchy native, same model ---------- */
+.B{font:12px/1 var(--mono)}
+.B .deck{flex:none;border-bottom:1px solid var(--raise);background:var(--panel)}
+.B .strip{display:flex;align-items:center;gap:10px;padding:6px 8px;flex-wrap:wrap}
+.B .tp{display:flex;gap:4px;flex:none}
+.B .k{border:1px solid var(--muted);padding:5px 7px;border-radius:2px;color:var(--bright)}
+.B .k.go{border-color:var(--green);color:var(--green)}
+.B .meta{flex:none;width:230px;min-width:0;display:flex;flex-direction:column;gap:5px}
+.B .meta b{color:var(--bright);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.B .meta span{color:var(--dim)}
+.B .ov{flex:1 1 200px;height:40px;min-width:0;background:var(--bg)}
+.B .dt{height:86px;background:var(--bg);border-top:1px solid var(--raise)}
+.B .body{flex:1;min-height:0;display:grid;grid-template-columns:184px 1fr 300px}
+.B .side{border-right:1px solid var(--raise);padding:6px 0;overflow:hidden;background:var(--panel)}
+.B .side div{display:flex;justify-content:space-between;gap:6px;padding:5px 10px;white-space:nowrap}
+.B .side .h{color:var(--dim);text-transform:uppercase;letter-spacing:.08em;font-size:10.5px;padding-top:10px}
+.B .side .sel{background:var(--sel);color:var(--bright);box-shadow:inset 2px 0 var(--accent)}
+.B .side em{font-style:normal;color:var(--dim)}
+.B .list{min-width:0;display:flex;flex-direction:column}
+.B .crumb{flex:none;display:flex;align-items:center;gap:10px;padding:7px 10px;border-bottom:1px solid var(--raise);color:var(--dim)}
+.B .crumb b{color:var(--bright);font-weight:500}
+.B .crumb .f{margin-left:auto;border:1px solid var(--raise);padding:4px 8px;width:150px}
+.B .row{display:flex;align-items:center;height:24px;gap:10px;padding-right:10px;border-left:3px solid var(--p)}
+.B .row.hd{color:var(--dim);font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;height:22px}
+.B .row.sel{background:var(--sel);color:var(--bright)}
+.B .c-n{width:26px;color:var(--dim)}.B .c-ar{width:140px;color:var(--dim)}.B .c-bpm{width:44px}.B .c-key{width:30px}.B .c-t{width:36px;color:var(--dim)}.B .c-en{width:44px}.B .c-tag{width:230px;display:flex;gap:4px}
+.B .sub{display:none}
+.pips{display:inline-flex;gap:2px;vertical-align:middle}
+.pips i{width:6px;height:10px;background:var(--raise)}.pips i.on{background:var(--orange)}
+.chip{color:var(--t);border:1px solid color-mix(in srgb,var(--t) 35%,transparent);padding:2px 5px;border-radius:2px;font-size:10.5px;white-space:nowrap;line-height:1.1}
+.chip.off{color:var(--dim);border-color:var(--raise)}
+.B .insp{border-left:1px solid var(--raise);background:var(--panel);padding:10px 12px;display:flex;flex-direction:column;gap:12px;overflow:hidden}
+.insp .t b{display:block;color:var(--bright);font-weight:500;font-size:13px;margin-bottom:5px}
+.insp .t span{color:var(--dim)}
+.insp h4{margin:0 0 6px;font:inherit;font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em}
+.insp .chips{display:flex;flex-wrap:wrap;gap:4px}
+.en5{display:flex;gap:4px}.en5 span{width:26px;padding:5px 0;text-align:center;border:1px solid var(--raise)}.en5 .on{background:var(--orange);color:var(--bg);border-color:var(--orange)}
+.sw{display:inline-flex;align-items:center;gap:5px;padding:3px 6px;border:1px solid var(--raise);border-radius:2px}
+.sw::before{content:"";width:8px;height:8px;background:var(--p)}
+.sw.on{border-color:var(--p);color:var(--bright)}
+.fact{border:1px dashed var(--muted);padding:7px 8px;display:flex;flex-direction:column;gap:6px}
+.fact small{color:var(--dim);font-size:10.5px}
+.fact .ac{display:flex;gap:6px}.fact .ac span{border:1px solid var(--muted);padding:3px 7px}.fact .ac span:first-child{border-color:var(--green);color:var(--green)}
+.B .st{flex:none;height:22px;display:flex;align-items:center;gap:14px;padding:0 10px;background:var(--bg);color:var(--dim);font-size:11px;white-space:nowrap;overflow:hidden}
+.B .st .ok{color:var(--green)}.B .st .run{color:var(--yellow)}
+@container (max-width:900px){.B .body{grid-template-columns:168px 1fr}.B .insp,.B .dt,.B .c-tag{display:none}.B .c-ar{width:110px}}
+@container (max-width:560px){.B .body{grid-template-columns:1fr}.B .side,.B .row.hd,.B .c-ar,.B .c-t,.B .c-n,.B .crumb .f{display:none}.B .row{height:38px}.B .sub{display:block;color:var(--dim);margin-top:5px;font-size:11px}.B .meta{width:auto;flex:1}.B .ov{flex-basis:100%}.B .crumb .dd{display:inline}.B .st .x{display:none}}
+.B .crumb .dd{display:none}
+
+/* ---------- C: keyboard first ---------- */
+.C{font:12px/1 var(--mono)}
+.C .q{flex:none;height:34px;display:flex;align-items:center;gap:8px;padding:0 10px;border-bottom:1px solid var(--raise);background:var(--panel);white-space:nowrap;overflow:hidden}
+.C .q .pr{color:var(--accent);font-weight:700}
+.C .tok{background:var(--raise);padding:4px 6px;border-radius:2px;color:var(--bright)}
+.C .tok em{font-style:normal;color:var(--dim)}
+.C .cur{width:7px;height:15px;background:var(--accent)}
+.C .q .ct{margin-left:auto;color:var(--dim)}
+.C .body{flex:1;min-height:0;display:grid;grid-template-columns:1fr 420px}
+.C .list{min-width:0;overflow:hidden}
+.C .row{display:flex;align-items:center;gap:10px;height:23px;padding:0 10px}
+.C .row::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--p);flex:none}
+.C .row.sel{background:var(--sel);color:var(--bright);box-shadow:inset 2px 0 var(--accent)}
+.C .c-ar{color:var(--dim);width:130px}.C .c-bpm{width:26px}.C .c-key{width:28px;color:var(--cyan)}.C .c-en{width:40px;color:var(--orange);letter-spacing:-1px}.C .c-tag{width:200px;color:var(--dim)}
+.C .c-en s{text-decoration:none;color:var(--raise)}
+.C .focus{border-left:1px solid var(--raise);background:var(--panel);padding:10px 12px;display:flex;flex-direction:column;gap:11px;overflow:hidden}
+.C .focus .dt{height:90px;background:var(--bg);flex:none}.C .focus .ov{height:26px;background:var(--bg);flex:none;margin-top:-8px}
+.C .hint{color:var(--dim);font-size:10.5px}
+.C kbd{font:inherit;color:var(--accent);border:1px solid var(--muted);border-radius:2px;padding:1px 4px;font-size:10.5px}
+.C .tagcol{display:grid;grid-template-columns:1fr 1fr;gap:10px 14px}
+.C .tagcol div div{display:flex;gap:6px;padding:3px 0;color:var(--dim)}
+.C .tagcol .on{color:var(--t)}
+.C .tagcol kbd{width:18px;text-align:center;padding:1px 0}
+.C .inl{display:none}
+.C .keys{flex:none;height:24px;display:flex;align-items:center;gap:14px;padding:0 10px;background:var(--bg);color:var(--dim);font-size:11px;white-space:nowrap;overflow:hidden}
+.C .keys .mode{background:var(--accent);color:var(--bg);padding:3px 7px;font-weight:700}
+@container (max-width:900px){.C .body{grid-template-columns:1fr}.C .body>.focus{display:none}.C .inl{display:block}.C .inl .focus{border-left:0;border-block:1px solid var(--raise)}.C .c-tag{display:none}}
+@container (max-width:560px){.C .c-ar,.C .q .tok:nth-of-type(n+3),.C .keys .x{display:none}.C .tagcol{gap:8px}}
+</style>
+
+<div class="page">
+  <h1>wreckordbox · three directions for the window</h1>
+  <p class="lede">The same playlist drawn three ways, each at the three widths Hyprland gives the window. Switch direction and width; every mock-up is live HTML in your Tokyo Night colours with invented tracks. Pick the one to refine, or name parts to combine.</p>
+  <div class="bar">
+    <div class="grp"><span class="lab">Direction</span><div class="seg" id="dir">
+      <button id="dA" data-v="A">A · Reskin</button><button id="dB" data-v="B">B · Same model, new look</button><button id="dC" data-v="C">C · Keyboard first</button></div></div>
+    <div class="grp"><span class="lab">Width</span><div class="seg" id="wid">
+      <button id="w1280" data-v="1280">Full 1280</button><button id="w640" data-v="640">Half 640</button><button id="w436" data-v="436">Narrow 436</button></div></div>
+  </div>
+  <div class="stagewrap"><div id="scaler"><div id="stage"></div></div></div>
+  <div class="notes" id="notes"></div>
+  <p class="fine">Widths are logical pixels on the 2560×1664 panel at scale 2. Waveforms are placeholders drawn on canvas. The deck itself is unaffected by any of this: only the desktop window is being designed.</p>
+</div>
+
+<script>
+const T=[
+ ["Glass Harbour (Extended Mix)","Mara Venn",124,"8A","6:55",4,"Clean",["Euphoric"],["Vocal","Piano"],["Peak time"],["Melodic House"]],
+ ["Low Sun","Ostrava Club",122,"5A","6:34",2,"Clean",["Dreamy"],["Pads"],["Opener"],["Progressive"]],
+ ["Paper Lanterns (Club Mix)","Hale & Wren",126,"9A","4:40",4,"Problem",["Driving"],["Acid"],["Tension builder"],["Tech House"]],
+ ["Nine Bridges","Kessler Park",123,"8A","6:01",0,"",[],[],[],[]],
+ ["Saltwater Choir (Original Mix)","Mara Venn",125,"7A","5:48",3,"Clean",["Dark","Driving"],["Vocal","Strings"],["Tension builder"],["Melodic Techno"]],
+ ["Tin Roof Rain","Dovecote",124,"6A","4:21",1,"Sample",["Dreamy"],["Piano"],["Reset moment"],["Organic House"]],
+ ["Second Floor Light","Ostrava Club",120,"10A","3:54",2,"Clean",["Dreamy"],["Vocal"],["Opener"],["Deep House"]],
+ ["Arc Lamp (Extended Mix)","Juno Halde",127,"4A","5:09",3,"Clean",["Dark"],["Acid"],["Tension builder"],["Melodic Techno"]],
+ ["Harbour Wall","Kessler Park",122,"8B","4:57",0,"Buy",[],[],[],[]],
+ ["Quiet Engine","Dovecote",132,"2A","6:53",5,"Clean",["Driving"],["Strings"],["Peak time"],["Techno"]],
+ ["Cold Start (Club Mix)","Juno Halde",127,"7A","3:48",4,"Clean",["Dark"],["Vocal"],["Peak time"],["Melodic Techno"]],
+ ["Lighthouse Keeper","Hale & Wren",129,"9A","3:39",0,"",[],[],[],[]],
+ ["Morning Shift","Mara Venn",128,"8A","5:31",3,"Clean",["Euphoric"],["Piano"],["Energy drop"],["Progressive"]],
+ ["Static Bloom","Ostrava Club",126,"5A","4:55",3,"Delete",["Dark"],["Acid"],["Tension builder"],["Tech House"]],
+ ["Wide Water (Extended Mix)","Dovecote",121,"3A","7:12",2,"Clean",["Dreamy"],["Pads","Vocal"],["Closer"],["Organic House"]],
+ ["Signal Fire","Juno Halde",130,"6A","6:01",5,"Clean",["Euphoric","Driving"],["Strings"],["Peak time"],["Melodic Techno"]],
+ ["Half Past Blue","Kessler Park",124,"8A","5:24",0,"",[],[],[],[]],
+ ["Open Field","Hale & Wren",123,"7A","6:40",2,"Clean",["Dreamy"],["Piano"],["Reset moment"],["Progressive"]],
+ ["Undertow (Club Mix)","Mara Venn",126,"9A","5:02",4,"Clean",["Dark"],["Vocal"],["Peak time"],["Melodic House"]],
+ ["Last Tram Home","Ostrava Club",118,"11A","4:48",1,"Clean",["Dreamy"],["Pads"],["Closer"],["Deep House"]],
+ ["Kiln","Juno Halde",131,"4A","5:55",5,"Problem",["Driving"],["Acid"],["Peak time"],["Techno"]],
+ ["Fernlight","Dovecote",122,"6A","6:18",2,"Clean",["Euphoric"],["Strings"],["Opener"],["Organic House"]],
+ ["North Stair","Kessler Park",125,"8A","4:33",3,"Clean",["Dark"],["Vocal"],["Tension builder"],["Tech House"]],
+ ["Slow Orbit","Hale & Wren",120,"10A","7:02",1,"Clean",["Dreamy"],["Pads"],["Reset moment"],["Progressive"]]
+].map((a,i)=>({n:i+1,title:a[0],artist:a[1],bpm:a[2],key:a[3],time:a[4],en:a[5],prep:a[6],mood:a[7],sound:a[8],sit:a[9],genre:a[10]}));
+const SEL=4, S=T[SEL];
+const VOC={mood:["Dark","Euphoric","Dreamy","Driving","Playful"],sound:["Vocal","Acid","Piano","Strings","Pads"],sit:["Opener","Tension builder","Peak time","Energy drop","Reset moment","Closer"],genre:["Melodic Techno","Melodic House","Tech House","Progressive","Organic House","Deep House","Techno"]};
+const CAT={mood:"Mood/Emotion",sound:"Sound Elements",sit:"Situation",genre:"Sub-genre"};
+const PREP=["Clean","Problem","Delete","Sample","Buy"];
+const tags=t=>["mood","sound","sit","genre"].flatMap(c=>t[c].map(x=>[c,x]));
+const wf=(seed,kind)=>`<canvas data-seed="${seed}" data-kind="${kind}"></canvas>`;
+const tree=[["All Tracks",0,412],["CURRENT",0,""],["Melodic Vox",1,30,1],["Hardstyle",1,18],["Drum and Bass",1,44],["Fresh 128s",1,27],["USB",0,""],["Eurodance",1,61],["Latin",1,22],["Main",1,140],["Main: Vocal",1,58],["Melodic Techno",1,73],["Techno",1,49],["Trance",1,35],["Groovy",1,40],["Fun House",1,26]];
+
+function A(){
+  const rows=T.map((t,i)=>`<div class="row prep-${t.prep} ${i==SEL?"sel":""}"><span class="cell c-col"></span><span class="cell c-n r">${t.n}</span><span class="cell c-pv cv">${t.en?wf(t.n,"mini"):""}</span><span class="cell grow">${t.title}</span><span class="cell c-ar">${t.artist}</span><span class="cell c-key">${t.key}</span><span class="cell c-bpm r">${t.bpm}.00</span><span class="cell c-t r">${t.time}</span><span class="cell c-en">${"★".repeat(t.en)}${"☆".repeat(5-t.en)}</span><span class="cell c-tag">${tags(t).map(x=>x[1]).join(", ")}</span></div>`).join("");
+  return `<div class="m A">
+   <div class="top"><span>▭ ▾</span><span style="margin-left:auto">⚙</span><span>▁▃▅</span><span>3:32</span></div>
+   <div class="deck">
+    <div class="ctl"><div class="rnd">CUE</div><div class="rnd play">▶</div></div>
+    <div class="wv"><div class="d cv">${wf(5,"detail")}</div><div class="o cv">${wf(5,"over")}</div>
+      <div class="pads">${"ABCDEFGH".split("").map((p,i)=>`<span class="pad ${i<4?"on":""}">${p}</span>`).join("")}<span class="btn" style="margin-left:14px">MEMORY</span><span class="btn on">Q</span></div></div>
+    <div class="mem"><div><span>0:32.1</span><span>×</span></div><div><span>1:04.4</span><span>×</span></div><div><span>2:40.9</span><span>×</span></div><div><span>4:17.2</span><span>×</span></div><div class="tabs"><span>MEMORY</span><span>HOT CUE</span><span>INFO</span></div></div>
+   </div>
+   <div class="br">
+    <div class="rail"><div><i>▰</i><span>Playlists</span></div><div><i>▭</i><span>Explorer</span></div><div><i>▯</i><span>Devices</span></div><div><i>◷</i><span>Histories</span></div><div><i>▤</i><span>Tag List</span></div></div>
+    <div class="tree"><div class="srch">⌕ Search library tree</div>${tree.map(t=>`<div class="${t[1]?"l2":"l1"} ${t[3]?"sel":""}">${t[1]?"▤":(t[2]===""?"▾ ▰":"♫")} ${t[0]}</div>`).join("")}</div>
+    <div class="list"><div class="lh"><span class="cell grow">Melodic Vox (30 Tracks)</span><span class="btn">MASTER ▾</span><span class="btn">▤</span></div>
+     <div class="row hd"><span class="cell c-col" style="background:none"></span><span class="cell c-n r"># ↑</span><span class="cell c-pv" style="background:none">Preview</span><span class="cell grow">Track Title</span><span class="cell c-ar">Artist</span><span class="cell c-key">Key</span><span class="cell c-bpm">BPM</span><span class="cell c-t">Time</span><span class="cell c-en">Energy</span><span class="cell c-tag">My Tag</span></div>
+     <div style="overflow:hidden;flex:1">${rows}</div></div>
+   </div>
+   <div class="st"><b>wreckordbox</b><span class="x">0.4.0</span><span style="margin-left:auto">30 tracks · 2 h 24 min<span class="x"> · 261.9 MB</span></span></div>
+  </div>`;
+}
+const pips=n=>`<span class="pips">${[1,2,3,4,5].map(i=>`<i class="${i<=n?"on":""}"></i>`).join("")}</span>`;
+function insp(){
+  return `<div class="t"><b>${S.title}</b><span>${S.artist} · ${S.bpm} · ${S.key} · ${S.time}</span></div>
+   <div><h4>Energy</h4><div class="en5">${[1,2,3,4,5].map(i=>`<span class="${i==S.en?"on":""}">${i}</span>`).join("")}</div></div>
+   <div><h4>Prep colour</h4><div class="chips">${PREP.map(p=>`<span class="sw prep-${p} ${p==S.prep?"on":""}">${p}</span>`).join("")}</div></div>
+   ${Object.keys(CAT).map(c=>`<div><h4>${CAT[c]}</h4><div class="chips">${VOC[c].map(v=>`<span class="chip tg-${c} ${S[c].includes(v)?"":"off"}">${v}</span>`).join("")}</div></div>`).join("")}
+   <div><h4>Waiting for you · 1</h4><div class="fact"><span>Situation: <b style="color:var(--yellow);font-weight:500">Peak time</b></span><small>agent · 0.72 · today 14:10</small><div class="ac"><span>Accept</span><span>Reject</span></div></div></div>`;
+}
+function B(){
+  const rows=T.map((t,i)=>`<div class="row prep-${t.prep} ${i==SEL?"sel":""}"><span class="cell c-n r">${t.n}</span><span class="cell grow">${t.title}<div class="sub">${t.artist}${tags(t).slice(0,2).map(x=>" · "+x[1]).join("")}</div></span><span class="cell c-ar">${t.artist}</span><span class="cell c-bpm r">${t.bpm}</span><span class="cell c-key">${t.key}</span><span class="cell c-t r">${t.time}</span><span class="cell c-en">${pips(t.en)}</span><span class="cell c-tag">${tags(t).slice(0,3).map(x=>`<span class="chip tg-${x[0]}">${x[1]}</span>`).join("")}</span></div>`).join("");
+  return `<div class="m B">
+   <div class="deck"><div class="strip"><div class="tp"><span class="k">CUE</span><span class="k go">▶</span></div>
+     <div class="meta"><b>${S.title}</b><span>${S.artist} · ${S.bpm}.00 · ${S.key} · 1:42 / ${S.time}</span></div>
+     <div class="ov cv">${wf(5,"over")}</div></div>
+     <div class="dt cv">${wf(5,"detail")}</div></div>
+   <div class="body">
+    <div class="side">${tree.map(t=>t[2]===""?`<div class="h">${t[0]}</div>`:`<div class="${t[3]?"sel":""}"><span>${t[0]}</span><em>${t[2]}</em></div>`).join("")}</div>
+    <div class="list"><div class="crumb"><span>CURRENT /</span><b>Melodic Vox</b><span class="dd">▾</span><span>30 · 2h24m</span><span class="f">/ filter</span></div>
+     <div class="row hd"><span class="cell c-n r">#</span><span class="cell grow">Title</span><span class="cell c-ar">Artist</span><span class="cell c-bpm r">BPM</span><span class="cell c-key">Key</span><span class="cell c-t r">Time</span><span class="cell c-en">Energy</span><span class="cell c-tag">MyTags</span></div>
+     <div style="overflow:hidden;flex:1">${rows}</div></div>
+    <div class="insp">${insp()}</div>
+   </div>
+   <div class="st"><span class="ok">● service</span><span class="x">Library writable</span><span class="run">Run: agent tagging 12/30</span><span class="x" style="margin-left:auto">scale 100% · Tokyo Night</span></div>
+  </div>`;
+}
+function focus(){
+  const keys={mood:"asdfg",sound:"qwert",sit:"zxcvbn",genre:"yuiophj"};
+  return `<div class="focus"><div class="dt cv">${wf(5,"detail")}</div><div class="ov cv">${wf(5,"over")}</div>
+   <div class="hint"><kbd>space</kbd> play &nbsp;<kbd>←</kbd><kbd>→</kbd> seek &nbsp;<kbd>F1</kbd>–<kbd>F8</kbd> hot cues</div>
+   <div style="display:flex;gap:16px;flex-wrap:wrap"><div><span class="hint">Energy </span>${[1,2,3,4,5].map(i=>i==S.en?`<kbd style="background:var(--orange);color:var(--bg);border-color:var(--orange)">${i}</kbd>`:`<kbd>${i}</kbd>`).join(" ")}</div><div><span class="hint">Prep </span><kbd>c</kbd> <span style="color:var(--green)">● Clean</span></div></div>
+   <div class="tagcol">${Object.keys(CAT).map(c=>`<div class="tg-${c}"><div class="hint" style="text-transform:uppercase;letter-spacing:.08em">${CAT[c]}</div>${VOC[c].map((v,i)=>`<div class="${S[c].includes(v)?"on":""}"><kbd>${keys[c][i]}</kbd>${v}</div>`).join("")}</div>`).join("")}</div></div>`;
+}
+function C(){
+  const bar=n=>"▮".repeat(n)+"<s>"+"▮".repeat(5-n)+"</s>";
+  const rows=T.map((t,i)=>`<div class="row prep-${t.prep} ${i==SEL?"sel":""}"><span class="cell grow">${t.title}</span><span class="cell c-ar">${t.artist}</span><span class="cell c-bpm r">${t.bpm}</span><span class="cell c-key">${t.key}</span><span class="cell c-en">${bar(t.en)}</span><span class="cell c-tag">${tags(t).map(x=>x[1].toLowerCase()).join(" · ")}</span></div>${i==SEL?`<div class="inl">${focus()}</div>`:""}`).join("");
+  return `<div class="m C">
+   <div class="q"><span class="pr">›</span><span class="tok"><em>in:</em>Melodic Vox</span><span class="tok"><em>energy:</em>≥3</span><span class="tok"><em>situation:</em>peak, tension</span><span class="cur"></span><span class="ct">24 of 30</span></div>
+   <div class="body"><div class="list">${rows}</div>${focus()}</div>
+   <div class="keys"><span class="mode">TAG</span><span><kbd>j</kbd><kbd>k</kbd> move</span><span><kbd>/</kbd> filter</span><span><kbd>g</kbd> go to playlist</span><span class="x"><kbd>t</kbd> tag mode</span><span class="x"><kbd>:</kbd> command</span><span class="x"><kbd>u</kbd> undo</span><span class="x" style="margin-left:auto;color:var(--yellow)">Run: agent tagging 12/30</span></div>
+  </div>`;
+}
+const NOTES={
+A:[["What it is","Upstream's layout kept as it stands: deck on top, rail, tree, track list. Colours and spacing move to the Omarchy theme, and panels drop away as the window narrows."],
+   ["You get",["Everything where rekordbox trained your hands to find it","Upstream interface fixes still cherry-pick","Prep colour as a row stripe, MyTags as a column"]],
+   ["You give up",["The deck still takes a third of a half-width window","Tagging stays in menus and the Tag List panel","New agent screens have no natural home"]]],
+B:[["What it is","The same three things (playlists, track list, deck) redrawn for a tiled desktop. The deck is a strip that expands, the tree is plain text, and an inspector edits Energy, Prep colour and all four MyTag categories for the selected track."],
+   ["You get",["A track list that survives 436 px as two-line rows","Tagging one click away at full width","A place for waiting Facts and Runs in the status line and inspector","Terminal type and theme colours throughout"]],
+   ["You give up",["Pixel parity with rekordbox","Upstream interface fixes become manual ports","The memory cue list and pad row move behind the expanded deck"]]],
+C:[["What it is","One list, one query line, and keys for everything. No tree: playlists are a filter or a go-to jump. The selected track opens beside the list, or inline when narrow, with every tag on a letter key."],
+   ["You get",["The fastest tagging of the three: select, press letters, move on","Works the same at any width","Filters read like the CLI, so window and agents share one language"]],
+   ["You give up",["Drag-and-drop playlist building as the main gesture","Anything familiar from rekordbox","The most new code, and keys to learn"]]]
+};
+function draw(){
+  document.querySelectorAll("#stage canvas").forEach(c=>{
+    const w=c.clientWidth,h=c.clientHeight;if(!w||!h)return;
+    const d=2;c.width=w*d;c.height=h*d;const g=c.getContext("2d");g.scale(d,d);
+    let s=+c.dataset.seed*9301+49297;const rnd=()=>(s=(s*9301+49297)%233280)/233280;
+    const kind=c.dataset.kind,n=kind=="detail"?Math.floor(w/3):w,bw=kind=="detail"?2:1,step=w/n,mid=kind=="detail"?h/2:h;
+    for(let i=0;i<n;i++){const p=i/n;
+      let env=kind=="detail"?(i%16<2?1:.35+.5*rnd()):(.35+.4*Math.sin(p*Math.PI)+(p>.28&&p<.36||p>.7&&p<.76?-.3:0)+.25*rnd());
+      env=Math.max(.06,Math.min(1,env));
+      const lo=env*mid*.95,mi=lo*(.35+.35*rnd()),hi=mi*(.3+.4*rnd());
+      [[lo,"#3d59a1"],[mi,"#ff9e64"],[hi,"#c0caf5"]].forEach(([v,col])=>{g.fillStyle=col;if(kind=="detail")g.fillRect(i*step,mid-v,bw,v*2);else g.fillRect(i*step,h-v,bw,v);});
+    }
+    if(kind!="mini"){const cues=kind=="detail"?[.18,.62]:[.08,.3,.55,.78];cues.forEach((p,i)=>{g.fillStyle=["#9ece6a","#0db9d7","#bb9af7","#e0af68"][i];g.fillRect(p*w,0,kind=="detail"?2:1.5,h);g.fillRect(p*w,0,7,5);});
+      g.fillStyle="#f7768e";g.fillRect((kind=="detail"?.5:.29)*w,0,1.5,h);}
+  });
+}
+let dir="B",wid=1280;
+function fit(){const sc=document.getElementById("scaler"),st=document.getElementById("stage"),av=sc.parentElement.clientWidth-24,k=Math.min(1,av/wid);
+  st.style.width=wid+"px";st.style.transform=`scale(${k})`;sc.style.width=wid*k+"px";sc.style.height=800*k+"px";}
+function render(){
+  document.getElementById("stage").innerHTML={A,B,C}[dir]();
+  document.querySelectorAll("#dir button").forEach(b=>b.setAttribute("aria-pressed",b.dataset.v==dir));
+  document.querySelectorAll("#wid button").forEach(b=>b.setAttribute("aria-pressed",b.dataset.v==wid));
+  document.getElementById("notes").innerHTML=NOTES[dir].map(([h,b])=>`<div><h2>${h}</h2>${Array.isArray(b)?`<ul>${b.map(x=>`<li>${x}</li>`).join("")}</ul>`:`<p>${b}</p>`}</div>`).join("");
+  fit();requestAnimationFrame(draw);
+}
+document.getElementById("dir").onclick=e=>{const v=e.target.dataset.v;if(v){dir=v;render();}};
+document.getElementById("wid").onclick=e=>{const v=e.target.dataset.v;if(v){wid=+v;render();}};
+addEventListener("resize",fit);
+if(location.hash.length==3){dir=location.hash[1].toUpperCase();wid={f:1280,h:640,n:436}[location.hash[2]]||1280;if(!NOTES[dir])dir="B";}
+render();
+</script>

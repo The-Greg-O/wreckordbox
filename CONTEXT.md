@@ -106,6 +106,14 @@ _Avoid_: AZ stems, stem files
 A Stem exported to a Stick as an ordinary track, for players that cannot play Native stems.
 _Avoid_: Acapella track, detached stem
 
+**Mutant**:
+A playlist's own edited version of a track: its parent track plus the edits made for that playlist, such as Stems muted, key shifted, tempo changed or cues moved. It is held in the Sidecar, inherits the parent's grid, Energy and tags, and reaches a Stick as an ordinary track rendered at load time.
+_Avoid_: Variant, edit, version, copy
+
+**Intake**:
+Preparing a newly added track for playing: correcting its title and artist, tagging it, checking its beat grid and cues, and marking it Clean. A track is waiting for Intake while it has no Prep colour.
+_Avoid_: Import (import means adding audio files to the Library), prep queue, inbox
+
 **Recipe**:
 The DJ's written criteria for a journey through a set: how Intensity should move, how far tempo and key may shift, which Situations belong where, how much to favour recent additions. A plain-text file the DJ versions and refines.
 _Avoid_: Rules, template, preset

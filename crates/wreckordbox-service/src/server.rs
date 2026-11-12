@@ -162,7 +162,6 @@ impl Service {
         let library_lock = take_lock(&library.master_db, &socket)?;
         let master_db = library.master_db.clone();
         let open = open(library)?;
-        let core = open.core();
         let listener = listen(&config.runtime_dir, &socket)?;
         let (queue, queued) = std::sync::mpsc::channel();
         let (sidecar_events, sidecar_queued) = std::sync::mpsc::channel();
@@ -201,16 +200,18 @@ impl Service {
         // or the front end this service shares the core with. The core calls
         // this under its own lock, so the change is only queued here.
         {
-            let shared = Arc::downgrade(&shared);
-            core.watch(move |change| {
-                let Some(shared) = shared.upgrade() else {
-                    return false;
-                };
-                let queue = lock(&shared.changes);
-                queue
-                    .as_ref()
-                    .is_some_and(|queue| queue.send(LibraryChanged::from(change).event()).is_ok())
-            });
+            let watching = Arc::downgrade(&shared);
+            if let Some(owned) = lock(&shared.library).as_ref() {
+                owned.library.watch(move |change| {
+                    let Some(shared) = watching.upgrade() else {
+                        return false;
+                    };
+                    let queue = lock(&shared.changes);
+                    queue.as_ref().is_some_and(|queue| {
+                        queue.send(LibraryChanged::from(change).event()).is_ok()
+                    })
+                });
+            }
         }
         {
             let shared = Arc::clone(&shared);
@@ -444,6 +445,24 @@ impl Shared {
                 crate::stems::answer(&self.stems, request, &|id| {
                     self.with_library(|library| crate::stems::parent(library, id))?
                 })
+            }
+            facts if crate::facts::answers(facts) => {
+                // The Sidecar's, not the Library's: the Library is only
+                // read, to find the track.
+                crate::facts::answer(&self.stems, request, &|id| {
+                    self.with_library(|library| crate::stems::parent(library, id))?
+                })
+            }
+            intake if crate::intake::answers(intake) => {
+                let (result, changed) = self.with_library(|library| {
+                    crate::intake::answer(library, &self.stems, request)
+                })??;
+                // Only its Prep colour edit changes the Library; the
+                // hosting process is told of it here, as of a rating.
+                if let Some(changed) = changed {
+                    self.tell_host(&changed.event());
+                }
+                Ok(result)
             }
             unknown => Err(ServiceError::new(
                 codes::UNKNOWN_COMMAND,

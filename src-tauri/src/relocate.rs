@@ -678,7 +678,7 @@ fn record_relocation(state: &AppState, moves: &[(String, PathBuf)], manual: bool
     let count = u32::try_from(relocation.len()).unwrap_or(u32::MAX);
     let edit = LibraryEdit::Relocate(relocation);
     if !edit.is_empty() {
-        state.edit_history.lock().record(edit, RELOCATE_LABEL);
+        state.edit_history().lock().record(edit, RELOCATE_LABEL);
     }
     Ok(count)
 }

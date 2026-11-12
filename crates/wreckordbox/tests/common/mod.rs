@@ -244,6 +244,43 @@ impl Sandbox {
         ]
     }
 
+    /// Names colour labels as the DJ names them in rekordbox's preferences:
+    /// `(colour, name)`, the colour numbered as [`Details::colour_id`]. The
+    /// fixture's colour table starts empty, so a colour not named here goes
+    /// by its own name.
+    pub fn name_colours(&self, names: &[(u8, &str)]) {
+        self.edit(|writer| {
+            for (colour, name) in names {
+                writer
+                    .library()
+                    .connection()
+                    .execute(
+                        "INSERT INTO djmdColor
+                            (ID, ColorCode, SortKey, Commnt, UUID, created_at, updated_at)
+                         VALUES (?1, 0, ?1, ?2, 'fixture-colour-' || ?1,
+                                 '2026-01-01', '2026-01-01')",
+                        (colour.to_string(), name),
+                    )
+                    .unwrap();
+            }
+        });
+    }
+
+    /// The DJ's own Prep colours: Buy on Pink, Problem on Red, Sample on
+    /// Yellow, Clean on Green and Delete on Purple.
+    pub fn dj_prep_colours(&self) {
+        self.name_colours(&[
+            (1, "Buy"),
+            (2, "Problem"),
+            (3, "Orange"),
+            (4, "Sample"),
+            (5, "Clean"),
+            (6, "Aqua"),
+            (7, "Blue"),
+            (8, "Delete"),
+        ]);
+    }
+
     /// Adds a MyTag called `name` to the end of `category` and answers its
     /// identifier.
     pub fn create_my_tag_in(&self, category: &str, name: &str) -> String {

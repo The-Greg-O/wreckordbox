@@ -577,7 +577,7 @@ fn analysed(index: &rbl_index::Library, row: Row) -> bool {
     index.analysed.get(row as usize).copied().unwrap_or(0) != 0
 }
 
-fn record(index: &rbl_index::Library, row: Row) -> TrackRecord {
+pub(crate) fn record(index: &rbl_index::Library, row: Row) -> TrackRecord {
     let at = row as usize;
     let text = |column: &rbl_index::strings::StrColumn| column.get(at).to_owned();
     let bpm_x100 = index.bpm_x100.get(at).copied().unwrap_or(0);

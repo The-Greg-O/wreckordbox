@@ -26,6 +26,31 @@ export function artworkUrl(trackId: string): string | undefined {
 }
 
 /**
+ * Whether the image has to be asked for with CORS, and how.
+ *
+ * WebKitGTK 2.54.0 and 2.54.1 refuse a plain (no-CORS) request to a scheme
+ * the app serves when the page itself came over HTTP, as it does from the dev
+ * server under `pnpm dev`: "Unsafe attempt to load URL rbl://…", and the app
+ * is never asked. Every sleeve was blank there, a Stick's and the Library's
+ * alike, while the built app, whose page is `tauri://localhost`, showed them
+ * (#44). A CORS request is let through, and the backend already answers an
+ * image with `Access-Control-Allow-Origin: *`. WebKitGTK 2.54.2 dropped the
+ * check (https://bugs.webkit.org/show_bug.cgi?id=326992).
+ *
+ * Only there: the built app on Linux, and macOS and Windows in any form, ask
+ * as they always have.
+ */
+export function artworkCrossOrigin(
+  src: string,
+  page: string = window.location.protocol,
+  agent: string = window.navigator.userAgent,
+): "anonymous" | undefined {
+  const overHttp = /^https?:/i;
+  // Windows' `http://rbl.localhost/…` is an ordinary web address already.
+  return /\bLinux\b/.test(agent) && overHttp.test(page) && !overHttp.test(src) ? "anonymous" : undefined;
+}
+
+/**
  * Attempts after the first, which is enough to outlast the library opening.
  *
  * A sleeve asked for before the library is open fails, and an `<img>` never
