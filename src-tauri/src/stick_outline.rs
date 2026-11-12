@@ -18,7 +18,10 @@ pub async fn stick_outline(path: String) -> AppResult<wreckordbox_stick_outline:
                 "That device is no longer connected.",
             ));
         }
-        Ok(wreckordbox_stick_outline::outline(&mount))
+        // A lock that cannot be leased, or a path that moved, is an error,
+        // not an empty Stick; an unfinished write is `pending`.
+        wreckordbox_stick_outline::read_outline(&mount)
+            .map_err(|error| crate::stick_recovery::read_error(&mount, error))
     })
     .await
 }

@@ -118,6 +118,16 @@ describe("sanitisePreferences", () => {
     expect(sanitisePreferences({ view: 3, advanced: [] })).toEqual(DEFAULT_PREFERENCES);
   });
 
+  it("keeps each of the four waveform themes for the window, and only rekordbox's three for a device", () => {
+    for (const choice of ["3band", "rgb", "blue", "theme"]) {
+      expect(sanitisePreferences({ view: { waveformColor: choice } }).view.waveformColor).toBe(choice);
+    }
+    expect(sanitisePreferences({}).view.waveformColor).toBe("3band");
+    expect(sanitisePreferences({ view: { waveformColor: "sepia" } }).view.waveformColor).toBe("3band");
+    // A CDJ has no Theme palette: the setting written to a Stick stays one of its own.
+    expect(sanitisePreferences({ djSystem: { waveformColor: "theme" } }).djSystem.waveformColor).toBe("3band");
+  });
+
   it("keeps every valid choice and replaces each bad one on its own", () => {
     const stored = {
       view: {

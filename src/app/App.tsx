@@ -90,6 +90,7 @@ import { DualZoom } from "@/views/player/DualDeck";
 import type { PreferencesTarget } from "@/views/settings/Preferences";
 import { PreferencesProvider, usePreferencesStore } from "@/store/usePreferences";
 import { stepUiScale, type PreferencePane } from "@/lib/preferences";
+import { useEffectiveWaveform } from "@/lib/waveTheme";
 import { answer, deckNumber, setPlaying, whenLoaded, withSetting, type ScriptHandler } from "@/lib/scripting";
 import { continuesFrom, playedToEnd, skipRowIndex, type ListPosition } from "@/lib/continuousPlay";
 import { useAnalysis } from "@/store/useAnalysis";
@@ -98,6 +99,9 @@ import { autoAnalysisOffer, takeRemainingPages } from "@/lib/autoAnalysis";
 import type { LibraryQuestion } from "@/views/library/NewLibraryDialog";
 import type { QueueItem } from "@/lib/queue";
 import { TrackFilter } from "@/views/browser/TrackFilter";
+import { TrackFilterBar } from "@/views/shell/TrackFilterBar";
+import { useShellTrackFilter } from "@/views/shell/useShellTrackFilter";
+import { hasPicks } from "@/lib/shellTrackFilter";
 import { EMPTY_FILTER, toSpecFilter, type FilterState } from "@/lib/trackFilter";
 import type { AnalysisResult, DeviceFormat, DeviceImportMissing, DevicePlaylistEdit, DevicePlaylistImportPlan, FilterValues, LinkPeerSeen, LinkStatus, ListTotals, RelocateSearch, SmartRule, TrackLookups, UnanalysedTracks } from "@/ipc/types";
 import { statusBarListText } from "@/lib/format";
@@ -508,6 +512,7 @@ function AppBody() {
   }, []);
   const prefs = usePreferencesStore();
   const { view: viewPrefs, advanced: advancedPrefs, analysis: analysisPrefs } = prefs.preferences;
+  const { palette: waveformPalette } = useEffectiveWaveform(viewPrefs.waveformColor);
   // Every write path reads this one flag: rekordbox holding the database,
   // or Library Protection in Preferences, refuse the same way.
   const backupJob = useBackupProgress();
@@ -943,13 +948,28 @@ function AppBody() {
   const masterBpmX100 = (syncMaster === "b" ? playerTrackB : playerTrack)?.bpmX100 ?? null;
   // Related Tracks relate to the track on Player 1, as rekordbox's do.
   const relatedTo = playerTrack?.id ?? null;
+  // The view shell's Track Filter bar (wbx-57): always shown above the list,
+  // its text is the list's search.
+  const shellFilterBase: ViewSpec = useMemo(() => ({ ...specForNode(selectedNode, "", null, "classic", "alphabetical", relatedTo, deviceLibraries.revision), searchField }),
+    [selectedNode, relatedTo, deviceLibraries.revision, searchField]);
+  // Key match and BPM ±6% follow the track the key lights follow (wbx-57).
+  const shellFilterLoaded = useMemo(() => ({ key: trafficKey || null, bpmX100: trafficTrack?.bpmX100 ?? null }), [trafficKey, trafficTrack?.bpmX100]);
+  const shellFilter = useShellTrackFilter({ enabled: shellOn, base: shellFilterBase, query, setQuery, generation: libraryGeneration, tagListRevision, loaded: shellFilterLoaded });
+  // Selected tracks the filter hid and the list deselected, as last told;
+  // said until the filter is cleared.
+  const [filterDeselected, setFilterDeselected] = useState(0);
+  const shellFilterChange = shellFilter.onChange;
+  const onShellFilterChange = useCallback((next: Parameters<typeof shellFilterChange>[0]) => {
+    if (!hasPicks(next) && next.text.trim() === "") setFilterDeselected(0);
+    shellFilterChange(next);
+  }, [shellFilterChange]);
   const spec: ViewSpec = useMemo(() => {
     const base = { ...specForNode(selectedNode, query, sortState, viewPrefs.keyDisplay, viewPrefs.keySort, relatedTo, deviceLibraries.revision), searchField };
     // Only while the bar is showing: hiding it puts the whole list back,
     // so a closed bar can never be silently narrowing the library.
-    const filter = filterOpen ? toSpecFilter(filterState, masterBpmX100) : undefined;
+    const filter = shellOn ? shellFilter.viewFilter : filterOpen ? toSpecFilter(filterState, masterBpmX100) : undefined;
     return filter ? { ...base, filter } : base;
-  }, [selectedNode, sortState, query, searchField, filterOpen, filterState, masterBpmX100, viewPrefs.keyDisplay, viewPrefs.keySort, relatedTo, deviceLibraries.revision]);
+  }, [selectedNode, sortState, query, searchField, filterOpen, filterState, masterBpmX100, viewPrefs.keyDisplay, viewPrefs.keySort, relatedTo, deviceLibraries.revision, shellOn, shellFilter.viewFilter]);
 
   // What the bar's lists offer, from Rust, for the source and query alone.
   // Re-asked when either changes or the library does, and only while the bar
@@ -2735,6 +2755,14 @@ function AppBody() {
     })();
   }, []);
 
+  // The DJ's explicit action in a Stick's panel, the one place the window
+  // settles a Stick's unfinished write (wbx-45.5); no read ever does. The
+  // Stick is read again (the shell's outline follows `revision`).
+  const settleStick = useCallback(async (path: string) => {
+    await deviceLibraries.settle(path);
+    refreshDevices();
+  }, [deviceLibraries, refreshDevices]);
+
   const ejectDeviceFromTree = useCallback(async (node: TreeNode) => {
     const path = devicePath(node.id);
     if (!path || ejectingDeviceRef.current || syncing || exportRunning) return;
@@ -3231,9 +3259,15 @@ function AppBody() {
     if (!sessionReady || screen.rows.length === 0) return;
     void getBackend().then(backend => backend.rememberScreenAssets(
       screen.rows.map(row => row.id),
-      waveformKindOf(viewPrefs.waveformColor, false),
+      waveformKindOf(waveformPalette, false),
     ));
-  }, [sessionReady, screen.rows, viewPrefs.waveformColor]);
+  }, [sessionReady, screen.rows, waveformPalette]);
+
+  // The waveform theme in force, for the markers drawn over every waveform:
+  // under Theme they get a halo (Player.module.css).
+  useEffect(() => {
+    document.documentElement.dataset.waveTheme = waveformPalette;
+  }, [waveformPalette]);
 
   // Written on every change rather than on exit: a window that is force-quit,
   // or a machine that loses power, still comes back where it was. It is a few
@@ -3490,6 +3524,7 @@ function AppBody() {
             onSync={syncToDevice}
             onRefresh={refreshDevices}
             onError={refuse}
+            onSettle={settleStick}
             busy={syncing}
           /></Suspense>
         ) : (
@@ -3562,9 +3597,14 @@ function AppBody() {
           searchRef={searchRef}
           seed={seed}
           onFirstRows={onFirstRows}
-          filterOpen={filterOpen}
-          onToggleFilter={toggleFilter}
-          filterBar={filterBar}
+          filterOpen={shellOn || filterOpen}
+          {...(shellOn ? { onHiddenSelectionDropped: setFilterDeselected } : { onToggleFilter: toggleFilter })}
+          filterBar={shellOn ? (
+            <TrackFilterBar model={shellFilter.model} onChange={onShellFilterChange} values={shellFilter.values}
+              valuesError={shellFilter.valuesError} categories={shellFilter.categories} dropped={shellFilter.dropped}
+              deselected={filterDeselected} onStick={shellFilter.onStick} count={shellFilter.count} filtering={shellFilter.filtering} loaded={shellFilterLoaded}
+              keyDisplay={viewPrefs.keyDisplay} keySort={viewPrefs.keySort} />
+          ) : filterBar}
         />
         )
   );

@@ -6,14 +6,14 @@
  * tokens. Rows are virtualized and keyed by row id so a re-sort moves DOM nodes
  * instead of rewriting every cell.
  */
-import { useFontScales } from "@/lib/themeRoles";
+import { shownTheme, subscribeShownTheme, useFontScales } from "@/lib/themeRoles";
 import { dragTracksToDesktop, getBackend, nativeTrackDragging } from "@/ipc/client";
 import { SearchField } from "@/components/SearchField";
 import { reportStartupPaint } from "@/lib/startup";
 import { useEventCallback } from "@/store/useEventCallback";
 import { TRACK_SEARCH_OPTIONS, type TrackSearchField } from "@/lib/search";
 
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { defaultRangeExtractor, useVirtualizer, type Range } from "@tanstack/react-virtual";
 import type { DeckId, ListTotals, RowDto, SortColumn, TrackField, ViewSpec } from "@/ipc/types";
@@ -99,12 +99,18 @@ export type Column = ColumnSpec;
  */
 /**
  * The columns as drawn: each stored width times how much larger the theme
- * file makes that column's text. Artwork is sized from the row already.
+ * file makes that column's text, and never below the look's floor for it
+ * (wbx-45.10). Artwork is sized from the row already.
  */
-function scaledColumns(columns: readonly ColumnSpec[], scale: (key: ColumnKey) => number): readonly ColumnSpec[] {
+function scaledColumns(
+  columns: readonly ColumnSpec[],
+  scale: (key: ColumnKey) => number,
+  floor?: (key: ColumnKey) => number | undefined,
+): readonly ColumnSpec[] {
   return columns.map((column) => {
     const by = column.key === "artwork" ? 1 : scale(column.key);
-    return by === 1 ? column : { ...column, width: Math.round(column.width * by) };
+    const width = Math.max(Math.round(column.width * by), floor?.(column.key) ?? 0);
+    return width === column.width ? column : { ...column, width };
   });
 }
 
@@ -1032,6 +1038,13 @@ export interface TrackTableProps {
   /** The bar itself, drawn between the header and the column header. */
   filterBar?: React.ReactNode;
   /**
+   * The view shell's Track Filter (wbx-57), opt-in: whenever the list's rows
+   * change (a filter, a search, an edit), selected tracks it no longer shows
+   * are deselected, so nothing acts on a track the DJ cannot see; this is
+   * told how many.
+   */
+  onHiddenSelectionDropped?: (count: number) => void;
+  /**
    * The Traffic Light: which deck the browser reads, the MASTER menu above
    * the list, and the key of the track on it. The main browser passes these;
    * the sub-browser has no menu and lights nothing.
@@ -1151,7 +1164,7 @@ export const TrackTable = memo(function TrackTable({
   onRemoveFromCollection, onAutoRelocate, onRelocate, onConvertMemoryCues, readOnly = false,
   onImportToCollection, onAnalysisLock, onAddToPlaylist, onAddToTagList, onRemoveFromTagList, onExportTrack, onReloadTag,
   playlists = [], devices = [], deviceMenu,
-  players = 0, onLoadTrack, onSelectedRow, filterOpen = false, onToggleFilter, filterBar,
+  players = 0, onLoadTrack, onSelectedRow, filterOpen = false, onToggleFilter, filterBar, onHiddenSelectionDropped,
   trafficLight, onTrafficLight, trafficKey = null, artworkMode = "partial", onArtworkMode, look,
 }: TrackTableProps) {
   // Browse › FontSize and Line Space scale the measured tokens; the
@@ -1171,9 +1184,13 @@ export const TrackTable = memo(function TrackTable({
     (key: ColumnKey) => (numberColumns?.includes(key) ? scales.numbers : scales.text),
     [numberColumns, scales],
   );
+  // A look's column floors are measured in the faces the theme shows.
+  const theme = useSyncExternalStore(subscribeShownTheme, shownTheme);
+  const columnFloor = look?.columnFloor;
   const columns = useMemo(
-    () => scaledColumns(columnsForArtworkMode(layoutColumns, artworkMode, rowH), columnScale),
-    [layoutColumns, artworkMode, rowH, columnScale],
+    () => scaledColumns(columnsForArtworkMode(layoutColumns, artworkMode, rowH), columnScale, columnFloor),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `theme` changes what the floor measures
+    [layoutColumns, artworkMode, rowH, columnScale, columnFloor, theme],
   );
   const band = previewBand(rowH);
   const extraColumns = useMemo(() => {
@@ -1244,6 +1261,8 @@ export const TrackTable = memo(function TrackTable({
   const scrollRef = useRef<HTMLDivElement>(null);
   const rowsRef = useRef<HTMLDivElement>(null);
   const [selection, setSelection] = useState<SelectionState>(emptySelection);
+  const selectionNow = useRef(selection);
+  selectionNow.current = selection;
   const [dragKey, setDragKey] = useState<ColumnKey | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; target: ColumnKey } | null>(null);
   // Live during a header-edge drag. A ref, not state: this updates per
@@ -1931,6 +1950,29 @@ export const TrackTable = memo(function TrackTable({
   // The rows behind the selection, resolved from what is cached. A selection
   // spanning unfetched rows contributes only what is on hand, which is what
   // the user can see anyway.
+  // The view shell's Track Filter (wbx-57): a selection is never wider than
+  // the rows shown. Re-checked whenever the view is opened again.
+  const hiddenSelectionDropped = useRef(onHiddenSelectionDropped);
+  hiddenSelectionDropped.current = onHiddenSelectionDropped;
+  const { token: viewToken, loading: viewLoading, count: viewCount, idsInRange: viewIdsInRange } = view;
+  useEffect(() => {
+    if (!hiddenSelectionDropped.current || viewLoading || selectionNow.current.ids.size === 0) return;
+    let live = true;
+    void (async () => {
+      const shown = new Set(viewCount > 0 ? await viewIdsInRange(0, viewCount - 1) : []);
+      if (!live) return;
+      const now = selectionNow.current;
+      const kept = [...now.ids].filter((id) => shown.has(id));
+      const dropped = now.ids.size - kept.length;
+      if (dropped === 0) return;
+      setSelection((current) => ({ ids: new Set([...current.ids].filter((id) => shown.has(id))), anchorIndex: null }));
+      hiddenSelectionDropped.current?.(dropped);
+    })().catch(() => {
+      // The view was replaced meanwhile; the next one checks again.
+    });
+    return () => { live = false; };
+  }, [viewToken, viewLoading, viewCount, viewIdsInRange]);
+
   /** The track menu: where it is, and which row it was opened on. */
   const [trackMenu, setTrackMenu] = useState<
     { x: number; y: number; row: RowDto } | null

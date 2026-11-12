@@ -57,6 +57,7 @@ export type DeckAction =
   | "waveformBlue"
   | "waveformRgb"
   | "waveform3band"
+  | "waveformTheme"
   | "analyse"
   | "exportLoopWav"
   | `exportTrack:${string}`
@@ -444,7 +445,9 @@ export interface MenuContext {
 
 /** What the deck's menu shows, so it can tick what is in force. */
 export interface DeckMenuState {
-  waveformColor: "blue" | "rgb" | "3band";
+  waveformColor: "blue" | "rgb" | "3band" | "theme";
+  /** The theme file sets the waveform colour: shown ticked, greyed. */
+  waveformColorFromFile?: boolean;
   beatCount: "position" | "toMemoryBars" | "toMemoryBeats";
   waveformClick: boolean;
   /** The deck has a loop set, so there is one to export. */
@@ -467,14 +470,18 @@ export interface DeckMenuState {
  */
 export function deckMenu(state: DeckMenuState): readonly MenuRow<DeckAction>[] {
   const tick = (on: boolean) => ({ checked: on });
+  // While the theme file sets the waveform colour, it wins: nothing here can change it.
+  const wave = (action: DeckAction) => (state.waveformColorFromFile ? null : action);
   return [
     {
       label: "Change waveform color",
       action: null,
       items: [
-        { label: "BLUE", action: "waveformBlue", ...tick(state.waveformColor === "blue") },
-        { label: "RGB", action: "waveformRgb", ...tick(state.waveformColor === "rgb") },
-        { label: "3Band", action: "waveform3band", ...tick(state.waveformColor === "3band") },
+        { label: "BLUE", action: wave("waveformBlue"), ...tick(state.waveformColor === "blue") },
+        { label: "RGB", action: wave("waveformRgb"), ...tick(state.waveformColor === "rgb") },
+        { label: "3Band", action: wave("waveform3band"), ...tick(state.waveformColor === "3band") },
+        // Not rekordbox's: the desktop theme's colours (`waveTheme.ts`).
+        { label: "Theme", action: wave("waveformTheme"), ...tick(state.waveformColor === "theme") },
       ],
     },
     { label: "Analyze Track", action: "analyse" },

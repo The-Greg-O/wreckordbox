@@ -264,8 +264,12 @@ export interface AppErrorDto {
    * `conflict`: an Undo or Redo was refused because what it would write was
    * changed since by something outside the history; nothing was written and
    * the entry is gone (#506).
+   *
+   * `unfinishedWrite`: a Stick's last write did not finish. Reads of it
+   * report this instead of settling it; `settleStick` is the action that
+   * does (wbx-45.5).
    */
-  kind: "readOnly" | "notFound" | "malformed" | "cancelled" | "conflict" | "internal";
+  kind: "readOnly" | "notFound" | "malformed" | "cancelled" | "conflict" | "unfinishedWrite" | "internal";
   message: string;
   detail?: string;
 }
@@ -1087,12 +1091,6 @@ export interface Backend {
    * flags clear.
    */
   deviceSettings(path: string): Promise<DeviceSettings>;
-  /**
-   * Gives a stick that holds an export but no DEVSETTING.DAT the DJ System
-   * defaults, as rekordbox does when its device panel opens; a stick that
-   * has one keeps it. Resolves to what the stick now holds.
-   */
-  writeDeviceDefaults(path: string, defaults: StickDefaults): Promise<DeviceSettings>;
   /** Writes them back and resolves to what the stick now holds. */
   saveDeviceSettings(path: string, settings: DeviceSettings): Promise<DeviceSettings>;
   /**
@@ -1124,6 +1122,14 @@ export interface Backend {
    * first, and reports one as `pending` with no playlists instead.
    */
   stickOutline(path: string): Promise<StickOutline>;
+  /**
+   * Settles a Stick's unfinished write: finishes the interrupted export if
+   * it can, otherwise puts back the files the Stick held before it; files
+   * another program wrote since are kept. This writes to the Stick: only for
+   * the action the DJ chose. Every read of such a Stick rejects with
+   * `unfinishedWrite` instead.
+   */
+  settleStick(path: string): Promise<void>;
   /**
    * A page of the Intake or Problems queue (wbx-62), from the Library
    * service the window hosts: each track with what it still needs, and the
@@ -2303,6 +2309,12 @@ export interface BpmFilter {
   tolerancePct: number;
   /** The master player's BPM x100, or `null` when no deck is loaded. */
   masterBpmX100: number | null;
+  /**
+   * Tempo ranges in hundredths, inclusive (the view shell's bar, wbx-57).
+   * When any is given they alone decide; a range whose low end is above its
+   * high end admits nothing.
+   */
+  rangesX100?: [number, number][];
 }
 
 /**
@@ -2312,6 +2324,11 @@ export interface BpmFilter {
 export interface TrackFilter {
   bpm?: BpmFilter;
   keys?: string[];
+  /**
+   * Keys by identity (the view shell's bar, wbx-57): a Camelot code takes
+   * every spelling of that key; a name off the wheel only itself.
+   */
+  keyIdentities?: string[];
   ratings?: number[];
   colors?: string[];
   /** One entry per ticked My Tag column with tags picked. */

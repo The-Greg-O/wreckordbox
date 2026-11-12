@@ -27,6 +27,18 @@ pub fn camelot_rank(name: &str) -> u32 {
     spelling::rank(name).unwrap_or(u32::MAX)
 }
 
+/// Whether a stored key name is the key `wanted` names (wbx-57): the same
+/// place on the Camelot wheel whatever either spelling, or, for a name off
+/// the wheel, exactly the same text.
+#[must_use]
+pub fn same_key(stored: &str, wanted: &str) -> bool {
+    match (spelling::rank(stored), spelling::rank(wanted)) {
+        (Some(a), Some(b)) => a == b,
+        (None, None) => stored == wanted,
+        _ => false,
+    }
+}
+
 /// The Classic label shown by the interface; unknown values stay as stored.
 fn displayed_name(name: &str) -> &str {
     let rank = camelot_rank(name);

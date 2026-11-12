@@ -1304,7 +1304,15 @@ pub async fn estimate_sync(
                             cache: Some(&EXPORT_CACHE), ..Default::default() };
                         selection.for_stick_inspected(&state, &library, &share, std::path::Path::new(&path), delete_unlisted_music.unwrap_or(false), false)
                             .map_err(|e| rbl_export::ExportError::Conflict(e.to_string()))
-                            .and_then(|selection| rbl_export::plan::preview(std::path::Path::new(&path), &selection.tracks, &selection.playlists, &selection.my_tags, &options))
+                            .and_then(|selection| {
+                                // The preview opens the Stick's exportLibrary.db with SQLite
+                                // itself; on a WAL-mode one that would create files on the
+                                // Stick, so no estimate is made there (wbx-45.5).
+                                if wreckordbox_stick_outline::one_library::sqlite_untouchable(std::path::Path::new(&path)) {
+                                    return Err(rbl_export::ExportError::Conflict(crate::stick_recovery::NO_ESTIMATE.into()));
+                                }
+                                rbl_export::plan::preview(std::path::Path::new(&path), &selection.tracks, &selection.playlists, &selection.my_tags, &options)
+                            })
                     }
                 };
                 let (found, net, peak, database_bytes, asset_bytes, unknown_size, kept_existing, approximate, error) = match plan {
@@ -4640,6 +4648,10 @@ pub async fn filter_values(
     state: State<'_, Arc<AppState>>,
     spec: ViewSpecDto,
 ) -> AppResult<FilterValuesDto> {
+    // A Stick list offers what the Stick holds (wbx-57).
+    if let crate::dto::TrackSourceDto::Device { path, format, playlist } = &spec.source {
+        return crate::device_library::filter_values(path.clone(), format.clone(), playlist.clone(), spec.query.clone(), spec.search_field).await;
+    }
     let library = state.library()?;
     let parsed = spec_from_wire(&library, &spec);
     blocking("filter_values", move || {

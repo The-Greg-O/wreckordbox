@@ -644,6 +644,10 @@ pub struct BpmFilterDto {
     pub tolerance_pct: u8,
     #[serde(default)]
     pub master_bpm_x100: Option<u32>,
+    /// Tempo ranges in hundredths, inclusive (the view shell's bar, wbx-57).
+    /// When any is given they alone decide.
+    #[serde(default)]
+    pub ranges_x100: Vec<[u32; 2]>,
 }
 
 /// One entry per column of the track filter bar; `None` is an unticked column.
@@ -657,6 +661,10 @@ pub struct TrackFilterDto {
     pub bpm: Option<BpmFilterDto>,
     #[serde(default)]
     pub keys: Option<Vec<String>>,
+    /// Keys as the view shell's bar holds them (wbx-57): a key on the wheel
+    /// takes every spelling of it, a name off the wheel only itself.
+    #[serde(default)]
+    pub key_identities: Option<Vec<String>>,
     #[serde(default)]
     pub ratings: Option<Vec<u8>>,
     #[serde(default)]

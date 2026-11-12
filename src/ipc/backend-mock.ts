@@ -31,6 +31,7 @@ import { referenceDeviceSettings } from "./mock-device-settings";
 import { createMockDeviceLibraries, type MockImportEntry } from "./mock-device-library";
 import { createMockIntake } from "./mock-intake";
 import { keyLightRows } from "./mock-key-lights";
+import { FILTER_FIXTURE_SIZE, filterFixtureColors, filterFixtureMembers, filterFixtureRows, filterFixtureTags } from "./mock-filter-fixture";
 
 const ARTISTS = [
   "MORTEN", "ARTBAT", "Meduza", "Vintage Culture", "Tujamo", "UMEK", "Kryder", "Joel Corry",
@@ -122,11 +123,30 @@ function passesFilter(
   held: readonly string[],
   categories: readonly { tags: readonly { id: string; name: string }[] }[],
 ): boolean {
+  if (!passesFields(row, color, filter)) return false;
+  for (const pick of filter.tags ?? []) {
+    if (pick.tags.length === 0) continue;
+    const carries = (name: string) =>
+      (categories[pick.category]?.tags ?? []).some((t) => t.name === name && held.includes(t.id));
+    if (!(pick.any ? pick.tags.some(carries) : pick.tags.every(carries))) return false;
+  }
+  return true;
+}
+
+/**
+ * The columns a Stick's rows carry too: BPM, key, Energy and Prep colour, as
+ * `rbl-index` tests them. `rangesX100` (the view shell's bar) decides alone
+ * when given; `keyIdentities` take every spelling of a key on the wheel and a
+ * name off it exactly; colour 0 is `none`.
+ */
+function passesFields(row: RowDto, color: number, filter: TrackFilter): boolean {
   if (filter.bpm) {
-    const { values, tolerancePct, masterBpmX100 } = filter.bpm;
+    const { values, tolerancePct, masterBpmX100, rangesX100 } = filter.bpm;
     const within = (centre: number) =>
       Math.abs(row.bpmX100 - centre) <= Math.floor((centre * tolerancePct) / 100);
-    if (values.length > 0) {
+    if (rangesX100 && rangesX100.length > 0) {
+      if (!rangesX100.some(([lo, hi]) => row.bpmX100 >= lo && row.bpmX100 <= hi)) return false;
+    } else if (values.length > 0) {
       const hit =
         tolerancePct === 0
           ? values.includes(wholeBpm(row.bpmX100))
@@ -136,15 +156,14 @@ function passesFilter(
       return false;
     }
   }
-  if (filter.keys && !filter.keys.includes(row.key)) return false;
-  if (filter.ratings && !filter.ratings.includes(row.rating)) return false;
-  if (filter.colors && !filter.colors.includes(COLOR_NAMES[color - 1] ?? "")) return false;
-  for (const pick of filter.tags ?? []) {
-    if (pick.tags.length === 0) continue;
-    const carries = (name: string) =>
-      (categories[pick.category]?.tags ?? []).some((t) => t.name === name && held.includes(t.id));
-    if (!(pick.any ? pick.tags.some(carries) : pick.tags.every(carries))) return false;
+  if (filter.keys || filter.keyIdentities) {
+    const identity = (key: string) => toCamelot(key) || key;
+    const named = filter.keys?.includes(row.key) ?? false;
+    const identified = row.key !== "" && (filter.keyIdentities ?? []).some((wanted) => identity(wanted) === identity(row.key));
+    if (!named && !identified) return false;
   }
+  if (filter.ratings && !filter.ratings.includes(row.rating)) return false;
+  if (filter.colors && !filter.colors.includes(color === 0 ? "none" : COLOR_NAMES[color - 1] ?? "")) return false;
   return true;
 }
 
@@ -432,7 +451,9 @@ export interface MockOptions {
 }
 
 export function createMockBackend(options: MockOptions = {}): Backend {
-  const trackCount = options.trackCount ?? readCountFromUrl() ?? 2000;
+  // `?filterFixture`: the Track Filter bar's constructed Library (wbx-57).
+  const filterFixture = readFlagFromUrl("filterFixture");
+  const trackCount = filterFixture ? FILTER_FIXTURE_SIZE : options.trackCount ?? readCountFromUrl() ?? 2000;
   const latency = options.latencyMs ?? readLatencyFromUrl() ?? 0;
   // What the Log window reads in a browser: a start-up line, then whatever
   // the status bar said.
@@ -457,8 +478,14 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     (window as unknown as { __turnLibraryProtection: (on: boolean) => void }).__turnLibraryProtection =
       (on) => { recordProtection(on); };
   }
+  // Waveform reads refused while on, as an unreadable analysis file is.
+  let failWaveformReads = false;
+  if (typeof window !== "undefined") {
+    (window as unknown as { __failWaveformReads: (on: boolean) => void }).__failWaveformReads =
+      (on) => { failWaveformReads = on; };
+  }
   const playlistFixture = options.playlistFixture ?? readPlaylistFixtureFromUrl();
-  const all = readFlagFromUrl("keyLights") ? keyLightRows(makeRows(12)) : makeRows(trackCount);
+  const all = readFlagFromUrl("keyLights") ? keyLightRows(makeRows(12)) : filterFixture ? filterFixtureRows(makeRows(trackCount)) : makeRows(trackCount);
   // A disposable browser fixture for external file drops. It is opt-in and
   // survives a page reload so the collection view can verify the import.
   const dropFixture = readFlagFromUrl("dropFixture");
@@ -517,7 +544,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     hooks.__pendingFileChecks = (id) => pendingFileChecks.get(id)?.length ?? 0;
     hooks.__completedFileChecks = () => completedFileChecks;
   }
-  const colors = makeColors(trackCount);
+  const colors = filterFixture ? filterFixtureColors() : makeColors(trackCount);
   const rowPositions = new Map(all.map((row, index) => [row.id, index]));
   // What the row DTO does not carry, made up per track and edited in place.
   const details = new Map<string, TrackDetails>();
@@ -534,6 +561,9 @@ export function createMockBackend(options: MockOptions = {}): Backend {
    * seeded slice; one made here starts empty, as a new one does.
    */
   const membership = new Map<string, string[]>();
+  if (filterFixture) {
+    for (const [playlist, rows] of filterFixtureMembers()) membership.set(playlist, rows.map((i) => all[i]?.id ?? ""));
+  }
   /** The Tag List's track ids, in its order. */
   const tagList: string[] = [];
   /** Intelligent playlists' rules, by id. */
@@ -993,6 +1023,18 @@ export function createMockBackend(options: MockOptions = {}): Backend {
   const holdingOutlines = new Set<string>();
   const outlineOverrides = new Map<string, StickOutline>();
   const unmounted = new Map<string, Device>();
+  // Sticks whose last write did not finish (wbx-45.5): every read rejects
+  // with `unfinishedWrite` until `settleStick`, the DJ's explicit action.
+  const unfinishedWrites = new Set<string>();
+  // `deviceLibraries` reads held unanswered until released, for the old
+  // tree's stale-answer test; what the Stick held when asked is answered.
+  const holdingLibraries = new Set<string>();
+  const heldLibraries = new Map<string, Array<() => void>>();
+  const settles = new Map<string, number>();
+  const unfinished = (path: string): Promise<never> | null =>
+    unfinishedWrites.has(path)
+      ? Promise.reject(Object.assign(new Error("A write to this Stick did not finish. Nothing on it has been changed; settle it from the Stick's panel to use it again."), { kind: "unfinishedWrite" }))
+      : null;
   if (typeof window !== "undefined") {
     const hooks = window as unknown as {
       __unmountDevice: (path: string) => void;
@@ -1000,7 +1042,22 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       __stickOutlineReads: (path: string) => number;
       __holdStickOutline: (path: string) => void;
       __releaseStickOutline: (path: string) => void;
+      __interruptStickWrite: (path: string) => void;
+      __stickSettles: (path: string) => number;
     };
+    hooks.__interruptStickWrite = (path) => { unfinishedWrites.add(path); };
+    const held = hooks as unknown as Record<string, (path: string) => number | void>;
+    held.__holdDeviceLibraries = (path) => { holdingLibraries.add(path); };
+    held.__releaseDeviceLibraries = (path) => {
+      for (const release of heldLibraries.get(path) ?? []) release();
+      heldLibraries.delete(path);
+    };
+    held.__deviceLibrariesHeld = (path) => heldLibraries.get(path)?.length ?? 0;
+    // Set before the page loads, so the first read already finds them.
+    for (const path of (window as unknown as { __initialUnfinishedWrites?: string[] }).__initialUnfinishedWrites ?? []) {
+      unfinishedWrites.add(path);
+    }
+    hooks.__stickSettles = (path) => settles.get(path) ?? 0;
     hooks.__unmountDevice = (path) => {
       const index = devices.findIndex((device) => device.path === path);
       if (index < 0) return;
@@ -1024,7 +1081,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
   const stickOutline = async (path: string): Promise<StickOutline> => {
     outlineReads.set(path, (outlineReads.get(path) ?? 0) + 1);
     // What the stick holds when it is asked, not when the answer comes.
-    const answer: StickOutline = outlineOverrides.get(path) ?? {
+    const answer: StickOutline = unfinishedWrites.has(path) ? { pending: true, libraries: [] } : outlineOverrides.get(path) ?? {
       pending: false,
       libraries: stickLibraries.libraries(path).map(({ format, nodes }) => ({ format, nodes })),
     };
@@ -1049,8 +1106,29 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     sorts: s.sorts.map((slot) => ({ ...slot })),
     colors: s.colors.map((c) => ({ ...c })),
   });
+  // Writes of a Stick's settings, per Stick: opening its panel makes none
+  // (wbx-45.5). A Stick listed in `__initialNoDevSetting` before the page
+  // loads holds an export but no DEVSETTING.DAT.
+  const settingsWrites = new Map<string, number>();
+  const noDevSetting = new Set<string>(typeof window === "undefined" ? [] : (window as unknown as { __initialNoDevSetting?: string[] }).__initialNoDevSetting ?? []);
+  if (typeof window !== "undefined") {
+    (window as unknown as { __stickSettingsWrites: (path: string) => number }).__stickSettingsWrites = (path) => settingsWrites.get(path) ?? 0;
+  }
   const settingsOf = (path: string): DeviceSettings => {
     const known = deviceSettings.get(path);
+    if (known && noDevSetting.delete(path)) {
+      const rekordboxDefaults = referenceDeviceSettings("", false);
+      const without: DeviceSettings = {
+        ...known,
+        hasDevSetting: false,
+        waveformColor: rekordboxDefaults.waveformColor,
+        waveformPosition: rekordboxDefaults.waveformPosition,
+        overviewWaveform: rekordboxDefaults.overviewWaveform,
+        keyDisplay: rekordboxDefaults.keyDisplay,
+      };
+      deviceSettings.set(path, without);
+      return without;
+    }
     if (known) return known;
     const device = devices.find((d) => d.path === path);
     const fresh = referenceDeviceSettings(device?.name ?? "", device?.export !== null);
@@ -1939,7 +2017,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       hotCueAutoLoad: true,
       publish: false,
       hasArtwork: false,
-      myTags: seed % 4 === 0 ? ["t-peak"] : [],
+      myTags: filterFixture ? filterFixtureTags(seed - 100000) : seed % 4 === 0 ? ["t-peak"] : [],
     };
     details.set(row.id, d);
     return d;
@@ -2303,12 +2381,18 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       // answer before the library is up. A mock that served rows while the
       // summary was still failing would not be standing in for anything.
       if (!ready) return notReady();
+      // A test's way to make list opens fail (track-filter-bar.spec.ts).
+      if ((globalThis as { __failOpenView?: boolean }).__failOpenView) return Promise.reject(new Error("The list could not be read."));
       if (spec.source.kind === "device") {
+        const refused = unfinished(spec.source.path);
+        if (refused) return refused;
         const q = fold(spec.query.trim());
         let rows: RowDto[];
         try {
           rows = stickLibraries.rows(spec.source.path, spec.source.format, spec.source.playlist)
-            .filter((row) => q === "" || matchesSearch(row, q, spec.searchField ?? "all"));
+            .filter((row) => q === "" || matchesSearch(row, q, spec.searchField ?? "all"))
+            // The Stick's own fields; a Stick's library carries no MyTags.
+            .filter((row) => !spec.filter || passesFields(row, 0, spec.filter));
         } catch (error) {
           return Promise.reject(error instanceof Error ? error : new Error(String(error)));
         }
@@ -2428,6 +2512,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     },
 
     trackWaveform: (trackId: string, kind: WaveformKind, window) => {
+      if (failWaveformReads) return Promise.reject(new Error("The analysis file could not be read."));
       // Three bytes a column — low, mid, high band energy — which is what the
       // real backend serves from `PWV6` and `PWV7`. Synthesising the old
       // one-byte `PWAV` shape here drew the bands from garbage.
@@ -3675,8 +3760,9 @@ export function createMockBackend(options: MockOptions = {}): Backend {
 
     // The device tabs. Held per stick so a change survives switching tabs
     // and devices, the way a written file would.
-    deviceSettings: (path) => wait(copySettings(settingsOf(path))),
+    deviceSettings: (path) => unfinished(path) ?? wait(copySettings(settingsOf(path))),
     ensureDeviceLibrary: (path, defaults) => {
+      settingsWrites.set(path, (settingsWrites.get(path) ?? 0) + 1);
       const current = settingsOf(path);
       if (current.hasDeviceLibrary) return wait(copySettings(current));
       // The empty database a blank stick gets: the reference rows, the
@@ -3703,8 +3789,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     },
     // The mock's sticks carry their settings from the start, so there is
     // nothing to give; what the stick holds comes back.
-    writeDeviceDefaults: (path) => wait(copySettings(settingsOf(path))),
     saveDeviceSettings: (path, settings) => {
+      settingsWrites.set(path, (settingsWrites.get(path) ?? 0) + 1);
       const current = settingsOf(path);
       // A stick without a library keeps its reference rows: nothing to
       // write them into, as the real backend also refuses.
@@ -3739,6 +3825,16 @@ export function createMockBackend(options: MockOptions = {}): Backend {
 
     filterValues: (spec) => {
       if (!ready) return notReady();
+      if (spec.source.kind === "device") {
+        // What the Stick list holds, as the Rust side reads it from the Stick.
+        const q = fold(spec.query.trim());
+        const keys = new Map<string, number>();
+        for (const row of stickLibraries.rows(spec.source.path, spec.source.format, spec.source.playlist)) {
+          if (q !== "" && !matchesSearch(row, q, spec.searchField ?? "all")) continue;
+          if (row.key !== "") keys.set(row.key, (keys.get(row.key) ?? 0) + 1);
+        }
+        return wait<FilterValues>({ bpms: [], keys: [...keys].map(([value, count]) => ({ value, count })), tags: [] });
+      }
       // Over the source and query alone, never the filter's own result.
       const bpms = new Map<number, number>();
       const keys = new Map<string, number>();
@@ -3781,10 +3877,23 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       return () => progressListeners.delete(listener);
     },
     // The fake disk above. Copies, as with the tree: the map is the mock's.
-    deviceLibraries: (path) => wait(stickLibraries.libraries(path)),
+    deviceLibraries: async (path) => {
+      const refused = unfinished(path);
+      if (refused) return refused;
+      const answer = stickLibraries.libraries(path);
+      if (holdingLibraries.delete(path)) {
+        await new Promise<void>((resolve) => { heldLibraries.set(path, [...(heldLibraries.get(path) ?? []), resolve]); });
+      }
+      return wait(answer);
+    },
     stickOutline,
+    settleStick: (path) => {
+      settles.set(path, (settles.get(path) ?? 0) + 1);
+      unfinishedWrites.delete(path);
+      return wait(undefined);
+    },
     devicePlaylistCollectionTracks: (path, format, tracks) =>
-      wait(stickLibraries.collectionTracks(path, format, tracks, [...(looseTracks.get(path) ?? [])])),
+      unfinished(path) ?? wait(stickLibraries.collectionTracks(path, format, tracks, [...(looseTracks.get(path) ?? [])])),
     devicePlaylistEdit: (path, format, edit) => {
       try {
         return wait(stickLibraries.edit(path, format, edit));
@@ -3800,6 +3909,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       }
     },
     devicePlaylistDuplicates: (path, format, playlist, tracks) => {
+      const refused = unfinished(path);
+      if (refused) return refused;
       try {
         return wait(stickLibraries.duplicates(path, format, playlist, tracks));
       } catch (error) {
@@ -3859,6 +3970,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       }));
     },
     devicePlaylistImportPlan: (path, format, id, destination) => {
+      const refused = unfinished(path);
+      if (refused) return refused;
       let source: { name: string; entries: MockImportEntry[] };
       try {
         source = stickLibraries.playlist(path, format, id);
