@@ -248,6 +248,7 @@ fn stretcher(sample_rate: u32, edits: Edits) -> Result<Option<rbl_deck::Offline>
     match rbl_deck::Offline::new(sample_rate, tempo, pitch) {
         Ok(stretch) => Ok(Some(stretch)),
         Err(rbl_deck::OfflineError::PitchUnavailable) => Err(RenderError::KeyShiftUnavailable),
+        Err(rbl_deck::OfflineError::TempoUnavailable) => Err(RenderError::TempoUnavailable),
         Err(rbl_deck::OfflineError::TempoOutOfRange) => Err(RenderError::TempoOutOfRange),
         Err(rbl_deck::OfflineError::PitchOutOfRange) => Err(RenderError::KeyShiftOutOfRange),
         Err(other) => Err(RenderError::Stretch(other)),

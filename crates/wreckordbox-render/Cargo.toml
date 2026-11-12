@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 # Like `rbl-deck`: a default build links the vendored Rubber Band Library
 # through it, and the combined work is distributable only under the GPL. See
-# LICENSING.md; `--no-default-features` renders tempo only, through WSOLA.
+# LICENSING.md; `--no-default-features` renders unedited audio only.
 license = "GPL-2.0-or-later"
 description = "The offline renderer behind Mutants: a track's audio, a key shift and a tempo in, an audio file out."
 

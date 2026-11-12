@@ -8,6 +8,9 @@
 //!
 //! Every render is read back through `rbl-audio`, not through this crate, so
 //! a file that only this crate could read would fail here.
+// A build without Rubber Band renders no edits, so the measuring helpers
+// have nothing to measure there.
+#![cfg_attr(not(feature = "rubberband"), allow(dead_code))]
 #![allow(
     clippy::pedantic,
     clippy::unwrap_used,
@@ -23,14 +26,8 @@ use wreckordbox_render::{
 
 const RATE: u32 = 44_100;
 
-/// The player's stretcher tests' gate for Rubber Band. A build without it
-/// stretches through WSOLA, which the player's own tests hold to 12 Hz at
-/// 440 Hz (47 cents); the same is asked of it here.
-const CENTS: f64 = if cfg!(feature = "rubberband") {
-    3.0
-} else {
-    47.0
-};
+/// The player's stretcher tests' gate.
+const CENTS: f64 = 3.0;
 
 /// Interleaved stereo: a sine on both channels.
 fn tone(hz: f64, secs: f64, amplitude: f64) -> Vec<f32> {
@@ -180,6 +177,17 @@ fn key(semitones: i8) -> Edits {
     }
 }
 
+/// An edit that puts the stretcher in the path, where the build has one that
+/// can render: progress, cancelling and what happens to files are the same
+/// with it or without.
+fn an_edit() -> Edits {
+    if cfg!(feature = "rubberband") {
+        tempo(1.05)
+    } else {
+        Edits::default()
+    }
+}
+
 fn tempo(ratio: f64) -> Edits {
     Edits {
         tempo: ratio,
@@ -229,20 +237,12 @@ fn a_key_shift_lands_on_the_interval_and_keeps_the_length() {
     }
 }
 
+#[cfg(feature = "rubberband")]
 #[test]
 fn a_tempo_change_gives_the_expected_length_at_the_same_pitch() {
     let bench = Bench::new();
     let source = bench.source(&tone(440.0, 2.0, 0.5));
-    // WSOLA cannot hold a steady tone near the file's own speed (its search
-    // has no room there: see `rbl-deck/src/stretch.rs`; at 0.94x this tone
-    // came back 107 cents flat), so a build without Rubber Band is measured
-    // at the ratios the player's own WSOLA tests use.
-    let ratios: &[f64] = if cfg!(feature = "rubberband") {
-        &[0.84, 0.94, 1.06, 1.16]
-    } else {
-        &[0.75, 1.5]
-    };
-    for &ratio in ratios {
+    for ratio in [0.84, 0.94, 1.06, 1.16] {
         let (frames, _) = bench.render(&source, tempo(ratio));
 
         // Six percent fast is six percent more of the source per second, so
@@ -291,15 +291,7 @@ fn key_and_tempo_combine() {
 /// How far a rendered event may sit from where it belongs. Measured at under
 /// 2 ms on every case below, against a 1.5 ms measuring window; the latency
 /// this guards against is 20 to 50 ms.
-///
-/// WSOLA reports no latency and places a segment by ear, up to a search
-/// window (5.8 ms) either way; it measured 5.4 ms out and is given a segment
-/// (23 ms).
-const ALIGNMENT_SECS: f64 = if cfg!(feature = "rubberband") {
-    0.005
-} else {
-    0.023
-};
+const ALIGNMENT_SECS: f64 = 0.005;
 
 /// The level of the `secs` at one end of a signal, as a root mean square.
 fn level(signal: &[f64], secs: f64, at_end: bool) -> f64 {
@@ -312,6 +304,7 @@ fn level(signal: &[f64], secs: f64, at_end: bool) -> f64 {
     (part.iter().map(|x| x * x).sum::<f64>() / part.len() as f64).sqrt()
 }
 
+#[cfg(feature = "rubberband")]
 #[test]
 fn audio_that_runs_to_the_ends_of_the_source_runs_to_the_ends_of_the_render() {
     // A tone from the first frame to the last. Whatever is still inside the
@@ -326,16 +319,15 @@ fn audio_that_runs_to_the_ends_of_the_source_runs_to_the_ends_of_the_render() {
     let source = bench.source(&tone(440.0, 2.0, 0.5));
     let nominal = 0.5 / 2.0_f64.sqrt();
 
-    let mut cases = vec![tempo(1.1), tempo(0.9)];
-    if cfg!(feature = "rubberband") {
-        cases.extend([
-            key(2),
-            Edits {
-                key_shift: -3,
-                tempo: 1.2,
-            },
-        ]);
-    }
+    let cases = [
+        tempo(1.1),
+        tempo(0.9),
+        key(2),
+        Edits {
+            key_shift: -3,
+            tempo: 1.2,
+        },
+    ];
     for edits in cases {
         let (frames, _) = bench.render(&source, edits);
         let signal = left(&frames);
@@ -348,6 +340,7 @@ fn audio_that_runs_to_the_ends_of_the_source_runs_to_the_ends_of_the_render() {
     }
 }
 
+#[cfg(feature = "rubberband")]
 #[test]
 fn an_edited_render_starts_and_ends_where_it_should() {
     // A second of silence, a second of tone, a second of silence: the
@@ -359,17 +352,16 @@ fn an_edited_render_starts_and_ends_where_it_should() {
     samples.extend(silence(1.0));
     let source = bench.source(&samples);
 
-    let mut cases = vec![tempo(1.25), tempo(0.8)];
-    if cfg!(feature = "rubberband") {
-        cases.extend([
-            key(2),
-            key(-5),
-            Edits {
-                key_shift: 3,
-                tempo: 1.1,
-            },
-        ]);
-    }
+    let cases = [
+        tempo(1.25),
+        tempo(0.8),
+        key(2),
+        key(-5),
+        Edits {
+            key_shift: 3,
+            tempo: 1.1,
+        },
+    ];
     for edits in cases {
         let (frames, _) = bench.render(&source, edits);
         let (from, to) = burst(&left(&frames), 0.5);
@@ -392,7 +384,7 @@ fn progress_is_reported_while_rendering() {
 
     render(
         &mut track,
-        tempo(1.05),
+        an_edit(),
         &Destination::wav(&out),
         &mut |progress| {
             existed_midway |= out.exists();
@@ -432,7 +424,7 @@ fn a_cancelled_render_leaves_no_file() {
 
     let result = render(
         &mut track,
-        tempo(1.05),
+        an_edit(),
         &Destination::wav(bench.out()),
         &mut |progress| {
             if progress.frames_done >= u64::from(RATE) {
@@ -466,13 +458,13 @@ fn the_source_file_is_never_modified() {
     // A complete render, an edited one, and a cancelled one.
     bench.render(&source, Edits::default());
     untouched();
-    bench.render(&source, tempo(1.1));
+    bench.render(&source, an_edit());
     untouched();
     std::fs::remove_file(bench.out()).unwrap();
     let mut track = TrackSource::open(&source).unwrap();
     let _ = render(
         &mut track,
-        tempo(1.1),
+        an_edit(),
         &Destination::wav(bench.out()),
         &mut |_| Proceed::Cancel,
     );
@@ -483,7 +475,7 @@ fn the_source_file_is_never_modified() {
     let mut track = TrackSource::open(&source).unwrap();
     let result = render(
         &mut track,
-        tempo(1.1),
+        an_edit(),
         &Destination::wav(&source),
         &mut |_| Proceed::Continue,
     );
@@ -506,7 +498,7 @@ fn a_file_that_appears_at_the_destination_during_a_render_is_not_replaced() {
 
     let result = render(
         &mut track,
-        tempo(1.05),
+        an_edit(),
         &Destination::wav(&out),
         &mut |_| {
             std::fs::write(&out, b"someone else's").unwrap();
@@ -540,6 +532,30 @@ fn edits_outside_what_the_stretcher_holds_are_refused() {
             matches!(result, Err(RenderError::KeyShiftOutOfRange))
         };
         assert!(want, "{edits:?} gave {result:?}");
+    }
+    assert_eq!(bench.files(), ["source.wav"]);
+}
+
+#[cfg(not(feature = "rubberband"))]
+#[test]
+fn a_build_without_rubber_band_refuses_a_tempo_change() {
+    // Its stretcher cannot hold a pitch: a 440 Hz tone at 0.94x came back
+    // 107 cents flat. A render that is in the wrong key is refused, not
+    // written.
+    let bench = Bench::new();
+    let source = bench.source(&tone(440.0, 0.5, 0.5));
+    for ratio in [0.94, 1.06, 0.75, 1.5] {
+        let mut track = TrackSource::open(&source).unwrap();
+        let result = render(
+            &mut track,
+            tempo(ratio),
+            &Destination::wav(bench.out()),
+            &mut |_| Proceed::Continue,
+        );
+        assert!(
+            matches!(result, Err(RenderError::TempoUnavailable)),
+            "at {ratio}x: {result:?}"
+        );
     }
     assert_eq!(bench.files(), ["source.wav"]);
 }

@@ -58,7 +58,9 @@ impl Source for TrackSource {
     }
 
     fn next_block(&mut self) -> Result<Option<&[f32]>, RenderError> {
-        let Some((_, stereo)) = self.stream.next_frames() else {
+        // The fallible reader: a file that cannot be read to its end is an
+        // error here, never a shorter render.
+        let Some((_, stereo)) = self.stream.try_next_frames()? else {
             return Ok(None);
         };
         self.block.clear();

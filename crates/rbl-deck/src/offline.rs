@@ -5,9 +5,10 @@
 //! frame accounted for, the output starting where the input starts and ending
 //! where it ends. This is that path, and it is deliberately the *same engine
 //! in the same mode* as the deck's key lock ([`crate::deck`]'s `key_lock`:
-//! Rubber Band R3 in its real-time mode by default, WSOLA in a build without
-//! it), so that a key or tempo heard on a deck and one rendered to a file are
-//! the same sound. Rubber Band's own offline mode studies the file first and
+//! Rubber Band R3 in its real-time mode), so that a key or tempo heard on a
+//! deck and one rendered to a file are the same sound. A build without Rubber
+//! Band has only WSOLA, which cannot hold a pitch, and renders no edit at
+//! all: see [`OfflineError::TempoUnavailable`]. Rubber Band's own offline mode studies the file first and
 //! places transients differently; it would be a second sound to keep in step.
 //!
 //! What the real-time use leaves out and this adds:
@@ -49,6 +50,10 @@ pub enum OfflineError {
     /// (no Rubber Band: see `LICENSING.md`).
     #[error("this build's stretcher cannot shift pitch")]
     PitchUnavailable,
+    /// A tempo change was asked of a build whose stretcher cannot hold the
+    /// pitch through one (no Rubber Band: see `LICENSING.md`).
+    #[error("this build's stretcher cannot change tempo and hold the pitch")]
+    TempoUnavailable,
     /// The stretcher stopped taking input and giving output.
     #[error("the stretcher stalled")]
     Stalled,
@@ -98,6 +103,17 @@ impl Offline {
         let shifting = pitch_scale != 1.0;
         if shifting && !stretcher.shifts_pitch() {
             return Err(OfflineError::PitchUnavailable);
+        }
+        // A file is held to more than a deck is. A deck on the WSOLA
+        // fallback plays with the pitch a little out, because a deck that
+        // plays is better than one that does not; a rendered file with the
+        // pitch out is a track in the wrong key that looks finished. Near
+        // the file's own speed WSOLA misses by a semitone, so a backend
+        // that cannot hold a pitch does not render a tempo at all.
+        #[allow(clippy::float_cmp, reason = "exactly 1.0 is what 'no tempo change' is")]
+        let stretching = tempo != 1.0;
+        if stretching && !stretcher.shifts_pitch() {
+            return Err(OfflineError::TempoUnavailable);
         }
         stretcher.reset();
         stretcher.set_ratio(tempo);
