@@ -81,6 +81,36 @@ pub struct Interrupted {
 /// journal, the Stick's own files untouched. Settling it publishes them.
 /// The Stick's lock file is left as it was.
 pub fn interrupt(root: &Path) -> Interrupted {
+    let next = next_export();
+    let journal = root.join(JOURNAL);
+    for (path, bytes) in [(PDB, &next.pdb), (ONE, &next.one)] {
+        let image = journal.join(path);
+        std::fs::create_dir_all(image.parent().unwrap()).unwrap();
+        std::fs::write(&image, bytes).unwrap();
+    }
+    std::fs::write(
+        journal.join("publication.json"),
+        format!(
+            r#"[{{"path":"{PDB}","present":true,"had_target":true,"exact":true}},{{"path":"{ONE}","present":true,"had_target":true,"exact":true}}]"#
+        ),
+    )
+    .unwrap();
+    next
+}
+
+/// What a whole publication by a writer of ours leaves when it completes:
+/// its lock file, both databases replaced by another export's (playlists
+/// [`NEXT_PLAYLISTS`]), no journal.
+pub fn publish_completely(root: &Path) -> Interrupted {
+    let next = next_export();
+    std::fs::write(root.join(LOCK), b"").unwrap();
+    std::fs::write(root.join(PDB), &next.pdb).unwrap();
+    std::fs::write(root.join(ONE), &next.one).unwrap();
+    next
+}
+
+/// Another real export's two databases.
+fn next_export() -> Interrupted {
     let other = tempfile::tempdir().unwrap();
     let src = tempfile::tempdir().unwrap();
     let tracks: Vec<SourceTrack> = (5..=6).map(|i| track(src.path(), i)).collect();
@@ -99,24 +129,10 @@ pub fn interrupt(root: &Path) -> Interrupted {
         },
     ];
     export(other.path(), &tracks, &playlists).unwrap();
-    let next = Interrupted {
+    Interrupted {
         pdb: std::fs::read(other.path().join(PDB)).unwrap(),
         one: std::fs::read(other.path().join(ONE)).unwrap(),
-    };
-    let journal = root.join(JOURNAL);
-    for (path, bytes) in [(PDB, &next.pdb), (ONE, &next.one)] {
-        let image = journal.join(path);
-        std::fs::create_dir_all(image.parent().unwrap()).unwrap();
-        std::fs::write(&image, bytes).unwrap();
     }
-    std::fs::write(
-        journal.join("publication.json"),
-        format!(
-            r#"[{{"path":"{PDB}","present":true,"had_target":true,"exact":true}},{{"path":"{ONE}","present":true,"had_target":true,"exact":true}}]"#
-        ),
-    )
-    .unwrap();
-    next
 }
 
 /// Removes our lock file, as on a Stick our writers never wrote to.
@@ -161,10 +177,17 @@ fn wal_writer(root: &Path) -> (rusqlite::Connection, tempfile::TempDir, PathBuf)
     std::fs::copy(root.join(ONE), &db).unwrap();
     let conn = rusqlite::Connection::open(&db).unwrap();
     crate::one_library::keyed(&conn).unwrap();
-    let mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0)).unwrap();
+    let mode: String = conn
+        .query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(mode, "wal");
     conn.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
-    let changed = conn.execute("UPDATE playlist SET name = ?1 WHERE name = 'Warm Up'", [WAL_RENAMED]).unwrap();
+    let changed = conn
+        .execute(
+            "UPDATE playlist SET name = ?1 WHERE name = 'Warm Up'",
+            [WAL_RENAMED],
+        )
+        .unwrap();
     assert_eq!(changed, 1);
     (conn, work, db)
 }
@@ -175,7 +198,10 @@ fn wal_writer(root: &Path) -> (rusqlite::Connection, tempfile::TempDir, PathBuf)
 pub fn wal_pending(root: &Path) {
     let (conn, _work, db) = wal_writer(root);
     let wal = PathBuf::from(format!("{}-wal", db.display()));
-    assert!(std::fs::metadata(&wal).unwrap().len() > 0, "the write is in the -wal");
+    assert!(
+        std::fs::metadata(&wal).unwrap().len() > 0,
+        "the write is in the -wal"
+    );
     std::fs::copy(&db, root.join(ONE)).unwrap();
     std::fs::copy(&wal, root.join(format!("{ONE}-wal"))).unwrap();
     drop(conn);
@@ -186,7 +212,8 @@ pub fn wal_pending(root: &Path) {
 /// read sees [`WAL_RENAMED`].
 pub fn wal_checkpointed(root: &Path) {
     let (conn, _work, db) = wal_writer(root);
-    conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(())).unwrap();
+    conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
+        .unwrap();
     drop(conn);
     for suffix in ["-wal", "-shm"] {
         let _ = std::fs::remove_file(format!("{}{suffix}", db.display()));
@@ -197,7 +224,10 @@ pub fn wal_checkpointed(root: &Path) {
 /// What differs between two [`snapshot`]s: each path added, removed or
 /// changed, for an assertion message that names them.
 #[must_use]
-pub fn changes(before: &BTreeMap<PathBuf, Option<Vec<u8>>>, after: &BTreeMap<PathBuf, Option<Vec<u8>>>) -> Vec<String> {
+pub fn changes(
+    before: &BTreeMap<PathBuf, Option<Vec<u8>>>,
+    after: &BTreeMap<PathBuf, Option<Vec<u8>>>,
+) -> Vec<String> {
     let mut out = Vec::new();
     for (path, bytes) in after {
         match before.get(path) {

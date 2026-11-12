@@ -1,18 +1,28 @@
 //! A Stick whose `exportLibrary.db` rekordbox left in WAL mode: every read
 //! sees its committed rows and creates, changes or deletes nothing on the
 //! Stick, the database's companion files included.
-#![allow(clippy::pedantic, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::pedantic,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
 
 use std::path::Path;
 
 use rbl_export::device_library::Format;
-use wreckordbox_stick_outline::testing::{assert_unchanged, snapshot, stick, wal_checkpointed, wal_pending, without_lock, WAL_RENAMED};
+use wreckordbox_stick_outline::testing::{
+    assert_unchanged, snapshot, stick, wal_checkpointed, wal_pending, without_lock, WAL_RENAMED,
+};
 use wreckordbox_stick_outline::{library, outline, read_outline, StickRead};
 
 /// Each fixture, with and without our lock file.
 fn sticks() -> Vec<(String, tempfile::TempDir)> {
     let mut out = Vec::new();
-    for (name, wal) in [("pending -wal", wal_pending as fn(&Path)), ("checkpointed", wal_checkpointed as fn(&Path))] {
+    for (name, wal) in [
+        ("pending -wal", wal_pending as fn(&Path)),
+        ("checkpointed", wal_checkpointed as fn(&Path)),
+    ] {
         for lock in [true, false] {
             let dest = tempfile::tempdir().unwrap();
             stick(dest.path());
@@ -27,7 +37,10 @@ fn sticks() -> Vec<(String, tempfile::TempDir)> {
 }
 
 fn assert_renamed(names: Vec<String>, what: &str) {
-    assert!(names.iter().any(|n| n == WAL_RENAMED), "{what}: committed WAL rows are read: {names:?}");
+    assert!(
+        names.iter().any(|n| n == WAL_RENAMED),
+        "{what}: committed WAL rows are read: {names:?}"
+    );
 }
 
 #[test]
@@ -42,7 +55,14 @@ fn reading_a_wal_mode_library_creates_or_changes_no_file_on_the_stick() {
 
         let found = outline(root);
         assert_unchanged(root, &before, &format!("{case}: outline()"));
-        assert_renamed(found.libraries[1].nodes.iter().map(|n| n.name.clone()).collect(), &case);
+        assert_renamed(
+            found.libraries[1]
+                .nodes
+                .iter()
+                .map(|n| n.name.clone())
+                .collect(),
+            &case,
+        );
         read_outline(root).unwrap();
         assert_unchanged(root, &before, &format!("{case}: read_outline()"));
 

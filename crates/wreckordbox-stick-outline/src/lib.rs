@@ -114,14 +114,8 @@ pub fn read_outline(mount: &Path) -> Result<Outline, ReadError> {
         pending: true,
         libraries: Vec::new(),
     };
-    let stick = match StickRead::begin(mount) {
-        Ok(stick) => stick,
-        Err(ReadError::UnfinishedWrite) => return Ok(pending),
-        Err(error) => return Err(error),
-    };
-    let found = outline_of(stick.root());
-    match stick.finish() {
-        Ok(()) => Ok(found),
+    match read(mount, |stick| Ok(outline_of(stick.root()))) {
+        Ok(found) => Ok(found),
         Err(ReadError::UnfinishedWrite) => Ok(pending),
         Err(error) => Err(error),
     }

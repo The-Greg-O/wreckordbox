@@ -33,7 +33,9 @@ fn companion(path: &Path, suffix: &str) -> PathBuf {
 /// Whether any SQLite companion sits beside `path`.
 #[must_use]
 pub fn has_companions(path: &Path) -> bool {
-    COMPANIONS.iter().any(|suffix| companion(path, suffix).exists())
+    COMPANIONS
+        .iter()
+        .any(|suffix| companion(path, suffix).exists())
 }
 
 /// Applies the cipher settings an `exportLibrary.db` needs, as
@@ -46,9 +48,12 @@ pub fn has_companions(path: &Path) -> bool {
 pub fn keyed(conn: &Connection) -> Result<(), String> {
     ready()?;
     let passphrase = rbl_onelibrary::key::passphrase().map_err(|e| e.to_string())?;
-    conn.pragma_update(None, "cipher", "sqlcipher").map_err(|e| e.to_string())?;
-    conn.pragma_update(None, "legacy", 4).map_err(|e| e.to_string())?;
-    conn.pragma_update(None, "key", passphrase).map_err(|e| e.to_string())?;
+    conn.pragma_update(None, "cipher", "sqlcipher")
+        .map_err(|e| e.to_string())?;
+    conn.pragma_update(None, "legacy", 4)
+        .map_err(|e| e.to_string())?;
+    conn.pragma_update(None, "key", passphrase)
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -112,11 +117,20 @@ impl OneLibraryRead {
         if wal.exists() {
             std::fs::copy(&wal, companion(&copy, "-wal")).map_err(|e| e.to_string())?;
         }
-        let conn = Connection::open_with_flags(&copy, OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX)
-            .map_err(|e| e.to_string())?;
+        let conn = Connection::open_with_flags(
+            &copy,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|e| e.to_string())?;
         keyed(&conn)?;
-        conn.query_row("SELECT COUNT(*) FROM sqlite_master", [], |r| r.get::<_, i64>(0)).map_err(|e| e.to_string())?;
-        Ok(Self { conn, _copy: Some(dir) })
+        conn.query_row("SELECT COUNT(*) FROM sqlite_master", [], |r| {
+            r.get::<_, i64>(0)
+        })
+        .map_err(|e| e.to_string())?;
+        Ok(Self {
+            conn,
+            _copy: Some(dir),
+        })
     }
 
     #[must_use]
@@ -132,17 +146,24 @@ fn immutable(path: &Path) -> Result<Connection, String> {
     let mut uri = String::from("file:");
     for byte in absolute.to_string_lossy().bytes() {
         match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'-' | b'_' | b'.' | b'~' => uri.push(char::from(byte)),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'-' | b'_' | b'.' | b'~' => {
+                uri.push(char::from(byte))
+            }
             other => uri.push_str(&format!("%{other:02X}")),
         }
     }
     uri.push_str("?immutable=1");
     let conn = Connection::open_with_flags(
         &uri,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_URI
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .map_err(|e| e.to_string())?;
     keyed(&conn)?;
-    conn.query_row("SELECT COUNT(*) FROM sqlite_master", [], |r| r.get::<_, i64>(0)).map_err(|e| e.to_string())?;
+    conn.query_row("SELECT COUNT(*) FROM sqlite_master", [], |r| {
+        r.get::<_, i64>(0)
+    })
+    .map_err(|e| e.to_string())?;
     Ok(conn)
 }

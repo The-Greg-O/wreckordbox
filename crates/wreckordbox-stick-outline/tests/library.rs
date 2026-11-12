@@ -14,7 +14,8 @@ use std::path::Path;
 
 use rbl_export::device_library::{self, Format};
 use wreckordbox_stick_outline::testing::{
-    interrupt, snapshot, stick, without_lock, JOURNAL, LOCK, NEXT_PLAYLISTS, ONE, PDB,
+    interrupt, publish_completely, snapshot, stick, without_lock, JOURNAL, LOCK, NEXT_PLAYLISTS,
+    ONE, PDB,
 };
 use wreckordbox_stick_outline::{library, settle, ReadError, StickRead};
 
@@ -221,4 +222,42 @@ fn settling_publishes_exactly_the_interrupted_export_and_leaves_it_readable() {
             );
         }
     }
+}
+
+/// The first writer of ours on a Stick with no lock file: it creates the
+/// lock, publishes both databases and removes its journal, all between the
+/// two libraries' reads. The read mixes two publications and is refused.
+#[test]
+fn a_publication_completed_during_an_unleased_read_is_refused() {
+    let dest = tempfile::tempdir().unwrap();
+    stick(dest.path());
+    without_lock(dest.path());
+    let read = StickRead::begin(dest.path()).unwrap();
+    let old = read.library(Format::DeviceLibrary).unwrap();
+    assert_eq!(names(&old), ["Sets", "Friday", "Warm Up"]);
+    publish_completely(dest.path());
+    let new = read.library(Format::OneLibrary).unwrap();
+    assert_eq!(names(&new), NEXT_PLAYLISTS);
+    assert!(!dest.path().join(JOURNAL).exists());
+    assert!(matches!(read.finish(), Err(ReadError::Changed)));
+}
+
+/// Another program (rekordbox takes no lock of ours) rewrites a database
+/// during a read that holds our lease: refused too.
+#[test]
+fn a_database_rewritten_during_a_leased_read_is_refused() {
+    let dest = tempfile::tempdir().unwrap();
+    stick(dest.path());
+    assert!(dest.path().join(LOCK).is_file());
+    let read = StickRead::begin(dest.path()).unwrap();
+    read.library(Format::DeviceLibrary).unwrap();
+    let other = tempfile::tempdir().unwrap();
+    stick(other.path());
+    std::fs::write(
+        dest.path().join(ONE),
+        std::fs::read(other.path().join(ONE)).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(dest.path().join(ONE), b"rewritten by another program").unwrap();
+    assert!(matches!(read.finish(), Err(ReadError::Changed)));
 }

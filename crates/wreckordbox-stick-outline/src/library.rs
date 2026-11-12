@@ -35,6 +35,11 @@ pub enum ReadError {
     /// write they asked for does.
     #[error("A write to this Stick did not finish.")]
     UnfinishedWrite,
+    /// The Stick was written while it was read (a writer of ours that took
+    /// its lock, or another program that rewrote a database): what was read
+    /// may mix two versions. Read again.
+    #[error("The Stick was written while it was being read.")]
+    Changed,
     /// The Stick's path named another folder by the end of the read.
     #[error("The Stick changed while it was being read.")]
     Moved,
@@ -76,8 +81,51 @@ pub struct StickRead {
     mount: PathBuf,
     root: PathBuf,
     identity: (u64, u64),
+    /// Whether our writers' lock existed when the read began. A read that
+    /// began without one holds no lease, so a writer of ours could have run
+    /// meanwhile: one that appears refuses the read.
+    locked: bool,
+    /// The databases and settings file as they were when the read began.
+    stamps: Vec<Option<Stamp>>,
     _lease: Option<File>,
 }
+
+/// A file's length, modification time and inode: what changes when a writer
+/// replaces or rewrites it.
+type Stamp = (u64, Option<std::time::SystemTime>, u64);
+
+/// The files a read of a Stick parses, under either export root.
+fn watched(root: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for name in ["PIONEER", ".PIONEER"] {
+        let export = root.join(name);
+        for file in [
+            "rekordbox/export.pdb",
+            "rekordbox/exportLibrary.db",
+            "rekordbox/exportLibrary.db-wal",
+            "DEVSETTING.DAT",
+        ] {
+            out.push(export.join(file));
+        }
+    }
+    out
+}
+
+fn stamps(root: &Path) -> Vec<Option<Stamp>> {
+    watched(root)
+        .iter()
+        .map(|path| {
+            let meta = std::fs::metadata(path).ok()?;
+            #[cfg(unix)]
+            let inode = std::os::unix::fs::MetadataExt::ino(&meta);
+            #[cfg(not(unix))]
+            let inode = 0;
+            Some((meta.len(), meta.modified().ok(), inode))
+        })
+        .collect()
+}
+
+const LOCK: &str = ".rbxport-write.lock";
 
 impl StickRead {
     /// Starts a read of the Stick mounted at `mount`.
@@ -94,10 +142,13 @@ impl StickRead {
         if unfinished_write(&root) {
             return Err(ReadError::UnfinishedWrite);
         }
+        let stamps = stamps(&root);
         Ok(Self {
             mount: mount.to_path_buf(),
+            locked: lease.is_some(),
             root,
             identity,
+            stamps,
             _lease: lease,
         })
     }
@@ -145,7 +196,11 @@ impl StickRead {
     /// # Errors
     ///
     /// [`ReadError::UnfinishedWrite`] when a journal appeared meanwhile;
-    /// [`ReadError::Moved`] when the Stick's path names another folder now.
+    /// [`ReadError::Moved`] when the Stick's path names another folder now;
+    /// [`ReadError::Changed`] when our writers' lock appeared on a read that
+    /// began without one, or a database or `DEVSETTING.DAT` is not the file
+    /// it was (length, modification time or inode), so the read may mix two
+    /// publications.
     pub fn finish(self) -> Result<(), ReadError> {
         if unfinished_write(&self.root) {
             return Err(ReadError::UnfinishedWrite);
@@ -155,11 +210,18 @@ impl StickRead {
         {
             return Err(ReadError::Moved);
         }
+        if !self.locked && self.root.join(LOCK).exists() {
+            return Err(ReadError::Changed);
+        }
+        if stamps(&self.root) != self.stamps {
+            return Err(ReadError::Changed);
+        }
         Ok(())
     }
 }
 
-/// Runs `read` on the Stick mounted at `mount` as one [`StickRead`].
+/// Runs `read` on the Stick mounted at `mount` as one [`StickRead`], again
+/// (up to [`ATTEMPTS`] in all) when the Stick was written meanwhile.
 ///
 /// # Errors
 ///
@@ -167,14 +229,24 @@ impl StickRead {
 /// [`StickRead::begin`] and [`StickRead::finish`]).
 pub fn read<T>(
     mount: &Path,
-    read: impl FnOnce(&StickRead) -> Result<T, ReadError>,
+    read: impl Fn(&StickRead) -> Result<T, ReadError>,
 ) -> Result<T, ReadError> {
-    let stick = StickRead::begin(mount)?;
-    let value = read(&stick);
-    // An unfinished write or a moved Stick outranks whatever the read found.
-    stick.finish()?;
-    value
+    let mut attempt = 0;
+    loop {
+        let stick = StickRead::begin(mount)?;
+        let value = read(&stick);
+        // An unfinished write or a moved Stick outranks whatever the read
+        // found; a Stick written meanwhile is read again, a few times.
+        match stick.finish() {
+            Ok(()) => return value,
+            Err(ReadError::Changed) if attempt + 1 < ATTEMPTS => attempt += 1,
+            Err(error) => return Err(error),
+        }
+    }
 }
+
+/// How many times a read of a Stick written meanwhile is tried in all.
+pub(crate) const ATTEMPTS: usize = 3;
 
 /// Reads one library of the Stick mounted at `mount`, tracks included,
 /// writing nothing to the Stick.
