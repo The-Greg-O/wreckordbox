@@ -396,11 +396,11 @@ impl StateSource {
 
 /// Keep the correction in the analysis header, as rekordbox does. The beat
 /// records remain the common baseline used by every player on the network.
-fn save_grid_offset(state: &AppState, track: &str, offset_ms: i16) -> crate::error::AppResult<()> {
+pub(crate) fn save_grid_offset(state: &AppState, track: &str, offset_ms: i16) -> crate::error::AppResult<()> {
     use crate::error::{AppError, ErrorKind};
     // Refused (Library Protection, rekordbox running, not the writer)
     // before the analysis file is touched.
-    let _edit = state.file_edit()?;
+    let mut edit = state.file_edit()?;
     let location = state.location()?;
     crate::file_journal::recover(state.backup_dir(), &location)?;
     let library = state.library()?;
@@ -409,12 +409,26 @@ fn save_grid_offset(state: &AppState, track: &str, offset_ms: i16) -> crate::err
     if relative.is_empty() { return Err(AppError::new(ErrorKind::NotFound, "Track has no analysis")); }
     let dat = rbl_anlz::resolve(&location.share_root, &relative);
     let analysis = rbl_anlz::Anlz::read(&dat).map_err(|e| AppError::internal(e.to_string()))?;
+    let before = analysis.grid_offset();
+    if before == Some(offset_ms) { return Ok(()); }
     let bytes = analysis.with_grid_offset(offset_ms)
         .ok_or_else(|| AppError::new(ErrorKind::Malformed, "Track has no complete beat-grid header"))?;
-    let journal = crate::file_journal::FileJournal::prepare(state.backup_dir(), &location, track,
-        library.bpm_x100[row as usize], None, false, &[(dat, bytes)])?;
-    if let Err(e) = journal.publish() { journal.rollback()?; return Err(e); }
-    journal.commit()
+    let record = edit.recording_values("link_grid_offset", track, &serde_json::json!({
+        "before": before, "after": offset_ms, "analysis": relative
+    })).map_err(crate::commands::write_error)?;
+    let journal = match crate::file_journal::FileJournal::prepare(state.backup_dir(), &location, track,
+        library.bpm_x100[row as usize], None, false, &[(dat, bytes)]) {
+        Ok(journal) => journal,
+        Err(error) => { record.cancelled(); return Err(error); }
+    };
+    if let Err(e) = journal.publish() {
+        journal.rollback()?;
+        record.cancelled();
+        return Err(e);
+    }
+    journal.commit()?;
+    record.written();
+    Ok(())
 }
 
 /// A running LINK session: the export, and the thread that reports it.
