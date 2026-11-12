@@ -35,6 +35,7 @@ mod diagnostics;
 mod explorer;
 mod device_library;
 mod stick_outline;
+mod stick_write_plan;
 mod link;
 mod rx3_link;
 mod network_labels;
@@ -738,6 +739,7 @@ pub fn run() {
             explorer::explorer_children,
             device_library::device_libraries,
             stick_outline::stick_outline,
+            stick_write_plan::stick_write_plan,
             device_library::device_playlist_edit,
             device_library::device_playlist_add_files,
             device_library::device_playlist_collection_tracks,

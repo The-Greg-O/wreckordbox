@@ -1046,7 +1046,7 @@ pub async fn export_playlist<R: tauri::Runtime>(
 /// itself accepts it. Folders, playlists since deleted from the library, and
 /// the stick's own playlists (made on a player or by rekordbox) are left
 /// out: an export with `keep_unlisted` keeps them as the stick has them.
-fn held_on_stick(state: &AppState, library: &rbl_index::Library, stick: &std::path::Path) -> (Vec<String>, bool) {
+pub(crate) fn held_on_stick(state: &AppState, library: &rbl_index::Library, stick: &std::path::Path) -> (Vec<String>, bool) {
     let Some(manifest) = rbl_export::Manifest::load(stick) else { return (Vec::new(), false) };
     let db_id = state.read_db(|db| rbl_db::export_info::db_id(db.connection())).unwrap_or(0);
     let record = rbl_export::sync_record::read(stick);
@@ -1369,7 +1369,7 @@ pub async fn export_tracks_to_device<R: tauri::Runtime>(
 
 /// What Export Track writes to `stick`: what it already holds, with
 /// `tracks` added in no playlist.
-fn track_export_selection(
+pub(crate) fn track_export_selection(
     state: &AppState,
     library: &rbl_index::Library,
     share: &std::path::Path,
@@ -1747,7 +1747,7 @@ impl ExportSelection {
     }
 
     #[allow(clippy::too_many_arguments, reason = "shared read-only preview and recovering execution selection")]
-    fn for_stick_inspected<'a>(
+    pub(crate) fn for_stick_inspected<'a>(
         &'a self, state: &AppState, library: &rbl_index::Library, share: &std::path::Path,
         destination: &std::path::Path, delete_unlisted_music: bool, recover_device: bool,
     ) -> AppResult<std::borrow::Cow<'a, Self>> {
@@ -1840,7 +1840,7 @@ static EXPORT_PROGRESS: std::sync::LazyLock<std::sync::Mutex<std::collections::H
     std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 static EXPORT_CANCEL: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, Arc<std::sync::atomic::AtomicBool>>>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
-static EXPORT_CACHE: std::sync::LazyLock<rbl_export::cache::PreparationCache> = std::sync::LazyLock::new(|| {
+pub(crate) static EXPORT_CACHE: std::sync::LazyLock<rbl_export::cache::PreparationCache> = std::sync::LazyLock::new(|| {
     let cache = rbl_export::cache::PreparationCache::new(rbl_backup::state_dir().join("cache/usb-export"));
     if let Err(error) = cache.prune(8 * 1024 * 1024 * 1024) { tracing::warn!(%error, "could not prune export cache"); }
     cache
@@ -5138,5 +5138,78 @@ mod tests {
 
         let files = expand_import_paths(&[dir.path().to_string_lossy().into_owned()]);
         assert_eq!(names(&files), ["real.mp3"]);
+    }
+
+    /// Every file on the stick and its bytes, to show a dry run wrote nothing.
+    fn stick_bytes(root: &std::path::Path) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+        let mut out = std::collections::BTreeMap::new();
+        let mut todo = vec![root.to_path_buf()];
+        while let Some(dir) = todo.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() { todo.push(path); } else { out.insert(path.clone(), std::fs::read(&path).unwrap()); }
+            }
+        }
+        out
+    }
+
+    /// wbx-45.4 review, finding 5: the shell stages an Export Playlist with
+    /// the export's own plan, worked out without writing to the stick.
+    #[test]
+    fn a_stick_write_plan_says_what_export_playlist_would_add_and_writes_nothing() {
+        use crate::stick_write_plan::{plan, PlaylistChange, StickWriteRequest};
+        let dir = tempfile::tempdir().unwrap();
+        let (state, _location, stick_dir) = export_rig(dir.path(), |_| {});
+        let stick = stick_dir.path().to_path_buf();
+        let a = rbl_db::fixture::playlist_id(0);
+        let before = stick_bytes(&stick);
+        let request = StickWriteRequest::Playlist { playlist: a, destination: stick.to_string_lossy().into_owned(), delete_unlisted_music: None, compatibility_format: None };
+        let found = plan(&state, &request).unwrap();
+        assert_eq!(stick_bytes(&stick), before, "the dry run wrote nothing");
+        assert!(!found.pending && !found.spare, "an unmarked stick is a Gig stick");
+        assert_eq!(found.tracks_new, rbl_db::fixture::Shape::default().tracks_per_playlist);
+        assert_eq!(found.playlists.len(), 1);
+        assert_eq!(found.playlists[0].change, PlaylistChange::Created);
+    }
+
+    /// Export Track re-synchronises every playlist the stick holds from this
+    /// Library: the plan says so, so the DJ sees more than the dropped track.
+    #[test]
+    fn a_track_export_plan_names_the_playlists_it_would_resynchronise() {
+        use crate::stick_write_plan::{plan, PlaylistChange, StickWriteRequest};
+        let dir = tempfile::tempdir().unwrap();
+        let (state, location, stick_dir) = export_rig(dir.path(), |_| {});
+        let stick = stick_dir.path().to_path_buf();
+        let a = rbl_db::fixture::playlist_id(0);
+        export_playlist_to(&state, &location, &stick, &a);
+        std::fs::write(stick.join(".rbxport-disposable"), b"").unwrap();
+        let before = stick_bytes(&stick);
+        let track = rbl_db::fixture::track_id(rbl_db::fixture::Shape::default().tracks - 1);
+        let request = StickWriteRequest::Tracks { tracks: vec![track], destination: stick.to_string_lossy().into_owned(), compatibility_format: None };
+        let found = plan(&state, &request).unwrap();
+        assert_eq!(stick_bytes(&stick), before, "the dry run wrote nothing");
+        assert!(found.spare, "the Spare stick marker is read");
+        assert_eq!(found.tracks_new, 1);
+        assert_eq!(found.playlists.iter().map(|p| p.change).collect::<Vec<_>>(), [PlaylistChange::Resynchronised]);
+    }
+
+    /// A stick with an unfinished write is planned as pending, settled by
+    /// nothing: the journal is still there and not a byte changed.
+    #[test]
+    fn a_stick_write_plan_does_not_settle_an_unfinished_write() {
+        use crate::stick_write_plan::{plan, StickWriteRequest};
+        let dir = tempfile::tempdir().unwrap();
+        let (state, location, stick_dir) = export_rig(dir.path(), |_| {});
+        let stick = stick_dir.path().to_path_buf();
+        export_playlist_to(&state, &location, &stick, &rbl_db::fixture::playlist_id(0));
+        // The journal an interrupted publication leaves (`rbl_export::recovery_pending`).
+        std::fs::write(stick.join(".rbxport-publication"), b"{}").unwrap();
+        let before = stick_bytes(&stick);
+        let request = StickWriteRequest::Playlist { playlist: rbl_db::fixture::playlist_id(1), destination: stick.to_string_lossy().into_owned(), delete_unlisted_music: None, compatibility_format: None };
+        let found = plan(&state, &request).unwrap();
+        assert!(found.pending);
+        assert!(found.playlists.is_empty());
+        assert_eq!(stick_bytes(&stick), before);
+        assert!(rbl_export::recovery_pending(&stick));
     }
 }
