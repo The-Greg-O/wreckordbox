@@ -1,158 +1,181 @@
-//! A Stick library read in full for showing it: never a recovery.
+//! A Stick library read in full for showing it: never a recovery, never a
+//! write, whatever a writer does around the read.
 //!
 //! Every Stick here is written by the export pipeline into a temporary
 //! directory; nothing touches a mounted Stick.
-#![allow(
-    clippy::pedantic,
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic
-)]
+#![allow(clippy::pedantic, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use rbl_export::device_library::{self, Format};
-use rbl_export::{export, SourcePlaylist, SourceTrack};
-use wreckordbox_stick_outline::{library, ReadError};
+use wreckordbox_stick_outline::testing::{
+    interrupt, snapshot, stick, without_lock, JOURNAL, LOCK, NEXT_PLAYLISTS, ONE, PDB,
+};
+use wreckordbox_stick_outline::{library, settle, ReadError, StickRead};
 
-fn track(dir: &Path, id: u64) -> SourceTrack {
-    let path = dir.join(format!("source-{id}.mp3"));
-    std::fs::write(&path, vec![id as u8; 2048]).unwrap();
-    SourceTrack {
-        id,
-        source_path: path,
-        title: format!("Track {id}"),
-        artist: "TRIODE".into(),
-        analysis: vec![(
-            "DAT".into(),
-            rbl_anlz::AnlzBuilder::new().path("/x.mp3").finish(),
-        )],
-        ..SourceTrack::default()
+const BOTH: [Format; 2] = [Format::DeviceLibrary, Format::OneLibrary];
+
+fn names(library: &device_library::Library) -> Vec<&str> {
+    library.nodes.iter().map(|n| n.name.as_str()).collect()
+}
+
+/// Each library read in turn, the Stick's bytes compared after every read.
+fn assert_each_read_refused_and_nothing_changed(root: &Path) {
+    let before = snapshot(root);
+    for format in BOTH {
+        let read = library(root, format);
+        assert!(matches!(read, Err(ReadError::UnfinishedWrite)), "{format:?}: {read:?}");
+        assert_eq!(snapshot(root), before, "{format:?}: not a byte on the Stick changed");
     }
 }
 
-/// A Stick with a folder holding one list, and a list at the top level.
-fn stick(dest: &Path) {
-    let src = tempfile::tempdir().unwrap();
-    let tracks: Vec<SourceTrack> = (1..=4).map(|i| track(src.path(), i)).collect();
-    let playlists = vec![
-        SourcePlaylist {
-            id: 10,
-            name: "Sets".into(),
-            folder: true,
-            ..Default::default()
-        },
-        SourcePlaylist {
-            id: 11,
-            name: "Friday".into(),
-            parent_id: 10,
-            track_indices: vec![0, 1],
-            ..Default::default()
-        },
-        SourcePlaylist {
-            id: 12,
-            name: "Warm Up".into(),
-            track_indices: vec![2],
-            ..Default::default()
-        },
-    ];
-    export(dest, &tracks, &playlists).unwrap();
+#[test]
+fn an_unfinished_write_under_our_lock_is_reported_and_left_alone() {
+    let dest = tempfile::tempdir().unwrap();
+    stick(dest.path());
+    interrupt(dest.path());
+    assert!(dest.path().join(LOCK).is_file(), "the export left its lock");
+    assert_each_read_refused_and_nothing_changed(dest.path());
 }
 
-/// Every file under `root` and its bytes, the directories too.
-fn snapshot(root: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
-    let mut out = BTreeMap::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir).unwrap() {
-            let path = entry.unwrap().path();
-            let relative = path.strip_prefix(root).unwrap().to_path_buf();
-            if path.is_dir() {
-                out.insert(relative, None);
-                stack.push(path);
-            } else {
-                out.insert(relative, Some(std::fs::read(&path).unwrap()));
-            }
+#[test]
+fn an_unfinished_write_with_no_lock_file_is_reported_and_no_lock_is_made() {
+    let dest = tempfile::tempdir().unwrap();
+    stick(dest.path());
+    interrupt(dest.path());
+    without_lock(dest.path());
+    assert_each_read_refused_and_nothing_changed(dest.path());
+    assert!(!dest.path().join(LOCK).exists());
+}
+
+#[test]
+fn a_settled_stick_reads_exactly_as_the_device_library_reads_it_and_nothing_is_written() {
+    for lock in [true, false] {
+        let dest = tempfile::tempdir().unwrap();
+        stick(dest.path());
+        if !lock {
+            without_lock(dest.path());
+        }
+        let before = snapshot(dest.path());
+        for format in BOTH {
+            let ours = library(dest.path(), format).unwrap();
+            assert_eq!(snapshot(dest.path()), before, "{format:?}: nothing written");
+            assert_eq!(ours, device_library::read(dest.path(), format).unwrap(), "{format:?}");
         }
     }
-    out
 }
 
-/// What an export that stopped part way leaves: export.pdb already
-/// replaced, the Stick's own copy set aside in the journal, and the new
-/// database still an image there. Recovery would roll this back.
-fn interrupted_publication(root: &Path) {
-    let pdb = "PIONEER/rekordbox/export.pdb";
-    let db = "PIONEER/rekordbox/exportLibrary.db";
-    let before = std::fs::read(root.join(pdb)).unwrap();
-    std::fs::write(root.join(pdb), b"the new export.pdb").unwrap();
-    let journal = root.join(".rbxport-publication");
-    let image = journal.join(db);
-    std::fs::create_dir_all(image.parent().unwrap()).unwrap();
-    std::fs::write(&image, b"the new database").unwrap();
-    let aside = journal.join(".previous").join(pdb);
-    std::fs::create_dir_all(aside.parent().unwrap()).unwrap();
-    std::fs::write(&aside, before).unwrap();
-    std::fs::write(
-        journal.join("publication.json"),
-        format!(
-            r#"[{{"path":"{pdb}","present":true,"had_target":true,"exact":true}},{{"path":"{db}","present":true,"had_target":true,"exact":true}}]"#
-        ),
-    )
-    .unwrap();
-}
-
+/// A writer of ours takes the lock and leaves a journal after the read has
+/// checked for one, then stops: the read must still answer "unfinished",
+/// and must not touch what the writer left.
 #[test]
-fn reading_a_library_of_a_stick_with_an_unfinished_write_changes_nothing() {
-    let dest = tempfile::tempdir().unwrap();
-    stick(dest.path());
-    interrupted_publication(dest.path());
-    let before = snapshot(dest.path());
+fn a_journal_and_lock_that_appear_after_the_check_are_reported_not_recovered() {
+    for lock_before in [true, false] {
+        let dest = tempfile::tempdir().unwrap();
+        stick(dest.path());
+        if !lock_before {
+            without_lock(dest.path());
+        }
+        let read = StickRead::begin(dest.path()).unwrap();
+        // The writer, between the check and the read.
+        std::fs::write(dest.path().join(LOCK), b"").unwrap();
+        interrupt(dest.path());
+        let after_writer = snapshot(dest.path());
 
-    for format in [Format::DeviceLibrary, Format::OneLibrary] {
-        let read = library(dest.path(), format);
-        assert!(
-            matches!(read, Err(ReadError::UnfinishedWrite)),
-            "{format:?}: the unfinished write is reported"
-        );
+        for format in BOTH {
+            // Whatever is parsed, nothing may be written or settled.
+            let _ = read.library(format);
+            assert_eq!(snapshot(dest.path()), after_writer, "{format:?}");
+        }
+        assert!(matches!(read.finish(), Err(ReadError::UnfinishedWrite)));
+        assert_eq!(snapshot(dest.path()), after_writer, "the journal is still there, untouched");
     }
-
-    assert_eq!(
-        snapshot(dest.path()),
-        before,
-        "not a byte on the Stick changed, the journal included"
-    );
 }
 
 #[test]
-fn a_settled_stick_reads_as_the_device_library_reads_it() {
+fn a_journal_that_appears_during_a_whole_read_makes_that_read_unfinished() {
     let dest = tempfile::tempdir().unwrap();
     stick(dest.path());
-    let before = snapshot(dest.path());
-    for format in [Format::DeviceLibrary, Format::OneLibrary] {
-        let ours = library(dest.path(), format).unwrap();
-        assert_eq!(ours, device_library::read(dest.path(), format).unwrap());
+    let read = StickRead::begin(dest.path()).unwrap();
+    let parsed = read.library(Format::DeviceLibrary).unwrap();
+    assert_eq!(names(&parsed), ["Sets", "Friday", "Warm Up"]);
+    interrupt(dest.path());
+    let after_writer = snapshot(dest.path());
+    assert!(matches!(read.finish(), Err(ReadError::UnfinishedWrite)));
+    assert_eq!(snapshot(dest.path()), after_writer);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_stick_path_retargeted_during_a_read_is_refused_and_neither_stick_changes() {
+    let (settled, pending, links) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    stick(settled.path());
+    stick(pending.path());
+    interrupt(pending.path());
+    let link = links.path().join("STICK");
+    std::os::unix::fs::symlink(settled.path(), &link).unwrap();
+    let (a, b) = (snapshot(settled.path()), snapshot(pending.path()));
+
+    let read = StickRead::begin(&link).unwrap();
+    std::fs::remove_file(&link).unwrap();
+    std::os::unix::fs::symlink(pending.path(), &link).unwrap();
+    // The read stays on the Stick it began on.
+    assert_eq!(names(&read.library(Format::DeviceLibrary).unwrap()), ["Sets", "Friday", "Warm Up"]);
+    assert!(matches!(read.finish(), Err(ReadError::Moved)));
+
+    assert_eq!(snapshot(settled.path()), a);
+    assert_eq!(snapshot(pending.path()), b);
+    // Through the retargeted path, the pending Stick is reported.
+    assert!(matches!(library(&link, Format::DeviceLibrary), Err(ReadError::UnfinishedWrite)));
+    assert_eq!(snapshot(pending.path()), b);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_lease_that_cannot_be_taken_is_an_error_and_nothing_is_read_or_written() {
+    use std::os::unix::fs::PermissionsExt;
+    let dest = tempfile::tempdir().unwrap();
+    stick(dest.path());
+    let lock = dest.path().join(LOCK);
+    std::fs::set_permissions(&lock, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::File::open(&lock).is_ok() {
+        // Running as root: permissions do not stop the open.
+        return;
     }
-    assert_eq!(snapshot(dest.path()), before, "no lock or other file made");
+    for format in BOTH {
+        assert!(matches!(library(dest.path(), format), Err(ReadError::Io(_))), "{format:?}");
+    }
+    std::fs::set_permissions(&lock, std::fs::Permissions::from_mode(0o644)).unwrap();
 }
 
 #[test]
-fn settling_is_the_explicit_action_that_does_recover() {
-    let dest = tempfile::tempdir().unwrap();
-    stick(dest.path());
-    interrupted_publication(dest.path());
-    let before = snapshot(dest.path());
+fn settling_publishes_exactly_the_interrupted_export_and_leaves_it_readable() {
+    for lock in [true, false] {
+        let dest = tempfile::tempdir().unwrap();
+        stick(dest.path());
+        let next = interrupt(dest.path());
+        if !lock {
+            without_lock(dest.path());
+        }
+        let before = snapshot(dest.path());
 
-    wreckordbox_stick_outline::settle(dest.path()).unwrap();
+        settle(dest.path()).unwrap();
 
-    assert_ne!(snapshot(dest.path()), before, "the Stick was settled");
-    assert!(!rbl_export::recovery_pending(dest.path()));
-    assert!(
-        !matches!(
-            library(dest.path(), Format::DeviceLibrary),
-            Err(ReadError::UnfinishedWrite)
-        ),
-        "the Stick no longer reports an unfinished write"
-    );
+        assert_eq!(std::fs::read(dest.path().join(PDB)).unwrap(), next.pdb);
+        assert_eq!(std::fs::read(dest.path().join(ONE)).unwrap(), next.one);
+        assert!(!dest.path().join(JOURNAL).exists());
+        // Nothing else the Stick held was touched (the lock aside).
+        let after = snapshot(dest.path());
+        let unchanged = |files: &std::collections::BTreeMap<std::path::PathBuf, Option<Vec<u8>>>| {
+            files
+                .iter()
+                .filter(|(p, _)| !p.starts_with(JOURNAL) && p.as_path() != Path::new(PDB) && p.as_path() != Path::new(ONE) && p.as_path() != Path::new(LOCK))
+                .map(|(p, b)| (p.clone(), b.clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(unchanged(&after), unchanged(&before));
+        for format in BOTH {
+            assert_eq!(names(&library(dest.path(), format).unwrap()), NEXT_PLAYLISTS, "{format:?}");
+        }
+    }
 }

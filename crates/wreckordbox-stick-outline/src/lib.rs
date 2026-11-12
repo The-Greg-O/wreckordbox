@@ -20,8 +20,10 @@
 //! ones the existing Stick view opens.
 
 mod library;
+#[cfg(feature = "testing")]
+pub mod testing;
 
-pub use library::{library, settle, unfinished_write, ReadError};
+pub use library::{library, read, settle, unfinished_write, ReadError, StickRead};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -89,19 +91,39 @@ struct Raw {
 /// Reads the playlist trees of the Stick mounted at `mount`, writing nothing.
 ///
 /// A volume with no export, or a library that cannot be read, lists nothing
-/// for it.
+/// for it; so does a Stick that cannot be read at all (see [`read_outline`]
+/// for why).
 #[must_use]
 pub fn outline(mount: &Path) -> Outline {
-    // Wait out a writer that holds the lock, without creating the lock.
-    let Ok(_lease) = rbl_core::durable::read_lease(mount) else {
-        return Outline::default();
+    read_outline(mount).unwrap_or_else(|error| {
+        tracing::warn!(stick = %mount.display(), %error, "cannot outline a Stick");
+        Outline::default()
+    })
+}
+
+/// [`outline`], saying why a Stick could not be read at all: its lock could
+/// not be leased, or its path named another folder by the end of the read.
+/// An unfinished write is an outline with `pending`, not an error.
+///
+/// # Errors
+///
+/// [`ReadError::Io`] or [`ReadError::Moved`].
+pub fn read_outline(mount: &Path) -> Result<Outline, ReadError> {
+    let pending = Outline { pending: true, libraries: Vec::new() };
+    let stick = match StickRead::begin(mount) {
+        Ok(stick) => stick,
+        Err(ReadError::UnfinishedWrite) => return Ok(pending),
+        Err(error) => return Err(error),
     };
-    if rbl_export::recovery_pending(mount) {
-        return Outline {
-            pending: true,
-            libraries: Vec::new(),
-        };
+    let found = outline_of(stick.root());
+    match stick.finish() {
+        Ok(()) => Ok(found),
+        Err(ReadError::UnfinishedWrite) => Ok(pending),
+        Err(error) => Err(error),
     }
+}
+
+fn outline_of(mount: &Path) -> Outline {
     let Ok(root) = rbl_export::export_root_name(mount) else {
         return Outline::default();
     };
@@ -123,10 +145,7 @@ pub fn outline(mount: &Path) -> Outline {
             }
         })
         .collect();
-    Outline {
-        pending: false,
-        libraries,
-    }
+    Outline { pending: false, libraries }
 }
 
 fn count(n: usize) -> u32 {
