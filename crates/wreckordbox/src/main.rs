@@ -13,6 +13,7 @@ mod ledger;
 mod mutants;
 mod mytag_edits;
 mod playlist_edits;
+mod project;
 use playlist_edits as edits;
 mod protection;
 mod reading;
@@ -165,6 +166,18 @@ enum Commands {
         #[command(subcommand)]
         command: schema::SchemaCommands,
     },
+    /// Project standing Facts into the Library: Energy into the star
+    /// rating and Prep colour into the colour label, under the policy in
+    /// `projection.toml` beside the Tag schema. Each kind of change waits
+    /// for the DJ or applies at or above a confidence; values the DJ set by
+    /// hand are never overwritten. Applying is one Run, by
+    /// `tool:projection` unless `--source` names another tool or agent.
+    Project {
+        #[command(flatten)]
+        run: ledger::RunOptions,
+        #[command(flatten)]
+        args: project::ProjectArgs,
+    },
     /// Restore and list backups of the Library and its Sidecar.
     Backup {
         #[command(subcommand)]
@@ -262,6 +275,12 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
     | Commands::Playlists { run, .. } = &cli.command
     {
         ledger::begin(run, cli.json);
+    }
+    // A dry run writes nothing, so it takes no Run.
+    if let Commands::Project { run, args } = &cli.command {
+        if !args.dry_run() {
+            ledger::begin(run, cli.json);
+        }
     }
     match &cli.command {
         Commands::Status => {
@@ -367,6 +386,9 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
             if !ok {
                 return Ok(ExitCode::FAILURE);
             }
+        }
+        Commands::Project { args, .. } => {
+            print(&project::run(&mut connect(&config)?, cli.json, args)?);
         }
         Commands::Backup { command } => print(&backup::run(&config, cli.json, command)?),
         Commands::Stop => stop(&config, cli.json)?,

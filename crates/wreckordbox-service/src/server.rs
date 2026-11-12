@@ -595,6 +595,17 @@ impl Shared {
                 }
                 Ok(result)
             }
+            projection if crate::projection::answers(projection) => {
+                let (changed, result) = self.with_library(|library| {
+                    crate::projection::answer(library, &self.stems, request)
+                })?;
+                // As for any edit: the hosting process is told here, even
+                // of a change whose answer then failed.
+                if let Some(changed) = changed {
+                    self.tell_host(&changed.event());
+                }
+                result
+            }
             intake if crate::intake::answers(intake) => {
                 let (result, changed) = self.with_library(|library| {
                     crate::intake::answer(library, &self.stems, request)

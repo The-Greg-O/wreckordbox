@@ -647,6 +647,7 @@ pub(crate) fn takes_run(command: &str) -> bool {
         || command == crate::tag_panel::commands::INTAKE_SET_TAGS
         || crate::mytag_edits::answers(command)
         || crate::playlist_edits::answers(command)
+        || command == crate::projection::commands::PROJECTION_APPLY
 }
 
 pub(crate) fn answers(command: &str) -> bool {
@@ -1127,7 +1128,9 @@ impl Keeper {
                 None => described(request),
             };
         Ok(Some(Target::Own {
-            source: source.unwrap_or_else(|| Source::new(SourceKind::Tool, UNNAMED_SOURCE)),
+            source: source
+                .or_else(|| crate::projection::default_source(&request.command))
+                .unwrap_or_else(|| Source::new(SourceKind::Tool, UNNAMED_SOURCE)),
             description,
             made: None,
         }))

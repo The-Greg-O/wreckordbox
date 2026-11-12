@@ -48,6 +48,7 @@ pub mod ledger;
 pub mod mutant_follow;
 pub mod mutants;
 pub mod precedence;
+pub mod projection;
 pub mod stems;
 mod store;
 pub mod tag_schema;

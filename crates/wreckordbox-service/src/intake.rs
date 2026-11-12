@@ -382,7 +382,7 @@ pub(crate) fn answer(
 /// (`djmdColor`, whose `Commnt` is the name rekordbox shows and lets the DJ
 /// change). The window does not read these: it names the eight colours
 /// itself ([`COLOR_NAMES`]).
-fn labels(library: &OpenLibrary) -> Result<Vec<PrepColour>, ServiceError> {
+pub(crate) fn labels(library: &OpenLibrary) -> Result<Vec<PrepColour>, ServiceError> {
     library.with_db(|db| {
         let read = || -> rusqlite::Result<Vec<(String, String)>> {
             db.connection()
@@ -499,7 +499,7 @@ fn numbered_colour(labels: &[PrepColour], number: u8) -> Result<Option<PrepColou
 
 /// The colour label `text` names: by the DJ's name for it or by the colour
 /// itself, in any case. `None` for `none`.
-fn named_colour(labels: &[PrepColour], text: &str) -> Result<Option<PrepColour>, ServiceError> {
+pub(crate) fn named_colour(labels: &[PrepColour], text: &str) -> Result<Option<PrepColour>, ServiceError> {
     let wanted = text.trim().to_lowercase();
     if wanted == "none" {
         return Ok(None);

@@ -36,6 +36,8 @@ serde = { workspace = true }
 tracing = { workspace = true }
 serde_json = { workspace = true }
 dirs = "5"
+# The DJ's projection policy file (`projection.toml`).
+toml = "0.8"
 # Only to tell a locked Library from a damaged one by SQLite's result code.
 rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
 
