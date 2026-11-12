@@ -21,14 +21,20 @@ afterEach(async () => {
 /** Starts `followTheme()` as `main.tsx` does, inside a mocked app shell with no theme yet. */
 async function startInAppShell(): Promise<void> {
   const { mockIPC } = await import("@tauri-apps/api/mocks");
-  mockIPC((command) => (command === "theme_roles" ? { roles: null, font: null } : undefined), { shouldMockEvents: true });
+  let asked = 0;
+  mockIPC((command) => {
+    if (command !== "theme_roles") return undefined;
+    asked += 1;
+    return { roles: null, font: null };
+  }, { shouldMockEvents: true });
   // The module decides at load whether it runs in the app shell.
   vi.resetModules();
   const { followTheme } = await import("./themeRoles");
   followTheme();
-  await vi.waitFor(() => expect(document.documentElement.hasAttribute("data-theme-mode")).toBe(false));
-  // Let the subscription and the first ask settle.
+  // It subscribes before it asks, so once it has asked it is listening.
+  await vi.waitFor(() => expect(asked).toBe(1));
   await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(document.documentElement.hasAttribute("data-theme-mode")).toBe(false);
 }
 
 const role = (name: string) => document.documentElement.style.getPropertyValue(name);
