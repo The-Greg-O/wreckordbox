@@ -1716,5 +1716,8 @@
   "Runs unavailable": "実行情報を取得できません",
   "{count} Stick loads in progress": "{count} 件のUSB書き込みが進行中",
   "Analyzing {done}/{total} tracks": "{done}/{total} 曲を解析中",
-  "{count} failed": "{count} 件失敗"
+  "{count} failed": "{count} 件失敗",
+  "Dismiss": "Dismiss",
+  "Theme file": "Theme file",
+  "line {line}": "line {line}"
 }

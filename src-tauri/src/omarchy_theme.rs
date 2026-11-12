@@ -23,6 +23,8 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use crate::theme_file::{Follow, ThemeFile, ThemeProblem};
+
 /// Points the module at a `colors.toml` of the caller's choosing instead of
 /// the active Omarchy theme's. For tests and screenshots: the DJ's real theme
 /// is never switched to look at another one.
@@ -62,15 +64,202 @@ pub struct ThemeRoles {
     /// The two ends of the active view tab's line.
     pub tab_from: String,
     pub tab_to: String,
+    /// A control's fill, where it is not the hairline colour: only the
+    /// built-in look tells the two apart.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub control: Option<String>,
+    /// A lit control under the pointer, where the look gives its own rather
+    /// than the one the window derives from the accent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accent_hover: Option<String>,
+    /// The built-in look (with the theme file's keys over it), not a theme:
+    /// upstream's layout keeps its own lit colours.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub built_in: bool,
 }
 
 /// What the interface is told: the roles, if a usable theme is present, and
-/// the system monospace family, if the system has one to name.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+/// the interface's face, if the theme file or the system names one. The
+/// sizes and the monospace face come from the theme file only, and so do
+/// the problems.
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Theme {
     pub roles: Option<ThemeRoles>,
+    /// The face for upstream's layout (`--role-font`): the file's `font`, or
+    /// the system monospace font while following Omarchy.
     pub font: Option<String>,
+    /// The theme file's `font`, `font_size`, `mono_font` and
+    /// `mono_font_size`, for the view shell; none of them come from Omarchy.
+    pub interface_font: Option<String>,
+    pub interface_font_size: Option<f64>,
+    pub mono_font: Option<String>,
+    pub mono_font_size: Option<f64>,
+    /// The theme file's mistakes, each left out of what is shown.
+    pub problems: Vec<ThemeProblem>,
+}
+
+/// The theme the window shows. The base roles are resolved first: the
+/// Omarchy theme's (where the file follows it and its palette is usable), or
+/// the built-in look's. The theme file's keys then replace the roles they
+/// name, and only those; what depends on contrast with a replaced role (the
+/// label on the accent, a selection the text could not be read on) is
+/// chosen again. With no file this is exactly the Omarchy theme.
+/// `system_font` is asked only when the look follows Omarchy and the file
+/// names no face.
+#[must_use]
+pub fn layered(
+    omarchy: Option<&str>,
+    file: Option<&ThemeFile>,
+    system_font: impl FnOnce() -> Option<String>,
+) -> Theme {
+    let follows = file.is_none_or(|file| file.follow == Follow::Omarchy);
+    let base = omarchy.filter(|_| follows).and_then(roles_from_colors);
+    let over = file
+        .map(|file| &file.colours)
+        .filter(|colours| !colours.is_empty());
+    let roles = match over {
+        None => base,
+        Some(over) => Some(overlay(&base.unwrap_or_else(built_in_roles), over)),
+    };
+    let interface_font = file.and_then(|file| file.font.clone());
+    let font = match &interface_font {
+        Some(face) => Some(face.clone()),
+        None if follows => system_font(),
+        None => None,
+    };
+    Theme {
+        roles,
+        font,
+        interface_font,
+        interface_font_size: file.and_then(|file| file.font_size),
+        mono_font: file.and_then(|file| file.mono_font.clone()),
+        mono_font_size: file.and_then(|file| file.mono_font_size),
+        problems: file.map(|file| file.problems.clone()).unwrap_or_default(),
+    }
+}
+
+/// The built-in look as roles: exactly the fallbacks of the `--role-*`
+/// properties in `src/styles/tokens.css`, upstream's colours.
+fn built_in_roles() -> ThemeRoles {
+    let colour = |value: &str| value.to_owned();
+    ThemeRoles {
+        mode: colour("dark"),
+        ground: colour("#000000"),
+        panel: colour("#0f0f0f"),
+        working: colour("#1e1e1e"),
+        hairline: colour("#323232"),
+        selection: colour("#314b67"),
+        border: colour("#646464"),
+        text: colour("#e6e6e6"),
+        text_dim: colour("#9a9a9a"),
+        text_bright: colour("#ffffff"),
+        accent: colour("#1373eb"),
+        on_accent: colour("#f0f0f0"),
+        tab_from: colour("#1373eb"),
+        tab_to: colour("#1373eb"),
+        control: Some(colour("#2b2b2b")),
+        accent_hover: Some(colour("#4a82ed")),
+        built_in: true,
+    }
+}
+
+/// The theme file's keys that name each role, first wins: the key itself,
+/// then the ones that stand in for it in an Omarchy palette.
+pub(crate) const ROLE_KEYS: &[(&str, &[&str])] = &[
+    ("ground", &["darker_background"]),
+    ("panel", &["dark_background"]),
+    ("working", &["background"]),
+    ("hairline", &["lighter_background"]),
+    ("selection", &["selection"]),
+    ("border", &["muted"]),
+    ("text", &["foreground"]),
+    ("text_dim", &["dark_foreground"]),
+    ("text_bright", &["bright_foreground", "color15"]),
+    ("accent", &["accent", "blue", "color4"]),
+    (
+        "tab_from",
+        &["bright_magenta", "color13", "magenta", "color5"],
+    ),
+    ("tab_to", &["bright_yellow", "color11", "yellow", "color3"]),
+];
+
+/// `base` with the roles `file` names replaced (see `layered`).
+fn overlay(base: &ThemeRoles, file: &BTreeMap<String, String>) -> ThemeRoles {
+    let given = |role: &str| {
+        ROLE_KEYS
+            .iter()
+            .find(|(name, _)| *name == role)
+            .and_then(|(_, keys)| keys.iter().find_map(|key| file.get(*key)))
+            .filter(|value| rgb(value).is_some())
+            .cloned()
+    };
+    let mut roles = base.clone();
+    let set = |role: &str, slot: &mut String| {
+        if let Some(value) = given(role) {
+            *slot = value;
+        }
+    };
+    set("ground", &mut roles.ground);
+    set("panel", &mut roles.panel);
+    set("working", &mut roles.working);
+    set("selection", &mut roles.selection);
+    set("border", &mut roles.border);
+    set("text", &mut roles.text);
+    set("text_dim", &mut roles.text_dim);
+    set("text_bright", &mut roles.text_bright);
+    set("accent", &mut roles.accent);
+    set("tab_from", &mut roles.tab_from);
+    set("tab_to", &mut roles.tab_to);
+    if let Some(hairline) = given("hairline") {
+        // A control's fill is the hairline colour in a theme.
+        roles.hairline = hairline;
+        roles.control = None;
+    }
+    if let Some(mode) = file
+        .get("mode")
+        .filter(|mode| matches!(mode.as_str(), "dark" | "light"))
+    {
+        roles.mode.clone_from(mode);
+    }
+    // A tab end the base took from its accent (it had none of its own)
+    // stays the accent's colour.
+    if roles.accent != base.accent {
+        for (role, slot) in [
+            ("tab_from", &mut roles.tab_from),
+            ("tab_to", &mut roles.tab_to),
+        ] {
+            if given(role).is_none() && *slot == base.accent {
+                slot.clone_from(&roles.accent);
+            }
+        }
+    }
+    let colour = |value: &str| rgb(value).unwrap_or_default();
+    // The label on the accent is chosen from the accent, the deepest ground
+    // and the brightest text; choose again only if one of them changed.
+    if (
+        roles.accent.as_str(),
+        roles.ground.as_str(),
+        roles.text_bright.as_str(),
+    ) != (
+        base.accent.as_str(),
+        base.ground.as_str(),
+        base.text_bright.as_str(),
+    ) {
+        let label = on_accent(
+            colour(&roles.accent),
+            [colour(&roles.ground), colour(&roles.text_bright)],
+        );
+        roles.on_accent = hex(label);
+        roles.accent_hover = None;
+    }
+    // A selection the text cannot be read on is replaced, as for a theme.
+    if given("selection").is_none()
+        && contrast(colour(&roles.selection), colour(&roles.text)) < SELECTION_CONTRAST
+    {
+        roles.selection = hex(mix(colour(&roles.working), colour(&roles.text), 0.18));
+    }
+    roles
 }
 
 type Rgb = [u8; 3];
@@ -100,6 +289,11 @@ fn parse_colors(text: &str) -> BTreeMap<String, String> {
         }
     }
     found
+}
+
+/// Whether `value` is a `#rrggbb` colour.
+pub(crate) fn is_colour(value: &str) -> bool {
+    rgb(value).is_some()
 }
 
 fn rgb(value: &str) -> Option<Rgb> {
@@ -187,7 +381,12 @@ fn on_accent(accent: Rgb, candidates: [Rgb; 2]) -> Rgb {
 /// practice, and the numbered colours stand in for the named ones.
 #[must_use]
 pub fn roles_from_colors(text: &str) -> Option<ThemeRoles> {
-    let colours = parse_colors(text);
+    roles_from_palette(&parse_colors(text))
+}
+
+/// The roles for a palette already read: `colors.toml`'s keys to their
+/// `#rrggbb` values, and `mode`.
+fn roles_from_palette(colours: &BTreeMap<String, String>) -> Option<ThemeRoles> {
     let get = |keys: &[&str]| {
         keys.iter()
             .find_map(|key| colours.get(*key).and_then(|value| rgb(value)))
@@ -231,6 +430,9 @@ pub fn roles_from_colors(text: &str) -> Option<ThemeRoles> {
         on_accent: hex(on_accent(accent, [ground, text_bright])),
         tab_from: hex(get(&["bright_magenta", "color13", "magenta", "color5"]).unwrap_or(accent)),
         tab_to: hex(get(&["bright_yellow", "color11", "yellow", "color3"]).unwrap_or(accent)),
+        control: None,
+        accent_hover: None,
+        built_in: false,
     })
 }
 
@@ -238,11 +440,14 @@ pub fn roles_from_colors(text: &str) -> Option<ThemeRoles> {
 /// unreadable or unusable.
 #[must_use]
 pub fn roles_from_file(path: &Path) -> Option<ThemeRoles> {
+    roles_from_colors(&palette_text(path)?)
+}
+
+/// The text of the colour file at `path`, if it is one.
+fn palette_text(path: &Path) -> Option<String> {
     // A palette is a few hundred bytes; anything large is not one.
-    if std::fs::metadata(path).ok()?.len() > 256 * 1024 {
-        return None;
-    }
-    roles_from_colors(&std::fs::read_to_string(path).ok()?)
+    let bytes = crate::theme_file::read_small(path, 256 * 1024).ok()?;
+    String::from_utf8(bytes).ok()
 }
 
 /// The colour file to read: the override, or the active Omarchy theme's on
@@ -262,7 +467,7 @@ pub fn colors_file() -> Option<PathBuf> {
 /// A family name as it may be written into a CSS `font-family`: the first of
 /// fontconfig's comma-separated aliases, refused if it holds anything that
 /// could end the quoted string it will be put in.
-fn css_family(answer: &str) -> Option<String> {
+pub(crate) fn css_family(answer: &str) -> Option<String> {
     let family = answer.lines().next()?.split(',').next()?.trim();
     let safe = !family.is_empty()
         && family.len() <= 100
@@ -302,6 +507,9 @@ pub struct Sources {
     pub theme_folder_is_replaced: bool,
     /// The folder `omarchy font set` writes `fonts.conf` into.
     pub font_folder: Option<PathBuf>,
+    /// The window's own theme file (`theme_file.rs`), laid over the theme.
+    /// It and its folder need not exist.
+    pub theme_file: Option<PathBuf>,
 }
 
 impl Sources {
@@ -317,34 +525,95 @@ impl Sources {
                 .then(dirs::config_dir)
                 .flatten()
                 .map(|config| config.join("fontconfig")),
+            theme_file: crate::theme_file::theme_file(),
         }
     }
 
     /// The theme as these sources give it now.
     #[must_use]
     pub fn read(&self) -> Theme {
-        Theme {
-            roles: self.colors.as_deref().and_then(roles_from_file),
-            font: system_monospace_font(),
-        }
+        self.read_following().0
     }
 
-    /// The folders whose entries change on a switch. They need not exist.
-    fn folders(&self) -> Vec<PathBuf> {
-        // The folder the colour file is in, for a file rewritten where it
-        // is; and for an Omarchy theme also the folder holding that one,
-        // where a switch removes the theme folder and puts another in.
-        let theme = self.colors.as_deref().and_then(Path::parent);
-        let holding = theme
-            .filter(|_| self.theme_folder_is_replaced)
-            .and_then(Path::parent);
-        holding
-            .into_iter()
-            .chain(theme)
-            .chain(self.font_folder.as_deref())
-            .filter(|folder| folder.is_absolute())
-            .map(Path::to_path_buf)
-            .collect()
+    /// The theme, and whether it follows the Omarchy theme (the theme
+    /// file's `follow`). Under `follow = "none"` neither the Omarchy palette
+    /// nor the system font is read.
+    fn read_following(&self) -> (Theme, bool) {
+        let file = self.theme_file.as_deref().and_then(crate::theme_file::read);
+        let follows = file
+            .as_ref()
+            .is_none_or(|file| file.follow == Follow::Omarchy);
+        let omarchy = self
+            .colors
+            .as_deref()
+            .filter(|_| follows)
+            .and_then(palette_text);
+        let theme = layered(omarchy.as_deref(), file.as_ref(), system_monospace_font);
+        (theme, follows)
+    }
+
+    /// What to watch for a change of the theme. While the look follows
+    /// Omarchy: the folders an Omarchy switch or `omarchy font set` writes
+    /// into, whole. Always: the theme file, by name, in its folder, and, if
+    /// it is a link (a dotfiles repository), the file it leads to, by name,
+    /// in that file's folder. None of them need exist.
+    #[must_use]
+    pub fn watches(&self, follows: bool) -> Vec<Watch> {
+        let whole = |folder: &Path| Watch {
+            folder: folder.to_path_buf(),
+            entry: None,
+        };
+        let named = |file: &Path| {
+            Some(Watch {
+                folder: file.parent()?.to_path_buf(),
+                entry: Some(file.file_name()?.to_os_string()),
+            })
+        };
+        let mut watches = Vec::new();
+        if follows {
+            // The folder the colour file is in, for a file rewritten where
+            // it is; and for an Omarchy theme also the folder holding that
+            // one, where a switch removes the theme folder and puts another
+            // in.
+            let theme = self.colors.as_deref().and_then(Path::parent);
+            let holding = theme
+                .filter(|_| self.theme_folder_is_replaced)
+                .and_then(Path::parent);
+            watches.extend(
+                holding
+                    .into_iter()
+                    .chain(theme)
+                    .chain(self.font_folder.as_deref())
+                    .map(whole),
+            );
+        }
+        if let Some(file) = self.theme_file.as_deref() {
+            watches.extend(named(file));
+            let target = std::fs::canonicalize(file).ok().filter(|target| {
+                file.parent()
+                    .and_then(|folder| std::fs::canonicalize(folder).ok())
+                    != target.parent().map(Path::to_path_buf)
+            });
+            watches.extend(target.as_deref().and_then(named));
+        }
+        watches.retain(|watch| watch.folder.is_absolute());
+        watches
+    }
+}
+
+/// One thing the theme watcher waits on: a folder, whole or for one entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Watch {
+    pub folder: PathBuf,
+    /// The one entry of `folder` that matters; `None` for all of them.
+    pub entry: Option<std::ffi::OsString>,
+}
+
+/// Writes the theme file's mistakes to the log.
+fn log_problems(sources: &Sources, theme: &Theme) {
+    let file = sources.theme_file.as_deref().unwrap_or(Path::new(""));
+    for problem in &theme.problems {
+        tracing::warn!(file = %file.display(), line = problem.line, "theme file: {}", problem.message);
     }
 }
 
@@ -381,9 +650,13 @@ pub fn follow_sources<R: tauri::Runtime>(app: &tauri::AppHandle<R>, sources: Sou
             .name("theme-watch".into())
             .spawn(move || {
                 watch::run(
-                    &sources.folders(),
-                    || sources.read(),
-                    |theme| {
+                    |follows| sources.watches(follows),
+                    || sources.read_following(),
+                    |theme, announce| {
+                        log_problems(&sources, theme);
+                        if !announce {
+                            return;
+                        }
                         tracing::info!(themed = theme.roles.is_some(), font = ?theme.font, "theme changed");
                         let _ = tauri::Emitter::emit(&app, CHANGED_EVENT, theme);
                     },
@@ -406,14 +679,14 @@ mod watch {
 
     use inotify::{Event, EventMask, Inotify, WatchDescriptor, WatchMask};
 
-    use super::Theme;
+    use super::{Theme, Watch};
 
     /// A switch is several writes over a moment; read once they stop.
     const SETTLE: Duration = Duration::from_millis(250);
 
     /// One mask for every watch: a folder can be watched both for itself and
     /// as the nearest existing folder above another, and inotify keeps one
-    /// mask per folder.
+    /// mask per folder. `ATTRIB`: a file or folder made readable again.
     fn mask() -> WatchMask {
         WatchMask::CREATE
             | WatchMask::CLOSE_WRITE
@@ -422,6 +695,7 @@ mod watch {
             | WatchMask::DELETE
             | WatchMask::DELETE_SELF
             | WatchMask::MOVE_SELF
+            | WatchMask::ATTRIB
     }
 
     /// What a watched folder is watched for.
@@ -429,8 +703,8 @@ mod watch {
     struct Interest {
         /// Anything in it: it is one of the folders a switch writes into.
         everything: bool,
-        /// Entries of these names: the next step down to a folder that does
-        /// not exist yet.
+        /// Entries of these names: a file that matters, or the next step
+        /// down to a folder that does not exist yet.
         names: Vec<OsString>,
     }
 
@@ -445,47 +719,69 @@ mod watch {
             Some(self.interests.entry(watch).or_default())
         }
 
-        /// Watches `folder`, or while it does not exist the nearest folder
-        /// above it that does, for the entry that leads down to it.
-        fn reach(&mut self, folder: &Path) {
-            // Each pass watches one level; a path is not deeper than this.
+        fn want(&mut self, folder: &Path, name: &OsString) -> bool {
+            let Some(interest) = self.interest(folder) else {
+                return false;
+            };
+            if !interest.names.contains(name) {
+                interest.names.push(name.clone());
+            }
+            true
+        }
+
+        /// Watches `watch.folder` for what `watch` asks, or while it does
+        /// not exist (or cannot be watched: no permission) the nearest
+        /// folder above it that can be, for the entry that leads down to it.
+        fn reach(&mut self, watch: &Watch) {
+            let mut folder = watch.folder.clone();
+            // Each pass goes one level down; a path is not deeper than this.
             for _ in 0..64 {
                 if folder.is_dir() {
-                    if let Some(interest) = self.interest(folder) {
-                        interest.everything = true;
+                    let watched = match &watch.entry {
+                        None => self
+                            .interest(&folder)
+                            .map(|interest| interest.everything = true)
+                            .is_some(),
+                        Some(name) => self.want(&folder, name),
+                    };
+                    if watched {
                         return;
                     }
+                    // There, but not to be watched: wait in the folder above
+                    // for it to change.
+                    if let (Some(above), Some(name)) = (folder.parent(), folder.file_name()) {
+                        self.want(above, &name.to_os_string());
+                    }
+                    return;
                 }
-                let Some((above, name)) = nearest_existing(folder) else {
+                let Some((above, name)) = nearest_existing(&folder) else {
                     return;
                 };
-                let Some(interest) = self.interest(&above) else {
+                if !self.want(&above, &name) {
                     return;
-                };
-                if !interest.names.contains(&name) {
-                    interest.names.push(name.clone());
                 }
                 // It may have appeared between the look and the watch; if
                 // so go round again and step down into it.
                 if !above.join(&name).is_dir() {
                     return;
                 }
+                folder.clone_from(&watch.folder);
             }
         }
 
         /// Starts again from nothing: folders come and go, and a watch on a
         /// removed folder is dead.
-        fn register(&mut self, folders: &[PathBuf]) {
+        fn register(&mut self, watches: &[Watch]) {
             for (watch, _) in self.interests.drain() {
                 let _ = self.inotify.watches().remove(watch);
             }
-            for folder in folders {
-                self.reach(folder);
+            for watch in watches {
+                self.reach(watch);
             }
         }
 
-        /// Whether `event` could mean a switch. An event for a watch that
-        /// has since been dropped is not one.
+        /// Whether `event` could mean a change of the theme. An event for a
+        /// watch that has since been dropped is not one.
         fn concerns(&self, event: &Event<&std::ffi::OsStr>) -> bool {
             let Some(interest) = self.interests.get(&event.wd) else {
                 return false;
@@ -493,6 +789,8 @@ mod watch {
             let gone = EventMask::DELETE_SELF | EventMask::MOVE_SELF | EventMask::IGNORED;
             interest.everything
                 || event.mask.intersects(gone)
+                // About the watched folder itself: its permissions changed.
+                || event.name.is_none()
                 || event
                     .name
                     .is_some_and(|name| interest.names.iter().any(|wanted| wanted == name))
@@ -512,19 +810,42 @@ mod watch {
         }
     }
 
-    /// Calls `tell` with the theme each time what `read` returns changes
-    /// after something happened in `folders`. Returns only if inotify fails.
-    pub(super) fn run(folders: &[PathBuf], read: impl Fn() -> Theme, mut tell: impl FnMut(&Theme)) {
-        if folders.is_empty() {
-            return;
+    /// Watches what `plan` names for the look's current `follow`, then
+    /// reads; if the read finds `follow` changed, plans and reads again.
+    /// Watch first, read second: a write that lands after the read is then
+    /// already watched for.
+    fn refresh(
+        watches: &mut Watches,
+        plan: &impl Fn(bool) -> Vec<Watch>,
+        read: &impl Fn() -> (Theme, bool),
+        mut follows: bool,
+    ) -> (Theme, bool) {
+        for _ in 0..3 {
+            watches.register(&plan(follows));
+            let (theme, now) = read();
+            if now == follows {
+                return (theme, now);
+            }
+            follows = now;
         }
+        read()
+    }
+
+    /// Calls `tell` with the theme each time what `read` returns changes
+    /// after something happened in what `plan` names, with `true`; once at
+    /// the start with `false`. Returns only if inotify fails.
+    pub(super) fn run(
+        plan: impl Fn(bool) -> Vec<Watch>,
+        read: impl Fn() -> (Theme, bool),
+        mut tell: impl FnMut(&Theme, bool),
+    ) {
         let Ok(inotify) = Inotify::init() else { return };
         let mut watches = Watches {
             inotify,
             interests: HashMap::new(),
         };
-        watches.register(folders);
-        let mut shown = read();
+        let (mut shown, mut follows) = refresh(&mut watches, &plan, &read, true);
+        tell(&shown, false);
         let mut buffer = [0_u8; 4096];
         loop {
             if watches.interests.is_empty() {
@@ -548,12 +869,10 @@ mod watch {
                     break;
                 }
             }
-            // Watch first, read second: a write that lands after the read is
-            // then already watched for.
-            watches.register(folders);
-            let now = read();
+            let now;
+            (now, follows) = refresh(&mut watches, &plan, &read, follows);
             if now != shown {
-                tell(&now);
+                tell(&now, true);
                 shown = now;
             }
         }
@@ -617,6 +936,9 @@ bright_magenta = "#bb9af7"
                 on_accent: "#0e0e14".into(),
                 tab_from: "#bb9af7".into(),
                 tab_to: "#ff9e64".into(),
+                control: None,
+                accent_hover: None,
+                built_in: false,
             }
         );
     }
@@ -772,6 +1094,289 @@ color15 = "#ddc7a1"
         assert_eq!(
             roles_from_file(&file).map(|roles| roles.accent),
             Some("#7aa2f7".into())
+        );
+    }
+
+    fn file(text: &str) -> ThemeFile {
+        crate::theme_file::parse(text)
+    }
+
+    fn no_font() -> Option<String> {
+        None
+    }
+
+    #[test]
+    fn with_no_theme_file_the_omarchy_theme_is_shown_as_it_is() {
+        let theme = layered(Some(TOKYO_NIGHT), None, || {
+            Some("JetBrainsMono Nerd Font".into())
+        });
+        assert_eq!(theme.roles, roles_from_colors(TOKYO_NIGHT));
+        assert_eq!(theme.font.as_deref(), Some("JetBrainsMono Nerd Font"));
+        assert_eq!(theme.problems, []);
+        assert_eq!(layered(None, None, no_font).roles, None);
+    }
+
+    #[test]
+    fn a_file_overriding_one_colour_changes_only_that_role() {
+        let omarchy = roles_from_colors(TOKYO_NIGHT).unwrap();
+        let theme = layered(
+            Some(TOKYO_NIGHT),
+            Some(&file("muted = \"#ff00ff\"\n")),
+            no_font,
+        );
+        assert_eq!(
+            theme.roles,
+            Some(ThemeRoles {
+                border: "#ff00ff".into(),
+                ..omarchy
+            })
+        );
+    }
+    /// The built-in look as roles: the stylesheet's fallbacks in
+    /// `src/styles/tokens.css`.
+    fn built_in() -> ThemeRoles {
+        ThemeRoles {
+            mode: "dark".into(),
+            ground: "#000000".into(),
+            panel: "#0f0f0f".into(),
+            working: "#1e1e1e".into(),
+            hairline: "#323232".into(),
+            selection: "#314b67".into(),
+            border: "#646464".into(),
+            text: "#e6e6e6".into(),
+            text_dim: "#9a9a9a".into(),
+            text_bright: "#ffffff".into(),
+            accent: "#1373eb".into(),
+            on_accent: "#f0f0f0".into(),
+            tab_from: "#1373eb".into(),
+            tab_to: "#1373eb".into(),
+            control: Some("#2b2b2b".into()),
+            accent_hover: Some("#4a82ed".into()),
+            built_in: true,
+        }
+    }
+
+    /// Everything but the on-accent colour and the hover derived from it,
+    /// which follow a changed accent.
+    fn apart_from_the_accents_label(roles: &ThemeRoles) -> ThemeRoles {
+        ThemeRoles {
+            on_accent: String::new(),
+            accent_hover: None,
+            ..roles.clone()
+        }
+    }
+
+    /// What wbx-45.6's review asked for: one key in the file, one role
+    /// changed, over full, partial, light and built-in bases.
+    #[test]
+    fn an_override_changes_only_the_role_it_names_over_any_base() {
+        let partial = "background = \"#282828\"\nforeground = \"#d4be98\"\n";
+        let light = "background = \"#eff1f5\"\nforeground = \"#4c4f69\"\n";
+        let base = |omarchy: Option<&str>| -> ThemeRoles {
+            omarchy.and_then(roles_from_colors).unwrap_or_else(built_in)
+        };
+        for omarchy in [Some(TOKYO_NIGHT), Some(partial), Some(light), None] {
+            let before = base(omarchy);
+            let dark = before.mode == "dark";
+            for (key, value, role) in [
+                (
+                    "foreground",
+                    if dark { "#ebdbb2" } else { "#202020" },
+                    "text",
+                ),
+                ("muted", "#ff00ff", "border"),
+                (
+                    "background",
+                    if dark { "#202020" } else { "#f8f8f8" },
+                    "working",
+                ),
+                ("dark_foreground", "#777777", "text_dim"),
+                (
+                    "darker_background",
+                    if dark { "#050505" } else { "#d0d0d0" },
+                    "ground",
+                ),
+            ] {
+                let theme = layered(
+                    omarchy,
+                    Some(&file(&format!("{key} = \"{value}\"\n"))),
+                    no_font,
+                );
+                let mut expected = before.clone();
+                match role {
+                    "text" => expected.text = value.into(),
+                    "border" => expected.border = value.into(),
+                    "working" => expected.working = value.into(),
+                    "text_dim" => expected.text_dim = value.into(),
+                    _ => expected.ground = value.into(),
+                }
+                let got = theme.roles.unwrap();
+                if role == "ground" {
+                    // The label on the accent is chosen from the ground; it
+                    // may change, nothing else may.
+                    assert_eq!(
+                        apart_from_the_accents_label(&got),
+                        apart_from_the_accents_label(&expected),
+                        "{key} over {omarchy:?}"
+                    );
+                } else {
+                    assert_eq!(got, expected, "{key} over {omarchy:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn over_the_built_in_look_the_stylesheets_own_fallbacks_stand() {
+        // Only `muted`: the control fill, the accent's label and its hover
+        // stay the built-in look's, not values derived from the palette.
+        let theme = layered(None, Some(&file("muted = \"#ff00ff\"\n")), no_font);
+        assert_eq!(
+            theme.roles,
+            Some(ThemeRoles {
+                border: "#ff00ff".into(),
+                ..built_in()
+            })
+        );
+        // `lighter_background` is both the hairline and the control fill.
+        let theme = layered(
+            None,
+            Some(&file("lighter_background = \"#3a3a3a\"\n")),
+            no_font,
+        );
+        let roles = theme.roles.unwrap();
+        assert_eq!((roles.hairline.as_str(), roles.control), ("#3a3a3a", None));
+    }
+
+    #[test]
+    fn follow_none_lays_the_file_over_the_built_in_look_and_not_over_omarchy() {
+        let asked = std::cell::Cell::new(false);
+        let theme = layered(
+            Some(TOKYO_NIGHT),
+            Some(&file("follow = \"none\"\naccent = \"#ff8800\"\n")),
+            || {
+                asked.set(true);
+                Some("JetBrainsMono Nerd Font".into())
+            },
+        );
+        assert_eq!(
+            theme.roles,
+            Some(ThemeRoles {
+                accent: "#ff8800".into(),
+                // The built-in tab line is the accent's colour.
+                tab_from: "#ff8800".into(),
+                tab_to: "#ff8800".into(),
+                // A new accent gets a label chosen for it, and the window
+                // derives its hover.
+                on_accent: "#000000".into(),
+                accent_hover: None,
+                ..built_in()
+            })
+        );
+        // Not following Omarchy: the face is the built-in one too.
+        assert_eq!(theme.font, None);
+        assert!(!asked.get());
+    }
+
+    #[test]
+    fn follow_none_with_no_colours_is_exactly_the_built_in_look() {
+        let theme = layered(
+            Some(TOKYO_NIGHT),
+            Some(&file("follow = \"none\"\n")),
+            no_font,
+        );
+        // No roles: the stylesheet's fallbacks, which are the built-in look.
+        assert_eq!(theme.roles, None);
+    }
+
+    #[test]
+    fn without_an_omarchy_theme_the_file_is_laid_over_the_built_in_look() {
+        let theme = layered(None, Some(&file("selection = \"#445566\"\n")), no_font);
+        assert_eq!(
+            theme.roles,
+            Some(ThemeRoles {
+                selection: "#445566".into(),
+                ..built_in()
+            })
+        );
+        // An Omarchy file that is not a usable palette is not mixed in.
+        let theme = layered(
+            Some("accent = \"#00ff00\"\n"),
+            Some(&file("selection = \"#445566\"\n")),
+            no_font,
+        );
+        assert_eq!(
+            theme.roles.map(|roles| roles.accent),
+            Some("#1373eb".into())
+        );
+    }
+
+    #[test]
+    fn whatever_accent_the_file_gives_its_label_can_be_read() {
+        let pair = |one: &str, other: &str| {
+            contrast(rgb(one).unwrap_or_default(), rgb(other).unwrap_or_default())
+        };
+        for accent in [
+            "#a9b1d6", "#808080", "#ffff00", "#000000", "#0e0e14", "#ffffff", "#7f7f7f",
+        ] {
+            let text = format!("accent = \"{accent}\"\n");
+            for omarchy in [Some(TOKYO_NIGHT), None] {
+                let roles = layered(omarchy, Some(&file(&text)), no_font).roles.unwrap();
+                assert_eq!(roles.accent, accent);
+                assert!(
+                    pair(&roles.on_accent, &roles.accent) >= 4.5,
+                    "{} on {accent}",
+                    roles.on_accent
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_files_faces_and_sizes_are_passed_on() {
+        let text =
+            "font = \"Inter\"\nfont_size = 13\nmono_font = \"Iosevka\"\nmono_font_size = 11.5\n";
+        let theme = layered(Some(TOKYO_NIGHT), Some(&file(text)), || {
+            Some("JetBrainsMono Nerd Font".into())
+        });
+        assert_eq!(theme.font.as_deref(), Some("Inter"));
+        assert_eq!(theme.interface_font.as_deref(), Some("Inter"));
+        assert_eq!(theme.interface_font_size, Some(13.0));
+        assert_eq!(theme.mono_font.as_deref(), Some("Iosevka"));
+        assert_eq!(theme.mono_font_size, Some(11.5));
+        // Fonts alone leave the colours on the Omarchy theme.
+        assert_eq!(theme.roles, roles_from_colors(TOKYO_NIGHT));
+        // Without them the system face stays upstream's, and the shell's own.
+        let theme = layered(Some(TOKYO_NIGHT), Some(&file("")), || {
+            Some("JetBrainsMono Nerd Font".into())
+        });
+        assert_eq!(theme.font.as_deref(), Some("JetBrainsMono Nerd Font"));
+        assert_eq!(theme.interface_font, None);
+        assert_eq!(theme.interface_font_size, None);
+    }
+
+    #[test]
+    fn the_files_mistakes_are_passed_on_and_the_rest_applies() {
+        let theme = layered(
+            Some(TOKYO_NIGHT),
+            Some(&file("accent = \"#ff8800\"\nmuted = \"grey\"\n")),
+            no_font,
+        );
+        assert_eq!(
+            theme.roles.as_ref().map(|roles| roles.accent.as_str()),
+            Some("#ff8800")
+        );
+        assert_eq!(
+            theme.roles.map(|roles| roles.border),
+            Some("#414868".into())
+        );
+        assert_eq!(
+            theme
+                .problems
+                .iter()
+                .map(|problem| problem.line)
+                .collect::<Vec<_>>(),
+            [2]
         );
     }
 

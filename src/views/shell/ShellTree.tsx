@@ -24,6 +24,7 @@
  * the focus is kept apart from which is selected: the keyboard moves the
  * one and only Enter changes the other.
  */
+import { useFontScales } from "@/lib/themeRoles";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 
 import { useTranslation } from "@/i18n";
@@ -55,6 +56,8 @@ export interface ShellTreeProps {
   onFolderOpen?: ((id: string, open: boolean) => void) | undefined;
   /** Why a Stick may not be written to now (the Stick write gate), or null. */
   stickRefusal?: ((path: string) => string | null) | undefined;
+  /** What waits in Intake and Problems, drawn beside them (wbx-62). */
+  queueCounts?: { intake: number | null; problems: number | null } | null | undefined;
 }
 
 /** No actions: a tree that only opens rows. */
@@ -123,7 +126,7 @@ function readSizes(element: HTMLElement | null): TreeSizes {
 }
 
 export function ShellTree({
-  library, sticks, setPlans = NO_SET_PLANS, selectedId, onOpen, actions = NO_ACTIONS, selectedNode = null,
+  library, sticks, setPlans = NO_SET_PLANS, selectedId, onOpen, queueCounts, actions = NO_ACTIONS, selectedNode = null,
   collapsed: keptCollapsed, onFolderOpen, stickRefusal,
 }: ShellTreeProps) {
   const t = useTranslation();
@@ -131,8 +134,8 @@ export function ShellTree({
   const collapsed = keptCollapsed ?? ownCollapsed;
   const act = useShellTreeActions({ actions, library, sticks, selectedNode, stickRefusal });
   const treeRows = useMemo(
-    () => shellTreeRows({ library, sticks, setPlans, collapsed }),
-    [library, sticks, setPlans, collapsed],
+    () => shellTreeRows({ library, sticks, setPlans, collapsed, queueCounts }),
+    [library, sticks, setPlans, collapsed, queueCounts],
   );
   const groups = useMemo(() => groupRows(treeRows, t), [treeRows, t]);
   const root = useRef<HTMLDivElement>(null);
@@ -149,6 +152,11 @@ export function ShellTree({
     observer.observe(element);
     return () => { observer.disconnect(); };
   }, []);
+  // The theme file's text size changes the row heights (wbx-45.6).
+  const fontScales = useFontScales();
+  useLayoutEffect(() => {
+    if (root.current !== null) setSizes(readSizes(root.current));
+  }, [fontScales]);
   const layout = useMemo(
     () => treeLayout(groups.map((group) => [group.heading !== undefined, group.rows.length] as const), sizes),
     [groups, sizes],

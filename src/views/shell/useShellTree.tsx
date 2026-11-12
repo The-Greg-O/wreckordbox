@@ -27,7 +27,7 @@ import { stagedStickActions, type ShellStickHandlers } from "./shellStickWrites"
 import type { StickWriteGate } from "./StickWriteGate";
 
 export function useShellTree({
-  library, sticks, selectedNode, onSelectNode, view, onViewChange, actions, fromStick = false, expansion, onExpansionChange,
+  library, sticks, selectedNode, onSelectNode, view, onViewChange, queueCounts, actions, fromStick = false, expansion, onExpansionChange,
   stickGate, stickHandlers, confirmDelete,
 }: {
   /** The Library's tree, as the backend sends it. */
@@ -50,7 +50,9 @@ export function useShellTree({
   stickHandlers?: ShellStickHandlers;
   /** Asks before a Library playlist or folder is deleted (wbx-45.4 review, finding 8). Without it nothing is deleted from the tree. */
   confirmDelete?: (question: string) => Promise<boolean>;
-}): { tree: ReactNode; intakeQueue: IntakeQueue } {
+  /** What waits in Intake and Problems, drawn beside them in the tree (wbx-62). */
+  queueCounts?: { intake: number | null; problems: number | null } | null | undefined;
+}): { tree: ReactNode; intakeQueue: IntakeQueue; showQueue: (queue: IntakeQueue) => void } {
   const [intakeQueue, setIntakeQueue] = useState<IntakeQueue>("intake");
   const [queueChosen, setQueueChosen] = useState(false);
 
@@ -60,6 +62,13 @@ export function useShellTree({
     else if (row.node !== undefined) onSelectNode(row.node);
     onViewChange(shellViewForRow(row.kind));
   }, [onSelectNode, onViewChange]);
+
+  /** Shows a queue in the Intake view as choosing it in the tree does (the empty queue's offer of Problems). */
+  const showQueue = useCallback((queue: IntakeQueue) => {
+    setQueueChosen(true);
+    setIntakeQueue(queue);
+    onViewChange("intake");
+  }, [onViewChange]);
 
   const selectedId = view === "intake" && queueChosen ? shellTreeQueueId(intakeQueue) : selectedNode?.id ?? null;
   const treeActions = useMemo(() => {
@@ -87,9 +96,9 @@ export function useShellTree({
     <ShellTree
       library={library} sticks={sticks} selectedId={selectedId} onOpen={open}
       actions={treeActions} selectedNode={selectedNode} collapsed={collapsed} onFolderOpen={folderOpen}
-      stickRefusal={stickGate?.refusal}
+      stickRefusal={stickGate?.refusal} queueCounts={queueCounts}
     />
   );
   const withGate = stickGate?.element ? <>{tree}{stickGate.element}</> : tree;
-  return { tree: withGate, intakeQueue };
+  return { tree: withGate, intakeQueue, showQueue };
 }

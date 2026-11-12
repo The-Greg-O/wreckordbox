@@ -1712,5 +1712,8 @@
   "Runs unavailable": "執行資訊無法取得",
   "{count} Stick loads in progress": "{count} 個 USB 寫入作業進行中",
   "Analyzing {done}/{total} tracks": "正在分析 {done}/{total} 首曲目",
-  "{count} failed": "{count} 個失敗"
+  "{count} failed": "{count} 個失敗",
+  "Dismiss": "Dismiss",
+  "Theme file": "Theme file",
+  "line {line}": "line {line}"
 }

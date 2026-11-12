@@ -54,7 +54,7 @@ test("with the switch on the window shows the frame: view tabs, tree, player, wo
   expect(await working(page).locator('[role="gridcell"][data-col="title"]').count()).toBeGreaterThan(5);
 });
 
-test("clicking a tab switches the working area, and the other three views are labelled empty states", async ({ page }) => {
+test("clicking a tab switches the working area: Intake shows its queue, Review and Stick are labelled empty states", async ({ page }) => {
   await enableViewShell(page);
   await open(page);
 
@@ -63,7 +63,9 @@ test("clicking a tab switches the working area, and the other three views are la
     await expect(tab(page, name)).toHaveAttribute("aria-selected", "true");
     await expect(tab(page, "Library")).toHaveAttribute("aria-selected", "false");
     await expect(working(page).getByRole("heading", { name })).toBeVisible();
-    await expect(working(page)).toContainText("Nothing is here yet");
+    // Intake is built (wbx-62): its queue; the other two are not yet.
+    if (name === "Intake") await expect(working(page).getByRole("listbox", { name: "Intake queue" })).toBeVisible();
+    else await expect(working(page)).toContainText("Nothing is here yet");
     // Only the working area changed: no track list in it now.
     await expect(working(page).getByRole("grid")).toHaveCount(0);
     // The rest of the frame is still there.

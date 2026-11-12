@@ -41,6 +41,7 @@ mod active_runs;
 pub mod attachments;
 mod audio;
 pub mod decisions;
+mod facts_snapshot;
 mod fingerprint;
 mod kinds;
 pub mod ledger;
@@ -53,6 +54,7 @@ use std::path::{Path, PathBuf};
 
 pub use active_runs::{ActiveRun, ActiveRunsReader};
 pub use audio::{audio_info, AudioInfo};
+pub use facts_snapshot::{FactsReader, FactsSnapshot};
 pub use fingerprint::{fingerprint_file, Fingerprint};
 pub use kinds::{Declaration, Kinds, ValueType, KINDS_FILE};
 pub use store::{

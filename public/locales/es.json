@@ -1711,5 +1711,8 @@
   "Runs unavailable": "Ejecuciones no disponibles",
   "{count} Stick loads in progress": "{count} cargas a USB en curso",
   "Analyzing {done}/{total} tracks": "Analizando {done}/{total} pistas",
-  "{count} failed": "{count} fallidas"
+  "{count} failed": "{count} fallidas",
+  "Dismiss": "Dismiss",
+  "Theme file": "Theme file",
+  "line {line}": "line {line}"
 }
