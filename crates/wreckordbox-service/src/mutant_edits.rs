@@ -70,7 +70,7 @@ pub struct Edits {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stems: Option<Vec<Stem>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub key_shift: Option<i16>,
+    pub key_shift: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tempo: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -262,12 +262,12 @@ pub fn derive(
     }
 }
 
-fn transpose(name: &str, shift: i16) -> Option<String> {
+fn transpose(name: &str, shift: i64) -> Option<String> {
     if shift == 0 {
         return (!name.is_empty()).then(|| name.to_owned());
     }
     let mut key = rbl_core::musickey::parse(name)?;
-    key.pitch = u8::try_from((i16::from(key.pitch) + shift).rem_euclid(12)).ok()?;
+    key.pitch = u8::try_from((i64::from(key.pitch) + shift).rem_euclid(12)).ok()?;
     let text = name.trim();
     if text
         .get(..text.len().saturating_sub(1))
@@ -306,4 +306,136 @@ pub struct ClearMutant {
     pub run: Option<i64>,
     pub source: Option<crate::facts::SourceArg>,
     pub description: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::float_cmp)]
+    use super::*;
+    fn parent() -> TrackRecord {
+        TrackRecord {
+            id: "1".into(),
+            title: "Parent".into(),
+            artist: "DJ".into(),
+            album: String::new(),
+            genre: String::new(),
+            label: String::new(),
+            year: None,
+            bpm: Some(120.0),
+            key: "8A".into(),
+            energy: Some(3),
+            rating: 3,
+            prep_colour: None,
+            colour: None,
+            colour_id: 0,
+            comment: String::new(),
+            duration_seconds: 120,
+            date_added: None,
+            play_count: 0,
+            location: String::new(),
+            file_name: String::new(),
+            analysed: true,
+            my_tags: Vec::new(),
+            playlists: Vec::new(),
+        }
+    }
+    fn cue(kind: u8, position_ms: u32) -> Cue {
+        Cue {
+            kind,
+            position_ms,
+            out_ms: 0,
+            colour: 0,
+            memory_colour: None,
+            comment: String::new(),
+        }
+    }
+    #[test]
+    fn description_key_tempo_length_and_cues_share_one_derivation() {
+        let cues = vec![cue(2, 1000), cue(0, 500)];
+        let mut edited = cues.clone();
+        edited[0].position_ms = 1500;
+        let edits = Edits {
+            stems: Some(vec![Stem::Melody, Stem::Bass, Stem::Drums]),
+            key_shift: Some(1),
+            tempo: Some(1.1),
+            cues: Some(edited.clone()),
+        };
+        let derived = derive(&edits, Some(&parent()), &cues, "1");
+        assert_eq!(
+            derived.description,
+            "no vocals, +1 st, tempo +10.00%, cue B moved"
+        );
+        assert_eq!(derived.key.as_deref(), Some("3A"));
+        assert_eq!(derived.bpm, Some(132.0));
+        assert!((derived.duration_seconds.unwrap() - 120.0 / 1.1).abs() < 1e-9);
+        assert_eq!(derived.cues, edited); // Still parent time, never double-scaled.
+        assert_eq!(derived.grid_parent, "1");
+        let inherited = derive(&Edits::default(), Some(&parent()), &cues, "1");
+        assert_eq!(inherited.description, "none");
+        assert_eq!(inherited.key.as_deref(), Some("8A"));
+        assert_eq!(inherited.duration_seconds, Some(120.0));
+        assert_eq!(inherited.cues, cues);
+        let removed = derive(
+            &Edits {
+                cues: Some(Vec::new()),
+                ..Default::default()
+            },
+            Some(&parent()),
+            &cues,
+            "1",
+        );
+        assert_eq!(
+            removed.description,
+            "cue B removed, memory cue at 500 ms removed"
+        );
+        assert!(removed.cues.is_empty());
+    }
+    #[test]
+    fn keys_wrap_preserve_mode_and_handle_unknown_values() {
+        for (key, shift, wanted) in [
+            ("Am", 1, "Bbm"),
+            ("B", 1, "C"),
+            ("Cm", -1, "Bm"),
+            ("1A", -6, "7A"),
+            ("8B", 6, "2B"),
+            ("Db", 0, "Db"),
+        ] {
+            assert_eq!(transpose(key, shift).as_deref(), Some(wanted));
+        }
+        assert_eq!(transpose("", 1), None);
+        assert_eq!(transpose("unknown", 2), None);
+        assert_eq!(transpose("unknown", 0).as_deref(), Some("unknown"));
+        for number in 1..=12 {
+            for mode in ['A', 'B'] {
+                for shift in -6..=6 {
+                    let original = format!("{number}{mode}");
+                    let shifted = transpose(&original, shift).unwrap();
+                    assert_eq!(transpose(&shifted, -shift), Some(original));
+                }
+            }
+        }
+    }
+    #[test]
+    fn independent_clear_and_identity_values_inherit() {
+        let mut edits = Edits {
+            stems: Some(Stem::ALL.to_vec()),
+            key_shift: Some(0),
+            tempo: Some(1.0),
+            cues: Some(vec![]),
+        };
+        edits.validate().unwrap();
+        assert_eq!(
+            edits,
+            Edits {
+                cues: Some(vec![]),
+                ..Default::default()
+            }
+        );
+        edits.clear(Aspect::Cues);
+        assert_eq!(edits, Edits::default());
+        let absent = derive(&edits, None, &[], "missing");
+        assert_eq!(absent.key, None);
+        assert_eq!(absent.bpm, None);
+        assert_eq!(absent.duration_seconds, None);
+    }
 }

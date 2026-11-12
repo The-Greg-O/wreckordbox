@@ -422,8 +422,11 @@ fn edits_text(edits: &Value) -> Result<String> {
     Ok(edits.to_string())
 }
 
-fn stored_edits(text: &str) -> Value {
-    serde_json::from_str(text).unwrap_or_else(|_| Value::Object(serde_json::Map::new()))
+fn stored_edits(text: &str) -> rusqlite::Result<Value> {
+    let object: serde_json::Map<String, Value> = serde_json::from_str(text).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(error))
+    })?;
+    Ok(Value::Object(object))
 }
 
 /// A Mutant with its newest change beside it.
@@ -451,7 +454,7 @@ fn read_mutant(row: &Row) -> rusqlite::Result<Mutant> {
             .map(Fingerprint::from_stored),
         created_at: row.get(5)?,
         removed_at: row.get(6)?,
-        edits: stored_edits(&row.get::<_, String>(7)?),
+        edits: stored_edits(&row.get::<_, String>(7)?)?,
         source: Source {
             kind: SourceKind::from_stored(&row.get::<_, String>(8)?),
             name: row.get(9)?,
@@ -541,7 +544,7 @@ impl<'a> MutantReader<'a> {
                     id: row.get(0)?,
                     mutant_id: row.get(1)?,
                     action: row.get(2)?,
-                    edits: stored_edits(&row.get::<_, String>(3)?),
+                    edits: stored_edits(&row.get::<_, String>(3)?)?,
                     fingerprint: row
                         .get::<_, Option<String>>(4)?
                         .map(Fingerprint::from_stored),

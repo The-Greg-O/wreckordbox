@@ -241,6 +241,7 @@ pub(crate) fn answer(
 /// that may be running.
 pub(crate) struct Stems {
     sidecar_dir: PathBuf,
+    pub(crate) mutant_edits: Mutex<()>,
     pub(crate) run_status: Mutex<crate::run_status::RunStatus>,
     command: Vec<OsString>,
     sidecar: Mutex<Option<Arc<Sidecar>>>,
@@ -279,6 +280,7 @@ impl Stems {
             .filter(|command| !command.trim().is_empty())
             .map_or_else(default_command, |command| parse_command(&command));
         Arc::new(Self {
+            mutant_edits: Mutex::new(()),
             run_status: Mutex::new(crate::run_status::RunStatus::new(&sidecar_dir)),
             sidecar_dir,
             command,

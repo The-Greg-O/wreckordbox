@@ -160,14 +160,19 @@ impl Mutants<'_> {
     ) -> Result<MutantChanged, ServiceError> {
         let provenance =
             self.provenance(args.run, args.source.as_ref(), args.description.as_deref())?;
-        // One gate serializes read/patch/commit with other Mutant edits and the
-        // host's parent edits. Nothing here edits the Library.
-        let (mutant, run) = self.read(|library| {
+        // Serialize patches without holding the Library gate while fingerprinting
+        // parent audio or hashing Stems. Recheck the entry/path before committing.
+        let _serial = self
+            .stems
+            .mutant_edits
+            .lock()
+            .map_err(|_| ServiceError::new("service_failed", "the Mutant edit lock failed"))?;
+        let stored = self.stored(args.id, args.entry.as_deref(), false)?;
+        let mut edits = parse_edits(stored.edits.clone())?;
+        patch(&mut edits);
+        edits.validate()?;
+        let (found, parent) = self.read(|library| {
             library.steady(|| {
-                let stored = self.stored(args.id, args.entry.as_deref(), false)?;
-                let mut edits = parse_edits(stored.edits.clone())?;
-                patch(&mut edits);
-                edits.validate()?;
                 let found = place(
                     library,
                     &CreateMutant {
@@ -175,17 +180,40 @@ impl Mutants<'_> {
                         ..Default::default()
                     },
                 )?;
+                let (parent, _) = metadata(library, &stored.track_id)?;
+                Ok((found, parent))
+            })
+        })?;
+        let audio_stamp = stamp(&found.audio);
+        let fingerprint =
+            if check_stems && edits.stems.is_some() {
+                Some(self.check_stems(parent.as_ref().ok_or_else(|| {
+                    ServiceError::new("track_not_found", "the parent is missing")
+                })?)?)
+            } else {
+                wreckordbox_sidecar::fingerprint_file(&found.audio).ok()
+            };
+        let renderability = self.readiness(&edits, parent.as_ref())?;
+        let (mutant, run) = self.read(|library| {
+            library.steady(|| {
+                let current = self.stored(args.id, args.entry.as_deref(), false)?;
+                if current != stored {
+                    return Err(ServiceError::new(
+                        "mutant_changed",
+                        "the Mutant changed; read it again and retry",
+                    ));
+                }
+                let fresh = again(library, &found)?;
+                if fresh.audio != found.audio || stamp(&fresh.audio) != audio_stamp {
+                    return Err(ServiceError::new(
+                        "mutant_parent_changed",
+                        "the parent's audio changed while checking the edit; try again",
+                    ));
+                }
+                let found = fresh;
                 let (inherited, cues) = metadata(library, &stored.track_id)?;
-                let fingerprint = if check_stems && edits.stems.is_some() {
-                    Some(self.check_stems(inherited.as_ref().ok_or_else(|| {
-                        ServiceError::new("track_not_found", "the parent is missing")
-                    })?)?)
-                } else {
-                    wreckordbox_sidecar::fingerprint_file(&found.audio).ok()
-                };
                 let derived =
                     mutant_edits::derive(&edits, inherited.as_ref(), &cues, &stored.track_id);
-                let renderability = self.readiness(&edits, inherited.as_ref())?;
                 let value = serde_json::to_value(&edits)
                     .map_err(|e| ServiceError::new("bad_request", e.to_string()))?;
                 let description = provenance.description.clone().unwrap_or_else(|| {
@@ -235,4 +263,10 @@ impl Mutants<'_> {
             created_run: provenance.run.is_none(),
         })
     }
+}
+
+// A quick recheck under the gate; the expensive content reads happen outside it.
+fn stamp(path: &std::path::Path) -> Option<(u64, std::time::SystemTime)> {
+    let metadata = std::fs::metadata(path).ok()?;
+    Some((metadata.len(), metadata.modified().ok()?))
 }
