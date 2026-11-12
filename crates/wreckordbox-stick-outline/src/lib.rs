@@ -109,7 +109,10 @@ pub fn outline(mount: &Path) -> Outline {
 ///
 /// [`ReadError::Io`] or [`ReadError::Moved`].
 pub fn read_outline(mount: &Path) -> Result<Outline, ReadError> {
-    let pending = Outline { pending: true, libraries: Vec::new() };
+    let pending = Outline {
+        pending: true,
+        libraries: Vec::new(),
+    };
     let stick = match StickRead::begin(mount) {
         Ok(stick) => stick,
         Err(ReadError::UnfinishedWrite) => return Ok(pending),
@@ -145,7 +148,10 @@ fn outline_of(mount: &Path) -> Outline {
             }
         })
         .collect();
-    Outline { pending: false, libraries }
+    Outline {
+        pending: false,
+        libraries,
+    }
 }
 
 fn count(n: usize) -> u32 {

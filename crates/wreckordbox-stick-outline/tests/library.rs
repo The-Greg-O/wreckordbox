@@ -3,7 +3,12 @@
 //!
 //! Every Stick here is written by the export pipeline into a temporary
 //! directory; nothing touches a mounted Stick.
-#![allow(clippy::pedantic, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::pedantic,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
 
 use std::path::Path;
 
@@ -24,8 +29,15 @@ fn assert_each_read_refused_and_nothing_changed(root: &Path) {
     let before = snapshot(root);
     for format in BOTH {
         let read = library(root, format);
-        assert!(matches!(read, Err(ReadError::UnfinishedWrite)), "{format:?}: {read:?}");
-        assert_eq!(snapshot(root), before, "{format:?}: not a byte on the Stick changed");
+        assert!(
+            matches!(read, Err(ReadError::UnfinishedWrite)),
+            "{format:?}: {read:?}"
+        );
+        assert_eq!(
+            snapshot(root),
+            before,
+            "{format:?}: not a byte on the Stick changed"
+        );
     }
 }
 
@@ -60,7 +72,11 @@ fn a_settled_stick_reads_exactly_as_the_device_library_reads_it_and_nothing_is_w
         for format in BOTH {
             let ours = library(dest.path(), format).unwrap();
             assert_eq!(snapshot(dest.path()), before, "{format:?}: nothing written");
-            assert_eq!(ours, device_library::read(dest.path(), format).unwrap(), "{format:?}");
+            assert_eq!(
+                ours,
+                device_library::read(dest.path(), format).unwrap(),
+                "{format:?}"
+            );
         }
     }
 }
@@ -88,7 +104,11 @@ fn a_journal_and_lock_that_appear_after_the_check_are_reported_not_recovered() {
             assert_eq!(snapshot(dest.path()), after_writer, "{format:?}");
         }
         assert!(matches!(read.finish(), Err(ReadError::UnfinishedWrite)));
-        assert_eq!(snapshot(dest.path()), after_writer, "the journal is still there, untouched");
+        assert_eq!(
+            snapshot(dest.path()),
+            after_writer,
+            "the journal is still there, untouched"
+        );
     }
 }
 
@@ -108,7 +128,11 @@ fn a_journal_that_appears_during_a_whole_read_makes_that_read_unfinished() {
 #[cfg(unix)]
 #[test]
 fn a_stick_path_retargeted_during_a_read_is_refused_and_neither_stick_changes() {
-    let (settled, pending, links) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (settled, pending, links) = (
+        tempfile::tempdir().unwrap(),
+        tempfile::tempdir().unwrap(),
+        tempfile::tempdir().unwrap(),
+    );
     stick(settled.path());
     stick(pending.path());
     interrupt(pending.path());
@@ -120,13 +144,19 @@ fn a_stick_path_retargeted_during_a_read_is_refused_and_neither_stick_changes() 
     std::fs::remove_file(&link).unwrap();
     std::os::unix::fs::symlink(pending.path(), &link).unwrap();
     // The read stays on the Stick it began on.
-    assert_eq!(names(&read.library(Format::DeviceLibrary).unwrap()), ["Sets", "Friday", "Warm Up"]);
+    assert_eq!(
+        names(&read.library(Format::DeviceLibrary).unwrap()),
+        ["Sets", "Friday", "Warm Up"]
+    );
     assert!(matches!(read.finish(), Err(ReadError::Moved)));
 
     assert_eq!(snapshot(settled.path()), a);
     assert_eq!(snapshot(pending.path()), b);
     // Through the retargeted path, the pending Stick is reported.
-    assert!(matches!(library(&link, Format::DeviceLibrary), Err(ReadError::UnfinishedWrite)));
+    assert!(matches!(
+        library(&link, Format::DeviceLibrary),
+        Err(ReadError::UnfinishedWrite)
+    ));
     assert_eq!(snapshot(pending.path()), b);
 }
 
@@ -143,7 +173,10 @@ fn a_lease_that_cannot_be_taken_is_an_error_and_nothing_is_read_or_written() {
         return;
     }
     for format in BOTH {
-        assert!(matches!(library(dest.path(), format), Err(ReadError::Io(_))), "{format:?}");
+        assert!(
+            matches!(library(dest.path(), format), Err(ReadError::Io(_))),
+            "{format:?}"
+        );
     }
     std::fs::set_permissions(&lock, std::fs::Permissions::from_mode(0o644)).unwrap();
 }
@@ -166,16 +199,26 @@ fn settling_publishes_exactly_the_interrupted_export_and_leaves_it_readable() {
         assert!(!dest.path().join(JOURNAL).exists());
         // Nothing else the Stick held was touched (the lock aside).
         let after = snapshot(dest.path());
-        let unchanged = |files: &std::collections::BTreeMap<std::path::PathBuf, Option<Vec<u8>>>| {
-            files
-                .iter()
-                .filter(|(p, _)| !p.starts_with(JOURNAL) && p.as_path() != Path::new(PDB) && p.as_path() != Path::new(ONE) && p.as_path() != Path::new(LOCK))
-                .map(|(p, b)| (p.clone(), b.clone()))
-                .collect::<Vec<_>>()
-        };
+        let unchanged =
+            |files: &std::collections::BTreeMap<std::path::PathBuf, Option<Vec<u8>>>| {
+                files
+                    .iter()
+                    .filter(|(p, _)| {
+                        !p.starts_with(JOURNAL)
+                            && p.as_path() != Path::new(PDB)
+                            && p.as_path() != Path::new(ONE)
+                            && p.as_path() != Path::new(LOCK)
+                    })
+                    .map(|(p, b)| (p.clone(), b.clone()))
+                    .collect::<Vec<_>>()
+            };
         assert_eq!(unchanged(&after), unchanged(&before));
         for format in BOTH {
-            assert_eq!(names(&library(dest.path(), format).unwrap()), NEXT_PLAYLISTS, "{format:?}");
+            assert_eq!(
+                names(&library(dest.path(), format).unwrap()),
+                NEXT_PLAYLISTS,
+                "{format:?}"
+            );
         }
     }
 }

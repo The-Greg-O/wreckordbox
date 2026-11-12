@@ -20,7 +20,10 @@ use crate::error::{AppError, AppResult, ErrorKind};
 
 /// The Stick's name as the window shows it: its mount point's last part.
 fn stick_name(mount: &Path) -> String {
-    mount.file_name().map_or_else(|| mount.display().to_string(), |n| n.to_string_lossy().into_owned())
+    mount.file_name().map_or_else(
+        || mount.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    )
 }
 
 /// What a read answers for a Stick whose last write did not finish: it
@@ -39,12 +42,17 @@ pub fn unfinished_write(mount: &Path) -> AppError {
 pub fn read_error(mount: &Path, error: ReadError) -> AppError {
     match error {
         ReadError::UnfinishedWrite => unfinished_write(mount),
-        ReadError::Moved => AppError::new(ErrorKind::NotFound, "The Stick changed while it was being read. Try again."),
+        ReadError::Moved => AppError::new(
+            ErrorKind::NotFound,
+            "The Stick changed while it was being read. Try again.",
+        ),
         ReadError::Unreadable(message) => AppError::new(ErrorKind::Malformed, message),
         ReadError::Io(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            AppError::new(ErrorKind::NotFound, "That device is no longer connected.").with_detail(e.to_string())
+            AppError::new(ErrorKind::NotFound, "That device is no longer connected.")
+                .with_detail(e.to_string())
         }
-        ReadError::Io(e) => AppError::new(ErrorKind::Internal, "The Stick could not be read.").with_detail(e.to_string()),
+        ReadError::Io(e) => AppError::new(ErrorKind::Internal, "The Stick could not be read.")
+            .with_detail(e.to_string()),
     }
 }
 
@@ -54,18 +62,31 @@ pub fn read_error(mount: &Path, error: ReadError) -> AppError {
 /// the DJ chose in the Stick's panel.
 #[tauri::command]
 pub async fn stick_settle(path: String) -> AppResult<()> {
-    blocking("stick_settle", move || settle(&PathBuf::from(path), rbl_db::is_rekordbox_app_running())).await
+    blocking("stick_settle", move || {
+        settle(&PathBuf::from(path), rbl_db::is_rekordbox_app_running())
+    })
+    .await
 }
 
 fn settle(mount: &Path, rekordbox_running: bool) -> AppResult<()> {
     if !mount.is_dir() {
-        return Err(AppError::new(ErrorKind::NotFound, "That device is no longer connected."));
+        return Err(AppError::new(
+            ErrorKind::NotFound,
+            "That device is no longer connected.",
+        ));
     }
     if rekordbox_running {
-        return Err(AppError::new(ErrorKind::ReadOnly, "Quit rekordbox before settling this Stick so only one application writes it."));
+        return Err(AppError::new(
+            ErrorKind::ReadOnly,
+            "Quit rekordbox before settling this Stick so only one application writes it.",
+        ));
     }
     wreckordbox_stick_outline::settle(mount).map_err(|error| {
-        AppError::new(ErrorKind::Malformed, "The unfinished write on this Stick could not be settled.").with_detail(error.to_string())
+        AppError::new(
+            ErrorKind::Malformed,
+            "The unfinished write on this Stick could not be settled.",
+        )
+        .with_detail(error.to_string())
     })
 }
 
@@ -76,7 +97,9 @@ mod tests {
     use std::sync::Arc;
 
     use tauri::Manager;
-    use wreckordbox_stick_outline::testing::{interrupt, snapshot, stick, without_lock, JOURNAL, LOCK, NEXT_PLAYLISTS, ONE, PDB};
+    use wreckordbox_stick_outline::testing::{
+        interrupt, snapshot, stick, without_lock, JOURNAL, LOCK, NEXT_PLAYLISTS, ONE, PDB,
+    };
 
     use super::*;
     use crate::dto::{TrackFilterDto, TrackSourceDto, ViewSpecDto};
@@ -102,7 +125,11 @@ mod tests {
 
     fn device_spec(path: &Path, format: &str, playlist: &str) -> ViewSpecDto {
         ViewSpecDto {
-            source: TrackSourceDto::Device { path: path.to_string_lossy().into_owned(), format: format.into(), playlist: playlist.into() },
+            source: TrackSourceDto::Device {
+                path: path.to_string_lossy().into_owned(),
+                format: format.into(),
+                playlist: playlist.into(),
+            },
             sort: "trackNo".into(),
             descending: false,
             query: String::new(),
@@ -115,7 +142,13 @@ mod tests {
         match result {
             Err(error) => {
                 assert_eq!(error.kind, ErrorKind::UnfinishedWrite, "{what}: {error:?}");
-                assert!(error.message.contains("Finish or roll back the unfinished write on"), "{what}: {}", error.message);
+                assert!(
+                    error
+                        .message
+                        .contains("Finish or roll back the unfinished write on"),
+                    "{what}: {}",
+                    error.message
+                );
             }
             Ok(found) => panic!("{what}: read a Stick with an unfinished write: {found:?}"),
         }
@@ -138,39 +171,96 @@ mod tests {
             let path = mount.to_string_lossy().into_owned();
             let app = app(dir.path());
             let state = app.state::<Arc<AppState>>();
-            let unchanged = |what: &str| assert_eq!(snapshot(mount), before, "lock {lock}: {what} changed the Stick");
+            let unchanged = |what: &str| {
+                assert_eq!(
+                    snapshot(mount),
+                    before,
+                    "lock {lock}: {what} changed the Stick"
+                )
+            };
 
             // The old tree: expanding a Stick, and every later listing refresh.
-            refused("device_libraries", run(crate::device_library::device_libraries(path.clone())));
+            refused(
+                "device_libraries",
+                run(crate::device_library::device_libraries(path.clone())),
+            );
             unchanged("device_libraries");
-            refused("device_libraries again", run(crate::device_library::device_libraries(path.clone())));
+            refused(
+                "device_libraries again",
+                run(crate::device_library::device_libraries(path.clone())),
+            );
             unchanged("device_libraries again");
             for format in ["deviceLibrary", "oneLibrary"] {
                 // Opening a Stick playlist's tracks, and a library's All Tracks.
                 for playlist in ["1", "0"] {
-                    refused("open_view", run(crate::commands::open_view(state.clone(), device_spec(mount, format, playlist))));
+                    refused(
+                        "open_view",
+                        run(crate::commands::open_view(
+                            state.clone(),
+                            device_spec(mount, format, playlist),
+                        )),
+                    );
                     unchanged("open_view");
                 }
-                refused("duplicates", run(crate::device_library::device_playlist_duplicates(path.clone(), format.into(), "1".into(), vec![])));
+                refused(
+                    "duplicates",
+                    run(crate::device_library::device_playlist_duplicates(
+                        path.clone(),
+                        format.into(),
+                        "1".into(),
+                        vec![],
+                    )),
+                );
                 unchanged("device_playlist_duplicates");
                 refused(
                     "collection tracks",
-                    run(crate::device_library::device_playlist_collection_tracks(state.clone(), path.clone(), format.into(), vec!["1".into()])),
+                    run(crate::device_library::device_playlist_collection_tracks(
+                        state.clone(),
+                        path.clone(),
+                        format.into(),
+                        vec!["1".into()],
+                    )),
                 );
                 unchanged("device_playlist_collection_tracks");
-                refused("import plan", run(crate::device_library::device_playlist_import_plan(state.clone(), path.clone(), format.into(), "1".into(), None)));
+                refused(
+                    "import plan",
+                    run(crate::device_library::device_playlist_import_plan(
+                        state.clone(),
+                        path.clone(),
+                        format.into(),
+                        "1".into(),
+                        None,
+                    )),
+                );
                 unchanged("device_playlist_import_plan");
             }
             // The Stick's panel, in either layout.
-            refused("device_settings", run(crate::device_settings::device_settings(path.clone())));
+            refused(
+                "device_settings",
+                run(crate::device_settings::device_settings(path.clone())),
+            );
             unchanged("device_settings");
             // The shell's tree.
-            assert!(run(crate::stick_outline::stick_outline(path)).unwrap().pending);
+            assert!(
+                run(crate::stick_outline::stick_outline(path))
+                    .unwrap()
+                    .pending
+            );
             unchanged("stick_outline");
             // Round-trip: cues, history, settings and ratings.
             let editor = crate::grid::GridEditor::at(state.backup_dir());
-            for (cues, history, settings, ratings) in [(true, false, false, false), (false, true, false, false), (false, false, true, false), (false, false, false, true)] {
-                refused("import_usb", crate::usb_import::import(&state, &editor, mount, cues, history, settings, ratings));
+            for (cues, history, settings, ratings) in [
+                (true, false, false, false),
+                (false, true, false, false),
+                (false, false, true, false),
+                (false, false, false, true),
+            ] {
+                refused(
+                    "import_usb",
+                    crate::usb_import::import(
+                        &state, &editor, mount, cues, history, settings, ratings,
+                    ),
+                );
                 unchanged("import_usb");
             }
             assert_eq!(mount.join(LOCK).exists(), lock, "no lock file was made");
@@ -191,7 +281,9 @@ mod tests {
         let state = app.state::<Arc<AppState>>();
         state.core().set_protection(true).unwrap();
         let editor = crate::grid::GridEditor::at(state.backup_dir());
-        let refused = crate::usb_import::import(&state, &editor, dest.path(), true, true, false, true).unwrap_err();
+        let refused =
+            crate::usb_import::import(&state, &editor, dest.path(), true, true, false, true)
+                .unwrap_err();
         assert_eq!(refused.message, rbl_library::protection::MESSAGE);
         assert_eq!(snapshot(dest.path()), before);
     }
@@ -208,7 +300,10 @@ mod tests {
                 without_lock(dest.path());
             }
             let before = snapshot(dest.path());
-            let settings = run(crate::device_settings::device_settings(dest.path().to_string_lossy().into_owned())).unwrap();
+            let settings = run(crate::device_settings::device_settings(
+                dest.path().to_string_lossy().into_owned(),
+            ))
+            .unwrap();
             assert!(settings.has_device_library);
             assert!(!settings.has_dev_setting);
             assert_eq!(snapshot(dest.path()), before);
@@ -229,13 +324,34 @@ mod tests {
             let libraries = run(crate::device_library::device_libraries(path.clone())).unwrap();
             assert_eq!(snapshot(mount), before);
             assert_eq!(libraries.len(), 2);
-            assert_eq!(libraries[0].nodes.iter().map(|n| n.name.as_str()).collect::<Vec<_>>(), ["Sets", "Friday", "Warm Up"]);
-            let friday = libraries[0].nodes.iter().find(|n| n.name == "Friday").unwrap().id.clone();
+            assert_eq!(
+                libraries[0]
+                    .nodes
+                    .iter()
+                    .map(|n| n.name.as_str())
+                    .collect::<Vec<_>>(),
+                ["Sets", "Friday", "Warm Up"]
+            );
+            let friday = libraries[0]
+                .nodes
+                .iter()
+                .find(|n| n.name == "Friday")
+                .unwrap()
+                .id
+                .clone();
             let app = app(dir.path());
-            let handle = run(crate::commands::open_view(app.state::<Arc<AppState>>(), device_spec(mount, "deviceLibrary", &friday))).unwrap();
+            let handle = run(crate::commands::open_view(
+                app.state::<Arc<AppState>>(),
+                device_spec(mount, "deviceLibrary", &friday),
+            ))
+            .unwrap();
             assert_eq!(handle.len, 2);
             assert_eq!(snapshot(mount), before);
-            assert!(run(crate::device_settings::device_settings(path)).unwrap().has_device_library);
+            assert!(
+                run(crate::device_settings::device_settings(path))
+                    .unwrap()
+                    .has_device_library
+            );
             assert_eq!(snapshot(mount), before);
         }
     }
@@ -256,9 +372,21 @@ mod tests {
             assert_eq!(std::fs::read(mount.join(PDB)).unwrap(), next.pdb);
             assert_eq!(std::fs::read(mount.join(ONE)).unwrap(), next.one);
             assert!(!mount.join(JOURNAL).exists());
-            let libraries = run(crate::device_library::device_libraries(mount.to_string_lossy().into_owned())).unwrap();
+            let libraries = run(crate::device_library::device_libraries(
+                mount.to_string_lossy().into_owned(),
+            ))
+            .unwrap();
             for library in &libraries {
-                assert_eq!(library.nodes.iter().map(|n| n.name.as_str()).collect::<Vec<_>>(), NEXT_PLAYLISTS, "{}", library.format);
+                assert_eq!(
+                    library
+                        .nodes
+                        .iter()
+                        .map(|n| n.name.as_str())
+                        .collect::<Vec<_>>(),
+                    NEXT_PLAYLISTS,
+                    "{}",
+                    library.format
+                );
             }
             assert_eq!(libraries.len(), 2);
         }

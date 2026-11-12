@@ -94,7 +94,12 @@ impl StickRead {
         if unfinished_write(&root) {
             return Err(ReadError::UnfinishedWrite);
         }
-        Ok(Self { mount: mount.to_path_buf(), root, identity, _lease: lease })
+        Ok(Self {
+            mount: mount.to_path_buf(),
+            root,
+            identity,
+            _lease: lease,
+        })
     }
 
     /// The Stick's root as resolved when the read began. Read files under
@@ -110,17 +115,29 @@ impl StickRead {
     ///
     /// Why the library could not be read.
     pub fn library(&self, format: Format) -> Result<Library, ReadError> {
-        let name = rbl_export::export_root_name(&self.root).map_err(|e| ReadError::Unreadable(e.to_string()))?;
-        let path = self.root.join(name).join("rekordbox").join(format.file_name());
+        let name = rbl_export::export_root_name(&self.root)
+            .map_err(|e| ReadError::Unreadable(e.to_string()))?;
+        let path = self
+            .root
+            .join(name)
+            .join("rekordbox")
+            .join(format.file_name());
         if !path.is_file() {
-            return Err(ReadError::Unreadable(format!("This device has no {}.", format.file_name())));
+            return Err(ReadError::Unreadable(format!(
+                "This device has no {}.",
+                format.file_name()
+            )));
         }
         let (nodes, mut tracks) = match format {
             Format::DeviceLibrary => read_pdb(&std::fs::read(&path)?)?,
             Format::OneLibrary => read_one(&path)?,
         };
         tracks.sort_by_key(|t| t.id);
-        Ok(Library { format, nodes: tree_order(nodes), tracks })
+        Ok(Library {
+            format,
+            nodes: tree_order(nodes),
+            tracks,
+        })
     }
 
     /// Ends the read: whether what was read can be shown.
@@ -133,7 +150,9 @@ impl StickRead {
         if unfinished_write(&self.root) {
             return Err(ReadError::UnfinishedWrite);
         }
-        if identity(&self.root)? != self.identity || identity(&self.mount).ok() != Some(self.identity) {
+        if identity(&self.root)? != self.identity
+            || identity(&self.mount).ok() != Some(self.identity)
+        {
             return Err(ReadError::Moved);
         }
         Ok(())
@@ -146,7 +165,10 @@ impl StickRead {
 ///
 /// The read's own error, or why the Stick could not be read (see
 /// [`StickRead::begin`] and [`StickRead::finish`]).
-pub fn read<T>(mount: &Path, read: impl FnOnce(&StickRead) -> Result<T, ReadError>) -> Result<T, ReadError> {
+pub fn read<T>(
+    mount: &Path,
+    read: impl FnOnce(&StickRead) -> Result<T, ReadError>,
+) -> Result<T, ReadError> {
     let stick = StickRead::begin(mount)?;
     let value = read(&stick);
     // An unfinished write or a moved Stick outranks whatever the read found.
@@ -186,10 +208,16 @@ fn unreadable(e: impl std::fmt::Display) -> ReadError {
 fn read_pdb(bytes: &[u8]) -> Result<(Vec<Node>, Vec<Track>), ReadError> {
     use rbl_pdb::PageType;
     let pdb = rbl_pdb::Pdb::parse(bytes).map_err(unreadable)?;
-    let entries = pdb.table(PageType::PlaylistEntries).map(|t| pdb.playlist_entries(t)).unwrap_or_default();
+    let entries = pdb
+        .table(PageType::PlaylistEntries)
+        .map(|t| pdb.playlist_entries(t))
+        .unwrap_or_default();
     let mut members: BTreeMap<u32, Vec<(u32, u32)>> = BTreeMap::new();
     for entry in entries {
-        members.entry(entry.playlist_id).or_default().push((entry.entry_index, entry.track_id));
+        members
+            .entry(entry.playlist_id)
+            .or_default()
+            .push((entry.entry_index, entry.track_id));
     }
     let nodes = pdb
         .table(PageType::PlaylistTree)
@@ -205,12 +233,23 @@ fn read_pdb(bytes: &[u8]) -> Result<(Vec<Node>, Vec<Track>), ReadError> {
                 name: n.name,
                 folder: n.is_folder,
                 sequence: n.sort_order,
-                tracks: if n.is_folder { Vec::new() } else { tracks.into_iter().map(|(_, track)| track).collect() },
+                tracks: if n.is_folder {
+                    Vec::new()
+                } else {
+                    tracks.into_iter().map(|(_, track)| track).collect()
+                },
             }
         })
         .collect();
     let names = |kind| -> BTreeMap<u32, String> {
-        pdb.table(kind).map(|t| pdb.named_rows(t).into_iter().map(|n| (n.id, n.name)).collect()).unwrap_or_default()
+        pdb.table(kind)
+            .map(|t| {
+                pdb.named_rows(t)
+                    .into_iter()
+                    .map(|n| (n.id, n.name))
+                    .collect()
+            })
+            .unwrap_or_default()
     };
     let (artists, albums, genres, labels, keys, artwork) = (
         names(PageType::Artists),
@@ -258,7 +297,8 @@ fn onelibrary_stars(raw: i64) -> u8 {
 
 fn read_one(path: &Path) -> Result<(Vec<Node>, Vec<Track>), ReadError> {
     let db = rbl_onelibrary::ExportLibrary::open_read_only(path).map_err(unreadable)?;
-    let (rows, mut contents) = rbl_onelibrary::playlists::read(db.connection()).map_err(unreadable)?;
+    let (rows, mut contents) =
+        rbl_onelibrary::playlists::read(db.connection()).map_err(unreadable)?;
     let id = |v: i64| u32::try_from(v).unwrap_or(0);
     let nodes = rows
         .into_iter()
@@ -271,7 +311,11 @@ fn read_one(path: &Path) -> Result<(Vec<Node>, Vec<Track>), ReadError> {
                 name: row.name,
                 folder,
                 sequence: id(row.sequence),
-                tracks: if folder { Vec::new() } else { tracks.into_iter().map(id).collect() },
+                tracks: if folder {
+                    Vec::new()
+                } else {
+                    tracks.into_iter().map(id).collect()
+                },
             }
         })
         .collect();
@@ -339,7 +383,12 @@ fn tree_order(mut nodes: Vec<Node>) -> Vec<Node> {
         siblings.sort_by_key(|n| (n.sequence, n.id));
     }
     let mut out = Vec::new();
-    let mut stack: Vec<Node> = children.remove(&0).unwrap_or_default().into_iter().rev().collect();
+    let mut stack: Vec<Node> = children
+        .remove(&0)
+        .unwrap_or_default()
+        .into_iter()
+        .rev()
+        .collect();
     while let Some(node) = stack.pop() {
         if let Some(under) = children.remove(&node.id) {
             stack.extend(under.into_iter().rev());

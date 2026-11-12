@@ -1,7 +1,12 @@
 //! Sticks in temporary folders for tests, here and in the app (feature
 //! `testing`). Every Stick is written by the export pipeline into a folder
 //! the test owns; nothing here touches a mounted Stick.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::missing_panics_doc)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::missing_panics_doc
+)]
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -24,7 +29,10 @@ fn track(dir: &Path, id: u64) -> SourceTrack {
         source_path: path,
         title: format!("Track {id}"),
         artist: "TRIODE".into(),
-        analysis: vec![("DAT".into(), rbl_anlz::AnlzBuilder::new().path("/x.mp3").finish())],
+        analysis: vec![(
+            "DAT".into(),
+            rbl_anlz::AnlzBuilder::new().path("/x.mp3").finish(),
+        )],
         ..SourceTrack::default()
     }
 }
@@ -35,9 +43,25 @@ pub fn stick(dest: &Path) {
     let src = tempfile::tempdir().unwrap();
     let tracks: Vec<SourceTrack> = (1..=4).map(|i| track(src.path(), i)).collect();
     let playlists = vec![
-        SourcePlaylist { id: 10, name: "Sets".into(), folder: true, ..Default::default() },
-        SourcePlaylist { id: 11, name: "Friday".into(), parent_id: 10, track_indices: vec![0, 1], ..Default::default() },
-        SourcePlaylist { id: 12, name: "Warm Up".into(), track_indices: vec![2], ..Default::default() },
+        SourcePlaylist {
+            id: 10,
+            name: "Sets".into(),
+            folder: true,
+            ..Default::default()
+        },
+        SourcePlaylist {
+            id: 11,
+            name: "Friday".into(),
+            parent_id: 10,
+            track_indices: vec![0, 1],
+            ..Default::default()
+        },
+        SourcePlaylist {
+            id: 12,
+            name: "Warm Up".into(),
+            track_indices: vec![2],
+            ..Default::default()
+        },
     ];
     export(dest, &tracks, &playlists).unwrap();
 }
@@ -61,8 +85,18 @@ pub fn interrupt(root: &Path) -> Interrupted {
     let src = tempfile::tempdir().unwrap();
     let tracks: Vec<SourceTrack> = (5..=6).map(|i| track(src.path(), i)).collect();
     let playlists = vec![
-        SourcePlaylist { id: 20, name: NEXT_PLAYLISTS[0].into(), track_indices: vec![0], ..Default::default() },
-        SourcePlaylist { id: 21, name: NEXT_PLAYLISTS[1].into(), track_indices: vec![1], ..Default::default() },
+        SourcePlaylist {
+            id: 20,
+            name: NEXT_PLAYLISTS[0].into(),
+            track_indices: vec![0],
+            ..Default::default()
+        },
+        SourcePlaylist {
+            id: 21,
+            name: NEXT_PLAYLISTS[1].into(),
+            track_indices: vec![1],
+            ..Default::default()
+        },
     ];
     export(other.path(), &tracks, &playlists).unwrap();
     let next = Interrupted {
