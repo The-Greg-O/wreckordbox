@@ -14,7 +14,7 @@ import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 
 import { useTranslation } from "@/i18n";
-import { MENU_COLUMNS, menuColumns, requiredColumns, type ColumnKey } from "@/lib/columns";
+import { MENU_COLUMNS, menuColumns, requiredColumns, type ColumnKey, type ColumnSpec } from "@/lib/columns";
 import type { ArtworkMode } from "@/lib/session";
 import styles from "./ColumnMenu.module.css";
 
@@ -45,14 +45,18 @@ export interface ColumnMenuProps {
   renumber?: RenumberItem | undefined;
   /** The artwork mode, whose header has its own columns. */
   artworkMode?: ArtworkMode;
+  /** A view's own columns in place of the catalogue's (the view shell's Library, #55). */
+  offered?: readonly ColumnSpec[];
+  /** With `offered`: the ones that cannot be turned off. */
+  required?: readonly ColumnKey[];
   onClose: () => void;
 }
 
 export function ColumnMenu({
-  x, y, target, visible, onToggle, onAutoSize, onAutoSizeAll, renumber, artworkMode = "partial", onClose,
+  x, y, target, visible, onToggle, onAutoSize, onAutoSizeAll, renumber, artworkMode = "partial", offered, required: requiredKeys, onClose,
 }: ColumnMenuProps) {
-  const columns = menuColumns(artworkMode);
-  const required = requiredColumns(artworkMode);
+  const columns = offered ?? menuColumns(artworkMode);
+  const required = requiredKeys ?? requiredColumns(artworkMode);
   const t = useTranslation();
   const ref = useRef<HTMLDivElement>(null);
 

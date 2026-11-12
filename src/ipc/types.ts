@@ -56,6 +56,21 @@ export interface RowDto {
   missing?: boolean;
   /** Extra database fields requested for visible browser columns. */
   extra?: Record<string, string | number | boolean | null>;
+  /**
+   * The track's MyTags, each with its id and category, in the Library's
+   * order: present when the extra field `myTags` was asked for (the view
+   * shell's Library, #55). The backend sends them inside `extra`; the IPC
+   * client lifts them here (`rowMyTags.ts`).
+   */
+  myTags?: RowMyTag[];
+}
+
+/** One of a row's MyTags, as `fetchRows` sends it for the `myTags` field. */
+export interface RowMyTag {
+  id: string;
+  name: string;
+  /** The name of the MyTag column (category) it belongs to. */
+  category: string;
 }
 
 export type TrackSource =
@@ -1059,6 +1074,12 @@ export interface Backend {
    * tree. A stick with neither answers with none.
    */
   deviceLibraries(path: string): Promise<DeviceLibrary[]>;
+  /**
+   * A stick's playlist trees, for showing them, read without writing to the
+   * stick: unlike `deviceLibraries` it never finishes an interrupted export
+   * first, and reports one as `pending` with no playlists instead.
+   */
+  stickOutline(path: string): Promise<StickOutline>;
   /** Maps collection track ids to rows already in one of a stick's libraries. */
   devicePlaylistCollectionTracks(path: string, format: DeviceFormat, tracks: string[]): Promise<(string | null)[]>;
   /**
@@ -1327,6 +1348,13 @@ export interface DeviceLibrary {
   tracks: number;
   /** Playlists and folders in tree order. */
   nodes: DeviceLibraryNode[];
+}
+
+/** A stick's playlist trees, read without writing to it (`stickOutline`). */
+export interface StickOutline {
+  /** An earlier write to the stick did not finish; nothing is listed until it is. */
+  pending: boolean;
+  libraries: { format: DeviceFormat; nodes: DeviceLibraryNode[] }[];
 }
 
 export interface DeviceLibraryNode {

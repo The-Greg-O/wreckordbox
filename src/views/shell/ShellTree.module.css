@@ -1,0 +1,114 @@
+/* The shell's tree (ticket #52). See ShellTree.tsx and
+   docs/design/screens/library: group headings in small uppercase labels,
+   one row per place, counts at the right, the selected row on the
+   selection colour with the accent down its left edge. */
+/* Only the rows in view are drawn (ShellTree.tsx): every part has a fixed
+   height, set from the same tokens the component reads, and each group is
+   placed at the offset the component works out. */
+.tree {
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  font: var(--f-size-shell) / 1.2 var(--f-shell);
+  font-variant-numeric: tabular-nums;
+  color: var(--c-text);
+}
+
+.content { position: relative; }
+.group { position: absolute; left: 0; right: 0; }
+
+.heading, .stick {
+  display: flex;
+  align-items: center;
+  gap: var(--s-shell-space-2);
+  height: var(--s-shell-heading-h);
+  padding: 0 var(--s-shell-space-4);
+  font-size: var(--f-size-shell-label);
+  letter-spacing: var(--f-tracking-shell-label);
+  text-transform: uppercase;
+  color: var(--c-text-dim);
+}
+
+.row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--s-shell-space-3);
+  height: var(--s-shell-row-h);
+  /* Each level in by one wide spacing step, up to the component's cap. */
+  padding: 0 var(--s-shell-space-4) 0 calc(var(--s-shell-space-4) + var(--depth, 0) * var(--s-shell-space-6));
+  border-left: calc(2 * var(--s-shell-border)) solid transparent;
+  cursor: pointer;
+  user-select: none;
+}
+
+.stick {
+  height: var(--s-shell-row-h);
+  cursor: pointer;
+  border-left: calc(2 * var(--s-shell-border)) solid transparent;
+  user-select: none;
+}
+
+.row:hover, .stick:hover { color: var(--c-text); background: var(--c-top); }
+.row[aria-selected="true"], .stick[aria-selected="true"] {
+  background: var(--c-select);
+  border-left-color: var(--c-accent);
+  color: var(--c-text);
+}
+.row:focus-visible, .stick:focus-visible {
+  outline: var(--s-shell-border) solid var(--c-accent);
+  outline-offset: calc(-1 * var(--s-shell-border));
+}
+
+/* A folder's open and close control, before its name; the folder's name
+   moves over by the control's width. */
+.twisty {
+  position: absolute;
+  left: calc(var(--s-shell-space-4) + var(--depth, 0) * var(--s-shell-space-6) - var(--s-shell-space-1));
+  width: var(--s-shell-space-5);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--c-text-dim);
+  font: inherit;
+  font-size: var(--f-size-shell-label);
+  line-height: 1;
+  cursor: pointer;
+}
+.row[aria-expanded] { padding-left: calc(var(--s-shell-space-4) + var(--s-shell-space-5) + var(--depth, 0) * var(--s-shell-space-6)); }
+
+.name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stickLabel { flex: none; }
+.stick .name { text-transform: none; letter-spacing: 0; }
+
+.count {
+  flex: none;
+  color: var(--c-text-dim);
+}
+
+/* A group with nothing in it says so, in the dim colour, not as a place. */
+.empty, .library {
+  height: var(--s-shell-row-h);
+  display: flex;
+  align-items: center;
+  padding: 0 var(--s-shell-space-4);
+  color: var(--c-text-dim);
+  font-style: italic;
+}
+
+/* The name of one of a Stick's two libraries, when they list different
+   playlists: a label, not a place. */
+.library {
+  font-style: normal;
+  font-size: var(--f-size-shell-label);
+  letter-spacing: var(--f-tracking-shell-label);
+  text-transform: uppercase;
+}

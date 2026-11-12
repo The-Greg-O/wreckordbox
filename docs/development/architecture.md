@@ -67,7 +67,11 @@ layout and drawn only when the stored preference `view.viewShell` is true
 `enableViewShell` from `e2e/helpers.ts`). `AppBody` in `src/app/App.tsx`
 makes the tree, the deck, the track list, the status bar and the dialogs
 once and places them in whichever layout is on, so it remains the owner of
-playback, the loaded track and the tree's selection in both. The shell's
+playback, the loaded track and the tree's selection in both. The shell has
+its own tree (`src/views/shell/ShellTree.tsx`, rows from
+`src/lib/shellTree.ts`): the Library with its Intake and Problems queues,
+every playlist, Set plans and each mounted Stick, where choosing a row
+opens it in the view it belongs to. The shell's
 layout answers to the window's own width through a container query, with
 the breakpoint from `docs/design/tokens.md` (`src/styles/tokens-shell.css`).
 The old layout goes when every view has moved (ticket #77).
