@@ -179,6 +179,104 @@ test("the waveform palette redraws the deck and the rows without a reload", asyn
   await expect.poll(pixels).not.toBe(threeBand);
 });
 
+/** Whether a canvas has a pixel of exactly this colour, anywhere. */
+const paints = (canvas: import("@playwright/test").Locator, rgb: readonly [number, number, number]) =>
+  canvas.evaluate((c: HTMLCanvasElement, [r, g, b]) => {
+    const ctx = c.getContext("2d");
+    if (!ctx || c.width === 0 || c.height === 0) return false;
+    const data = ctx.getImageData(0, 0, c.width, c.height).data;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i] === r && data[i + 1] === g && data[i + 2] === b && data[i + 3] === 255) return true;
+    }
+    return false;
+  }, rgb);
+
+async function chooseWaveform(page: Page, name: string) {
+  const dialog = await prefs(page);
+  await dialog.getByRole("tab", { name: "Color" }).click();
+  await dialog.getByRole("radiogroup", { name: "Waveform color" }).getByRole("radio", { name, exact: true }).click();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+}
+
+test("the Theme waveform draws in the Omarchy theme's colours, follows them, and survives a restart", async ({ page }) => {
+  await open(page);
+  await load(page);
+  const overview = page.getByTestId("player-overview").locator("canvas").first();
+  const measuredBlue = [0, 85, 225] as const;
+  const tokyoBlue = [122, 162, 247] as const;
+  await expect.poll(() => paints(overview, measuredBlue)).toBe(true);
+
+  await chooseWaveform(page, "Theme");
+  // No theme roles on this page: Tokyo Night's blue stands in for the low band.
+  await expect.poll(() => paints(overview, tokyoBlue)).toBe(true);
+  expect(await paints(overview, measuredBlue)).toBe(false);
+
+  // The Omarchy theme changes under the open window: the waveform follows.
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent("wreckordbox:theme", {
+    detail: { roles: null, font: null, wave: { low: "#f38ba8", mid: "#fab387", high: "#f9e2af" } },
+  })));
+  await expect.poll(() => paints(overview, [243, 139, 168])).toBe(true);
+  expect(await paints(overview, tokyoBlue)).toBe(false);
+
+  await page.reload();
+  await expect(page.getByTestId("browser-title")).toContainText("Tracks)");
+  const again = await prefs(page);
+  await again.getByRole("tab", { name: "Color" }).click();
+  const group = again.getByRole("radiogroup", { name: "Waveform color" });
+  await expect(group.getByRole("radio", { name: "Theme", exact: true })).toBeChecked();
+  // All four are offered.
+  await expect(group.getByRole("radio")).toHaveCount(4);
+  for (const name of ["BLUE", "RGB", "3Band"]) {
+    await expect(group.getByRole("radio", { name, exact: true })).not.toBeChecked();
+  }
+});
+
+test("cue, playhead, beat and phrase colours are the same under every waveform theme", async ({ page }) => {
+  await open(page);
+  await load(page);
+  const deck = player(page);
+  await expect(deck.getByTestId("beat-grid-marker").first()).toBeAttached();
+  await expect(deck.getByTestId("player-phrase").first()).toBeAttached();
+  /** Every colour the markers over the waveforms are painted in. */
+  const markers = () => deck.evaluate((root) => {
+    const out: string[] = [];
+    const selectors = [
+      '[data-testid="player-head"]', '[data-testid="player-detail-head"]', '[data-testid="beat-grid-marker"]',
+      '[data-testid="player-phrase"]', '[data-testid="player-phrase"] *', "[data-cue]", "[data-cue] *",
+    ];
+    for (const selector of selectors) {
+      const found = [...root.querySelectorAll(selector)].slice(0, 12);
+      if (found.length === 0) out.push(`${selector}: none`);
+      for (const el of found) {
+        const style = getComputedStyle(el);
+        const before = getComputedStyle(el, "::before");
+        out.push([
+          selector, style.color, style.backgroundColor, style.backgroundImage, style.borderTopColor,
+          style.borderLeftColor, style.fill, before.backgroundColor, before.borderTopColor,
+        ].join(" | "));
+      }
+    }
+    return out;
+  });
+  const measured = await markers();
+  // The deck really has each kind of marker to compare.
+  for (const kind of ["player-head", "player-detail-head", "beat-grid-marker", "player-phrase", "[data-cue]"]) {
+    expect(measured.some((line) => line.includes(kind) && !line.endsWith(": none")), kind).toBe(true);
+  }
+  const overview = page.getByTestId("player-overview").locator("canvas").first();
+  const row = () => overview.evaluate((c: HTMLCanvasElement) =>
+    Array.from(c.getContext("2d")?.getImageData(0, 0, c.width, c.height).data ?? []).join(","));
+  let last = await row();
+  for (const name of ["RGB", "BLUE", "Theme"]) {
+    await chooseWaveform(page, name);
+    // The waveform itself did change, so the comparison is of a redrawn deck.
+    await expect.poll(row).not.toBe(last);
+    last = await row();
+    expect(await markers(), name).toEqual(measured);
+  }
+});
+
 test("the Beat Count Display counts bars, or down to the next memory cue", async ({ page }) => {
   await open(page);
   await load(page);

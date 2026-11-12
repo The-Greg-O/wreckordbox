@@ -399,11 +399,22 @@ describe("deckMenu", () => {
     const rows = deckMenu({ ...state, waveformColor: "rgb", beatCount: "toMemoryBeats", waveformClick: false });
     const items = (label: string) => entriesOf(rows).find((e) => e.label === label)?.items ?? [];
     expect(entriesOf(items("Change waveform color")).map((e) => [e.label, e.checked ?? false]))
-      .toEqual([["BLUE", false], ["RGB", true], ["3Band", false]]);
+      .toEqual([["BLUE", false], ["RGB", true], ["3Band", false], ["Theme", false]]);
+    const themed = entriesOf(deckMenu({ ...state, waveformColor: "theme" })).find((e) => e.label === "Change waveform color");
+    expect(entriesOf(themed?.items ?? []).filter((e) => e.checked).map((e) => [e.label, e.action]))
+      .toEqual([["Theme", "waveformTheme"]]);
     expect(entriesOf(items("Beat Count Display")).filter((e) => e.checked).map((e) => e.label))
       .toEqual(["Count to the next MEMORY CUE (Beats)"]);
     expect(entriesOf(items("Click on the waveform for PLAY and CUE")).filter((e) => e.checked).map((e) => e.label))
       .toEqual(["Disable"]);
+  });
+
+  it("ticks the theme file's waveform colour and greys every choice while the file sets it", () => {
+    const rows = deckMenu({ ...state, waveformColor: "blue", waveformColorFromFile: true });
+    const items = entriesOf(entriesOf(rows).find((e) => e.label === "Change waveform color")?.items ?? []);
+    expect(items.map((e) => [e.label, e.checked ?? false, e.action])).toEqual([
+      ["BLUE", true, null], ["RGB", false, null], ["3Band", false, null], ["Theme", false, null],
+    ]);
   });
 
   it("offers Analyze Track for the loaded track", () => {

@@ -132,3 +132,14 @@
 # in the Library list. Without them, the interface face and size.
 # mono_font = "JetBrainsMono Nerd Font"
 # mono_font_size = 12
+
+# ── Waveform colours ─────────────────────────────────────────────────────
+#
+# The waveform colour theme, in every waveform of the window: "3band"
+# (rekordbox's measured colours, the default), "rgb", "blue", or "theme"
+# (the active Omarchy theme's blue, magenta and bright foreground; never
+# this file's colours). Set here, it wins over Preferences, which then shows
+# it and cannot change it; leave it out to choose in Preferences. Cue,
+# playhead, beat and phrase colours are the same under all four.
+#
+# waveform = "3band"

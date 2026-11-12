@@ -56,8 +56,25 @@ file lists each group.
 
 Colours that carry meaning are never themeable: Energy, Prep colours, key
 lights, cue and phrase colours and the waveforms keep their own colours under
-every theme and every theme file. Waveform colour themes are a separate
-setting.
+every theme and every theme file.
+
+## Waveform colours
+
+The waveform colour theme is chosen in Preferences (View, Color, "Waveform
+color") or in this file with `waveform = "3band"`, `"rgb"`, `"blue"` or
+`"theme"`. **The file wins:** while it sets `waveform`, every window draws
+that theme and Preferences shows it, greyed, with a note that the theme file
+sets it. Remove the line to choose in Preferences again; the choice made
+there before is kept.
+
+3Band (the default), RGB and Blue are rekordbox's own colours and never
+change. Theme takes the active Omarchy theme's `blue`, `magenta` and
+`bright_foreground` (or `color4`, `color5`, `color15`), and follows a theme
+switch live. It never takes this file's colours: a file's `blue` or
+`bright_foreground` changes the window, not the waveform. Under
+`follow = "none"`, or with no usable Omarchy theme, Theme draws in Tokyo
+Night's blue, magenta and bright foreground. Cue, playhead, beat and phrase
+colours are the same under all four.
 
 ## Type
 
