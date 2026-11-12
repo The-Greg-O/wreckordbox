@@ -283,3 +283,37 @@ fn by_hand_a_refusal_says_how_to_turn_protection_off_from_the_command() {
         format!("wreckordbox: {MESSAGE}\nOr turn it off here: wreckordbox protection off\n")
     );
 }
+
+/// Help text with its line breaks folded, so a phrase can be looked for
+/// wherever the terminal's width wrapped it.
+fn help(sandbox: &Sandbox, args: &[&str]) -> String {
+    let run = sandbox.cli(args);
+    assert!(run.status.success(), "{}", run.stderr);
+    run.stdout.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[test]
+fn the_commands_help_states_the_rule_the_default_and_the_loading_wait() {
+    let sandbox = Sandbox::new();
+
+    // On when nothing has been recorded, and how to turn it off.
+    let protection = help(&sandbox, &["protection", "--help"]);
+    assert!(
+        protection.contains("on until someone turns it off"),
+        "{protection}"
+    );
+    assert!(
+        protection.contains("nothing has been recorded"),
+        "{protection}"
+    );
+    assert!(
+        protection.contains("wreckordbox protection off"),
+        "{protection}"
+    );
+
+    // How long a command waits for a window still reading the Library.
+    let top = help(&sandbox, &["--help"]);
+    let bound = wreckordbox_service::DEFAULT_LOADING_WAIT.as_secs();
+    assert!(top.contains(&format!("up to {bound} seconds")), "{top}");
+    assert!(top.contains(wreckordbox_service::LOADING_WAIT_ENV), "{top}");
+}

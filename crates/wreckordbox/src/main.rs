@@ -28,6 +28,11 @@ use wreckordbox_service::{
 /// One background Library service owns the Library; this command and the
 /// window are both clients of it. A service is started when none is running
 /// and stops by itself when nothing is using it.
+///
+/// A window that has only just opened is still reading the Library: a
+/// command waits for it, asking again for up to 15 seconds, before it
+/// fails with `library_loading`. Set `WRECKORDBOX_LOADING_WAIT_SECS` to wait
+/// another number of seconds; 0 does not wait.
 #[derive(Parser)]
 #[command(name = "wreckordbox", version, propagate_version = true)]
 struct Cli {
@@ -71,6 +76,10 @@ enum Commands {
     /// While it is on, every command that changes the Library is refused,
     /// here and in the window; reading is not affected. It is the window's
     /// Preferences switch, and is on until someone turns it off.
+    ///
+    /// It also counts as on while nothing has been recorded, as on a
+    /// machine where the window has never run, or while what was recorded
+    /// cannot be read. `wreckordbox protection off` turns it off.
     Protection {
         #[command(subcommand)]
         command: Option<protection::ProtectionCommands>,
