@@ -199,7 +199,7 @@ async function chooseWaveform(page: Page, name: string) {
   await expect(dialog).toBeHidden();
 }
 
-test("the Theme waveform draws in the desktop theme's colours, follows them, and survives a restart", async ({ page }) => {
+test("the Theme waveform draws in the Omarchy theme's colours, follows them, and survives a restart", async ({ page }) => {
   await open(page);
   await load(page);
   const overview = page.getByTestId("player-overview").locator("canvas").first();
@@ -212,8 +212,10 @@ test("the Theme waveform draws in the desktop theme's colours, follows them, and
   await expect.poll(() => paints(overview, tokyoBlue)).toBe(true);
   expect(await paints(overview, measuredBlue)).toBe(false);
 
-  // The desktop theme changes under the open window: the waveform follows.
-  await page.evaluate(() => document.documentElement.style.setProperty("--role-blue", "#f38ba8"));
+  // The Omarchy theme changes under the open window: the waveform follows.
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent("wreckordbox:theme", {
+    detail: { roles: null, font: null, wave: { low: "#f38ba8", mid: "#fab387", high: "#f9e2af" } },
+  })));
   await expect.poll(() => paints(overview, [243, 139, 168])).toBe(true);
   expect(await paints(overview, tokyoBlue)).toBe(false);
 
