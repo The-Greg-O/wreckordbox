@@ -1,0 +1,85 @@
+/* The large player (wbx-62): the compact strip, then the phrases and the
+   detail waveform (`.bigplayer`, `.pb` and `.det` in docs/design/screens/
+   mock.html; the render is intake-1280.png). Chrome is the theme's roles;
+   phrase, beat, cue and playhead colours are the fixed meaning colours. */
+
+.large {
+  /* The detail band: phrase row 14px over the waveform, 190px in the
+     render at full width, less at half width. */
+  --lp-phrase-h: 14px;
+  --lp-wave-h: 180px;
+
+  display: grid;
+  grid-template-rows: auto auto;
+  min-width: 0;
+  background: var(--role-ground, var(--c-black));
+}
+
+/* The band the frame loop slides: phrases on top, the waveform under them,
+   one fixed playhead through both. */
+.band {
+  position: relative;
+  height: calc(var(--lp-phrase-h) + var(--lp-wave-h));
+  min-width: 0;
+  overflow: hidden;
+  border-top: var(--s-shell-border) solid var(--role-hairline, var(--c-raised));
+  cursor: pointer;
+}
+
+.phrases {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--lp-phrase-h);
+  overflow: hidden;
+}
+.phrase {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  box-sizing: border-box;
+  padding-left: var(--s-shell-space-3);
+  border-right: 1px solid var(--c-black);
+  overflow: hidden;
+  color: var(--c-black);
+  font-family: var(--f-shell);
+  font-size: var(--f-size-shell-label);
+  line-height: var(--lp-phrase-h);
+  white-space: nowrap;
+}
+.phrase[data-phrase="intro"] { background: var(--c-phrase-intro); }
+.phrase[data-phrase="verse"] { background: var(--c-phrase-verse); }
+.phrase[data-phrase="bridge"] { background: var(--c-phrase-bridge); }
+.phrase[data-phrase="chorus"] { background: var(--c-phrase-chorus); }
+.phrase[data-phrase="up"] { background: var(--c-phrase-up); }
+.phrase[data-phrase="up2"] { background: var(--c-phrase-up2); }
+.phrase[data-phrase="up3"] { background: var(--c-phrase-up3); }
+.phrase[data-phrase="down"] { background: var(--c-phrase-down); }
+.phrase[data-phrase="outro"] { background: var(--c-phrase-outro); }
+
+/* The waveform, its beat grid and its cue markers, under the phrase row. */
+.wave {
+  position: absolute;
+  top: var(--lp-phrase-h);
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+.wave canvas { display: block; width: 100%; height: 100%; }
+
+/* No track, or one with no waveform yet: the band keeps its height. */
+.blank {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--role-text-dim, var(--c-text-dim));
+  font-family: var(--f-shell);
+  font-size: var(--f-size-shell);
+  pointer-events: none;
+}
+
+@container shell (max-width: 800px) {
+  .large { --lp-wave-h: 120px; }
+}

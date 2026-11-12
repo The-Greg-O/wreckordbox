@@ -31,6 +31,12 @@ export interface CompactPlayerProps {
   deck: DeckId;
   /** The deck's own element: a pointer down inside it gives the deck the arrows. */
   shell: React.RefObject<HTMLElement | null>;
+  /**
+   * Whether the strip is the "Preview player" region itself (the default).
+   * Inside the large player (wbx-62) the large player is the region and the
+   * strip a part of it.
+   */
+  region?: boolean;
   armed: boolean;
   droppable: boolean;
   onDragOver: (event: React.DragEvent<HTMLElement>) => void;
@@ -85,7 +91,7 @@ const Position = memo(function Position({ source, total }: { source: PositionSou
 });
 
 export const CompactPlayer = memo(function CompactPlayer({
-  track, deck, shell, armed, droppable, onDragOver, onDrop,
+  track, deck, shell, region = true, armed, droppable, onDragOver, onDrop,
   playing, idle, onToggle, onCueDown, onCueUp, positionSource, total, bpmX100, keyText,
   cues, loop, phrases, overviewRef, overview, overviewHead, onScrubStart, onScrubMove, onScrubEnd, drawn,
   jumpBeats, onJumpBeats, onJump,
@@ -109,7 +115,7 @@ export const CompactPlayer = memo(function CompactPlayer({
     <section
       ref={shell}
       className={styles.strip}
-      aria-label={deck === "b" ? "Preview player B" : "Preview player"}
+      aria-label={region ? (deck === "b" ? "Preview player B" : "Preview player") : undefined}
       data-testid="compact-player"
       data-armed={armed ? "" : undefined}
       data-empty={track ? undefined : ""}

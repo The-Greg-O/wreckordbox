@@ -515,3 +515,115 @@ fn a_prep_colour_edit_that_cannot_be_made_changes_nothing() {
     );
     assert_eq!(generation(&hosted), before + 1);
 }
+
+/// Every file in the Sidecar's folder, with its bytes: what a read must
+/// leave exactly as it found it.
+fn folder_snapshot(
+    dir: &std::path::Path,
+) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(at) = stack.pop() {
+        for entry in std::fs::read_dir(&at).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                out.insert(path.clone(), Vec::new());
+                stack.push(path);
+            } else {
+                out.insert(path.clone(), std::fs::read(&path).unwrap());
+            }
+        }
+    }
+    out
+}
+
+/// Asserts the folder is byte for byte what it was, naming what changed.
+fn assert_unchanged(
+    dir: &std::path::Path,
+    before: &std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>,
+) {
+    let after = folder_snapshot(dir);
+    let changed: Vec<_> = before
+        .keys()
+        .chain(after.keys())
+        .filter(|path| before.get(*path) != after.get(*path))
+        .collect();
+    assert!(
+        changed.is_empty(),
+        "the read changed the Sidecar's folder: {changed:?}"
+    );
+}
+
+/// A Sidecar made by an earlier service, with an agent's proposed title,
+/// and a running service that did not see it at its start (it appeared
+/// later): the case where only the queue's own read could open it.
+fn sidecar_appearing_after_start() -> (Hosted, std::path::PathBuf) {
+    let fixture = Fixture::new(3);
+    fixture.declare_title_and_artist();
+    let sidecar = wreckordbox_sidecar_dir(&fixture.location);
+    let aside = fixture.dir.path().join("sidecar-aside");
+    let location = fixture.location.clone();
+    let dir = fixture.dir;
+    {
+        let first = Fixture {
+            dir,
+            location: location.clone(),
+        }
+        .start();
+        first.record(
+            "10000",
+            "title",
+            "A Better Title",
+            json!({ "kind": "agent", "name": "tagger" }),
+        );
+        let Hosted { _dir: dir, service } = first;
+        drop(service);
+        std::fs::rename(&sidecar, &aside).unwrap();
+        let hosted = Fixture { dir, location }.start();
+        std::fs::rename(&aside, &sidecar).unwrap();
+        (hosted, sidecar)
+    }
+}
+
+#[test]
+fn reading_the_queues_never_opens_migrates_or_tidies_a_sidecar() {
+    let (hosted, sidecar) = sidecar_appearing_after_start();
+    let before = folder_snapshot(&sidecar);
+    assert!(before.keys().any(|path| path.ends_with("sidecar.db")));
+
+    let page = hosted.call("intake.list", json!({}));
+    hosted.call("intake.counts", json!({}));
+
+    // Read through a read-only snapshot: the proposal is there...
+    assert_eq!(
+        track(&page, "10000")["suggestions"][0]["value"],
+        "A Better Title"
+    );
+    assert!(page.get("suggestions_unavailable").is_none());
+    // ...and not one byte of the Sidecar's folder changed, nor a file appeared.
+    assert_unchanged(&sidecar, &before);
+}
+
+#[test]
+fn a_sidecar_the_queue_cannot_read_safely_lists_the_queue_and_says_suggestions_are_unknown() {
+    let (hosted, sidecar) = sidecar_appearing_after_start();
+    // An older schema: opening it as the writer would migrate it.
+    {
+        let db = rusqlite::Connection::open(sidecar.join("sidecar.db")).unwrap();
+        db.execute(
+            "UPDATE meta SET value = '1' WHERE key = 'schema_version'",
+            [],
+        )
+        .unwrap();
+    }
+    let before = folder_snapshot(&sidecar);
+
+    let page = hosted.call("intake.list", json!({}));
+
+    assert_eq!(ids(&page).len(), 3);
+    assert_eq!(track(&page, "10000")["suggestions"], json!([]));
+    assert!(page["suggestions_unavailable"]
+        .as_str()
+        .is_some_and(|why| !why.is_empty()));
+    assert_unchanged(&sidecar, &before);
+}
