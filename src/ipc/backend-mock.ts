@@ -3069,6 +3069,39 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       w.__menuEnabled = { ...w.__menuEnabled, ...items };
       return wait(undefined);
     },
+    // A browser cannot go full screen or quit on its own say: kept where a
+    // test can read what the shell was asked for.
+    runMenuItem: (id) => {
+      const w = window as unknown as { __shellItems?: string[] };
+      w.__shellItems = [...(w.__shellItems ?? []), id];
+      return wait(undefined);
+    },
+    // The webview's editing actions, against a clipboard of the mock's own
+    // (`window.__clipboard`): what WebKitGTK's editing commands do to the
+    // field with the keyboard, so a test can see text really move.
+    runEditCommand: (edit) => {
+      const w = window as unknown as { __clipboard?: string; __editCommands?: string[] };
+      w.__editCommands = [...(w.__editCommands ?? []), edit];
+      const field = document.activeElement;
+      if (!(field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)) {
+        if (edit === "copy") w.__clipboard = window.getSelection()?.toString() ?? "";
+        return wait(undefined);
+      }
+      const start = field.selectionStart ?? field.value.length;
+      const end = field.selectionEnd ?? start;
+      const changed = () => field.dispatchEvent(new Event("input", { bubbles: true }));
+      if (edit === "selectAll") field.select();
+      if (edit === "copy" || edit === "cut") w.__clipboard = field.value.slice(start, end);
+      if (edit === "cut") {
+        field.setRangeText("", start, end, "end");
+        changed();
+      }
+      if (edit === "paste") {
+        field.setRangeText(w.__clipboard ?? "", start, end, "end");
+        changed();
+      }
+      return wait(undefined);
+    },
 
     // No network in a browser, so LINK cannot turn on. Saying why is better
     // than a switch that silently does nothing.
