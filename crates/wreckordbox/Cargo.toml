@@ -16,6 +16,8 @@ clap = { version = "4", features = ["derive"] }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+# Compare service readiness with the capabilities of this exact build.
+wreckordbox-render = { path = "../wreckordbox-render", default-features = false }
 # `backup` tests: archives laid out as a backup is, and a restore stopped
 # between two replacements.
 rbl-backup = { path = "../rbl-backup", features = ["testing"] }
