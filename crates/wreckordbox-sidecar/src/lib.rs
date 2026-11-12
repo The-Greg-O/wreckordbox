@@ -27,9 +27,12 @@
 //!   track. Not Facts, in tables of their own, kept by the same rules.
 //! - [`fingerprint_file`] fingerprints a track's audio.
 //!
-//! There is no Ledger, Unwind or Projection here. A Fact is never changed
-//! or deleted once recorded, only marked stale or superseded, and carries
-//! its Run, so those can be added without rewriting what is stored.
+//! - [`ledger`] is the Ledger's table: the append-only record of every
+//!   change to the Library and to the Sidecar, read back by Run.
+//!
+//! There is no Unwind or Projection here. A Fact is never changed or
+//! deleted once recorded, only marked stale or superseded, and carries
+//! its Run; a Ledger entry is never changed at all.
 //!
 //! No dependency on the desktop framework, the Library service or any
 //! rekordbox-format crate.
@@ -39,6 +42,7 @@ mod audio;
 pub mod decisions;
 mod fingerprint;
 mod kinds;
+pub mod ledger;
 pub mod mutants;
 pub mod stems;
 mod store;

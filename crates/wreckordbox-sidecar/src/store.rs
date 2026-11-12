@@ -25,7 +25,7 @@ use crate::{io, Fingerprint, Result, SidecarError};
 /// The version of the stored shape this crate reads and writes. A store from
 /// a newer wreckordbox is refused rather than guessed at; an older one is
 /// brought up to date by [`MIGRATIONS`] when it is opened.
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// What each version after the first adds, in order: the version a store is
 /// at once the statements have run, and the statements. A new store is made
@@ -35,7 +35,8 @@ pub const SCHEMA_VERSION: u32 = 4;
 const MIGRATIONS: &[(u32, &str)] = &[
     (2, crate::mutants::SCHEMA),
     (3, crate::decisions::SCHEMA),
-    (4, crate::active_runs::SCHEMA),
+    (4, crate::ledger::SCHEMA),
+    (5, crate::active_runs::SCHEMA),
 ];
 
 // A migration added without raising `SCHEMA_VERSION`, or the reverse,
@@ -478,18 +479,64 @@ impl Sidecar {
     /// identifiers are answered. Judgements are left alone; they follow the
     /// music. A stale Fact is kept, not removed.
     pub fn mark_stale(&self, track_id: &str, current: &Fingerprint) -> Result<Vec<i64>> {
-        let db = self.db();
-        let mut statement = db.prepare(
-            "UPDATE fact SET stale_at = ?1
-             WHERE track_id = ?2 AND stale_at IS NULL
-               AND fingerprint IS NOT NULL AND fingerprint <> ?3
-               AND kind IN (SELECT name FROM kind WHERE nature = 'measurement')
-             RETURNING id",
-        )?;
-        let mut ids = statement
-            .query_map(params![now(), track_id, current.as_str()], |row| row.get(0))?
-            .collect::<rusqlite::Result<Vec<i64>>>()?;
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let mut ids = {
+            let mut statement = tx.prepare(
+                "UPDATE fact SET stale_at = ?1
+                 WHERE track_id = ?2 AND stale_at IS NULL
+                   AND fingerprint IS NOT NULL AND fingerprint <> ?3
+                   AND kind IN (SELECT name FROM kind WHERE nature = 'measurement')
+                 RETURNING id",
+            )?;
+            let marked = statement
+                .query_map(params![now(), track_id, current.as_str()], |row| row.get(0))?;
+            marked.collect::<rusqlite::Result<Vec<i64>>>()?
+        };
         ids.sort_unstable();
+        if !ids.is_empty() {
+            // The Ledger's entry for it, in a Run of wreckordbox's own:
+            // marked and recorded together or not at all.
+            let source = Source::new(SourceKind::Tool, crate::ledger::HOUSEKEEPING);
+            let at = now();
+            tx.execute(
+                "INSERT INTO run (source_kind, source_name, description, started_at, finished_at, outcome)
+                 VALUES (?1, ?2, ?3, ?4, ?4, ?5)",
+                params![
+                    source.kind.as_str(),
+                    source.name,
+                    format!("The audio of track {track_id} changed"),
+                    at,
+                    format!("marked {} stale", ids.len()),
+                ],
+            )?;
+            let run = RunId(tx.last_insert_rowid());
+            let payload = serde_json::json!({
+                "track": track_id,
+                "fingerprint": current.as_str(),
+                "facts": ids,
+            });
+            crate::ledger::append_in(
+                &tx,
+                &crate::ledger::NewEntry {
+                    run,
+                    store: crate::ledger::Store::Sidecar,
+                    source: &source,
+                    at: Some(at),
+                    action: crate::ledger::Action::Edit,
+                    kind: crate::ledger::STALE,
+                    label: "Mark Measurements stale",
+                    command: None,
+                    id: None,
+                    reverses: None,
+                    part_of: None,
+                    reversible: true,
+                    format: 1,
+                    payload: Some(&payload),
+                },
+            )?;
+        }
+        tx.commit()?;
         Ok(ids)
     }
 
@@ -577,7 +624,7 @@ pub(crate) fn record_in(tx: &rusqlite::Transaction, new: &NewFact) -> Result<Fac
     Ok(fact)
 }
 
-fn select(rest: &str) -> String {
+pub(crate) fn select(rest: &str) -> String {
     format!(
         "SELECT fact.id, fact.track_id, fact.fingerprint, fact.kind, kind.nature, fact.value,
                 fact.source_kind, fact.source_name, fact.confidence, fact.run_id, fact.recorded_at,
@@ -586,7 +633,7 @@ fn select(rest: &str) -> String {
     )
 }
 
-fn read_fact(row: &Row) -> rusqlite::Result<Fact> {
+pub(crate) fn read_fact(row: &Row) -> rusqlite::Result<Fact> {
     let value: String = row.get(5)?;
     Ok(Fact {
         id: row.get(0)?,

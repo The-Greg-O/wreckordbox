@@ -83,6 +83,10 @@ pub struct Request {
     pub command: String,
     #[serde(default)]
     pub args: Value,
+    /// For a command that edits the Library: the Run its changes belong
+    /// to, or who they are by. See [`crate::ledger::RunArg`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<crate::ledger::RunArg>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,6 +94,10 @@ pub struct Response {
     pub id: u64,
     #[serde(flatten)]
     pub outcome: Outcome,
+    /// The Run the command's changes are in, when it edited the Library
+    /// or joined a Run: a `Run` as `runs.start` answers it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<Value>,
 }
 
 /// `"result": …` or `"error": {"code": …, "message": …}`.
