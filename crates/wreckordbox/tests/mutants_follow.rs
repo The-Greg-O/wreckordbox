@@ -243,8 +243,17 @@ fn reordering_a_playlist_leaves_every_mutant_on_the_same_entry() {
     );
 }
 
+/// Gives a Mutant edits, as an agent would, and answers them as stored.
+fn edit(sandbox: &Sandbox, id: i64, edits: &str) -> Value {
+    ok(
+        sandbox,
+        &["mutants", "edit", &id.to_string(), "--edits", edits, "--source", "agent:preparer"],
+    );
+    mutant(sandbox, id)["edits"].clone()
+}
+
 #[test]
-fn copying_a_playlist_copies_its_mutants_to_the_copy() {
+fn copying_a_playlist_copies_its_mutants_with_their_edits_as_versions_of_their_own() {
     let sandbox = Sandbox::new();
     // Track 1 twice: two entries, each its own Mutant.
     let playlist = sandbox.create_playlist("Friday", &[1, 2]);
@@ -257,11 +266,10 @@ fn copying_a_playlist_copies_its_mutants_to_the_copy() {
     assert_eq!(entries.len(), 3);
     let second = mutate(&sandbox, &entries[1]);
     let again = mutate(&sandbox, &entries[2]);
+    let second_edits = edit(&sandbox, second, r#"{"key_shift":2}"#);
+    let again_edits = edit(&sandbox, again, r#"{"tempo":1.04}"#);
 
-    let copied = ok(
-        &sandbox,
-        &["playlists", "copy", &playlist, "--name", "Friday 2"],
-    );
+    let copied = ok(&sandbox, &["playlists", "copy", &playlist, "--name", "Friday 2"]);
     let copy = copied["playlist"].as_str().unwrap().to_owned();
     assert_eq!(copied["name"], "Friday 2");
     assert_eq!(copied["tracks"], 3);
@@ -270,27 +278,30 @@ fn copying_a_playlist_copies_its_mutants_to_the_copy() {
     assert_eq!(copy_entries.len(), 3);
     let in_copy = live(&sandbox, Some(&copy));
     assert_eq!(
-        in_copy
-            .iter()
-            .map(|(_, entry)| entry.clone())
-            .collect::<Vec<_>>(),
+        in_copy.iter().map(|(_, entry)| entry.clone()).collect::<Vec<_>>(),
         vec![copy_entries[1].clone(), copy_entries[2].clone()]
     );
-    // New Mutants, of the same parents, at the same positions; the source's
-    // own stay where they were.
-    for (id, _) in &in_copy {
-        assert!(*id != second && *id != again);
-    }
-    let copied_second = mutant(&sandbox, in_copy[0].0);
-    assert_eq!(copied_second["parent"]["id"], "10002");
-    assert_eq!(copied_second["position"], 2);
-    let copied_again = mutant(&sandbox, in_copy[1].0);
-    assert_eq!(copied_again["parent"]["id"], "10001");
-    assert_eq!(copied_again["position"], 3);
+    let (copy_second, copy_again) = (in_copy[0].0, in_copy[1].0);
+    assert!(![second, again].contains(&copy_second) && ![second, again].contains(&copy_again));
+    let shown = mutant(&sandbox, copy_second);
+    assert_eq!(shown["parent"]["id"], "10002");
+    assert_eq!(shown["position"], 2);
+    assert_eq!(shown["edits"], second_edits);
+    let shown = mutant(&sandbox, copy_again);
+    assert_eq!(shown["parent"]["id"], "10001");
+    assert_eq!(shown["position"], 3);
+    assert_eq!(shown["edits"], again_edits);
     assert_eq!(
-        ok(&sandbox, &["mutants", "show", &in_copy[0].0.to_string()])["history"][0]["action"],
+        ok(&sandbox, &["mutants", "show", &copy_second.to_string()])["history"][0]["action"],
         "copied"
     );
+
+    // Each version is edited on its own.
+    let copy_now = edit(&sandbox, copy_second, r#"{"key_shift":-4}"#);
+    assert_eq!(mutant(&sandbox, second)["edits"], second_edits);
+    let source_now = edit(&sandbox, second, r#"{"key_shift":5}"#);
+    assert_eq!(mutant(&sandbox, copy_second)["edits"], copy_now);
+    assert_ne!(copy_now, source_now);
     assert_eq!(live(&sandbox, Some(&playlist)).len(), 2);
 }
 
@@ -505,4 +516,53 @@ fn a_removal_whose_entry_had_to_wait_removes_its_mutant_when_the_entry_is_writte
     assert_eq!(history.as_array().unwrap().len(), 2, "{history}");
     assert_eq!(history[1]["action"], "detached");
     assert!(!sandbox.sidecar_dir().join("ledger-spill.jsonl").exists());
+}
+
+#[test]
+fn a_service_killed_between_a_copy_and_its_entry_still_copies_the_mutants_when_it_recovers() {
+    let sandbox = Sandbox::new();
+    let playlist = sandbox.create_playlist("Friday", &[1, 2]);
+    let entries = entries(&sandbox, &playlist);
+    let source = mutate(&sandbox, &entries[1]);
+    let edits = edit(&sandbox, source, r#"{"key_shift":2}"#);
+    stop_service(&sandbox);
+
+    // The service dies the moment the copy is in the Library, before the
+    // Ledger records it or copies its Mutants.
+    let killed = with_faults(&sandbox, "abort_after_write", &["playlists", "copy", &playlist, "--name", "Saved"]);
+    assert!(!killed.status.success());
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while wreckordbox_service::Client::connect(&sandbox.config().socket_path(sandbox.location()))
+        .and_then(|mut client| client.status())
+        .is_ok()
+    {
+        assert!(std::time::Instant::now() < deadline, "the service did not die");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    // The next service finds the copy and gives it its Mutant, with the
+    // edits the source had, on the copy's entry of the same place.
+    let tree = ok(&sandbox, &["playlists", "tree"]);
+    let copy = tree["playlists"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["name"] == "Saved")
+        .unwrap_or_else(|| panic!("no copy in {tree}"))["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let copy_entries = self::entries(&sandbox, &copy);
+    let in_copy = live(&sandbox, Some(&copy));
+    assert_eq!(in_copy.len(), 1, "{in_copy:?}");
+    assert_eq!(in_copy[0].1, copy_entries[1]);
+    let copied = mutant(&sandbox, in_copy[0].0);
+    assert_eq!(copied["edits"], edits);
+    assert_eq!(
+        ok(&sandbox, &["mutants", "show", &in_copy[0].0.to_string()])["history"][0]["action"],
+        "copied"
+    );
+    // Recovered once: a restart changes nothing more.
+    stop_service(&sandbox);
+    assert_eq!(live(&sandbox, Some(&copy)).len(), 1);
 }

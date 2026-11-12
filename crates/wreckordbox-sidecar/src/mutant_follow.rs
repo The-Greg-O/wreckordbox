@@ -10,13 +10,15 @@
 //! playlist gets **copies** of its source's Mutants.
 //!
 //! Nothing here reads the Library. The caller declares what happened to
-//! which entries ([`Follow`]) and this module records the Mutants'
-//! consequences inside the transaction that appends the Library change's
-//! Ledger entry ([`Sidecar::append_following`]), so the change's entry and
-//! its Mutant consequences are kept together or not at all, under the
-//! entry's Run and source. A Follow that cannot be applied is rolled back
-//! on its own and the entry is kept, saying so (`mutants_not_followed` in
-//! its payload): a Ledger entry is never lost to a Mutant.
+//! which entries ([`Follow`]), with every new Mutant spelled out whole
+//! ([`Made`]: its parent, edits and fingerprint as they were when the
+//! Library change was made), and this module records the consequences
+//! inside the transaction that appends the change's Ledger entry
+//! ([`Sidecar::append_following`]): the entry and its Mutant consequences
+//! are kept together or not at all. A Follow that cannot be applied fails
+//! the whole append, so the Ledger keeps the entry, Follow and all, and
+//! writes both later (its spill file), exactly as it does any entry it
+//! could not write.
 //!
 //! Every lookup is by entry through an index (the live Mutant of an entry)
 //! or by playlist through an index (the Mutants detached from a playlist's
@@ -27,11 +29,18 @@
 //! again: the one exception to "set once", and only for a Mutant whose
 //! newest change is `detached`. A Mutant the DJ or an agent removed on
 //! purpose (`removed`) is never brought back by a playlist edit.
+//!
+//! A write whose entries are not known in advance and would lose Mutants
+//! if it were never confirmed (a replacement, a copy) leaves a plan with
+//! its Ledger intent before the Library is changed
+//! ([`Sidecar::capture_mutant_plan`]); recovery reads it back with the
+//! intent ([`crate::ledger::OpenIntent::mutant_plan`]).
 
 use std::collections::HashSet;
 
 use rusqlite::{params, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::{Result, RunId, Source};
 
@@ -49,28 +58,52 @@ pub mod actions {
     pub const COPIED: &str = "copied";
 }
 
-/// A replacement of one playlist's entries: each Mutant of an entry in
-/// `from` moves to the entry of the same track in `to`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Carry {
-    pub playlist: String,
-    /// The entries replaced.
-    pub from: Vec<String>,
-    /// The entries written in their place, with their tracks, in order.
-    pub to: Vec<(String, String)>,
+/// A live Mutant as it stands, whole: what a plan keeps and a [`Made`] is
+/// made from.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Snapshot {
+    pub mutant_id: i64,
+    pub playlist_id: String,
+    pub entry_id: String,
+    pub track_id: String,
+    /// Its edits as they stand (the newest change's).
+    pub edits: Value,
+    pub fingerprint: Option<String>,
 }
 
-/// A copy of one entry: its live Mutant is copied to `to`, an entry of
-/// `playlist` (the same track).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Copy {
-    pub from: String,
-    pub playlist: String,
-    pub to: String,
+/// A new Mutant a Follow makes: carried to a replacement's new entry, or
+/// copied to a copy's entry, from `from` as it was then.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Made {
+    /// [`actions::CARRIED`] or [`actions::COPIED`].
+    pub action: String,
+    /// The Mutant it is made from.
+    pub from: i64,
+    pub playlist_id: String,
+    pub entry_id: String,
+    pub track_id: String,
+    pub edits: Value,
+    pub fingerprint: Option<String>,
+}
+
+impl Made {
+    /// `snapshot` made again on `entry` of `playlist`.
+    #[must_use]
+    pub fn from_snapshot(action: &str, snapshot: &Snapshot, playlist: &str, entry: &str) -> Self {
+        Self {
+            action: action.to_owned(),
+            from: snapshot.mutant_id,
+            playlist_id: playlist.to_owned(),
+            entry_id: entry.to_owned(),
+            track_id: snapshot.track_id.clone(),
+            edits: snapshot.edits.clone(),
+            fingerprint: snapshot.fingerprint.clone(),
+        }
+    }
 }
 
 /// What a Library change did to playlist entries, as far as Mutants care.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Follow {
     /// Entries that left the Library's playlists: their live Mutants are
     /// detached.
@@ -84,23 +117,24 @@ pub struct Follow {
     /// Mutants are looked for.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub returned_in: Vec<String>,
-    /// Replacements whose Mutants move to the new entries. The replaced
-    /// entries belong in `left` too.
+    /// New Mutants, carried or copied, spelled out whole.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub carried: Vec<Carry>,
-    /// Entries copied to another playlist.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub copied: Vec<Copy>,
+    pub made: Vec<Made>,
 }
 
 impl Follow {
     /// Nothing to follow.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.left.is_empty()
-            && self.returned.is_empty()
-            && self.carried.is_empty()
-            && self.copied.is_empty()
+        self.left.is_empty() && self.returned.is_empty() && self.made.is_empty()
+    }
+
+    /// Takes `other`'s consequences too.
+    pub fn extend(&mut self, other: Self) {
+        self.left.extend(other.left);
+        self.returned.extend(other.returned);
+        self.returned_in.extend(other.returned_in);
+        self.made.extend(other.made);
     }
 }
 
@@ -121,7 +155,6 @@ struct Held {
     playlist: String,
     entry: String,
     track: String,
-    fingerprint: Option<String>,
     edits: String,
 }
 
@@ -135,32 +168,6 @@ pub(crate) fn apply_in(
     at: i64,
 ) -> Result<Vec<Followed>> {
     let mut done = Vec::new();
-    // What the carried and copied Mutants start from, read before any of
-    // them is detached.
-    let mut carried: Vec<(Held, String, String)> = Vec::new();
-    for carry in &follow.carried {
-        let mut used: HashSet<&str> = HashSet::new();
-        for from in &carry.from {
-            let Some(held) = live_of(tx, from)? else {
-                continue;
-            };
-            let to = carry
-                .to
-                .iter()
-                .find(|(entry, track)| *track == held.track && !used.contains(entry.as_str()));
-            if let Some((entry, _)) = to {
-                used.insert(entry);
-                carried.push((held, carry.playlist.clone(), entry.clone()));
-            }
-        }
-    }
-    let mut copied: Vec<(Held, String, String)> = Vec::new();
-    for copy in &follow.copied {
-        if let Some(held) = live_of(tx, &copy.from)? {
-            copied.push((held, copy.playlist.clone(), copy.to.clone()));
-        }
-    }
-
     for entry in &follow.left {
         let Some(held) = live_of(tx, entry)? else {
             continue;
@@ -200,29 +207,37 @@ pub(crate) fn apply_in(
         }
     }
 
-    for (action, list) in [(actions::CARRIED, carried), (actions::COPIED, copied)] {
-        for (from, playlist, entry) in list {
-            if live_of(tx, &entry)?.is_some() {
-                continue;
-            }
-            tx.execute(
-                "INSERT INTO mutant (playlist_id, entry_id, track_id, fingerprint, created_at, created_run)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![playlist, entry, from.track, from.fingerprint, at, run.0],
-            )?;
-            let made = Held {
-                id: tx.last_insert_rowid(),
-                playlist,
-                entry,
-                track: from.track,
-                fingerprint: from.fingerprint,
-                edits: from.edits,
-            };
-            change(tx, &made, action, source, run, at)?;
-            done.push(followed(&made, action));
+    for made in &follow.made {
+        // Made once: a recovery that runs again finds it there.
+        if live_of(tx, &made.entry_id)?.is_some() {
+            continue;
         }
+        let edits = stored_text(&made.edits);
+        tx.execute(
+            "INSERT INTO mutant (playlist_id, entry_id, track_id, fingerprint, created_at, created_run)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![made.playlist_id, made.entry_id, made.track_id, made.fingerprint, at, run.0],
+        )?;
+        let held = Held {
+            id: tx.last_insert_rowid(),
+            playlist: made.playlist_id.clone(),
+            entry: made.entry_id.clone(),
+            track: made.track_id.clone(),
+            edits,
+        };
+        change(tx, &held, &made.action, source, run, at)?;
+        done.push(followed(&held, &made.action));
     }
     Ok(done)
+}
+
+/// Edits as `mutant_change.edits` holds them: a damaged value read as text
+/// is written back as the same text.
+fn stored_text(edits: &Value) -> String {
+    match edits {
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    }
 }
 
 fn followed(held: &Held, action: &str) -> Followed {
@@ -248,13 +263,27 @@ fn held(row: &rusqlite::Row) -> rusqlite::Result<(Held, String)> {
             playlist: row.get(1)?,
             entry: row.get(2)?,
             track: row.get(3)?,
-            fingerprint: row.get(4)?,
             edits: row
                 .get::<_, Option<String>>(5)?
                 .unwrap_or_else(|| "{}".to_owned()),
         },
         row.get::<_, Option<String>>(6)?.unwrap_or_default(),
     ))
+}
+
+fn snapshot(row: &rusqlite::Row) -> rusqlite::Result<Snapshot> {
+    let edits = row
+        .get::<_, Option<String>>(5)?
+        .unwrap_or_else(|| "{}".to_owned());
+    Ok(Snapshot {
+        mutant_id: row.get(0)?,
+        playlist_id: row.get(1)?,
+        entry_id: row.get(2)?,
+        track_id: row.get(3)?,
+        fingerprint: row.get(4)?,
+        // Kept as stored, even if damaged: a copy repeats what is there.
+        edits: serde_json::from_str(&edits).unwrap_or(Value::String(edits)),
+    })
 }
 
 /// The entry's live Mutant (through the live-entry index).
@@ -271,9 +300,8 @@ fn live_of(tx: &Transaction, entry: &str) -> Result<Option<Held>> {
 
 /// A playlist's Mutants, newest first, with each one's newest action.
 fn in_playlist(tx: &Transaction, playlist: &str) -> Result<Vec<(Held, String)>> {
-    let mut statement = tx.prepare(&format!(
-        "{HELD} WHERE playlist_id = ?1 ORDER BY mutant.id DESC"
-    ))?;
+    let mut statement =
+        tx.prepare(&format!("{HELD} WHERE playlist_id = ?1 ORDER BY mutant.id DESC"))?;
     let rows = statement
         .query_map([playlist], held)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -317,6 +345,14 @@ pub struct Attachment {
     pub live: bool,
 }
 
+/// The table a plan is kept in, beside its Ledger intent; removed with it.
+pub(crate) const SCHEMA: &str = "
+CREATE TABLE mutant_intent (
+    id   INTEGER PRIMARY KEY REFERENCES ledger_intent (id) ON DELETE CASCADE,
+    plan TEXT NOT NULL
+) STRICT;
+";
+
 impl crate::Sidecar {
     /// Records a Library change's Ledger entry and its Mutant consequences
     /// in one transaction; see the module's notes. Answers the entry's
@@ -324,7 +360,7 @@ impl crate::Sidecar {
     /// already there: a replay changes nothing twice).
     ///
     /// # Errors
-    /// The entry could not be written; nothing is kept.
+    /// The entry or its consequences could not be written; nothing is kept.
     pub fn append_following(
         &self,
         entry: &crate::ledger::NewEntry,
@@ -333,6 +369,71 @@ impl crate::Sidecar {
         follow: &Follow,
     ) -> Result<(i64, Vec<Followed>)> {
         self.append_in_one(entry, facts, reconciled, follow)
+    }
+
+    /// Keeps `plan` with the intent `id` until the intent is settled.
+    ///
+    /// # Errors
+    /// The plan could not be written.
+    pub fn capture_mutant_plan(&self, id: i64, plan: &Value) -> Result<()> {
+        self.db().execute(
+            "INSERT OR REPLACE INTO mutant_intent (id, plan) VALUES (?1, ?2)",
+            params![id, plan.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// The live Mutants of these playlists, whole (through the playlist
+    /// index).
+    ///
+    /// # Errors
+    /// The store could not be read.
+    pub fn mutant_snapshots_in(&self, playlists: &[String]) -> Result<Vec<Snapshot>> {
+        let db = self.db();
+        let mut statement = db.prepare(&format!(
+            "{HELD} WHERE playlist_id = ?1 AND removed_at IS NULL ORDER BY mutant.id"
+        ))?;
+        let mut found = Vec::new();
+        for playlist in playlists {
+            for row in statement.query_map([playlist], snapshot)? {
+                found.push(row?);
+            }
+        }
+        Ok(found)
+    }
+
+    /// The live Mutants of these entries, whole (through the live-entry
+    /// index).
+    ///
+    /// # Errors
+    /// The store could not be read.
+    pub fn mutant_snapshots_of(&self, entries: &[String]) -> Result<Vec<Snapshot>> {
+        let db = self.db();
+        let mut statement = db.prepare(&format!(
+            "{HELD} WHERE entry_id = ?1 AND removed_at IS NULL"
+        ))?;
+        let mut found = Vec::new();
+        for entry in entries {
+            if let Some(row) = statement.query_row([entry], snapshot).optional()? {
+                found.push(row);
+            }
+        }
+        Ok(found)
+    }
+
+    /// The playlists that have a live Mutant.
+    ///
+    /// # Errors
+    /// The store could not be read.
+    pub fn mutated_playlists(&self) -> Result<Vec<String>> {
+        let db = self.db();
+        let mut statement = db.prepare(
+            "SELECT DISTINCT playlist_id FROM mutant WHERE removed_at IS NULL ORDER BY playlist_id",
+        )?;
+        let found = statement
+            .query_map([], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<String>>>()?;
+        Ok(found)
     }
 
     /// Every Mutant a playlist edit could still move (live, or detached by

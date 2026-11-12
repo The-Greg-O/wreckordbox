@@ -109,35 +109,14 @@ impl Sidecar {
                 return Ok((id, Vec::new()));
             }
         }
-        // The Mutants' consequences, kept or rolled back on their own: a
-        // failure is noted on the entry, which is kept.
-        let mut followed = Vec::new();
-        let mut noted = None;
-        if !follow.is_empty() {
-            tx.execute_batch("SAVEPOINT mutant_follow")?;
-            let at = entry.at.unwrap_or_else(crate::store::now);
-            match crate::mutant_follow::apply_in(&tx, follow, entry.source, entry.run, at) {
-                Ok(done) => {
-                    tx.execute_batch("RELEASE mutant_follow")?;
-                    followed = done;
-                }
-                Err(error) => {
-                    tx.execute_batch("ROLLBACK TO mutant_follow; RELEASE mutant_follow")?;
-                    let mut payload = entry.payload.cloned().unwrap_or_else(|| json!({}));
-                    payload["mutants_not_followed"] = json!(error.to_string());
-                    noted = Some(payload);
-                }
-            }
-        }
-        let with_note;
-        let entry = if let Some(payload) = &noted {
-            with_note = NewEntry {
-                payload: Some(payload),
-                ..*entry
-            };
-            &with_note
+        // The Mutants' consequences: with the entry or not at all. A
+        // failure fails the append, so the Ledger keeps both and writes
+        // them later together (wbx-80).
+        let followed = if follow.is_empty() {
+            Vec::new()
         } else {
-            entry
+            let at = entry.at.unwrap_or_else(crate::store::now);
+            crate::mutant_follow::apply_in(&tx, follow, entry.source, entry.run, at)?
         };
         let mut facts = facts.clone();
         // Nothing from an agent/Projection is promoted by this observer.

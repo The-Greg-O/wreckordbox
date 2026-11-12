@@ -25,7 +25,7 @@ use crate::{io, Fingerprint, Result, SidecarError};
 /// The version of the stored shape this crate reads and writes. A store from
 /// a newer wreckordbox is refused rather than guessed at; an older one is
 /// brought up to date by [`MIGRATIONS`] when it is opened.
-pub const SCHEMA_VERSION: u32 = 8;
+pub const SCHEMA_VERSION: u32 = 9;
 
 /// What each version after the first adds, in order: the version a store is
 /// at once the statements have run, and the statements. A new store is made
@@ -40,6 +40,7 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (6, crate::active_runs::SCHEMA),
     (7, crate::dj_facts::SCHEMA),
     (8, crate::dj_facts::EFFECTS_SCHEMA),
+    (9, crate::mutant_follow::SCHEMA),
 ];
 
 // A migration added without raising `SCHEMA_VERSION`, or the reverse,

@@ -14,15 +14,15 @@
 //!
 //! Read only (`parts`, no `from_parts`): the playlist membership payloads
 //! [`PlaylistTrackRemoval`], [`PlaylistTrackAddition`] and
-//! [`MembershipReplacement`], whose entry rows a Mutant (keyed to a
+//! [`MembershipReplacement`] and a folder drop's [`ListReplacement`], whose entry rows a Mutant (keyed to a
 //! `djmdSongPlaylist.ID`) follows when they leave a playlist or come back
 //! (wbx-80).
 
 use rusqlite::types::Value;
 
 use super::{
-    MembershipReplacement, MyTagOrder, PlaylistTrackAddition, PlaylistTrackRemoval, TrackEdit,
-    TrackTagEdit, WRITABLE_COLUMNS,
+    ListReplacement, MembershipReplacement, MyTagOrder, PlaylistDeletion, PlaylistTrackAddition,
+    PlaylistTrackRemoval, TrackEdit, TrackTagEdit, WRITABLE_COLUMNS,
 };
 
 /// One track column's value before and after an edit.
@@ -150,6 +150,35 @@ impl MembershipReplacement {
             playlist: &self.playlist,
             moved: self.before.iter().map(String::as_str).collect(),
             around: self.after.iter().map(String::as_str).collect(),
+        }
+    }
+}
+
+/// A folder drop's Replace existing, read out: the list it replaced (and
+/// everything inside it), and the playlist made in its place with its
+/// membership rows in order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListReplacementParts<'a> {
+    /// The parent both lists sit under.
+    pub parent: &'a str,
+    /// The replaced list's tombstoned rows: its playlists (the list first)
+    /// and their membership rows.
+    pub replaced: &'a PlaylistDeletion,
+    /// The playlist made in its place.
+    pub playlist: &'a str,
+    /// Its membership rows, in `TrackNo` order.
+    pub members: Vec<&'a str>,
+}
+
+impl ListReplacement {
+    /// The lists and rows the replacement moved.
+    #[must_use]
+    pub fn parts(&self) -> ListReplacementParts<'_> {
+        ListReplacementParts {
+            parent: &self.parent,
+            replaced: &self.replaced,
+            playlist: &self.playlist,
+            members: self.members.iter().map(String::as_str).collect(),
         }
     }
 }

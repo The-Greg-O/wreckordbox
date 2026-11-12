@@ -25,7 +25,6 @@ use crate::mutants::commands as mutant_commands;
 use crate::protocol::{codes as shared_codes, LibraryChanged, Request, ServiceError};
 use crate::reading::codes as reading_codes;
 use crate::stems::Stems;
-use wreckordbox_sidecar::mutant_follow::Copy;
 
 /// The names of the commands this module answers.
 pub mod commands {
@@ -162,13 +161,36 @@ pub(crate) fn answers(command: &str) -> bool {
     )
 }
 
-/// Makes the edit `request` names. Answers the result and, when the
-/// Library changed, what to tell the hosting process.
+/// What an edit did: the change to tell everyone of, when the Library
+/// changed, and the answer, which can still fail after the change was made
+/// (reading back what the change touched). The change is told either way.
+pub(crate) type Done = (Option<LibraryChanged>, Result<Value, ServiceError>);
+
+/// Failures a test can inject with [`FAULTS_ENV`], honoured only under
+/// `RBXPORT_TEST`: `fail_answer` (an edit is made, then its answer fails).
+pub const FAULTS_ENV: &str = "WRECKORDBOX_EDIT_FAULTS";
+
+fn answer_fails() -> bool {
+    std::env::var("RBXPORT_TEST").as_deref() == Ok("1")
+        && std::env::var(FAULTS_ENV)
+            .is_ok_and(|faults| faults.split(',').any(|fault| fault.trim() == "fail_answer"))
+}
+
+/// Makes the edit `request` names. An `Err` means nothing was changed.
 pub(crate) fn answer(
     library: &OpenLibrary,
     stems: &Arc<Stems>,
     request: &Request,
-) -> Result<(Value, Option<LibraryChanged>), ServiceError> {
+) -> Result<Done, ServiceError> {
+    let (changed, answer) = make(library, stems, request)?;
+    if changed.is_some() && answer_fails() {
+        let injected = ServiceError::new(shared_codes::SERVICE_FAILED, "the answer failed (injected)");
+        return Ok((changed, Err(injected)));
+    }
+    Ok((changed, answer))
+}
+
+fn make(library: &OpenLibrary, stems: &Arc<Stems>, request: &Request) -> Result<Done, ServiceError> {
     let edits = Edits { library, stems };
     let command = request.command.as_str();
     match command {
@@ -186,10 +208,7 @@ struct Edits<'a> {
 }
 
 impl Edits<'_> {
-    fn remove(
-        &self,
-        remove: &RemoveTracks,
-    ) -> Result<(Value, Option<LibraryChanged>), ServiceError> {
+    fn remove(&self, remove: &RemoveTracks) -> Result<Done, ServiceError> {
         let entries = self.plain(&remove.playlist)?;
         if let Some(missing) = remove
             .tracks
@@ -217,42 +236,30 @@ impl Edits<'_> {
                     .map(|(changed, edit)| (changed.rows, LibraryEdit::RemovePlaylistTracks(edit)))
             },
         )?;
-        self.edited(&remove.playlist, rows > 0, changed, &before)
+        Ok(self.edited(&remove.playlist, rows > 0, changed, &before))
     }
 
-    fn delete(
-        &self,
-        delete: &DeletePlaylist,
-    ) -> Result<(Value, Option<LibraryChanged>), ServiceError> {
+    fn delete(&self, delete: &DeletePlaylist) -> Result<Done, ServiceError> {
         let index = self.library.index()?;
         if entries::playlist_name(&index, &delete.playlist).is_none() {
             return Err(not_found(&delete.playlist));
         }
-        let before: Vec<i64> = self
-            .stored(|sidecar| sidecar.mutants(None))?
-            .into_iter()
-            .map(|mutant| mutant.id)
-            .collect();
         let playlist = delete.playlist.clone();
-        let (rows, changed) =
+        let ((rows, entries), changed) =
             self.library
                 .recorded_edit(Touched::Playlists, "Delete Playlist", move |writer| {
-                    writer
-                        .delete_playlist_with_undo(&playlist)
-                        .map(|(changed, edit)| (changed.rows, LibraryEdit::DeletePlaylist(edit)))
+                    writer.delete_playlist_with_undo(&playlist).map(|(changed, edit)| {
+                        let entries = edit.membership_ids.clone();
+                        ((changed.rows, entries), LibraryEdit::DeletePlaylist(edit))
+                    })
                 })?;
-        // The Mutants that went with it: those live before and not now.
-        let gone: Vec<i64> = before
-            .into_iter()
-            .filter(|id| matches!(self.mutant(*id), Ok(Some(m)) if m["removed"] == true))
-            .collect();
-        self.edited(&delete.playlist, rows > 0, changed, &gone)
+        // The Mutants that went with it: those of its entries, now removed.
+        let gone = self.detached_from(&entries);
+        let answer = gone.and_then(|gone| self.answer_edited(&delete.playlist, rows > 0, &changed, &gone));
+        Ok((Some(changed), answer))
     }
 
-    fn reorder(
-        &self,
-        reorder: &ReorderEntries,
-    ) -> Result<(Value, Option<LibraryChanged>), ServiceError> {
+    fn reorder(&self, reorder: &ReorderEntries) -> Result<Done, ServiceError> {
         let entries = self.plain(&reorder.playlist)?;
         let mut have: Vec<&str> = entries.iter().map(|entry| entry.id.as_str()).collect();
         let mut wanted: Vec<&str> = reorder.entries.iter().map(String::as_str).collect();
@@ -277,10 +284,13 @@ impl Edits<'_> {
                     rbl_library::entry_order::reorder(writer, &playlist, &order)
                         .map(|edit| (!edit.is_empty(), LibraryEdit::ReorderEntries(edit)))
                 })?;
-        self.edited(&reorder.playlist, moved, changed, &before)
+        Ok(self.edited(&reorder.playlist, moved, changed, &before))
     }
 
-    fn copy(&self, copy: &CopyPlaylist) -> Result<(Value, Option<LibraryChanged>), ServiceError> {
+    /// One write: the playlist and every entry, or nothing (wbx-80). The
+    /// Ledger plans the copy's identifiers and snapshots the source's
+    /// Mutants before it is written, and copies them with its entry.
+    fn copy(&self, copy: &CopyPlaylist) -> Result<Done, ServiceError> {
         let index = self.library.index()?;
         let Some(source_name) = entries::playlist_name(&index, &copy.playlist) else {
             return Err(not_found(&copy.playlist));
@@ -291,82 +301,40 @@ impl Edits<'_> {
             .clone()
             .unwrap_or_else(|| format!("{source_name} copy"));
         let (source, wanted) = (copy.playlist.clone(), name.clone());
-        let (made, mut changed) = self.library.recorded_edit(
-            Touched::Playlists,
-            "Create Playlist",
-            move |writer| {
-                let parent: String = writer
-                    .library()
-                    .connection()
-                    .query_row(
-                        "SELECT ParentID FROM djmdPlaylist WHERE ID = ?1 AND rb_local_deleted = 0",
-                        [&source],
-                        |row| row.get(0),
-                    )
-                    .map_err(rbl_db::DbError::from)?;
-                writer
-                    .create_with_undo(&wanted, &parent, rbl_db::write::ATTRIBUTE_PLAYLIST, None)
-                    .map(|(id, edit)| (id, LibraryEdit::CreatePlaylist(edit)))
-            },
-        )?;
-        // The entries, read again under the gate of the write that copies
-        // them; their Mutants are copied with the addition's Ledger entry.
-        let (source, target) = (copy.playlist.clone(), made.clone());
-        let added = self.library.recorded_edit(
-            Touched::Playlists,
-            "Add Tracks to Playlist",
-            move |writer| {
-                let entries =
-                    rbl_library::entry_order::entries(writer.library().connection(), &source)?;
-                if entries.is_empty() {
-                    return Err(rbl_db::DbError::WriteRefused(NOTHING_TO_COPY.to_owned()));
-                }
-                let tracks: Vec<String> = entries.iter().map(|e| e.track_id.clone()).collect();
-                let (_, addition) = writer.add_tracks_with_undo(&target, &tracks, true)?;
-                let copies = entries
-                    .iter()
-                    .zip(addition.added())
-                    .map(|(from, to)| Copy {
-                        from: from.id.clone(),
-                        playlist: target.clone(),
-                        to: to.clone(),
-                    })
-                    .collect();
-                crate::mutant_follow::expect_copies(copies);
-                Ok((
-                    addition.added().len(),
-                    LibraryEdit::AddPlaylistTracks {
-                        addition,
-                        transaction: None,
-                    },
-                ))
-            },
-        );
-        crate::mutant_follow::forget_copies();
-        let tracks = match added {
-            Ok((tracks, more)) => {
-                changed = more;
-                tracks
-            }
-            Err(error) if error.message == NOTHING_TO_COPY => 0,
-            Err(error) => return Err(error),
-        };
-        let mutants = self.listed(json!({ "playlist": made }))?;
-        let copied = PlaylistCopied {
-            playlist: made,
-            name,
-            from: copy.playlist.clone(),
-            tracks,
-            generation: changed.generation,
-            mutants,
-        };
-        Ok((to_value(&copied)?, Some(changed)))
+        crate::mutant_follow::copying(&source);
+        let made = self
+            .library
+            .recorded_edit(Touched::Playlists, "Copy Playlist", move |writer| {
+                let ids = match crate::mutant_follow::copy_ids() {
+                    Some(ids) => ids,
+                    None => {
+                        let count = rbl_library::entry_order::entries(
+                            writer.library().connection(),
+                            &source,
+                        )?
+                        .len();
+                        rbl_library::entry_copy::CopyIds::fresh(writer.library().connection(), count)?
+                    }
+                };
+                rbl_library::entry_copy::copy(writer, &source, &wanted, &ids)
+                    .map(|copy| ((copy.parts().1.to_owned(), copy.parts().2.len()), LibraryEdit::CopyPlaylist(copy)))
+            });
+        crate::mutant_follow::done_copying();
+        let ((playlist, tracks), changed) = made?;
+        let answer = self.listed(json!({ "playlist": playlist })).and_then(|mutants| {
+            to_value(&PlaylistCopied {
+                playlist,
+                name,
+                from: copy.playlist.clone(),
+                tracks,
+                generation: changed.generation,
+                mutants,
+            })
+        });
+        Ok((Some(changed), answer))
     }
 
-    fn remove_from_collection(
-        &self,
-        remove: &RemoveFromCollection,
-    ) -> Result<(Value, Option<LibraryChanged>), ServiceError> {
+    fn remove_from_collection(&self, remove: &RemoveFromCollection) -> Result<Done, ServiceError> {
         if remove.tracks.is_empty() {
             return Err(ServiceError::new(
                 shared_codes::BAD_REQUEST,
@@ -401,7 +369,7 @@ impl Edits<'_> {
                 generation: None,
                 mutants: affected,
             };
-            return Ok((to_value(&report)?, None));
+            return Ok((None, to_value(&report)));
         }
         let ids: Vec<i64> = affected.iter().filter_map(|m| m["id"].as_i64()).collect();
         let doomed = tracks.clone();
@@ -410,19 +378,15 @@ impl Edits<'_> {
             .permanent_edit(Touched::Tracks, move |writer| {
                 writer.delete_tracks(&doomed).map(drop)
             })?;
-        let mut mutants = Vec::new();
-        for id in ids {
-            if let Some(mutant) = self.mutant(id)? {
-                mutants.push(mutant);
-            }
-        }
-        let report = CollectionRemoval {
-            tracks,
-            removed: true,
-            generation: Some(changed.generation),
-            mutants,
-        };
-        Ok((to_value(&report)?, Some(changed)))
+        let answer = self.describe(&ids).and_then(|mutants| {
+            to_value(&CollectionRemoval {
+                tracks,
+                removed: true,
+                generation: Some(changed.generation),
+                mutants,
+            })
+        });
+        Ok((Some(changed), answer))
     }
 
     /// The entries of a plain playlist, refused for anything else.
@@ -452,24 +416,31 @@ impl Edits<'_> {
 
     /// The live Mutants of these entries, by identifier.
     fn mutants_of(&self, entries: &[String]) -> Result<Vec<i64>, ServiceError> {
-        let mut found = Vec::new();
-        for entry in entries {
-            let live = self.stored(|sidecar| {
-                sidecar
-                    .mutant_of_entry(entry)
-                    .map(|mutant| mutant.map(|mutant| mutant.id))
-            })?;
-            if let Some(mutant) = live {
-                found.push(mutant);
-            }
-        }
-        Ok(found)
+        Ok(self
+            .stored(|sidecar| sidecar.mutant_snapshots_of(entries))?
+            .into_iter()
+            .map(|snapshot| snapshot.mutant_id)
+            .collect())
+    }
+
+    /// The Mutants an edit detached from these entries: the newest of each
+    /// entry, when it is no longer live.
+    fn detached_from(&self, entries: &[String]) -> Result<Vec<i64>, ServiceError> {
+        let wanted: std::collections::HashSet<&str> = entries.iter().map(String::as_str).collect();
+        Ok(self
+            .stored(|sidecar| sidecar.mutant_attachments())?
+            .into_iter()
+            .filter(|attachment| !attachment.live && wanted.contains(attachment.entry_id.as_str()))
+            .map(|attachment| attachment.mutant_id)
+            .collect())
     }
 
     /// Reads the Sidecar, when there is one, without making one.
     fn stored<T: Default>(
         &self,
-        read: impl FnOnce(&wreckordbox_sidecar::Sidecar) -> Result<T, wreckordbox_sidecar::SidecarError>,
+        read: impl FnOnce(
+            &wreckordbox_sidecar::Sidecar,
+        ) -> Result<T, wreckordbox_sidecar::SidecarError>,
     ) -> Result<T, ServiceError> {
         let Some(sidecar) = self.stems.sidecar_if_made()? else {
             return Ok(T::default());
@@ -478,56 +449,43 @@ impl Edits<'_> {
             .map_err(|e| ServiceError::new(crate::stems::codes::SIDECAR_FAILED, e.to_string()))
     }
 
-    /// A Mutant as `mutants.get` answers it.
-    fn mutant(&self, id: i64) -> Result<Option<Value>, ServiceError> {
-        match self.mutants_call(mutant_commands::MUTANTS_GET, json!({ "id": id })) {
-            Ok(answer) => Ok(Some(answer["mutant"].clone())),
-            Err(error) if error.code == crate::mutants::codes::MUTANT_NOT_FOUND => Ok(None),
-            Err(error) => Err(error),
-        }
+    /// These Mutants as `mutants.get` describes them, in one pass.
+    fn describe(&self, ids: &[i64]) -> Result<Vec<Value>, ServiceError> {
+        crate::mutants::describe(self.stems, &|read| read(self.library), ids)
     }
 
     /// The live Mutants `mutants.list` answers for `args`.
     fn listed(&self, args: Value) -> Result<Vec<Value>, ServiceError> {
-        let answer = self.mutants_call(mutant_commands::MUTANTS_LIST, args)?;
-        Ok(answer["mutants"].as_array().cloned().unwrap_or_default())
-    }
-
-    fn mutants_call(&self, command: &str, args: Value) -> Result<Value, ServiceError> {
         let request = Request {
             id: 0,
-            command: command.to_owned(),
+            command: mutant_commands::MUTANTS_LIST.to_owned(),
             args,
             run: None,
         };
-        crate::mutants::answer(self.stems, &request, &|read| read(self.library))
+        let answer = crate::mutants::answer(self.stems, &request, &|read| read(self.library))?;
+        Ok(answer["mutants"].as_array().cloned().unwrap_or_default())
     }
 
-    fn edited(
+    fn edited(&self, playlist: &str, changed: bool, change: LibraryChanged, mutants: &[i64]) -> Done {
+        let answer = self.answer_edited(playlist, changed, &change, mutants);
+        (Some(change), answer)
+    }
+
+    fn answer_edited(
         &self,
         playlist: &str,
         changed: bool,
-        change: LibraryChanged,
+        change: &LibraryChanged,
         mutants: &[i64],
-    ) -> Result<(Value, Option<LibraryChanged>), ServiceError> {
-        let mut shown = Vec::new();
-        for id in mutants {
-            if let Some(mutant) = self.mutant(*id)? {
-                shown.push(mutant);
-            }
-        }
-        let edited = PlaylistEdited {
+    ) -> Result<Value, ServiceError> {
+        to_value(&PlaylistEdited {
             playlist: playlist.to_owned(),
             changed,
             generation: change.generation,
-            mutants: shown,
-        };
-        Ok((to_value(&edited)?, Some(change)))
+            mutants: self.describe(mutants)?,
+        })
     }
 }
-
-/// An empty playlist's copy has nothing to add: the write is not made.
-const NOTHING_TO_COPY: &str = "the playlist has no entries to copy";
 
 fn not_found(playlist: &str) -> ServiceError {
     ServiceError::new(
