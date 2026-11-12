@@ -77,6 +77,19 @@ impl Sidecar {
         facts: &NativeFacts,
         reconciled: bool,
     ) -> Result<i64> {
+        self.append_in_one(entry, facts, reconciled, &crate::mutant_follow::Follow::default())
+            .map(|(id, _)| id)
+    }
+
+    /// [`Self::append_with_dj_facts`] with the Mutant consequences of the
+    /// change in the same transaction (wbx-80, [`crate::mutant_follow`]).
+    pub(crate) fn append_in_one(
+        &self,
+        entry: &NewEntry,
+        facts: &NativeFacts,
+        reconciled: bool,
+        follow: &crate::mutant_follow::Follow,
+    ) -> Result<(i64, Vec<crate::mutant_follow::Followed>)> {
         let mut db = self.db();
         let tx = db.transaction()?;
         if let Some(id) = entry.id {
@@ -88,9 +101,39 @@ impl Sidecar {
             if exists {
                 let id = append_in(&tx, entry)?;
                 tx.commit()?;
-                return Ok(id);
+                return Ok((id, Vec::new()));
             }
         }
+        // The Mutants' consequences, kept or rolled back on their own: a
+        // failure is noted on the entry, which is kept.
+        let mut followed = Vec::new();
+        let mut noted = None;
+        if !follow.is_empty() {
+            tx.execute_batch("SAVEPOINT mutant_follow")?;
+            let at = entry.at.unwrap_or_else(crate::store::now);
+            match crate::mutant_follow::apply_in(&tx, follow, entry.source, entry.run, at) {
+                Ok(done) => {
+                    tx.execute_batch("RELEASE mutant_follow")?;
+                    followed = done;
+                }
+                Err(error) => {
+                    tx.execute_batch("ROLLBACK TO mutant_follow; RELEASE mutant_follow")?;
+                    let mut payload = entry.payload.cloned().unwrap_or_else(|| json!({}));
+                    payload["mutants_not_followed"] = json!(error.to_string());
+                    noted = Some(payload);
+                }
+            }
+        }
+        let with_note;
+        let entry = if let Some(payload) = &noted {
+            with_note = NewEntry {
+                payload: Some(payload),
+                ..*entry
+            };
+            &with_note
+        } else {
+            entry
+        };
         let mut facts = facts.clone();
         // Nothing from an agent/Projection is promoted by this observer.
         if entry.source.kind != SourceKind::Dj {
@@ -166,7 +209,7 @@ impl Sidecar {
             }
         };
         tx.commit()?;
-        Ok(id)
+        Ok((id, followed))
     }
 }
 fn with_omissions(entry: &NewEntry, skipped: &[Omission]) -> Option<Value> {

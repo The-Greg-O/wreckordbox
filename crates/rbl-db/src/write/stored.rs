@@ -11,10 +11,19 @@
 //! Covered: [`TrackEdit`], [`TrackTagEdit`] and [`MyTagOrder`], the
 //! payloads of every edit the Library service's commands make today. The
 //! other payloads are added here the same way when the Ledger stores them.
+//!
+//! Read only (`parts`, no `from_parts`): the playlist membership payloads
+//! [`PlaylistTrackRemoval`], [`PlaylistTrackAddition`] and
+//! [`MembershipReplacement`], whose entry rows a Mutant (keyed to a
+//! `djmdSongPlaylist.ID`) follows when they leave a playlist or come back
+//! (wbx-80).
 
 use rusqlite::types::Value;
 
-use super::{MyTagOrder, TrackEdit, TrackTagEdit, WRITABLE_COLUMNS};
+use super::{
+    MembershipReplacement, MyTagOrder, PlaylistTrackAddition, PlaylistTrackRemoval, TrackEdit,
+    TrackTagEdit, WRITABLE_COLUMNS,
+};
 
 /// One track column's value before and after an edit.
 #[derive(Debug, Clone, PartialEq)]
@@ -91,6 +100,57 @@ impl MyTagOrder {
     #[must_use]
     pub fn from_parts(parts: MyTagOrderParts) -> Self {
         Self { parent: parts.parent, before: parts.before, after: parts.after }
+    }
+}
+
+/// A playlist's membership rows (`djmdSongPlaylist.ID`) an edit moved:
+/// those it took out or put in, and the rows of the playlist around it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MembershipParts<'a> {
+    /// The playlist (`djmdPlaylist.ID`).
+    pub playlist: &'a str,
+    /// For a removal, the rows it took out; for an addition, the rows it
+    /// made; for a replacement, the rows the playlist held before.
+    pub moved: Vec<&'a str>,
+    /// For a removal, every row of the playlist before it, in order; for
+    /// an addition, the rows after it; for a replacement, the rows the
+    /// playlist holds after.
+    pub around: Vec<&'a str>,
+}
+
+impl PlaylistTrackRemoval {
+    /// The playlist, the rows taken out, and its rows before.
+    #[must_use]
+    pub fn parts(&self) -> MembershipParts<'_> {
+        MembershipParts {
+            playlist: &self.playlist,
+            moved: self.removed.iter().map(String::as_str).collect(),
+            around: self.order.iter().map(String::as_str).collect(),
+        }
+    }
+}
+
+impl PlaylistTrackAddition {
+    /// The playlist, the rows made, and its rows after.
+    #[must_use]
+    pub fn parts(&self) -> MembershipParts<'_> {
+        MembershipParts {
+            playlist: &self.playlist,
+            moved: self.added.iter().map(String::as_str).collect(),
+            around: self.after.iter().map(|(id, _)| id.as_str()).collect(),
+        }
+    }
+}
+
+impl MembershipReplacement {
+    /// The playlist, its rows before the replacement, and after.
+    #[must_use]
+    pub fn parts(&self) -> MembershipParts<'_> {
+        MembershipParts {
+            playlist: &self.playlist,
+            moved: self.before.iter().map(String::as_str).collect(),
+            around: self.after.iter().map(String::as_str).collect(),
+        }
     }
 }
 

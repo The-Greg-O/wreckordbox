@@ -790,6 +790,9 @@ struct Spilled {
     dj_snapshot: Option<Value>,
     #[serde(default)]
     dj_facts: Option<wreckordbox_sidecar::dj_facts::NativeFacts>,
+    /// The Mutants' consequences of the change (wbx-80), applied with it.
+    #[serde(default)]
+    follow: wreckordbox_sidecar::mutant_follow::Follow,
 }
 
 struct WindowRun {
@@ -845,6 +848,8 @@ struct Draft<'a> {
     reverses: Option<i64>,
     part_of: Option<i64>,
     payload: Option<Value>,
+    /// What the change means for the Mutants of its entries (wbx-80).
+    follow: wreckordbox_sidecar::mutant_follow::Follow,
 }
 
 /// Failures a test can inject into a service with [`FAULTS_ENV`], honoured
@@ -1191,8 +1196,11 @@ impl Keeper {
             };
             let facts =
                 crate::dj_facts::recover(&self.location, &self.stems, open.dj_snapshot.as_ref());
-            sidecar
-                .append_with_dj_facts(
+            // What the unconfirmed write did to entries is not known: the
+            // Mutants are brought into line with the Library as it is.
+            let follow = crate::mutant_follow::reconcile(&self.location, Some(sidecar));
+            let (_, followed) = sidecar
+                .append_following(
                     &NewEntry {
                         id: Some(open.id),
                         run,
@@ -1211,8 +1219,10 @@ impl Keeper {
                     },
                     &facts,
                     true,
+                    &follow,
                 )
                 .map_err(|e| e.to_string())?;
+            crate::mutant_follow::announce(&self.stems, &followed);
         }
         sidecar
             .finish_owned_runs("wreckordbox stopped without ending it")
@@ -1239,8 +1249,8 @@ impl Keeper {
                     waiting.dj_snapshot.as_ref(),
                 ),
             };
-            sidecar
-                .append_with_dj_facts(
+            let (_, followed) = sidecar
+                .append_following(
                     &NewEntry {
                         id: waiting.id,
                         run,
@@ -1259,8 +1269,10 @@ impl Keeper {
                     },
                     &facts,
                     reconciled,
+                    &waiting.follow,
                 )
                 .map_err(|e| e.to_string())?;
+            crate::mutant_follow::announce(&self.stems, &followed);
             state.unwritten.remove(0);
             if self.faults.abort_in_replay {
                 std::process::abort();
@@ -1300,8 +1312,9 @@ impl Keeper {
         let appended = run.and_then(|run| {
             let facts =
                 crate::dj_facts::recover(&self.location, &self.stems, op.dj_snapshot.as_ref());
+            let follow = crate::mutant_follow::reconcile(&self.location, Some(sidecar));
             sidecar
-                .append_with_dj_facts(
+                .append_following(
                     &NewEntry {
                         id: Some(op.id),
                         run,
@@ -1320,7 +1333,9 @@ impl Keeper {
                     },
                     &facts,
                     true,
+                    &follow,
                 )
+                .map(|(_, followed)| crate::mutant_follow::announce(&self.stems, &followed))
                 .map_err(|e| e.to_string())
         });
         if let Err(error) = appended {
@@ -1413,7 +1428,7 @@ impl Keeper {
                     Err("the Sidecar refused the entry (injected)".to_owned())
                 }
                 (Ok(sidecar), Ok(run)) if state.unwritten.is_empty() => sidecar
-                    .append_with_dj_facts(&NewEntry {
+                    .append_following(&NewEntry {
                         id,
                         run: *run,
                         store: Store::Library,
@@ -1428,7 +1443,11 @@ impl Keeper {
                         reversible,
                         format: stored::FORMAT,
                         payload: draft.payload.as_ref(),
-                    }, &dj_facts, false)
+                    }, &dj_facts, false, &draft.follow)
+                    .map(|(id, followed)| {
+                        crate::mutant_follow::announce(&self.stems, &followed);
+                        id
+                    })
                     .map_err(|e| e.to_string()),
                 (Ok(_), Ok(_)) => Err("earlier entries are still waiting to be written".to_owned()),
                 (Err(error), _) => Err(error.message.clone()),
@@ -1457,6 +1476,7 @@ impl Keeper {
                         payload: draft.payload,
                         dj_snapshot,
                         dj_facts: Some(dj_facts),
+                        follow: draft.follow,
                     };
                     let on_disk = sidecar
                         .as_ref()
@@ -1589,6 +1609,9 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn record(&self, step: Step, edit: &LibraryEdit, label: &str, link: Link) -> Option<i64> {
+        let sidecar = self.stems.sidecar().ok();
+        let follow =
+            crate::mutant_follow::of_edit(&self.location, sidecar.as_deref(), step, edit);
         self.append(Draft {
             action: match step {
                 Step::Edit => Action::Edit,
@@ -1600,6 +1623,7 @@ impl rbl_library::ledger::Ledger for Keeper {
             reverses: link.reverses,
             part_of: link.part_of,
             payload: stored::store(edit),
+            follow,
         })
     }
 
@@ -1620,6 +1644,15 @@ impl rbl_library::ledger::Ledger for Keeper {
             }
             return;
         };
+        // Rows removed for good (Remove from Collection) name no entries:
+        // the Mutants are brought into line with the Library instead.
+        let follow = match kept {
+            Unkept::Permanent => crate::mutant_follow::reconcile(
+                &self.location,
+                self.stems.sidecar().ok().as_deref(),
+            ),
+            Unkept::Unrecorded => wreckordbox_sidecar::mutant_follow::Follow::default(),
+        };
         self.append(Draft {
             action: Action::Edit,
             kind: match kept {
@@ -1630,6 +1663,7 @@ impl rbl_library::ledger::Ledger for Keeper {
             reverses: None,
             part_of: None,
             payload: None,
+            follow,
         });
     }
 }

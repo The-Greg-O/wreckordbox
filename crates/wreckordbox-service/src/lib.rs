@@ -22,6 +22,7 @@ pub mod intensity;
 pub mod ledger;
 mod library;
 pub mod mutant_edits;
+mod mutant_follow;
 mod mutant_reads;
 pub mod mutants;
 pub mod mytag_edits;
