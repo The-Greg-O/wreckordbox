@@ -18,6 +18,13 @@ export async function prepareDevicePlaylistDrop(
   compatibility: Parameters<Backend["exportTracksToDevice"]>[3],
   askDuplicates: (held: number, total: number, name: string) => Promise<boolean | null>,
   name: string,
+  /**
+   * Asked once the duplicate question is answered and before anything is
+   * written (the view shell's staged Stick write, wbx-45.4): the tracks to
+   * export to the Stick first and how many go into the playlist. False
+   * stops here, having written nothing.
+   */
+  beforeWrite?: (missing: readonly string[], adding: number) => Promise<boolean>,
 ): Promise<Extract<DevicePlaylistEdit, { kind: "add" }> | null> {
   if (ids.length === 0) return null;
 
@@ -29,6 +36,8 @@ export async function prepareDevicePlaylistDrop(
   if (duplicates === null) return null;
 
   const missing = ids.filter((_, index) => before[index] === null);
+  const adding = duplicates ? ids.length : ids.length - new Set(held).size;
+  if (beforeWrite && !(await beforeWrite(missing, adding))) return null;
   if (missing.length > 0) await backend.exportTracksToDevice([...missing], path, defaults, compatibility);
 
   const after = await backend.devicePlaylistCollectionTracks(path, format, [...ids]);

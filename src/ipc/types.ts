@@ -1004,6 +1004,13 @@ export interface Backend {
    * What `syncDevices` would use and give back on each stick, from the record
    * the stick holds. Writes nothing.
    */
+  /**
+   * What an Export Playlist or Export Track to one Stick would write, worked
+   * out without writing or settling anything (wbx-45.4): the shell's tree
+   * shows it before the DJ confirms the write.
+   */
+  stickWritePlan(request: StickWriteRequest): Promise<StickWritePlan>;
+
   estimateSync(
     playlists: string[],
     destinations: string[],
@@ -1535,6 +1542,24 @@ export interface MissingExportFile {
 }
 
 /** One playlist a stick was last synced with. */
+/** A Stick write to plan (`stickWritePlan`). */
+export type StickWriteRequest =
+  | { kind: "playlist"; playlist: string; destination: string; deleteUnlistedMusic?: boolean; compatibilityFormat?: "wav" | "aiff" | "mp3" }
+  | { kind: "tracks"; tracks: string[]; destination: string; compatibilityFormat?: "wav" | "aiff" | "mp3" };
+
+/** What a Stick write would do; `pending` means nothing may be written and nothing was planned. */
+export interface StickWritePlan {
+  spare: boolean;
+  pending: boolean;
+  tracksNew: number;
+  tracksChanged: number;
+  tracksKept: number;
+  tracksRemoved: number;
+  tracksMissing: number;
+  playlists: { name: string; folder: boolean; change: "created" | "resynchronised" }[];
+  netAdditionalBytes: number;
+}
+
 export interface SyncPlaylist {
   /** The tree's node id for the playlist, so it can be ticked again. */
   libraryId: string;

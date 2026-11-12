@@ -2595,6 +2595,32 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       }
       return reports;
     },
+    // The shell's staged Stick write (wbx-45.4): what Export Playlist or
+    // Export Track would put on the stick, from what the mock stick holds.
+    stickWritePlan: (request) => {
+      const path = request.destination;
+      if (!devices.some((d) => d.path === path)) return Promise.reject(new Error("That device is no longer connected."));
+      const spare = mockStickSpare(path);
+      const none = { tracksNew: 0, tracksChanged: 0, tracksKept: 0, tracksRemoved: 0, tracksMissing: 0, playlists: [], netAdditionalBytes: 0 };
+      if (mockStickPending(path)) return wait({ spare, pending: true, ...none });
+      const held = syncSelections.get(path) ?? [];
+      const onStick = new Set([...held.flatMap((p) => membersOf(p.libraryId)), ...(looseTracks.get(path) ?? [])]);
+      const chosen = request.kind === "playlist" && !held.some((p) => p.libraryId === request.playlist)
+        ? [{ libraryId: request.playlist, name: findNode(request.playlist)?.name ?? request.playlist }]
+        : [];
+      const adding = request.kind === "playlist" ? membersOf(request.playlist) : request.tracks;
+      const fresh = new Set(adding.filter((id) => !onStick.has(id)));
+      return wait({
+        spare, pending: false, ...none,
+        tracksNew: fresh.size,
+        tracksKept: onStick.size,
+        playlists: [
+          ...held.map((p) => ({ name: p.name, folder: false, change: "resynchronised" as const })),
+          ...chosen.map((p) => ({ name: p.name, folder: false, change: "created" as const })),
+        ],
+        netAdditionalBytes: fresh.size * 8_000_000,
+      });
+    },
     // Synthetic sizes, but the same deduplication and peak/net distinction.
     estimateSync: (playlists, destinations) => wait(destinations.map((path) => {
       const selected = new Set(playlists.flatMap(membersOf));

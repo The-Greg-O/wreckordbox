@@ -23,9 +23,12 @@ import { setShellFolderOpen, shellCollapsed } from "@/lib/shellTreeActions";
 import type { ShellView } from "@/lib/shellViews";
 import { ShellTree } from "./ShellTree";
 import type { ShellTreeActionProps } from "./ShellTreeActions";
+import { stagedStickActions, type ShellStickHandlers } from "./shellStickWrites";
+import type { StickWriteGate } from "./StickWriteGate";
 
 export function useShellTree({
   library, sticks, selectedNode, onSelectNode, view, onViewChange, actions, fromStick = false, expansion, onExpansionChange,
+  stickGate, stickHandlers,
 }: {
   /** The Library's tree, as the backend sends it. */
   library: readonly TreeNode[];
@@ -42,6 +45,9 @@ export function useShellTree({
   /** The folders' open and closed state, kept in the session as the old tree's is. */
   expansion?: TreeExpansion;
   onExpansionChange?: (expansion: TreeExpansion) => void;
+  /** Every Stick write staged and confirmed first (wbx-45.4 review, finding 5). Without it the tree offers no Stick writes. */
+  stickGate?: StickWriteGate;
+  stickHandlers?: ShellStickHandlers;
 }): { tree: ReactNode; intakeQueue: IntakeQueue } {
   const [intakeQueue, setIntakeQueue] = useState<IntakeQueue>("intake");
   const [queueChosen, setQueueChosen] = useState(false);
@@ -54,10 +60,14 @@ export function useShellTree({
   }, [onSelectNode, onViewChange]);
 
   const selectedId = view === "intake" && queueChosen ? shellTreeQueueId(intakeQueue) : selectedNode?.id ?? null;
-  const treeActions = useMemo(
-    () => (actions ? { ...actions, canDropToDevicePlaylists: fromStick } : undefined),
-    [actions, fromStick],
-  );
+  const treeActions = useMemo(() => {
+    if (!actions) return undefined;
+    const base = { ...actions, canDropToDevicePlaylists: fromStick };
+    if (stickGate && stickHandlers) return stagedStickActions(base, stickGate, sticks, stickHandlers);
+    // No gate: nothing in the tree may write to a Stick.
+    const { onExport: _e, onDropTracksOnDevice: _t, onDropDeviceTracks: _d, onDeviceCreate: _c, onDeviceRename: _r, onDeviceDelete: _x, onDeviceImport: _i, ...rest } = base;
+    return rest;
+  }, [actions, fromStick, stickGate, stickHandlers, sticks]);
   const collapsed = useMemo(() => (expansion ? shellCollapsed(expansion) : undefined), [expansion]);
   const folderOpen = useCallback((id: string, isOpen: boolean) => {
     if (expansion && onExpansionChange) onExpansionChange(setShellFolderOpen(expansion, id, isOpen));
@@ -66,7 +76,9 @@ export function useShellTree({
     <ShellTree
       library={library} sticks={sticks} selectedId={selectedId} onOpen={open}
       actions={treeActions} selectedNode={selectedNode} collapsed={collapsed} onFolderOpen={folderOpen}
+      stickRefusal={stickGate?.refusal}
     />
   );
-  return { tree, intakeQueue };
+  const withGate = stickGate?.element ? <>{tree}{stickGate.element}</> : tree;
+  return { tree: withGate, intakeQueue };
 }

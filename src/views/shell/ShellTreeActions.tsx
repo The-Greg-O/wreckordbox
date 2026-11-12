@@ -18,6 +18,7 @@ import { EjectIcon } from "@/components/icons";
 import { useTranslation } from "@/i18n";
 import { TREE_ROOT, type TreeNode } from "@/ipc/types";
 import { deviceTreeMenu, SEPARATOR, treeMenu, type DeviceTreeAction, type MenuRow, type TreeAction } from "@/lib/contextMenus";
+import { parseDeviceNodeId } from "@/lib/deviceLibrary";
 import { devicePath } from "@/lib/devices";
 import { publishTreeMenuState } from "@/lib/menuBar";
 import type { ShellStick, ShellTreeRow } from "@/lib/shellTree";
@@ -74,11 +75,13 @@ export interface ShellTreeActionsApi {
 
 const PLAYLISTS_HEADING = "shell:heading:playlists";
 
-export function useShellTreeActions({ actions, library, sticks, selectedNode }: {
+export function useShellTreeActions({ actions, library, sticks, selectedNode, stickRefusal }: {
   actions: ShellTreeActionProps;
   library: readonly TreeNode[];
   sticks: readonly ShellStick[];
   selectedNode: TreeNode | null;
+  /** Why a Stick may not be written to now; a Stick it refuses takes no drop and is greyed in Export. */
+  stickRefusal?: ((path: string) => string | null) | undefined;
 }): ShellTreeActionsApi {
   const t = useTranslation();
   const { advanced: { doubleClickToEdit } } = usePreferences();
@@ -151,6 +154,10 @@ export function useShellTreeActions({ actions, library, sticks, selectedNode }: 
   const dropOn = (row: ShellTreeRow, event: DragEvent<HTMLElement>) => {
     const drop = shellRowDrop(row, sticks, dragOf(event));
     if ((drop === "exportTracks" || drop === "exportNode") && deviceBusy) return null;
+    if (drop === "exportTracks" || drop === "exportNode" || drop === "stickTracks") {
+      const path = drop === "stickTracks" ? (row.node ? parseDeviceNodeId(row.node.id)?.path : undefined) : devicePath(row.id);
+      if (path == null || stickRefusal?.(path) != null) return null;
+    }
     if (drop === "stickTracks" && (!canDropToDevicePlaylists || !actions.onDropDeviceTracks)) return null;
     if (drop === "exportTracks" && !actions.onDropTracksOnDevice) return null;
     if (drop === "tracks" && !actions.onDropTracks) return null;
@@ -334,6 +341,19 @@ export function useShellTreeActions({ actions, library, sticks, selectedNode }: 
     };
   };
 
+  /** Export's Sticks, each greyed while the gate refuses it (unread, unfinished write, being checked). */
+  const writableExports = (rows: readonly MenuRow<TreeAction>[]): MenuRow<TreeAction>[] => rows.map((row) => {
+    if (row === SEPARATOR || !row.items) return row;
+    return {
+      ...row,
+      items: row.items.map((item) => {
+        if (item === SEPARATOR || typeof item.action !== "string" || !item.action.startsWith("exportTo:")) return item;
+        const path = item.action.slice("exportTo:".length);
+        return actions.onExport && stickRefusal?.(path) == null && !deviceBusy ? item : { ...item, action: null };
+      }),
+    };
+  });
+
   const renderMenu = (): ReactNode => {
     if (menu === null) return null;
     const close = () => { setMenu(null); };
@@ -368,7 +388,7 @@ export function useShellTreeActions({ actions, library, sticks, selectedNode }: 
         <ContextMenu<TreeAction>
           x={menu.x}
           y={menu.y}
-          rows={treeMenu(found.menu, actions.exportDevices, childrenOf(library, found.menu === "collection" ? TREE_ROOT : node.id).length > 0)}
+          rows={writableExports(treeMenu(found.menu, actions.exportDevices, childrenOf(library, found.menu === "collection" ? TREE_ROOT : node.id).length > 0))}
           label={found.menu === "folder" ? "Folder" : found.menu === "collection" ? "Playlists" : "Playlist"}
           context={{ inPlaylist: true, hasFile: true, readOnly }}
           onChoose={run}

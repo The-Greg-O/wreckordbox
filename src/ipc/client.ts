@@ -7,7 +7,7 @@
 import { detectPlatform } from "@/lib/shortcuts";
 import { confirmHandler } from "./confirmHost";
 import type {
-  AnalysisStageDescriptor, AnalysisResult, AudioDevices, Backend, Backup, BackupProgress, BackupSizes, ConfirmReplace, Cue, SyncEstimate, DeckEvent, Device, DeviceLibrary,
+  AnalysisStageDescriptor, AnalysisResult, AudioDevices, Backend, Backup, BackupProgress, BackupSizes, ConfirmReplace, Cue, SyncEstimate, StickWritePlan, DeckEvent, Device, DeviceLibrary,
   DevicePlaylistEditResult, DevicePlaylistImportPlan, DevicePlaylistImportResult, DeviceSettings, DeviceSyncState,
   Diagnostics, Duplicates, LibraryProtection, LogPage, GridState, Limiter, PreferencesRequest, SmartRule, SyncDeviceReport, SyncProgress, XmlImportReport,
   ExportProgress, ExportReport, ExplorerChildren, ExplorerRoot, FilterValues, FolderPlaylistReport, Phrase, ImportReport,
@@ -600,6 +600,7 @@ async function realBackend(): Promise<Backend> {
         compatibilityFormat: compatibilityFormat ?? null,
         verifyAll: verifyAll ?? false,
       }),
+    stickWritePlan: (request) => invoke<StickWritePlan>("stick_write_plan", { request }),
     estimateSync: (playlists, destinations, deleteUnlistedMusic, compatibilityFormat) =>
       invoke<SyncEstimate[]>("estimate_sync", {
         playlists,

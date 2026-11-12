@@ -52,6 +52,8 @@ export interface ShellTreeProps {
   collapsed?: ReadonlySet<string> | undefined;
   /** A folder was opened or closed. */
   onFolderOpen?: ((id: string, open: boolean) => void) | undefined;
+  /** Why a Stick may not be written to now (the Stick write gate), or null. */
+  stickRefusal?: ((path: string) => string | null) | undefined;
 }
 
 /** No actions: a tree that only opens rows. */
@@ -119,12 +121,12 @@ function readSizes(element: HTMLElement | null): TreeSizes {
 
 export function ShellTree({
   library, sticks, setPlans = NO_SET_PLANS, selectedId, onOpen, actions = NO_ACTIONS, selectedNode = null,
-  collapsed: keptCollapsed, onFolderOpen,
+  collapsed: keptCollapsed, onFolderOpen, stickRefusal,
 }: ShellTreeProps) {
   const t = useTranslation();
   const [ownCollapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const collapsed = keptCollapsed ?? ownCollapsed;
-  const act = useShellTreeActions({ actions, library, sticks, selectedNode });
+  const act = useShellTreeActions({ actions, library, sticks, selectedNode, stickRefusal });
   const treeRows = useMemo(
     () => shellTreeRows({ library, sticks, setPlans, collapsed }),
     [library, sticks, setPlans, collapsed],

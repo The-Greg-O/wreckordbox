@@ -125,14 +125,18 @@ test("a Stick write that fails part-way leaves the Stick refused until it is set
   await seed(page, true);
   await page.goto("/?writable=1");
   await expect(stick(page).getByRole("treeitem", { name: "Melodic Vox" })).toBeVisible();
+  // A Stick playlist is open in the list: after the failed write the list must not reopen it.
+  await stick(page).getByRole("treeitem", { name: "Melodic Vox" }).click();
+  await expect(page.getByTestId("browser-title")).toContainText("Melodic Vox");
   await page.evaluate((path) => { (window as unknown as Hooks).__failNextStickWrite(path); }, TEST);
   // Create New Playlist on the Stick, confirmed with the hold.
   await stick(page).getByRole("treeitem", { name: "TEST", exact: true }).click({ button: "right" });
   await page.getByRole("menu", { name: "Playlists" }).getByRole("menuitem", { name: "Create New Playlist" }).click();
   const confirm = page.getByRole("alertdialog", { name: /Write to TEST/ });
-  await confirm.getByRole("button", { name: /Hold to write/ }).dispatchEvent("pointerdown");
-  await page.waitForTimeout(2300);
-  await confirm.getByRole("button", { name: /Hold to write/ }).dispatchEvent("pointerup");
+  await confirm.getByRole("button", { name: /Hold to write/ }).hover();
+  await page.mouse.down();
+  await expect(confirm).toHaveCount(0, { timeout: 4000 });
+  await page.mouse.up();
   await expect(page.getByTestId("shell-status")).toContainText("stopped part-way");
   // The tree looks at the Stick again and shows what is there now.
   await expect(stick(page)).toContainText("A write to this Stick did not finish");
