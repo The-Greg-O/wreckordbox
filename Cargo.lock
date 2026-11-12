@@ -7046,6 +7046,7 @@ version = "1.10.0"
 dependencies = [
  "rbl-audio",
  "rbl-deck",
+ "rustix",
  "tempfile",
  "thiserror 2.0.20",
 ]

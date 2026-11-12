@@ -5,9 +5,11 @@
 //! how far along it is and may cancel. See the README beside this crate.
 
 mod encode;
+#[doc(hidden)]
+pub mod publish;
 mod source;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub use source::{MemorySource, Source, TrackSource};
 
@@ -89,6 +91,10 @@ pub enum RenderError {
     KeyShiftUnavailable,
     #[error("the tempo is outside what the stretcher holds")]
     TempoOutOfRange,
+    #[error("this build cannot change a tempo and hold the pitch (it has no Rubber Band)")]
+    TempoUnavailable,
+    #[error("this filesystem cannot put a file in place without replacing: {0}")]
+    NoReplaceUnsupported(PathBuf),
     #[error("the source holds no audio")]
     Empty,
     #[error("the stretcher failed: {0}")]
@@ -128,6 +134,20 @@ pub fn render(
     destination: &Destination,
     progress: &mut dyn FnMut(Progress) -> Proceed,
 ) -> Result<Rendered, RenderError> {
+    render_on(&publish::Real, source, edits, destination, progress)
+}
+
+/// [`render`] over a filesystem of the caller's choosing: the seam the tests
+/// use to stand in for a filesystem that cannot link or rename without
+/// replacing, and to put a competing file in the way at an exact moment.
+#[doc(hidden)]
+pub fn render_on(
+    files: &dyn publish::Filesystem,
+    source: &mut dyn Source,
+    edits: Edits,
+    destination: &Destination,
+    progress: &mut dyn FnMut(Progress) -> Proceed,
+) -> Result<Rendered, RenderError> {
     if !(-MAX_KEY_SHIFT..=MAX_KEY_SHIFT).contains(&edits.key_shift) {
         return Err(RenderError::KeyShiftOutOfRange);
     }
@@ -140,8 +160,8 @@ pub fn render(
     let sample_rate = source.sample_rate();
     let mut stretch = stretcher(sample_rate, edits)?;
 
-    let part = Part::beside(&destination.path)?;
-    let mut encoder = encode::encoder(destination.format, part.create()?, sample_rate)?;
+    let (part, file) = publish::Part::create(files, &destination.path)?;
+    let mut encoder = encode::encoder(destination.format, file, sample_rate)?;
 
     let total = source.frames_hint();
     // About twice a second of source audio: often enough to draw, and a
@@ -231,70 +251,5 @@ fn stretcher(sample_rate: u32, edits: Edits) -> Result<Option<rbl_deck::Offline>
         Err(rbl_deck::OfflineError::TempoOutOfRange) => Err(RenderError::TempoOutOfRange),
         Err(rbl_deck::OfflineError::PitchOutOfRange) => Err(RenderError::KeyShiftOutOfRange),
         Err(other) => Err(RenderError::Stretch(other)),
-    }
-}
-
-/// The file being written, under a name that is not the destination's.
-/// Dropped without [`Part::commit`], it is removed.
-struct Part {
-    path: PathBuf,
-    committed: bool,
-}
-
-impl Part {
-    /// In the destination's own folder, so moving it into place is a rename
-    /// and never a copy.
-    fn beside(destination: &Path) -> Result<Self, RenderError> {
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let name = destination.file_name().ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "the destination has no file name",
-            )
-        })?;
-        let unique = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let mut part = std::ffi::OsString::from(".");
-        part.push(name);
-        part.push(format!(".{}-{unique}.part", std::process::id()));
-        Ok(Self {
-            path: destination.with_file_name(part),
-            committed: false,
-        })
-    }
-
-    fn create(&self) -> std::io::Result<std::fs::File> {
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&self.path)
-    }
-
-    fn commit(mut self, destination: &Path) -> Result<(), RenderError> {
-        // A render takes a while, and a rename replaces whatever arrived
-        // meanwhile. A hard link does not: it fails if the name is taken, in
-        // one step, and the temporary name is then dropped as usual.
-        match std::fs::hard_link(&self.path, destination) {
-            Ok(()) => return Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                return Err(RenderError::DestinationExists(destination.to_path_buf()));
-            }
-            // A filesystem without hard links (FAT, exFAT): ask again and
-            // rename, which leaves a moment between the two.
-            Err(_) => {}
-        }
-        if destination.try_exists()? {
-            return Err(RenderError::DestinationExists(destination.to_path_buf()));
-        }
-        std::fs::rename(&self.path, destination)?;
-        self.committed = true;
-        Ok(())
-    }
-}
-
-impl Drop for Part {
-    fn drop(&mut self) {
-        if !self.committed {
-            let _ = std::fs::remove_file(&self.path);
-        }
     }
 }
