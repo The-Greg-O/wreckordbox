@@ -47,6 +47,8 @@ import { useCommands } from "@/store/useCommands";
 import { useEventCallback } from "@/store/useEventCallback";
 import { usePreferences } from "@/store/usePreferences";
 import { IntakeTagPanel, TagFailures, TagPicker } from "./IntakeTagPanel";
+import { DeckWriteFailures } from "./DeckWriteFailures";
+import { deckWrites } from "@/lib/trackWrites";
 import { IntakeTrackPanel } from "./IntakeTrackPanel";
 import styles from "./IntakeView.module.css";
 import { useIntakeColours } from "./useIntakeColours";
@@ -291,11 +293,19 @@ export function IntakeView(props: IntakeViewProps) {
       return answer;
     },
   }));
-  /** Waits for `id`'s tag writes; says why any failed and answers whether the mark may go on. */
+  /**
+   * Waits for `id`'s tag writes, then its cue and grid writes (wbx-64);
+   * says why any failed and answers whether the mark may go on.
+   */
   const tagsWritten = useEventCallback(async (op: IntakeOperation): Promise<boolean> => {
     const why = await tagStore.settled(op.id);
-    if (why === null) return true;
-    if (owns(op)) setEditFailure(`${t("Not saved")}: ${t("tags")}: ${why}`);
+    if (why !== null) {
+      if (owns(op)) setEditFailure(`${t("Not saved")}: ${t("tags")}: ${why}`);
+      return false;
+    }
+    const deck = await deckWrites.settled(op.id);
+    if (deck === null) return true;
+    if (owns(op)) setEditFailure(`${t("Not saved")}: ${deck}`);
     return false;
   });
 
@@ -461,7 +471,12 @@ export function IntakeView(props: IntakeViewProps) {
 
   const picker = picking && selected ? <TagPicker store={tagStore} trackId={selected.id} onClose={() => setPicking(false)} /> : null;
   const titleOf = (id: string) => page?.tracks.find((track) => track.id === id)?.title ?? id;
-  const tagFailures = <TagFailures store={tagStore} titleOf={titleOf} shownTrack={shownId} />;
+  const tagFailures = (
+    <>
+      <TagFailures store={tagStore} titleOf={titleOf} shownTrack={shownId} />
+      <DeckWriteFailures titleOf={titleOf} shownTrack={shownId} />
+    </>
+  );
 
   // Nothing read yet: still reading, or the first read failed (the Library
   // still loading, no service). `library:ready` and Retry read again.
@@ -498,6 +513,7 @@ export function IntakeView(props: IntakeViewProps) {
         <h2>{title}</h2>
         {stale}
         <TagFailures store={tagStore} titleOf={titleOf} shownTrack={null} />
+        <DeckWriteFailures titleOf={titleOf} shownTrack={null} />
         {queue === "intake" ? (
           <>
             <p>{t("Intake is empty: every track has a Prep colour.")}</p>

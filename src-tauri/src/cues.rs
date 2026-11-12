@@ -107,10 +107,12 @@ pub struct CueChange {
 pub fn apply(writer: &mut rbl_db::write::Writer, edit: CueEdit) -> AppResult<CueChange> {
     match edit {
         CueEdit::Add { track, kind, position_ms } => {
+            refuse_a_set_slot(writer, &track, &kind)?;
             let cue = writer.add_cue(&track, kind.number()?, position_ms).map_err(write_error)?;
             Ok(CueChange { track, cue })
         }
         CueEdit::AddLoop { track, kind, in_ms, out_ms, beat_loop } => {
+            refuse_a_set_slot(writer, &track, &kind)?;
             let cue = writer
                 .add_beat_loop(&track, kind.number()?, in_ms, out_ms, beat_loop)
                 .map_err(write_error)?;
@@ -205,6 +207,27 @@ pub fn apply_recorded(writer: &mut rbl_db::write::Writer, edit: CueEdit) -> AppR
     let after = writer.cue_rows(&change.track).map_err(write_error)?;
     let revision = CueRevision::between(&change.track, &before, &after);
     Ok((change, revision))
+}
+
+/// A hot cue slot holds one cue (wbx-64): a second Set Hot Cue on a set
+/// slot, two presses racing the pads' refetch, is refused before anything is
+/// written. A memory cue has no slot.
+fn refuse_a_set_slot(writer: &rbl_db::write::Writer, track: &str, kind: &CueKind) -> AppResult<()> {
+    let &CueKind::Hot(letter) = kind else { return Ok(()) };
+    let number = kind.number()?;
+    let set: i64 = writer
+        .library()
+        .connection()
+        .query_row(
+            "SELECT COUNT(*) FROM djmdCue WHERE ContentID=?1 AND Kind=?2 AND COALESCE(rb_local_deleted, 0)=0",
+            rusqlite::params![track, number],
+            |row| row.get(0),
+        )
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    if set > 0 {
+        return Err(AppError::new(ErrorKind::Conflict, format!("Hot Cue {} is already set.", letter.to_ascii_uppercase())));
+    }
+    Ok(())
 }
 
 fn owner_of(writer: &rbl_db::write::Writer, cue: &str) -> AppResult<String> {
@@ -488,6 +511,30 @@ mod tests {
         assert!(kind("{\"hot\":\"AB\"}").is_err());
         assert!(kind("{\"hot\":\"\"}").is_err());
         assert!(kind("3").is_err());
+    }
+
+    /// wbx-64 review 5: a hot cue slot holds one cue. A second Set Hot Cue
+    /// on a set slot (two presses racing a refetch) is refused and writes
+    /// nothing; the slot keeps its cue. A memory cue is never refused so.
+    #[test]
+    fn a_set_hot_cue_slot_refuses_a_second_cue() {
+        let mut f = open();
+        let track = track_id(1);
+        apply(&mut f.writer, CueEdit::Add { track: track.clone(), kind: CueKind::Hot('E'), position_ms: 10_000 }).unwrap();
+        let before = f.writer.cue_rows(&track).unwrap().len();
+        let refused = apply(&mut f.writer, CueEdit::Add { track: track.clone(), kind: CueKind::Hot('E'), position_ms: 20_000 }).unwrap_err();
+        assert_eq!(refused.kind, ErrorKind::Conflict);
+        let refused = apply(&mut f.writer, CueEdit::AddLoop {
+            track: track.clone(), kind: CueKind::Hot('E'), in_ms: 30_000, out_ms: 31_000, beat_loop: None,
+        }).unwrap_err();
+        assert_eq!(refused.kind, ErrorKind::Conflict);
+        assert_eq!(f.writer.cue_rows(&track).unwrap().len(), before);
+        f.reload(&track);
+        let set: Vec<_> = f.cues(&track).into_iter().filter(|cue| cue.hot_letter() == Some('E')).collect();
+        assert_eq!(set.len(), 1);
+        assert_eq!(set[0].position_ms, 10_000);
+        apply(&mut f.writer, CueEdit::Add { track: track.clone(), kind: CueKind::Memory, position_ms: 10_000 }).unwrap();
+        apply(&mut f.writer, CueEdit::Add { track, kind: CueKind::Memory, position_ms: 10_000 }).unwrap();
     }
 
     #[test]

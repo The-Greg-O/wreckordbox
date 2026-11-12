@@ -12,18 +12,18 @@ use serde_json::{json, Value};
 use std::{path::PathBuf, process::Command, sync::Arc, time::Duration};
 use wreckordbox_service::{Client, Config, Service};
 
-struct Fixture {
+pub(crate) struct Fixture {
     service: Service,
-    state: Arc<AppState>,
-    location: rbl_db::LibraryLocation,
+    pub(crate) state: Arc<AppState>,
+    pub(crate) location: rbl_db::LibraryLocation,
     config: Config,
-    dat: PathBuf,
+    pub(crate) dat: PathBuf,
     ext: PathBuf,
-    dir: tempfile::TempDir,
+    pub(crate) dir: tempfile::TempDir,
 }
 
 impl Fixture {
-    fn new(tracks: usize) -> Self {
+    pub(crate) fn new(tracks: usize) -> Self {
         let dir = match std::env::var_os("WBX22_CHILD_ROOT") {
             Some(root) => tempfile::tempdir_in(root).unwrap(),
             None => tempfile::tempdir().unwrap(),
@@ -97,7 +97,7 @@ impl Fixture {
         }
     }
 
-    fn cli(&self, args: &[&str]) -> Value {
+    pub(crate) fn cli(&self, args: &[&str]) -> Value {
         cli_at(self.dir.path(), args)
     }
 
@@ -483,7 +483,7 @@ fn file_edit_latency_at_twenty_thousand_tracks() {
     }
 }
 
-fn entries(f: &Fixture) -> Vec<Value> {
+pub(crate) fn entries(f: &Fixture) -> Vec<Value> {
     f.cli(&["runs", "list"])["runs"]
         .as_array()
         .unwrap()
@@ -626,9 +626,11 @@ fn window_grid_edit_undo_redo_are_recorded_once_each() {
     }
     let all = entries(&f);
     assert_eq!(all.len(), 3);
-    for (e, (action, before, after)) in
-        all.iter()
-            .zip([("write", 500, 600), ("undo", 600, 500), ("redo", 500, 600)])
+    for (e, (action, before, after)) in all
+        .iter()
+        // A history edit since wbx-64: the window's grid edits are steps
+        // of the shared history.
+        .zip([("edit", 500, 600), ("undo", 600, 500), ("redo", 500, 600)])
     {
         assert_eq!(e["source"], json!({"kind":"dj", "name":"dj"}));
         assert_eq!(e["action"], action);

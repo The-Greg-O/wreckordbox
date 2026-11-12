@@ -961,6 +961,11 @@ const APP_FILE_WRITERS: &[&str] = &[
     "move_cue",
     "move_hot_cue",
     "record_play",
+    // Undo and Redo of a window grid step (wbx-64): the grid editor's
+    // analysis files under `file_edit` (Library and Stick Protection, the
+    // file journal), and the Library cache re-read when the tempo changed,
+    // as `grid_undo`/`grid_redo` do.
+    "redo_edit",
     "reload_library",
     "relocate_by_location",
     "rename_my_tag",
@@ -972,6 +977,7 @@ const APP_FILE_WRITERS: &[&str] = &[
     "set_track_field",
     "set_track_rating",
     "stick_unlock",
+    "undo_edit",
     "use_default_library",
 ];
 

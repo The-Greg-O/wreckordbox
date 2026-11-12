@@ -34,6 +34,7 @@ import { fromServicePanel, fromServiceTagsSet } from "@/lib/tagPanel";
 import { referenceDeviceSettings } from "./mock-device-settings";
 import { createMockDeviceLibraries, type MockImportEntry } from "./mock-device-library";
 import { createMockIntake } from "./mock-intake";
+import { mockCueHooks } from "./mock-cue-pads";
 import { createMockTagPanel } from "./mock-tag-panel";
 import { keyLightRows } from "./mock-key-lights";
 import { FILTER_FIXTURE_SIZE, filterFixtureColors, filterFixtureMembers, filterFixtureRows, filterFixtureTags } from "./mock-filter-fixture";
@@ -708,6 +709,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
   }
   type MockEdit = {
     label: string; undo: () => void; redo: () => void;
+    /** A window grid edit, or a run of them (wbx-64): its track, run and beats either side. */
+    grid?: { track: string; transaction: string | undefined; before: EditableBeat[]; after: EditableBeat[] };
     /** An Add Tracks to Playlist still open to its next slice (#499). */
     transaction?: string | undefined; playlist?: string; after?: string[];
   };
@@ -1811,9 +1814,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
           if (held.locked) return refuse("The beat grid is locked. Unlock it to edit.");
           const next = applyEditFrom(held.beats, null, { kind: "tempo", bpmX100: Math.round(bpm * 100), anchorMs: 0 }, row.durationSec * 1000);
           if (!sameGrid(next, held.beats)) {
-            held.undo.push({ beats: held.beats, label: "Set Tempo" });
-            held.transaction = undefined;
-            held.redo = [];
+            recordGridStep(row.id, "Set Tempo", held.beats, next, undefined);
             held.beats = next;
           }
           row.bpmX100 = Math.round(bpm * 100);
@@ -1855,16 +1856,23 @@ export function createMockBackend(options: MockOptions = {}): Backend {
         return { undo: () => apply(beforeRow, beforeDetails), redo: () => apply(afterRow, afterDetails) };
       });
     },
-    addCue: (track, kind, positionMs) => {
+    addCue: async (track, kind, positionMs) => {
       if (!all.some((r) => r.id === track)) return refuse(`no track ${track}`);
       if (kind !== "memory" && !/^[A-P]$/.test(kind.hot)) {
         return refuse(`${JSON.stringify(kind.hot)} is not a hot cue slot rekordbox has`);
       }
+      await cueHooks.writeGate();
+      // As the writer: a slot holds one hot cue.
+      if (kind !== "memory" && cuesOf(track).some((cue) => !cue.memory && cue.letter === kind.hot)) {
+        return refuse(`Hot cue ${kind.hot} is already set.`);
+      }
+      const failing = cueHooks.refusal();
+      if (failing) return refuse(failing);
       const id = `cue-${nextCueId++}`;
-      cuesOf(track).push({
+      cueHooks.recorded(track, kind === "memory" ? "Set Memory Cue" : "Set Hot Cue", () => cuesOf(track).push({
         id, positionMs, outMs: 0, letter: kind === "memory" ? "" : kind.hot, memory: kind === "memory",
         colour: NO_COLOUR,
-      });
+      }));
       return cuesChanged(track, id);
     },
     addLoop: (track, kind, inMs, outMs) => {
@@ -1949,20 +1957,27 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       found.cue.letter = letter;
       return cuesChanged(found.track, undefined);
     },
-    deleteCue: (cue) => {
+    deleteCue: async (cue) => {
+      await cueHooks.writeGate();
       const found = findCue(cue);
       if (!found) return notFound(`no cue ${cue}`);
-      const list = cuesOf(found.track);
-      list.splice(list.indexOf(found.cue), 1);
+      const failing = cueHooks.refusal();
+      if (failing) return refuse(failing);
+      cueHooks.recorded(found.track, "Delete Cue", () => {
+        const list = cuesOf(found.track);
+        list.splice(list.indexOf(found.cue), 1);
+      });
       return cuesChanged(found.track, undefined);
     },
-    gridEdit: (track, edit, options) => {
+    gridEdit: async (track, edit, options) => {
+      const refused = await cueHooks.gridWrite(edit.kind);
+      if (refused) return refuse(refused);
       const held = gridOf(track);
       if (!held) return notFound("That track has no beat grid to edit.");
       if (held.locked) return refuse("The beat grid is locked. Unlock it to edit.");
       const invalid = validateEdit(held.beats, options?.fromMs ?? null, edit);
       if (invalid) return refuse(invalid);
-      if (["stretch", "tempo"].includes(edit.kind) && !options?.allowDynamic && isDynamicFrom(held.beats, options?.fromMs ?? null)) return refuse("Confirm replacing this section's tempo changes.");
+      if (["stretch", "tempo", "tap"].includes(edit.kind) && !options?.allowDynamic && isDynamicFrom(held.beats, options?.fromMs ?? null)) return refuse("Confirm replacing this section's tempo changes.");
       const duration = options?.durationMs ?? (all[Number.parseInt(track, 10) - 100000]?.durationSec ?? 0) * 1000;
       const next = applyEditFrom(held.beats, options?.fromMs ?? null, edit, duration);
       if (next.length === 0) return failed("malformed", "That edit would leave the track without a beat.");
@@ -1971,31 +1986,25 @@ export function createMockBackend(options: MockOptions = {}): Backend {
         ? (edit.ms < 0 ? "Shift Beat Grid Left" : "Shift Beat Grid Right")
         : { double: "Double Tempo", halve: "Halve Tempo", downbeat: "Set Downbeat",
           tempo: "Set Tempo", tap: "Tap Tempo", stretch: "Adjust Tempo", align: "Align Beat Grid" }[edit.kind];
-      if (!options?.transaction || held.transaction !== options.transaction) held.undo.push({ beats: held.beats, label });
-      held.transaction = edit.kind === "tap" ? options?.transaction : undefined;
-      held.redo = [];
+      recordGridStep(track, label, held.beats, next, edit.kind === "tap" || edit.kind === "nudge" ? options?.transaction : undefined);
       held.beats = next;
       return gridChanged(track, held);
     },
-    gridUndo: (track) => {
+    // The grid panel's Undo and Redo step the shared history when its next
+    // entry is this track's grid step, and never past anything else.
+    gridUndo: async (track) => {
       const held = gridOf(track);
       if (!held) return notFound("That track has no beat grid to edit.");
-      held.transaction = undefined;
-      const previous = held.undo.pop();
-      if (!previous) return notFound("Nothing to undo.");
-      held.redo.push({ beats: held.beats, label: previous.label });
-      held.beats = previous.beats;
-      return gridChanged(track, held);
+      if (editUndo.at(-1)?.grid?.track !== track) return notFound("Nothing to undo on this track's beat grid.");
+      await edits.undoEdit();
+      return gridStateOf(held);
     },
-    gridRedo: (track) => {
+    gridRedo: async (track) => {
       const held = gridOf(track);
       if (!held) return notFound("That track has no beat grid to edit.");
-      held.transaction = undefined;
-      const next = held.redo.pop();
-      if (!next) return notFound("Nothing to redo.");
-      held.undo.push({ beats: held.beats, label: next.label });
-      held.beats = next.beats;
-      return gridChanged(track, held);
+      if (editRedo.at(-1)?.grid?.track !== track) return notFound("Nothing to redo on this track's beat grid.");
+      await edits.redoEdit();
+      return gridStateOf(held);
     },
     gridLock: (track, on) => {
       const held = gridOf(track);
@@ -2041,6 +2050,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
    * also bumps the generation, because the row's BPM column changed.
    */
   interface HeldGrid {
+    track: string;
     beats: EditableBeat[];
     transaction?: string | undefined;
     undo: { beats: EditableBeat[]; label: string }[];
@@ -2071,22 +2081,52 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       beats.push({ number: (n % 4) + 1, tempoX100: fast ? row.bpmX100 * 2 : row.bpmX100, timeMs: Math.round(at) });
       at += fast ? beatMs / 2 : beatMs;
     }
-    const made = { beats, undo: [], redo: [], locked: false };
+    const made = { track: trackId, beats, undo: [], redo: [], locked: false };
     gridStore.set(trackId, made);
     return made;
   };
   const sameGrid = (a: readonly EditableBeat[], b: readonly EditableBeat[]) =>
     a.length === b.length
     && a.every((beat, i) => beat.timeMs === b[i]?.timeMs && beat.number === b[i]?.number && beat.tempoX100 === b[i]?.tempoX100);
-  const gridStateOf = (held: HeldGrid): GridState => ({
-    bpmX100: tempoX100(held.beats),
-    beats: held.beats.length,
-    canUndo: held.undo.length > 0,
-    canRedo: held.redo.length > 0,
-    undoLabel: held.undo.at(-1)?.label ?? null,
-    redoLabel: held.redo.at(-1)?.label ?? null,
-    locked: held.locked,
-  });
+  // What the grid panel offers to undo and redo: the shared history's next
+  // entries, when they are this track's grid steps (wbx-64).
+  const gridStateOf = (held: HeldGrid): GridState => {
+    const undo = editUndo.at(-1);
+    const redo = editRedo.at(-1);
+    const mine = (entry: MockEdit | undefined) => (entry?.grid?.track === held.track ? entry : undefined);
+    return {
+      bpmX100: tempoX100(held.beats),
+      beats: held.beats.length,
+      canUndo: mine(undo) !== undefined,
+      canRedo: mine(redo) !== undefined,
+      undoLabel: mine(undo)?.label ?? null,
+      redoLabel: mine(redo)?.label ?? null,
+      locked: held.locked,
+    };
+  };
+  /**
+   * One window grid edit as a step of the shared history, as the shell
+   * records it (wbx-64): an edit of the tap run or held nudge on top joins
+   * it. Undo and Redo put the grid back, refusing one changed since.
+   */
+  const recordGridStep = (track: string, label: string, before: EditableBeat[], after: EditableBeat[], transaction: string | undefined) => {
+    const top = editUndo.at(-1);
+    if (transaction && top?.grid?.track === track && top.grid.transaction === transaction) {
+      top.grid.after = after;
+    } else {
+      const step = { track, transaction, before, after };
+      const put = (from: EditableBeat[], to: EditableBeat[]) => {
+        const now = gridOf(track);
+        if (!now || !sameGrid(now.beats, from)) throw new Error("the track's beat grid has changed since");
+        now.beats = to;
+        void gridChanged(track, now);
+      };
+      editUndo.push({ label, grid: step, undo: () => put(step.after, step.before), redo: () => put(step.before, step.after) });
+      if (editUndo.length > 50) editUndo.shift();
+    }
+    editRedo.length = 0;
+    announceHistory();
+  };
   const gridChanged = async (trackId: string, held: HeldGrid): Promise<GridState> => {
     const row = all[Number.parseInt(trackId, 10) - 100000];
     const bpm = tempoX100(held.beats);
@@ -2239,6 +2279,26 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     for (const listener of cueListeners) listener(track);
     return wait(value);
   };
+  // wbx-64: a hot cue set or a cue deleted is an entry of the shared Undo
+  // history, as the shell's `edit_cues` records `LibraryEdit::Cues`.
+  const cueHooks = mockCueHooks({
+    cuesOf,
+    announce: (track) => { syncRow(track); for (const listener of cueListeners) listener(track); },
+    record: (label, undo, redo) => {
+      editUndo.push({ label, undo, redo });
+      editRedo.length = 0;
+      announceHistory();
+    },
+    grid: (track) => {
+      const held = gridOf(track);
+      if (!held) return null;
+      // The beat nearest 10 s: a nudge moves it, and none drops it off the start.
+      const near = held.beats.reduce((best, beat) => (Math.abs(beat.timeMs - 10_000) < Math.abs(best - 10_000) ? beat.timeMs : best), Number.POSITIVE_INFINITY);
+      return { beatMs: near, bpmX100: tempoX100(held.beats), locked: held.locked };
+    },
+    beats: (track) => gridOf(track)?.beats.map((b) => [b.timeMs, b.number, b.tempoX100] as [number, number, number]) ?? null,
+    undoLabels: () => editUndo.map((entry) => entry.label),
+  });
   // The shape a refused command arrives in: an `Error` whose `kind` is the
   // `AppErrorDto` kind, so a caller can tell a read-only refusal from a bug.
   const failed = (kind: AppErrorDto["kind"], message: string) =>
@@ -2781,8 +2841,10 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     // The memory cue and the row's own hot cues, so the player's markers and
     // list agree with the badges on the row that was loaded. A copy, ordered
     // by position as the index orders them, so an edit cannot reach the store.
-    trackCues: (trackId) =>
-      wait(cuesOf(trackId).map((cue) => ({ ...cue })).sort((a, b) => a.positionMs - b.positionMs)),
+    trackCues: async (trackId) => {
+      await cueHooks.readGate(trackId);
+      return wait(cuesOf(trackId).map((cue) => ({ ...cue })).sort((a, b) => a.positionMs - b.positionMs));
+    },
 
     // A plausible structure, so the phrase bar can be driven without an
     // analysis file: a real track's phrases tile it end to end.
