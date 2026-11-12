@@ -142,7 +142,10 @@ pub fn set_prep_colour(state: &Arc<AppState>, id: &str, colour: Option<u8>) -> A
             .and_then(|at| rbl_index::COLOR_NAMES.get(at))
             .copied()
             .ok_or_else(|| {
-                AppError::new(ErrorKind::Malformed, format!("There is no colour label {number}."))
+                AppError::new(
+                    ErrorKind::Malformed,
+                    format!("There is no colour label {number}."),
+                )
             })?,
     };
     ask(

@@ -180,14 +180,20 @@ fn a_prep_colour_set_from_the_window_is_one_undoable_edit_refused_under_protecti
     // Library Protection on: refused, the queue unchanged, nothing to undo.
     window.protect(true);
     let refused = intake_view::set_prep_colour(&state, &wanted, Some(5)).unwrap_err();
-    assert!(refused.message.contains("Library Protection"), "{}", refused.message);
+    assert!(
+        refused.message.contains("Library Protection"),
+        "{}",
+        refused.message
+    );
     assert_eq!(intake_view::counts(&state).unwrap()["intake"], 5);
     window.protect(false);
-    assert!(tauri::async_runtime::block_on(rbxport_lib::commands::undo_edit(
-        window.app.handle().clone(),
-        window.app.state::<Arc<AppState>>()
-    ))
-    .is_err());
+    assert!(
+        tauri::async_runtime::block_on(rbxport_lib::commands::undo_edit(
+            window.app.handle().clone(),
+            window.app.state::<Arc<AppState>>()
+        ))
+        .is_err()
+    );
 
     let set = intake_view::set_prep_colour(&state, &wanted, Some(5)).unwrap();
     assert_eq!(set["prep_colour"]["colour"], "Green");
