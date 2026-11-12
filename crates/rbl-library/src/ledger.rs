@@ -125,6 +125,12 @@ pub trait Ledger: Send + Sync {
     /// with its text and nothing is changed.
     fn begin(&self) -> Result<(), String>;
 
+    /// A row write outside Undo history. Bulk analysis/import scopes may join
+    /// these writes; recorded playlist edits retain their ordinary intent,
+    /// preparation and transactional consequences (including Mutant Follows).
+    fn begin_unkept(&self) -> Result<(), String> { self.begin() }
+
+
     /// A file-only change, after the file-edit guards and before publication.
     /// Keep the kind and track with the intent for crash recovery. No audio,
     /// file snapshots or database scans belong here.

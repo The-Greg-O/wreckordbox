@@ -489,8 +489,10 @@ export interface Backend {
    * decodes, and `onAnalysisProgress` says when there is more of it. That
    * costs a second waveform pass, so a batch leaves it off.
    */
+  beginLedgerOperation(kind: "analysis" | "import"): Promise<string>;
+  finishLedgerOperation(operation: string): Promise<string | null>;
   analysisStages(): Promise<AnalysisStageDescriptor[]>;
-  analyseTrack(trackId: string, mode?: "rekordbox" | "rbxport", settings?: AnalysisSettings, keyTag?: KeyDisplay, drawing?: boolean, keyDisplay?: KeyDisplay): Promise<AnalysisResult>;
+  analyseTrack(trackId: string, mode?: "rekordbox" | "rbxport", settings?: AnalysisSettings, keyTag?: KeyDisplay, drawing?: boolean, keyDisplay?: KeyDisplay, operation?: string): Promise<AnalysisResult>;
 
   /**
    * A track's whole beat grid, as raw bytes: seven per beat, a little-endian
@@ -539,7 +541,7 @@ export interface Backend {
    * One slice of a larger import. The library is not re-read afterwards, so
    * the caller calls {@link reloadLibrary} once after the last slice.
    */
-  importPathsSlice(paths: string[]): Promise<ImportReport>;
+  importPathsSlice(paths: string[], operation?: string): Promise<ImportReport>;
   /**
    * A folder from Finder or Explorer dropped onto the Playlists root or a
    * playlist folder: one playlist under `parent` named after the folder,
@@ -1897,6 +1899,7 @@ export interface AnalysisSettings {
 
 /** What analysing one track found, now written to the library. */
 export interface AnalysisResult {
+  recordingWarning?: string;
   analysisArtifacts?: Record<string, unknown>;
   completedStages?: string[];
   trackId: string;
@@ -1916,6 +1919,7 @@ export interface AnalysisResult {
 
 /** What an import batch did. */
 export interface ImportReport {
+  recordingWarning?: string;
   imported: number;
   /** One line per file that was not imported, saying why. */
   skipped: string[];

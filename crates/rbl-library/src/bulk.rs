@@ -1,10 +1,13 @@
 //! Operation-sized recording for analysis and imports. It never owns a Library
 //! writer or a lock: callers still use the core's guarded edit path.
-use std::sync::Arc;
 use serde_json::Value;
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Kind { Analysis, Import }
+pub enum Kind {
+    Analysis,
+    Import,
+}
 
 /// Implemented by the service's Ledger. Enter is thread-local and its guard
 /// must not cross an await. Completion reports only values already in hand.
@@ -27,10 +30,15 @@ impl Operation {
     /// Runs one track or import slice, including all its auxiliary writes.
     /// On error a begun write is retained as partial, never as a success.
     pub fn run<T, E: std::fmt::Display>(
-        &self, target: Value, work: impl FnOnce() -> Result<T, E>,
+        &self,
+        target: Value,
+        work: impl FnOnce() -> Result<T, E>,
         values: impl FnOnce(&T) -> Vec<Value>,
     ) -> Result<T, E> {
-        let mut step = self.0.as_ref().map(|recorder| recorder.enter(target.clone()));
+        let mut step = self
+            .0
+            .as_ref()
+            .map(|recorder| recorder.enter(target.clone()));
         let result = work();
         if let Some(step) = &mut step {
             step.complete(match &result {

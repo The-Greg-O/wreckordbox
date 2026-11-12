@@ -613,20 +613,27 @@ pub(crate) fn answers(command: &str) -> bool {
 /// Answers `runs.list` and `runs.show`. Reading never makes a Sidecar:
 /// with none there are no Runs.
 pub(crate) fn answer(
-    keeper: &Keeper,
+    _keeper: &Keeper,
     stems: &Stems,
     request: &Request,
 ) -> Result<Value, ServiceError> {
+    stems.with_sidecar_wait(|sidecar| {
+        if sidecar.is_none() && stems.sidecar_dir().join("sidecar.db").exists() {
+            return Err(ServiceError::new(crate::stems::codes::SIDECAR_FAILED,
+                "The Sidecar appeared after the service started. Restart the service to open it; a Ledger query cannot open or recover it."));
+        }
+        read_ledger(sidecar, request)
+    })?
+}
+
+fn read_ledger(sidecar: Option<&Sidecar>, request: &Request) -> Result<Value, ServiceError> {
     let bad = |e: serde_json::Error| {
         ServiceError::new(
             service_codes::BAD_REQUEST,
             format!("bad arguments to {}: {e}", request.command),
         )
     };
-    // What an earlier service left is settled first: a reader never sees
-    // less than was done.
-    keeper.recover()?;
-    let sidecar = stems.sidecar_if_made()?;
+    // Startup and write admission recover. A query never settles active work.
     let answer = if request.command == commands::RUNS_LIST {
         let args: ListRuns = if request.args.is_null() {
             ListRuns::default()
@@ -1147,6 +1154,7 @@ impl Keeper {
     /// reader never sees less than was done.
     pub(crate) fn recover(&self) -> Result<(), ServiceError> {
         let Some(sidecar) = self.stems.sidecar_if_made()? else {
+            self.state().settled = true;
             return Ok(());
         };
         let mut state = self.state();
@@ -1623,12 +1631,17 @@ impl rbl_library::ledger::Ledger for Keeper {
     fn bulk(&self, kind: rbl_library::bulk::Kind) -> Option<Arc<dyn rbl_library::bulk::Recorder>> { Some(bulk::make(self, kind)) }
 
     fn begin(&self) -> Result<(), String> {
-        if let Some(active) = bulk::active(self) { return active.begin(); }
+        if let Some(active) = bulk::active(self) { active.set_bulk(false); }
+        self.begin_operation(None)
+    }
+
+    fn begin_unkept(&self) -> Result<(), String> {
+        if let Some(active) = bulk::active(self) { active.set_bulk(true); return active.begin(); }
         self.begin_operation(None)
     }
 
     fn begin_file(&self, kind: &str, track: &str, values: &Value) -> Result<(), String> {
-        if let Some(active) = bulk::active(self) { return active.begin(); }
+        if let Some(active) = bulk::active(self) { active.set_bulk(true); return active.begin(); }
         let mut args = values.as_object().cloned().unwrap_or_default();
         args.insert("kind".to_owned(), Value::from(kind));
         args.insert("track".to_owned(), Value::from(track));
@@ -1642,7 +1655,7 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn file_written(&self, kind: &str, track: &str) {
-        if let Some(active) = bulk::active(self) { active.written(true); return; }
+        if let Some(active) = bulk::active(self).filter(|active| active.is_bulk()) { active.written(true); return; }
         let command = self.state().op.as_ref().and_then(|op| op.command.clone());
         let args = command.as_ref().and_then(|command| command.get("args"));
         let reason =
@@ -1670,7 +1683,6 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn prepare(&self, db: &rbl_db::Library, targets: &rbl_library::ledger::Preparation) {
-        if bulk::active(self).is_some() { return; }
         let mut state = self.state();
         let Some(op) = state
             .op
@@ -1692,7 +1704,7 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn written(&self, wrote: bool) {
-        if let Some(active) = bulk::active(self) { active.written(wrote); if wrote && self.faults.abort_after_write { std::process::abort(); } return; }
+        if let Some(active) = bulk::active(self).filter(|active| active.is_bulk()) { active.written(wrote); if wrote && self.faults.abort_after_write { std::process::abort(); } return; }
         if let Some(op) = self.state().op.as_mut() {
             op.wrote = Some(wrote);
             if !wrote {
@@ -1709,7 +1721,6 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn record(&self, step: Step, edit: &LibraryEdit, label: &str, link: Link) -> Option<i64> {
-        if let Some(active) = bulk::active(self) { active.written(true); return None; }
         self.append(Draft {
             action: match step {
                 Step::Edit => Action::Edit,
@@ -1725,7 +1736,7 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn note(&self, kept: Unkept, name: Option<&str>) {
-        if bulk::active(self).is_some() { return; }
+        if bulk::active(self).is_some_and(|active| active.is_bulk()) { return; }
         // Named by the caller, else by the command being answered. A write
         // with neither is not an edit (analysis, an import, a player): not
         // recorded here (bead wbx-14.11), and its intent needs no entry.

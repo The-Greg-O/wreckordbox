@@ -3472,7 +3472,7 @@ pub async fn import_files<R: tauri::Runtime>(
     state: State<'_, Arc<AppState>>,
     paths: Vec<String>,
 ) -> AppResult<ImportReportDto> {
-    import_files_then(app, state, paths, true).await
+    import_files_then(app, state, paths, true, None).await
 }
 
 /// One slice of a larger import: the same as [`import_files`] but the library
@@ -3483,8 +3483,9 @@ pub async fn import_files_slice<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     state: State<'_, Arc<AppState>>,
     paths: Vec<String>,
+    operation: Option<String>,
 ) -> AppResult<ImportReportDto> {
-    import_files_then(app, state, paths, false).await
+    import_files_then(app, state, paths, false, operation).await
 }
 
 async fn import_files_then<R: tauri::Runtime>(
@@ -3492,13 +3493,16 @@ async fn import_files_then<R: tauri::Runtime>(
     state: State<'_, Arc<AppState>>,
     paths: Vec<String>,
     reload_after: bool,
+    operation: Option<String>,
 ) -> AppResult<ImportReportDto> {
     let state_for_edit = Arc::clone(&state);
     let writing = Arc::clone(&state);
     let report = blocking("import_files", move || {
         let files = expand_import_paths(&paths);
+        let recording=crate::bulk_writes::Recording::get(&writing,operation.as_deref(),rbl_library::bulk::Kind::Import)?;
+        let result=recording.operation.run(serde_json::json!({"files":files.len()}), || {
         let _gate = writing.edit_gate().lock();
-        let report = writing
+        writing
             .write(|writer| {
                 let mut imported = 0_u32;
                 let mut skipped = Vec::new();
@@ -3525,9 +3529,12 @@ async fn import_files_then<R: tauri::Runtime>(
                         }
                     }
                 }
-                Ok(ImportReportDto { imported, skipped, tracks, existing })
+                Ok(ImportReportDto { recording_warning: None, imported, skipped, tracks, existing })
             })
-            .map_err(write_error)?;
+            .map_err(write_error)
+        }, |report| report.tracks.iter().map(|track|serde_json::json!({"track":track.id,"title":track.title})).collect());
+        let (mut report, warning) = recording.finish(result)?;
+        report.recording_warning = warning;
         if report.imported > 0 {
             wrote_outside_history(&writing, false);
         }

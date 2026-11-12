@@ -1,3 +1,4 @@
+import { createMockBulkLedger } from "./mock-bulk-ledger";
 /**
  * In-browser stand-in for the Rust backend.
  *
@@ -453,6 +454,7 @@ export interface MockOptions {
 }
 
 export function createMockBackend(options: MockOptions = {}): Backend {
+  const bulkLedger = createMockBulkLedger();
   // `?filterFixture`: the Track Filter bar's constructed Library (wbx-57).
   const filterFixture = readFlagFromUrl("filterFixture");
   const trackCount = filterFixture ? FILTER_FIXTURE_SIZE : options.trackCount ?? readCountFromUrl() ?? 2000;
@@ -3527,7 +3529,9 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       { id: "key", label: "KEY", description: "", requires: ["core.audio"], produces: ["core.key"], defaultEnabled: true, requiresFullTrack: false, revision: "1" },
       { id: "waveform", label: "Waveform", description: "", requires: ["core.audio"], produces: ["core.waveform"], defaultEnabled: true, requiresFullTrack: false, revision: "1" },
     ]),
-    analyseTrack: (trackId, _mode, settings, _keyTag, drawing, keyDisplay) => {
+    beginLedgerOperation: bulkLedger.begin,
+    finishLedgerOperation: bulkLedger.finish,
+    analyseTrack: (trackId, _mode, settings, _keyTag, drawing, keyDisplay, operation) => {
       const index = Number.parseInt(trackId, 10) - 100000;
       const row = all[index];
       if (!row) return Promise.reject(new Error("That track is not in the library."));
@@ -3558,6 +3562,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
         setTimeout(
           () => {
             drawn.delete(trackId);
+            bulkLedger.record(operation, trackId);
             if (settings?.bpmGrid !== false) {
               row.analysed = 1;
               row.bpmX100 ||= 12_800;
@@ -3595,7 +3600,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     importPaths: (paths) => wait({ imported: 0, skipped: paths.map((p) => `${p}: the mock library takes no files`), tracks: [], existing: [] }),
     // No file system in a browser: a path is its own one file.
     listImportFiles: (paths) => wait([...paths]),
-    importPathsSlice: (paths) => {
+    importPathsSlice: (paths, operation) => {
       if (!dropFixture) return wait({ imported: 0, skipped: paths.map((p) => `${p}: the mock library takes no files`), tracks: [], existing: [] });
       const tracks: { id: string; title: string }[] = [];
       const existing: { id: string; title: string }[] = [];
@@ -3612,6 +3617,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
         indexOfId.set(row.id, all.length);
         all.push(row);
         droppedPaths.push(path);
+        bulkLedger.record(operation, row.id);
         tracks.push({ id: row.id, title: row.title });
       }
       localStorage.setItem(dropFixtureKey, JSON.stringify(droppedPaths));

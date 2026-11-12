@@ -16,6 +16,7 @@ mod test_stick;
 #[cfg(test)]
 mod file_ledger_tests;
 pub mod analysis;
+pub mod bulk_writes;
 mod analysis_extensions;
 mod analysis_pipeline;
 pub mod commands;
@@ -604,6 +605,8 @@ pub fn run() {
             commands::track_waveform,
             commands::track_pcm_waveform,
             analysis::analyse_track,
+            bulk_writes::begin_ledger_operation,
+            bulk_writes::finish_ledger_operation,
             analysis::analysis_stages,
             analysis::edit_phrase,
             commands::reload_library,

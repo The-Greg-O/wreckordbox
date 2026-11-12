@@ -2,7 +2,7 @@ import { ConfirmHost } from "@/components/ConfirmDialog";
 import type { DuplicateAnswer } from "@/components/DuplicateTracksDialog";
 import type { FolderClashAnswer } from "@/lib/folderDrop";
 import { JobQueue, slices, type JobView } from "@/lib/jobQueue";
-import { importInSlices, removeInSlices } from "@/lib/bulkJobs";
+import { importWithLedger, removeInSlices } from "@/lib/bulkJobs";
 import { INITIAL_SYNC, deckStartedPlaying, isFollowing, pressMaster, toggleBeatSync, type SyncState } from "@/lib/syncMaster";
 import { skippedTail } from "@/lib/importSkips";
 import { useBackupProgress } from "@/store/useBackupProgress";
@@ -713,6 +713,9 @@ function AppBody() {
   const [playerError, setPlayerError] = useState<string | null>(null);
   const report = useCallback((text: string) => setNote({ text, failed: false }), []);
   const refuse = useCallback((text: string) => setNote({ text, failed: true }), []);
+  useEffect(() => {
+    if (analysis.recordingError) refuse(analysis.recordingError);
+  }, [analysis.recordingError, refuse]);
   const stopJob = useCallback((id: number) => jobs.stop(id), [jobs]);
   // The Library service this window hosts has stopped, or another window
   // has the Library: nothing more is saved, and the status bar says why for
@@ -1358,7 +1361,7 @@ function AppBody() {
           let landed = 0;
           let sliced;
           try {
-            sliced = await importInSlices(files, (slice) => backend.importPathsSlice(slice), signal, (reached, sofar) => {
+            sliced = await importWithLedger(backend, files, signal, (reached, sofar) => {
               landed = sofar.imported;
               update({ done: reached });
             });
@@ -1390,6 +1393,7 @@ function AppBody() {
             : added === 0 && toAdd.length > 0
               ? `Already in ${name}${left}${already}.`
               : `Added ${noun(added)} to ${name}${left}${already}.`);
+          if (sliced.recordingWarning) refuse(sliced.recordingWarning);
         },
       });
     },
@@ -1416,7 +1420,7 @@ function AppBody() {
         let landed = 0;
         let imported;
         try {
-          imported = await importInSlices(files, (slice) => backend.importPathsSlice(slice), signal, (reached, sofar) => {
+          imported = await importWithLedger(backend, files, signal, (reached, sofar) => {
             landed = sofar.imported;
             update({ done: reached });
           });
@@ -1426,6 +1430,7 @@ function AppBody() {
         if (analysisPrefs.auto && imported.tracks.length > 0) analysis.add(imported.tracks);
         const already = imported.existing > 0 ? `; ${imported.existing} already in the library` : "";
         report(`Imported ${imported.imported} of ${files.length} files${skippedTail(imported.skipped)}${already}.`);
+        if (imported.recordingWarning) refuse(imported.recordingWarning);
       },
     });
   }, [readOnly, advancedPrefs.protectLibrary, refuse, jobs, t, analysisPrefs.auto, analysis, report]);
@@ -2151,7 +2156,7 @@ function AppBody() {
           let landed = 0;
           let imported;
           try {
-            imported = await importInSlices(paths, (slice) => backend.importPathsSlice(slice), signal, (reached, sofar) => {
+            imported = await importWithLedger(backend, paths, signal, (reached, sofar) => {
               landed = sofar.imported;
               update({ done: reached });
             });
@@ -2170,6 +2175,7 @@ function AppBody() {
             : `Imported ${values.imported} of ${values.total} files${skippedTail(imported.skipped)}`;
           const already = imported.existing > 0 ? `; ${imported.existing} already in the library` : "";
           await afterWrite(signal.aborted ? said : `${said}${already}.`);
+          if (imported.recordingWarning) refuse(imported.recordingWarning);
         },
       });
     },

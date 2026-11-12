@@ -1467,3 +1467,6 @@ fn undo_restores_the_previous_dj_fact_and_clear_withdraws_an_opinion() {
 
 #[path = "service_host/file_ledger.rs"]
 mod file_ledger;
+
+#[path = "service_host/bulk_ledger.rs"]
+mod bulk_ledger;

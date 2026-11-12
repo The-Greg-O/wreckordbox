@@ -420,7 +420,7 @@ impl LibraryCore {
         // with the history let go: the Ledger may block to write.
         let ledger = if own_intent { self.history.lock().ledger() } else { None };
         if let Some(ledger) = &ledger {
-            ledger.begin().map_err(|why| {
+            (if history == History::Outside { ledger.begin_unkept() } else { ledger.begin() }).map_err(|why| {
                 rbl_db::DbError::WriteRefused(format!("The Ledger cannot record a change, so nothing was changed: {why}"))
             })?;
         }

@@ -106,6 +106,8 @@ impl AnalysisSettings {
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AnalysisResultDto {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recording_warning: Option<String>,
     /// Serializable extension results, keyed by each registered artifact ID.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub analysis_artifacts: std::collections::BTreeMap<String, serde_json::Value>,
@@ -162,6 +164,7 @@ pub async fn analyse_track<R: tauri::Runtime>(
     key_tag: Option<crate::key_tag::KeyNotation>,
     drawing: Option<bool>,
     key_display: Option<crate::key_tag::KeyNotation>,
+    operation: Option<String>,
 ) -> AppResult<AnalysisResultDto> {
     let preset = match mode.as_deref().unwrap_or("rbxport") {
         "rekordbox" => rbl_analysis::AnalysisPreset::Rekordbox,
@@ -195,6 +198,8 @@ pub async fn analyse_track<R: tauri::Runtime>(
             .filter(|&secs| secs > 0)
             .map(f64::from);
         let hook = Drawing { publish: &progress, length_secs };
+        let recording = crate::bulk_writes::Recording::get(&state, operation.as_deref(), rbl_library::bulk::Kind::Analysis)?;
+        let result = recording.operation.run(serde_json::json!({"track":track_id}), || {
         let result = analyse_and_save_notated(&state, &library, &share, &track_id, preset, &settings, &editor, drawing.then_some(&hook), notation)?;
         // After the library has the key, as rekordbox writes the tag after
         // `modTrackKeyInfo` stores it. Only with the preference on, which is
@@ -203,6 +208,10 @@ pub async fn analyse_track<R: tauri::Runtime>(
             let path = library.row_of(&track_id).map_or("", |row| library.folder_path.get(row as usize));
             crate::key_tag::write_logged(state.backup_dir(), &track_id, path, key.name_for(notation));
         }
+        Ok::<_, AppError>(result)
+        }, |result| vec![serde_json::json!({"track":result.track_id,"after":{"bpm_x100":result.bpm_x100,"key":result.key,"analysis_path":result.analysis_path,"first_beat_cue_added":result.added_first_beat_cue}})]);
+        let (mut result, warning) = recording.finish(result)?;
+        result.recording_warning = warning;
         Ok(result)
     }).await;
     // Finished or failed, the drawing is over: from here a deck reads the
@@ -290,7 +299,7 @@ fn analyse_and_save_notated(
         let mut result=if settings.key {
             save_key_only(state,library,row,track_id,analysis.key.as_ref(),analysis.peak,editor,started,notation)?
         } else {
-            AnalysisResultDto {analysis_artifacts:std::collections::BTreeMap::new(),completed_stages:Vec::new(),track_id:track_id.into(),analysed:library.analysed.get(row).copied().unwrap_or(0),bpm_x100:library.bpm_x100.get(row).copied().unwrap_or(0),key:library.keys.name(library.key.get(row).copied().unwrap_or(0)).into(),beats:0,peak:analysis.peak,duration_sec:library.length_sec.get(row).copied().unwrap_or(0),elapsed_ms:u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),analysis_path:state.analysis_path_of(library,row,track_id),added_first_beat_cue:false,detected_key:None}
+            AnalysisResultDto {recording_warning:None,analysis_artifacts:std::collections::BTreeMap::new(),completed_stages:Vec::new(),track_id:track_id.into(),analysed:library.analysed.get(row).copied().unwrap_or(0),bpm_x100:library.bpm_x100.get(row).copied().unwrap_or(0),key:library.keys.name(library.key.get(row).copied().unwrap_or(0)).into(),beats:0,peak:analysis.peak,duration_sec:library.length_sec.get(row).copied().unwrap_or(0),elapsed_ms:u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),analysis_path:state.analysis_path_of(library,row,track_id),added_first_beat_cue:false,detected_key:None}
         };
         result.analysis_artifacts=analysis_artifacts;result.completed_stages=completed_stages;return Ok(result);
     }
@@ -353,6 +362,7 @@ fn analyse_and_save_notated(
     };
 
     Ok(AnalysisResultDto {
+        recording_warning: None,
         analysis_artifacts,
         completed_stages,
         track_id: track_id.to_owned(),
@@ -693,6 +703,7 @@ fn save_key_only(state:&AppState,library:&rbl_index::Library,row:usize,track_id:
         }).map_err(write_error)?
     } else { None };
     Ok(AnalysisResultDto {
+        recording_warning: None,
         analysis_artifacts: std::collections::BTreeMap::new(),
         completed_stages: Vec::new(),
         track_id: track_id.to_owned(),
