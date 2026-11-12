@@ -86,6 +86,8 @@ rbl-backup = { path = "../crates/rbl-backup", features = ["testing"] }
 # `test` gives a mock app, so the native menu can be built and inspected
 # without opening a window — which cannot be screenshotted on this machine.
 tauri = { version = "2", features = ["test"] }
+# Mutants on playlist entries, for the entry reorder's tests (wbx-59).
+wreckordbox-sidecar = { path = "../crates/wreckordbox-sidecar" }
 # The database server's side of a link test: what a player is answered.
 rbl-dbserver = { path = "../crates/rbl-dbserver" }
 # Tags written into fixture audio files, for Reload Tag (#503).

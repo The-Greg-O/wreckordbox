@@ -54,6 +54,7 @@ mod sync_window;
 mod scripting;
 pub mod service_host;
 pub mod intake_view;
+pub mod playlist_entries;
 pub mod service_status;
 mod device_settings;
 pub mod dto;
@@ -736,6 +737,8 @@ pub fn run() {
             commands::remove_from_history,
             commands::remove_from_collection,
             commands::reorder_playlist,
+            playlist_entries::playlist_entries,
+            playlist_entries::reorder_playlist_entries,
             commands::set_track_rating,
             commands::set_track_comment,
             commands::set_track_color,
