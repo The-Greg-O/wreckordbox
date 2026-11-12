@@ -23,6 +23,8 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use crate::theme_file::{Follow, ThemeFile, ThemeProblem};
+
 /// Points the module at a `colors.toml` of the caller's choosing instead of
 /// the active Omarchy theme's. For tests and screenshots: the DJ's real theme
 /// is never switched to look at another one.
@@ -65,12 +67,91 @@ pub struct ThemeRoles {
 }
 
 /// What the interface is told: the roles, if a usable theme is present, and
-/// the system monospace family, if the system has one to name.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+/// the interface's face, if the theme file or the system names one. The
+/// sizes and the monospace face come from the theme file only, and so do
+/// the problems.
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Theme {
     pub roles: Option<ThemeRoles>,
+    /// The face for upstream's layout (`--role-font`): the file's `font`, or
+    /// the system monospace font while following Omarchy.
     pub font: Option<String>,
+    /// The theme file's `font`, `font_size`, `mono_font` and
+    /// `mono_font_size`, for the view shell; none of them come from Omarchy.
+    pub interface_font: Option<String>,
+    pub interface_font_size: Option<f64>,
+    pub mono_font: Option<String>,
+    pub mono_font_size: Option<f64>,
+    /// The theme file's mistakes, each left out of what is shown.
+    pub problems: Vec<ThemeProblem>,
+}
+
+/// The theme the window shows: the theme file's keys over the Omarchy
+/// palette `omarchy` (or over the built-in one, where the file says
+/// `follow = "none"` or there is no usable Omarchy palette), key by key,
+/// then the roles derived from the result as for any palette. With no file
+/// this is exactly the Omarchy theme. `system_font` is asked only when the
+/// look follows Omarchy and the file names no face.
+#[must_use]
+pub fn layered(
+    omarchy: Option<&str>,
+    file: Option<&ThemeFile>,
+    system_font: impl FnOnce() -> Option<String>,
+) -> Theme {
+    let follows = file.is_none_or(|file| file.follow == Follow::Omarchy);
+    // Only a usable Omarchy palette is a base; an unusable one would mix
+    // into the built-in palette.
+    let base = omarchy
+        .filter(|_| follows)
+        .map(parse_colors)
+        .filter(|palette| roles_from_palette(palette).is_some());
+    let over = file.map(|file| &file.colours).filter(|colours| !colours.is_empty());
+    let roles = match (base, over) {
+        (base, None) => base.as_ref().and_then(roles_from_palette),
+        (base, Some(over)) => {
+            let mut palette = base.unwrap_or_else(built_in_palette);
+            palette.extend(over.iter().map(|(key, value)| (key.clone(), value.clone())));
+            roles_from_palette(&palette)
+        }
+    };
+    let interface_font = file.and_then(|file| file.font.clone());
+    let font = match &interface_font {
+        Some(face) => Some(face.clone()),
+        None if follows => system_font(),
+        None => None,
+    };
+    Theme {
+        roles,
+        font,
+        interface_font,
+        interface_font_size: file.and_then(|file| file.font_size),
+        mono_font: file.and_then(|file| file.mono_font.clone()),
+        mono_font_size: file.and_then(|file| file.mono_font_size),
+        problems: file.map(|file| file.problems.clone()).unwrap_or_default(),
+    }
+}
+
+/// The built-in look as a palette: the fallbacks of the `--role-*`
+/// properties in `src/styles/tokens.css`, upstream's colours. The view tab's
+/// two ends are left to the accent, as there.
+fn built_in_palette() -> BTreeMap<String, String> {
+    [
+        ("mode", "dark"),
+        ("darker_background", "#000000"),
+        ("dark_background", "#0f0f0f"),
+        ("background", "#1e1e1e"),
+        ("lighter_background", "#323232"),
+        ("selection", "#314b67"),
+        ("muted", "#646464"),
+        ("foreground", "#e6e6e6"),
+        ("dark_foreground", "#9a9a9a"),
+        ("bright_foreground", "#ffffff"),
+        ("accent", "#1373eb"),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_owned(), value.to_owned()))
+    .collect()
 }
 
 type Rgb = [u8; 3];
@@ -100,6 +181,11 @@ fn parse_colors(text: &str) -> BTreeMap<String, String> {
         }
     }
     found
+}
+
+/// Whether `value` is a `#rrggbb` colour.
+pub(crate) fn is_colour(value: &str) -> bool {
+    rgb(value).is_some()
 }
 
 fn rgb(value: &str) -> Option<Rgb> {
@@ -187,7 +273,12 @@ fn on_accent(accent: Rgb, candidates: [Rgb; 2]) -> Rgb {
 /// practice, and the numbered colours stand in for the named ones.
 #[must_use]
 pub fn roles_from_colors(text: &str) -> Option<ThemeRoles> {
-    let colours = parse_colors(text);
+    roles_from_palette(&parse_colors(text))
+}
+
+/// The roles for a palette already read: `colors.toml`'s keys to their
+/// `#rrggbb` values, and `mode`.
+fn roles_from_palette(colours: &BTreeMap<String, String>) -> Option<ThemeRoles> {
     let get = |keys: &[&str]| {
         keys.iter()
             .find_map(|key| colours.get(*key).and_then(|value| rgb(value)))
@@ -238,11 +329,16 @@ pub fn roles_from_colors(text: &str) -> Option<ThemeRoles> {
 /// unreadable or unusable.
 #[must_use]
 pub fn roles_from_file(path: &Path) -> Option<ThemeRoles> {
+    roles_from_colors(&palette_text(path)?)
+}
+
+/// The text of the colour file at `path`, if it is one.
+fn palette_text(path: &Path) -> Option<String> {
     // A palette is a few hundred bytes; anything large is not one.
     if std::fs::metadata(path).ok()?.len() > 256 * 1024 {
         return None;
     }
-    roles_from_colors(&std::fs::read_to_string(path).ok()?)
+    std::fs::read_to_string(path).ok()
 }
 
 /// The colour file to read: the override, or the active Omarchy theme's on
@@ -262,7 +358,7 @@ pub fn colors_file() -> Option<PathBuf> {
 /// A family name as it may be written into a CSS `font-family`: the first of
 /// fontconfig's comma-separated aliases, refused if it holds anything that
 /// could end the quoted string it will be put in.
-fn css_family(answer: &str) -> Option<String> {
+pub(crate) fn css_family(answer: &str) -> Option<String> {
     let family = answer.lines().next()?.split(',').next()?.trim();
     let safe = !family.is_empty()
         && family.len() <= 100
@@ -302,6 +398,9 @@ pub struct Sources {
     pub theme_folder_is_replaced: bool,
     /// The folder `omarchy font set` writes `fonts.conf` into.
     pub font_folder: Option<PathBuf>,
+    /// The window's own theme file (`theme_file.rs`), laid over the theme.
+    /// It and its folder need not exist.
+    pub theme_file: Option<PathBuf>,
 }
 
 impl Sources {
@@ -317,16 +416,21 @@ impl Sources {
                 .then(dirs::config_dir)
                 .flatten()
                 .map(|config| config.join("fontconfig")),
+            theme_file: crate::theme_file::theme_file(),
         }
     }
 
     /// The theme as these sources give it now.
     #[must_use]
     pub fn read(&self) -> Theme {
-        Theme {
-            roles: self.colors.as_deref().and_then(roles_from_file),
-            font: system_monospace_font(),
+        let file = self.theme_file.as_deref().and_then(crate::theme_file::read);
+        if let (Some(file), Some(path)) = (&file, &self.theme_file) {
+            for problem in &file.problems {
+                tracing::warn!(file = %path.display(), line = problem.line, "theme file: {}", problem.message);
+            }
         }
+        let omarchy = self.colors.as_deref().and_then(palette_text);
+        layered(omarchy.as_deref(), file.as_ref(), system_monospace_font)
     }
 
     /// The folders whose entries change on a switch. They need not exist.
@@ -342,6 +446,7 @@ impl Sources {
             .into_iter()
             .chain(theme)
             .chain(self.font_folder.as_deref())
+            .chain(self.theme_file.as_deref().and_then(Path::parent))
             .filter(|folder| folder.is_absolute())
             .map(Path::to_path_buf)
             .collect()
@@ -773,6 +878,152 @@ color15 = "#ddc7a1"
             roles_from_file(&file).map(|roles| roles.accent),
             Some("#7aa2f7".into())
         );
+    }
+
+    fn file(text: &str) -> ThemeFile {
+        crate::theme_file::parse(text)
+    }
+
+    fn no_font() -> Option<String> {
+        None
+    }
+
+    #[test]
+    fn with_no_theme_file_the_omarchy_theme_is_shown_as_it_is() {
+        let theme = layered(Some(TOKYO_NIGHT), None, || Some("JetBrainsMono Nerd Font".into()));
+        assert_eq!(theme.roles, roles_from_colors(TOKYO_NIGHT));
+        assert_eq!(theme.font.as_deref(), Some("JetBrainsMono Nerd Font"));
+        assert!(theme.problems.is_empty());
+        assert_eq!(layered(None, None, no_font).roles, None);
+    }
+
+    #[test]
+    fn a_file_overriding_one_colour_changes_only_that_role() {
+        let omarchy = roles_from_colors(TOKYO_NIGHT).unwrap();
+        let theme = layered(Some(TOKYO_NIGHT), Some(&file("muted = \"#ff00ff\"\n")), no_font);
+        assert_eq!(
+            theme.roles,
+            Some(ThemeRoles {
+                border: "#ff00ff".into(),
+                ..omarchy
+            })
+        );
+    }
+    /// The built-in look as roles: the stylesheet's fallbacks in
+    /// `src/styles/tokens.css`.
+    fn built_in() -> ThemeRoles {
+        ThemeRoles {
+            mode: "dark".into(),
+            ground: "#000000".into(),
+            panel: "#0f0f0f".into(),
+            working: "#1e1e1e".into(),
+            hairline: "#323232".into(),
+            selection: "#314b67".into(),
+            border: "#646464".into(),
+            text: "#e6e6e6".into(),
+            text_dim: "#9a9a9a".into(),
+            text_bright: "#ffffff".into(),
+            accent: "#1373eb".into(),
+            on_accent: "#000000".into(),
+            tab_from: "#1373eb".into(),
+            tab_to: "#1373eb".into(),
+        }
+    }
+
+    #[test]
+    fn follow_none_lays_the_file_over_the_built_in_look_and_not_over_omarchy() {
+        let asked = std::cell::Cell::new(false);
+        let theme = layered(
+            Some(TOKYO_NIGHT),
+            Some(&file("follow = \"none\"\naccent = \"#ff8800\"\n")),
+            || {
+                asked.set(true);
+                Some("JetBrainsMono Nerd Font".into())
+            },
+        );
+        assert_eq!(
+            theme.roles,
+            Some(ThemeRoles {
+                accent: "#ff8800".into(),
+                tab_from: "#ff8800".into(),
+                tab_to: "#ff8800".into(),
+                ..built_in()
+            })
+        );
+        // Not following Omarchy: the face is the built-in one too.
+        assert_eq!(theme.font, None);
+        assert!(!asked.get());
+    }
+
+    #[test]
+    fn follow_none_with_no_colours_is_exactly_the_built_in_look() {
+        let theme = layered(Some(TOKYO_NIGHT), Some(&file("follow = \"none\"\n")), no_font);
+        // No roles: the stylesheet's fallbacks, which are the built-in look.
+        assert_eq!(theme.roles, None);
+    }
+
+    #[test]
+    fn without_an_omarchy_theme_the_file_is_laid_over_the_built_in_look() {
+        let theme = layered(None, Some(&file("selection = \"#445566\"\n")), no_font);
+        assert_eq!(
+            theme.roles,
+            Some(ThemeRoles {
+                selection: "#445566".into(),
+                ..built_in()
+            })
+        );
+        // An Omarchy file that is not a usable palette is not mixed in.
+        let theme = layered(
+            Some("accent = \"#00ff00\"\n"),
+            Some(&file("selection = \"#445566\"\n")),
+            no_font,
+        );
+        assert_eq!(theme.roles.map(|roles| roles.accent), Some("#1373eb".into()));
+    }
+
+    #[test]
+    fn whatever_accent_the_file_gives_its_label_can_be_read() {
+        let pair = |one: &str, other: &str| {
+            contrast(rgb(one).unwrap_or_default(), rgb(other).unwrap_or_default())
+        };
+        for accent in ["#a9b1d6", "#808080", "#ffff00", "#000000", "#0e0e14", "#ffffff", "#7f7f7f"] {
+            let text = format!("accent = \"{accent}\"\n");
+            for omarchy in [Some(TOKYO_NIGHT), None] {
+                let roles = layered(omarchy, Some(&file(&text)), no_font).roles.unwrap();
+                assert_eq!(roles.accent, accent);
+                assert!(pair(&roles.on_accent, &roles.accent) >= 4.5, "{} on {accent}", roles.on_accent);
+            }
+        }
+    }
+
+    #[test]
+    fn the_files_faces_and_sizes_are_passed_on() {
+        let text = "font = \"Inter\"\nfont_size = 13\nmono_font = \"Iosevka\"\nmono_font_size = 11.5\n";
+        let theme = layered(Some(TOKYO_NIGHT), Some(&file(text)), || Some("JetBrainsMono Nerd Font".into()));
+        assert_eq!(theme.font.as_deref(), Some("Inter"));
+        assert_eq!(theme.interface_font.as_deref(), Some("Inter"));
+        assert_eq!(theme.interface_font_size, Some(13.0));
+        assert_eq!(theme.mono_font.as_deref(), Some("Iosevka"));
+        assert_eq!(theme.mono_font_size, Some(11.5));
+        // Fonts alone leave the colours on the Omarchy theme.
+        assert_eq!(theme.roles, roles_from_colors(TOKYO_NIGHT));
+        // Without them the system face stays upstream's, and the shell's own.
+        let theme = layered(Some(TOKYO_NIGHT), Some(&file("")), || Some("JetBrainsMono Nerd Font".into()));
+        assert_eq!(theme.font.as_deref(), Some("JetBrainsMono Nerd Font"));
+        assert_eq!(theme.interface_font, None);
+        assert_eq!(theme.interface_font_size, None);
+    }
+
+    #[test]
+    fn the_files_mistakes_are_passed_on_and_the_rest_applies() {
+        let theme = layered(
+            Some(TOKYO_NIGHT),
+            Some(&file("accent = \"#ff8800\"\nmuted = \"grey\"\n")),
+            no_font,
+        );
+        assert_eq!(theme.roles.as_ref().map(|roles| roles.accent.as_str()), Some("#ff8800"));
+        assert_eq!(theme.roles.map(|roles| roles.border), Some("#414868".into()));
+        assert_eq!(theme.problems.iter().map(|problem| problem.line).collect::<Vec<_>>(), [2]);
     }
 
     #[test]

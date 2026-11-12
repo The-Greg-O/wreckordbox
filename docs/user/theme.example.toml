@@ -1,0 +1,100 @@
+# wreckordbox's own theme file.
+#
+# Copy this file to ~/.config/wreckordbox/theme.toml (or
+# $XDG_CONFIG_HOME/wreckordbox/theme.toml) and uncomment what you want to
+# change. Saving it changes the open window at once; deleting it puts the
+# window back on your Omarchy theme. As shipped, every line is a comment, so
+# this file changes nothing.
+#
+# A mistake never breaks the window: a bad key or a line that does not parse
+# is left out, the rest applies, and the window shows each problem with its
+# line number (it is also written to the app's log).
+#
+# See docs/user/theme.md for how the layers work.
+
+# ── What the look starts from ────────────────────────────────────────────
+#
+# "omarchy" (the default): the active Omarchy theme, live, as with no file.
+#   Every key below then wins over the Omarchy theme's key of the same name
+#   and leaves the rest following it.
+# "none": stop following the Omarchy theme. The window starts from its
+#   built-in look (dark greys, blue accent, Arial) and the keys below are
+#   laid over that.
+#
+# follow = "omarchy"
+
+# "dark" or "light". Without it, the theme's own mode stands (or, for a file
+# that gives the grounds, light when the background is lighter than the
+# text). Under a light theme the old (upstream) layout keeps its dark grounds
+# and takes only the accent and the face.
+#
+# mode = "dark"
+
+# ── Colours ──────────────────────────────────────────────────────────────
+#
+# The same names as an Omarchy theme's colors.toml, so you can paste one in
+# (from ~/.local/state/omarchy/current/theme/colors.toml or
+# /usr/share/omarchy/themes/<name>/colors.toml) and edit it. Each value is
+# "#rrggbb". Anything the file leaves out, and anything the theme leaves out,
+# is derived from background and foreground so the result stays readable.
+#
+# Text written on an accent-filled control is never set here: the window
+# picks whichever of the darkest ground and the brightest text can be read
+# on your accent, else black or white.
+#
+# Colours that carry meaning (Energy, Prep colours, key lights, cue colours,
+# waveform colours, phrases) are not themeable and ignore this file.
+
+# Focus, the active filter, lit controls, the deck marker.
+# accent = "#7aa2f7"
+# A selected row (replaced by a derived colour if your text cannot be read on it).
+# selection = "#292e42"
+# Control borders.
+# muted = "#414868"
+
+# The working area.
+# background = "#1a1b26"
+# Panels: tree, player, target list.
+# dark_background = "#13141c"
+# The deepest ground: top bar, status line, waveform wells.
+# darker_background = "#0e0e14"
+# Hairlines, inactive tabs and control fills.
+# lighter_background = "#24283b"
+
+# Text.
+# foreground = "#a9b1d6"
+# Secondary text and labels.
+# dark_foreground = "#565f89"
+# Emphasised text.
+# bright_foreground = "#c0caf5"
+
+# The two ends of the active view tab's line (a missing one takes the accent;
+# magenta, color13, color5 and yellow, color11, color3 stand in for them).
+# bright_magenta = "#bb9af7"
+# bright_yellow = "#ff9e64"
+
+# Accepted so that a pasted Omarchy palette is not reported, but they only
+# stand in for missing keys above (blue or color4 for the accent):
+# light_foreground, cursor, black, red, green, yellow, blue, magenta, cyan,
+# white, orange, brown, the bright_ forms of each, color0 to color15. Keys
+# starting with hyprland_ and other Omarchy settings that are not colours
+# are ignored.
+
+# ── Type ─────────────────────────────────────────────────────────────────
+#
+# A family name as fontconfig knows it (`fc-list : family`), one name, no
+# commas. Sizes are CSS pixels at 100% interface scale, 8 to 24; the whole
+# interface still scales with Ctrl+- and Ctrl+=.
+
+# The interface: tree, tabs, lists, menus, labels. Without it, the window's
+# own monospace face (and, in the old layout, the system monospace font
+# while following Omarchy).
+# font = "JetBrainsMono Nerd Font"
+# Base size of interface text (12 by default). Titles, labels and the status
+# line keep their proportion to it.
+# font_size = 12
+
+# Text whose digits line up: BPM, key, time, bitrate and dates in the list.
+# Without them, the interface face and size.
+# mono_font = "JetBrainsMono Nerd Font"
+# mono_font_size = 12

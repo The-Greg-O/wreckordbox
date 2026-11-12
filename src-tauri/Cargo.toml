@@ -63,6 +63,8 @@ rbl-backup = { path = "../crates/rbl-backup" }
 sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 parking_lot = "0.12"
 dirs = "5"
+# The window's own theme file (theme_file.rs), with the line of each mistake.
+toml = "0.8"
 uuid = { version = "1", features = ["v4"] }
 # Matching a dropped `File.name` to its pasteboard path (file_drop.rs).
 unicode-normalization = "0.1"
