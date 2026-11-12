@@ -149,6 +149,13 @@ export interface ViewPreferences {
   browseLineSpace: number;
   /** The whole-interface scale, as an index into `UI_SCALES`. */
   uiScale: number;
+  /**
+   * The view shell (Library, Intake, Review and Stick on keys 1 to 4) drawn
+   * in place of upstream's single layout. Off unless turned on, while views
+   * move into the shell one at a time; ticket #77 removes the old layout and
+   * this switch with it. No Preferences pane offers it.
+   */
+  viewShell: boolean;
   /** Key display format: `Ebm` or `2A`. */
   keyDisplay: KeyDisplay;
   /** How the browser's Key column is ordered. */
@@ -402,6 +409,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
     browseBold: false,
     browseLineSpace: BROWSE_SCALE_DEFAULT,
     uiScale: UI_SCALE_DEFAULT,
+    viewShell: false,
     keyDisplay: "classic",
     keySort: "alphabetical",
     overviewWaveform: "half",
@@ -584,6 +592,7 @@ export function sanitisePreferences(value: unknown): Preferences {
       // Out of range is the measured size, not the nearest end: a stop from
       // a build with a different set of stops is not a size anyone chose.
       uiScale: isUiScaleStop(view.uiScale) ? view.uiScale : d.view.uiScale,
+      viewShell: bool(view.viewShell, d.view.viewShell),
       keyDisplay: oneOf(view.keyDisplay, KEY_DISPLAYS, d.view.keyDisplay),
       keySort: oneOf(
         view.keySort,

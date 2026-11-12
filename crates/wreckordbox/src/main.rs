@@ -10,6 +10,7 @@ mod ledger;
 mod mytag_edits;
 mod reading;
 mod stems;
+mod stems_write;
 mod tracks;
 
 use std::fmt::Write as _;
@@ -70,7 +71,8 @@ enum Commands {
         #[command(subcommand)]
         command: reading::HistoryCommands,
     },
-    /// Separate a track into Stems, kept in the Sidecar beside the Library.
+    /// Separate a track into Stems, kept in the Sidecar beside the Library,
+    /// and write them to a Spare stick as Native stems.
     Stems {
         #[command(subcommand)]
         command: stems::StemCommands,

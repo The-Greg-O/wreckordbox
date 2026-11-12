@@ -443,6 +443,12 @@ impl Shared {
             crate::tracks::TRACKS_GET | crate::tracks::TRACKS_QUERY => {
                 self.with_library(|library| crate::tracks::answer(library, request))?
             }
+            crate::native_stems::commands::STEMS_WRITE => {
+                // To a Stick, not the Library: only the lookup takes it.
+                crate::native_stems::answer(&self.stems, request, &|id| {
+                    self.with_library(|library| crate::native_stems::parent(library, id))?
+                })
+            }
             stems if crate::stems::answers(stems) => {
                 // Only the lookup takes the Library; a separation runs
                 // with it free.
