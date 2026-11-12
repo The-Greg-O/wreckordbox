@@ -212,6 +212,14 @@ impl MonoStream {
         self.expected
     }
 
+    /// Whether [`MonoStream::expected_frames`] is exactly what a whole file
+    /// holds, sample for sample: PCM (WAV, AIFF) and FLAC. Not for lossy
+    /// files, whose count includes encoder delay and padding a decoder may
+    /// or may not hand out, or is only an estimate.
+    pub fn is_exact_length(&self) -> bool {
+        self.expected.is_some() && self.slack == Some(0)
+    }
+
     /// The rate of the samples handed out so far, or the one the container
     /// declares before the first packet.
     pub fn sample_rate(&self) -> u32 {

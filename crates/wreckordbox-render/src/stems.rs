@@ -9,12 +9,18 @@ use crate::source::from_i16;
 use crate::{RenderError, Source, TrackSource};
 
 /// A track's four Stems, as the Sidecar holds them: one file per Stem, each
-/// exactly the parent's length.
+/// exactly the parent's length, at 44,100 Hz.
 ///
 /// `frames` is that length as the Stems were made from the parent (the
-/// Sidecar's `samples`); every file must hold exactly that many frames or
-/// the render is refused. The four are the Sidecar's roles; `other` is
-/// the melody.
+/// Sidecar's `samples`); every file must hold exactly that many frames, at
+/// [`STEM_RATE`], and the parent itself must be that long (see
+/// [`StemSum::open`]) or the render is refused. The four are the Sidecar's
+/// roles; `other` is the melody.
+///
+/// Pass only Stems verified current for the parent's audio as it is now
+/// (the service's `current_stems_for_render`): the renderer can tell Stems
+/// of the wrong length or rate, not Stems of other audio of the same
+/// length.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Stems {
     pub frames: u64,
@@ -23,6 +29,10 @@ pub struct Stems {
     pub bass: PathBuf,
     pub drums: PathBuf,
 }
+
+/// The rate every Stem is at: the separation engine writes 44.1 kHz 16-bit
+/// stereo, and the Sidecar records nothing else.
+pub const STEM_RATE: u32 = 44_100;
 
 /// Which Stems a render keeps. All four is no Stem edit at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,7 +108,7 @@ impl MutantSource {
             return Ok(Self::Track(TrackSource::open(parent)?));
         }
         let stems = stems.ok_or(RenderError::StemsMissing)?;
-        Ok(Self::Stems(StemSum::open(stems, kept)?))
+        Ok(Self::Stems(StemSum::open(parent, stems, kept)?))
     }
 }
 
@@ -144,10 +154,11 @@ struct Reader {
 /// they are about as loud as it, and any part of them less so; a peak past
 /// full scale is clipped where the file is written, as for any render.
 ///
-/// Every Stem must be exactly [`Stems::frames`] long and all at one rate:
+/// Every Stem must be exactly [`Stems::frames`] long and at [`STEM_RATE`]:
 /// a Stem that says otherwise in its header is refused when opened, and one
 /// that turns out otherwise while it is read stops the render with
-/// [`RenderError::StemLength`], so nothing is written.
+/// [`RenderError::StemLength`], so nothing is written. The set must fit its
+/// parent too; see [`StemSum::open`].
 pub struct StemSum {
     readers: Vec<Reader>,
     frames: u64,
@@ -159,29 +170,40 @@ pub struct StemSum {
 const BLOCK: usize = 4096;
 
 impl StemSum {
-    pub fn open(stems: &Stems, kept: Kept) -> Result<Self, RenderError> {
+    /// The kept Stems of `stems`, checked against the parent they were made
+    /// from before anything is read:
+    ///
+    /// - every kept Stem is at [`STEM_RATE`] ([`RenderError::StemRate`]) and
+    ///   [`Stems::frames`] long by its header ([`RenderError::StemLength`]);
+    /// - the parent's length is exact (WAV, AIFF, FLAC). A lossy parent's
+    ///   decoded length includes encoder delay and padding, and where its
+    ///   Stems start on its timeline is not established (wbx-49.1), so it
+    ///   is refused: [`RenderError::StemAlignmentUnknown`];
+    /// - the parent lasts as long as the Stems: exactly [`Stems::frames`]
+    ///   when it is at 44.1 kHz, and within one 44.1 kHz frame of that
+    ///   (a resampler's rounding) at any other rate;
+    ///   [`RenderError::StemsDoNotFitParent`] otherwise.
+    pub fn open(parent: &Path, stems: &Stems, kept: Kept) -> Result<Self, RenderError> {
         let paths = stems.kept(kept);
         if paths.is_empty() {
             return Err(RenderError::NothingKept);
         }
         let mut readers = Vec::with_capacity(paths.len());
-        let mut sample_rate = None;
         for path in paths {
             let stream = MonoStream::open(path)?;
+            let rate = stream.sample_rate();
+            if rate != STEM_RATE {
+                return Err(RenderError::StemRate {
+                    stem: path.to_path_buf(),
+                    expected: STEM_RATE,
+                    found: rate,
+                });
+            }
             if let Some(found) = stream.expected_frames().filter(|&n| n != stems.frames) {
                 return Err(RenderError::StemLength {
                     stem: path.to_path_buf(),
                     expected: stems.frames,
                     found,
-                });
-            }
-            let rate = stream.sample_rate();
-            let expected = *sample_rate.get_or_insert(rate);
-            if rate != expected {
-                return Err(RenderError::StemRate {
-                    stem: path.to_path_buf(),
-                    expected,
-                    found: rate,
                 });
             }
             readers.push(Reader {
@@ -192,10 +214,11 @@ impl StemSum {
                 ended: false,
             });
         }
+        fits_parent(parent, stems.frames)?;
         Ok(Self {
             readers,
             frames: stems.frames,
-            sample_rate: sample_rate.unwrap_or(44_100),
+            sample_rate: STEM_RATE,
             block: Vec::new(),
         })
     }
@@ -263,6 +286,36 @@ impl Source for StemSum {
         }
         Ok(Some(&self.block))
     }
+}
+
+/// Whether `parent`, as it is on disk, lasts as long as a Stem set of
+/// `frames` frames at [`STEM_RATE`].
+fn fits_parent(parent: &Path, frames: u64) -> Result<(), RenderError> {
+    let stream = MonoStream::open(parent)?;
+    let (Some(parent_frames), true) = (stream.expected_frames(), stream.is_exact_length()) else {
+        return Err(RenderError::StemAlignmentUnknown {
+            parent: parent.to_path_buf(),
+        });
+    };
+    let parent_rate = stream.sample_rate();
+    // Both durations over the product of the rates, in whole numbers: the
+    // Stems' `frames / 44100` against the parent's `frames / rate`.
+    let stems_at = u128::from(frames) * u128::from(parent_rate);
+    let parent_at = u128::from(parent_frames) * u128::from(STEM_RATE);
+    let tolerance = if parent_rate == STEM_RATE {
+        0
+    } else {
+        u128::from(parent_rate)
+    };
+    if stems_at.abs_diff(parent_at) > tolerance {
+        return Err(RenderError::StemsDoNotFitParent {
+            parent: parent.to_path_buf(),
+            stems: frames,
+            parent_frames,
+            parent_rate,
+        });
+    }
+    Ok(())
 }
 
 /// A sum of 16-bit samples on the same scale as [`from_i16`]: exact, since

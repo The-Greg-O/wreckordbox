@@ -84,27 +84,50 @@ pub fn level_at(signal: &[f64], hz: f64) -> f64 {
     2.0 * power.sqrt() / signal.len() as f64
 }
 
-/// Four Stems in a temporary folder, each a tone of its own on both
-/// channels, so what a render kept can be told by frequency.
+/// Four Stems in a temporary folder, each a tone of its own on the left and
+/// another on the right, so what a render kept, and on which side, can be
+/// told by frequency.
 pub struct StemBench {
     pub dir: tempfile::TempDir,
     pub frames: usize,
 }
 
-/// Each Stem's tone, in the order vocals, other, bass, drums. Chosen to sit
-/// on whole Goertzel bins of a one-second signal and far from each other.
+/// The Stems' names, in the order vocals, other, bass, drums.
+pub const NAMES: [&str; 4] = ["vocals", "other", "bass", "drums"];
+
+/// Each Stem's left tone, in the order vocals, other, bass, drums. Chosen to
+/// sit on whole Goertzel bins of a one-second signal and far from each
+/// other and from the right-hand tones.
 pub const HZ: [f64; 4] = [880.0, 660.0, 110.0, 2_200.0];
 pub const AMPLITUDE: f64 = 0.2;
+/// Each Stem's right tone.
+pub const HZ_RIGHT: [f64; 4] = [1_100.0, 440.0, 220.0, 3_300.0];
+pub const AMPLITUDE_RIGHT: f64 = 0.1;
+
+/// A Stem's two channels.
+pub type Channels = (Vec<i16>, Vec<i16>);
 
 impl StemBench {
     pub fn new(frames: usize) -> Self {
+        Self::with(
+            frames,
+            std::array::from_fn(|i| {
+                (
+                    sine(HZ[i], frames, AMPLITUDE),
+                    sine(HZ_RIGHT[i], frames, AMPLITUDE_RIGHT),
+                )
+            }),
+        )
+    }
+
+    /// Four Stems of the given samples, vocals, other, bass, drums.
+    pub fn with(frames: usize, stems: [Channels; 4]) -> Self {
         let bench = Self {
             dir: tempfile::tempdir().unwrap(),
             frames,
         };
-        for (name, hz) in ["vocals", "other", "bass", "drums"].into_iter().zip(HZ) {
-            let samples = sine(hz, frames, AMPLITUDE);
-            write_wav(&bench.path(&format!("{name}.wav")), &samples, &samples);
+        for (name, (left, right)) in NAMES.into_iter().zip(&stems) {
+            write_wav(&bench.path(&format!("{name}.wav")), left, right);
         }
         bench
     }
@@ -127,19 +150,41 @@ impl StemBench {
 
     /// The Stems' own samples, read through `rbl-audio`, in the same order.
     pub fn samples(&self) -> [Vec<[i16; 2]>; 4] {
-        ["vocals", "other", "bass", "drums"].map(|name| read(&self.path(&format!("{name}.wav"))).0)
+        NAMES.map(|name| read(&self.path(&format!("{name}.wav"))).0)
     }
 
-    /// A parent track: the four Stems summed, as a WAV.
+    /// What keeping `kept` (vocals, other, bass, drums) must give: the kept
+    /// Stems' samples added as integers, clipped at full scale.
+    pub fn sum(&self, kept: [bool; 4]) -> Vec<[i16; 2]> {
+        let samples = self.samples();
+        (0..self.frames)
+            .map(|i| {
+                let mut sum = [0_i32; 2];
+                for (stem, _) in samples.iter().zip(kept).filter(|(_, k)| *k) {
+                    sum[0] += i32::from(stem[i][0]);
+                    sum[1] += i32::from(stem[i][1]);
+                }
+                sum.map(|s| s.clamp(-32_768, 32_767) as i16)
+            })
+            .collect()
+    }
+
+    /// A parent track: the four Stems summed, as a WAV at 44.1 kHz.
     pub fn parent(&self) -> PathBuf {
         let path = self.path("parent.wav");
-        let mut mix = vec![0_i16; self.frames];
-        for hz in HZ {
-            for (m, s) in mix.iter_mut().zip(sine(hz, self.frames, AMPLITUDE)) {
-                *m += s;
-            }
-        }
-        write_wav(&path, &mix, &mix);
+        let mix = self.sum([true; 4]);
+        let left: Vec<i16> = mix.iter().map(|f| f[0]).collect();
+        let right: Vec<i16> = mix.iter().map(|f| f[1]).collect();
+        write_wav(&path, &left, &right);
+        path
+    }
+
+    /// A parent of `frames` frames at `rate`, a quiet tone: a real file of
+    /// its own length, to hold a Stem set up against.
+    pub fn parent_of(&self, name: &str, frames: usize, rate: u32) -> PathBuf {
+        let path = self.path(name);
+        let tone = sine(330.0, frames, 0.3);
+        write_wav_rate(&path, &tone, &tone, rate);
         path
     }
 }

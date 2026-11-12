@@ -13,7 +13,7 @@ mod stems;
 use std::path::{Path, PathBuf};
 
 pub use source::{MemorySource, Source, TrackSource};
-pub use stems::{Kept, MutantSource, StemSum, Stems};
+pub use stems::{Kept, MutantSource, StemSum, Stems, STEM_RATE};
 
 /// What to do to the audio. The default is nothing.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -187,12 +187,28 @@ pub enum RenderError {
         expected: u64,
         found: u64,
     },
-    #[error("the Stem {stem} is at {found} Hz, not {expected} Hz like the others")]
+    #[error("the Stem {stem} is at {found} Hz, not {expected} Hz")]
     StemRate {
         stem: PathBuf,
         expected: u32,
         found: u32,
     },
+    #[error(
+        "the Stems are {stems} frames at 44100 Hz and their parent {parent} is {parent_frames} \
+         frames at {parent_rate} Hz: they were not made from this audio"
+    )]
+    StemsDoNotFitParent {
+        parent: PathBuf,
+        stems: u64,
+        parent_frames: u64,
+        parent_rate: u32,
+    },
+    #[error(
+        "the Stems of {parent} cannot be lined up with it: it is a lossy file, whose length \
+         includes encoder delay and padding, and where its Stems start on its timeline is not \
+         established"
+    )]
+    StemAlignmentUnknown { parent: PathBuf },
     #[error("the stretcher failed: {0}")]
     Stretch(rbl_deck::OfflineError),
     #[error(transparent)]
