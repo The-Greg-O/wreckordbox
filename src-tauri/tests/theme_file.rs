@@ -256,7 +256,10 @@ fn a_file_that_may_not_be_read_is_reported_and_reloaded_when_it_may_again() {
     let theme = next(&themes);
     assert_eq!(accent(&theme), Some("#7aa2f7"));
     assert!(
-        theme["problems"][0]["message"].as_str().unwrap().contains("ermission"),
+        theme["problems"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("ermission"),
         "{theme}"
     );
     chmod(&file, 0o644);
@@ -285,7 +288,9 @@ fn only_the_theme_file_is_watched_in_its_folder_and_omarchy_not_at_all_under_fol
         folder: folder.clone(),
         entry: entry("theme.toml"),
     }));
-    assert!(following.iter().any(|watch| watch.folder == root.path().join("state/current") && watch.entry.is_none()));
+    assert!(following
+        .iter()
+        .any(|watch| watch.folder == root.path().join("state/current") && watch.entry.is_none()));
     // Under follow = "none": only the theme file.
     assert_eq!(
         sources.watches(false),
@@ -311,7 +316,11 @@ fn other_files_beside_the_theme_file_are_not_followed() {
     // Nothing to announce: another file in the folder, and an Omarchy switch
     // while not following it.
     std::fs::write(folder.join("notes.txt"), "hello").unwrap();
-    std::fs::write(root.path().join("state/current/theme/colors.toml"), palette("#b9f24b")).unwrap();
+    std::fs::write(
+        root.path().join("state/current/theme/colors.toml"),
+        palette("#b9f24b"),
+    )
+    .unwrap();
     assert!(themes.recv_timeout(Duration::from_secs(2)).is_err());
     std::fs::write(&file, "follow = \"none\"\n").unwrap();
     assert_eq!(next(&themes)["problems"], serde_json::json!([]));

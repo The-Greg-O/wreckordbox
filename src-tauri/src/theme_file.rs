@@ -72,10 +72,17 @@ const COLOUR_KEYS: &[&str] = &[
 /// exactly these).
 #[must_use]
 pub fn accepted_keys() -> Vec<&'static str> {
-    ["follow", "mode", "font", "font_size", "mono_font", "mono_font_size"]
-        .into_iter()
-        .chain(COLOUR_KEYS.iter().copied())
-        .collect()
+    [
+        "follow",
+        "mode",
+        "font",
+        "font_size",
+        "mono_font",
+        "mono_font_size",
+    ]
+    .into_iter()
+    .chain(COLOUR_KEYS.iter().copied())
+    .collect()
 }
 
 /// Settings an Omarchy palette may carry for other programs. Passed over in
@@ -431,10 +438,19 @@ mod tests {
 
     #[test]
     fn a_mistake_after_a_line_that_is_not_toml_keeps_its_own_line() {
-        let file = parse("this is not toml\nmuted = \"grey\"\nnot toml either\nacent = \"#ffffff\"\n");
+        let file =
+            parse("this is not toml\nmuted = \"grey\"\nnot toml either\nacent = \"#ffffff\"\n");
         assert_eq!(lines(&file), [1, 2, 3, 4]);
-        assert!(file.problems[1].message.contains("muted"), "{:?}", file.problems);
-        assert!(file.problems[3].message.contains("acent"), "{:?}", file.problems);
+        assert!(
+            file.problems[1].message.contains("muted"),
+            "{:?}",
+            file.problems
+        );
+        assert!(
+            file.problems[3].message.contains("acent"),
+            "{:?}",
+            file.problems
+        );
     }
 
     #[test]
@@ -496,12 +512,20 @@ mod tests {
         without_permission(&file, 0o000, || {
             let read = read(&file).expect("a file that is there is not no file");
             assert_eq!(lines(&read), [1]);
-            assert!(read.problems[0].message.contains("ermission"), "{:?}", read.problems);
+            assert!(
+                read.problems[0].message.contains("ermission"),
+                "{:?}",
+                read.problems
+            );
         });
         // Its folder may not be searched: the file cannot even be looked at.
         without_permission(folder.path(), 0o000, || {
             let read = read(&file).expect("a folder that cannot be searched is not no file");
-            assert!(read.problems[0].message.contains("ermission"), "{:?}", read.problems);
+            assert!(
+                read.problems[0].message.contains("ermission"),
+                "{:?}",
+                read.problems
+            );
         });
     }
 
@@ -510,7 +534,10 @@ mod tests {
     fn a_special_file_is_reported_without_waiting_on_it() {
         let folder = tempfile::tempdir().unwrap();
         let fifo = folder.path().join("theme.toml");
-        let made = std::process::Command::new("mkfifo").arg(&fifo).status().unwrap();
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap();
         assert!(made.success());
         let (send, receive) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -520,7 +547,11 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(5))
             .expect("reading a FIFO must not wait for a writer");
         let read = read.expect("a FIFO where the file should be is reported");
-        assert!(read.problems[0].message.contains("not a regular file"), "{:?}", read.problems);
+        assert!(
+            read.problems[0].message.contains("not a regular file"),
+            "{:?}",
+            read.problems
+        );
     }
 
     #[test]
@@ -532,7 +563,11 @@ mod tests {
         std::fs::write(&file, big).unwrap();
         let read = read(&file).unwrap();
         assert_eq!(read.colours.len(), 0);
-        assert!(read.problems[0].message.contains("larger than"), "{:?}", read.problems);
+        assert!(
+            read.problems[0].message.contains("larger than"),
+            "{:?}",
+            read.problems
+        );
     }
 
     #[test]
@@ -546,11 +581,17 @@ mod tests {
             .filter_map(|line| line.strip_prefix("# "))
             .filter(|line| {
                 line.split_once(" = ").is_some_and(|(key, _)| {
-                    !key.is_empty() && key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+                    !key.is_empty()
+                        && key
+                            .chars()
+                            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
                 })
             })
             .collect();
-        let keys: Vec<&str> = assignments.iter().map(|line| line.split_once(" = ").unwrap().0).collect();
+        let keys: Vec<&str> = assignments
+            .iter()
+            .map(|line| line.split_once(" = ").unwrap().0)
+            .collect();
         let mut sorted = keys.clone();
         sorted.sort_unstable();
         sorted.dedup();

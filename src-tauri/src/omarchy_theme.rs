@@ -120,7 +120,7 @@ pub fn layered(
         .filter(|colours| !colours.is_empty());
     let roles = match over {
         None => base,
-        Some(over) => Some(overlay(base.unwrap_or_else(built_in_roles), over)),
+        Some(over) => Some(overlay(&base.unwrap_or_else(built_in_roles), over)),
     };
     let interface_font = file.and_then(|file| file.font.clone());
     let font = match &interface_font {
@@ -177,12 +177,15 @@ pub(crate) const ROLE_KEYS: &[(&str, &[&str])] = &[
     ("text_dim", &["dark_foreground"]),
     ("text_bright", &["bright_foreground", "color15"]),
     ("accent", &["accent", "blue", "color4"]),
-    ("tab_from", &["bright_magenta", "color13", "magenta", "color5"]),
+    (
+        "tab_from",
+        &["bright_magenta", "color13", "magenta", "color5"],
+    ),
     ("tab_to", &["bright_yellow", "color11", "yellow", "color3"]),
 ];
 
 /// `base` with the roles `file` names replaced (see `layered`).
-fn overlay(base: ThemeRoles, file: &BTreeMap<String, String>) -> ThemeRoles {
+fn overlay(base: &ThemeRoles, file: &BTreeMap<String, String>) -> ThemeRoles {
     let given = |role: &str| {
         ROLE_KEYS
             .iter()
@@ -213,13 +216,19 @@ fn overlay(base: ThemeRoles, file: &BTreeMap<String, String>) -> ThemeRoles {
         roles.hairline = hairline;
         roles.control = None;
     }
-    if let Some(mode) = file.get("mode").filter(|mode| matches!(mode.as_str(), "dark" | "light")) {
+    if let Some(mode) = file
+        .get("mode")
+        .filter(|mode| matches!(mode.as_str(), "dark" | "light"))
+    {
         roles.mode.clone_from(mode);
     }
     // A tab end the base took from its accent (it had none of its own)
     // stays the accent's colour.
     if roles.accent != base.accent {
-        for (role, slot) in [("tab_from", &mut roles.tab_from), ("tab_to", &mut roles.tab_to)] {
+        for (role, slot) in [
+            ("tab_from", &mut roles.tab_from),
+            ("tab_to", &mut roles.tab_to),
+        ] {
             if given(role).is_none() && *slot == base.accent {
                 slot.clone_from(&roles.accent);
             }
@@ -228,10 +237,19 @@ fn overlay(base: ThemeRoles, file: &BTreeMap<String, String>) -> ThemeRoles {
     let colour = |value: &str| rgb(value).unwrap_or_default();
     // The label on the accent is chosen from the accent, the deepest ground
     // and the brightest text; choose again only if one of them changed.
-    if (roles.accent.as_str(), roles.ground.as_str(), roles.text_bright.as_str())
-        != (base.accent.as_str(), base.ground.as_str(), base.text_bright.as_str())
-    {
-        let label = on_accent(colour(&roles.accent), [colour(&roles.ground), colour(&roles.text_bright)]);
+    if (
+        roles.accent.as_str(),
+        roles.ground.as_str(),
+        roles.text_bright.as_str(),
+    ) != (
+        base.accent.as_str(),
+        base.ground.as_str(),
+        base.text_bright.as_str(),
+    ) {
+        let label = on_accent(
+            colour(&roles.accent),
+            [colour(&roles.ground), colour(&roles.text_bright)],
+        );
         roles.on_accent = hex(label);
         roles.accent_hover = None;
     }
@@ -522,7 +540,9 @@ impl Sources {
     /// nor the system font is read.
     fn read_following(&self) -> (Theme, bool) {
         let file = self.theme_file.as_deref().and_then(crate::theme_file::read);
-        let follows = file.as_ref().is_none_or(|file| file.follow == Follow::Omarchy);
+        let follows = file
+            .as_ref()
+            .is_none_or(|file| file.follow == Follow::Omarchy);
         let omarchy = self
             .colors
             .as_deref()
@@ -559,12 +579,19 @@ impl Sources {
             let holding = theme
                 .filter(|_| self.theme_folder_is_replaced)
                 .and_then(Path::parent);
-            watches.extend(holding.into_iter().chain(theme).chain(self.font_folder.as_deref()).map(whole));
+            watches.extend(
+                holding
+                    .into_iter()
+                    .chain(theme)
+                    .chain(self.font_folder.as_deref())
+                    .map(whole),
+            );
         }
         if let Some(file) = self.theme_file.as_deref() {
             watches.extend(named(file));
             let target = std::fs::canonicalize(file).ok().filter(|target| {
-                file.parent().and_then(|folder| std::fs::canonicalize(folder).ok())
+                file.parent()
+                    .and_then(|folder| std::fs::canonicalize(folder).ok())
                     != target.parent().map(Path::to_path_buf)
             });
             watches.extend(target.as_deref().and_then(named));
@@ -711,7 +738,10 @@ mod watch {
             for _ in 0..64 {
                 if folder.is_dir() {
                     let watched = match &watch.entry {
-                        None => self.interest(&folder).map(|interest| interest.everything = true).is_some(),
+                        None => self
+                            .interest(&folder)
+                            .map(|interest| interest.everything = true)
+                            .is_some(),
                         Some(name) => self.want(&folder, name),
                     };
                     if watched {
@@ -1149,13 +1179,29 @@ color15 = "#ddc7a1"
             let before = base(omarchy);
             let dark = before.mode == "dark";
             for (key, value, role) in [
-                ("foreground", if dark { "#ebdbb2" } else { "#202020" }, "text"),
+                (
+                    "foreground",
+                    if dark { "#ebdbb2" } else { "#202020" },
+                    "text",
+                ),
                 ("muted", "#ff00ff", "border"),
-                ("background", if dark { "#202020" } else { "#f8f8f8" }, "working"),
+                (
+                    "background",
+                    if dark { "#202020" } else { "#f8f8f8" },
+                    "working",
+                ),
                 ("dark_foreground", "#777777", "text_dim"),
-                ("darker_background", if dark { "#050505" } else { "#d0d0d0" }, "ground"),
+                (
+                    "darker_background",
+                    if dark { "#050505" } else { "#d0d0d0" },
+                    "ground",
+                ),
             ] {
-                let theme = layered(omarchy, Some(&file(&format!("{key} = \"{value}\"\n"))), no_font);
+                let theme = layered(
+                    omarchy,
+                    Some(&file(&format!("{key} = \"{value}\"\n"))),
+                    no_font,
+                );
                 let mut expected = before.clone();
                 match role {
                     "text" => expected.text = value.into(),
@@ -1168,7 +1214,11 @@ color15 = "#ddc7a1"
                 if role == "ground" {
                     // The label on the accent is chosen from the ground; it
                     // may change, nothing else may.
-                    assert_eq!(apart_from_the_accents_label(&got), apart_from_the_accents_label(&expected), "{key} over {omarchy:?}");
+                    assert_eq!(
+                        apart_from_the_accents_label(&got),
+                        apart_from_the_accents_label(&expected),
+                        "{key} over {omarchy:?}"
+                    );
                 } else {
                     assert_eq!(got, expected, "{key} over {omarchy:?}");
                 }
@@ -1189,7 +1239,11 @@ color15 = "#ddc7a1"
             })
         );
         // `lighter_background` is both the hairline and the control fill.
-        let theme = layered(None, Some(&file("lighter_background = \"#3a3a3a\"\n")), no_font);
+        let theme = layered(
+            None,
+            Some(&file("lighter_background = \"#3a3a3a\"\n")),
+            no_font,
+        );
         let roles = theme.roles.unwrap();
         assert_eq!((roles.hairline.as_str(), roles.control), ("#3a3a3a", None));
     }
