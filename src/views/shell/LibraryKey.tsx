@@ -8,5 +8,8 @@ export function LibraryKey({ stored, loaded, text }: { stored: string; loaded: s
   const light = keyLight(loaded, stored);
   const hint = light === "match" ? t("Harmonic match") : light === "boost" ? t("Energy boost (+2)") : null;
   return <span className={styles.key} data-light={light} title={hint ?? undefined}
-    aria-label={hint ? `${text}: ${hint}` : undefined}>{text}</span>;
+    role={hint ? "img" : undefined} aria-label={hint ? `${text}: ${hint}` : undefined}>
+    <span data-key-text="">{text}</span>
+    {hint ? <span data-key-mark="" aria-hidden="true">{light === "boost" ? "↑" : "="}</span> : null}
+  </span>;
 }

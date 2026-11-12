@@ -1,7 +1,14 @@
-/* Music colours from the design reference, fixed under every chrome theme. */
+/* Music tokens, fixed under every chrome theme (docs/design/tokens.md). */
 .key {
-  padding: 2px 3px;
+  --c-key-match: #9ece6a;
+  --c-key-boost: #e0af68;
+  --c-key-text: #0e0e14;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 2px;
   border-radius: 2px;
 }
-.key[data-light="match"] { background: #9ece6a; color: #0e0e14; }
-.key[data-light="boost"] { background: #e0af68; color: #0e0e14; }
+.key[data-light="match"] { background: var(--c-key-match); color: var(--c-key-text); }
+.key[data-light="boost"] { background: var(--c-key-boost); color: var(--c-key-text); }
+.key [data-key-mark] { font-weight: bold; }

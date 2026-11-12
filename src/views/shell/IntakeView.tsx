@@ -36,6 +36,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent }
 import { useTranslation } from "@/i18n";
 import type { RowDto } from "@/ipc/types";
 import { needsLine, queuePosition, type IntakeCounts, type IntakeQueueName, type QueuedTrack } from "@/lib/intakeQueue";
+import { formatKey } from "@/lib/preferences";
+import { usePreferences } from "@/store/usePreferences";
 import styles from "./IntakeView.module.css";
 import { useIntakeQueue } from "./useIntakeQueue";
 
@@ -242,9 +244,10 @@ function optionId(trackId: string): string {
 
 function QueueRow({ track, selected, onChoose }: { track: QueuedTrack; selected: boolean; onChoose: () => void }) {
   const t = useTranslation();
+  const { keyDisplay } = usePreferences().view;
   const facts = useMemo(
-    () => [track.artist, track.bpm !== null ? String(Math.round(track.bpm)) : "", track.key].filter((part) => part !== "").join(" · "),
-    [track],
+    () => [track.artist, track.bpm !== null ? String(Math.round(track.bpm)) : "", formatKey(track.key, keyDisplay)].filter((part) => part !== "").join(" · "),
+    [track, keyDisplay],
   );
   return (
     <div

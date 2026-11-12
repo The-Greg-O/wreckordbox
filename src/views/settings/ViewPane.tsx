@@ -222,16 +222,19 @@ export function ViewPane({ tab, onResetColumns, onResetLayout }: ViewPaneProps) 
         </div>
         <Separator />
         <Sub>Sort keys</Sub>
+        <div data-own-activation="">
         <Radios
           label="Sort keys"
           nested
           value={view.keySort}
           choices={[
+            { value: "auto", label: "Follow displayed notation" },
             { value: "alphabetical", label: "Alphabetically — A, Ab, B, …" },
             { value: "musical", label: "Musically — Abm, B, Ebm, F#, Bbm, …" },
           ]}
           onChange={(keySort) => set({ keySort })}
         />
+        </div>
       </Section>
       <Section title="Waveform">
         <Sub>Full/Preview Waveform</Sub>

@@ -2360,7 +2360,7 @@ export const TrackTable = memo(function TrackTable({
           */}
           {view.loading ? title : `${title} (${view.count} Tracks)`}
         </span>
-        {trafficLight && onTrafficLight ? (
+        {!look?.keyCell && trafficLight && onTrafficLight ? (
           <div ref={trafficBox} className={styles.trafficBox}>
             <button
               type="button"
