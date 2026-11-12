@@ -121,6 +121,10 @@ webview2-com = "0.38"
 windows-core = "0.61"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# The webview's own editing commands (Cut, Copy, Paste) for the command
+# palette, where there is no native Edit menu (#54). The version wry and
+# Tauri already use, so nothing new is built.
+webkit2gtk = "=2.0.2"
 # ALSA sequencer backend: the XDJ-RX3's USB-MIDI output, for its Link Export
 # activation lease (`rx3_link.rs`).
 midir = "0.11"

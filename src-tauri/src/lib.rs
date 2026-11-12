@@ -548,6 +548,7 @@ pub fn run() {
             menu::set_menu_labels,
             menu::set_menu_enabled,
             menu::run_menu_item,
+            menu::run_edit_command,
             commands::library_summary,
             commands::disable_read_only,
             new_library::library_problem,

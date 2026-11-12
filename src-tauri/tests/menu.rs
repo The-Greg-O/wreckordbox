@@ -31,7 +31,9 @@ fn main() {
         linux_installs_no_menu_row();
         linux_keeps_no_menu_row_when_the_labels_arrive();
         the_palette_reaches_what_only_the_shell_can_do();
-        println!("3 menu checks passed");
+        the_shell_items_act_on_the_window();
+        the_palette_names_the_webviews_editing_actions();
+        println!("5 menu checks passed");
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     println!("skipped: the menu bar is untested on this platform");
@@ -97,6 +99,74 @@ fn the_palette_reaches_what_only_the_shell_can_do() {
         heard.try_recv().is_err(),
         "full screen is the shell's own and must not reach the window"
     );
+}
+
+/// A window that remembers what was done to it.
+#[cfg(target_os = "linux")]
+#[derive(Default)]
+struct Watched {
+    full: std::cell::Cell<bool>,
+    closed: std::cell::Cell<u32>,
+}
+
+#[cfg(target_os = "linux")]
+impl rbxport_lib::menu::ShellWindow for Watched {
+    fn is_fullscreen(&self) -> bool {
+        self.full.get()
+    }
+    fn set_fullscreen(&self, on: bool) -> Result<(), String> {
+        self.full.set(on);
+        Ok(())
+    }
+    fn close(&self) -> Result<(), String> {
+        self.closed.set(self.closed.get() + 1);
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn the_shell_items_act_on_the_window() {
+    use rbxport_lib::menu::run_shell_item;
+
+    let window = Watched::default();
+    // Full screen goes in, and out again.
+    assert!(run_shell_item(&window, "fullscreen").unwrap());
+    assert!(
+        window.full.get(),
+        "full screen must make the window full screen"
+    );
+    assert!(run_shell_item(&window, "fullscreen").unwrap());
+    assert!(!window.full.get(), "full screen again must leave it");
+    // Close Window and Quit close the main window (which quits).
+    assert!(run_shell_item(&window, "close-window").unwrap());
+    assert_eq!(window.closed.get(), 1);
+    assert!(run_shell_item(&window, "quit").unwrap());
+    assert_eq!(window.closed.get(), 2);
+    // Anything else is the window's, not the shell's.
+    assert!(!run_shell_item(&window, "missing").unwrap());
+    assert_eq!(window.closed.get(), 2);
+    assert!(!window.full.get());
+}
+
+#[cfg(target_os = "linux")]
+fn the_palette_names_the_webviews_editing_actions() {
+    use rbxport_lib::menu::editing_command;
+
+    // WebKit's own command names (`WEBKIT_EDITING_COMMAND_*`).
+    assert_eq!(editing_command("cut"), Some("Cut"));
+    assert_eq!(editing_command("copy"), Some("Copy"));
+    assert_eq!(editing_command("paste"), Some("Paste"));
+    assert_eq!(editing_command("selectAll"), Some("SelectAll"));
+    assert_eq!(editing_command("delete-library"), None);
+
+    // Through a window: accepted for an editing action, refused otherwise.
+    let app = tauri::test::mock_app();
+    let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .expect("a mock window");
+    rbxport_lib::menu::run_edit_command(window.clone(), "paste".to_owned())
+        .expect("paste is accepted");
+    assert!(rbxport_lib::menu::run_edit_command(window, "format".to_owned()).is_err());
 }
 
 /// Every id the menu emits, in the order the menus are laid out.
