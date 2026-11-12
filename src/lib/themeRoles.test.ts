@@ -1,23 +1,23 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-import { applyTheme, themeProperties, type Theme, type ThemeRoles } from "./themeRoles";
+import { applyTheme, followThemeFrom, themeProperties, type Theme, type ThemeRoles } from "./themeRoles";
 
 const TOKYO_NIGHT: ThemeRoles = {
   mode: "dark", ground: "#0e0e14", panel: "#13141c", working: "#1a1b26", hairline: "#24283b",
   selection: "#292e42", border: "#414868", text: "#a9b1d6", textDim: "#565f89", textBright: "#c0caf5",
-  accent: "#7aa2f7", tabFrom: "#bb9af7", tabTo: "#ff9e64",
+  accent: "#7aa2f7", onAccent: "#0e0e14", tabFrom: "#bb9af7", tabTo: "#ff9e64",
 };
 const GRUVBOX: ThemeRoles = {
   mode: "dark", ground: "#161616", panel: "#1e1e1e", working: "#282828", hairline: "#3c3836",
   selection: "#504945", border: "#665c54", text: "#d4be98", textDim: "#7c6f64", textBright: "#d4be98",
-  accent: "#7daea3", tabFrom: "#d3869b", tabTo: "#d8a657",
+  accent: "#7daea3", onAccent: "#161616", tabFrom: "#d3869b", tabTo: "#d8a657",
 };
 
 const LATTE: ThemeRoles = {
   mode: "light", ground: "#d7d8dc", panel: "#e3e4e8", working: "#eff1f5", hairline: "#dce0e8",
   selection: "#ccd0da", border: "#acb0be", text: "#4c4f69", textDim: "#9ca0b0", textBright: "#4c4f69",
-  accent: "#1e66f5", tabFrom: "#8839ef", tabTo: "#df8e1d",
+  accent: "#1e66f5", onAccent: "#ffffff", tabFrom: "#8839ef", tabTo: "#df8e1d",
 };
 
 /** A stand-in for the root element. */
@@ -50,6 +50,7 @@ describe("themeProperties", () => {
       "--role-text-dim": "#565f89",
       "--role-text-bright": "#c0caf5",
       "--role-accent": "#7aa2f7",
+      "--role-on-accent": "#0e0e14",
       "--role-tab-from": "#bb9af7",
       "--role-tab-to": "#ff9e64",
       "--role-font": '"JetBrainsMono Nerd Font", ui-monospace, monospace',
@@ -58,7 +59,7 @@ describe("themeProperties", () => {
 
   it("leaves every role to the stylesheet's fallback when there is no theme and no font", () => {
     const properties = themeProperties({ roles: null, font: null });
-    expect(Object.keys(properties)).toHaveLength(14);
+    expect(Object.keys(properties)).toHaveLength(15);
     expect(Object.values(properties).every((value) => value === null)).toBe(true);
   });
 
@@ -96,6 +97,44 @@ describe("applyTheme", () => {
   });
 });
 
+describe("followThemeFrom", () => {
+  /** A stand-in for the app shell: the command's answer, and the event's listeners. */
+  function shell(first: Theme) {
+    const listeners: ((theme: Theme) => void)[] = [];
+    const calls: string[] = [];
+    return {
+      calls,
+      emit: (theme: Theme) => listeners.forEach((listener) => listener(theme)),
+      current: () => (calls.push("current"), Promise.resolve(first)),
+      onChange: (listener: (theme: Theme) => void) => (calls.push("onChange"), listeners.push(listener), Promise.resolve()),
+    };
+  }
+
+  it("shows the shell's theme, then each one it announces, with the mode", async () => {
+    const root = fakeRoot();
+    const source = shell({ roles: TOKYO_NIGHT, font: "JetBrainsMono Nerd Font" });
+    await followThemeFrom(source, root);
+    expect(root.set.get("--role-accent")).toBe("#7aa2f7");
+    expect(root.set.get("--role-on-accent")).toBe("#0e0e14");
+    expect(root.set.get("--role-font")).toContain("JetBrainsMono Nerd Font");
+    expect(root.attributes.get("data-theme-mode")).toBe("dark");
+
+    source.emit({ roles: LATTE, font: "JetBrainsMono Nerd Font" });
+    expect(root.set.get("--role-accent")).toBe("#1e66f5");
+    expect(root.attributes.get("data-theme-mode")).toBe("light");
+
+    source.emit({ roles: null, font: null });
+    expect(root.set.size).toBe(0);
+    expect(root.attributes.has("data-theme-mode")).toBe(false);
+  });
+
+  it("subscribes before it asks, so a switch in between is not lost", async () => {
+    const source = shell({ roles: null, font: null });
+    await followThemeFrom(source, fakeRoot());
+    expect(source.calls).toEqual(["onChange", "current"]);
+  });
+});
+
 // What the window would compute for each token under a theme: the
 // stylesheet's `:root` declarations with the theme's properties laid over
 // them, as an inline style on the root lays them over.
@@ -112,7 +151,9 @@ function declared(selectors = [":root"]): Map<string, string> {
 }
 
 function computed(theme: Theme): Map<string, string> {
-  const values = declared(theme.roles ? [":root", `:root[data-theme-mode="${theme.roles.mode}"]`] : [":root"]);
+  const values = declared(
+    theme.roles ? [":root", ":root[data-theme-mode]", `:root[data-theme-mode="${theme.roles.mode}"]`] : [":root"],
+  );
   for (const [name, value] of Object.entries(themeProperties(theme))) if (value !== null) values.set(name, value);
   const resolve = (value: string, depth = 0): string =>
     depth > 8 ? value : value.replace(/var\((--[\w-]+)\)/g, (_, name: string) => resolve(values.get(name) ?? "", depth + 1));
@@ -125,8 +166,14 @@ const CHROME = [
   "--c-select", "--f-ui",
 ];
 
+/** The lit states of upstream's chrome and what is written on them: the accent, under a theme only. */
+const LIT = [
+  "--c-on-accent", "--c-pad-active", "--c-tab-active", "--c-filter-accent", "--c-mytag-check-on", "--c-mytag-tick",
+  "--c-device-tab-on", "--c-info-tab-active", "--c-info-tab-active-text", "--c-rail-lit", "--c-pref-select",
+];
+
 /** Colours that mean something: the music, not the chrome. */
-const MEANING = /^--c-(wave|phrase|cue|pad|label|comment|meter|playhead|beat|downbeat|vocal|pcm|scrub|played|missing$|error|tempo|traffic-light|play-ring|bars-label|sync-pending)/;
+const MEANING = /^--c-(?!pad-active$)(wave|phrase|cue|pad|energy|loop-band|label|comment|meter|playhead|beat|downbeat|vocal|pcm|scrub|played|missing$|error|tempo|traffic-light|play-ring|bars-label|sync-pending)/;
 
 describe("tokens under a theme", () => {
   const plain = computed({ roles: null, font: null });
@@ -134,8 +181,11 @@ describe("tokens under a theme", () => {
   const gruvbox = computed({ roles: GRUVBOX, font: "CaskaydiaMono Nerd Font" });
 
   it("only the chrome tokens refer to a role", () => {
-    const referring = [...declared()].filter(([name, value]) => !name.startsWith("--role-") && value.includes("--role-"));
-    expect(referring.map(([name]) => name).sort()).toEqual([...CHROME].sort());
+    const referring = (selectors: string[]) =>
+      [...declared(selectors)].filter(([name, value]) => !name.startsWith("--role-") && value.includes("--role-")).map(([name]) => name).sort();
+    expect(referring([":root"])).toEqual([...CHROME].sort());
+    expect(referring([":root[data-theme-mode]"])).toEqual([...LIT].sort());
+    expect([...CHROME, ...LIT].filter((name) => MEANING.test(name))).toEqual([]);
   });
 
   it("colours that carry meaning are identical under two themes and under none", () => {
@@ -144,7 +194,8 @@ describe("tokens under a theme", () => {
     expect(meaning.length).toBeGreaterThan(80);
     expect(meaning).toEqual(expect.arrayContaining([
       "--c-wave-low", "--c-wave-all", "--c-phrase-chorus", "--c-cue-hot", "--c-cue-purple", "--c-label-pink",
-      "--c-comment-red", "--c-meter-green", "--c-playhead", "--c-downbeat",
+      "--c-comment-red", "--c-meter-green", "--c-playhead", "--c-downbeat", "--c-energy", "--c-energy-hover",
+      "--c-loop-band",
     ]));
     for (const name of meaning) {
       expect(tokyo.get(name), name).toBe(plain.get(name));
@@ -156,8 +207,8 @@ describe("tokens under a theme", () => {
   });
 
   it("nothing but the chrome tokens and the roles changes with the theme", () => {
-    const changed = [...plain.keys()].filter((name) => tokyo.get(name) !== plain.get(name));
-    expect(changed.filter((name) => !name.startsWith("--role-")).sort()).toEqual([...CHROME].sort());
+    const changed = [...new Set([...plain.keys(), ...tokyo.keys()])].filter((name) => tokyo.get(name) !== plain.get(name));
+    expect(changed.filter((name) => !name.startsWith("--role-")).sort()).toEqual([...CHROME, ...LIT].sort());
   });
 
   it("the chrome takes the theme's colours and the system's face", () => {
@@ -168,6 +219,28 @@ describe("tokens under a theme", () => {
     expect(tokyo.get("--c-text")).toBe("#a9b1d6");
     expect(gruvbox.get("--c-accent")).toBe("#7daea3");
     expect(tokyo.get("--f-ui")).toBe('"JetBrainsMono Nerd Font", ui-monospace, monospace');
+  });
+
+  it("the lit states of the chrome are the accent, and what is written on them the theme's colour for that", () => {
+    for (const name of LIT.filter((name) => !/on-accent|tick|text/.test(name))) {
+      expect(tokyo.get(name), name).toBe("#7aa2f7");
+      expect(gruvbox.get(name), name).toBe("#7daea3");
+    }
+    for (const name of ["--c-on-accent", "--c-mytag-tick", "--c-info-tab-active-text"]) expect(tokyo.get(name), name).toBe("#0e0e14");
+    // Without a theme they are upstream's measured blues, and nothing defines --c-on-accent.
+    expect(plain.get("--c-pad-active")).toBe("#3571E3");
+    expect(plain.get("--c-tab-active")).toBe("#457FE5");
+    expect(plain.get("--c-pref-select")).toBe("#3571E3");
+    expect(plain.get("--c-info-tab-active-text")).toBe("#000000");
+    expect(plain.has("--c-on-accent")).toBe(false);
+  });
+
+  it("Energy stars and the loop band keep their colours under every theme", () => {
+    for (const theme of [plain, tokyo, gruvbox]) {
+      expect(theme.get("--c-energy")).toBe("#E6E6E6");
+      expect(theme.get("--c-energy-hover")).toBe("#1373EB");
+      expect(theme.get("--c-loop-band")).toBe("#3571E3");
+    }
   });
 
   it("under a light theme the upstream layout keeps its dark grounds and light text, and takes the accent", () => {

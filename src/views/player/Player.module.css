@@ -706,7 +706,7 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  background: var(--c-pad-active);
+  background: var(--c-loop-band);
   opacity: 0.18;
   pointer-events: none;
   z-index: 1;
@@ -1084,7 +1084,7 @@
   flex: none;
   align-self: center;
 }
-.chip[data-on] { border-color: var(--c-pad-active); background: var(--c-pad-active); color: var(--c-icon-on); }
+.chip[data-on] { border-color: var(--c-pad-active); background: var(--c-pad-active); color: var(--c-on-accent, var(--c-icon-on)); }
 .chip:hover:not(:disabled) { background: #383838; border-color: #969696; color: #fff; }
 .chip[data-on]:hover:not(:disabled) { background: #4a82ed; border-color: #4a82ed; }
 
@@ -1100,7 +1100,7 @@ button.pageNumber {
 }
 button.pageNumber:disabled { color: var(--c-icon-off); }
 .pageNumber[data-on],
-.memoryLabel[data-on] { background: var(--c-pad-active); color: var(--c-icon-on); }
+.memoryLabel[data-on] { background: var(--c-pad-active); color: var(--c-on-accent, var(--c-icon-on)); }
 
 .pageNumber {
   min-width: 70px;
@@ -1283,7 +1283,7 @@ button.cueDelete:disabled { color: var(--c-icon-off); }
 .sideTab[data-on] {
   background: var(--c-tab-active);
   border-color: var(--c-tab-active);
-  color: var(--c-icon-on);
+  color: var(--c-on-accent, var(--c-icon-on));
 }
 
 

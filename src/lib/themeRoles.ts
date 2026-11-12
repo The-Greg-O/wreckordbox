@@ -37,6 +37,8 @@ export type ThemeRoles = {
   textBright: string;
   /** Focus, the active filter, the deck marker. */
   accent: string;
+  /** Text and glyphs on a control filled with the accent. */
+  onAccent: string;
   /** The two ends of the active view tab's line. */
   tabFrom: string;
   tabTo: string;
@@ -61,6 +63,7 @@ const COLOUR_PROPERTIES: Record<Exclude<keyof ThemeRoles, "mode">, string> = {
   textDim: "--role-text-dim",
   textBright: "--role-text-bright",
   accent: "--role-accent",
+  onAccent: "--role-on-accent",
   tabFrom: "--role-tab-from",
   tabTo: "--role-tab-to",
 };
@@ -107,6 +110,47 @@ export function applyTheme(theme: Theme, root: Root = document.documentElement):
   else root.removeAttribute("data-theme-mode");
 }
 
+/** Where a window learns the theme from: the app shell, or a stand-in for it. */
+export type ThemeSource = {
+  /** The theme as it stands. */
+  current(): Promise<Theme>;
+  /** Calls `listener` with each later theme. */
+  onChange(listener: (theme: Theme) => void): Promise<unknown>;
+};
+
+/**
+ * Shows the source's theme on `root` and every later one. Subscribes before
+ * asking, so a switch between the two is not lost.
+ */
+export async function followThemeFrom(source: ThemeSource, root?: Root): Promise<void> {
+  await source.onChange((theme) => applyTheme(theme, root));
+  applyTheme(await source.current(), root);
+}
+
+/** The app shell: the `theme_roles` command and the `theme:changed` event. */
+async function appShell(): Promise<ThemeSource> {
+  const [{ invoke }, { listen }] = await Promise.all([import("@tauri-apps/api/core"), import("@tauri-apps/api/event")]);
+  return {
+    current: () => invoke<Theme>("theme_roles"),
+    onChange: (listener) => listen<Theme>("theme:changed", (event) => listener(event.payload)),
+  };
+}
+
+/**
+ * In a browser tab there is no app shell and no theme: upstream's colours
+ * stand. A page script can still show one, as the browser tests do, by
+ * dispatching a `wreckordbox:theme` event on the window with a `Theme` as
+ * its detail; it goes through the same path as the app shell's.
+ */
+export const BROWSER_THEME_EVENT = "wreckordbox:theme";
+const browserTab: ThemeSource = {
+  current: () => Promise.resolve({ roles: null, font: null }),
+  onChange: (listener) => {
+    window.addEventListener(BROWSER_THEME_EVENT, (event) => listener((event as CustomEvent<Theme>).detail));
+    return Promise.resolve();
+  },
+};
+
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 /**
@@ -114,12 +158,10 @@ const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
  * switches. Called from `main.tsx` for every window before it draws.
  */
 export function followTheme(): void {
-  if (!isTauri) return;
+  if (typeof window === "undefined") return;
   void (async () => {
     try {
-      const [{ invoke }, { listen }] = await Promise.all([import("@tauri-apps/api/core"), import("@tauri-apps/api/event")]);
-      await listen<Theme>("theme:changed", (event) => applyTheme(event.payload));
-      applyTheme(await invoke<Theme>("theme_roles"));
+      await followThemeFrom(isTauri ? await appShell() : browserTab);
     } catch (failure) {
       console.warn("the window could not read the theme", failure);
     }

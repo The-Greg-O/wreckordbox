@@ -36,7 +36,7 @@
   white-space: nowrap;
   cursor: default;
 }
-.item:hover:not(:disabled) { background: var(--c-accent); color: var(--c-icon-on); }
+.item:hover:not(:disabled) { background: var(--c-accent); color: var(--c-on-accent, var(--c-icon-on)); }
 .item:disabled { color: var(--c-context-menu-text-dim); }
 .menu > .item { min-height: 25px; padding-left: 24px; }
 

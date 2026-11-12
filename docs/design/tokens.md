@@ -32,6 +32,7 @@ Read from the active theme's `colors.toml`; the window re-reads it when the them
 | Secondary text, labels | `dark_foreground` | `#565f89` |
 | Emphasised text | `bright_foreground` | `#c0caf5` |
 | Accent (focus, active filter, deck marker) | `accent` | `#7aa2f7` |
+| Text and glyphs on an accent fill | derived: whichever of `darker_background` and `bright_foreground` stands out more from the accent, or black or white where neither reaches 4.5:1 | `#0e0e14` |
 
 The active view tab carries a two-colour line (`bright_magenta` to `bright_yellow`); the Stick load display uses the same pair. These are the only gradients.
 
@@ -41,13 +42,14 @@ The active theme's file is `~/.local/state/omarchy/current/theme/colors.toml`. I
 
 - **No theme** (no Omarchy, macOS, Windows, the browser mock, or a file without both `background` and `foreground`): every role keeps upstream's colour, so the window looks as upstream's does.
 - **A partial file:** a missing role is derived from the file's own `background` and `foreground` (darker grounds towards black; hairline, selection and borders a step towards the foreground; secondary text a step towards the background), never taken from upstream, so two palettes are not mixed. A selection colour too close to the text colour to read is replaced the same way.
-- **A light theme:** the roles are the theme's. Upstream's layout, until it is removed, keeps its dark grounds and text and takes only the accent and the font, because its icons are drawn for a dark ground.
+- **A light theme:** the roles are the theme's, for the new views. Upstream's layout, until it is removed (wbx-77), keeps its dark grounds and text and takes only the accent and the font, because its icons are drawn for a dark ground; it stays readable, it does not turn light.
+- **Lit controls in upstream's layout:** every lit state of the chrome (the AU, Q and MASTER buttons, the active player tab, the open side-rail box, Preferences' selections, the Track Filter's picked rows, tick boxes) is the accent under a theme, with the on-accent colour written on it. Without a theme they keep upstream's measured blues.
 - **Font:** where fontconfig cannot name a monospace family, upstream's face.
 
 ## Fixed colours (meaning, not theme)
 
 - **Prep colour:** rekordbox's own label colours, shown as a 3 px stripe at the row's left edge.
-- **Energy:** five pips coloured by level, cool to hot (1 blue, 2 cyan, 3 green, 4 orange, 5 red).
+- **Energy:** five pips coloured by level, cool to hot (1 blue, 2 cyan, 3 green, 4 orange, 5 red). In upstream's layout, until it is removed, Energy is five stars in a fixed light grey (`--c-energy`), not the theme's text colour.
 - **Key lights:** green fill for a key that mixes with the loaded track, yellow fill for an energy-boost move, no fill otherwise.
 - **Tag dimensions:** one hue per dimension for set tags; an unset tag is outlined in the hairline colour; a suggested tag has a dashed yellow outline.
 - **Mutant:** magenta badge and banner. Magenta is used for nothing else in a list.

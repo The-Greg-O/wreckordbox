@@ -516,7 +516,7 @@
 
 /* rekordbox 7.2.11's track list at 2x (2026-09-25): each star's ink 30 capture
    px wide and 28 tall on a 32 px pitch, its middle 1.25px above the row's. */
-.stars { color: var(--c-text); display: flex; align-items: center; gap: 1px; height: 100%; }
+.stars { color: var(--c-energy); display: flex; align-items: center; gap: 1px; height: 100%; }
 .star {
   display: flex;
   border: 0;
@@ -530,7 +530,7 @@
   height: 14.26px;
   transform: translateY(-1.25px);
 }
-.star:hover { color: var(--c-accent); }
+.star:hover { color: var(--c-energy-hover); }
 
 /* An inline editor sits flush in the cell: a bordered box would make the row
    jump by a pixel as it opens. */

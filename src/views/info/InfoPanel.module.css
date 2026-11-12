@@ -373,7 +373,7 @@
   top: 1px;
   width: 3px;
   height: 7px;
-  border: solid var(--c-icon-on);
+  border: solid var(--c-on-accent, var(--c-icon-on));
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
 }

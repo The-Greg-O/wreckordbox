@@ -17,6 +17,7 @@
   --role-text-dim: #9A9A9A; /* secondary text, labels (theme: dark_foreground) */
   --role-text-bright: #FFFFFF; /* emphasised text (theme: bright_foreground) */
   --role-accent: #1373EB; /* focus, active filter, deck marker (theme: accent) */
+  --role-on-accent: #F0F0F0; /* text and glyphs on an accent fill (theme: whichever of its darkest ground and brightest text stands out from the accent, else black or white) */
   --role-tab-from: #1373EB; /* the active view tab's line, left end (theme: bright_magenta) */
   --role-tab-to: #1373EB; /* the active view tab's line, right end (theme: bright_yellow) */
   --role-font: Arial, "Helvetica Neue", Helvetica, sans-serif; /* the system monospace font where the system names one */
@@ -36,6 +37,9 @@
   --c-text: var(--role-text);
   --c-text-dim: var(--role-text-dim);
   --c-played: #69B900; /* rekordbox 7.2.19 static: a played track's text in the track list, theme colour 0x30000e1 in the dark theme and the selected-row constant alike (ListViewer::findTextColour @0x1003efb70; the theme table from __GLOBAL__sub_I_ColorTheme.cpp, issue #540) */
+  --c-energy: #E6E6E6; /* Energy stars in the track list. Fixed: it is the DJ's judgement of the track, not chrome, and does not follow the theme's text colour. Upstream drew them in its text colour, which this is */
+  --c-energy-hover: #1373EB; /* the star under the pointer; upstream's accent blue, fixed for the same reason */
+  --c-loop-band: #3571E3; /* a loop's band over the waveform; the pad blue, fixed because it is drawn on the music */
   --c-icon-off: #A0A0A0; /* skins/*_off.svg fill rgb(160,160,160) */
   --c-icon-on: #F0F0F0; /* skins/*_on.svg fill rgb(240,240,240) */
   --c-missing: #FF9600; /* measured: the orange [!] rekordbox 7.2.14 draws in the Attribute column for a track whose file is missing (Winrig chris-win11 2026-10-08, issue #201) */
@@ -674,6 +678,25 @@
   --f-size-traffic-master: 10px; /* measured from the 2-player capture docs/screenshots (Screenshot 2026-09-08 at 3.00.12 PM, rekordbox 7.2.11, 2x): 'MASTER' in the box, a 14 capture px cap; bold */
   --f-size-link-label: 16px; /* docs/screenshots 2026-09-13 11.16.28 AM (rekordbox 7.2.11 EXPORT, 2x, LINK on, both decks empty): LINK, the player number, MIXER and a loaded title: a 23 capture px cap (11.5pt), Arial at 16px; LINK 68px wide at 2x, Arial 16 gives 72 */
   --f-size-link-lamp: 12.5px; /* docs/screenshots 2026-09-13 11.16.28 AM (rekordbox 7.2.11 EXPORT, 2x, LINK on, both decks empty): MASTER SYNC: an 18 capture px cap (9pt), Arial at 12.5px; 'MASTER SYNC' 184px wide at 2x */
+}
+
+/* A theme is applied. The lit states of upstream's chrome are a dozen blues
+   measured one by one from rekordbox; under a theme they are all the accent,
+   and what is written on them is the colour the theme gives for that
+   (--c-on-accent is not defined without a theme, so each place that uses it
+   falls back to upstream's own colour). Nothing here describes the music. */
+:root[data-theme-mode] {
+  --c-on-accent: var(--role-on-accent);
+  --c-pad-active: var(--role-accent);
+  --c-tab-active: var(--role-accent);
+  --c-filter-accent: var(--role-accent);
+  --c-mytag-check-on: var(--role-accent);
+  --c-mytag-tick: var(--role-on-accent);
+  --c-device-tab-on: var(--role-accent);
+  --c-info-tab-active: var(--role-accent);
+  --c-info-tab-active-text: var(--role-on-accent);
+  --c-rail-lit: var(--role-accent);
+  --c-pref-select: var(--role-accent);
 }
 
 /* A light theme. Upstream's layout draws its icons and many labels from fixed
