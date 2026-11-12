@@ -1,0 +1,35 @@
+/* The view shell's own chrome (ticket #50): sizes, density and type from
+   docs/design/tokens.md, at 100% interface scale. Everything here multiplies
+   by the whole-interface scale, because that scale is the webview's zoom.
+
+   Sizes only. The shell takes its colours from the tokens in tokens.css
+   until ticket #47 replaces the chrome colours with roles read from the
+   Omarchy theme; nothing in the shell names a colour value of its own. */
+:root {
+  --s-shell-top-bar-h: 30px; /* docs/design/tokens.md, Density: top bar */
+  --s-shell-player-h: 58px; /* docs/design/tokens.md, Density: compact player, phrase strip included; the least the player area takes until ticket #51 builds the compact player */
+  --s-shell-status-h: 22px; /* docs/design/tokens.md, Density: status line */
+  --s-shell-tree-w: 186px; /* docs/design/tokens.md, Density: tree */
+  --s-shell-row-h: 24px; /* docs/design/tokens.md, Density: list row */
+  --s-shell-heading-h: 22px; /* docs/design/tokens.md, Density: column heading row */
+  --s-shell-space-1: 2px; /* docs/design/tokens.md, Density: spacing steps 2, 4, 6, 8, 10, 14 */
+  --s-shell-space-2: 4px;
+  --s-shell-space-3: 6px;
+  --s-shell-space-4: 8px;
+  --s-shell-space-5: 10px;
+  --s-shell-space-6: 14px;
+  --s-shell-radius: 2px; /* docs/design/tokens.md, Density: corners */
+  --s-shell-border: 1px; /* docs/design/tokens.md, Density: borders */
+  /* docs/design/tokens.md, Breakpoints: at this width of the window and
+     below, the tree gives way. A custom property cannot be read inside a
+     container query's condition, so ViewShell.module.css repeats the number
+     and `SHELL_NARROW_MAX_PX` in src/lib/shellViews.ts names it for tests;
+     change all three together. */
+  --s-shell-narrow-max: 800px;
+  --f-shell: ui-monospace, "JetBrainsMono Nerd Font", "JetBrains Mono", monospace; /* docs/design/tokens.md, Type: the system monospace font; ticket #47 reads the DJ's own from Omarchy */
+  --f-size-shell: 12px; /* docs/design/tokens.md, Type: lists and controls */
+  --f-size-shell-title: 13px; /* docs/design/tokens.md, Type: a list's title, bold */
+  --f-size-shell-label: 10.5px; /* docs/design/tokens.md, Type: labels and column headings, uppercase */
+  --f-size-shell-status: 11px; /* docs/design/tokens.md, Type: status line */
+  --f-tracking-shell-label: 0.08em; /* docs/design/tokens.md, Type: label tracking */
+}
