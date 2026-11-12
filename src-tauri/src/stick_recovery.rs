@@ -38,6 +38,10 @@ pub fn unfinished_write(mount: &Path) -> AppError {
     )
 }
 
+/// Why the Sync Manager shows no estimate for a Stick whose OneLibrary
+/// rekordbox left in WAL mode: making one would open it on the Stick.
+pub const NO_ESTIMATE: &str = "No estimate for this Stick: rekordbox left its library mid-save, and reading it for an estimate could write to the Stick. Sync works as usual.";
+
 /// A failed Stick read, for the window.
 pub fn read_error(mount: &Path, error: ReadError) -> AppError {
     match error {
@@ -45,6 +49,10 @@ pub fn read_error(mount: &Path, error: ReadError) -> AppError {
         ReadError::Moved => AppError::new(
             ErrorKind::NotFound,
             "The Stick changed while it was being read. Try again.",
+        ),
+        ReadError::Changed => AppError::new(
+            ErrorKind::Conflict,
+            "The Stick was written to while it was being read. Try again.",
         ),
         ReadError::Unreadable(message) => AppError::new(ErrorKind::Malformed, message),
         ReadError::Io(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -401,5 +409,61 @@ mod tests {
         let refused = settle(dest.path(), true).unwrap_err();
         assert_eq!(refused.kind, ErrorKind::ReadOnly);
         assert_eq!(snapshot(dest.path()), before);
+    }
+
+    /// A Stick whose `exportLibrary.db` rekordbox left in WAL mode (with its
+    /// committed `-wal` and no `-shm`, and checkpointed), with and without
+    /// our lock: every read path in either layout, the Sync Manager's,
+    /// the estimate and Round-trip, the whole Stick folder compared after
+    /// each one.
+    #[test]
+    fn no_read_creates_or_changes_any_file_on_a_wal_mode_stick() {
+        use wreckordbox_stick_outline::testing::{assert_unchanged, wal_checkpointed, wal_pending, WAL_RENAMED};
+        for (case, wal) in [("pending -wal", wal_pending as fn(&Path)), ("checkpointed", wal_checkpointed as fn(&Path))] {
+            for lock in [true, false] {
+                let (dest, dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+                let mount = dest.path();
+                stick(mount);
+                wal(mount);
+                if !lock {
+                    without_lock(mount);
+                }
+                let before = snapshot(mount);
+                let path = mount.to_string_lossy().into_owned();
+                let app = app(dir.path());
+                let state = app.state::<Arc<AppState>>();
+                let check = |what: &str| assert_unchanged(mount, &before, &format!("{case}, lock {lock}: {what}"));
+
+                let libraries = run(crate::device_library::device_libraries(path.clone())).unwrap();
+                check("device_libraries");
+                let one = libraries.iter().find(|l| l.format == "oneLibrary").unwrap();
+                assert!(one.nodes.iter().any(|n| n.name == WAL_RENAMED), "{case}: committed WAL rows are shown");
+                for format in ["deviceLibrary", "oneLibrary"] {
+                    for playlist in ["1", "0"] {
+                        let _ = run(crate::commands::open_view(state.clone(), device_spec(mount, format, playlist)));
+                        check("open_view");
+                    }
+                    let _ = run(crate::device_library::device_playlist_duplicates(path.clone(), format.into(), "1".into(), vec![]));
+                    check("device_playlist_duplicates");
+                    let _ = run(crate::device_library::device_playlist_collection_tracks(state.clone(), path.clone(), format.into(), vec!["1".into()]));
+                    check("device_playlist_collection_tracks");
+                    let _ = run(crate::device_library::device_playlist_import_plan(state.clone(), path.clone(), format.into(), "1".into(), None));
+                    check("device_playlist_import_plan");
+                }
+                run(crate::device_settings::device_settings(path.clone())).unwrap();
+                check("device_settings");
+                run(crate::stick_outline::stick_outline(path.clone())).unwrap();
+                check("stick_outline");
+                let _ = run(crate::commands::device_sync_state(state.clone(), path.clone()));
+                check("device_sync_state");
+                let _ = run(crate::commands::estimate_sync(state.clone(), vec![], vec![path.clone()], None, None));
+                check("estimate_sync");
+                let editor = crate::grid::GridEditor::at(state.backup_dir());
+                for (cues, history, settings, ratings) in [(true, false, false, false), (false, true, false, false), (false, false, true, false), (false, false, false, true)] {
+                    let _ = crate::usb_import::import(&state, &editor, mount, cues, history, settings, ratings);
+                    check("import_usb");
+                }
+            }
+        }
     }
 }

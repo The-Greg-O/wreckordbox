@@ -1102,13 +1102,19 @@ pub async fn open_view(state: &State<'_, Arc<AppState>>, path: String, format: S
         let mount = connected(&path)?;
         let format = format_from(&format)?;
         let playlist = id_from(&playlist)?;
-        let library = read_settled(&mount, format)?;
+        // The library and its OneLibrary cues in one read of the Stick that
+        // cannot recover or write anything (wbx-45.5).
+        let (library, one_cues) = wreckordbox_stick_outline::read(&mount, |stick| {
+            let library = stick.library(format)?;
+            let cues = if format == Format::OneLibrary { one_library_cues(stick.root()) } else { HashMap::new() };
+            Ok((library, cues))
+        })
+        .map_err(|error| crate::stick_recovery::read_error(&mount, error))?;
         let ids: Vec<u32> = if playlist == 0 {
             library.tracks.iter().map(|t| t.id).collect()
         } else {
             library.node(playlist).map(|n| n.tracks.clone()).unwrap_or_default()
         };
-        let one_cues = if format == Format::OneLibrary { one_library_cues(&mount) } else { HashMap::new() };
         let rows: Vec<DeviceRow> = ids
             .iter()
             .enumerate()
@@ -1249,15 +1255,18 @@ fn cue_from_analysis(entry: &rbl_anlz::CueEntry) -> Option<rbl_index::Cue> {
     })
 }
 
-/// `OneLibrary`'s cue table supplies its own cue identity and timing. The
-/// connection is explicitly read-only; malformed individual rows are ignored.
+/// `OneLibrary`'s cue table supplies its own cue identity and timing.
+/// Opened so that nothing on the Stick is created or written (see
+/// [`wreckordbox_stick_outline::one_library`]); malformed individual rows
+/// are ignored.
 fn one_library_cues(mount: &Path) -> HashMap<u32, Vec<rbl_index::Cue>> {
     let read = || -> rbl_onelibrary::Result<HashMap<u32, Vec<rbl_index::Cue>>> {
         let root = rbl_export::export_root_name(mount)
             .map_err(|error| rbl_onelibrary::Error::Io(std::io::Error::other(error)))?;
-        let db = rbl_onelibrary::ExportLibrary::open_read_only(
+        let db = wreckordbox_stick_outline::one_library::OneLibraryRead::open(
             &mount.join(root).join("rekordbox/exportLibrary.db"),
-        )?;
+        )
+        .map_err(|error| rbl_onelibrary::Error::Io(std::io::Error::other(error)))?;
         let mut stmt = db.connection().prepare(
             "SELECT content_id, kind, colorTableIndex, inUsec, outUsec FROM cue ORDER BY cue_id",
         )?;

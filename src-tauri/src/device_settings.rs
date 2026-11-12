@@ -369,7 +369,12 @@ pub async fn device_settings(path: String) -> AppResult<DeviceSettingsDto> {
         // settling of an unfinished write, which `settings::read` would do
         // (wbx-45.5). One pinned, leased read that cannot recover.
         let mount = Path::new(&path);
-        let read = wreckordbox_stick_outline::read(mount, |stick| Ok(rbl_devices::settings::read_without_recovery(stick.root())))
+        // Read from off-Stick copies of the databases and DEVSETTING.DAT:
+        // the settings reader opens exportLibrary.db with SQLite itself.
+        let read = wreckordbox_stick_outline::read(mount, |stick| {
+            let mirror = stick.mirror()?;
+            Ok(rbl_devices::settings::read_without_recovery(mirror.path()))
+        })
             .map_err(|error| crate::stick_recovery::read_error(mount, error))?;
         Ok(to_dto(&read))
     })

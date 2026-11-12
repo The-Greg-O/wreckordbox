@@ -167,3 +167,33 @@ fn immutable(path: &Path) -> Result<Connection, String> {
     .map_err(|e| e.to_string())?;
     Ok(conn)
 }
+
+/// Whether the `exportLibrary.db` at `path` is in WAL mode, read from a copy
+/// off the Stick (its header is encrypted, and an immutable connection does
+/// not report it).
+///
+/// # Errors
+///
+/// Why the copy could not be made or read.
+pub fn is_wal_mode(path: &Path) -> Result<bool, String> {
+    let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let copy = dir.path().join("exportLibrary.db");
+    std::fs::copy(path, &copy).map_err(|e| e.to_string())?;
+    let conn = Connection::open_with_flags(&copy, OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX)
+        .map_err(|e| e.to_string())?;
+    keyed(&conn)?;
+    let mode: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0)).map_err(|e| e.to_string())?;
+    Ok(mode.eq_ignore_ascii_case("wal"))
+}
+
+/// Whether code that opens the Stick's `exportLibrary.db` directly with
+/// SQLite (the protected crates' readers) could create or change a file on
+/// the Stick: the database has a companion beside it, is in WAL mode, or
+/// cannot be checked. Such code must not run on this Stick for a read.
+#[must_use]
+pub fn sqlite_untouchable(mount: &Path) -> bool {
+    ["PIONEER", ".PIONEER"].iter().any(|name| {
+        let db = mount.join(name).join("rekordbox/exportLibrary.db");
+        db.is_file() && (has_companions(&db) || is_wal_mode(&db).unwrap_or(true))
+    })
+}

@@ -160,6 +160,31 @@ impl StickRead {
         &self.root
     }
 
+    /// Copies the Stick's databases (with `exportLibrary.db`'s `-wal`) and
+    /// `DEVSETTING.DAT` into a temporary folder off the Stick, at the same
+    /// paths: for readers that open a database themselves (the protected
+    /// crates' `Snapshot`, `rbl_devices`' settings), which SQLite could
+    /// otherwise make create companion files on the Stick.
+    ///
+    /// # Errors
+    ///
+    /// Why a file could not be copied.
+    pub fn mirror(&self) -> Result<tempfile::TempDir, ReadError> {
+        let dir = tempfile::tempdir()?;
+        for path in watched(&self.root) {
+            if !path.is_file() {
+                continue;
+            }
+            let relative = path.strip_prefix(&self.root).map_err(std::io::Error::other)?;
+            let copy = dir.path().join(relative);
+            if let Some(parent) = copy.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::copy(&path, &copy)?;
+        }
+        Ok(dir)
+    }
+
     /// Parses one library. Opens files for reading only.
     ///
     /// # Errors
