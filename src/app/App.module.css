@@ -73,6 +73,21 @@
     var(--s-status-bar-h);
 }
 .window[data-platform="linux"] > .titleBar { display: none; }
+
+/* The window with the view shell on (ticket #50, `view.viewShell`): the
+   title bar strip where the platform has one, then the shell, which lays
+   out everything else itself. The dialogs after it are fixed, so they take
+   no row. */
+.shellWindow {
+  display: grid;
+  grid-template-rows: var(--s-title-bar-h) minmax(0, 1fr);
+  height: 100%;
+  background: var(--c-black);
+}
+.shellWindow[data-platform="linux"] { grid-template-rows: 0 minmax(0, 1fr); }
+.shellWindow[data-platform="linux"] > .titleBar { display: none; }
+.shellWindow > .titleBar { grid-row: 1; }
+.shellWindow > :nth-child(2) { grid-row: 2; }
 /* Each region on its own row, named rather than taken in turn. Full Browser
    draws no deck block at all, and auto-placement then slid the body up into
    the deck row — sized to its content — and the status bar into the body's,
