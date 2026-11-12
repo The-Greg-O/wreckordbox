@@ -13,6 +13,7 @@
 pub mod entry_copy;
 pub mod entry_order;
 pub mod history;
+pub mod judgements;
 pub mod ledger;
 pub mod my_tags;
 pub mod protection;
