@@ -1706,5 +1706,8 @@
   "Runs unavailable": "Uitvoeringen niet beschikbaar",
   "{count} Stick loads in progress": "{count} USB-overdrachten bezig",
   "Analyzing {done}/{total} tracks": "{done}/{total} tracks analyseren",
-  "{count} failed": "{count} mislukt"
+  "{count} failed": "{count} mislukt",
+  "Dismiss": "Dismiss",
+  "Theme file": "Theme file",
+  "line {line}": "line {line}"
 }

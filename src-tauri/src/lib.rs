@@ -47,6 +47,7 @@ pub mod preview;
 mod preferences;
 mod browse_settings;
 pub mod omarchy_theme;
+pub mod theme_file;
 mod protocol;
 mod relocate;
 mod sync_window;

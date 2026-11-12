@@ -1712,5 +1712,8 @@
   "Runs unavailable": "运行信息不可用",
   "{count} Stick loads in progress": "{count} 个 U 盘写入正在进行",
   "Analyzing {done}/{total} tracks": "正在分析 {done}/{total} 首曲目",
-  "{count} failed": "{count} 个失败"
+  "{count} failed": "{count} 个失败",
+  "Dismiss": "Dismiss",
+  "Theme file": "Theme file",
+  "line {line}": "line {line}"
 }

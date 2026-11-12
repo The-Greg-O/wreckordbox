@@ -105,6 +105,8 @@ export const LIBRARY_LOOK: ListLook = {
   className: styles.list ?? "",
   rowHeight: 24,
   headingHeight: 22,
+  // LibraryList.module.css draws these in the monospace face.
+  numberColumns: ["trackNo", "bpm", "key", "duration", "bitrate", "dateAdded"],
   fetch,
   menu: { columns: LIBRARY_MENU, required: LIBRARY_REQUIRED },
   cell,
