@@ -1,0 +1,309 @@
+//! The closed Mutant edit vocabulary and its one derivation rule.
+//! Cue positions are in the parent's timeline. Consumers scale them (and the
+//! parent's grid) by `1 / tempo` only when assembling rendered analysis.
+use crate::{protocol::ServiceError, tracks::TrackRecord};
+use serde::{Deserialize, Serialize};
+
+/// Stable refusals, also used as render-readiness reasons.
+pub mod codes {
+    pub const KEY_SHIFT_LIMIT: &str = "mutant_key_shift_limit";
+    pub const TEMPO_LIMIT: &str = "mutant_tempo_limit";
+    pub const STEMS_MISSING: &str = "mutant_stems_missing";
+    pub const STEMS_STALE: &str = "mutant_stems_stale";
+    pub const STEM_ALIGNMENT_UNKNOWN: &str = "stem_alignment_unknown";
+    pub const INVALID_CUES: &str = "mutant_invalid_cues";
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Stem {
+    Vocals,
+    Melody,
+    Bass,
+    Drums,
+}
+impl Stem {
+    pub const ALL: [Self; 4] = [Self::Vocals, Self::Melody, Self::Bass, Self::Drums];
+    fn name(self) -> &'static str {
+        match self {
+            Self::Vocals => "vocals",
+            Self::Melody => "melody",
+            Self::Bass => "bass",
+            Self::Drums => "drums",
+        }
+    }
+}
+
+/// A cue or loop, preserving rekordbox's raw cue kind and colours.
+/// Kind 0 is Memory, 4 is Active Loop; 1..3, 5..17 are Hot Cues A..P.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Cue {
+    pub kind: u8,
+    pub position_ms: u32,
+    #[serde(default)]
+    pub out_ms: u32,
+    #[serde(default)]
+    pub colour: u8,
+    #[serde(default)]
+    pub memory_colour: Option<u8>,
+    #[serde(default)]
+    pub comment: String,
+}
+impl Cue {
+    fn label(&self) -> String {
+        match self.kind {
+            0 | 4 => format!("memory cue at {} ms", self.position_ms),
+            k => format!(
+                "cue {}",
+                char::from(b'A' + if k < 4 { k - 1 } else { k - 2 })
+            ),
+        }
+    }
+}
+
+/// Absent means inherit. All four Stems, zero shift and unit tempo normalize
+/// to absence. `Some([])` cues explicitly removes every inherited cue.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Edits {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stems: Option<Vec<Stem>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_shift: Option<i16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tempo: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cues: Option<Vec<Cue>>,
+}
+impl Edits {
+    pub fn validate(&mut self) -> Result<(), ServiceError> {
+        if self.key_shift.is_some_and(|s| !(-6..=6).contains(&s)) {
+            return Err(ServiceError::new(
+                codes::KEY_SHIFT_LIMIT,
+                "key shift must be within -6 to +6 semitones",
+            ));
+        }
+        if self
+            .tempo
+            .is_some_and(|t| !t.is_finite() || !(0.84..=1.16).contains(&t))
+        {
+            return Err(ServiceError::new(
+                codes::TEMPO_LIMIT,
+                "tempo ratio must be within 0.84 to 1.16",
+            ));
+        }
+        if self.key_shift == Some(0) {
+            self.key_shift = None;
+        }
+        if self.tempo == Some(1.0) {
+            self.tempo = None;
+        }
+        if let Some(kept) = &mut self.stems {
+            kept.sort_unstable();
+            if kept.is_empty() || kept.windows(2).any(|w| w[0] == w[1]) {
+                return Err(ServiceError::new(
+                    "bad_request",
+                    "keep at least one Stem, with no duplicates",
+                ));
+            }
+            if kept.len() == 4 {
+                self.stems = None;
+            }
+        }
+        if let Some(cues) = &self.cues {
+            let mut hot = std::collections::HashSet::new();
+            for cue in cues {
+                if cue.kind > 17
+                    || (cue.out_ms != 0 && cue.out_ms <= cue.position_ms)
+                    || (cue.kind == 4 && cue.out_ms == 0)
+                    || cue.memory_colour.is_some_and(|c| c > 7)
+                    || (cue.kind != 0 && cue.kind != 4 && !hot.insert(cue.kind))
+                {
+                    return Err(ServiceError::new(
+                        codes::INVALID_CUES,
+                        "invalid cue kind, loop, colour or duplicate Hot Cue",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+    /// Apply only supplied aspects; explicit clearing is a separate command.
+    pub fn patch(&mut self, patch: Self) {
+        if patch.stems.is_some() {
+            self.stems = patch.stems;
+        }
+        if patch.key_shift.is_some() {
+            self.key_shift = patch.key_shift;
+        }
+        if patch.tempo.is_some() {
+            self.tempo = patch.tempo;
+        }
+        if patch.cues.is_some() {
+            self.cues = patch.cues;
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Aspect {
+    Stems,
+    KeyShift,
+    Tempo,
+    Cues,
+}
+impl Edits {
+    pub fn clear(&mut self, aspect: Aspect) {
+        match aspect {
+            Aspect::Stems => self.stems = None,
+            Aspect::KeyShift => self.key_shift = None,
+            Aspect::Tempo => self.tempo = None,
+            Aspect::Cues => self.cues = None,
+        }
+    }
+}
+
+/// These are readiness checks, not a promise that decoding/encoding will succeed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Renderability {
+    pub renderable: bool,
+    pub reason: Option<ServiceError>,
+}
+impl Renderability {
+    pub(crate) fn ready() -> Self {
+        Self {
+            renderable: true,
+            reason: None,
+        }
+    }
+    pub(crate) fn blocked(error: ServiceError) -> Self {
+        Self {
+            renderable: false,
+            reason: Some(error),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Derived {
+    pub description: String,
+    /// Unknown/unparseable keys remain unknown after transposition.
+    pub key: Option<String>,
+    pub bpm: Option<f64>,
+    pub duration_seconds: Option<f64>,
+    /// Unscaled cues in parent time, inherited until explicitly replaced.
+    pub cues: Vec<Cue>,
+    /// Always the parent's grid; no Mutant can override it.
+    pub grid_parent: String,
+}
+
+/// Shared by every caller: no I/O, no cached parent metadata.
+pub fn derive(
+    edits: &Edits,
+    parent: Option<&TrackRecord>,
+    parent_cues: &[Cue],
+    parent_id: &str,
+) -> Derived {
+    let tempo = edits.tempo.unwrap_or(1.0);
+    let mut differences = Vec::new();
+    if let Some(kept) = &edits.stems {
+        for stem in Stem::ALL {
+            if !kept.contains(&stem) {
+                differences.push(format!("no {}", stem.name()));
+            }
+        }
+    }
+    if let Some(shift) = edits.key_shift {
+        differences.push(format!("{shift:+} st"));
+    }
+    if edits.tempo.is_some() {
+        differences.push(format!("tempo {:+.2}%", (tempo - 1.0) * 100.0));
+    }
+    if let Some(cues) = &edits.cues {
+        for cue in cues {
+            if parent_cues.contains(cue) {
+                continue;
+            }
+            let old = parent_cues.iter().find(|old| {
+                old.kind == cue.kind
+                    && (cue.kind != 0 && cue.kind != 4 || old.position_ms == cue.position_ms)
+            });
+            let change = match old {
+                Some(old) if old.position_ms != cue.position_ms || old.out_ms != cue.out_ms => {
+                    "moved"
+                }
+                Some(_) => "changed",
+                None => "added",
+            };
+            differences.push(format!("{} {change}", cue.label()));
+        }
+        for cue in parent_cues {
+            if !cues.iter().any(|new| {
+                new.kind == cue.kind
+                    && (cue.kind != 0 && cue.kind != 4 || new.position_ms == cue.position_ms)
+            }) {
+                differences.push(format!("{} removed", cue.label()));
+            }
+        }
+    }
+    Derived {
+        description: if differences.is_empty() {
+            "none".into()
+        } else {
+            differences.join(", ")
+        },
+        key: parent.and_then(|p| transpose(&p.key, edits.key_shift.unwrap_or(0))),
+        bpm: parent.and_then(|p| p.bpm).map(|b| b * tempo),
+        duration_seconds: parent.map(|p| f64::from(p.duration_seconds) / tempo),
+        cues: edits.cues.clone().unwrap_or_else(|| parent_cues.to_vec()),
+        grid_parent: parent_id.into(),
+    }
+}
+
+fn transpose(name: &str, shift: i16) -> Option<String> {
+    if shift == 0 {
+        return (!name.is_empty()).then(|| name.to_owned());
+    }
+    let mut key = rbl_core::musickey::parse(name)?;
+    key.pitch = u8::try_from((i16::from(key.pitch) + shift).rem_euclid(12)).ok()?;
+    let text = name.trim();
+    if text
+        .get(..text.len().saturating_sub(1))
+        .is_some_and(|n| n.parse::<u8>().is_ok())
+    {
+        let suffix = if key.mode == rbl_core::musickey::Mode::Minor {
+            'A'
+        } else {
+            'B'
+        };
+        return (1..=12)
+            .map(|n| format!("{n}{suffix}"))
+            .find(|candidate| rbl_core::musickey::parse(candidate) == Some(key));
+    }
+    Some(key.name())
+}
+
+/// Patch supplied aspects, preserving every other edit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EditMutant {
+    pub id: Option<i64>,
+    pub entry: Option<String>,
+    pub edits: Edits,
+    pub run: Option<i64>,
+    pub source: Option<crate::facts::SourceArg>,
+    pub description: Option<String>,
+}
+/// Return one aspect to its parent's value.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClearMutant {
+    pub id: Option<i64>,
+    pub entry: Option<String>,
+    pub edit: Aspect,
+    pub run: Option<i64>,
+    pub source: Option<crate::facts::SourceArg>,
+    pub description: Option<String>,
+}

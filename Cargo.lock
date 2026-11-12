@@ -7174,6 +7174,7 @@ dependencies = [
  "dirs 5.0.1",
  "rbl-anlz",
  "rbl-backup",
+ "rbl-core",
  "rbl-db",
  "rbl-index",
  "rbl-library",

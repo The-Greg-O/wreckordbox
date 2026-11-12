@@ -1,6 +1,8 @@
 //! `mutants`: a playlist's own edited version of a track, kept in the
 //! Sidecar for one playlist entry.
 
+#[path = "mutant_edits.rs"]
+mod editing;
 use clap::{Args, Subcommand};
 use serde_json::json;
 use wreckordbox_service::facts::SourceArg;
@@ -14,6 +16,8 @@ use crate::facts::{parse_source, source_text, table, time_text};
 
 #[derive(Subcommand)]
 pub enum MutantCommands {
+    #[command(flatten)]
+    Edit(editing::Commands),
     /// Mutate a playlist entry: from now on that entry has its own version
     /// of its track, a Mutant. Nothing audible changes until the Mutant is
     /// edited, and the Library is not changed: the playlist's entry there
@@ -103,6 +107,7 @@ pub fn run(
     command: &MutantCommands,
 ) -> Result<String, ServiceError> {
     Ok(match command {
+        MutantCommands::Edit(command) => editing::run(client, as_json, command)?,
         MutantCommands::Create {
             entry,
             playlist,
@@ -205,10 +210,7 @@ fn place_text(mutant: &Mutant) -> String {
 /// What differs from the parent, in a word. The edits are an object whose
 /// keys are the aspects edited.
 fn edits_text(mutant: &Mutant) -> String {
-    match mutant.edits.as_object() {
-        Some(edits) if !edits.is_empty() => mutant.edits.to_string(),
-        _ => "none".to_owned(),
-    }
+    mutant.derived.description.clone()
 }
 
 fn shown_text(shown: &MutantShown) -> String {
@@ -245,6 +247,29 @@ fn shown_text(shown: &MutantShown) -> String {
                 .map_or_else(|| "-".to_owned(), ToString::to_string),
         ],
         ["Edits".to_owned(), edits_text(mutant)],
+        [
+            "Key".to_owned(),
+            mutant
+                .derived
+                .key
+                .clone()
+                .unwrap_or_else(|| "unknown".into()),
+        ],
+        [
+            "Tempo".to_owned(),
+            mutant
+                .derived
+                .bpm
+                .map_or_else(|| "unknown".into(), |b| format!("{b:.2} BPM")),
+        ],
+        [
+            "Length".to_owned(),
+            mutant
+                .derived
+                .duration_seconds
+                .map_or_else(|| "unknown".into(), |s| format!("{s:.3} seconds")),
+        ],
+        ["Renderable".to_owned(), readiness_text(mutant)],
     ];
     let mut history = vec![["CHANGE", "WHEN", "SOURCE", "RUN", "EDITS"].map(str::to_owned)];
     history.extend(shown.history.iter().map(|change| {
@@ -267,7 +292,15 @@ fn list_text(list: &MutantList) -> String {
         return "No Mutants.".to_owned();
     }
     let mut rows = vec![[
-        "MUTANT", "PLAYLIST", "NAME", "POSITION", "TRACK", "TITLE", "EDITS", "SOURCE",
+        "MUTANT",
+        "PLAYLIST",
+        "NAME",
+        "POSITION",
+        "TRACK",
+        "TITLE",
+        "EDITS",
+        "SOURCE",
+        "RENDERABLE",
     ]
     .map(str::to_owned)];
     rows.extend(list.mutants.iter().map(|mutant| {
@@ -282,6 +315,7 @@ fn list_text(list: &MutantList) -> String {
             dash(&mutant.parent.title),
             edits_text(mutant),
             source_text(&mutant.source),
+            readiness_text(mutant),
         ]
     }));
     table(&rows)
@@ -293,4 +327,11 @@ fn dash(text: &str) -> String {
     } else {
         text.to_owned()
     }
+}
+
+fn readiness_text(mutant: &Mutant) -> String {
+    mutant.renderability.reason.as_ref().map_or_else(
+        || "yes".into(),
+        |e| format!("no: {} ({})", e.message, e.code),
+    )
 }

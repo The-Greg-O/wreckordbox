@@ -407,6 +407,13 @@ impl Sidecar {
 
     /// A Stems Fact as a Stem set; `None` for a Fact that is not one.
     fn stem_set(&self, fact: Fact) -> Option<StemSet> {
+        StemSet::from_fact(self.dir(), fact)
+    }
+}
+
+impl StemSet {
+    /// Decode a stored Stems Fact without opening or writing the Sidecar.
+    pub fn from_fact(dir: &Path, fact: Fact) -> Option<Self> {
         let stale = fact.is_stale();
         let superseded = !fact.is_live();
         let stored: StoredSet = serde_json::from_value(fact.value).ok()?;
@@ -421,7 +428,7 @@ impl Sidecar {
                 .into_iter()
                 .map(|stem| Stem {
                     role: stem.role,
-                    path: self.dir().join(stem.file),
+                    path: dir.join(stem.file),
                     format: stem.format,
                     channels: stem.channels,
                     bits_per_sample: stem.bits_per_sample,

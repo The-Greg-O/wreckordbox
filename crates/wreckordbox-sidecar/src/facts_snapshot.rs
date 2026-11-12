@@ -92,3 +92,10 @@ impl FactsReader {
         Ok(facts)
     }
 }
+
+impl FactsReader {
+    /// Read Mutants through this immutable snapshot, without migration or cleanup.
+    pub fn mutants(&self) -> crate::mutants::MutantReader<'_> {
+        crate::mutants::MutantReader::new(&self.db)
+    }
+}

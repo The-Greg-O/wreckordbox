@@ -19,6 +19,10 @@
 //! A Mutant's edits are a JSON object, empty until something edits it: an
 //! absent key means that aspect is the parent's.
 
+#[path = "mutant_commands.rs"]
+mod editing;
+use crate::mutant_edits::{self, Derived, Edits, Renderability};
+use crate::mutant_reads::inspect;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -52,6 +56,8 @@ pub mod commands {
     /// Removes a Mutant: its entry is the core track again. Takes a
     /// [`RemoveMutant`](super::RemoveMutant), answers a
     /// [`MutantChanged`](super::MutantChanged).
+    pub const MUTANTS_EDIT: &str = "mutants.edit";
+    pub const MUTANTS_CLEAR: &str = "mutants.clear";
     pub const MUTANTS_REMOVE: &str = "mutants.remove";
 }
 
@@ -165,6 +171,10 @@ pub struct Mutant {
     pub fingerprint: Option<Fingerprint>,
     /// What differs from the parent: an object, empty when nothing does.
     pub edits: Value,
+    /// Current parent metadata, never copied into the stored edits.
+    pub inherited: Option<crate::tracks::TrackRecord>,
+    pub derived: Derived,
+    pub renderability: Renderability,
     /// Who last changed it.
     pub source: Source,
     /// The identifier of the Run it was last changed in.
@@ -245,6 +255,8 @@ pub(crate) fn answers(command: &str) -> bool {
             | commands::MUTANTS_GET
             | commands::MUTANTS_LIST
             | commands::MUTANTS_REMOVE
+            | commands::MUTANTS_EDIT
+            | commands::MUTANTS_CLEAR
     )
 }
 
@@ -262,11 +274,20 @@ pub(crate) fn answer(
     library: WithLibrary,
 ) -> Result<Value, ServiceError> {
     let mutants = Mutants {
-        sidecar: stems.sidecar()?,
+        sidecar: if matches!(
+            request.command.as_str(),
+            commands::MUTANTS_GET | commands::MUTANTS_LIST
+        ) {
+            None
+        } else {
+            Some(stems.sidecar()?)
+        },
         stems,
         library,
     };
     let answer = match request.command.as_str() {
+        commands::MUTANTS_EDIT => serde_json::to_value(mutants.edit(&arguments(request)?)?),
+        commands::MUTANTS_CLEAR => serde_json::to_value(mutants.clear(&arguments(request)?)?),
         commands::MUTANTS_CREATE => serde_json::to_value(mutants.create(&arguments(request)?)?),
         commands::MUTANTS_GET => serde_json::to_value(mutants.get(&arguments(request)?)?),
         commands::MUTANTS_LIST => serde_json::to_value(mutants.list(&arguments(request)?)?),
@@ -285,7 +306,7 @@ fn arguments<T: serde::de::DeserializeOwned>(request: &Request) -> Result<T, Ser
 }
 
 struct Mutants<'a> {
-    sidecar: Arc<Sidecar>,
+    sidecar: Option<Arc<Sidecar>>,
     stems: &'a Stems,
     library: WithLibrary<'a>,
 }
@@ -319,6 +340,11 @@ impl Provenance {
 }
 
 impl Mutants<'_> {
+    fn writer(&self) -> Result<&Sidecar, ServiceError> {
+        self.sidecar.as_deref().ok_or_else(|| {
+            ServiceError::new(service_codes::SERVICE_FAILED, "this command is read-only")
+        })
+    }
     /// Reads the Library: `read` runs with the Library's lock held.
     fn read<T>(
         &self,
@@ -347,7 +373,7 @@ impl Mutants<'_> {
             create.description.as_deref(),
         )?;
         if let Some(existing) = self
-            .sidecar
+            .writer()?
             .mutant_of_entry(&found.entry.id)
             .map_err(|e| sidecar_error(&e))?
         {
@@ -360,7 +386,7 @@ impl Mutants<'_> {
         // Again with no edit under way, until the change is committed: the
         // entry, its playlist and its track are looked up afresh, and an
         // edit that removed any of them meanwhile refuses the change.
-        let (place, committed) = self.read(|library| {
+        let (place, committed, inherited, derived) = self.read(|library| {
             library.steady(|| {
                 let place = again(library, &found)?;
                 let description = provenance.description.clone().unwrap_or_else(|| {
@@ -372,8 +398,15 @@ impl Mutants<'_> {
                         place.parent.title
                     )
                 });
+                let (inherited, cues) = editing::metadata(library, &place.parent.id)?;
+                let derived = mutant_edits::derive(
+                    &Edits::default(),
+                    inherited.as_ref(),
+                    &cues,
+                    &place.parent.id,
+                );
                 let committed = self
-                    .sidecar
+                    .writer()?
                     .create_mutant(&NewMutant {
                         playlist_id: &place.entry.playlist_id,
                         entry_id: &place.entry.id,
@@ -384,7 +417,7 @@ impl Mutants<'_> {
                         run: provenance.in_run(&description),
                     })
                     .map_err(|e| sidecar_error(&e))?;
-                Ok((place, committed))
+                Ok((place, committed, inherited, derived))
             })
         })?;
         // Committed: nothing below can fail.
@@ -392,6 +425,9 @@ impl Mutants<'_> {
         self.changed(&made, actions::CREATED);
         Ok(MutantChanged {
             mutant: Mutant {
+                renderability: editing::source_readiness(inherited.as_ref()),
+                inherited,
+                derived,
                 id: made.id,
                 playlist: PlaylistName {
                     id: place.entry.playlist_id,
@@ -415,10 +451,7 @@ impl Mutants<'_> {
 
     fn get(&self, which: &WhichMutant) -> Result<MutantShown, ServiceError> {
         let stored = self.stored(which.id, which.entry.as_deref(), true)?;
-        let history = self
-            .sidecar
-            .mutant_changes(stored.id)
-            .map_err(|e| sidecar_error(&e))?
+        let history = inspect(self.stems, |store| store.mutant_changes(stored.id))?
             .into_iter()
             .map(|change| MutantChange {
                 id: change.id,
@@ -438,11 +471,10 @@ impl Mutants<'_> {
     }
 
     fn list(&self, list: &ListMutants) -> Result<MutantList, ServiceError> {
-        let mut stored = match &list.track {
-            Some(track) => self.sidecar.mutants_of_track(track),
-            None => self.sidecar.mutants(list.playlist.as_deref()),
-        }
-        .map_err(|e| sidecar_error(&e))?;
+        let mut stored = inspect(self.stems, |store| match &list.track {
+            Some(track) => store.mutants_of_track(track),
+            None => store.mutants(list.playlist.as_deref()),
+        })?;
         if let (Some(playlist), Some(_)) = (&list.playlist, &list.track) {
             stored.retain(|mutant| &mutant.playlist_id == playlist);
         }
@@ -489,7 +521,7 @@ impl Mutants<'_> {
             mutant: removed,
             run,
         } = self
-            .sidecar
+            .writer()?
             .remove_mutant(
                 stored.id,
                 &MutantUpdate {
@@ -525,16 +557,10 @@ impl Mutants<'_> {
         removed: bool,
     ) -> Result<wreckordbox_sidecar::mutants::Mutant, ServiceError> {
         match (id, entry) {
-            (Some(id), None) => self
-                .sidecar
-                .mutant(id)
-                .map_err(|e| sidecar_error(&e))?
+            (Some(id), None) => inspect(self.stems, |store| store.mutant(id))?
                 .filter(|mutant| removed || mutant.is_live())
                 .ok_or_else(|| no_mutant(id)),
-            (None, Some(entry)) => self
-                .sidecar
-                .mutant_of_entry(entry)
-                .map_err(|e| sidecar_error(&e))?
+            (None, Some(entry)) => inspect(self.stems, |store| store.mutant_of_entry(entry))?
                 .ok_or_else(|| {
                     ServiceError::new(
                         codes::MUTANT_NOT_FOUND,
@@ -558,53 +584,73 @@ impl Mutants<'_> {
         if stored.is_empty() {
             return Ok(Vec::new());
         }
-        self.read(|library| {
-            let index = library.index()?;
-            let mut playlists: HashMap<String, Vec<Entry>> = HashMap::new();
-            stored
-                .into_iter()
-                .map(|mutant| {
-                    if !playlists.contains_key(&mutant.playlist_id) {
-                        playlists.insert(
-                            mutant.playlist_id.clone(),
-                            entries::of_playlist(library, &index, &mutant.playlist_id)?,
+        let mut described: Vec<Mutant> = self.read(|library| {
+            library.steady(|| {
+                let index = library.index()?;
+                let mut playlists: HashMap<String, Vec<Entry>> = HashMap::new();
+                stored
+                    .into_iter()
+                    .map(|mutant| {
+                        if !playlists.contains_key(&mutant.playlist_id) {
+                            playlists.insert(
+                                mutant.playlist_id.clone(),
+                                entries::of_playlist(library, &index, &mutant.playlist_id)?,
+                            );
+                        }
+                        let name = entries::playlist_name(&index, &mutant.playlist_id);
+                        // A playlist that is gone has no entries to be at.
+                        let position = name.as_ref().and_then(|_| {
+                            playlists[&mutant.playlist_id]
+                                .iter()
+                                .find(|entry| entry.id == mutant.entry_id)
+                                .map(|entry| entry.position)
+                        });
+                        let title = index
+                            .row_of(&mutant.track_id)
+                            .map(|row| index.title.get(row as usize).to_owned())
+                            .unwrap_or_default();
+                        let (inherited, cues) = editing::metadata(library, &mutant.track_id)?;
+                        let edits = editing::parse_edits(mutant.edits.clone())?;
+                        let derived = mutant_edits::derive(
+                            &edits,
+                            inherited.as_ref(),
+                            &cues,
+                            &mutant.track_id,
                         );
-                    }
-                    let name = entries::playlist_name(&index, &mutant.playlist_id);
-                    // A playlist that is gone has no entries to be at.
-                    let position = name.as_ref().and_then(|_| {
-                        playlists[&mutant.playlist_id]
-                            .iter()
-                            .find(|entry| entry.id == mutant.entry_id)
-                            .map(|entry| entry.position)
-                    });
-                    let title = index
-                        .row_of(&mutant.track_id)
-                        .map(|row| index.title.get(row as usize).to_owned())
-                        .unwrap_or_default();
-                    Ok(Mutant {
-                        removed: !mutant.is_live(),
-                        id: mutant.id,
-                        playlist: PlaylistName {
-                            id: mutant.playlist_id,
-                            name: name.unwrap_or_default(),
-                        },
-                        entry_id: mutant.entry_id,
-                        position,
-                        parent: Parent {
-                            id: mutant.track_id,
-                            title,
-                        },
-                        fingerprint: mutant.fingerprint,
-                        edits: mutant.edits,
-                        source: mutant.source,
-                        run: mutant.run.0,
-                        created_at: mutant.created_at,
-                        changed_at: mutant.changed_at,
+                        Ok(Mutant {
+                            inherited,
+                            derived,
+                            renderability: Renderability::ready(),
+                            removed: !mutant.is_live(),
+                            id: mutant.id,
+                            playlist: PlaylistName {
+                                id: mutant.playlist_id,
+                                name: name.unwrap_or_default(),
+                            },
+                            entry_id: mutant.entry_id,
+                            position,
+                            parent: Parent {
+                                id: mutant.track_id,
+                                title,
+                            },
+                            fingerprint: mutant.fingerprint,
+                            edits: mutant.edits,
+                            source: mutant.source,
+                            run: mutant.run.0,
+                            created_at: mutant.created_at,
+                            changed_at: mutant.changed_at,
+                        })
                     })
-                })
-                .collect()
-        })
+                    .collect()
+            })
+        })?;
+        for mutant in &mut described {
+            mutant.renderability = self.readiness(
+                &editing::parse_edits(mutant.edits.clone())?,
+                mutant.inherited.as_ref(),
+            )?;
+        }
+        Ok(described)
     }
 
     /// Who is making the change and in which Run, checked before anything
@@ -624,7 +670,7 @@ impl Mutants<'_> {
                     ));
                 }
                 let run = self
-                    .sidecar
+                    .writer()?
                     .run(RunId(id))
                     .map_err(|e| sidecar_error(&e))?
                     .ok_or_else(|| {
@@ -764,7 +810,7 @@ fn no_mutant(id: i64) -> ServiceError {
     ServiceError::new(codes::MUTANT_NOT_FOUND, format!("there is no Mutant {id}"))
 }
 
-fn sidecar_error(error: &SidecarError) -> ServiceError {
+pub(crate) fn sidecar_error(error: &SidecarError) -> ServiceError {
     match error {
         SidecarError::AlreadyMutant { entry_id, mutant } => already(entry_id, *mutant),
         SidecarError::NoMutant(id) => no_mutant(*id),
