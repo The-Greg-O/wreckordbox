@@ -27,6 +27,7 @@ mod mutant_reads;
 pub mod mutants;
 pub mod mytag_edits;
 pub mod native_stems;
+pub mod playlist_edits;
 pub mod protection;
 pub mod protocol;
 pub mod reading;

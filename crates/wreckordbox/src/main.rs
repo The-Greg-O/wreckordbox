@@ -12,6 +12,7 @@ mod intensity;
 mod ledger;
 mod mutants;
 mod mytag_edits;
+mod playlist_edits;
 mod protection;
 mod reading;
 mod schema;
@@ -74,8 +75,11 @@ enum Commands {
         #[command(subcommand)]
         command: reading::MyTagCommands,
     },
-    /// Read the playlist tree and what is in a playlist.
+    /// Read the playlist tree and what is in a playlist, and edit
+    /// playlists.
     Playlists {
+        #[command(flatten)]
+        run: ledger::RunOptions,
         #[command(subcommand)]
         command: reading::PlaylistCommands,
     },
@@ -222,6 +226,10 @@ enum TrackCommands {
         reason = "this is the command's help, where MyTag is a word, not code"
     )]
     Query(Box<tracks::QueryArgs>),
+    /// Remove tracks from the collection and every playlist, saying first
+    /// which Mutants go with them. Nothing is removed without `--confirm`.
+    /// The audio files stay where they are.
+    Remove(playlist_edits::RemoveArgs),
 }
 
 fn main() -> ExitCode {
@@ -249,7 +257,8 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
     // The Run a command that edits the Library was given, sent with it.
     if let Commands::Tracks { run, .. }
     | Commands::Mytags { run, .. }
-    | Commands::Intake { run, .. } = &cli.command
+    | Commands::Intake { run, .. }
+    | Commands::Playlists { run, .. } = &cli.command
     {
         ledger::begin(run, cli.json);
     }
@@ -294,7 +303,7 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
                 command,
             )?);
         }
-        Commands::Playlists { command } => {
+        Commands::Playlists { command, .. } => {
             print(&reading::playlists(
                 &mut connect(&config)?,
                 cli.json,
@@ -316,6 +325,10 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
             command: TrackCommands::Query(args),
             ..
         } => print(&tracks::query(&mut connect(&config)?, args, cli.json)?),
+        Commands::Tracks {
+            command: TrackCommands::Remove(args),
+            ..
+        } => print(&playlist_edits::remove(&mut connect(&config)?, cli.json, args)?),
         Commands::Stick { command } => {
             print(&stick::stick(&config.recovery_dir, cli.json, command)?);
         }

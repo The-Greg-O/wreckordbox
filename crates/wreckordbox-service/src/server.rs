@@ -504,6 +504,15 @@ impl Shared {
                 self.tell_host(&changed.event());
                 Ok(result)
             }
+            edit if crate::playlist_edits::answers(edit) => {
+                let (result, changed) = self.with_library(|library| {
+                    crate::playlist_edits::answer(library, &self.stems, request)
+                })??;
+                if let Some(changed) = changed {
+                    self.tell_host(&changed.event());
+                }
+                Ok(result)
+            }
             crate::tracks::TRACKS_GET | crate::tracks::TRACKS_QUERY => {
                 self.with_library(|library| crate::tracks::answer(library, request))?
             }

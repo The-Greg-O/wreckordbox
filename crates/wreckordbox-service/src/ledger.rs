@@ -589,6 +589,7 @@ pub(crate) fn takes_run(command: &str) -> bool {
     command == crate::protocol::commands::TRACKS_RATE
         || command == crate::intake::commands::TRACKS_SET_PREP_COLOUR
         || crate::mytag_edits::answers(command)
+        || crate::playlist_edits::answers(command)
 }
 
 pub(crate) fn answers(command: &str) -> bool {
