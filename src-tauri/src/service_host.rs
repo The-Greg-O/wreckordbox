@@ -316,7 +316,7 @@ pub async fn adopt_library_protection(
 ) -> AppResult<ProtectionDto> {
     let state = Arc::clone(&state);
     crate::commands::blocking("adopt_library_protection", move || {
-        state.core().adopt_protection(window_preference).map(ProtectionDto::from).map_err(not_recorded)
+        state.core().adopt_protection(window_preference).map(ProtectionDto::from).map_err(|error| not_recorded(&error))
     })
     .await
 }
@@ -330,14 +330,14 @@ pub async fn set_library_protection(
 ) -> AppResult<ProtectionDto> {
     let state = Arc::clone(&state);
     crate::commands::blocking("set_library_protection", move || {
-        state.core().set_protection(protect_library).map(|turned| turned.now.into()).map_err(not_recorded)
+        state.core().set_protection(protect_library).map(|turned| turned.now.into()).map_err(|error| not_recorded(&error))
     })
     .await
 }
 
 /// What the DJ is told when the switch could not be saved: said plainly,
 /// since the interface shows it beside the switch.
-fn not_recorded(error: std::io::Error) -> crate::error::AppError {
+fn not_recorded(error: &std::io::Error) -> crate::error::AppError {
     tracing::error!(%error, "Library Protection could not be saved");
     crate::error::AppError::new(
         crate::error::ErrorKind::ReadOnly,
