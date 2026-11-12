@@ -341,7 +341,10 @@ fn a_version_two_store_keeps_its_mutants_when_brought_to_version_three() {
 
     assert_eq!(schema_version(&folder), 3);
     assert_eq!(rows_of(&folder, "mutant"), before.1);
-    assert_eq!(again.decision(id).unwrap().unwrap().answers[0].choice, "Techno");
+    assert_eq!(
+        again.decision(id).unwrap().unwrap().answers[0].choice,
+        "Techno"
+    );
 }
 
 #[test]
@@ -351,12 +354,20 @@ fn a_migration_from_version_two_that_fails_part_way_leaves_version_two_intact() 
     raw(&folder)
         .execute_batch("CREATE TABLE decision_answer_by_decider (in_the_way INTEGER)")
         .unwrap();
-    let before = (shape(&folder), rows_of(&folder, "mutant"), version_one_rows(&folder));
+    let before = (
+        shape(&folder),
+        rows_of(&folder, "mutant"),
+        version_one_rows(&folder),
+    );
 
     assert!(matches!(Sidecar::open(&folder), Err(SidecarError::Db(_))));
 
     assert_eq!(schema_version(&folder), 2);
-    let after = (shape(&folder), rows_of(&folder, "mutant"), version_one_rows(&folder));
+    let after = (
+        shape(&folder),
+        rows_of(&folder, "mutant"),
+        version_one_rows(&folder),
+    );
     assert_eq!(after, before, "nothing of version 3 was left behind");
     raw(&folder)
         .execute_batch("DROP TABLE decision_answer_by_decider")

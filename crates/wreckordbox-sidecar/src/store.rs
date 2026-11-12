@@ -32,10 +32,7 @@ pub const SCHEMA_VERSION: u32 = 3;
 /// at version 1 by [`SCHEMA`] and then taken through every one of these, so
 /// a new store and an old one brought up to date hold the same tables. Add
 /// a version at the end; never change one that has shipped.
-const MIGRATIONS: &[(u32, &str)] = &[
-    (2, crate::mutants::SCHEMA),
-    (3, crate::decisions::SCHEMA),
-];
+const MIGRATIONS: &[(u32, &str)] = &[(2, crate::mutants::SCHEMA), (3, crate::decisions::SCHEMA)];
 
 // A migration added without raising `SCHEMA_VERSION`, or the reverse,
 // does not build.
