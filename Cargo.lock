@@ -7221,6 +7221,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "wreckordbox-stick-protection"
+version = "1.10.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "write16"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
