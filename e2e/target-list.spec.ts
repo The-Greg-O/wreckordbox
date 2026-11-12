@@ -174,3 +174,117 @@ test("under Library Protection an add is refused, saying why, and the target is 
   await expect.poll(() => targetTitles(page)).toEqual(bars(...range(3, 20)));
   expect(await playlistAsListed(page, "Melodic Vox")).toEqual(bars(...range(3, 20)));
 });
+
+/** Melodic Vox as the target, with Bar 03, Bar 04 and Bar 05 its first three. */
+async function voxTarget(page: Page) {
+  await open(page);
+  await allTracks(page);
+  await showTarget(page, "Melodic Vox");
+  await expect.poll(() => targetTitles(page)).toEqual(bars(...range(3, 20)));
+}
+
+test("Alt+Down and Alt+Up reorder the target's selected track, the selection follows it, and Undo puts it back", async ({ page }) => {
+  await voxTarget(page);
+  await targetRows(page).nth(0).click();
+  await page.keyboard.press("Alt+ArrowDown");
+  await expect(status(page)).toContainText("Playlist reordered.");
+  await expect.poll(() => targetTitles(page)).toEqual(bars(4, 3, ...range(5, 20)));
+  await expect(targetRows(page).nth(1)).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("Alt+ArrowDown");
+  await expect.poll(() => targetTitles(page)).toEqual(bars(4, 5, 3, ...range(6, 20)));
+  await page.keyboard.press("Alt+ArrowUp");
+  await expect.poll(() => targetTitles(page)).toEqual(bars(4, 3, ...range(5, 20)));
+
+  // The reorder is the Library's: the playlist opened in the main list has it.
+  expect(await playlistAsListed(page, "Melodic Vox")).toEqual(bars(4, 3, ...range(5, 20)));
+
+  await menu(page, "undo");
+  await expect(status(page)).toContainText("Edit undone.");
+  await expect.poll(() => targetTitles(page)).toEqual(bars(4, 5, 3, ...range(6, 20)));
+});
+
+test("plain arrows move the target's selection, not the main list's, and Enter and Space in the target reach neither the list nor the deck", async ({ page }) => {
+  await voxTarget(page);
+  await mainRow(page, "Bar 00").locator('[data-col="title"]').click();
+  await targetRows(page).nth(0).click();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  await expect(targetRows(page).nth(2)).toHaveAttribute("aria-selected", "true");
+  await expect(mainRow(page, "Bar 00")).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Space");
+  await expect.poll(() => targetTitles(page)).toEqual(bars(...range(3, 20)));
+  await expect(page.getByTestId("shell-player")).toContainText("No track loaded");
+});
+
+test("dragging a row within the target reorders it", async ({ page }) => {
+  await voxTarget(page);
+  // Bar 05 dropped on the top half of Bar 03: it goes first.
+  const onto = targetRows(page).nth(0);
+  const box = await onto.boundingBox();
+  if (!box) throw new Error("The target's first row is not visible");
+  await targetRows(page).nth(2).dragTo(onto, { targetPosition: { x: 20, y: 2 } });
+  await expect(status(page)).toContainText("Playlist reordered.");
+  await expect.poll(() => targetTitles(page)).toEqual(bars(5, 3, 4, ...range(6, 20)));
+  expect(await playlistAsListed(page, "Melodic Vox")).toEqual(bars(5, 3, 4, ...range(6, 20)));
+});
+
+test("one key swaps source and target, and the tree marks the target", async ({ page }) => {
+  await open(page);
+  await openInMain(page, "Melodic Vox");
+  await mainRows(page).first().click();
+  await page.keyboard.press("Control+Backslash");
+  await picker(page).selectOption({ label: (await picker(page).locator("option").filter({ hasText: /Eurodance$/ }).innerText()).trim() });
+  await expect(shellPlaylist(page, "Eurodance")).toHaveAccessibleDescription("Target playlist");
+  await expect(shellPlaylist(page, "Melodic Vox")).not.toHaveAccessibleDescription("Target playlist");
+
+  await page.keyboard.press("Control+Shift+Backslash");
+  await expect(page.getByTestId("browser-title")).toContainText("Eurodance");
+  await expect(target(page).getByRole("heading")).toContainText("Melodic Vox");
+  await expect.poll(() => targetTitles(page)).toEqual(bars(...range(3, 20)));
+  await expect(shellPlaylist(page, "Melodic Vox")).toHaveAccessibleDescription("Target playlist");
+  await expect(shellPlaylist(page, "Eurodance")).not.toHaveAccessibleDescription("Target playlist");
+
+  // Hidden, nothing in the tree is marked.
+  await page.keyboard.press("Control+Backslash");
+  await expect(tree(page).locator("[aria-description]")).toHaveCount(0);
+});
+
+test("a Stick's playlist is never a target: not offered, a swap from it is refused, and its tracks are not added", async ({ page }) => {
+  await open(page);
+  await allTracks(page);
+  await showTarget(page, "Eurodance");
+  await expect(picker(page).locator("option", { hasText: "Now Playing Test" })).toHaveCount(0);
+
+  const stickPlaylist = tree(page).getByRole("group", { name: "Stick TEST" }).getByRole("treeitem", { name: "Now Playing Test" });
+  await stickPlaylist.click();
+  await expect(page.getByTestId("browser-title")).toContainText("Now Playing Test");
+  const before = await main(page).locator('[data-col="title"]').allInnerTexts();
+
+  await page.keyboard.press("Control+Shift+Backslash");
+  await expect(target(page).getByRole("status")).toContainText("A Stick's playlist cannot be the target");
+  await expect(page.getByTestId("browser-title")).toContainText("Now Playing Test");
+  await expect(target(page).getByRole("heading")).toContainText("Eurodance");
+
+  await mainRows(page).first().locator('[data-col="title"]').click();
+  await page.keyboard.press("Enter");
+  await expect(target(page).getByRole("status")).toContainText("Tracks listed from a Stick cannot be added");
+  await mainRows(page).nth(1).dragTo(targetGrid(page));
+  await expect(target(page).getByRole("status")).toContainText("Tracks listed from a Stick cannot be added");
+  await expect.poll(() => targetTitles(page)).toEqual([]);
+  expect(await main(page).locator('[data-col="title"]').allInnerTexts()).toEqual(before);
+});
+
+test("at half width the second list gives way, and comes back when the window is wide again", async ({ page }) => {
+  await voxTarget(page);
+  await page.setViewportSize({ width: 640, height: 800 });
+  await expect(target(page)).toHaveCount(0);
+  // Enter is not an add while the list is not there.
+  await mainRow(page, "Bar 00").locator('[data-col="title"]').click();
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Control+Backslash");
+  await expect(status(page)).toContainText("too narrow for a second list");
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await expect(target(page)).toBeVisible();
+  await expect.poll(() => targetTitles(page)).toEqual(bars(...range(3, 20)));
+});

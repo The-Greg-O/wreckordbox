@@ -112,7 +112,7 @@ export function useTargetList(input: TargetListInput): { pane: ReactNode; target
   }, []);
 
   const toggle = useEventCallback(() => {
-    if (!shown && narrow) return refused("The window is too narrow for a second list: widen it past 800 pixels.");
+    if (narrow) return refused("The window is too narrow for a second list: widen it past 800 pixels.");
     setShown(!shown);
     setNotice(null);
     return true;
