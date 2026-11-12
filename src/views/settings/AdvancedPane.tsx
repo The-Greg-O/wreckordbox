@@ -224,7 +224,10 @@ export function AdvancedPane({ tab, summary }: {
             }}
           >
             <h3>{t("Library Protection")}</h3>
-            <p>{t("It looks like you haven’t made a backup yet. We strongly recommend creating one before using wreckordbox.")}</p>
+            {/* Why a backup is asked about here (wbx-45.15): turning protection
+                off is what lets edits reach the Library. */}
+            <p>{t("Turning Library Protection off lets wreckordbox write to your Library. No backup of it was found, so an edit could only be put back with Undo while the window is open.")}</p>
+            <p>{t("Make one under Preferences › Backups first, or unlock anyway.")}</p>
             <div className={styles.warningActions}>
               <Button onClick={() => {
                 setUnlockWarning(false);
