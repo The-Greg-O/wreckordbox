@@ -3,7 +3,11 @@
    something picked is outlined in the accent and names its picks. Colours
    are theme roles; the Prep colour swatches are rekordbox's track colours,
    which do not follow the theme. */
+/* `min-width: 0` and the controls' `contain: inline-size` keep the bar from
+   widening the list's grid column to fit every control: at half width the
+   controls scroll sideways inside the bar instead. */
 .bar {
+  min-width: 0;
   font-family: var(--f-shell);
   font-size: var(--f-size-shell);
   color: var(--c-text);
@@ -35,6 +39,7 @@
   gap: var(--s-shell-space-2);
   flex: 1 1 auto;
   min-width: 0;
+  contain: inline-size;
   overflow-x: auto;
   scrollbar-width: thin;
 }

@@ -255,3 +255,22 @@ test("with Classic keys chosen, keys are offered in Classic, alphabetically", as
   for (const label of labels) expect(label).toMatch(/^[A-G][#b]?m?$/);
   expect(labels).toEqual([...labels].sort((a, b) => (a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0)));
 });
+
+test("at half width the bar stays within the window and does not push the list's search away", async ({ page }) => {
+  await page.setViewportSize({ width: 640, height: 800 });
+  await open(page);
+  await control(page, "Energy").click();
+  await bar(page).getByRole("combobox", { name: "Energy from" }).selectOption("3");
+  await counted(page);
+  for (const part of [count(page), bar(page).getByRole("button", { name: "Clear filter" }), working(page).getByRole("searchbox")]) {
+    const box = await part.boundingBox();
+    expect(box, "drawn").not.toBeNull();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(640);
+  }
+  // The controls that do not fit scroll into view.
+  const key = control(page, "Key");
+  await key.scrollIntoViewIfNeeded();
+  await key.click();
+  await expect(key).toHaveAttribute("aria-expanded", "true");
+});
