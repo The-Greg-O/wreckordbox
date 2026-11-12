@@ -415,26 +415,41 @@ fn a_front_ends_own_change_is_sent_to_clients_and_not_back_to_the_front_end() {
 }
 
 #[test]
-fn turning_protection_tells_the_host_and_subscribed_clients() {
+fn turning_protection_tells_subscribed_clients_in_order_with_a_rising_revision() {
     let hosted = host();
-    let heard = hosted.service.events();
     let mut client = Client::connect(&hosted.socket).unwrap();
     client.subscribe().unwrap();
 
-    let set: serde_json::Value = client
+    let on: serde_json::Value = client
+        .call("protection.set", json!({ "protect_library": true }))
+        .unwrap();
+    let off: serde_json::Value = client
+        .call("protection.set", json!({ "protect_library": false }))
+        .unwrap();
+    let again: serde_json::Value = client
         .call("protection.set", json!({ "protect_library": true }))
         .unwrap();
 
-    assert_eq!(set, json!({ "protect_library": true, "previous": false }));
-    let event = Event {
-        event: "protection_changed".into(),
-        data: json!({ "protect_library": true }),
-    };
-    assert_eq!(heard.recv_timeout(Duration::from_secs(5)).unwrap(), event);
-    assert_eq!(
-        client.next_event(Duration::from_secs(5)).unwrap(),
-        Some(event)
+    assert_eq!(on["protect_library"], true);
+    assert_eq!(on["previous"], false);
+    assert_eq!(off["previous"], true);
+    let revisions: Vec<u64> = [&on, &off, &again]
+        .iter()
+        .map(|set| set["revision"].as_u64().unwrap())
+        .collect();
+    assert!(
+        revisions.windows(2).all(|pair| pair[0] < pair[1]),
+        "{revisions:?}"
     );
+    for (set, on) in [(&on, true), (&off, false), (&again, true)] {
+        assert_eq!(
+            client.next_event(Duration::from_secs(5)).unwrap(),
+            Some(Event {
+                event: "protection_changed".into(),
+                data: json!({ "protect_library": on, "revision": set["revision"] }),
+            })
+        );
+    }
     // The hosting process's own commands are held to the switch as well.
     let refused = hosted
         .service

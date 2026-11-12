@@ -211,6 +211,23 @@ impl Service {
                         queue.send(LibraryChanged::from(change).event()).is_ok()
                     })
                 });
+                // Every turn of Library Protection, likewise in order, on
+                // the same queue. A hosting window hears of it from the core.
+                let watching = Arc::downgrade(&shared);
+                owned.library.watch_protection(move |state| {
+                    let Some(shared) = watching.upgrade() else {
+                        return false;
+                    };
+                    let queue = lock(&shared.changes);
+                    queue.as_ref().is_some_and(|queue| {
+                        queue
+                            .send(Event {
+                                event: crate::protection::PROTECTION_CHANGED.to_owned(),
+                                data: json!(crate::protection::Protection::from(state)),
+                            })
+                            .is_ok()
+                    })
+                });
             }
         }
         {
@@ -407,23 +424,14 @@ impl Shared {
                 Ok(json!({}))
             }
             crate::protection::commands::GET => {
-                let protect_library = self.with_library(OpenLibrary::protected)?;
-                to_value(&crate::protection::Protection { protect_library })
+                to_value(&self.with_library(OpenLibrary::protection)?)
             }
             crate::protection::commands::SET => {
+                // Turned through the core, which tells the clients (the
+                // watcher below) and a hosting window (its own watcher) in
+                // order, with the change's revision.
                 let set: crate::protection::SetProtection = required_arguments(request)?;
-                let protect_library = set.protect_library;
-                let previous = self.with_library(|library| library.protect(protect_library))??;
-                // The window takes the switch up as its own preference, so
-                // its status bar and its own edits agree with the service.
-                self.publish(&Event {
-                    event: crate::protection::PROTECTION_CHANGED.to_owned(),
-                    data: json!(crate::protection::Protection { protect_library }),
-                });
-                to_value(&crate::protection::ProtectionSet {
-                    protect_library,
-                    previous,
-                })
+                to_value(&self.with_library(|library| library.protect(set.protect_library))??)
             }
             reading if crate::reading::answers(reading) => self
                 .with_library(|library| crate::reading::answer(library, reading, &request.args))?,

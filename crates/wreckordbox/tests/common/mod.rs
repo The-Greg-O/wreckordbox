@@ -99,14 +99,10 @@ impl Sandbox {
         self.state_dir().join("library-protection.json")
     }
 
-    /// Turns Library Protection on or off as the window records it.
+    /// Turns Library Protection on or off as any writer records it: its
+    /// turn under the lock, its own temporary file, a higher revision.
     pub fn protect(&self, on: bool) {
-        std::fs::create_dir_all(self.state_dir()).unwrap();
-        std::fs::write(
-            self.protection_file(),
-            format!("{{\"protect_library\":{on}}}"),
-        )
-        .unwrap();
+        wreckordbox_service::protection::store(&self.state_dir(), on).unwrap();
     }
 
     pub fn with_shape(shape: Shape) -> Self {

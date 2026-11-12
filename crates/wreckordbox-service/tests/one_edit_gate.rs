@@ -1,7 +1,14 @@
-//! Library Protection is enforced in one place, `OpenLibrary::change`,
-//! because that is the service's only way to write the Library. These read
-//! the crate's own source to keep it so: a change that opens a second way
-//! fails here, before any DJ's protected Library is written.
+//! A supplementary lint, not the guarantee. Library Protection is enforced
+//! by the Library core itself (`rbl_library::protection`): every write the
+//! core makes is refused while it is on, checked under the edit gate, and
+//! the behavioural tests (`crates/rbl-library/tests/protection.rs`, the
+//! CLI's `library_protection.rs`, the shell's `service_host.rs`) prove it.
+//!
+//! These only read the crate's own top-level source files for literal
+//! spellings, to keep the service's writes going through
+//! `OpenLibrary::change` (the one place that lends the core a host and
+//! maps its refusals to `library_protected`). A nested module or another
+//! spelling would slip past them; the core would still refuse its writes.
 #![allow(
     clippy::pedantic,
     clippy::unwrap_used,

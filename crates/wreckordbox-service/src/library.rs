@@ -99,10 +99,14 @@ impl OpenLibrary {
         &self,
         read: impl FnOnce(&rbl_db::Library) -> Result<T, ServiceError>,
     ) -> Result<T, ServiceError> {
-        match &self.db {
-            Some(db) => read(db),
-            None => read(&self.core.open_read_only().map_err(|e| open_error(&e))?),
+        if let Some(db) = &self.db {
+            return read(db);
         }
+        // A hosting window that has not read the Library yet: the same
+        // answer the index gives, so a client waits and asks again rather
+        // than being told there is no Library.
+        self.index()?;
+        read(&self.core.open_read_only().map_err(|e| open_error(&e))?)
     }
 
     /// The index as it stands now: a snapshot an edit does not change.
@@ -137,18 +141,18 @@ impl OpenLibrary {
 
     /// The service's one way to change the Library: every command that
     /// does comes through here, whatever it changes and however the edit
-    /// history treats it, so this is where Library Protection is enforced.
-    /// While it is on the change is refused before the core is asked, with
-    /// nothing written, nothing recorded in the edit history and no client
-    /// told.
+    /// history treats it. Library Protection is enforced by the core
+    /// itself, under the gate that serialises edits ([`LibraryCore::write_then`]
+    /// refuses every write while it is on), so a refusal comes back from
+    /// `write` before anything is written, recorded in the edit history or
+    /// told to a client; here it becomes [`codes::LIBRARY_PROTECTED`].
     ///
     /// `write` is handed the core and the host to make one of the core's
     /// edits with ([`LibraryCore::edit`], `recorded_edit`,
     /// `permanent_edit`). This is the only place in the crate that reads
     /// `self.host`, which every writing method of the core needs, and the
     /// core is never handed out of this file; `tests/one_edit_gate.rs`
-    /// holds both to that. A new kind of edit is a new caller of this, not
-    /// a way round it.
+    /// lints for both.
     ///
     /// Reading does not come this way, and neither does writing to the
     /// Sidecar, which is not the Library.
@@ -156,32 +160,39 @@ impl OpenLibrary {
         &self,
         write: impl FnOnce(&LibraryCore, &dyn Host) -> Result<(T, rbl_library::Change), DbError>,
     ) -> Result<(T, LibraryChanged), ServiceError> {
-        if self.protected() {
-            return Err(protection::refusal());
-        }
         write(&self.core, &*self.host)
             .map(|(value, change)| (value, change.into()))
             .map_err(|e| edit_error(&e))
     }
 
-    /// Whether Library Protection is on: what the window last recorded in
-    /// the folder it shares with the service, and on when it has recorded
-    /// nothing.
-    pub(crate) fn protected(&self) -> bool {
-        protection::is_on(self.core.recovery_dir())
+    /// Library Protection as the core holds it.
+    pub(crate) fn protection(&self) -> protection::Protection {
+        self.core.protection().into()
     }
 
-    /// Turns Library Protection on or off for the service and the window
-    /// alike, and answers what it was.
-    pub(crate) fn protect(&self, on: bool) -> Result<bool, ServiceError> {
-        let previous = self.protected();
-        protection::store(self.core.recovery_dir(), on).map_err(|e| {
+    /// Turns Library Protection on or off through the core, for the service
+    /// and the window alike, and answers what it was.
+    pub(crate) fn protect(&self, on: bool) -> Result<protection::ProtectionSet, ServiceError> {
+        let turned = self.core.set_protection(on).map_err(|e| {
             ServiceError::new(
                 codes::SERVICE_FAILED,
                 format!("could not record Library Protection: {e}"),
             )
         })?;
-        Ok(previous)
+        Ok(protection::ProtectionSet {
+            protect_library: turned.now.protect_library,
+            previous: turned.previous,
+            revision: turned.now.revision,
+        })
+    }
+
+    /// Hears every change of Library Protection made through the core, in
+    /// order; see [`LibraryCore::watch_protection`].
+    pub(crate) fn watch_protection(
+        &self,
+        watcher: impl FnMut(rbl_library::protection::ProtectionState) -> bool + Send + 'static,
+    ) {
+        self.core.watch_protection(watcher);
     }
 
     /// Makes `action`'s writes through the Library's single edit path (the
@@ -301,7 +312,12 @@ pub(crate) fn track(index: &rbl_index::Library, row: rbl_index::Row) -> Track {
 /// ones the window shows.
 fn edit_error(error: &DbError) -> ServiceError {
     match error {
+        refused if rbl_library::protection::refused(refused) => protection::refusal(),
         DbError::WriteRefused(why) => ServiceError::new(codes::WRITE_REFUSED, why.clone()),
+        // The core has no Library yet: a hosting window is still reading it.
+        DbError::NotInstalled(why) if why == rbl_library::NOT_LOADED => {
+            ServiceError::new(codes::LIBRARY_LOADING, why.clone())
+        }
         other => open_error(other),
     }
 }

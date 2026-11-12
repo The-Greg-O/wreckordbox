@@ -92,7 +92,11 @@ pub fn file(state_dir: &Path) -> PathBuf {
 /// What the file in `state_dir` says, read now.
 #[must_use]
 pub fn read(state_dir: &Path) -> ProtectionState {
-    let on = |recorded| ProtectionState { protect_library: true, revision: 0, recorded };
+    let on = |recorded| ProtectionState {
+        protect_library: true,
+        revision: 0,
+        recorded,
+    };
     match std::fs::read(file(state_dir)) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => on(Recorded::Never),
         Err(_) => on(Recorded::Unreadable),
@@ -147,7 +151,11 @@ type Watcher = Box<dyn FnMut(ProtectionState) -> bool + Send>;
 
 impl Switch {
     pub(crate) fn new(dir: PathBuf) -> Self {
-        Self { dir, held: parking_lot::Mutex::new(Held::default()), watchers: parking_lot::Mutex::new(Vec::new()) }
+        Self {
+            dir,
+            held: parking_lot::Mutex::new(Held::default()),
+            watchers: parking_lot::Mutex::new(Vec::new()),
+        }
     }
 
     fn current_with(&self, held: &Held) -> ProtectionState {
@@ -174,7 +182,10 @@ impl Switch {
         let mut held = self.held.lock();
         let before = self.current_with(&held);
         if only_if_never && before.recorded != Recorded::Never {
-            return Ok(Turned { previous: before.protect_library, now: before });
+            return Ok(Turned {
+                previous: before.protect_library,
+                now: before,
+            });
         }
         let revision = before.revision + 1;
         let written = Turn::take(&self.dir).and_then(|_turn| {
@@ -187,7 +198,10 @@ impl Switch {
                 held.highest = now.revision;
                 held.unsaved_on = false;
                 self.tell(now);
-                Ok(Turned { previous: before.protect_library, now })
+                Ok(Turned {
+                    previous: before.protect_library,
+                    now,
+                })
             }
             Err(error) => {
                 if on && !before.protect_library {
@@ -209,7 +223,11 @@ struct Turn(std::fs::File);
 impl Turn {
     fn take(dir: &Path) -> std::io::Result<Self> {
         std::fs::create_dir_all(dir)?;
-        let lock = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(dir.join(LOCK_FILE))?;
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(dir.join(LOCK_FILE))?;
         lock.lock()?;
         Ok(Self(lock))
     }
@@ -225,12 +243,23 @@ impl Drop for Turn {
 /// the old one, so a reader never sees half of one. Call holding a [`Turn`].
 fn write(dir: &Path, protect_library: bool, revision: u64) -> std::io::Result<ProtectionState> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
-    let text = serde_json::to_vec(&Stored { protect_library, revision })?;
-    let partial = dir.join(format!("{FILE}.{}.{}.tmp", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
-    let written = std::fs::OpenOptions::new().write(true).create_new(true).open(&partial).and_then(|mut out| {
-        out.write_all(&text)?;
-        out.sync_all()
-    });
+    let text = serde_json::to_vec(&Stored {
+        protect_library,
+        revision,
+    })?;
+    let partial = dir.join(format!(
+        "{FILE}.{}.{}.tmp",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let written = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&partial)
+        .and_then(|mut out| {
+            out.write_all(&text)?;
+            out.sync_all()
+        });
     if let Err(error) = written.and_then(|()| std::fs::rename(&partial, file(dir))) {
         let _ = std::fs::remove_file(&partial);
         return Err(error);
@@ -238,7 +267,11 @@ fn write(dir: &Path, protect_library: bool, revision: u64) -> std::io::Result<Pr
     // The rename itself survives a crash once the folder is synced.
     #[cfg(unix)]
     std::fs::File::open(dir)?.sync_all()?;
-    Ok(ProtectionState { protect_library, revision, recorded: Recorded::Set })
+    Ok(ProtectionState {
+        protect_library,
+        revision,
+        recorded: Recorded::Set,
+    })
 }
 
 impl LibraryCore {

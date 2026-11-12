@@ -242,19 +242,19 @@ fn the_command_says_whether_protection_is_on_and_turns_it_off_and_on() {
 
     let off = sandbox.cli(&["--json", "protection", "off"]);
     assert!(off.status.success(), "{}", off.stderr);
-    assert_eq!(
-        off.json(),
-        serde_json::json!({ "protect_library": false, "previous": true })
-    );
+    let off = off.json();
+    assert_eq!(off["protect_library"], false);
+    assert_eq!(off["previous"], true);
+    assert!(off["revision"].as_u64().unwrap() > shown.json()["revision"].as_u64().unwrap());
     assert_eq!(
         sandbox.cli(&["protection"]).stdout,
         "Library Protection is off: the Library can be changed.\n"
     );
     // What the window reads when it next starts.
-    assert_eq!(
-        std::fs::read_to_string(sandbox.protection_file()).unwrap(),
-        r#"{"protect_library":false}"#
-    );
+    let recorded: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(sandbox.protection_file()).unwrap()).unwrap();
+    assert_eq!(recorded["protect_library"], false);
+    assert_eq!(recorded["revision"], off["revision"]);
     assert!(sandbox
         .cli(&["tracks", "rate", "10003", "4"])
         .status

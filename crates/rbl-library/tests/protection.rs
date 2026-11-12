@@ -29,10 +29,15 @@ fn rating_of(core: &LibraryCore, track: &str) -> u8 {
 }
 
 fn rate(core: &LibraryCore, track: &str, stars: u8) -> Result<(), rbl_db::DbError> {
-    core.recorded_edit(&NoHost, Touched::Metadata(vec![track.to_owned()]), TRACK_EDIT, |w| {
-        let (_, recorded) = w.set_rating_with_undo(track, stars)?;
-        Ok(((), LibraryEdit::Track(vec![recorded])))
-    })
+    core.recorded_edit(
+        &NoHost,
+        Touched::Metadata(vec![track.to_owned()]),
+        TRACK_EDIT,
+        |w| {
+            let (_, recorded) = w.set_rating_with_undo(track, stars)?;
+            Ok(((), LibraryEdit::Track(vec![recorded])))
+        },
+    )
     .map(|_| ())
 }
 
@@ -54,9 +59,17 @@ fn every_write_undo_and_redo_included_is_refused_while_protection_is_on() {
     let generation = core.generation();
 
     assert!(refused(&rate(&core, &track, 2)));
-    assert!(refused(&core.edit(&NoHost, History::Outside, Touched::Playlists, |_| Ok(()))));
+    assert!(refused(&core.edit(
+        &NoHost,
+        History::Outside,
+        Touched::Playlists,
+        |_| Ok(())
+    )));
     let redo = core.step_history(&NoHost, false);
-    assert!(matches!(&redo, Err(StepError::Write(error)) if protection::refused(error)), "{redo:?}");
+    assert!(
+        matches!(&redo, Err(StepError::Write(error)) if protection::refused(error)),
+        "{redo:?}"
+    );
     assert_eq!(rating_of(&core, &track), 0);
     assert_eq!(core.generation(), generation);
     // The refused Redo is still there to run once protection is off.
@@ -96,7 +109,11 @@ fn an_unreadable_file_is_on_and_not_replaced_by_the_windows_preference() {
     let core = core_in(dir.path());
     let track = rbl_db::fixture::track_id(1);
     std::fs::create_dir_all(dir.path().join("recovery")).unwrap();
-    std::fs::write(protection::file(&dir.path().join("recovery")), b"{\"protect_lib").unwrap();
+    std::fs::write(
+        protection::file(&dir.path().join("recovery")),
+        b"{\"protect_lib",
+    )
+    .unwrap();
 
     assert!(core.protection().protect_library);
     assert_eq!(core.protection().recorded, Recorded::Unreadable);
@@ -118,7 +135,9 @@ fn every_transition_has_a_higher_revision_and_is_heard_in_order() {
     let heard = Arc::new(Mutex::new(Vec::new()));
     let told = Arc::clone(&heard);
     core.watch_protection(move |state| {
-        told.lock().unwrap().push((state.protect_library, state.revision));
+        told.lock()
+            .unwrap()
+            .push((state.protect_library, state.revision));
         true
     });
 
@@ -127,7 +146,10 @@ fn every_transition_has_a_higher_revision_and_is_heard_in_order() {
     let c = core.set_protection(true).unwrap().now;
 
     assert!(a.revision < b.revision && b.revision < c.revision);
-    assert_eq!(*heard.lock().unwrap(), [(true, a.revision), (false, b.revision), (true, c.revision)]);
+    assert_eq!(
+        *heard.lock().unwrap(),
+        [(true, a.revision), (false, b.revision), (true, c.revision)]
+    );
     assert_eq!(core.protection().revision, c.revision);
 }
 
@@ -142,13 +164,20 @@ fn writers_at_once_never_share_a_temporary_file_or_lose_the_last_word() {
     let answers = Arc::new(Mutex::new(Vec::new()));
     let writers: Vec<_> = (0..8)
         .map(|n| {
-            let core = if n % 2 == 0 { Arc::clone(&core) } else { Arc::clone(&other) };
+            let core = if n % 2 == 0 {
+                Arc::clone(&core)
+            } else {
+                Arc::clone(&other)
+            };
             let answers = Arc::clone(&answers);
             std::thread::spawn(move || {
                 for i in 0..25 {
                     let on = (n + i) % 2 == 0;
                     let state = core.set_protection(on).unwrap().now;
-                    answers.lock().unwrap().push((state.revision, state.protect_library));
+                    answers
+                        .lock()
+                        .unwrap()
+                        .push((state.revision, state.protect_library));
                 }
             })
         })
@@ -161,14 +190,18 @@ fn writers_at_once_never_share_a_temporary_file_or_lose_the_last_word() {
     let mut revisions: Vec<u64> = answers.iter().map(|(revision, _)| *revision).collect();
     revisions.sort_unstable();
     revisions.dedup();
-    assert_eq!(revisions.len(), answers.len(), "two writers were given one revision");
+    assert_eq!(
+        revisions.len(),
+        answers.len(),
+        "two writers were given one revision"
+    );
     let last = answers.iter().max().unwrap();
     let recorded = protection::read(&dir.path().join("recovery"));
     assert_eq!((recorded.revision, recorded.protect_library), *last);
     let leftovers: Vec<_> = std::fs::read_dir(dir.path().join("recovery"))
         .unwrap()
-        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
-        .filter(|name| name.ends_with(".tmp"))
+        .filter_map(|entry| Some(entry.ok()?.path()))
+        .filter(|path| path.extension().is_some_and(|extension| extension == "tmp"))
         .collect();
     assert!(leftovers.is_empty(), "{leftovers:?}");
 }
