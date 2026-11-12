@@ -248,19 +248,20 @@ fn read(
             }
             terms.sort();
             terms.dedup();
-            let value =
-                if text_dimensions.contains(&view.dimension) {
-                    match terms.as_slice() {
-                        [] => Value::Null,
-                        [term] => json!(term),
-                        _ => return Err(format!(
+            let value = if text_dimensions.contains(&view.dimension) {
+                match terms.as_slice() {
+                    [] => Value::Null,
+                    [term] => json!(term),
+                    _ => {
+                        return Err(format!(
                             "{} is a single-text dimension but track {track} carries several terms",
                             view.dimension
-                        )),
+                        ))
                     }
-                } else {
-                    json!(terms)
-                };
+                }
+            } else {
+                json!(terms)
+            };
             fields.insert(view.dimension.clone(), value);
         }
     }
