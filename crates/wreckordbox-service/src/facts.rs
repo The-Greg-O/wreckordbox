@@ -639,7 +639,7 @@ fn check(
 }
 
 /// A source as given, checked: every source but the DJ has a name.
-fn source(given: &SourceArg) -> Result<Source, ServiceError> {
+pub(crate) fn source(given: &SourceArg) -> Result<Source, ServiceError> {
     let name = given.name.trim();
     if !name.is_empty() {
         return Ok(Source::new(given.kind, name));
