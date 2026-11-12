@@ -108,7 +108,12 @@ fn a_queue_is_paged_like_the_track_query() {
     let first = hosted.call("intake.list", json!({ "limit": 2 }));
     assert_eq!(ids(&first), ["10000", "10001"]);
     assert_eq!(
-        (&first["total"], &first["offset"], &first["limit"], &first["next_offset"]),
+        (
+            &first["total"],
+            &first["offset"],
+            &first["limit"],
+            &first["next_offset"]
+        ),
         (&json!(5), &json!(0), &json!(2), &json!(2))
     );
 
@@ -188,8 +193,16 @@ fn problems_says_so_when_no_colour_label_is_named_problem() {
         .unwrap_err();
 
     assert_eq!(refused.code, "problem_colour_not_found");
-    assert!(refused.message.contains("\"Problem\""), "{}", refused.message);
-    assert!(refused.message.contains("Clean (Green)"), "{}", refused.message);
+    assert!(
+        refused.message.contains("\"Problem\""),
+        "{}",
+        refused.message
+    );
+    assert!(
+        refused.message.contains("Clean (Green)"),
+        "{}",
+        refused.message
+    );
 }
 
 #[test]
@@ -230,7 +243,10 @@ fn counts_still_count_intake_when_nothing_is_named_problem() {
 
     assert_eq!(counts["intake"], 4);
     assert_eq!(counts["problems"], Value::Null);
-    assert_eq!(counts["problems_unavailable"]["code"], "problem_colour_not_found");
+    assert_eq!(
+        counts["problems_unavailable"]["code"],
+        "problem_colour_not_found"
+    );
 }
 
 fn track<'a>(page: &'a Value, id: &str) -> &'a Value {
@@ -259,7 +275,10 @@ fn each_queued_track_says_what_it_still_needs() {
         writer
             .library()
             .connection()
-            .execute("UPDATE djmdContent SET Analysed = NULL WHERE ID = ?1", [&fresh])
+            .execute(
+                "UPDATE djmdContent SET Analysed = NULL WHERE ID = ?1",
+                [&fresh],
+            )
             .unwrap();
     });
     let hosted = fixture.start();
@@ -267,7 +286,10 @@ fn each_queued_track_says_what_it_still_needs() {
     let page = hosted.call("intake.list", json!({}));
 
     let untouched = track(&page, "10000");
-    assert_eq!(untouched["needs"], json!(["energy", "tags", "hot_cues", "grid"]));
+    assert_eq!(
+        untouched["needs"],
+        json!(["energy", "tags", "hot_cues", "grid"])
+    );
     assert_eq!(
         untouched["empty_dimensions"],
         json!([{ "id": "700001", "name": "Situation", "kind": "mytag_category" }])
@@ -408,7 +430,9 @@ fn setting_a_prep_colour_moves_a_track_between_the_queues() {
     );
     assert_eq!(clean["previous"], Value::Null);
     assert_eq!(clean["changed"], true);
-    let told = events.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+    let told = events
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
     assert_eq!(told.event, "library_changed");
     assert_eq!(told.data["generation"], clean["generation"]);
 
@@ -434,9 +458,15 @@ fn setting_a_prep_colour_moves_a_track_between_the_queues() {
         json!({ "id": "10000", "prep_colour": "none" }),
     );
     assert_eq!(none["prep_colour"], Value::Null);
-    assert_eq!(ids(&hosted.call("intake.list", json!({}))), ["10000", "10002"]);
+    assert_eq!(
+        ids(&hosted.call("intake.list", json!({}))),
+        ["10000", "10002"]
+    );
     let counts = hosted.call("intake.counts", json!({}));
-    assert_eq!((&counts["intake"], &counts["problems"]), (&json!(2), &json!(1)));
+    assert_eq!(
+        (&counts["intake"], &counts["problems"]),
+        (&json!(2), &json!(1))
+    );
 }
 
 #[test]
@@ -462,7 +492,11 @@ fn a_prep_colour_edit_that_cannot_be_made_changes_nothing() {
         )
         .unwrap_err();
     assert_eq!(unknown_colour.code, "prep_colour_not_found");
-    assert!(unknown_colour.message.contains("Clean"), "{}", unknown_colour.message);
+    assert!(
+        unknown_colour.message.contains("Clean"),
+        "{}",
+        unknown_colour.message
+    );
 
     let unknown_track = hosted
         .service
@@ -473,6 +507,9 @@ fn a_prep_colour_edit_that_cannot_be_made_changes_nothing() {
         .unwrap_err();
     assert_eq!(unknown_track.code, "track_not_found");
 
-    assert_eq!(ids(&hosted.call("intake.list", json!({}))), ["10000", "10001"]);
+    assert_eq!(
+        ids(&hosted.call("intake.list", json!({}))),
+        ["10000", "10001"]
+    );
     assert_eq!(generation(&hosted), before + 1);
 }

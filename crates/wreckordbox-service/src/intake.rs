@@ -399,17 +399,16 @@ fn set_prep_colour(
         .map_or_else(|| edit.id.clone(), u64::to_string);
     let title = before.title.get(row as usize).to_owned();
     let colour = wanted.as_ref().map(|colour| colour.id.to_string());
-    let (rows, change) = library.recorded_edit(
-        Touched::Metadata(vec![id.clone()]),
-        TRACK_EDIT,
-        |writer| {
+    let (rows, change) =
+        library.recorded_edit(Touched::Metadata(vec![id.clone()]), TRACK_EDIT, |writer| {
             let (changed, recorded) = writer.set_color_with_undo(&id, colour.as_deref())?;
             Ok((changed.rows, LibraryEdit::Track(vec![recorded])))
-        },
-    )?;
+        })?;
     // Read back from the index the edit refreshed, not assumed.
     let after = library.index()?;
-    let prep_colour = after.row_of(&id).map_or(wanted, |row| colour_of(&after, row));
+    let prep_colour = after
+        .row_of(&id)
+        .map_or(wanted, |row| colour_of(&after, row));
     Ok((
         PrepColourSet {
             id,
@@ -502,12 +501,8 @@ fn problem_colour(labels: &[PrepColour], asked: Option<&str>) -> Result<PrepColo
             Err(ServiceError::new(
                 codes::PROBLEM_COLOUR_NOT_FOUND,
                 format!(
-                    "no colour label in the Library is named {wanted:?}, so nothing says which Prep colour means Problem. {} Name one {wanted:?} in rekordbox's preferences, or say what you call it with --label or {PROBLEM_LABEL_ENV}.",
-                    if there.is_empty() {
-                        "The Library names no colour labels.".to_owned()
-                    } else {
-                        format!("The colour labels are: {}.", there.join(", "))
-                    }
+                    "no colour label in the Library is named {wanted:?}, so nothing says which Prep colour means Problem. The colour labels are: {}. Name one {wanted:?} in rekordbox's preferences, or say what you call it with --label or {PROBLEM_LABEL_ENV}.",
+                    there.join(", ")
                 ),
             ))
         }
@@ -595,8 +590,7 @@ impl Known {
                     format!("the Library could not be read: {e}"),
                 )
             };
-            let my_tags =
-                rbl_db::export_info::my_tags(db.connection()).map_err(|e| failed(&e))?;
+            let my_tags = rbl_db::export_info::my_tags(db.connection()).map_err(|e| failed(&e))?;
             let locked = locked(db.connection(), &ids).map_err(|e| failed(&e))?;
             Ok((my_tags, locked))
         })?;
@@ -638,7 +632,10 @@ impl Known {
         };
         let mut needs = Vec::new();
         for field in [needs::TITLE, needs::ARTIST] {
-            if suggestions.iter().any(|suggestion| suggestion.field == field) {
+            if suggestions
+                .iter()
+                .any(|suggestion| suggestion.field == field)
+            {
                 needs.push(field);
             }
         }
@@ -723,10 +720,7 @@ fn dimensions_reaching_the_deck(my_tags: &[rbl_db::export_info::MyTagRow]) -> Ve
 /// Which of `ids` have their analysis locked: rekordbox's Analysis Lock,
 /// bit 7 of `djmdContent.Analysed`, the bit the window's grid lock sets.
 /// The index keeps only whether a track is analysed at all.
-fn locked(
-    connection: &rusqlite::Connection,
-    ids: &[String],
-) -> rusqlite::Result<HashSet<String>> {
+fn locked(connection: &rusqlite::Connection, ids: &[String]) -> rusqlite::Result<HashSet<String>> {
     if ids.is_empty() {
         return Ok(HashSet::new());
     }
