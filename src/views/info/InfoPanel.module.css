@@ -339,7 +339,6 @@
   font: inherit;
   cursor: default;
 }
-.star:not(:disabled):hover { color: var(--c-accent); }
 
 .checkRow {
   display: grid;

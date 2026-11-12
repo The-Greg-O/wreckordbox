@@ -194,8 +194,8 @@ describe("tokens under a theme", () => {
     expect(meaning.length).toBeGreaterThan(80);
     expect(meaning).toEqual(expect.arrayContaining([
       "--c-wave-low", "--c-wave-all", "--c-phrase-chorus", "--c-cue-hot", "--c-cue-purple", "--c-label-pink",
-      "--c-comment-red", "--c-meter-green", "--c-playhead", "--c-downbeat", "--c-energy", "--c-energy-hover",
-      "--c-loop-band",
+      "--c-comment-red", "--c-meter-green", "--c-playhead", "--c-downbeat", "--c-energy-0", "--c-energy-1",
+      "--c-energy-5", "--c-loop-band",
     ]));
     for (const name of meaning) {
       expect(tokyo.get(name), name).toBe(plain.get(name));
@@ -237,8 +237,12 @@ describe("tokens under a theme", () => {
 
   it("Energy stars and the loop band keep their colours under every theme", () => {
     for (const theme of [plain, tokyo, gruvbox]) {
-      expect(theme.get("--c-energy")).toBe("#E6E6E6");
-      expect(theme.get("--c-energy-hover")).toBe("#1373EB");
+      // One set of Energy colours for upstream's stars and the new list's pips.
+      expect(["0", "1", "2", "3", "4", "5"].map((level) => theme.get(`--c-energy-${level}`))).toEqual(
+        ["#414868", "#7aa2f7", "#0db9d7", "#9ece6a", "#ff9e64", "#f7768e"],
+      );
+      expect(theme.has("--c-energy")).toBe(false);
+      expect(theme.has("--c-energy-hover")).toBe(false);
       expect(theme.get("--c-loop-band")).toBe("#3571E3");
     }
   });

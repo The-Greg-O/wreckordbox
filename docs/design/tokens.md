@@ -49,7 +49,7 @@ The active theme's file is `~/.local/state/omarchy/current/theme/colors.toml`. I
 ## Fixed colours (meaning, not theme)
 
 - **Prep colour:** rekordbox's own label colours, shown as a 3 px stripe at the row's left edge.
-- **Energy:** five pips coloured by level, cool to hot (1 blue, 2 cyan, 3 green, 4 orange, 5 red). In upstream's layout, until it is removed, Energy is five stars in a fixed light grey (`--c-energy`), not the theme's text colour.
+- **Energy:** five pips coloured by level, cool to hot (1 blue, 2 cyan, 3 green, 4 orange, 5 red). Unset pips are a fixed slate (`--c-energy-0`). In upstream's layout, until it is removed, Energy is five stars in the same colours: lit stars in the track's level colour, unlit ones in the unset colour, never the theme's text colour.
 - **Key lights:** green fill for a key that mixes with the loaded track, yellow fill for an energy-boost move, no fill otherwise.
 - **Tag dimensions:** one hue per dimension for set tags; an unset tag is outlined in the hairline colour; a suggested tag has a dashed yellow outline.
 - **Mutant:** magenta badge and banner. Magenta is used for nothing else in a list.

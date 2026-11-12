@@ -38,7 +38,7 @@ const FACE = "JetBrainsMono Nerd Font";
 /** Colours that carry meaning: bands, phrases, cues, Prep colours, meters, the playhead, Energy. */
 const MEANING = [
   "--c-wave-low", "--c-wave-all", "--c-phrase-chorus", "--c-cue-hot", "--c-cue-purple", "--c-label-pink",
-  "--c-comment-red", "--c-meter-green", "--c-playhead", "--c-downbeat", "--c-played", "--c-energy", "--c-loop-band",
+  "--c-comment-red", "--c-meter-green", "--c-playhead", "--c-downbeat", "--c-played", "--c-energy-0", "--c-energy-3", "--c-energy-5", "--c-loop-band",
 ];
 
 /** Each token as the browser resolves it on a real element, so `var()` chains are followed. */
@@ -90,7 +90,6 @@ async function open(page: Page): Promise<void> {
   await expect(page.getByTestId("browser-title")).toContainText("Tracks)");
 }
 
-const energy = (page: Page): Locator => page.getByRole("radiogroup", { name: "Rating" }).first();
 const treeRow = (page: Page): Locator => page.getByRole("treeitem").filter({ hasText: "Melodic Vox" }).first();
 const memoryTab = (page: Page): Locator => page.getByRole("tab", { name: "MEMORY" }).first();
 
@@ -126,18 +125,26 @@ test("a theme announced to the page recolours the chrome, and a second one repla
   expect(await drawn(treeRow(page), "color")).toBe(rgb("#E6E6E6"));
 });
 
-test("Energy stars are drawn in the same colour under two themes, at rest and under the pointer", async ({ page }) => {
+test("Energy stars are drawn in Energy's own level colours under two themes, at rest and under the pointer", async ({ page }) => {
   await open(page);
-  const star = energy(page).getByRole("radio").nth(2);
+  // A rated track: its lit stars are its level's colour, its unlit ones the unset colour.
+  const group = page.getByRole("radiogroup", { name: "Rating" }).filter({ has: page.getByRole("radio", { checked: true }) }).first();
+  const level = Number((await group.getByRole("radio", { checked: true }).getAttribute("aria-label"))!.split(" ")[0]);
+  expect(level).toBeGreaterThan(0);
+  expect(level).toBeLessThan(5);
+  const icon = (star: number) => group.getByRole("radio").nth(star - 1).locator("svg");
+  const tokens = await resolved(page, ["--c-energy-0", `--c-energy-${level}`, "--c-energy-5"]);
   const seen: string[][] = [];
   for (const roles of [null, TOKYO_NIGHT, GRUVBOX]) {
     await announce(page, { roles, font: null });
     await page.mouse.move(0, 0);
-    const rest = await drawn(star, "color");
-    await star.hover();
-    seen.push([rest, await drawn(star, "color")]);
+    const lit = await drawn(icon(1), "color");
+    const unlit = await drawn(icon(5), "color");
+    await group.getByRole("radio").nth(4).hover();
+    seen.push([lit, unlit, await drawn(icon(5), "color")]);
   }
-  expect(seen[0]).toEqual([rgb("#E6E6E6"), rgb("#1373EB")]);
+  // Under the pointer the fifth star shows the level it would set.
+  expect(seen[0]).toEqual([tokens[`--c-energy-${level}`], tokens["--c-energy-0"], tokens["--c-energy-5"]]);
   expect(seen[1]).toEqual(seen[0]);
   expect(seen[2]).toEqual(seen[0]);
 });
@@ -197,4 +204,44 @@ test("the view shell's active tab carries the theme's two-colour line", async ({
   );
   expect(await drawn(tab, "color")).toBe(rgb(TOKYO_NIGHT.text));
   expect(await drawn(page.getByTestId("shell-top-bar"), "font-family")).toContain(FACE);
+});
+
+test("in the view shell the chrome follows two dark themes and Energy, Prep and the player's phrases do not", async ({ page }) => {
+  await enableViewShell(page);
+  await page.goto("/");
+  await expect(page.getByTestId("browser-title")).toContainText("Tracks)", { timeout: 15_000 });
+  const list = page.getByRole("tabpanel");
+  const pips = list.getByRole("radiogroup", { name: "Energy 3 of 5" }).first().getByRole("radio");
+  const stripe = list.getByRole("img", { name: "Prep colour: Pink" }).first();
+  const tree = page.getByRole("tree", { name: "Tree" });
+  const treeItem = tree.getByRole("treeitem").first();
+  await expect(pips.first()).toBeVisible();
+  const background = (target: Locator) => drawn(target, "background-color");
+  /** The nearest painted ground behind `target`. */
+  const ground = (target: Locator) =>
+    target.evaluate((el) => {
+      for (let at: Element | null = el; at; at = at.parentElement) {
+        const colour = getComputedStyle(at).backgroundColor;
+        if (colour !== "rgba(0, 0, 0, 0)" && colour !== "transparent") return colour;
+      }
+      return getComputedStyle(document.body).backgroundColor;
+    });
+  const meaning = async () => [
+    await background(pips.nth(0)), await background(pips.nth(4)), await background(stripe),
+    ...Object.values(await resolved(page, MEANING)),
+  ];
+
+  const seen: string[][] = [];
+  for (const roles of [TOKYO_NIGHT, GRUVBOX]) {
+    await announce(page, { roles, font: FACE });
+    seen.push(await meaning());
+    // The chrome is the theme's, and its text can be read on it.
+    expect(await drawn(treeItem, "color"), roles.text).toBe(rgb(roles.text));
+    expect(contrast(await drawn(treeItem, "color"), await ground(treeItem)), roles.text).toBeGreaterThanOrEqual(4.5);
+    // A lit pip stands out from the row it sits in.
+    expect(contrast(await background(pips.nth(0)), await ground(list.locator('[role="row"][aria-selected]').first())))
+      .toBeGreaterThanOrEqual(3);
+  }
+  expect(seen[1]).toEqual(seen[0]);
+  expect(seen[0]!.slice(0, 2)).toEqual(Object.values(await resolved(page, ["--c-energy-3", "--c-energy-0"])));
 });

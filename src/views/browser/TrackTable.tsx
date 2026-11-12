@@ -204,7 +204,7 @@ const Stars = memo(function Stars({
               onRate(rating === star ? 0 : star);
             }}
           >
-            <RatingStar lit={star <= rating} className={styles.starIcon} />
+            <RatingStar star={star} rating={rating} className={styles.starIcon} />
           </button>
         ))}
       </span>
@@ -212,7 +212,7 @@ const Stars = memo(function Stars({
   }
   return (
     <span className={styles.stars} role="img" aria-label={`${rating} of 5`}>
-      {[1, 2, 3, 4, 5].map((star) => <RatingStar key={star} lit={star <= rating} className={styles.starIcon} />)}
+      {[1, 2, 3, 4, 5].map((star) => <RatingStar key={star} star={star} rating={rating} className={styles.starIcon} />)}
     </span>
   );
 });

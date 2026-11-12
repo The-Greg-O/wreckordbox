@@ -37,8 +37,6 @@
   --c-text: var(--role-text);
   --c-text-dim: var(--role-text-dim);
   --c-played: #69B900; /* rekordbox 7.2.19 static: a played track's text in the track list, theme colour 0x30000e1 in the dark theme and the selected-row constant alike (ListViewer::findTextColour @0x1003efb70; the theme table from __GLOBAL__sub_I_ColorTheme.cpp, issue #540) */
-  --c-energy: #E6E6E6; /* Energy stars in the track list. Fixed: it is the DJ's judgement of the track, not chrome, and does not follow the theme's text colour. Upstream drew them in its text colour, which this is */
-  --c-energy-hover: #1373EB; /* the star under the pointer; upstream's accent blue, fixed for the same reason */
   --c-loop-band: #3571E3; /* a loop's band over the waveform; the pad blue, fixed because it is drawn on the music */
   --c-icon-off: #A0A0A0; /* skins/*_off.svg fill rgb(160,160,160) */
   --c-icon-on: #F0F0F0; /* skins/*_on.svg fill rgb(240,240,240) */
@@ -156,7 +154,9 @@
   --c-label-aqua: #56BDF3; /* measured from the device-panel captures docs/screenshots (rekordbox 7.2.11, 2x, 9.08.22 to 9.08.41 PM): the Aqua dot */
   --c-label-blue: #204FEF; /* measured from the device-panel captures docs/screenshots (rekordbox 7.2.11, 2x, 9.08.22 to 9.08.41 PM): the Blue dot */
   --c-label-purple: #8B1EEF; /* measured from the device-panel captures docs/screenshots (rekordbox 7.2.11, 2x, 9.08.22 to 9.08.41 PM): the Purple dot */
-  /* Energy's five levels, cool to hot (docs/design/tokens.md, Fixed colours; values from screens/mock.html). Meaning, not theme. */
+  /* Energy's five levels, cool to hot (docs/design/tokens.md, Fixed colours; values from screens/mock.html). Meaning, not theme:
+     the new list's pips and upstream's stars both use them, so a track's Energy looks the same in either layout and every theme. */
+  --c-energy-0: #414868; /* an unset pip or unlit star (screens/mock.html's e0) */
   --c-energy-1: #7aa2f7;
   --c-energy-2: #0db9d7;
   --c-energy-3: #9ece6a;
