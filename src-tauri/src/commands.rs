@@ -4783,6 +4783,10 @@ pub async fn filter_values(
     state: State<'_, Arc<AppState>>,
     spec: ViewSpecDto,
 ) -> AppResult<FilterValuesDto> {
+    // A Stick list offers what the Stick holds (wbx-57).
+    if let crate::dto::TrackSourceDto::Device { path, format, playlist } = &spec.source {
+        return crate::device_library::filter_values(path.clone(), format.clone(), playlist.clone(), spec.query.clone(), spec.search_field).await;
+    }
     let library = state.library()?;
     let parsed = spec_from_wire(&library, &spec);
     blocking("filter_values", move || {
