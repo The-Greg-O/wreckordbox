@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("analysis completes one operation and shows a Ledger failure separately from its results", async ({ page }) => {
+test("analysis finishes one mixed-result operation and shows a Ledger failure separately", async ({ page }) => {
   await page.goto("/?writable=1&ledgerWarning=1");
   const rows = page.getByRole("row").filter({ has: page.getByRole("gridcell") });
   await rows.nth(2).click();
@@ -14,6 +14,9 @@ test("analysis completes one operation and shows a Ledger failure separately fro
   }).__bulkLedgerRuns);
   expect(runs).toHaveLength(1);
   expect(runs[0]).toMatchObject({ kind: "analysis", ended: true });
-  expect(new Set(runs[0]!.tracks).size).toBe(2);
+  // The fixture deliberately refuses one selected track. Accepted work still
+  // belongs to the one completed operation and keeps its recording warning.
+  expect(new Set(runs[0]!.tracks).size).toBe(1);
+  await expect(page.getByRole("contentinfo")).toContainText("1 failed");
   await expect(page.getByRole("contentinfo").getByRole("button", { name: "Stop" })).toHaveCount(0);
 });
