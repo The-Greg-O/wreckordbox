@@ -273,6 +273,24 @@ fn separating_an_unchanged_track_again_reuses_its_stems_without_running_the_engi
     assert_eq!(text.stderr, "");
 }
 
+/// After a backup that left Stem audio out is restored, the Sidecar still
+/// records the separation but the files are not there.
+#[test]
+fn stems_recorded_without_their_audio_files_read_as_needing_separation() {
+    let sandbox = Sandbox::new();
+    let track = import(&sandbox, "Night Bus.wav", 4_410);
+    separate(&sandbox, &track);
+    std::fs::remove_dir_all(sandbox.sidecar_dir().join("stems")).unwrap();
+
+    let shown = show(&sandbox, &track);
+    assert_eq!(shown["stems"], serde_json::Value::Null);
+
+    let again = separate(&sandbox, &track);
+    assert_eq!(again["reused"], false);
+    assert_eq!(sandbox.engine_runs(), 2);
+    assert_eq!(stem_files(&sandbox).len(), 4);
+}
+
 #[test]
 fn a_track_whose_audio_changed_is_separated_afresh_and_its_old_stems_are_marked_stale() {
     let sandbox = Sandbox::new();

@@ -14,10 +14,17 @@
 //! {"samples": 13418790, "sample_rate": 44100,
 //!  "produced_by": {"engine_version": "0.1.0", "model": "htdemucs_ft.yaml", ...},
 //!  "stems": [{"role": "vocals", "file": "stems/10003/run-7/vocals.wav",
-//!             "format": "wav", "channels": 2, "bits_per_sample": 16}, ...]}
+//!             "format": "wav", "channels": 2, "bits_per_sample": 16,
+//!             "hash": "b3:<hex>"}, ...]}
 //! ```
 //!
 //! `file` is relative to the Sidecar's folder, so the folder can be moved.
+//! `hash` is the BLAKE3 hash of the file's bytes as recorded. Stem folders
+//! are named after Runs, and a restored Sidecar can rewind Run identifiers,
+//! so a path alone does not say the file there is the one recorded: a
+//! Stem's audio counts as present only when its hash matches. A set
+//! recorded without hashes (before they were kept) cannot be checked, and
+//! reads as needing separation.
 
 use std::path::{Path, PathBuf};
 
@@ -122,6 +129,110 @@ impl StemSet {
     pub fn is_current(&self) -> bool {
         !self.stale && !self.superseded
     }
+
+    /// Whether every Stem's audio file is in the Sidecar. A set can be
+    /// recorded without its audio: a backup leaves Stem audio out unless
+    /// asked, so a restored Sidecar remembers separations whose files did
+    /// not come back. Such a set is not the track's Stems; the track needs
+    /// separating again.
+    ///
+    /// The files must also be the ones recorded: each is checked against
+    /// the hash recorded with the set, since a later separation can have
+    /// written other audio at the same path. A set without recorded hashes
+    /// cannot be checked and is not present.
+    ///
+    /// A file's hash is computed once and kept, for this process, with the
+    /// file's size, modification time and (on Unix) inode: it is computed
+    /// again only when one of those changes. Four lossless Stems of a
+    /// five-minute track are about 215 MB: hashing them took 0.34 to 0.41 s
+    /// on the M2 (release build, files in the page cache; more from a cold
+    /// disk), against about 4 µs to read a file's metadata. Use
+    /// [`Self::audio_verified`] where a stale verdict would do harm.
+    #[must_use]
+    pub fn audio_present(&self) -> bool {
+        self.stems.iter().all(|stem| {
+            stem.hash.as_deref().is_some_and(|recorded| {
+                cached_hash(&stem.path).is_ok_and(|found| found == recorded)
+            })
+        })
+    }
+
+    /// [`Self::audio_present`], with every file hashed now whatever was
+    /// kept: what a Stick write checks before it copies the audio.
+    #[must_use]
+    pub fn audio_verified(&self) -> bool {
+        self.stems.iter().all(|stem| {
+            stem.hash
+                .as_deref()
+                .is_some_and(|recorded| fresh_hash(&stem.path).is_ok_and(|found| found == recorded))
+        })
+    }
+}
+
+/// What identifies a file's contents cheaply: if any of these changes, the
+/// kept hash is not trusted.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Seen {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+    inode: u64,
+}
+
+fn seen(path: &Path) -> Option<Seen> {
+    let meta = std::fs::metadata(path)
+        .ok()
+        .filter(std::fs::Metadata::is_file)?;
+    #[cfg(unix)]
+    let inode = std::os::unix::fs::MetadataExt::ino(&meta);
+    #[cfg(not(unix))]
+    let inode = 0;
+    Some(Seen {
+        len: meta.len(),
+        modified: meta.modified().ok(),
+        inode,
+    })
+}
+
+type Kept = std::collections::HashMap<PathBuf, (Seen, String)>;
+
+fn kept() -> std::sync::MutexGuard<'static, Kept> {
+    static KEPT: std::sync::OnceLock<std::sync::Mutex<Kept>> = std::sync::OnceLock::new();
+    KEPT.get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The file's hash, from what was kept when the file is as it was then.
+fn cached_hash(path: &Path) -> Result<String> {
+    let Some(now) = seen(path) else {
+        kept().remove(path);
+        return Err(SidecarError::Invalid(format!(
+            "{} is not a file",
+            path.display()
+        )));
+    };
+    if let Some((then, hash)) = kept().get(path) {
+        if *then == now {
+            return Ok(hash.clone());
+        }
+    }
+    fresh_hash(path)
+}
+
+/// The file's hash, read now, and kept for [`cached_hash`]. Kept only when
+/// the file did not change while it was read.
+fn fresh_hash(path: &Path) -> Result<String> {
+    let before = seen(path);
+    let hash = content_hash(path)?;
+    match (before, seen(path)) {
+        (Some(before), Some(after)) if before == after => {
+            kept().insert(path.to_path_buf(), (after, hash.clone()));
+        }
+        _ => {
+            kept().remove(path);
+        }
+    }
+    Ok(hash)
 }
 
 /// One Stem: its role and its audio file.
@@ -134,6 +245,10 @@ pub struct Stem {
     pub format: String,
     pub channels: u16,
     pub bits_per_sample: Option<u32>,
+    /// The BLAKE3 hash of the file as recorded, `b3:<hex>`; `None` for a
+    /// Stem recorded before hashes were kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hash: Option<String>,
 }
 
 /// A Stem as the Fact's value keeps it.
@@ -145,6 +260,16 @@ struct StoredStem {
     format: String,
     channels: u16,
     bits_per_sample: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hash: Option<String>,
+}
+
+/// The BLAKE3 hash of a file's bytes, as a Stem records it.
+fn content_hash(path: &Path) -> Result<String> {
+    let mut file = std::fs::File::open(path).map_err(io("could not read", path))?;
+    let mut hasher = blake3::Hasher::new();
+    std::io::copy(&mut file, &mut hasher).map_err(io("could not read", path))?;
+    Ok(format!("b3:{}", hasher.finalize().to_hex()))
 }
 
 #[derive(Serialize, Deserialize)]
@@ -212,6 +337,7 @@ impl Sidecar {
                 format,
                 channels: info.channels,
                 bits_per_sample: info.bits_per_sample,
+                hash: Some(content_hash(path)?),
             });
         }
 
@@ -263,7 +389,10 @@ impl Sidecar {
     }
 
     /// The track's Stems now, if it has any that match `fingerprint`, the
-    /// track's audio as it is: neither replaced nor made from other audio.
+    /// track's audio as it is: neither replaced nor made from other audio,
+    /// and with their audio files in the Sidecar
+    /// ([`StemSet::audio_present`]). `None` means the track needs
+    /// separating.
     pub fn current_stems(
         &self,
         track_id: &str,
@@ -272,7 +401,8 @@ impl Sidecar {
         Ok(self
             .stems(track_id)?
             .into_iter()
-            .find(|set| set.is_current() && set.fingerprint == *fingerprint))
+            .find(|set| set.is_current() && set.fingerprint == *fingerprint)
+            .filter(StemSet::audio_present))
     }
 
     /// A Stems Fact as a Stem set; `None` for a Fact that is not one.
@@ -295,6 +425,7 @@ impl Sidecar {
                     format: stem.format,
                     channels: stem.channels,
                     bits_per_sample: stem.bits_per_sample,
+                    hash: stem.hash,
                 })
                 .collect(),
             source: fact.source,

@@ -15,6 +15,7 @@ import { EXTRA_COLUMNS, type ColumnKey } from "@/lib/columns";
 import type { RowDto } from "@/ipc/types";
 import type { ListLook } from "@/views/browser/listLook";
 import styles from "./LibraryList.module.css";
+import { LibraryKey } from "./LibraryKey";
 
 const PIPS = [1, 2, 3, 4, 5] as const;
 
@@ -110,5 +111,6 @@ export const LIBRARY_LOOK: ListLook = {
   fetch,
   menu: { columns: LIBRARY_MENU, required: LIBRARY_REQUIRED },
   cell,
+  keyCell: (stored, loaded, text) => <LibraryKey stored={stored} loaded={loaded} text={text} />,
   edge,
 };

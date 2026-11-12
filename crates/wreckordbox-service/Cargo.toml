@@ -27,6 +27,10 @@ rbl-anlz = { path = "../rbl-anlz" }
 # Native stems: the writer of a track's Stems to a Stick, which the service
 # drives because it owns the Sidecar the Stems are in.
 wreckordbox-native-stems = { path = "../wreckordbox-native-stems" }
+# The renderer's Stem set type: the service hands it only verified-current
+# Stems (`render_stems`). Without Rubber Band here; a binary that renders
+# key or tempo edits turns the feature on.
+wreckordbox-render = { path = "../wreckordbox-render", default-features = false }
 serde = { workspace = true }
 tracing = { workspace = true }
 serde_json = { workspace = true }

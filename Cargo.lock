@@ -3900,6 +3900,7 @@ dependencies = [
  "dirs 5.0.1",
  "flate2",
  "fs2",
+ "rbl-backup",
  "rbl-core",
  "rbl-db",
  "rusqlite",
@@ -3909,6 +3910,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tracing",
  "uuid",
+ "wreckordbox-sidecar",
  "zip",
 ]
 
@@ -7115,6 +7117,7 @@ dependencies = [
  "clap",
  "lewton",
  "rbl-anlz",
+ "rbl-backup",
  "rbl-db",
  "rbl-export",
  "rbl-onelibrary",
@@ -7156,6 +7159,7 @@ dependencies = [
 name = "wreckordbox-render"
 version = "1.10.0"
 dependencies = [
+ "mp3lame-encoder",
  "rbl-audio",
  "rbl-deck",
  "rustix",
@@ -7180,6 +7184,7 @@ dependencies = [
  "tracing",
  "wreckordbox-intensity",
  "wreckordbox-native-stems",
+ "wreckordbox-render",
  "wreckordbox-sidecar",
 ]
 

@@ -28,6 +28,7 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
@@ -243,6 +244,9 @@ pub(crate) struct Stems {
     pub(crate) run_status: Mutex<crate::run_status::RunStatus>,
     command: Vec<OsString>,
     sidecar: Mutex<Option<Arc<Sidecar>>>,
+    /// Set, under the `sidecar` lock, when the service stops: the Sidecar
+    /// is not opened again (wbx-45.7).
+    closed: AtomicBool,
     /// The separation in progress, if any.
     running: Mutex<Option<Arc<Job>>>,
     /// Where events go to reach clients and the host.
@@ -279,6 +283,7 @@ impl Stems {
             sidecar_dir,
             command,
             sidecar: Mutex::new(None),
+            closed: AtomicBool::new(false),
             running: Mutex::new(None),
             events: Mutex::new(events),
             intensity: crate::intensity::Lifecycle::default(),
@@ -310,11 +315,27 @@ impl Stems {
         &self.sidecar_dir
     }
 
-    /// The Sidecar, opened on first use.
+    /// Lets go of the Sidecar for a service that is stopping, as it lets go
+    /// of the Library: the writer is closed now (its journal folded in),
+    /// not when the last of the service's threads ends, and is not opened
+    /// again. A command still holding it closes it when that command ends.
+    pub(crate) fn close(&self) {
+        let mut sidecar = lock(&self.sidecar);
+        self.closed.store(true, Ordering::Release);
+        drop(sidecar.take());
+    }
+
+    /// The Sidecar, opened on first use; refused once the service stopped.
     pub(crate) fn sidecar(&self) -> Result<Arc<Sidecar>, ServiceError> {
         let mut sidecar = lock(&self.sidecar);
         if let Some(open) = sidecar.as_ref() {
             return Ok(Arc::clone(open));
+        }
+        if self.closed.load(Ordering::Acquire) {
+            return Err(ServiceError::new(
+                service_codes::SERVICE_NOT_RUNNING,
+                "the service has stopped and closed the Sidecar".to_owned(),
+            ));
         }
         let open = Arc::new(Sidecar::open(&self.sidecar_dir).map_err(|e| sidecar_error(&e))?);
         *sidecar = Some(Arc::clone(&open));
@@ -495,9 +516,11 @@ impl Stems {
             .partition(|set| set.is_current() && fingerprint.as_ref() == Some(&set.fingerprint));
         Ok(TrackStems {
             track: parent,
-            stems: current
-                .into_iter()
-                .find(|set| set.stems.iter().all(|stem| stem.path.is_file())),
+            // Stems whose audio files are missing or are not the ones
+            // recorded (a restored Sidecar can rewind Run identifiers, so
+            // a later separation may have written other audio at the same
+            // path) are not Stems: the track reads as needing separation.
+            stems: current.into_iter().find(StemSet::audio_present),
             previous,
         })
     }

@@ -36,7 +36,7 @@ export function specForNode(
   /** How the Key column is shown: classic names or Camelot codes. */
   keyDisplay: KeyDisplay = "classic",
   /** Alphabetical key names, or their order around the Camelot wheel. */
-  keySort: "alphabetical" | "musical" = keyDisplay === "alphanumeric" ? "musical" : "alphabetical",
+  keySort: "auto" | "alphabetical" | "musical" = "auto",
   /**
    * The track Related Tracks relates to: the one on the player. None, and
    * the section's criteria open empty, as rekordbox's do with no track
@@ -73,7 +73,7 @@ export function specForNode(
                 : node?.kind === "tagList"
                   ? { kind: "tagList" }
                   : { kind: "collection" }),
-    sort: order.column === "key" && keySort === "musical" ? "keyCamelot" : order.column,
+    sort: order.column === "key" && (keySort === "musical" || (keySort === "auto" && keyDisplay === "alphanumeric")) ? "keyCamelot" : order.column,
     descending: order.descending,
     query,
   };
