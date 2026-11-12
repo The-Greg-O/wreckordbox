@@ -6,7 +6,7 @@ import { fromServiceColours, INTAKE_ACTIONS, intakeActionForKey, nextQueuedIndex
 const linux = { mac: false };
 const body: FocusTarget = { tagName: "BODY", closest: () => null };
 const field: FocusTarget = { tagName: "INPUT", closest: () => null };
-const inDialog: FocusTarget = { tagName: "BUTTON", closest: () => ({}) as Element };
+const inDialog: FocusTarget = { tagName: "BUTTON", closest: () => ({}) };
 
 describe("intakeActionForKey", () => {
   it("Ctrl+Enter marks Clean and next, P marks Problem, ] skips", () => {
