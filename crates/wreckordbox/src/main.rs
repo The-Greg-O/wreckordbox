@@ -13,6 +13,7 @@ mod ledger;
 mod mutants;
 mod mytag_edits;
 mod playlist_edits;
+use playlist_edits as edits;
 mod protection;
 mod reading;
 mod schema;
@@ -328,11 +329,7 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
         Commands::Tracks {
             command: TrackCommands::Remove(args),
             ..
-        } => print(&playlist_edits::remove(
-            &mut connect(&config)?,
-            cli.json,
-            args,
-        )?),
+        } => print(&edits::remove(&mut connect(&config)?, cli.json, args)?),
         Commands::Stick { command } => {
             print(&stick::stick(&config.recovery_dir, cli.json, command)?);
         }
