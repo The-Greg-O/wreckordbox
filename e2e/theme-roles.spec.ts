@@ -87,7 +87,8 @@ function contrast(one: string, other: string): number {
 
 async function open(page: Page): Promise<void> {
   await page.goto("/");
-  await expect(page.getByTestId("browser-title")).toContainText("Tracks)");
+  // The machine these run on is shared; opening can take a while.
+  await expect(page.getByTestId("browser-title")).toContainText("Tracks)", { timeout: 15_000 });
 }
 
 const treeRow = (page: Page): Locator => page.getByRole("treeitem").filter({ hasText: "Melodic Vox" }).first();
@@ -158,6 +159,26 @@ test("the lit states of the chrome take the accent, with a label that can be rea
     expect(fill, roles.accent).toBe(rgb(roles.accent));
     expect(label, roles.accent).toBe(rgb(roles.onAccent));
     expect(contrast(fill, label), roles.accent).toBeGreaterThanOrEqual(4.5);
+  }
+});
+
+test("a lit control under the pointer keeps the theme's accent family and a label that can be read on it", async ({ page }) => {
+  await open(page);
+  const lit = page.locator("button[data-on]:visible:not(:disabled)");
+  const count = await lit.count();
+  expect(count).toBeGreaterThan(0);
+  for (const roles of [TOKYO_NIGHT, GRUVBOX, TWO_COLOURS]) {
+    await announce(page, { roles, font: null });
+    for (let i = 0; i < count; i++) {
+      const control = lit.nth(i);
+      await control.hover();
+      const fill = await drawn(control, "background-color");
+      if (fill === "rgba(0, 0, 0, 0)") continue; // lit by its glyph only, drawn on the panel
+      const what = `${roles.accent} ${await control.getAttribute("aria-label") ?? await control.innerText()}`;
+      expect(fill, what).not.toBe(rgb("#4A82ED"));
+      expect(contrast(fill, await drawn(control, "color")), what).toBeGreaterThanOrEqual(4.5);
+    }
+    await page.mouse.move(0, 0);
   }
 });
 

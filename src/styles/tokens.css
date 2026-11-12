@@ -18,6 +18,7 @@
   --role-text-bright: #FFFFFF; /* emphasised text (theme: bright_foreground) */
   --role-accent: #1373EB; /* focus, active filter, deck marker (theme: accent) */
   --role-on-accent: #F0F0F0; /* text and glyphs on an accent fill (theme: whichever of its darkest ground and brightest text stands out from the accent, else black or white) */
+  --role-accent-hover: #4A82ED; /* a lit control under the pointer (theme: derived in themeRoles.ts, the accent moved 15% away from its on-accent colour) */
   --role-tab-from: #1373EB; /* the active view tab's line, left end (theme: bright_magenta) */
   --role-tab-to: #1373EB; /* the active view tab's line, right end (theme: bright_yellow) */
   --role-font: Arial, "Helvetica Neue", Helvetica, sans-serif; /* the system monospace font where the system names one */
@@ -87,6 +88,7 @@
   --c-play-ring-on: #60D330; /* sampled from a capture of the PLAY button with the deck running: the ring lights from the resting green */
   --c-play-glyph-on: #FFFFFF; /* sampled from the same capture: the triangle is a flat 255,255,255 while the deck runs, against #A0A0A0 at rest */
   --c-beat: #4C4C4C; /* measured from docs/screenshots; the detail band runs y 358..650: a beat marker's line */
+  --c-lit-hover: #4A82ED; /* a lit control under the pointer (the AU/Q pads, the deck's chips, the page numbers): upstream's lighter pad blue. Under a theme, the accent moved away from its label (--role-accent-hover) */
   --c-pad-active: #3571E3; /* measured from the pad row in a 2x capture of rekordbox 7.2.11: the AU and Q buttons when on */
   --c-pad-set: #3CEB50; /* measured from the pad row in a 2x capture of rekordbox 7.2.11: the square inside a hot-cue pad that holds a cue */
   --c-pad-well: #0F0F0F; /* measured from the pad row in a 2x capture of rekordbox 7.2.11: a hot-cue pad's own background */
@@ -218,6 +220,7 @@
   --c-pad-edit-off-glyph: #606060; /* docs/screenshots/grid-edit-row-2026-09-18@2x.png (rekordbox 7.2.11, 2x): the undo and redo arrows with nothing to undo, (96,96,96) */
   --c-pad-edit-off-bar: #484848; /* docs/screenshots/grid-edit-row-2026-09-18@2x.png (rekordbox 7.2.11, 2x): the beat lines on a grid-edit button that cannot act, (72,72,72) */
   --c-pad-edit-faint: #444444; /* docs/screenshots/grid-edit-row-2026-09-18@2x.png (rekordbox 7.2.11, 2x): the beats before the playhead on the adjust-from-here button, (68,68,68) read through the 1.5px lines' anti-aliasing */
+  --c-pad-edit-on-hover: #70B1FF; /* the lit metronome under the pointer; under a theme it stays the accent (the button's ground lightens instead) */
   --c-pad-edit-on: #4294F7; /* docs/screenshots/grid-edit-row-2026-09-18@2x.png (rekordbox 7.2.11, 2x): the metronome's bars while it runs, (66,148,247) on the button's own grey */
   --c-modal-scrim: rgb(0 0 0 / 55%); /* shared dimming layer behind modal windows */
   --c-shadow-soft: rgb(0 0 0 / 45%); /* shared shadow under compact menus */
@@ -703,6 +706,10 @@
   --c-info-tab-active-text: var(--role-on-accent);
   --c-rail-lit: var(--role-accent);
   --c-pref-select: var(--role-accent);
+  --c-lit-hover: var(--role-accent-hover);
+  --c-pad-edit-on: var(--role-accent);
+  --c-pad-edit-on-hover: var(--role-accent);
+  --c-mytag-check-on-off: color-mix(in srgb, var(--role-accent) 50%, #282828);
 }
 
 /* A light theme. Upstream's layout draws its icons and many labels from fixed

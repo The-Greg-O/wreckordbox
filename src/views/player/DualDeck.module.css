@@ -255,7 +255,7 @@
   color: var(--c-on-accent, var(--c-icon-on));
 }
 .controls button:hover:not(:disabled) { background: #383838; color: #fff; }
-.controls button[data-on]:hover:not(:disabled) { background: #4a82ed; border-color: #4a82ed; }
+.controls button[data-on]:hover:not(:disabled) { background: var(--c-lit-hover); border-color: var(--c-lit-hover); color: var(--c-on-accent, #fff); }
 
 /* The two fields print their number in a regular face a size up. */
 .loopField,

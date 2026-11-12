@@ -51,6 +51,7 @@ describe("themeProperties", () => {
       "--role-text-bright": "#c0caf5",
       "--role-accent": "#7aa2f7",
       "--role-on-accent": "#0e0e14",
+      "--role-accent-hover": "#8eb0f8",
       "--role-tab-from": "#bb9af7",
       "--role-tab-to": "#ff9e64",
       "--role-font": '"JetBrainsMono Nerd Font", ui-monospace, monospace',
@@ -59,8 +60,14 @@ describe("themeProperties", () => {
 
   it("leaves every role to the stylesheet's fallback when there is no theme and no font", () => {
     const properties = themeProperties({ roles: null, font: null });
-    expect(Object.keys(properties)).toHaveLength(15);
+    expect(Object.keys(properties)).toHaveLength(16);
     expect(Object.values(properties).every((value) => value === null)).toBe(true);
+  });
+
+  it("a lit control under the pointer moves its accent away from what is written on it", () => {
+    // A dark label on a light accent: lighter. A white label on a deep accent: darker.
+    expect(themeProperties({ roles: TOKYO_NIGHT, font: null })["--role-accent-hover"]).toBe("#8eb0f8");
+    expect(themeProperties({ roles: LATTE, font: null })["--role-accent-hover"]).toBe("#1a57d0");
   });
 
   it("passes over a value that is not a colour, and a font name that could not be quoted", () => {
@@ -69,6 +76,7 @@ describe("themeProperties", () => {
       font: 'Mono"; } body { display: none',
     });
     expect(properties["--role-accent"]).toBeNull();
+    expect(properties["--role-accent-hover"]).toBeNull();
     expect(properties["--role-font"]).toBeNull();
     expect(properties["--role-text"]).toBe("#a9b1d6");
   });
@@ -170,10 +178,11 @@ const CHROME = [
 const LIT = [
   "--c-on-accent", "--c-pad-active", "--c-tab-active", "--c-filter-accent", "--c-mytag-check-on", "--c-mytag-tick",
   "--c-device-tab-on", "--c-info-tab-active", "--c-info-tab-active-text", "--c-rail-lit", "--c-pref-select",
+  "--c-lit-hover", "--c-pad-edit-on", "--c-pad-edit-on-hover", "--c-mytag-check-on-off",
 ];
 
 /** Colours that mean something: the music, not the chrome. */
-const MEANING = /^--c-(?!pad-active$)(wave|phrase|cue|pad|energy|loop-band|label|comment|meter|playhead|beat|downbeat|vocal|pcm|scrub|played|missing$|error|tempo|traffic-light|play-ring|bars-label|sync-pending)/;
+const MEANING = /^--c-(?!pad-active$|pad-edit-on$|pad-edit-on-hover$)(wave|phrase|cue|pad|energy|loop-band|label|comment|meter|playhead|beat|downbeat|vocal|pcm|scrub|played|missing$|error|tempo|traffic-light|play-ring|bars-label|sync-pending)/;
 
 describe("tokens under a theme", () => {
   const plain = computed({ roles: null, font: null });
@@ -222,7 +231,7 @@ describe("tokens under a theme", () => {
   });
 
   it("the lit states of the chrome are the accent, and what is written on them the theme's colour for that", () => {
-    for (const name of LIT.filter((name) => !/on-accent|tick|text/.test(name))) {
+    for (const name of LIT.filter((name) => !/on-accent|tick|text|hover|on-off/.test(name))) {
       expect(tokyo.get(name), name).toBe("#7aa2f7");
       expect(gruvbox.get(name), name).toBe("#7daea3");
     }
@@ -233,6 +242,11 @@ describe("tokens under a theme", () => {
     expect(plain.get("--c-pref-select")).toBe("#3571E3");
     expect(plain.get("--c-info-tab-active-text")).toBe("#000000");
     expect(plain.has("--c-on-accent")).toBe(false);
+    // A lit control under the pointer, and a ticked box greyed.
+    expect(tokyo.get("--c-lit-hover")).toBe("#8eb0f8");
+    expect(plain.get("--c-lit-hover")).toBe("#4A82ED");
+    expect(plain.get("--c-mytag-check-on-off")).toBe("#144480");
+    expect(tokyo.get("--c-mytag-check-on-off")).toBe("color-mix(in srgb, #7aa2f7 50%, #282828)");
   });
 
   it("Energy stars and the loop band keep their colours under every theme", () => {

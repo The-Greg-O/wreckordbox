@@ -68,9 +68,29 @@ const COLOUR_PROPERTIES: Record<Exclude<keyof ThemeRoles, "mode">, string> = {
   tabTo: "--role-tab-to",
 };
 const CONTROL_PROPERTY = "--role-control";
+const ACCENT_HOVER_PROPERTY = "--role-accent-hover";
 const FONT_PROPERTY = "--role-font";
 
 const COLOUR = /^#[0-9a-f]{6}$/i;
+
+const channels = (hex: string): number[] => [1, 3, 5].map((at) => Number.parseInt(hex.slice(at, at + 2), 16));
+const luminance = (hex: string): number => {
+  const [r, g, b] = channels(hex).map((value) => {
+    const c = value / 255;
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+};
+
+/**
+ * A lit control under the pointer: the accent moved 15% away from the colour
+ * written on it (toward white under a dark label, toward black under a light
+ * one), so the label stays at least as readable as at rest.
+ */
+function accentHover(accent: string, onAccent: string): string {
+  const toward = luminance(onAccent) < luminance(accent) ? 255 : 0;
+  return `#${channels(accent).map((value) => Math.round(value + (toward - value) * 0.15).toString(16).padStart(2, "0")).join("")}`;
+}
 const FAMILY = /^[\p{L}\p{N} ._+()-]{1,100}$/u;
 
 /**
@@ -86,6 +106,9 @@ export function themeProperties(theme: Theme): Record<string, string | null> {
   // A control's fill is the hairline colour in a theme; only upstream's
   // fallbacks tell the two apart.
   properties[CONTROL_PROPERTY] = properties[COLOUR_PROPERTIES.hairline] ?? null;
+  const accent = properties[COLOUR_PROPERTIES.accent];
+  const onAccent = properties[COLOUR_PROPERTIES.onAccent];
+  properties[ACCENT_HOVER_PROPERTY] = accent && onAccent ? accentHover(accent, onAccent) : null;
   properties[FONT_PROPERTY] = theme.font && FAMILY.test(theme.font) ? `"${theme.font}", ui-monospace, monospace` : null;
   return properties;
 }
