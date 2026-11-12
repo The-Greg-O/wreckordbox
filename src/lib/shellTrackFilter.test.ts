@@ -14,6 +14,7 @@ import {
   setTagsAny,
   type ShellFilter,
 } from "./shellTrackFilter";
+import cases from "./shellTrackFilter.cases.json";
 
 const CATEGORIES = ["Situation", "Mood", "Sound", "Sub-genre"];
 
@@ -154,4 +155,26 @@ describe("what the bar says", () => {
     expect(pickSummaries(setBpmRange(EMPTY_SHELL_FILTER, null, 128)).bpm).toBe("-128");
     expect(pickSummaries(setEnergyRange(EMPTY_SHELL_FILTER, 4, 4)).energy).toBe("4");
   });
+});
+
+
+/** The cases file writes a long run of whole BPMs as `"lo..hi"`. */
+function expandBpm(window: { query: string; filter?: Record<string, unknown> }) {
+  const bpm = window.filter?.bpm as { values: number[] | string } | undefined;
+  if (bpm && typeof bpm.values === "string") {
+    const [lo, hi] = bpm.values.split("..").map(Number) as [number, number];
+    return { ...window, filter: { ...window.filter, bpm: { ...bpm, values: Array.from({ length: hi - lo + 1 }, (_, i) => lo + i) } } };
+  }
+  return window;
+}
+
+describe("the cases both sides are checked against", () => {
+  for (const c of cases.cases) {
+    it(c.name, () => {
+      const filter = c.filter as ShellFilter;
+      const window = toViewFilter(filter, cases.categories);
+      expect({ query: window.query, ...(window.filter ? { filter: window.filter } : {}) }).toEqual(expandBpm(c.window));
+      expect(toServiceSelection(filter)).toEqual(c.service);
+    });
+  }
 });
