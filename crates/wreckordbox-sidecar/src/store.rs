@@ -23,8 +23,16 @@ use serde_json::Value;
 use crate::{io, Fingerprint, Result, SidecarError};
 
 /// Raised when a stored shape changes. A store from a newer wreckordbox is
-/// refused rather than guessed at.
-pub const SCHEMA_VERSION: u32 = 1;
+/// refused rather than guessed at; an older one is brought up to date by
+/// [`MIGRATIONS`] when it is opened.
+pub const SCHEMA_VERSION: u32 = 2;
+
+/// What each version after the first adds, in order: the version a store is
+/// at once the statements have run, and the statements. A new store is made
+/// at version 1 by [`SCHEMA`] and then taken through every one of these, so
+/// a new store and an old one brought up to date hold the same tables. Add
+/// a version at the end; never change one that has shipped.
+const MIGRATIONS: &[(u32, &str)] = &[(2, crate::ledger::SCHEMA)];
 
 const DATABASE_FILE: &str = "sidecar.db";
 /// Where a tool writes before its result is accepted. Emptied on open.
@@ -153,7 +161,7 @@ pub enum SourceKind {
 }
 
 impl SourceKind {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Dj => "dj",
             Self::Agent => "agent",
@@ -162,7 +170,7 @@ impl SourceKind {
         }
     }
 
-    fn from_stored(text: &str) -> Self {
+    pub(crate) fn from_stored(text: &str) -> Self {
         match text {
             "dj" => Self::Dj,
             "agent" => Self::Agent,
@@ -311,28 +319,39 @@ impl Sidecar {
             [],
             |row| row.get(0),
         )?;
-        if has_meta {
-            let found: u32 = db
-                .query_row(
-                    "SELECT value FROM meta WHERE key = 'schema_version'",
-                    [],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()?
-                .and_then(|version| version.parse().ok())
-                .unwrap_or(0);
-            if found > SCHEMA_VERSION {
-                return Err(SidecarError::Newer {
-                    path,
-                    found,
-                    supported: SCHEMA_VERSION,
-                });
-            }
+        let found: u32 = if has_meta {
+            db.query_row(
+                "SELECT value FROM meta WHERE key = 'schema_version'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .and_then(|version| version.parse().ok())
+            .unwrap_or(0)
         } else {
+            0
+        };
+        if found > SCHEMA_VERSION {
+            return Err(SidecarError::Newer {
+                path,
+                found,
+                supported: SCHEMA_VERSION,
+            });
+        }
+        if found < SCHEMA_VERSION {
+            // All of it or none: a store is never left between versions.
             let tx = db.transaction()?;
-            tx.execute_batch(SCHEMA)?;
+            if !has_meta {
+                tx.execute_batch(SCHEMA)?;
+            }
+            for (version, statements) in MIGRATIONS {
+                if *version > found {
+                    tx.execute_batch(statements)?;
+                }
+            }
             tx.execute(
-                "INSERT INTO meta (key, value) VALUES ('schema_version', ?1)",
+                "INSERT INTO meta (key, value) VALUES ('schema_version', ?1)
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
                 [SCHEMA_VERSION.to_string()],
             )?;
             tx.commit()?;
@@ -486,7 +505,7 @@ impl Sidecar {
         Ok(ids)
     }
 
-    fn db(&self) -> MutexGuard<'_, Connection> {
+    pub(crate) fn db(&self) -> MutexGuard<'_, Connection> {
         // Nothing is left half-done under this lock: a write is one
         // statement or one transaction.
         self.db.lock().unwrap_or_else(PoisonError::into_inner)
@@ -570,7 +589,7 @@ fn record_in(tx: &rusqlite::Transaction, new: &NewFact) -> Result<Fact> {
     Ok(fact)
 }
 
-fn select(rest: &str) -> String {
+pub(crate) fn select(rest: &str) -> String {
     format!(
         "SELECT fact.id, fact.track_id, fact.fingerprint, fact.kind, kind.nature, fact.value,
                 fact.source_kind, fact.source_name, fact.confidence, fact.run_id, fact.recorded_at,
@@ -579,7 +598,7 @@ fn select(rest: &str) -> String {
     )
 }
 
-fn read_fact(row: &Row) -> rusqlite::Result<Fact> {
+pub(crate) fn read_fact(row: &Row) -> rusqlite::Result<Fact> {
     let value: String = row.get(5)?;
     Ok(Fact {
         id: row.get(0)?,
@@ -603,7 +622,7 @@ fn read_fact(row: &Row) -> rusqlite::Result<Fact> {
     })
 }
 
-fn now() -> i64 {
+pub(crate) fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .ok()

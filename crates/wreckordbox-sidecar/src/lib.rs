@@ -30,6 +30,7 @@
 mod audio;
 mod fingerprint;
 mod kinds;
+pub mod ledger;
 pub mod stems;
 mod store;
 
