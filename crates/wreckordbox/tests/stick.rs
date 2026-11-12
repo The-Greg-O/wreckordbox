@@ -1,6 +1,11 @@
 //! `wreckordbox stick` (wbx-45.11): Stick Protection from a terminal, kept
 //! with the window's. A temporary folder stands in for every Stick.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(
+    clippy::pedantic,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
 
 mod common;
 
@@ -21,14 +26,25 @@ fn a_gig_stick_unlocks_only_with_its_name_and_a_spare_stick_with_a_confirmation(
 
     let refused = sandbox.cli(&["stick", "unlock", gig]);
     assert!(!refused.status.success());
-    assert!(refused.stderr.contains("type its name, FRIDAY"), "{}", refused.stderr);
+    assert!(
+        refused.stderr.contains("type its name, FRIDAY"),
+        "{}",
+        refused.stderr
+    );
     let wrong = sandbox.cli(&["stick", "unlock", gig, "--name", "friday"]);
     assert!(!wrong.status.success());
-    assert_eq!(sandbox.cli(&["--json", "stick", "status", gig]).json()["protected"], true);
+    assert_eq!(
+        sandbox.cli(&["--json", "stick", "status", gig]).json()["protected"],
+        true
+    );
 
     let unlocked = sandbox.cli(&["stick", "unlock", gig, "--name", "FRIDAY"]);
     assert!(unlocked.status.success(), "{}", unlocked.stderr);
-    assert!(unlocked.stdout.contains("FRIDAY (Gig stick) is unlocked"), "{}", unlocked.stdout);
+    assert!(
+        unlocked.stdout.contains("FRIDAY (Gig stick) is unlocked"),
+        "{}",
+        unlocked.stdout
+    );
     let locked = sandbox.cli(&["stick", "lock", gig]);
     assert!(locked.stdout.contains("is protected"), "{}", locked.stdout);
 

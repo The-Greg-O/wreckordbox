@@ -11,7 +11,12 @@
 //!   writer or not, and any command that reaches a write primitive without
 //!   passing the guard fails the test, through helpers too (with a negative
 //!   test of an indirect writer).
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::too_many_lines)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::too_many_lines
+)]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -22,10 +27,13 @@ use rbl_db::{Library as Db, OpenMode};
 use rbxport_lib::state::AppState;
 use rbxport_lib::stick_approval::STICK_WRITING_COMMANDS;
 use rbxport_lib::stick_guard::STICK_WRITERS;
-use rbxport_lib::{commands, details, device_library, device_settings, log_window, stick_add_tracks, stick_recovery};
+use rbxport_lib::{
+    commands, details, device_library, device_settings, log_window, stick_add_tracks,
+    stick_recovery,
+};
 use tauri::test::MockRuntime;
 use tauri::{App, Manager};
-use wreckordbox_stick_protection::{STAND_IN_MARKER, SPARE_MARKER};
+use wreckordbox_stick_protection::{SPARE_MARKER, STAND_IN_MARKER};
 
 struct Rig {
     dir: tempfile::TempDir,
@@ -44,14 +52,21 @@ fn rig() -> Rig {
     state.set_library(library, false, db.schema().db_version, 0, location);
     let app = tauri::test::mock_app();
     app.manage(Arc::new(state));
-    app.manage(Arc::new(rbxport_lib::grid::GridEditor::at(&dir.path().join("editor"))));
+    app.manage(Arc::new(rbxport_lib::grid::GridEditor::at(
+        &dir.path().join("editor"),
+    )));
     let sticks = tempfile::tempdir().unwrap();
     let stick = sticks.path().join("GIGSTICK");
     // Something on it, so "unchanged" means something.
     std::fs::create_dir_all(stick.join("Contents")).unwrap();
     std::fs::write(stick.join("Contents/keep.txt"), b"the DJ's").unwrap();
     std::fs::write(stick.join(STAND_IN_MARKER), b"").unwrap();
-    Rig { dir, app, sticks, stick }
+    Rig {
+        dir,
+        app,
+        sticks,
+        stick,
+    }
 }
 
 impl Rig {
@@ -62,7 +77,8 @@ impl Rig {
         self.state().backup_dir().to_path_buf()
     }
     fn unlock(&self) {
-        wreckordbox_stick_protection::unlock(&self.state_dir(), &self.stick, Some("GIGSTICK")).unwrap();
+        wreckordbox_stick_protection::unlock(&self.state_dir(), &self.stick, Some("GIGSTICK"))
+            .unwrap();
     }
     fn lock(&self) {
         wreckordbox_stick_protection::lock(&self.state_dir(), &self.stick).unwrap();
@@ -74,12 +90,20 @@ impl Rig {
     /// approved, as the window's hold does.
     fn token(&self, operation: &serde_json::Value) -> Option<String> {
         let plan = plan(self, &self.stick, operation);
-        plan.plan.map(|id| rbxport_lib::stick_approval::approve(&id).unwrap())
+        plan.plan
+            .map(|id| rbxport_lib::stick_approval::approve(&id).unwrap())
     }
 }
 
-fn plan(rig: &Rig, stick: &Path, operation: &serde_json::Value) -> rbxport_lib::stick_write_plan::StickWritePlan {
-    let request = serde_json::from_value(serde_json::json!({ "destination": stick.to_string_lossy(), "operation": operation })).unwrap();
+fn plan(
+    rig: &Rig,
+    stick: &Path,
+    operation: &serde_json::Value,
+) -> rbxport_lib::stick_write_plan::StickWritePlan {
+    let request = serde_json::from_value(
+        serde_json::json!({ "destination": stick.to_string_lossy(), "operation": operation }),
+    )
+    .unwrap();
     rbxport_lib::stick_write_plan::plan(&rig.state(), &request).unwrap()
 }
 
@@ -106,8 +130,16 @@ fn run<T>(future: impl std::future::Future<Output = T>) -> T {
 /// Refused by Stick Protection: the stable code, the Stick's name, how to unlock it.
 fn protected<T: std::fmt::Debug>(name: &str, result: Result<T, rbxport_lib::AppError>) {
     let error = result.expect_err(name);
-    assert_eq!(serde_json::to_value(error.kind).unwrap(), "stickProtected", "{name}: {error:?}");
-    assert!(error.message.contains("GIGSTICK") && error.message.contains("unlock"), "{name}: {}", error.message);
+    assert_eq!(
+        serde_json::to_value(error.kind).unwrap(),
+        "stickProtected",
+        "{name}: {error:?}"
+    );
+    assert!(
+        error.message.contains("GIGSTICK") && error.message.contains("unlock"),
+        "{name}: {}",
+        error.message
+    );
 }
 
 /// An MP3 on the Stick, imported into the Library: (file, track id).
@@ -121,8 +153,21 @@ fn track_on_stick(rig: &Rig) -> (PathBuf, String) {
     }
     std::fs::write(&audio, &mp3).unwrap();
     rbl_db::key_tag::write_key(&audio, "Am").unwrap();
-    let id = run(commands::import_files(rig.app.handle().clone(), rig.app.state(), vec![audio.display().to_string()])).unwrap().tracks[0].id.clone();
-    rig.state().write(|w| { w.ensure_detected_key("Am")?; w.ensure_detected_key("Fm") }).unwrap();
+    let id = run(commands::import_files(
+        rig.app.handle().clone(),
+        rig.app.state(),
+        vec![audio.display().to_string()],
+    ))
+    .unwrap()
+    .tracks[0]
+        .id
+        .clone();
+    rig.state()
+        .write(|w| {
+            w.ensure_detected_key("Am")?;
+            w.ensure_detected_key("Fm")
+        })
+        .unwrap();
     (audio, id)
 }
 
@@ -136,7 +181,15 @@ fn every_writer_is_refused_on_a_protected_stick_and_writes_nothing() {
     // wrote the file's tag, for Undo and Redo below.
     rig.unlock();
     rig.state().set_backup_destination(&rig.stick).unwrap();
-    run(details::set_track_field(handle.clone(), rig.app.state(), vec![track.clone()], "key".into(), "Fm".into(), Some(true))).unwrap();
+    run(details::set_track_field(
+        handle.clone(),
+        rig.app.state(),
+        vec![track.clone()],
+        "key".into(),
+        "Fm".into(),
+        Some(true),
+    ))
+    .unwrap();
     // Tokens the DJ confirmed, so it is Stick Protection that refuses.
     let tokens: BTreeMap<&str, Option<String>> = [
         ("export_playlist", serde_json::json!({ "kind": "exportPlaylist", "playlist": playlist_id(0) })),
@@ -160,54 +213,229 @@ fn every_writer_is_refused_on_a_protected_stick_and_writes_nothing() {
     };
 
     let t = call("export_playlist");
-    protected("export_playlist", run(commands::export_playlist(handle.clone(), rig.app.state(), playlist_id(0), path.clone(), None, None, None, t)));
+    protected(
+        "export_playlist",
+        run(commands::export_playlist(
+            handle.clone(),
+            rig.app.state(),
+            playlist_id(0),
+            path.clone(),
+            None,
+            None,
+            None,
+            t,
+        )),
+    );
     let t = call("export_tracks_to_device");
-    protected("export_tracks_to_device", run(commands::export_tracks_to_device(handle.clone(), rig.app.state(), vec![track_id(0)], path.clone(), None, None, t)));
+    protected(
+        "export_tracks_to_device",
+        run(commands::export_tracks_to_device(
+            handle.clone(),
+            rig.app.state(),
+            vec![track_id(0)],
+            path.clone(),
+            None,
+            None,
+            t,
+        )),
+    );
     let t = call("sync_devices");
     let approvals = t.map(|t| [(path.clone(), t)].into_iter().collect());
-    let reports = run(commands::sync_devices(handle.clone(), rig.app.state(), vec![playlist_id(0)], vec![path.clone()], None, None, None, None, None, None, approvals)).unwrap();
-    let said = serde_json::to_value(&reports).unwrap()[0]["error"].as_str().unwrap_or_default().to_owned();
-    assert!(said.contains("GIGSTICK is protected"), "sync_devices: {said}");
+    let reports = run(commands::sync_devices(
+        handle.clone(),
+        rig.app.state(),
+        vec![playlist_id(0)],
+        vec![path.clone()],
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        approvals,
+    ))
+    .unwrap();
+    let said = serde_json::to_value(&reports).unwrap()[0]["error"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        said.contains("GIGSTICK is protected"),
+        "sync_devices: {said}"
+    );
     let t = call("device_playlist_edit");
-    let edit = serde_json::from_value(serde_json::json!({ "kind": "create", "parent": "0", "name": "X", "folder": false })).unwrap();
-    protected("device_playlist_edit", run(device_library::device_playlist_edit(rig.app.state(), path.clone(), "deviceLibrary".into(), edit, t)));
+    let edit = serde_json::from_value(
+        serde_json::json!({ "kind": "create", "parent": "0", "name": "X", "folder": false }),
+    )
+    .unwrap();
+    protected(
+        "device_playlist_edit",
+        run(device_library::device_playlist_edit(
+            rig.app.state(),
+            path.clone(),
+            "deviceLibrary".into(),
+            edit,
+            t,
+        )),
+    );
     let t = call("device_playlist_add_files");
-    protected("device_playlist_add_files", run(device_library::device_playlist_add_files(rig.app.state(), path.clone(), "deviceLibrary".into(), "1".into(), vec!["file:/x.mp3".into()], t)));
+    protected(
+        "device_playlist_add_files",
+        run(device_library::device_playlist_add_files(
+            rig.app.state(),
+            path.clone(),
+            "deviceLibrary".into(),
+            "1".into(),
+            vec!["file:/x.mp3".into()],
+            t,
+        )),
+    );
     let t = call("device_playlist_add_library_tracks");
-    protected("device_playlist_add_library_tracks", run(stick_add_tracks::device_playlist_add_library_tracks(handle.clone(), rig.app.state(), path.clone(), "deviceLibrary".into(), "1".into(), vec![track_id(0)], false, None, None, t)));
+    protected(
+        "device_playlist_add_library_tracks",
+        run(stick_add_tracks::device_playlist_add_library_tracks(
+            handle.clone(),
+            rig.app.state(),
+            path.clone(),
+            "deviceLibrary".into(),
+            "1".into(),
+            vec![track_id(0)],
+            false,
+            None,
+            None,
+            t,
+        )),
+    );
     let t = call("save_device_settings");
     let settings = run(device_settings::device_settings(path.clone())).unwrap();
-    protected("save_device_settings", run(device_settings::save_device_settings(rig.app.state(), path.clone(), settings, t)));
+    protected(
+        "save_device_settings",
+        run(device_settings::save_device_settings(
+            rig.app.state(),
+            path.clone(),
+            settings,
+            t,
+        )),
+    );
     let t = call("ensure_device_library");
-    protected("ensure_device_library", run(device_settings::ensure_device_library(rig.app.state(), path.clone(), None, t)));
+    protected(
+        "ensure_device_library",
+        run(device_settings::ensure_device_library(
+            rig.app.state(),
+            path.clone(),
+            None,
+            t,
+        )),
+    );
     let t = call("stick_settle");
-    protected("stick_settle", run(stick_recovery::stick_settle(rig.app.state(), path.clone(), t)));
+    protected(
+        "stick_settle",
+        run(stick_recovery::stick_settle(
+            rig.app.state(),
+            path.clone(),
+            t,
+        )),
+    );
     let t = call("format_device");
-    protected("format_device", run(commands::format_device(rig.app.state(), path.clone(), serde_json::from_value(serde_json::json!("fat32")).unwrap(), t)));
+    protected(
+        "format_device",
+        run(commands::format_device(
+            rig.app.state(),
+            path.clone(),
+            serde_json::from_value(serde_json::json!("fat32")).unwrap(),
+            t,
+        )),
+    );
     let on_stick = |name: &str| rig.stick.join(name).to_string_lossy().into_owned();
     call("export_playlist_file");
-    protected("export_playlist_file", run(commands::export_playlist_file(rig.app.state(), playlist_id(0), on_stick("set.m3u8"), "m3u8".into())));
+    protected(
+        "export_playlist_file",
+        run(commands::export_playlist_file(
+            rig.app.state(),
+            playlist_id(0),
+            on_stick("set.m3u8"),
+            "m3u8".into(),
+        )),
+    );
     call("export_xml");
-    protected("export_xml", run(commands::export_xml(rig.app.state(), on_stick("New Folder/rekordbox.xml"))));
+    protected(
+        "export_xml",
+        run(commands::export_xml(
+            rig.app.state(),
+            on_stick("New Folder/rekordbox.xml"),
+        )),
+    );
     call("export_loop_wav");
-    protected("export_loop_wav", run(commands::export_loop_wav(rig.app.state(), track_id(0), 0.0, 1000.0, on_stick("loop.wav"))));
+    protected(
+        "export_loop_wav",
+        run(commands::export_loop_wav(
+            rig.app.state(),
+            track_id(0),
+            0.0,
+            1000.0,
+            on_stick("loop.wav"),
+        )),
+    );
     call("save_log_text");
-    protected("save_log_text", run(log_window::save_log_text(rig.app.state(), on_stick("log.txt"), "log".into())));
+    protected(
+        "save_log_text",
+        run(log_window::save_log_text(
+            rig.app.state(),
+            on_stick("log.txt"),
+            "log".into(),
+        )),
+    );
     call("set_backup_directory");
-    protected("set_backup_directory", run(commands::set_backup_directory(rig.app.state(), on_stick("Backups"))));
+    protected(
+        "set_backup_directory",
+        run(commands::set_backup_directory(
+            rig.app.state(),
+            on_stick("Backups"),
+        )),
+    );
     call("back_up_library");
-    protected("back_up_library", run(commands::back_up_library(rig.app.state())));
+    protected(
+        "back_up_library",
+        run(commands::back_up_library(rig.app.state())),
+    );
     call("start_backup");
     protected("start_backup", commands::start_backup(rig.app.state()));
     call("delete_backup");
-    protected("delete_backup", run(commands::delete_backup(rig.app.state(), on_stick("Contents/keep.txt"))));
+    protected(
+        "delete_backup",
+        run(commands::delete_backup(
+            rig.app.state(),
+            on_stick("Contents/keep.txt"),
+        )),
+    );
     call("set_track_field");
-    let key_before = run(details::track_details(rig.app.state(), track.clone())).unwrap().key;
-    protected("set_track_field", run(details::set_track_field(handle.clone(), rig.app.state(), vec![track.clone()], "key".into(), "Am".into(), Some(true))));
-    assert_eq!(run(details::track_details(rig.app.state(), track.clone())).unwrap().key, key_before, "nor the Library's key");
+    let key_before = run(details::track_details(rig.app.state(), track.clone()))
+        .unwrap()
+        .key;
+    protected(
+        "set_track_field",
+        run(details::set_track_field(
+            handle.clone(),
+            rig.app.state(),
+            vec![track.clone()],
+            "key".into(),
+            "Am".into(),
+            Some(true),
+        )),
+    );
+    assert_eq!(
+        run(details::track_details(rig.app.state(), track.clone()))
+            .unwrap()
+            .key,
+        key_before,
+        "nor the Library's key"
+    );
     call("undo_edit");
     let undo = run(commands::undo_edit(handle.clone(), rig.app.state())).unwrap_err();
-    assert!(undo.to_string().contains("GIGSTICK is protected"), "undo_edit: {undo}");
+    assert!(
+        undo.to_string().contains("GIGSTICK is protected"),
+        "undo_edit: {undo}"
+    );
     call("analyse_track");
     // Analysis writes the key tag through this, after the Library has it.
     rbxport_lib::key_tag::write_logged(&rig.state_dir(), &track, &audio.to_string_lossy(), "Am");
@@ -220,9 +448,16 @@ fn every_writer_is_refused_on_a_protected_stick_and_writes_nothing() {
     rig.lock();
     let undone = bytes(&rig.stick);
     let redo = run(commands::redo_edit(handle.clone(), rig.app.state())).unwrap_err();
-    assert!(redo.to_string().contains("GIGSTICK is protected"), "redo_edit: {redo}");
+    assert!(
+        redo.to_string().contains("GIGSTICK is protected"),
+        "redo_edit: {redo}"
+    );
     assert_eq!(bytes(&rig.stick), undone, "redo wrote nothing");
-    assert_eq!(rbl_db::key_tag::read_key(&audio).unwrap().as_deref(), Some("Am"), "as the unlocked Undo left it");
+    assert_eq!(
+        rbl_db::key_tag::read_key(&audio).unwrap().as_deref(),
+        Some("Am"),
+        "as the unlocked Undo left it"
+    );
     let mut listed: Vec<&str> = STICK_WRITERS.to_vec();
     listed.sort_unstable();
     called.sort_unstable();
@@ -235,15 +470,58 @@ fn a_spare_stick_unlocked_takes_a_confirmed_export_and_an_unconfirmed_one_is_sti
     std::fs::write(rig.stick.join(SPARE_MARKER), b"").unwrap();
     wreckordbox_stick_protection::unlock(&rig.state_dir(), &rig.stick, None).unwrap();
     let handle = rig.app.handle().clone();
-    let unconfirmed = run(commands::export_playlist(handle.clone(), rig.app.state(), playlist_id(0), rig.path(), None, None, None, None)).unwrap_err();
-    assert!(unconfirmed.to_string().contains("was not confirmed"), "{unconfirmed}");
-    let planned = plan(&rig, &rig.stick, &serde_json::json!({ "kind": "exportPlaylist", "playlist": playlist_id(0) }));
-    assert!(planned.on_stick && !planned.protected && planned.spare, "{planned:?}");
+    let unconfirmed = run(commands::export_playlist(
+        handle.clone(),
+        rig.app.state(),
+        playlist_id(0),
+        rig.path(),
+        None,
+        None,
+        None,
+        None,
+    ))
+    .unwrap_err();
+    assert!(
+        unconfirmed.to_string().contains("was not confirmed"),
+        "{unconfirmed}"
+    );
+    let planned = plan(
+        &rig,
+        &rig.stick,
+        &serde_json::json!({ "kind": "exportPlaylist", "playlist": playlist_id(0) }),
+    );
+    assert!(
+        planned.on_stick && !planned.protected && planned.spare,
+        "{planned:?}"
+    );
     let plan_id = planned.plan.unwrap();
-    let not_yet = run(commands::export_playlist(handle.clone(), rig.app.state(), playlist_id(0), rig.path(), None, None, None, Some(plan_id.clone()))).unwrap_err();
-    assert!(not_yet.to_string().contains("not confirmed"), "a plan id is not a token: {not_yet}");
+    let not_yet = run(commands::export_playlist(
+        handle.clone(),
+        rig.app.state(),
+        playlist_id(0),
+        rig.path(),
+        None,
+        None,
+        None,
+        Some(plan_id.clone()),
+    ))
+    .unwrap_err();
+    assert!(
+        not_yet.to_string().contains("not confirmed"),
+        "a plan id is not a token: {not_yet}"
+    );
     let token = rbxport_lib::stick_write_plan::plan(&rig.state(), &serde_json::from_value(serde_json::json!({ "destination": rig.path(), "operation": { "kind": "exportPlaylist", "playlist": playlist_id(0) } })).unwrap()).unwrap().plan.map(|p| rbxport_lib::stick_approval::approve(&p).unwrap());
-    run(commands::export_playlist(handle, rig.app.state(), playlist_id(0), rig.path(), None, None, None, token)).unwrap();
+    run(commands::export_playlist(
+        handle,
+        rig.app.state(),
+        playlist_id(0),
+        rig.path(),
+        None,
+        None,
+        None,
+        token,
+    ))
+    .unwrap();
     assert!(rbl_export::Manifest::load(&rig.stick).is_some(), "written");
 }
 
@@ -254,15 +532,61 @@ fn an_ordinary_folder_needs_no_unlock_and_no_token() {
     std::fs::create_dir_all(&folder).unwrap();
     let path = folder.to_string_lossy().into_owned();
     let handle = rig.app.handle().clone();
-    let planned = plan(&rig, &folder, &serde_json::json!({ "kind": "exportPlaylist", "playlist": playlist_id(0) }));
+    let planned = plan(
+        &rig,
+        &folder,
+        &serde_json::json!({ "kind": "exportPlaylist", "playlist": playlist_id(0) }),
+    );
     assert!(!planned.on_stick && planned.plan.is_none(), "{planned:?}");
-    run(commands::export_playlist(handle.clone(), rig.app.state(), playlist_id(0), path.clone(), None, None, None, None)).unwrap();
+    run(commands::export_playlist(
+        handle.clone(),
+        rig.app.state(),
+        playlist_id(0),
+        path.clone(),
+        None,
+        None,
+        None,
+        None,
+    ))
+    .unwrap();
     assert!(rbl_export::Manifest::load(&folder).is_some(), "exported");
-    run(commands::export_xml(rig.app.state(), folder.join("rekordbox.xml").to_string_lossy().into_owned())).unwrap();
-    run(commands::export_playlist_file(rig.app.state(), playlist_id(0), folder.join("set.m3u8").to_string_lossy().into_owned(), "m3u8".into())).unwrap();
-    run(log_window::save_log_text(rig.app.state(), folder.join("log.txt").to_string_lossy().into_owned(), "log".into())).unwrap();
-    let reports = run(commands::sync_devices(handle, rig.app.state(), vec![playlist_id(0)], vec![path], None, None, None, None, None, None, None)).unwrap();
-    assert!(serde_json::to_value(&reports).unwrap()[0]["error"].is_null(), "{:?}", serde_json::to_value(&reports).unwrap());
+    run(commands::export_xml(
+        rig.app.state(),
+        folder.join("rekordbox.xml").to_string_lossy().into_owned(),
+    ))
+    .unwrap();
+    run(commands::export_playlist_file(
+        rig.app.state(),
+        playlist_id(0),
+        folder.join("set.m3u8").to_string_lossy().into_owned(),
+        "m3u8".into(),
+    ))
+    .unwrap();
+    run(log_window::save_log_text(
+        rig.app.state(),
+        folder.join("log.txt").to_string_lossy().into_owned(),
+        "log".into(),
+    ))
+    .unwrap();
+    let reports = run(commands::sync_devices(
+        handle,
+        rig.app.state(),
+        vec![playlist_id(0)],
+        vec![path],
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    ))
+    .unwrap();
+    assert!(
+        serde_json::to_value(&reports).unwrap()[0]["error"].is_null(),
+        "{:?}",
+        serde_json::to_value(&reports).unwrap()
+    );
 }
 
 #[test]
@@ -282,14 +606,32 @@ fn a_stick_removed_and_put_back_is_protected_again() {
     }
     std::fs::remove_dir_all(&rig.stick).unwrap();
     std::fs::rename(&copy, &rig.stick).unwrap();
-    protected("export_xml", run(commands::export_xml(rig.app.state(), rig.stick.join("x.xml").to_string_lossy().into_owned())));
+    protected(
+        "export_xml",
+        run(commands::export_xml(
+            rig.app.state(),
+            rig.stick.join("x.xml").to_string_lossy().into_owned(),
+        )),
+    );
 }
 
 #[test]
 fn a_sync_to_two_sticks_takes_their_locks_in_one_order_and_refuses_the_same_stick_twice() {
     let rig = rig();
     let path = rig.path();
-    let twice = run(commands::sync_devices(rig.app.handle().clone(), rig.app.state(), vec![playlist_id(0)], vec![path.clone(), format!("{path}/.")], None, None, None, None, None, None, None));
+    let twice = run(commands::sync_devices(
+        rig.app.handle().clone(),
+        rig.app.state(),
+        vec![playlist_id(0)],
+        vec![path.clone(), format!("{path}/.")],
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    ));
     let error = twice.unwrap_err();
     assert!(error.full_message().contains("more than once"), "{error:?}");
 }
@@ -309,7 +651,10 @@ fn calls(body: &str) -> BTreeSet<String> {
         // `Type::new(`, `Self::open(`: a type's own function, not a free one.
         if body[..start].ends_with("::") {
             let path = &body[..start - 2];
-            let segment = path.rsplit(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).next().unwrap_or_default();
+            let segment = path
+                .rsplit(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .next()
+                .unwrap_or_default();
             if segment.starts_with(|c: char| c.is_ascii_uppercase()) {
                 continue;
             }
@@ -349,7 +694,10 @@ fn functions(sources: &[(PathBuf, String)]) -> Vec<(String, String, bool)> {
     for (_, text) in sources {
         let pieces: Vec<&str> = text.split("fn ").collect();
         for (i, piece) in pieces.iter().enumerate().skip(1) {
-            let name: String = piece.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+            let name: String = piece
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
             // Free functions only, at the left margin: methods are reached
             // as `.name(` or `Type::name(`, which `calls` leaves out.
             let line = pieces[i - 1].rsplit('\n').next().unwrap_or_default();
@@ -373,13 +721,23 @@ fn unguarded_writers(functions: &[(String, String, bool)]) -> BTreeMap<String, S
     let mut writers: BTreeMap<String, String> = functions
         .iter()
         .filter(|(_, body, _)| !guarded(body))
-        .filter_map(|(name, body, _)| PRIMITIVES.iter().find(|p| body.contains(*p)).map(|p| (name.clone(), (*p).to_owned())))
+        .filter_map(|(name, body, _)| {
+            PRIMITIVES
+                .iter()
+                .find(|p| body.contains(*p))
+                .map(|p| (name.clone(), (*p).to_owned()))
+        })
         .collect();
     loop {
         let more: Vec<(String, String)> = functions
             .iter()
             .filter(|(name, body, _)| !writers.contains_key(name) && !guarded(body))
-            .filter_map(|(name, body, _)| calls(body).into_iter().find(|c| writers.contains_key(c)).map(|c| (name.clone(), format!("{c}() → {}", writers[&c]))))
+            .filter_map(|(name, body, _)| {
+                calls(body)
+                    .into_iter()
+                    .find(|c| writers.contains_key(c))
+                    .map(|c| (name.clone(), format!("{c}() → {}", writers[&c])))
+            })
             .collect();
         if more.is_empty() {
             return writers;
@@ -405,8 +763,14 @@ fn sources() -> Vec<(PathBuf, String)> {
                     .map(|(at, _)| at)
                     .find(|at| {
                         let after = text[*at + "#[cfg(test)]".len()..].trim_start();
-                        let after = after.strip_prefix("#[allow(").map_or(after, |rest| rest.split_once(")]").map_or(rest, |(_, r)| r.trim_start()));
-                        after.starts_with("mod ") && after.lines().next().is_some_and(|l| l.trim_end().ends_with('{'))
+                        let after = after.strip_prefix("#[allow(").map_or(after, |rest| {
+                            rest.split_once(")]").map_or(rest, |(_, r)| r.trim_start())
+                        });
+                        after.starts_with("mod ")
+                            && after
+                                .lines()
+                                .next()
+                                .is_some_and(|l| l.trim_end().ends_with('{'))
                     })
                     .unwrap_or(text.len());
                 let text = text[..cut].to_owned();
@@ -419,14 +783,21 @@ fn sources() -> Vec<(PathBuf, String)> {
 
 /// The commands `lib.rs` registers, by name.
 fn registered() -> BTreeSet<String> {
-    let lib = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs")).unwrap();
+    let lib =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs")).unwrap();
     let start = lib.find("generate_handler![").unwrap() + "generate_handler![".len();
     let end = start + lib[start..].find(']').unwrap();
     lib[start..end]
         .lines()
         .map(|line| line.split("//").next().unwrap_or_default())
         .flat_map(|line| line.split(','))
-        .map(|item| item.trim().rsplit("::").next().unwrap_or_default().to_owned())
+        .map(|item| {
+            item.trim()
+                .rsplit("::")
+                .next()
+                .unwrap_or_default()
+                .to_owned()
+        })
         .filter(|name| !name.is_empty())
         .collect()
 }
@@ -434,74 +805,247 @@ fn registered() -> BTreeSet<String> {
 /// Every registered command that cannot write to a Stick: a new command
 /// must be added here or to `STICK_WRITERS`, after deciding which it is.
 const NOT_STICK_WRITERS: &[&str] = &[
-    "add_artwork", "add_cue", "add_loop", "add_playlist_artwork", "add_to_tag_list",
-    "add_tracks_to_playlist", "adopt_library_protection", "analysis_stages", "app_diagnostics",
-    "app_version", "audio_devices", "auto_relocate", "backup_directory", "backup_progress",
-    "backup_sizes", "cancel_backup", "cancel_export", "clear_artwork", "clear_tag_list",
-    "convert_memory_cues_to_hot", "create_folder", "create_library", "create_my_tag",
-    "create_playlist", "create_smart_playlist", "database_drives", "deck_clear_loop",
-    "deck_key_shift", "deck_load", "deck_loop_active", "deck_master_tempo", "deck_metronome",
-    "deck_metronome_grid", "deck_move", "deck_move_grid", "deck_move_loop", "deck_pause",
-    "deck_play", "deck_play_after", "deck_scrub_begin", "deck_scrub_end", "deck_scrub_to",
-    "deck_seek", "deck_set_loop", "deck_state", "deck_tempo", "deck_unload", "delete_cue",
-    "delete_my_tag", "delete_playlist", "device_libraries", "device_playlist_collection_tracks",
-    "device_playlist_duplicates", "device_playlist_import", "device_playlist_import_plan",
-    "device_settings", "device_sync_state", "disable_read_only", "drag_tracks",
-    "dropped_file_paths", "edit_phrase", "eject_device", "estimate_sync", "explorer_children",
-    "explorer_roots", "export_progress", "fetch_rows", "filter_values", "find_duplicates",
-    "grid_edit", "grid_lock", "grid_redo", "grid_state", "grid_undo", "import_files",
-    "import_files_slice", "import_folder_playlist", "import_itunes", "import_itunes_selected",
-    "import_usb", "import_xml", "intake_counts", "intake_queue", "itunes_default_library",
-    "itunes_library_at", "library_problem", "library_protection", "library_summary",
-    "link_load_track", "link_nudge_master", "link_peers", "link_set_master", "link_status",
-    "link_take_master_tempo", "list_backups", "list_devices", "list_import_files", "log_lines",
-    "log_status_message", "master_limiter", "missing_tracks", "move_cue", "move_hot_cue",
-    "move_playlist", "open_backup_directory", "open_log", "open_log_folder", "open_log_window",
-    "open_preferences", "open_sync_window", "open_view", "played_tracks", "playlist_duplicates",
-    "playlist_tree", "preview_play", "preview_state", "preview_stop", "put_my_tag",
-    "record_play", "reference_stick_settings", "rekordbox_browse_settings", "reload_library",
-    "reload_tags", "relocate_by_location", "relocate_track", "relocation_targets",
-    "remember_screen_assets", "remove_from_collection", "remove_from_history",
-    "remove_from_tag_list", "remove_missing_tracks", "remove_tracks_from_playlist",
-    "rename_my_tag", "rename_playlist", "reorder_playlist", "reset_play_count",
-    "reset_played_tracks", "reveal_track", "run_edit_command", "run_menu_item",
-    "script_preferences", "script_ready", "script_reply", "selection_details",
-    "selection_my_tags", "service_activity", "service_problem", "set_active_loop",
-    "set_audio_config", "set_audio_device", "set_channel_band", "set_channel_kill",
-    "set_channel_trim", "set_crossfade", "set_cue_colour", "set_cue_comment", "set_eq_curve",
-    "set_history_menu", "set_library_protection", "set_master_level", "set_master_limiter",
-    "set_menu_enabled", "set_menu_labels", "set_metronome", "set_my_tags", "set_smart_rule",
-    "set_track_color", "set_track_comment", "set_track_rating", "show_window", "smart_rule",
-    "sort_missing_tracks", "sort_playlist_items", "start_link_export", "startup_milestone",
-    "stick_lock", "stick_outline", "stick_protection", "stick_unlock", "stick_write_approve",
-    "stick_write_plan", "stick_write_revoke", "stop_link_export", "switch_library",
-    "test_eval_result", "theme_roles", "track_beats", "track_cues", "track_details",
-    "track_lookups", "track_missing", "track_pcm_waveform", "track_phrases", "track_playlists",
-    "track_vocals", "track_waveform", "unanalysed_tracks", "use_default_library",
-    "validate_export_files", "view_ids_in_range", "write_my_tag_comments",
+    "add_artwork",
+    "add_cue",
+    "add_loop",
+    "add_playlist_artwork",
+    "add_to_tag_list",
+    "add_tracks_to_playlist",
+    "adopt_library_protection",
+    "analysis_stages",
+    "app_diagnostics",
+    "app_version",
+    "audio_devices",
+    "auto_relocate",
+    "backup_directory",
+    "backup_progress",
+    "backup_sizes",
+    "cancel_backup",
+    "cancel_export",
+    "clear_artwork",
+    "clear_tag_list",
+    "convert_memory_cues_to_hot",
+    "create_folder",
+    "create_library",
+    "create_my_tag",
+    "create_playlist",
+    "create_smart_playlist",
+    "database_drives",
+    "deck_clear_loop",
+    "deck_key_shift",
+    "deck_load",
+    "deck_loop_active",
+    "deck_master_tempo",
+    "deck_metronome",
+    "deck_metronome_grid",
+    "deck_move",
+    "deck_move_grid",
+    "deck_move_loop",
+    "deck_pause",
+    "deck_play",
+    "deck_play_after",
+    "deck_scrub_begin",
+    "deck_scrub_end",
+    "deck_scrub_to",
+    "deck_seek",
+    "deck_set_loop",
+    "deck_state",
+    "deck_tempo",
+    "deck_unload",
+    "delete_cue",
+    "delete_my_tag",
+    "delete_playlist",
+    "device_libraries",
+    "device_playlist_collection_tracks",
+    "device_playlist_duplicates",
+    "device_playlist_import",
+    "device_playlist_import_plan",
+    "device_settings",
+    "device_sync_state",
+    "disable_read_only",
+    "drag_tracks",
+    "dropped_file_paths",
+    "edit_phrase",
+    "eject_device",
+    "estimate_sync",
+    "explorer_children",
+    "explorer_roots",
+    "export_progress",
+    "fetch_rows",
+    "filter_values",
+    "find_duplicates",
+    "grid_edit",
+    "grid_lock",
+    "grid_redo",
+    "grid_state",
+    "grid_undo",
+    "import_files",
+    "import_files_slice",
+    "import_folder_playlist",
+    "import_itunes",
+    "import_itunes_selected",
+    "import_usb",
+    "import_xml",
+    "intake_counts",
+    "intake_queue",
+    "itunes_default_library",
+    "itunes_library_at",
+    "library_problem",
+    "library_protection",
+    "library_summary",
+    "link_load_track",
+    "link_nudge_master",
+    "link_peers",
+    "link_set_master",
+    "link_status",
+    "link_take_master_tempo",
+    "list_backups",
+    "list_devices",
+    "list_import_files",
+    "log_lines",
+    "log_status_message",
+    "master_limiter",
+    "missing_tracks",
+    "move_cue",
+    "move_hot_cue",
+    "move_playlist",
+    "open_backup_directory",
+    "open_log",
+    "open_log_folder",
+    "open_log_window",
+    "open_preferences",
+    "open_sync_window",
+    "open_view",
+    "played_tracks",
+    "playlist_duplicates",
+    "playlist_tree",
+    "preview_play",
+    "preview_state",
+    "preview_stop",
+    "put_my_tag",
+    "record_play",
+    "reference_stick_settings",
+    "rekordbox_browse_settings",
+    "reload_library",
+    "reload_tags",
+    "relocate_by_location",
+    "relocate_track",
+    "relocation_targets",
+    "remember_screen_assets",
+    "remove_from_collection",
+    "remove_from_history",
+    "remove_from_tag_list",
+    "remove_missing_tracks",
+    "remove_tracks_from_playlist",
+    "rename_my_tag",
+    "rename_playlist",
+    "reorder_playlist",
+    "reset_play_count",
+    "reset_played_tracks",
+    "reveal_track",
+    "run_edit_command",
+    "run_menu_item",
+    "script_preferences",
+    "script_ready",
+    "script_reply",
+    "selection_details",
+    "selection_my_tags",
+    "service_activity",
+    "service_problem",
+    "set_active_loop",
+    "set_audio_config",
+    "set_audio_device",
+    "set_channel_band",
+    "set_channel_kill",
+    "set_channel_trim",
+    "set_crossfade",
+    "set_cue_colour",
+    "set_cue_comment",
+    "set_eq_curve",
+    "set_history_menu",
+    "set_library_protection",
+    "set_master_level",
+    "set_master_limiter",
+    "set_menu_enabled",
+    "set_menu_labels",
+    "set_metronome",
+    "set_my_tags",
+    "set_smart_rule",
+    "set_track_color",
+    "set_track_comment",
+    "set_track_rating",
+    "show_window",
+    "smart_rule",
+    "sort_missing_tracks",
+    "sort_playlist_items",
+    "start_link_export",
+    "startup_milestone",
+    "stick_lock",
+    "stick_outline",
+    "stick_protection",
+    "stick_unlock",
+    "stick_write_approve",
+    "stick_write_plan",
+    "stick_write_revoke",
+    "stop_link_export",
+    "switch_library",
+    "test_eval_result",
+    "theme_roles",
+    "track_beats",
+    "track_cues",
+    "track_details",
+    "track_lookups",
+    "track_missing",
+    "track_pcm_waveform",
+    "track_phrases",
+    "track_playlists",
+    "track_vocals",
+    "track_waveform",
+    "unanalysed_tracks",
+    "use_default_library",
+    "validate_export_files",
+    "view_ids_in_range",
+    "write_my_tag_comments",
 ];
 
 #[test]
 fn every_registered_command_is_classified_and_every_stick_writer_passes_the_guard() {
     let registered = registered();
-    assert!(registered.len() > 200, "found the commands: {}", registered.len());
+    assert!(
+        registered.len() > 200,
+        "found the commands: {}",
+        registered.len()
+    );
     for name in &registered {
         let writer = STICK_WRITERS.contains(&name.as_str());
         let not = NOT_STICK_WRITERS.contains(&name.as_str());
         assert!(writer != not, "`{name}` must be in exactly one of STICK_WRITERS (stick_guard.rs) and NOT_STICK_WRITERS (this test)");
     }
     for name in STICK_WRITERS.iter().chain(NOT_STICK_WRITERS) {
-        assert!(registered.contains(*name), "`{name}` is classified but not registered");
+        assert!(
+            registered.contains(*name),
+            "`{name}` is classified but not registered"
+        );
     }
     let sources = sources();
     let functions = functions(&sources);
     let unguarded = unguarded_writers(&functions);
-    let commands: BTreeMap<&str, &str> = functions.iter().filter(|(_, _, c)| *c).map(|(n, b, _)| (n.as_str(), b.as_str())).collect();
+    let commands: BTreeMap<&str, &str> = functions
+        .iter()
+        .filter(|(_, _, c)| *c)
+        .map(|(n, b, _)| (n.as_str(), b.as_str()))
+        .collect();
     for name in &registered {
-        assert!(!unguarded.contains_key(name), "`{name}` reaches a Stick write without passing stick_guard: {}", unguarded[name]);
+        assert!(
+            !unguarded.contains_key(name),
+            "`{name}` reaches a Stick write without passing stick_guard: {}",
+            unguarded[name]
+        );
     }
     for name in STICK_WRITERS {
-        let body = commands.get(name).unwrap_or_else(|| panic!("`{name}` has no #[tauri::command] body"));
+        let body = commands
+            .get(name)
+            .unwrap_or_else(|| panic!("`{name}` has no #[tauri::command] body"));
         let indirect = ["set_track_field", "undo_edit", "redo_edit", "analyse_track"];
         assert!(
             body.contains("stick_guard::enter") || indirect.contains(name),
@@ -511,8 +1055,13 @@ fn every_registered_command_is_classified_and_every_stick_writer_passes_the_guar
     for name in STICK_WRITING_COMMANDS {
         let body = commands[name];
         let guard = body.find("stick_guard::enter").expect(name);
-        let consume = body.find("stick_approval::consume(").unwrap_or_else(|| panic!("`{name}` must consume its token"));
-        assert!(guard < consume, "`{name}`: Stick Protection, under the lock, before the token");
+        let consume = body
+            .find("stick_approval::consume(")
+            .unwrap_or_else(|| panic!("`{name}` must consume its token"));
+        assert!(
+            guard < consume,
+            "`{name}`: Stick Protection, under the lock, before the token"
+        );
         assert!(STICK_WRITERS.contains(name), "`{name}`");
     }
 }
@@ -523,8 +1072,13 @@ fn the_source_guard_catches_a_writer_behind_a_helper() {
     let indirect = "#[tauri::command]\npub async fn sneaky(path: String) {\n    helper(&path);\n}\n\nfn helper(path: &str) {\n    deeper(path)\n}\n\nfn deeper(path: &str) {\n    write_range_wav(a, b, c, Path::new(path));\n}\n";
     let found = unguarded_writers(&functions(&source(indirect)));
     assert!(found.contains_key("sneaky"), "{found:?}");
-    let guarded = indirect.replace("    helper(&path);", "    let _a = crate::stick_guard::enter(dir, Path::new(&path))?;\n    helper(&path);");
+    let guarded = indirect.replace(
+        "    helper(&path);",
+        "    let _a = crate::stick_guard::enter(dir, Path::new(&path))?;\n    helper(&path);",
+    );
     let found = unguarded_writers(&functions(&source(&guarded)));
     assert!(!found.contains_key("sneaky"), "{found:?}");
-    assert!(functions(&source(indirect)).iter().any(|(n, _, c)| n == "sneaky" && *c));
+    assert!(functions(&source(indirect))
+        .iter()
+        .any(|(n, _, c)| n == "sneaky" && *c));
 }

@@ -36,9 +36,18 @@ fn a_spare_stick_unlocks_with_a_confirmation_and_a_gig_stick_needs_its_name() {
     assert!(!unlock(state.path(), &spare, None).unwrap().protected);
 
     let gig = stick(sticks.path(), "GIG", false);
-    assert_eq!(unlock(state.path(), &gig, None).unwrap_err(), UnlockError::NameRequired { name: "GIG".into() });
-    assert_eq!(unlock(state.path(), &gig, Some("gig")).unwrap_err(), UnlockError::NameMismatch { name: "GIG".into() });
-    assert!(status(state.path(), &gig).protected, "a wrong name unlocks nothing");
+    assert_eq!(
+        unlock(state.path(), &gig, None).unwrap_err(),
+        UnlockError::NameRequired { name: "GIG".into() }
+    );
+    assert_eq!(
+        unlock(state.path(), &gig, Some("gig")).unwrap_err(),
+        UnlockError::NameMismatch { name: "GIG".into() }
+    );
+    assert!(
+        status(state.path(), &gig).protected,
+        "a wrong name unlocks nothing"
+    );
     assert!(!unlock(state.path(), &gig, Some(" GIG ")).unwrap().protected);
     // One Stick's unlock is not another's.
     assert!(status(state.path(), &stick(sticks.path(), "OTHER", true)).protected);
@@ -81,12 +90,27 @@ fn a_destination_is_a_stick_only_when_it_is_on_a_mounted_one() {
     std::fs::create_dir_all(&ordinary).unwrap();
     let mounts = [mounted.clone()];
 
-    assert_eq!(stick_root_of(&mounted.join("Music/set.m3u8"), &mounts), Some(mounted.canonicalize().unwrap()));
-    assert_eq!(stick_root_of(&mounted, &mounts), Some(mounted.canonicalize().unwrap()));
-    assert_eq!(stick_root_of(&stand_in.join("PIONEER/x.xml"), &mounts), Some(stand_in.canonicalize().unwrap()));
+    assert_eq!(
+        stick_root_of(&mounted.join("Music/set.m3u8"), &mounts),
+        Some(mounted.canonicalize().unwrap())
+    );
+    assert_eq!(
+        stick_root_of(&mounted, &mounts),
+        Some(mounted.canonicalize().unwrap())
+    );
+    assert_eq!(
+        stick_root_of(&stand_in.join("PIONEER/x.xml"), &mounts),
+        Some(stand_in.canonicalize().unwrap())
+    );
     assert_eq!(stick_root_of(&ordinary.join("set.m3u8"), &mounts), None);
     // A file not written yet, in a folder not made yet, on the Stick.
-    assert_eq!(stick_root_of(&mounted.join("New/Deeper/loop.wav"), &mounts), Some(mounted.canonicalize().unwrap()));
+    assert_eq!(
+        stick_root_of(&mounted.join("New/Deeper/loop.wav"), &mounts),
+        Some(mounted.canonicalize().unwrap())
+    );
     // A path that only looks like it: `..` resolved first.
-    assert_eq!(stick_root_of(&mounted.join("../Exports/set.m3u8"), &mounts), None);
+    assert_eq!(
+        stick_root_of(&mounted.join("../Exports/set.m3u8"), &mounts),
+        None
+    );
 }

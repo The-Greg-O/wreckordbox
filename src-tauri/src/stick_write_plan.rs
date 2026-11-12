@@ -22,8 +22,8 @@
 //! write is reported `pending`, with nothing planned.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::sync::Arc;
 use std::path::Path;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -32,9 +32,9 @@ use crate::commands::{
 };
 use crate::device_library::DeviceEditDto;
 use crate::device_settings::DeviceSettingsDto;
+use crate::device_settings::StickDefaultsDto;
 use crate::error::{AppError, AppResult, ErrorKind};
 use crate::state::AppState;
-use crate::device_settings::StickDefaultsDto;
 use crate::stick_approval::{self, bound, StickOperation};
 
 /// A write to plan, on the Stick at `destination`.
@@ -140,6 +140,10 @@ pub struct TrackChange {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent facts the window shows, as sent"
+)]
 pub struct StickWritePlan {
     /// The destination is on a mounted Stick. When not (an ordinary
     /// folder), nothing else here applies: no plan, token or unlock.
@@ -192,11 +196,18 @@ pub async fn stick_write_plan(
 /// carries. Refused when the Stick changed or was replaced since the plan.
 #[tauri::command]
 pub async fn stick_write_approve(plan: String) -> AppResult<String> {
-    blocking("stick_write_approve", move || stick_approval::approve(&plan)).await
+    blocking("stick_write_approve", move || {
+        stick_approval::approve(&plan)
+    })
+    .await
 }
 
 /// The DJ cancelled the plan `plan`: it can no longer be confirmed.
 #[tauri::command]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Tauri passes command arguments by value"
+)]
 pub fn stick_write_revoke(plan: String) {
     stick_approval::revoke(&plan);
 }
@@ -221,7 +232,9 @@ pub fn plan(state: &AppState, request: &StickWriteRequest) -> AppResult<StickWri
             | PlannedOperation::Sync { .. }
     );
     // Exports can go to an ordinary folder: nothing to plan or confirm.
-    let Some(root) = crate::stick_guard::stick_of(asked).or_else(|| (!exporting).then(|| asked.to_path_buf())) else {
+    let Some(root) =
+        crate::stick_guard::stick_of(asked).or_else(|| (!exporting).then(|| asked.to_path_buf()))
+    else {
         return Ok(StickWritePlan::default());
     };
     let destination = asked;
@@ -250,7 +263,11 @@ pub fn plan(state: &AppState, request: &StickWriteRequest) -> AppResult<StickWri
         }
         return Ok(stick(StickWritePlan {
             pending: true,
-            plan: Some(stick_approval::propose(destination, StickOperation::Settle, None)?),
+            plan: Some(stick_approval::propose(
+                destination,
+                StickOperation::Settle,
+                None,
+            )?),
             ..StickWritePlan::default()
         }));
     }
@@ -274,7 +291,13 @@ pub fn plan(state: &AppState, request: &StickWriteRequest) -> AppResult<StickWri
             let delete = delete_unlisted_music.unwrap_or(false);
             let selection = playlist_selection(state, &library, destination, playlist, delete)?;
             (
-                export_plan(state, &library, destination, &selection, *compatibility_format)?,
+                export_plan(
+                    state,
+                    &library,
+                    destination,
+                    &selection,
+                    *compatibility_format,
+                )?,
                 StickOperation::ExportPlaylist {
                     playlist: playlist.clone(),
                     delete_unlisted_music: delete,
@@ -288,9 +311,16 @@ pub fn plan(state: &AppState, request: &StickWriteRequest) -> AppResult<StickWri
             defaults,
             compatibility_format,
         } => {
-            let selection = track_export_selection(state, &library, &share_root, destination, tracks)?;
+            let selection =
+                track_export_selection(state, &library, &share_root, destination, tracks)?;
             (
-                export_plan(state, &library, destination, &selection, *compatibility_format)?,
+                export_plan(
+                    state,
+                    &library,
+                    destination,
+                    &selection,
+                    *compatibility_format,
+                )?,
                 StickOperation::ExportTracks {
                     tracks: tracks.clone(),
                     defaults: bound(defaults.as_ref()),
@@ -307,13 +337,32 @@ pub fn plan(state: &AppState, request: &StickWriteRequest) -> AppResult<StickWri
         } => {
             let delete = delete_unlisted_music.unwrap_or(false);
             let automatic = automatic.unwrap_or(false);
-            let selection = ExportSelection::from_playlists(state, &library, &share_root, playlists, automatic)?;
-            let selection = match selection.for_stick_inspected(state, &library, &share_root, destination, delete, false)? {
+            let selection = ExportSelection::from_playlists(
+                state,
+                &library,
+                &share_root,
+                playlists,
+                automatic,
+            )?;
+            let selection = match selection.for_stick_inspected(
+                state,
+                &library,
+                &share_root,
+                destination,
+                delete,
+                false,
+            )? {
                 std::borrow::Cow::Owned(kept) => kept,
                 std::borrow::Cow::Borrowed(_) => selection,
             };
             (
-                export_plan(state, &library, destination, &selection, *compatibility_format)?,
+                export_plan(
+                    state,
+                    &library,
+                    destination,
+                    &selection,
+                    *compatibility_format,
+                )?,
                 StickOperation::Sync {
                     playlists: playlists.clone(),
                     delete_unlisted_music: delete,
@@ -331,12 +380,31 @@ pub fn plan(state: &AppState, request: &StickWriteRequest) -> AppResult<StickWri
             defaults,
             compatibility_format,
         } => {
-            let resolved = crate::device_library::resolve_library_tracks(state, destination, format, playlist, tracks, *duplicates)?;
+            let resolved = crate::device_library::resolve_library_tracks(
+                state,
+                destination,
+                format,
+                playlist,
+                tracks,
+                *duplicates,
+            )?;
             let mut found = if resolved.missing.is_empty() {
                 StickWritePlan::default()
             } else {
-                let selection = track_export_selection(state, &library, &share_root, destination, &resolved.missing)?;
-                export_plan(state, &library, destination, &selection, *compatibility_format)?
+                let selection = track_export_selection(
+                    state,
+                    &library,
+                    &share_root,
+                    destination,
+                    &resolved.missing,
+                )?;
+                export_plan(
+                    state,
+                    &library,
+                    destination,
+                    &selection,
+                    *compatibility_format,
+                )?
             };
             found.adding = Some(resolved.adding);
             (
@@ -391,7 +459,10 @@ pub fn plan(state: &AppState, request: &StickWriteRequest) -> AppResult<StickWri
         PlannedOperation::Settle => unreachable!("settling is planned above"),
     };
     let id = stick_approval::propose(destination, operation, Some(generation))?;
-    Ok(stick(StickWritePlan { plan: Some(id), ..found }))
+    Ok(stick(StickWritePlan {
+        plan: Some(id),
+        ..found
+    }))
 }
 
 /// The same JSON the write command makes of its argument.
@@ -682,8 +753,14 @@ mod tests {
 
     #[test]
     fn a_playlist_whose_kept_entries_change_order_is_reordered() {
-        assert!(!reordered(&ids(&["a", "b", "c"]), &ids(&["a", "b", "c", "d"])));
-        assert!(!reordered(&ids(&["a", "b", "c"]), &ids(&["a", "c"])), "a removal alone");
+        assert!(!reordered(
+            &ids(&["a", "b", "c"]),
+            &ids(&["a", "b", "c", "d"])
+        ));
+        assert!(
+            !reordered(&ids(&["a", "b", "c"]), &ids(&["a", "c"])),
+            "a removal alone"
+        );
         assert!(reordered(&ids(&["a", "b", "c"]), &ids(&["c", "a", "b"])));
         assert!(reordered(&ids(&["a", "b"]), &ids(&["x", "b", "a"])));
     }

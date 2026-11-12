@@ -18,7 +18,10 @@ use crate::state::AppState;
 use crate::stick_approval::{bound, StickOperation};
 
 #[tauri::command]
-#[allow(clippy::too_many_arguments, reason = "the window's arguments, as the other Stick writes take them")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the window's arguments, as the other Stick writes take them"
+)]
 pub async fn device_playlist_add_library_tracks<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     state: State<'_, Arc<AppState>>,
@@ -50,14 +53,31 @@ pub async fn device_playlist_add_library_tracks<R: tauri::Runtime>(
             stick,
             generation,
         )?;
-        let resolved = crate::device_library::resolve_library_tracks(&state, stick, &format, &playlist, &tracks, duplicates)?;
+        let resolved = crate::device_library::resolve_library_tracks(
+            &state, stick, &format, &playlist, &tracks, duplicates,
+        )?;
         if !resolved.missing.is_empty() {
             let reservation = reserve_export(&app, stick)?;
-            let selection = track_export_selection(&state, &library, &state.share_root(), stick, &resolved.missing)?;
-            let report = write_export_registered(&app, stick, &selection, defaults.as_ref(), compatibility_format, &reservation)?;
+            let selection = track_export_selection(
+                &state,
+                &library,
+                &state.share_root(),
+                stick,
+                &resolved.missing,
+            )?;
+            let report = write_export_registered(
+                &app,
+                stick,
+                &selection,
+                defaults.as_ref(),
+                compatibility_format,
+                &reservation,
+            )?;
             let _ = tauri::Emitter::emit(&app, "export:done", &report);
         }
-        crate::device_library::add_library_rows(&state, stick, &format, &playlist, &tracks, duplicates)
+        crate::device_library::add_library_rows(
+            &state, stick, &format, &playlist, &tracks, duplicates,
+        )
     })
     .await
 }

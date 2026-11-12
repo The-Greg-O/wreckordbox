@@ -272,7 +272,11 @@ fn refused(why: &str) -> AppError {
 /// Records a plan for `op` on the Stick at `stick`, bound to what is
 /// there now, and answers its plan id: not a token. Called by
 /// `stick_write_plan` alone.
-pub(crate) fn propose(stick: &Path, op: StickOperation, generation: Option<u64>) -> AppResult<String> {
+pub(crate) fn propose(
+    stick: &Path,
+    op: StickOperation,
+    generation: Option<u64>,
+) -> AppResult<String> {
     let approval = Approval {
         stick: stick.to_path_buf(),
         volume: volume_identity(stick)?,
@@ -294,14 +298,18 @@ pub(crate) fn propose(stick: &Path, op: StickOperation, generation: Option<u64>)
 /// Stick moved, replaced or changed since the plan is refused.
 pub fn approve(plan: &str) -> AppResult<String> {
     let Some(mut approval) = approvals().remove(plan).filter(|a| !a.approved) else {
-        return Err(refused("This plan was already confirmed, cancelled, or is unknown."));
+        return Err(refused(
+            "This plan was already confirmed, cancelled, or is unknown.",
+        ));
     };
     if approval.issued.elapsed() >= APPROVAL_LIFETIME {
         return Err(refused("This plan has expired."));
     }
     let _lock = lock(&approval.stick);
     if volume_identity(&approval.stick)? != approval.volume {
-        return Err(refused("The Stick at this place is not the one the plan was made for."));
+        return Err(refused(
+            "The Stick at this place is not the one the plan was made for.",
+        ));
     }
     if stick_revision(&approval.stick) != approval.revision {
         return Err(refused("The Stick changed since the plan was made."));
@@ -315,14 +323,17 @@ pub fn approve(plan: &str) -> AppResult<String> {
 
 /// The DJ cancelled the plan `plan`: it can never be confirmed.
 pub fn revoke(plan: &str) {
-    approvals().retain(|id, a| !(id == plan && !a.approved));
+    approvals().retain(|id, a| id != plan || a.approved);
 }
 
 /// The plan `plan`, while it waits for the DJ: for tests.
 #[doc(hidden)]
 #[must_use]
 pub fn planned(plan: &str) -> Option<StickOperation> {
-    approvals().get(plan).filter(|a| !a.approved).map(|a| a.op.clone())
+    approvals()
+        .get(plan)
+        .filter(|a| !a.approved)
+        .map(|a| a.op.clone())
 }
 
 /// Checks and uses up the token for `op` on the Stick at `stick`. Call it
@@ -348,7 +359,9 @@ pub fn consume(
         ));
     };
     if !approval.approved {
-        return Err(refused("This write to the Stick was planned but not confirmed."));
+        return Err(refused(
+            "This write to the Stick was planned but not confirmed.",
+        ));
     }
     if approval.issued.elapsed() >= APPROVAL_LIFETIME {
         return Err(refused("This confirmation has expired."));
@@ -420,7 +433,10 @@ mod tests {
         assert!(consume(None, &op, dir.path(), 0).is_err());
         let plan = propose(dir.path(), op.clone(), Some(0)).unwrap();
         let unconfirmed = consume(Some(&plan), &op, dir.path(), 0).err().unwrap();
-        assert!(unconfirmed.to_string().contains("not confirmed"), "{unconfirmed}");
+        assert!(
+            unconfirmed.to_string().contains("not confirmed"),
+            "{unconfirmed}"
+        );
         let plan = propose(dir.path(), op.clone(), Some(0)).unwrap();
         let token = approve(&plan).unwrap();
         assert!(approve(&plan).is_err(), "a plan is confirmed once");
@@ -443,20 +459,35 @@ mod tests {
         let op = export(&["1", "2"]);
         let other = stick();
         let t = token(dir.path(), &op, 0);
-        assert!(consume(Some(&t), &export(&["2", "1"]), dir.path(), 0).is_err(), "another order");
+        assert!(
+            consume(Some(&t), &export(&["2", "1"]), dir.path(), 0).is_err(),
+            "another order"
+        );
         let t = token(dir.path(), &op, 0);
         let mut defaults = op.clone();
         if let StickOperation::ExportTracks { defaults: d, .. } = &mut defaults {
             *d = serde_json::json!({ "language": "fr" });
         }
-        assert!(consume(Some(&t), &defaults, dir.path(), 0).is_err(), "other defaults");
+        assert!(
+            consume(Some(&t), &defaults, dir.path(), 0).is_err(),
+            "other defaults"
+        );
         let t = token(dir.path(), &op, 0);
-        assert!(consume(Some(&t), &op, other.path(), 0).is_err(), "another Stick");
+        assert!(
+            consume(Some(&t), &op, other.path(), 0).is_err(),
+            "another Stick"
+        );
         let t = token(dir.path(), &op, 0);
-        assert!(consume(Some(&t), &op, dir.path(), 1).is_err(), "the Library changed");
+        assert!(
+            consume(Some(&t), &op, dir.path(), 1).is_err(),
+            "the Library changed"
+        );
         let t = token(dir.path(), &op, 0);
         std::fs::write(dir.path().join(".rbxport-publication"), b"{}").unwrap();
-        assert!(consume(Some(&t), &op, dir.path(), 0).is_err(), "an unfinished write appeared");
+        assert!(
+            consume(Some(&t), &op, dir.path(), 0).is_err(),
+            "an unfinished write appeared"
+        );
     }
 
     #[test]
@@ -467,7 +498,12 @@ mod tests {
         let op = export(&["1"]);
         let t = token(dir.path(), &op, 0);
         std::fs::write(&file, b"two").unwrap();
-        std::fs::File::options().write(true).open(&file).unwrap().set_modified(when).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(when)
+            .unwrap();
         assert_eq!(std::fs::metadata(&file).unwrap().modified().unwrap(), when);
         let refused = consume(Some(&t), &op, dir.path(), 0).err().unwrap();
         assert!(refused.to_string().contains("changed"), "{refused}");

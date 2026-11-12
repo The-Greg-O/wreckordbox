@@ -46,7 +46,10 @@ fn found(stick: &Path) -> Result<PathBuf, ServiceError> {
     if absolute.is_dir() {
         Ok(absolute)
     } else {
-        Err(ServiceError::new(STICK_NOT_FOUND, format!("there is no Stick at {}", stick.display())))
+        Err(ServiceError::new(
+            STICK_NOT_FOUND,
+            format!("there is no Stick at {}", stick.display()),
+        ))
     }
 }
 
@@ -54,18 +57,35 @@ fn said(status: &protection::Status, as_json: bool) -> String {
     if as_json {
         return json!(status).to_string();
     }
-    let kind = if status.spare { "Spare stick" } else { "Gig stick" };
-    if status.protected {
-        format!("{} ({kind}) is protected: nothing is written to it.", status.name)
+    let kind = if status.spare {
+        "Spare stick"
     } else {
-        format!("{} ({kind}) is unlocked until it is ejected, removed or locked.", status.name)
+        "Gig stick"
+    };
+    if status.protected {
+        format!(
+            "{} ({kind}) is protected: nothing is written to it.",
+            status.name
+        )
+    } else {
+        format!(
+            "{} ({kind}) is unlocked until it is ejected, removed or locked.",
+            status.name
+        )
     }
 }
 
 /// What to print for `wreckordbox stick …`.
-pub fn stick(state_dir: &Path, as_json: bool, command: &StickCommands) -> Result<String, ServiceError> {
+pub fn stick(
+    state_dir: &Path,
+    as_json: bool,
+    command: &StickCommands,
+) -> Result<String, ServiceError> {
     match command {
-        StickCommands::Status { stick } => Ok(said(&protection::status(state_dir, &found(stick)?), as_json)),
+        StickCommands::Status { stick } => Ok(said(
+            &protection::status(state_dir, &found(stick)?),
+            as_json,
+        )),
         StickCommands::Unlock { stick, name } => {
             let root = found(stick)?;
             protection::unlock(state_dir, &root, name.as_deref())
@@ -73,7 +93,9 @@ pub fn stick(state_dir: &Path, as_json: bool, command: &StickCommands) -> Result
                 .map_err(|error| {
                     let code = match error {
                         UnlockError::NotFound => STICK_NOT_FOUND,
-                        UnlockError::NameRequired { .. } | UnlockError::NameMismatch { .. } => codes::BAD_REQUEST,
+                        UnlockError::NameRequired { .. } | UnlockError::NameMismatch { .. } => {
+                            codes::BAD_REQUEST
+                        }
                         UnlockError::Io(_) => codes::WRITE_REFUSED,
                     };
                     ServiceError::new(code, error.to_string())
@@ -83,12 +105,18 @@ pub fn stick(state_dir: &Path, as_json: bool, command: &StickCommands) -> Result
             let root = found(stick)?;
             protection::lock(state_dir, &root)
                 .map(|status| said(&status, as_json))
-                .map_err(|e| ServiceError::new(codes::WRITE_REFUSED, format!("the Stick could not be locked: {e}")))
+                .map_err(|e| {
+                    ServiceError::new(
+                        codes::WRITE_REFUSED,
+                        format!("the Stick could not be locked: {e}"),
+                    )
+                })
         }
     }
 }
 
 /// What a person is told beside a refusal by Stick Protection.
 pub fn hint(error: &ServiceError) -> Option<&'static str> {
-    (error.code == codes::STICK_PROTECTED).then_some("Unlock it first: wreckordbox stick unlock <stick> [--name <its name>]")
+    (error.code == codes::STICK_PROTECTED)
+        .then_some("Unlock it first: wreckordbox stick unlock <stick> [--name <its name>]")
 }

@@ -79,10 +79,19 @@ pub enum UnlockError {
 impl std::fmt::Display for UnlockError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NameRequired { name } => write!(f, "{name} is a Gig stick: type its name, {name}, to unlock it."),
-            Self::NameMismatch { name } => write!(f, "That is not this Stick's name. Type {name} exactly to unlock it."),
+            Self::NameRequired { name } => write!(
+                f,
+                "{name} is a Gig stick: type its name, {name}, to unlock it."
+            ),
+            Self::NameMismatch { name } => write!(
+                f,
+                "That is not this Stick's name. Type {name} exactly to unlock it."
+            ),
             Self::NotFound => f.write_str("There is no Stick there."),
-            Self::Io(why) => write!(f, "The Stick could not be unlocked, so it stays protected: {why}"),
+            Self::Io(why) => write!(
+                f,
+                "The Stick could not be unlocked, so it stays protected: {why}"
+            ),
         }
     }
 }
@@ -100,7 +109,10 @@ struct Stored {
 /// The Stick's name: its mounted folder's.
 #[must_use]
 pub fn name_of(root: &Path) -> String {
-    root.file_name().map_or_else(|| root.display().to_string(), |n| n.to_string_lossy().into_owned())
+    root.file_name().map_or_else(
+        || root.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    )
 }
 
 /// Whether the Stick carries the Spare stick marker.
@@ -118,7 +130,12 @@ pub fn mount_of(root: &Path) -> std::io::Result<Mount> {
     let path = root.canonicalize()?;
     let meta = std::fs::metadata(&path)?;
     let (dev, ino) = identity(&meta);
-    Ok(Mount { mount_id: mount_id(&path), path, dev, ino })
+    Ok(Mount {
+        mount_id: mount_id(&path),
+        path,
+        dev,
+        ino,
+    })
 }
 
 #[cfg(unix)]
@@ -129,7 +146,11 @@ fn identity(meta: &std::fs::Metadata) -> (u64, u64) {
 
 #[cfg(not(unix))]
 fn identity(meta: &std::fs::Metadata) -> (u64, u64) {
-    let created = meta.created().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
+    let created = meta
+        .created()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs());
     (0, created)
 }
 
@@ -160,7 +181,12 @@ fn read_stored(state_dir: &Path) -> Stored {
 pub fn status(state_dir: &Path, root: &Path) -> Status {
     let stored = read_stored(state_dir);
     let unlocked = mount_of(root).is_ok_and(|now| stored.unlocked.contains(&now));
-    Status { protected: !unlocked, spare: is_spare(root), name: name_of(root), revision: stored.revision }
+    Status {
+        protected: !unlocked,
+        spare: is_spare(root),
+        name: name_of(root),
+        revision: stored.revision,
+    }
 }
 
 /// Whether a write to the Stick at `root` may go ahead.
@@ -212,7 +238,9 @@ pub fn unlock(state_dir: &Path, root: &Path, typed: Option<&str>) -> Result<Stat
 /// written away is still protected once it is removed or put back.
 pub fn lock(state_dir: &Path, root: &Path) -> std::io::Result<Status> {
     let path = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    change(state_dir, |stored| stored.unlocked.retain(|m| m.path != path))?;
+    change(state_dir, |stored| {
+        stored.unlocked.retain(|m| m.path != path)
+    })?;
     Ok(status(state_dir, root))
 }
 
@@ -228,7 +256,9 @@ fn change(state_dir: &Path, edit: impl FnOnce(&mut Stored)) -> std::io::Result<(
         .open(state_dir.join(LOCK_FILE))?;
     turn.lock()?;
     let mut stored = read_stored(state_dir);
-    stored.unlocked.retain(|m| mount_of(&m.path).is_ok_and(|now| now == *m));
+    stored
+        .unlocked
+        .retain(|m| mount_of(&m.path).is_ok_and(|now| now == *m));
     edit(&mut stored);
     stored.revision += 1;
     let partial = state_dir.join(format!("{FILE}.{}.partial", std::process::id()));
@@ -255,21 +285,34 @@ pub fn stick_root_of(destination: &Path, mounted: &[PathBuf]) -> Option<PathBuf>
     let resolved = resolve(destination)?;
     let mut best: Option<PathBuf> = None;
     for mount in mounted {
-        let Ok(mount) = mount.canonicalize() else { continue };
-        if resolved.starts_with(&mount) && best.as_ref().is_none_or(|b| mount.as_os_str().len() > b.as_os_str().len()) {
+        let Ok(mount) = mount.canonicalize() else {
+            continue;
+        };
+        if resolved.starts_with(&mount)
+            && best
+                .as_ref()
+                .is_none_or(|b| mount.as_os_str().len() > b.as_os_str().len())
+        {
             best = Some(mount);
         }
     }
     if best.is_some() {
         return best;
     }
-    resolved.ancestors().find(|dir| dir.join(STAND_IN_MARKER).is_file()).map(Path::to_path_buf)
+    resolved
+        .ancestors()
+        .find(|dir| dir.join(STAND_IN_MARKER).is_file())
+        .map(Path::to_path_buf)
 }
 
 /// `path` made absolute and canonical through its nearest existing
 /// ancestor, the rest appended (with `..` and `.` resolved).
 fn resolve(path: &Path) -> Option<PathBuf> {
-    let absolute = if path.is_absolute() { path.to_path_buf() } else { std::env::current_dir().ok()?.join(path) };
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().ok()?.join(path)
+    };
     let mut rest = Vec::new();
     let mut existing = absolute.as_path();
     loop {
