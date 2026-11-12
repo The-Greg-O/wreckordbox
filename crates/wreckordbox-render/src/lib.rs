@@ -10,7 +10,7 @@ pub mod publish;
 mod source;
 mod stems;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub use source::{MemorySource, Source, TrackSource};
 pub use stems::{Kept, MutantSource, StemSum, Stems};
@@ -34,12 +34,47 @@ impl Default for Edits {
     }
 }
 
-/// The file format written.
+/// The file format written. Always 16-bit stereo at the source's rate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Format {
-    /// 16-bit PCM stereo at the source's sample rate.
+    /// PCM WAV.
     Wav,
+    /// PCM AIFF (big-endian).
+    Aiff,
+    /// MPEG-1 Layer III at 320 kbit/s constant, with a LAME Info frame: the
+    /// export's own MP3 settings. Lined up so that, on rekordbox's timeline,
+    /// the audio is where the source had it (see the README).
+    Mp3,
+}
+
+impl Format {
+    /// The parent's own format where there is an encoder for it, WAV
+    /// otherwise: by the parent file's extension, as the Library and the
+    /// export name formats.
+    #[must_use]
+    pub fn for_parent(parent: &Path) -> Self {
+        let extension = parent
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        match extension.as_str() {
+            "mp3" => Self::Mp3,
+            "aif" | "aiff" => Self::Aiff,
+            _ => Self::Wav,
+        }
+    }
+
+    /// The extension a file in this format is given.
+    #[must_use]
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Wav => "wav",
+            Self::Aiff => "aiff",
+            Self::Mp3 => "mp3",
+        }
+    }
 }
 
 /// Where the render goes.
@@ -50,11 +85,34 @@ pub struct Destination {
 }
 
 impl Destination {
-    pub fn wav(path: impl Into<PathBuf>) -> Self {
+    pub fn new(path: impl Into<PathBuf>, format: Format) -> Self {
         Self {
             path: path.into(),
-            format: Format::Wav,
+            format,
         }
+    }
+
+    pub fn wav(path: impl Into<PathBuf>) -> Self {
+        Self::new(path, Format::Wav)
+    }
+
+    pub fn aiff(path: impl Into<PathBuf>) -> Self {
+        Self::new(path, Format::Aiff)
+    }
+
+    pub fn mp3(path: impl Into<PathBuf>) -> Self {
+        Self::new(path, Format::Mp3)
+    }
+
+    /// `name` plus the extension of [`Format::for_parent`], in that format:
+    /// `/work/m3` for an AIFF parent is `/work/m3.aiff`.
+    #[must_use]
+    pub fn for_parent(parent: &Path, name: &Path) -> Self {
+        let format = Format::for_parent(parent);
+        let mut path = name.as_os_str().to_owned();
+        path.push(".");
+        path.push(format.extension());
+        Self::new(path, format)
     }
 }
 

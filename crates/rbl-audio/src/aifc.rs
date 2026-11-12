@@ -97,6 +97,38 @@ fn find_compression(file: &mut File) -> io::Result<Option<(u64, [u8; 4], u16)>> 
     Ok(None)
 }
 
+/// The frames an AIFF or AIFF-C file's `COMM` chunk declares, or `None` for
+/// any other file or one whose header cannot be read.
+///
+/// symphonia 0.5.5 (`symphonia-format-riff`, `aiff/mod.rs`) takes the `SSND`
+/// chunk's size as the size of the samples, but the format counts the
+/// chunk's 8-byte offset and block-size fields in it as well, so its frame
+/// count for every correctly written AIFF is too high by those 8 bytes'
+/// worth (2 frames of 16-bit stereo). `COMM` holds the true count.
+pub fn declared_frames(path: &Path) -> Option<u64> {
+    let mut file = File::open(path).ok()?;
+    let mut header = [0_u8; 12];
+    file.read_exact(&mut header).ok()?;
+    if &header[0..4] != b"FORM" || !matches!(&header[8..12], b"AIFF" | b"AIFC") {
+        return None;
+    }
+    let mut at = 12_u64;
+    for _ in 0..MAX_CHUNKS {
+        let mut chunk = [0_u8; 8];
+        file.seek(SeekFrom::Start(at)).ok()?;
+        file.read_exact(&mut chunk).ok()?;
+        let size = u64::from(u32::from_be_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]));
+        if &chunk[0..4] == b"COMM" {
+            // channels (2), then the frames (4).
+            let mut comm = [0_u8; 6];
+            file.read_exact(&mut comm).ok()?;
+            return Some(u64::from(u32::from_be_bytes([comm[2], comm[3], comm[4], comm[5]])));
+        }
+        at += 8 + size + (size & 1);
+    }
+    None
+}
+
 /// A file read through a view with four bytes replaced.
 struct Patched {
     file: File,

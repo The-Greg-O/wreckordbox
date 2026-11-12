@@ -177,7 +177,11 @@ impl MonoStream {
             .channels
             .map_or(2, |c| u16::try_from(c.count()).unwrap_or(2));
         let lead = path.map_or(0, |path| rekordbox_lead(path, track.codec_params.codec));
-        let expected = track.codec_params.n_frames.map(|frames| frames.saturating_add_signed(lead));
+        // An AIFF's own header, where symphonia's count is off (see
+        // `aifc::declared_frames`); the container's count otherwise.
+        let expected = path
+            .and_then(aifc::declared_frames)
+            .or_else(|| track.codec_params.n_frames.map(|frames| frames.saturating_add_signed(lead)));
         let exact = declares_exact_length(track.codec_params.codec);
         Ok(Self {
             format,
@@ -604,6 +608,44 @@ mod tests {
             handed_out += stereo.len();
         }
         assert_eq!(handed_out, before);
+    }
+
+    /// A 16-bit stereo AIFF as the format defines it: the `SSND` chunk's size
+    /// counts its offset and block-size fields as well as the samples.
+    fn aiff_bytes(frames: u32) -> Vec<u8> {
+        let data = frames * 4;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"FORM");
+        bytes.extend_from_slice(&(46 + data).to_be_bytes());
+        bytes.extend_from_slice(b"AIFFCOMM");
+        bytes.extend_from_slice(&18_u32.to_be_bytes());
+        bytes.extend_from_slice(&2_u16.to_be_bytes());
+        bytes.extend_from_slice(&frames.to_be_bytes());
+        bytes.extend_from_slice(&16_u16.to_be_bytes());
+        bytes.extend_from_slice(&[0x40, 0x0e, 0xac, 0x44, 0, 0, 0, 0, 0, 0]);
+        bytes.extend_from_slice(b"SSND");
+        bytes.extend_from_slice(&(8 + data).to_be_bytes());
+        bytes.extend_from_slice(&[0; 8]);
+        for i in 0..frames {
+            let sample = ((i % 100) as i16 * 300).to_be_bytes();
+            bytes.extend_from_slice(&sample);
+            bytes.extend_from_slice(&sample);
+        }
+        bytes
+    }
+
+    #[test]
+    fn the_fallible_reader_reads_a_whole_aiff_to_its_end_and_refuses_one_cut_short() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tone.aiff");
+        let whole = aiff_bytes(12_000);
+        std::fs::write(&path, &whole).unwrap();
+        assert_eq!(MonoStream::open(&path).unwrap().expected_frames(), Some(12_000));
+        assert_eq!(drain(&mut MonoStream::open(&path).unwrap()).unwrap(), 12_000);
+
+        std::fs::write(&path, &whole[..54 + 5_000 * 4]).unwrap();
+        let (error, _) = drain(&mut MonoStream::open(&path).unwrap()).unwrap_err();
+        assert!(matches!(error, AudioError::Truncated { expected: 12_000, .. }), "{error:?}");
     }
 
     #[test]
