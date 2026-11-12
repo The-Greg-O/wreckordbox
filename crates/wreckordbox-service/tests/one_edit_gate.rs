@@ -82,7 +82,8 @@ fn the_host_every_edit_needs_is_lent_only_by_the_protected_gate() {
         .unwrap();
 
     // Every writing method of the core takes the host. It is read once, in
-    // `change`, after the protection check.
+    // `change`, which maps the core's protection refusal to
+    // `library_protected`.
     assert_eq!(
         library.matches("self.host").count(),
         1,
@@ -92,8 +93,8 @@ fn the_host_every_edit_needs_is_lent_only_by_the_protected_gate() {
     let gate = &gate[..gate.find("\n    }\n").unwrap()];
     assert!(gate.contains("self.host"));
     assert!(
-        gate.find("self.protected()").unwrap() < gate.find("self.host").unwrap(),
-        "the gate must check Library Protection before it lends the host"
+        gate.contains("edit_error"),
+        "the gate must map the core's refusals, Library Protection among them"
     );
     // And no edit is made with a host of its own.
     assert_eq!(
