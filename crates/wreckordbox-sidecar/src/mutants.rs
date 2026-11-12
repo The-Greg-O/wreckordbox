@@ -254,92 +254,34 @@ impl Sidecar {
         self.change(id, actions::REMOVED, None, update)
     }
 
-    /// One Mutant by its identifier, removed ones included.
+    /// Read the stored Mutant archive without changing it.
     pub fn mutant(&self, id: i64) -> Result<Option<Mutant>> {
-        Ok(self
-            .db()
-            .query_row(&select("WHERE mutant.id = ?1"), [id], read_mutant)
-            .optional()?)
+        MutantReader::new(&self.db()).mutant(id)
     }
 
-    /// The Mutant a playlist entry has now, if it has one.
+    /// Read the stored Mutant archive without changing it.
     pub fn mutant_of_entry(&self, entry_id: &str) -> Result<Option<Mutant>> {
-        Ok(self
-            .db()
-            .query_row(
-                &select("WHERE mutant.entry_id = ?1 AND mutant.removed_at IS NULL"),
-                [entry_id],
-                read_mutant,
-            )
-            .optional()?)
+        MutantReader::new(&self.db()).mutant_of_entry(entry_id)
     }
 
-    /// The live Mutants of one playlist, or of every playlist, oldest
-    /// first.
+    /// Read the stored Mutant archive without changing it.
     pub fn mutants(&self, playlist_id: Option<&str>) -> Result<Vec<Mutant>> {
-        self.live("mutant.playlist_id", playlist_id)
+        MutantReader::new(&self.db()).mutants(playlist_id)
     }
 
-    /// The live Mutants whose parent is this track, oldest first.
+    /// Read the stored Mutant archive without changing it.
     pub fn mutants_of_track(&self, track_id: &str) -> Result<Vec<Mutant>> {
-        self.live("mutant.track_id", Some(track_id))
+        MutantReader::new(&self.db()).mutants_of_track(track_id)
     }
 
-    /// Everything that has happened to a Mutant, oldest first.
+    /// Read the stored Mutant archive without changing it.
     pub fn mutant_changes(&self, id: i64) -> Result<Vec<MutantChange>> {
-        self.changes("WHERE mutant_id = ?1 ORDER BY id", id)
+        MutantReader::new(&self.db()).mutant_changes(id)
     }
 
-    /// Every change to any Mutant made in a Run, oldest first.
+    /// Read the stored Mutant archive without changing it.
     pub fn mutant_changes_in_run(&self, run: RunId) -> Result<Vec<MutantChange>> {
-        self.changes("WHERE run_id = ?1 ORDER BY id", run.0)
-    }
-
-    fn live(&self, column: &str, value: Option<&str>) -> Result<Vec<Mutant>> {
-        let db = self.db();
-        let mutants = if let Some(value) = value {
-            db.prepare(&select(&format!(
-                "WHERE {column} = ?1 AND mutant.removed_at IS NULL ORDER BY mutant.id"
-            )))?
-            .query_map([value], read_mutant)?
-            .collect::<rusqlite::Result<Vec<Mutant>>>()?
-        } else {
-            db.prepare(&select(
-                "WHERE mutant.removed_at IS NULL ORDER BY mutant.id",
-            ))?
-            .query_map([], read_mutant)?
-            .collect::<rusqlite::Result<Vec<Mutant>>>()?
-        };
-        Ok(mutants)
-    }
-
-    fn changes(&self, rest: &str, key: i64) -> Result<Vec<MutantChange>> {
-        let db = self.db();
-        let changes = db
-            .prepare(&format!(
-                "SELECT id, mutant_id, action, edits, fingerprint, source_kind, source_name,
-                        run_id, recorded_at
-                 FROM mutant_change {rest}"
-            ))?
-            .query_map([key], |row| {
-                Ok(MutantChange {
-                    id: row.get(0)?,
-                    mutant_id: row.get(1)?,
-                    action: row.get(2)?,
-                    edits: stored_edits(&row.get::<_, String>(3)?),
-                    fingerprint: row
-                        .get::<_, Option<String>>(4)?
-                        .map(Fingerprint::from_stored),
-                    source: Source {
-                        kind: SourceKind::from_stored(&row.get::<_, String>(5)?),
-                        name: row.get(6)?,
-                    },
-                    run: RunId(row.get(7)?),
-                    recorded_at: row.get(8)?,
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<MutantChange>>>()?;
-        Ok(changes)
+        MutantReader::new(&self.db()).mutant_changes_in_run(run)
     }
 
     /// One more change to a live Mutant. `edits` of `None` keeps the edits
@@ -481,7 +423,9 @@ fn edits_text(edits: &Value) -> Result<String> {
 }
 
 fn stored_edits(text: &str) -> Value {
-    serde_json::from_str(text).unwrap_or_else(|_| Value::Object(serde_json::Map::new()))
+    // Keep damaged data inspectable and removable. Presentation owns validation;
+    // never invent an empty edit or let one bad row hide every other Mutant.
+    serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.to_owned()))
 }
 
 /// A Mutant with its newest change beside it.
@@ -517,4 +461,101 @@ fn read_mutant(row: &Row) -> rusqlite::Result<Mutant> {
         run: RunId(row.get(10)?),
         changed_at: row.get(11)?,
     })
+}
+
+/// A borrowed, read-only view of the Mutant archive. It never opens a writer.
+pub struct MutantReader<'a> {
+    db: &'a rusqlite::Connection,
+}
+impl<'a> MutantReader<'a> {
+    pub(crate) fn new(db: &'a rusqlite::Connection) -> Self {
+        Self { db }
+    }
+    /// One Mutant by its identifier, removed ones included.
+    pub fn mutant(&self, id: i64) -> Result<Option<Mutant>> {
+        Ok(self
+            .db
+            .query_row(&select("WHERE mutant.id = ?1"), [id], read_mutant)
+            .optional()?)
+    }
+
+    /// The Mutant a playlist entry has now, if it has one.
+    pub fn mutant_of_entry(&self, entry_id: &str) -> Result<Option<Mutant>> {
+        Ok(self
+            .db
+            .query_row(
+                &select("WHERE mutant.entry_id = ?1 AND mutant.removed_at IS NULL"),
+                [entry_id],
+                read_mutant,
+            )
+            .optional()?)
+    }
+
+    /// The live Mutants of one playlist, or of every playlist, oldest
+    /// first.
+    pub fn mutants(&self, playlist_id: Option<&str>) -> Result<Vec<Mutant>> {
+        self.live("mutant.playlist_id", playlist_id)
+    }
+
+    /// The live Mutants whose parent is this track, oldest first.
+    pub fn mutants_of_track(&self, track_id: &str) -> Result<Vec<Mutant>> {
+        self.live("mutant.track_id", Some(track_id))
+    }
+
+    /// Everything that has happened to a Mutant, oldest first.
+    pub fn mutant_changes(&self, id: i64) -> Result<Vec<MutantChange>> {
+        self.changes("WHERE mutant_id = ?1 ORDER BY id", id)
+    }
+
+    /// Every change to any Mutant made in a Run, oldest first.
+    pub fn mutant_changes_in_run(&self, run: RunId) -> Result<Vec<MutantChange>> {
+        self.changes("WHERE run_id = ?1 ORDER BY id", run.0)
+    }
+
+    fn live(&self, column: &str, value: Option<&str>) -> Result<Vec<Mutant>> {
+        let db = self.db;
+        let mutants = if let Some(value) = value {
+            db.prepare(&select(&format!(
+                "WHERE {column} = ?1 AND mutant.removed_at IS NULL ORDER BY mutant.id"
+            )))?
+            .query_map([value], read_mutant)?
+            .collect::<rusqlite::Result<Vec<Mutant>>>()?
+        } else {
+            db.prepare(&select(
+                "WHERE mutant.removed_at IS NULL ORDER BY mutant.id",
+            ))?
+            .query_map([], read_mutant)?
+            .collect::<rusqlite::Result<Vec<Mutant>>>()?
+        };
+        Ok(mutants)
+    }
+
+    fn changes(&self, rest: &str, key: i64) -> Result<Vec<MutantChange>> {
+        let db = self.db;
+        let changes = db
+            .prepare(&format!(
+                "SELECT id, mutant_id, action, edits, fingerprint, source_kind, source_name,
+                        run_id, recorded_at
+                 FROM mutant_change {rest}"
+            ))?
+            .query_map([key], |row| {
+                Ok(MutantChange {
+                    id: row.get(0)?,
+                    mutant_id: row.get(1)?,
+                    action: row.get(2)?,
+                    edits: stored_edits(&row.get::<_, String>(3)?),
+                    fingerprint: row
+                        .get::<_, Option<String>>(4)?
+                        .map(Fingerprint::from_stored),
+                    source: Source {
+                        kind: SourceKind::from_stored(&row.get::<_, String>(5)?),
+                        name: row.get(6)?,
+                    },
+                    run: RunId(row.get(7)?),
+                    recorded_at: row.get(8)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<MutantChange>>>()?;
+        Ok(changes)
+    }
 }

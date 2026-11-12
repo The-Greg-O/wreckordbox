@@ -86,3 +86,30 @@ fn a_missing_file_has_no_fingerprint() {
     let dir = tempfile::tempdir().unwrap();
     assert!(fingerprint_file(&dir.path().join("gone.wav")).is_err());
 }
+
+#[test]
+fn cached_fingerprints_only_survive_matching_file_metadata() {
+    use wreckordbox_sidecar::{fingerprint_cached, known_fingerprint};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("track.wav");
+    write_audio(&path, 1000, 7, None);
+    assert_eq!(known_fingerprint(&path), None);
+    let verified = fingerprint_file(&path).unwrap();
+    assert_eq!(known_fingerprint(&path), Some(verified.clone()));
+    assert_eq!(fingerprint_cached(&path).unwrap(), verified);
+    let previous = std::fs::metadata(&path).unwrap();
+    let replacement = dir.path().join("replacement.wav");
+    write_audio(&replacement, 1000, 8, None);
+    std::fs::File::options()
+        .write(true)
+        .open(&replacement)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(previous.modified().unwrap()))
+        .unwrap();
+    std::fs::rename(replacement, &path).unwrap();
+    // Same size and mtime; replacement inode must invalidate the verdict.
+    assert_eq!(known_fingerprint(&path), None);
+    assert_ne!(fingerprint_cached(&path).unwrap(), verified);
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(known_fingerprint(&path), None);
+}

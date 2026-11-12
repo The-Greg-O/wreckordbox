@@ -260,12 +260,7 @@ pub fn render_on(
     destination: &Destination,
     progress: &mut dyn FnMut(Progress) -> Proceed,
 ) -> Result<Rendered, RenderError> {
-    if !(-MAX_KEY_SHIFT..=MAX_KEY_SHIFT).contains(&edits.key_shift) {
-        return Err(RenderError::KeyShiftOutOfRange);
-    }
-    if !edits.tempo.is_finite() || !(MIN_TEMPO..=MAX_TEMPO).contains(&edits.tempo) {
-        return Err(RenderError::TempoOutOfRange);
-    }
+    validate_edits(edits)?;
     if destination.path.try_exists()? {
         return Err(RenderError::DestinationExists(destination.path.clone()));
     }
@@ -367,4 +362,29 @@ fn stretcher(sample_rate: u32, edits: Edits) -> Result<Option<rbl_deck::Offline>
         Err(rbl_deck::OfflineError::PitchOutOfRange) => Err(RenderError::KeyShiftOutOfRange),
         Err(other) => Err(RenderError::Stretch(other)),
     }
+}
+
+fn validate_edits(edits: Edits) -> Result<(), RenderError> {
+    if !(-MAX_KEY_SHIFT..=MAX_KEY_SHIFT).contains(&edits.key_shift) {
+        return Err(RenderError::KeyShiftOutOfRange);
+    }
+    if !edits.tempo.is_finite() || !(MIN_TEMPO..=MAX_TEMPO).contains(&edits.tempo) {
+        return Err(RenderError::TempoOutOfRange);
+    }
+    Ok(())
+}
+
+/// Read-only preflight using the renderer's own source, alignment, length and
+/// stretcher checks. Opens headers, never renders or writes. Decoding may still
+/// fail later; current audio fingerprints must be verified by the render caller.
+pub fn preflight(
+    parent: &Path,
+    kept: Kept,
+    stems: Option<&Stems>,
+    edits: Edits,
+) -> Result<(), RenderError> {
+    validate_edits(edits)?;
+    let source = MutantSource::open(parent, kept, stems)?;
+    let _stretch = stretcher(source.sample_rate(), edits)?;
+    Ok(())
 }

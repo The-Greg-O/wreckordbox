@@ -78,7 +78,7 @@ test("selecting a queued track loads it into the large player: detail waveform, 
   await expect(analysed).toHaveAttribute("aria-selected", "true");
   await expect(loadedTitle(page)).toHaveText(title);
   await expect(page.getByTestId("intake-position")).toHaveText(/^\d+ of \d+$/);
-  await expect(page.getByTestId("intake-panel-title")).toHaveText(title);
+  await expect(page.getByRole("region", { name: "Track" }).getByRole("textbox", { name: "Title" })).toHaveValue(title);
 
   await expect(detail(page)).toBeVisible();
   await expect(detail(page).getByTestId("beat-grid-marker").first()).toBeAttached();
@@ -315,7 +315,7 @@ test("a track that cannot load leaves the queue on the track that did, and says 
   await expect(loadedTitle(page)).toHaveText(title);
   await expect(loaded).toHaveAttribute("aria-selected", "true");
   await expect(broken).toHaveAttribute("aria-selected", "false");
-  await expect(page.getByTestId("intake-panel-title")).toHaveText(title);
+  await expect(page.getByRole("region", { name: "Track" }).getByRole("textbox", { name: "Title" })).toHaveValue(title);
   await expect(page.getByTestId("shell-status")).toContainText(/could not be found/i);
 });
 

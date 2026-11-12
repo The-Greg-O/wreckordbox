@@ -30,6 +30,7 @@ import { TARGET_ACTIONS } from "./targetList";
 import {
   BINDINGS, chordMatches, type Action, type Binding, type KeyChord, type KeyOverrides, type Platform,
 } from "./shortcuts";
+import { INTAKE_ACTIONS } from "./intakeEdits";
 
 /** The items the shell does itself (`SHELL_ITEMS` in `menu.rs`). */
 export type ShellItem = "fullscreen" | "close-window" | "quit";
@@ -158,6 +159,17 @@ const EXPLICIT_ENTRIES: readonly PaletteEntry[] = [
     run: { kind: "command", action: entry.action },
     key: chord(entry.chord, "window"),
     ...(entry.action === "toggleTargetList" || entry.action === "swapTargetLists" ? {} : { writes: true }),
+  })),
+
+  // The Intake view's actions (wbx-63): live while the view shows.
+  ...INTAKE_ACTIONS.map((entry): PaletteEntry => ({
+    id: `intake-${entry.action.slice("intake".length).toLowerCase()}`,
+    label: entry.label,
+    group: "Intake",
+    keywords: ["intake", "prep", ...(entry.action.startsWith("intakeEnergy") ? ["energy", "rating"] : [])],
+    run: { kind: "command", action: entry.action },
+    key: chord(entry.chord, "window"),
+    ...(entry.writes ? { writes: true } : {}),
   })),
 
   // wreckordbox (the application menu).

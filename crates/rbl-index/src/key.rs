@@ -137,3 +137,13 @@ mod tests {
         assert_eq!(keys, ["A", "Ab", "am", "F", "F#", "F#m", "Fm", ""]);
     }
 }
+
+/// Resulting key, using the spelling rules shared with the window.
+#[must_use]
+pub fn transpose(name: &str, semitones: i64) -> Option<String> {
+    spelling::transpose(name, semitones)
+}
+
+#[cfg(test)]
+#[path = "key_transpose_tests.rs"]
+mod transpose_tests;

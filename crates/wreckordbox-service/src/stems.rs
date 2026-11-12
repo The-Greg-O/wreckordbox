@@ -26,6 +26,7 @@
 //!   work folder, so a separation that fails, or a service that stops or
 //!   dies part-way, leaves the Sidecar as it was.
 
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -241,6 +242,7 @@ pub(crate) fn answer(
 /// that may be running.
 pub(crate) struct Stems {
     sidecar_dir: PathBuf,
+    pub(crate) mutant_edits: Mutex<std::collections::HashMap<i64, std::sync::Weak<Mutex<()>>>>,
     pub(crate) run_status: Mutex<crate::run_status::RunStatus>,
     command: Vec<OsString>,
     sidecar: Mutex<Option<Arc<Sidecar>>>,
@@ -279,6 +281,7 @@ impl Stems {
             .filter(|command| !command.trim().is_empty())
             .map_or_else(default_command, |command| parse_command(&command));
         Arc::new(Self {
+            mutant_edits: Mutex::new(HashMap::default()),
             run_status: Mutex::new(crate::run_status::RunStatus::new(&sidecar_dir)),
             sidecar_dir,
             command,
@@ -311,6 +314,27 @@ impl Stems {
             .map(|open| read(open.as_deref()))
     }
 
+    /// Commands wait for the slot; only status snapshots may answer busy.
+    pub(crate) fn with_sidecar_wait<T>(
+        &self,
+        read: impl FnOnce(Option<&Sidecar>) -> T,
+    ) -> Result<T, ServiceError> {
+        let guard =
+            crate::mutant_reads::wait_for_slot(&self.sidecar, std::time::Duration::from_secs(5))?;
+        Ok(read(guard.as_deref()))
+    }
+
+    pub(crate) fn mutant_lock(&self, id: i64) -> Arc<Mutex<()>> {
+        let mut locks = lock(&self.mutant_edits);
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        if let Some(lock) = locks.get(&id).and_then(std::sync::Weak::upgrade) {
+            return lock;
+        }
+        let mutex = Arc::new(Mutex::new(()));
+        locks.insert(id, Arc::downgrade(&mutex));
+        mutex
+    }
+
     pub(crate) fn sidecar_dir(&self) -> &Path {
         &self.sidecar_dir
     }
@@ -327,7 +351,8 @@ impl Stems {
 
     /// The Sidecar, opened on first use; refused once the service stopped.
     pub(crate) fn sidecar(&self) -> Result<Arc<Sidecar>, ServiceError> {
-        let mut sidecar = lock(&self.sidecar);
+        let mut sidecar =
+            crate::mutant_reads::wait_for_slot(&self.sidecar, std::time::Duration::from_secs(5))?;
         if let Some(open) = sidecar.as_ref() {
             return Ok(Arc::clone(open));
         }
