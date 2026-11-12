@@ -11,6 +11,7 @@
 //! display.
 
 mod client;
+pub mod facts;
 mod library;
 pub mod mytag_edits;
 pub mod protocol;

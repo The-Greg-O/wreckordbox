@@ -151,7 +151,7 @@ pub struct StemsProgress {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SidecarChanged {
     pub track_id: String,
-    /// The kind of Fact that changed: `stems`.
+    /// The kind of Fact that changed: `stems`, `genre`, ...
     pub kind: String,
     /// The Fact that was recorded, when one was.
     pub fact_id: Option<i64>,
@@ -168,6 +168,17 @@ pub(crate) fn answers(command: &str) -> bool {
 pub(crate) struct ParentAudio {
     parent: Parent,
     path: PathBuf,
+}
+
+impl ParentAudio {
+    pub(crate) fn parent(&self) -> &Parent {
+        &self.parent
+    }
+
+    /// Where the Library says the track's audio file is.
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
 }
 
 /// Looks the track up in the Library, the way every command does.
@@ -263,7 +274,8 @@ impl Stems {
         }
     }
 
-    fn sidecar(&self) -> Result<Arc<Sidecar>, ServiceError> {
+    /// The Sidecar, opened on first use.
+    pub(crate) fn sidecar(&self) -> Result<Arc<Sidecar>, ServiceError> {
         let mut sidecar = lock(&self.sidecar);
         if let Some(open) = sidecar.as_ref() {
             return Ok(Arc::clone(open));
@@ -273,7 +285,8 @@ impl Stems {
         Ok(open)
     }
 
-    fn publish(&self, event: &str, data: Value) {
+    /// Sends an event to subscribed clients and the host.
+    pub(crate) fn publish(&self, event: &str, data: Value) {
         let _ = lock(&self.events).send(Event {
             event: event.to_owned(),
             data,
@@ -468,7 +481,8 @@ impl Stems {
     }
 }
 
-fn fingerprint(parent: &Parent, path: &Path) -> Result<Fingerprint, ServiceError> {
+/// The fingerprint of a track's audio, or why its file cannot be read.
+pub(crate) fn fingerprint(parent: &Parent, path: &Path) -> Result<Fingerprint, ServiceError> {
     if !path.is_file() {
         return Err(ServiceError::new(
             codes::TRACK_FILE_MISSING,
