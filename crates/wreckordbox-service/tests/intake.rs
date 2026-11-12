@@ -627,3 +627,52 @@ fn a_sidecar_the_queue_cannot_read_safely_lists_the_queue_and_says_suggestions_a
         .is_some_and(|why| !why.is_empty()));
     assert_unchanged(&sidecar, &before);
 }
+
+#[test]
+fn the_colours_are_the_djs_eight_labels_with_clean_and_problem_named() {
+    let fixture = Fixture::new(1);
+    dj_labels(&fixture);
+    let hosted = fixture.start();
+
+    let colours = hosted.call("intake.colours", json!({}));
+
+    let labels: Vec<(u64, &str, &str)> = colours["colours"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            (
+                c["id"].as_u64().unwrap(),
+                c["colour"].as_str().unwrap(),
+                c["label"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            (1, "Pink", "Buy"),
+            (2, "Red", "Problem"),
+            (3, "Orange", "Orange"),
+            (4, "Yellow", "Sample"),
+            (5, "Green", "Clean"),
+            (6, "Aqua", "Aqua"),
+            (7, "Blue", "Blue"),
+            (8, "Purple", "Delete"),
+        ]
+    );
+    assert_eq!(colours["clean"]["id"], 5);
+    assert_eq!(colours["problem"]["id"], 2);
+}
+
+#[test]
+fn the_colours_say_when_no_label_is_named_clean_or_problem() {
+    let hosted = Fixture::new(1).start();
+
+    let colours = hosted.call("intake.colours", json!({}));
+
+    assert_eq!(colours["colours"].as_array().unwrap().len(), 8);
+    assert_eq!(colours["colours"][4]["label"], "Green");
+    assert_eq!(colours["clean"], Value::Null);
+    assert_eq!(colours["problem"], Value::Null);
+}

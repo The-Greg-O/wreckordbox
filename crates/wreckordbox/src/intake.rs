@@ -10,7 +10,7 @@ use std::fmt::Write as _;
 use clap::{Args, Subcommand};
 use serde_json::json;
 use wreckordbox_service::intake::{
-    commands, Counts, CountsOf, GridState, Page, PrepColour, PrepColourSet, ProblemsPage, Queue,
+    commands, Colours, Counts, CountsOf, GridState, Page, PrepColour, PrepColourSet, ProblemsPage, Queue,
     QueuedTrack, SetPrepColour,
 };
 use wreckordbox_service::tracks::DEFAULT_PAGE_LIMIT;
@@ -39,6 +39,11 @@ pub enum IntakeCommands {
     /// Say how many tracks wait in Intake and in Problems, without listing
     /// them.
     Count(LabelArgs),
+    /// List the Library's eight colour labels with your names for them,
+    /// and which one means Clean (the label named Clean) and which means
+    /// Problem: the Prep colours `colour` takes.
+    #[command(visible_alias = "colors")]
+    Colours,
     /// Set a track's Prep colour and report what it was and what it is
     /// now.
     ///
@@ -125,6 +130,14 @@ pub fn run(
                 counts_text(&counts)
             })
         }
+        IntakeCommands::Colours => {
+            let colours: Colours = client.call(commands::INTAKE_COLOURS, json!({}))?;
+            Ok(if as_json {
+                json!(colours).to_string()
+            } else {
+                colours_text(&colours)
+            })
+        }
         IntakeCommands::Colour { id, prep_colour } => {
             let set: PrepColourSet = client.call(
                 commands::TRACKS_SET_PREP_COLOUR,
@@ -159,6 +172,30 @@ fn counts_text(counts: &Counts) -> String {
         ),
     };
     format!("Intake    {}\nProblems  {problems}", counts.intake)
+}
+
+/// The eight labels as a table; MEANS says which is Clean and which is
+/// Problem.
+fn colours_text(colours: &Colours) -> String {
+    let means = |colour: &PrepColour| {
+        if colours.clean.as_ref() == Some(colour) {
+            "Clean"
+        } else if colours.problem.as_ref() == Some(colour) {
+            "Problem"
+        } else {
+            ""
+        }
+    };
+    let mut rows = vec![["ID", "COLOUR", "LABEL", "MEANS"].map(str::to_owned)];
+    rows.extend(colours.colours.iter().map(|colour| {
+        [
+            colour.id.to_string(),
+            colour.colour.clone(),
+            colour.label.clone(),
+            means(colour).to_owned(),
+        ]
+    }));
+    table(&rows)
 }
 
 /// One line saying what a Prep colour edit did.

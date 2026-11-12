@@ -42,6 +42,11 @@ pub mod commands {
     /// [`PrepColourSet`](super::PrepColourSet). The only command here that
     /// changes the Library.
     pub const TRACKS_SET_PREP_COLOUR: &str = "tracks.set_prep_colour";
+    /// The Library's eight colour labels with the DJ's names, and which of
+    /// them mean Clean and Problem. Takes `{}`, answers a
+    /// [`Colours`](super::Colours). Reads only; what the Intake view offers
+    /// as Prep colours (wbx-63).
+    pub const INTAKE_COLOURS: &str = "intake.colours";
 }
 
 /// The error codes of the Intake commands, beside the service's own.
@@ -62,6 +67,9 @@ pub const DEFAULT_PROBLEM_LABEL: &str = "Problem";
 /// Names the colour label that marks a Problem, for a DJ who calls it
 /// something else. Read by the service on each command.
 pub const PROBLEM_LABEL_ENV: &str = "WRECKORDBOX_PROBLEM_LABEL";
+/// The name the DJ gives the colour label that marks a track ready: what
+/// "mark Clean and next" sets.
+pub const CLEAN_LABEL: &str = "Clean";
 
 /// Which part of a queue to answer. Both may be left out.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -141,6 +149,21 @@ pub struct PrepColourSet {
     /// The Library's generation after the edit, as the change event
     /// carries it.
     pub generation: u32,
+}
+
+/// What `intake.colours` answers.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Colours {
+    /// All eight colour labels, numbered 1 to 8, with the DJ's names.
+    pub colours: Vec<PrepColour>,
+    /// The one named [`CLEAN_LABEL`] (any case); `null` when none is, or
+    /// when several are.
+    pub clean: Option<PrepColour>,
+    /// The DJ's Problem colour as `intake.problems` finds it; `null` when
+    /// it cannot be found, and `problem_unavailable` then says why.
+    pub problem: Option<PrepColour>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub problem_unavailable: Option<ServiceError>,
 }
 
 /// A colour label of the Library: one of rekordbox's eight colours, and
@@ -272,6 +295,7 @@ pub(crate) fn answers(command: &str) -> bool {
             | commands::INTAKE_PROBLEMS
             | commands::INTAKE_COUNTS
             | commands::TRACKS_SET_PREP_COLOUR
+            | commands::INTAKE_COLOURS
     )
 }
 
@@ -285,6 +309,10 @@ pub(crate) fn answer(
     if request.command == commands::TRACKS_SET_PREP_COLOUR {
         let (set, changed) = set_prep_colour(library, &required_arguments(request)?)?;
         return Ok((to_value(&set)?, Some(changed)));
+    }
+    if request.command == commands::INTAKE_COLOURS {
+        let _: Empty = arguments(request)?;
+        return Ok((to_value(&colours(&labels(library)?))?, None));
     }
     let index = library.index()?;
     let list = |rows: &[Row], page: &Page, colour: Option<PrepColour>| {
@@ -527,6 +555,32 @@ fn problem_colour(labels: &[PrepColour], asked: Option<&str>) -> Result<PrepColo
                     .join(", ")
             ),
         )),
+    }
+}
+
+/// `intake.colours` takes no arguments.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Empty {}
+
+/// The eight labels, and which mean Clean and Problem.
+fn colours(labels: &[PrepColour]) -> Colours {
+    let clean: Vec<&PrepColour> = labels
+        .iter()
+        .filter(|colour| colour.label.to_lowercase() == CLEAN_LABEL.to_lowercase())
+        .collect();
+    let (problem, problem_unavailable) = match problem_colour(labels, None) {
+        Ok(problem) => (Some(problem), None),
+        Err(why) => (None, Some(why)),
+    };
+    Colours {
+        colours: labels.to_vec(),
+        clean: match clean.as_slice() {
+            [one] => Some((*one).clone()),
+            _ => None,
+        },
+        problem,
+        problem_unavailable,
     }
 }
 

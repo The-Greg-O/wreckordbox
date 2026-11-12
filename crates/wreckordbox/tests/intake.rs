@@ -368,3 +368,26 @@ fn a_title_an_agent_proposed_shows_as_needed_until_the_dj_records_one() {
     assert_eq!(page["tracks"][0]["needs"][0], "energy");
     assert_eq!(page["tracks"][0]["suggestions"], json!([]));
 }
+
+#[test]
+fn intake_colours_lists_the_djs_labels_and_which_mean_clean_and_problem() {
+    let sandbox = prepared();
+
+    let colours = ok(&sandbox, &["intake", "colours"]);
+    assert_eq!(colours["colours"].as_array().unwrap().len(), 8);
+    assert_eq!(colours["clean"]["label"], "Clean");
+    assert_eq!(colours["problem"]["colour"], "Red");
+
+    assert_eq!(
+        text(&sandbox, &["intake", "colours"]).trim_end(),
+        "ID  COLOUR  LABEL    MEANS\n\
+         1   Pink    Buy\n\
+         2   Red     Problem  Problem\n\
+         3   Orange  Orange\n\
+         4   Yellow  Sample\n\
+         5   Green   Clean    Clean\n\
+         6   Aqua    Aqua\n\
+         7   Blue    Blue\n\
+         8   Purple  Delete"
+    );
+}
