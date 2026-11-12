@@ -51,7 +51,12 @@ export function useServiceActivity(): Snapshot | null {
           if (next.runsUnavailable) delay = RETRY_MS;
         }).catch(() => {
           delay = RETRY_MS;
-          if (requested === generation) publish({ connected: false, problem: null, runs: [], statusUnavailable: true });
+          if (live && requested === generation) {
+            // A failed read cannot prove that a known stopped service recovered.
+            setActivity(previous => previous?.problem ? previous : {
+              connected: false, problem: null, runs: [], statusUnavailable: true,
+            });
+          }
         }).finally(() => {
           clearTimeout(deadline);
           reading = false;

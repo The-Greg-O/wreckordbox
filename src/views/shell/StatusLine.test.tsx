@@ -172,3 +172,18 @@ it("keeps the existing analysis Stop and log actions available", async () => {
   expect(showLog).toHaveBeenCalledOnce();
   expect(host.textContent).toContain("Analyzing 2/5 tracks");
 });
+
+
+it("keeps a known stop through failed and timed-out reads until re-host succeeds", async () => {
+  read.mockResolvedValueOnce(connected)
+    .mockRejectedValueOnce(new Error("IPC unavailable"))
+    .mockImplementationOnce(() => new Promise(() => {}))
+    .mockResolvedValue(connected);
+  await act(async () => root.render(<StatusLine />));
+  act(() => stop("The Library service has stopped"));
+  await act(async () => { await vi.advanceTimersByTimeAsync(16000); });
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain("The Library service has stopped");
+  await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
+  expect(host.textContent).toContain("Service connected");
+  expect(host.querySelector('[role="alert"]')).toBeNull();
+});
