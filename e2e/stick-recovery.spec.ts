@@ -9,7 +9,7 @@
  * call that writes the Stick here.
  */
 import { expect, test, type Page } from "@playwright/test";
-import { enableViewShell } from "./helpers";
+import { confirmStickWrite, enableViewShell } from "./helpers";
 
 const TEST = "/Volumes/TEST";
 const NOTICE = "A write to this Stick did not finish";
@@ -58,6 +58,8 @@ test.describe("the old layout", () => {
     expect(await settles(page)).toBe(0);
 
     await notice.getByRole("button", { name: ACTION }).click();
+    // Settling writes to the Stick: staged and held for like every Stick write (wbx-45.4).
+    await confirmStickWrite(page);
 
     await expect.poll(() => settles(page)).toBe(1);
     await expect(panel.getByRole("tablist", { name: "Device settings" })).toBeVisible();
@@ -141,6 +143,8 @@ test("opening the panel of a Stick with an export but no DEVSETTING.DAT shows th
   expect(await writes()).toBe(0);
   // Choosing a setting is the DJ's write: then the Stick gets its file.
   await panel.getByRole("radio", { name: "BLUE", exact: true }).check();
+  // Staged and held for, as every Stick write is (wbx-45.4).
+  await confirmStickWrite(page);
   await expect.poll(writes).toBe(1);
 });
 
@@ -162,6 +166,8 @@ test.describe("the view shell", () => {
     expect(await settles(page)).toBe(0);
 
     await notice.getByRole("button", { name: ACTION }).click();
+    // Settling writes to the Stick: staged and held for like every Stick write (wbx-45.4).
+    await confirmStickWrite(page);
 
     await expect.poll(() => settles(page)).toBe(1);
     await expect(stick(page)).not.toContainText(NOTICE);
