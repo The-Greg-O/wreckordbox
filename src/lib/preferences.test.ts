@@ -339,3 +339,18 @@ describe("the whole-interface scale", () => {
     expect(view).toMatchObject({ uiScale: 1, browseFontSize: 4, browseLineSpace: 0 });
   });
 });
+
+describe("the view shell switch", () => {
+  it("is off unless it was turned on", () => {
+    expect(DEFAULT_PREFERENCES.view.viewShell).toBe(false);
+    expect(sanitisePreferences({}).view.viewShell).toBe(false);
+    expect(sanitisePreferences({ view: {} }).view.viewShell).toBe(false);
+  });
+
+  it("keeps a stored on and reads anything that is not a yes or no as off", () => {
+    expect(sanitisePreferences({ view: { viewShell: true } }).view.viewShell).toBe(true);
+    for (const stored of ["true", 1, null]) {
+      expect(sanitisePreferences({ view: { viewShell: stored } }).view.viewShell, String(stored)).toBe(false);
+    }
+  });
+});
