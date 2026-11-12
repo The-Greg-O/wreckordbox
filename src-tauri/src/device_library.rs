@@ -239,37 +239,34 @@ pub async fn device_libraries(path: String) -> AppResult<Vec<DeviceLibraryDto>> 
 /// the log: the interface shows the stick with nothing under it, as it
 /// shows a folder it may not open, and says nothing more.
 ///
-/// Never settles an unfinished write: a Stick whose last write did not
-/// finish answers [`crate::stick_recovery::unfinished_write`] (wbx-45.5).
+/// Never settles or writes anything: the libraries are read by
+/// [`wreckordbox_stick_outline::StickRead`], which cannot recover, and a
+/// Stick whose last write did not finish answers
+/// [`crate::stick_recovery::unfinished_write`] (wbx-45.5).
 fn readable_libraries(mount: &Path) -> AppResult<Vec<DeviceLibraryDto>> {
-    if wreckordbox_stick_outline::unfinished_write(mount) {
-        return Err(crate::stick_recovery::unfinished_write());
-    }
-    if let Err(error) = rbl_export::export_root_name(mount) {
-        tracing::warn!(device = %mount.display(), %error, "the device's libraries cannot be listed");
-        return Ok(Vec::new());
-    }
-    let mut out = Vec::new();
-    for format in device::formats(mount) {
-        match read_settled(mount, format) {
-            Ok(library) => out.push(library_dto(&library)),
-            Err(error) if error.kind == ErrorKind::UnfinishedWrite => return Err(error),
-            Err(error) => {
-                tracing::warn!(device = %mount.display(), library = format_name(format), error = %error.message, "a library on the device cannot be read; it is left out of the tree");
+    wreckordbox_stick_outline::read(mount, |stick| {
+        if let Err(error) = rbl_export::export_root_name(stick.root()) {
+            tracing::warn!(device = %mount.display(), %error, "the device's libraries cannot be listed");
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::new();
+        for format in device::formats(stick.root()) {
+            match stick.library(format) {
+                Ok(library) => out.push(library_dto(&library)),
+                Err(error) => {
+                    tracing::warn!(device = %mount.display(), library = format_name(format), %error, "a library on the device cannot be read; it is left out of the tree");
+                }
             }
         }
-    }
-    Ok(out)
+        Ok(out)
+    })
+    .map_err(|error| crate::stick_recovery::read_error(mount, error))
 }
 
-/// Reads one library of a Stick for showing it, never settling an
-/// unfinished write (see [`crate::stick_recovery`]).
+/// Reads one library of a Stick for showing it, by a reader that cannot
+/// settle or write anything (see [`crate::stick_recovery`]).
 fn read_settled(mount: &Path, format: Format) -> AppResult<device::Library> {
-    wreckordbox_stick_outline::library(mount, format).map_err(|error| match error {
-        wreckordbox_stick_outline::ReadError::UnfinishedWrite => crate::stick_recovery::unfinished_write(),
-        wreckordbox_stick_outline::ReadError::Export(e) => device_error(&e),
-        wreckordbox_stick_outline::ReadError::Io(e) => device_error(&rbl_export::ExportError::from(e)),
-    })
+    wreckordbox_stick_outline::library(mount, format).map_err(|error| crate::stick_recovery::read_error(mount, error))
 }
 
 fn library_dto(library: &device::Library) -> DeviceLibraryDto {
@@ -896,18 +893,23 @@ struct StickTracks {
 }
 
 impl StickTracks {
+    /// Both of the Stick's libraries are read in one read, by a reader that
+    /// cannot settle or write anything (wbx-45.5).
     fn read(mount: &Path, format: Format) -> AppResult<Self> {
-        let library = read_settled(mount, format)?;
-        let mut masters_by_path = std::collections::HashMap::new();
-        if format == Format::DeviceLibrary && device::formats(mount).contains(&Format::OneLibrary) {
-            // Only a help for older rows: a OneLibrary that cannot be read
-            // leaves the Device Library's own rows to say what they can (#631).
-            match read_settled(mount, Format::OneLibrary) {
-                Ok(one) => masters_by_path = one.tracks.iter().map(|t| (t.path.clone(), (t.master_db_id, t.master_content_id))).collect(),
-                Err(error) if error.kind == ErrorKind::UnfinishedWrite => return Err(error),
-                Err(error) => tracing::warn!(device = %mount.display(), error = %error.message, "the device's OneLibrary cannot be read; Device Library tracks are matched by their own rows"),
+        let (library, masters_by_path) = wreckordbox_stick_outline::read(mount, |stick| {
+            let library = stick.library(format)?;
+            let mut masters_by_path = std::collections::HashMap::new();
+            if format == Format::DeviceLibrary && device::formats(stick.root()).contains(&Format::OneLibrary) {
+                // Only a help for older rows: a OneLibrary that cannot be read
+                // leaves the Device Library's own rows to say what they can (#631).
+                match stick.library(Format::OneLibrary) {
+                    Ok(one) => masters_by_path = one.tracks.iter().map(|t| (t.path.clone(), (t.master_db_id, t.master_content_id))).collect(),
+                    Err(error) => tracing::warn!(device = %mount.display(), %error, "the device's OneLibrary cannot be read; Device Library tracks are matched by their own rows"),
+                }
             }
-        }
+            Ok((library, masters_by_path))
+        })
+        .map_err(|error| crate::stick_recovery::read_error(mount, error))?;
         Ok(Self { mount: mount.to_path_buf(), library, masters_by_path })
     }
 }

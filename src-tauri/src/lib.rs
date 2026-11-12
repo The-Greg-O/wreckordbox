@@ -737,7 +737,6 @@ pub fn run() {
             cues::convert_memory_cues_to_hot,
             commands::filter_values,
             device_settings::device_settings,
-            device_settings::write_device_defaults,
             device_settings::save_device_settings,
             device_settings::ensure_device_library,
             explorer::explorer_roots,

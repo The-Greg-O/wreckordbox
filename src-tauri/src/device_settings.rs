@@ -278,29 +278,6 @@ pub fn dev_defaults(dto: &StickDefaultsDto) -> AppResult<DevSetting> {
     Ok(dev)
 }
 
-/// Gives a stick that holds an export but no `DEVSETTING.DAT` the defaults,
-/// when the device panel opens on it — which is when rekordbox writes one
-/// too. A stick that has one keeps it; a stick with no export gets nothing.
-#[tauri::command]
-pub async fn write_device_defaults(path: String, defaults: StickDefaultsDto) -> AppResult<DeviceSettingsDto> {
-    crate::commands::blocking("write_device_defaults", move || {
-        let mount = Path::new(&path);
-        if !mount.is_dir() {
-            return Err(AppError::new(ErrorKind::NotFound, "That device is no longer connected."));
-        }
-        // Opening the panel is not the DJ asking to settle an unfinished
-        // write, which reading the settings would do (wbx-45.5).
-        if wreckordbox_stick_outline::unfinished_write(mount) {
-            return Err(crate::stick_recovery::unfinished_write());
-        }
-        if rbl_devices::inspect(mount).is_some() {
-            write_dev_defaults(mount, &defaults)?;
-        }
-        Ok(to_dto(&rbl_devices::settings::read(mount)))
-    })
-    .await
-}
-
 /// Gives a stick that has no `DEVSETTING.DAT` the defaults. A stick that
 /// has one keeps it. Called from inside a `blocking` closure, which is
 /// `spawn_blocking` with a name; never from the async thread.
@@ -387,15 +364,14 @@ pub async fn ensure_device_library(
 #[tauri::command]
 pub async fn device_settings(path: String) -> AppResult<DeviceSettingsDto> {
     crate::commands::blocking("device_settings", move || {
-        // `settings::read` settles an unfinished write first; opening the
-        // panel must not (wbx-45.5). The shared lease keeps a writer of ours
-        // from starting between the check and the read.
+        // Opening the panel reads the Stick and writes nothing: no defaults
+        // (they go to the Stick only with a write the DJ asks for), and no
+        // settling of an unfinished write, which `settings::read` would do
+        // (wbx-45.5). One pinned, leased read that cannot recover.
         let mount = Path::new(&path);
-        let _lease = rbl_core::durable::read_lease(mount).ok().flatten();
-        if wreckordbox_stick_outline::unfinished_write(mount) {
-            return Err(crate::stick_recovery::unfinished_write());
-        }
-        Ok(to_dto(&rbl_devices::settings::read(mount)))
+        let read = wreckordbox_stick_outline::read(mount, |stick| Ok(rbl_devices::settings::read_without_recovery(stick.root())))
+            .map_err(|error| crate::stick_recovery::read_error(mount, error))?;
+        Ok(to_dto(&read))
     })
     .await
 }

@@ -95,14 +95,24 @@ pub async fn import_usb<R: tauri::Runtime>(app: tauri::AppHandle<R>, state: Stat
 }
 
 #[allow(clippy::fn_params_excessive_bools, reason = "the same independent choices as import_usb")]
-fn import(state: &AppState, editor: &crate::grid::GridEditor, root: &Path, cues: bool, history: bool, settings: bool, ratings: bool) -> AppResult<ImportReport> {
+pub(crate) fn import(state: &AppState, editor: &crate::grid::GridEditor, root: &Path, cues: bool, history: bool, settings: bool, ratings: bool) -> AppResult<ImportReport> {
+    // Library Protection is said first: the DJ is not sent to settle a Stick
+    // for an import that would be refused anyway. Checked again, under the
+    // gate, by `file_edit` below.
+    if (cues || history || ratings) && state.core().protection().protect_library {
+        return Err(write_error(rbl_library::protection::refusal()));
+    }
     // The stick first, the library after: an import waiting here for an
     // export to finish writing the stick must not hold the library's edit
     // gate, or every analysis and the next sync's preparation wait behind
     // it (#284). An export never asks for the gate while it holds the stick.
-    rbl_devices::settings::recover(root)
-        .map_err(|e| err(format!("Could not recover an interrupted export before importing: {e}")))?;
-    let _device_read = rbl_core::durable::read_lock(root).map_err(err)?;
+    //
+    // Never settles the Stick (wbx-45.5): one whose last write did not
+    // finish is refused, naming the action that settles it. The lease is
+    // taken only on an existing lock (none is created) and held to the end;
+    // the Stick is read under its root as resolved here.
+    let device_read = wreckordbox_stick_outline::StickRead::begin(root).map_err(|e| crate::stick_recovery::read_error(root, e))?;
+    let root = device_read.root();
     // Cues (analysis files and rows), play history and ratings change the
     // Library: refused before any file is written while it may not be
     // changed (Library Protection among it). The players' settings alone go
@@ -871,7 +881,7 @@ mod tests {
     }
 
     #[test]
-    fn import_explains_an_interrupted_export_that_cannot_be_recovered() {
+    fn import_refuses_an_interrupted_export_and_names_the_settle_action() {
         let dir = tempfile::tempdir().unwrap();
         let usb = dir.path().join("usb");
         let journal = usb.join(".rbxport-publication");
@@ -884,8 +894,13 @@ mod tests {
         let state = AppState::unprotected(dir.path().join("backups"));
         let editor = crate::grid::GridEditor::at(state.backup_dir());
 
+        let before = std::fs::read(journal.join("publication.json")).unwrap();
+
+        // wbx-45.5: importing never settles the Stick; it says how to.
         let error = import(&state, &editor, &usb, false, true, false, false).unwrap_err();
-        assert!(error.message.contains("Could not recover an interrupted export"));
-        assert!(error.message.contains("missing-track.wav"));
+        assert_eq!(error.kind, ErrorKind::UnfinishedWrite);
+        assert!(error.message.contains("Finish or roll back the unfinished write on usb"), "{}", error.message);
+        assert_eq!(std::fs::read(journal.join("publication.json")).unwrap(), before);
+        assert!(!usb.join(".rbxport-write.lock").exists(), "no lock file made");
     }
 }
