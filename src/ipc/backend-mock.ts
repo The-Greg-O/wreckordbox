@@ -9,6 +9,7 @@
  * Its sort and search semantics are checked against the Rust view tests by a
  * parity test once `rbl-index` lands.
  */
+import { mockStickPending, mockStickSpare, withStickSafetyLog } from "./mock-stick-safety";
 import { TRACK_SEARCH_OPTIONS, type TrackSearchField } from "@/lib/search";
 import theme from "@/styles/theme";
 import { rowMemoryCueColours } from "@/lib/memoryCueColours";
@@ -976,11 +977,6 @@ export function createMockBackend(options: MockOptions = {}): Backend {
   // stick has had; and the next read of a stick held unanswered until
   // released.
   const outlineReads = new Map<string, number>();
-  const deviceLibrariesReads = new Map<string, number>();
-  if (typeof window !== "undefined") {
-    (window as unknown as { __deviceLibrariesReads: (path: string) => number }).__deviceLibrariesReads =
-      (path) => deviceLibrariesReads.get(path) ?? 0;
-  }
   const heldOutlines = new Map<string, Array<() => void>>();
   const holdingOutlines = new Set<string>();
   const outlineOverrides = new Map<string, StickOutline>();
@@ -1016,10 +1012,13 @@ export function createMockBackend(options: MockOptions = {}): Backend {
   const stickOutline = async (path: string): Promise<StickOutline> => {
     outlineReads.set(path, (outlineReads.get(path) ?? 0) + 1);
     // What the stick holds when it is asked, not when the answer comes.
-    const answer: StickOutline = outlineOverrides.get(path) ?? {
-      pending: false,
-      libraries: stickLibraries.libraries(path).map(({ format, nodes }) => ({ format, nodes })),
-    };
+    const answer: StickOutline = mockStickPending(path)
+      ? { pending: true, spare: mockStickSpare(path), libraries: [] }
+      : outlineOverrides.get(path) ?? {
+        pending: false,
+        spare: mockStickSpare(path),
+        libraries: stickLibraries.libraries(path).map(({ format, nodes }) => ({ format, nodes })),
+      };
     // A hold is for the next read only.
     if (holdingOutlines.delete(path)) {
       await new Promise<void>((resolve) => { heldOutlines.set(path, [...(heldOutlines.get(path) ?? []), resolve]); });
@@ -2219,7 +2218,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     return path;
   };
 
-  return {
+  return withStickSafetyLog({
     rekordboxBrowseSettings: () => Promise.resolve(null),
     librarySummary: () =>
       ready
@@ -3723,12 +3722,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       return () => progressListeners.delete(listener);
     },
     // The fake disk above. Copies, as with the tree: the map is the mock's.
-    deviceLibraries: (path) => {
-      // Counted, for the shell tree's spec: this is the read that settles
-      // an unfinished export on a real Stick (wbx-45.5).
-      deviceLibrariesReads.set(path, (deviceLibrariesReads.get(path) ?? 0) + 1);
-      return wait(stickLibraries.libraries(path));
-    },
+    deviceLibraries: (path) => wait(stickLibraries.libraries(path)),
     stickOutline,
     devicePlaylistCollectionTracks: (path, format, tracks) =>
       wait(stickLibraries.collectionTracks(path, format, tracks, [...(looseTracks.get(path) ?? [])])),
@@ -3920,7 +3914,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       if (!head) return wait([]);
       return wait(head.myTags.filter((tag) => rest.every((d) => d.myTags.includes(tag))));
     },
-  };
+  });
 }
 
 /** `?grids=101325:none,100004:double`, by track id: see `gridOf`. */

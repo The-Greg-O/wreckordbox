@@ -1396,6 +1396,12 @@ export interface DeviceLibrary {
 export interface StickOutline {
   /** An earlier write to the stick did not finish; nothing is listed until it is. */
   pending: boolean;
+  /**
+   * The Stick carries the Spare stick marker (`.rbxport-disposable` at its
+   * root): the DJ declared it safe to overwrite. Otherwise it is treated as
+   * a Gig stick.
+   */
+  spare?: boolean;
   libraries: { format: DeviceFormat; nodes: DeviceLibraryNode[] }[];
 }
 

@@ -62,10 +62,11 @@ export function useDeviceLibraries(devices: readonly Device[], readBack?: { read
   const expand = useCallback(
     (node: TreeNode) => {
       const path = devicePath(node.id);
+      if (readBack?.current === false) return;
       if (path === null || known.current.has(path) || pending.current.has(path)) return;
       void read(path);
     },
-    [read],
+    [read, readBack],
   );
 
   // A stick that left is forgotten; one still here is read again, since the
@@ -76,10 +77,14 @@ export function useDeviceLibraries(devices: readonly Device[], readBack?: { read
       const kept = new Map([...current].filter(([path]) => present.has(path)));
       return kept.size === current.size ? current : kept;
     });
+    // Not in the view shell: a Stick opened in the old layout is not read
+    // again behind the DJ's back, since this read settles an unfinished
+    // export (wbx-45.4 review, finding 6).
+    if (readBack?.current === false) return;
     for (const path of known.current.keys()) {
       if (present.has(path) && !pending.current.has(path)) void read(path);
     }
-  }, [devices, read]);
+  }, [devices, read, readBack]);
 
   const edit = useCallback(
     async (path: string, format: DeviceFormat, change: DevicePlaylistEdit) => {

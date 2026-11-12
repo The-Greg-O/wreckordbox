@@ -572,7 +572,8 @@ function AppBody() {
    * the layout menu last chose; the choice itself is kept for the old layout.
    */
   const shellOn = prefs.preferences.view.viewShell;
-  useEffect(() => { stickReadBack.current = !shellOn; }, [shellOn]);
+  // Set during render, before any effect of this commit can read it.
+  stickReadBack.current = !shellOn;
   // The shell's tree reads each Stick's playlists without writing to it
   // (ticket #52); only drawn, so only read, with the shell on.
   const shellSticks = useStickOutlines(shellOn ? devices : NO_DEVICES, deviceLibraries.revision);

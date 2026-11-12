@@ -234,3 +234,24 @@ fn the_outline_is_sent_in_the_device_tree_shape() {
     assert_eq!(json["libraries"][0]["format"], "deviceLibrary");
     assert_eq!(json["pending"], false);
 }
+
+/// A Stick the DJ declared safe to overwrite carries the Spare stick marker
+/// at its root; the window asks for a shorter hold before writing to it
+/// (wbx-45.4 review, finding 5). Any other Stick is a Gig stick.
+#[test]
+fn the_spare_stick_marker_is_reported_without_writing() {
+    let dest = tempfile::tempdir().unwrap();
+    stick(dest.path());
+    assert!(!outline(dest.path()).spare, "no marker: a Gig stick");
+
+    std::fs::write(dest.path().join(".rbxport-disposable"), b"").unwrap();
+    let before = snapshot(dest.path());
+    let found = outline(dest.path());
+    assert!(found.spare, "the marker is read");
+    assert_eq!(snapshot(dest.path()), before);
+    assert_eq!(serde_json::to_value(&found).unwrap()["spare"], true);
+
+    interrupted_publication(dest.path());
+    let pending = outline(dest.path());
+    assert!(pending.pending && pending.spare, "an unfinished write does not hide the marker");
+}

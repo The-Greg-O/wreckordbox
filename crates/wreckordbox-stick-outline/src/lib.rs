@@ -32,6 +32,10 @@ pub struct Outline {
     /// An earlier write to the Stick did not finish. Nothing is listed until
     /// an explicit operation settles it.
     pub pending: bool,
+    /// The Stick carries the Spare stick marker ([`SPARE_MARKER`] at its
+    /// root): the DJ declared it safe to overwrite. Without it the Stick is
+    /// a Gig stick. Read by the file's existence alone.
+    pub spare: bool,
     /// Device Library first, then `OneLibrary`, as rekordbox lists them.
     pub libraries: Vec<LibraryOutline>,
 }
@@ -82,24 +86,30 @@ struct Raw {
     count: u32,
 }
 
+/// The file at a Stick's root that declares it a Spare stick, as the
+/// real-Stick tests already require of a Stick they may write to.
+pub const SPARE_MARKER: &str = ".rbxport-disposable";
+
 /// Reads the playlist trees of the Stick mounted at `mount`, writing nothing.
 ///
 /// A volume with no export, or a library that cannot be read, lists nothing
 /// for it.
 #[must_use]
 pub fn outline(mount: &Path) -> Outline {
+    let spare = mount.join(SPARE_MARKER).is_file();
     // Wait out a writer that holds the lock, without creating the lock.
     let Ok(_lease) = rbl_core::durable::read_lease(mount) else {
-        return Outline::default();
+        return Outline { spare, ..Outline::default() };
     };
     if rbl_export::recovery_pending(mount) {
         return Outline {
             pending: true,
+            spare,
             libraries: Vec::new(),
         };
     }
     let Ok(root) = rbl_export::export_root_name(mount) else {
-        return Outline::default();
+        return Outline { spare, ..Outline::default() };
     };
     let dir = mount.join(root).join("rekordbox");
     let libraries = device::formats(mount)
@@ -121,6 +131,7 @@ pub fn outline(mount: &Path) -> Outline {
         .collect();
     Outline {
         pending: false,
+        spare,
         libraries,
     }
 }
