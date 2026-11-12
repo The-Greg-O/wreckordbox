@@ -468,6 +468,8 @@ pub fn run() {
                     commands::announce_history(&handle, handle.state::<Arc<AppState>>().inner());
                 });
             }
+            // Every turn of Library Protection reaches the interface, in order.
+            service_host::announce_protection(app.handle());
             #[cfg(target_os = "macos")]
             if let Some(store) = crate::test_port::data_store() {
                 let config = app.config().app.windows.iter().find(|window| window.label == MAIN_WINDOW)
@@ -559,6 +561,9 @@ pub fn run() {
             new_library::library_problem,
             service_host::service_problem,
             service_status::service_activity,
+            service_host::library_protection,
+            service_host::adopt_library_protection,
+            service_host::set_library_protection,
             new_library::create_library,
             new_library::use_default_library,
             new_library::database_drives,

@@ -1027,6 +1027,30 @@ test("Library Protection refuses edits the way a running rekordbox does", async 
   await expect(page.getByRole("contentinfo").getByRole("alert")).toHaveCount(0);
 });
 
+test("Library Protection turned outside the window is what the window shows (#43)", async ({ page }) => {
+  await expect(page.getByTestId("browser-title")).toContainText("Tracks)");
+  // The mock's Library is read-only on its own; the badge says why.
+  const badge = page.getByRole("contentinfo").getByRole("button", { name: "Library read-only" });
+  const turn = (on: boolean) => page.evaluate((value) => (window as unknown as { __turnLibraryProtection: (on: boolean) => void }).__turnLibraryProtection(value), on);
+  // The suite's stored preference (off) was taken up as the backend's first record.
+  await expect(badge).not.toHaveAttribute("title", /Library Protection/);
+
+  // As `wreckordbox protection on` turns it.
+  await turn(true);
+  await expect(badge).toHaveAttribute("title", /Library Protection/);
+  await page.getByRole("banner").getByRole("button", { name: "Settings" }).click();
+  const dialog = page.getByRole("dialog", { name: "Preferences" });
+  await dialog.getByRole("tab", { name: "Advanced" }).click();
+  await dialog.getByRole("tab", { name: "Browse", exact: true }).click();
+  const protection = dialog.getByRole("switch", { name: "Protect library edit." });
+  await expect(protection).toBeChecked();
+
+  await turn(false);
+  await expect(protection).not.toBeChecked();
+  await page.keyboard.press("Escape");
+  await expect(badge).not.toHaveAttribute("title", /Library Protection/);
+});
+
 test("the Traffic Light lights the keys that go with the loaded track's", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByTestId("browser-title")).toContainText("Tracks)");

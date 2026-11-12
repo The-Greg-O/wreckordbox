@@ -285,6 +285,13 @@ export interface AppErrorDto {
 export type WaveformKind = "bands" | "bandsDetail" | "mono" | "monoDetail" | "colour" | "colourDetail";
 
 
+/** Library Protection as the backend holds it. */
+export interface LibraryProtection {
+  protectLibrary: boolean;
+  /** Higher for every later change; a lower one than already seen is stale. */
+  revision: number;
+}
+
 export interface Backend {
   /** The installed rekordbox browseSetting.xml, when present. Read-only. */
   rekordboxBrowseSettings(): Promise<string | null>;
@@ -390,6 +397,25 @@ export interface Backend {
   serviceProblem(): Promise<string | null>;
   /** Current connection and unfinished Runs, including work started by another client. */
   serviceActivity(): Promise<import("./serviceActivity").ServiceActivity>;
+  /**
+   * Library Protection as the backend holds it. The backend owns the
+   * switch (it refuses every change to the Library while it is on); the
+   * window's preference only shows it.
+   */
+  libraryProtection(): Promise<LibraryProtection>;
+  /**
+   * The window's stored preference, taken up only on the first start,
+   * while the backend has never recorded the switch; answers what stands.
+   */
+  adoptLibraryProtection(windowPreference: boolean): Promise<LibraryProtection>;
+  /** Turns Library Protection on or off; resolves once it is recorded. */
+  setLibraryProtection(protectLibrary: boolean): Promise<LibraryProtection>;
+  /**
+   * Library Protection was turned, by whoever; in order of `revision`.
+   * Resolves, with the unsubscribe, once the listener is in place: a turn
+   * made before that is not heard, so ask for the state only after it.
+   */
+  onLibraryProtectionChanged(listener: (now: LibraryProtection) => void): Promise<() => void>;
 
   /**
    * Makes a new, empty library where rekordbox keeps one and loads it;

@@ -20,7 +20,7 @@ import type {
   DatabaseDrive, EditHistoryState, FilterValues, GridState, LibraryProblem, LibrarySummary, Limiter, LinkPeerSeen, LinkStatus, RelatedCriterion, RowDto, RowMyTag, SortKey,
   SelectionDetails, SmartRule, StickDefaults, SyncPlaylist, SyncProgress, Tick, TrackDetails, TrackField,
   PreferencesRequest, RelocateSearch, ExportProgress,
-  DeckId, StickOutline, TrackFilter, TreeNode, ViewHandle, ViewSpec, WaveformKind, LogLine, LogLevel,
+  DeckId, LibraryProtection, StickOutline, TrackFilter, TreeNode, ViewHandle, ViewSpec, WaveformKind, LogLine, LogLevel,
 } from "./types";
 import { TREE_ROOT } from "./types";
 import { applyEditFrom, validateEdit, isDynamicFrom, tempoX100, type EditableBeat } from "@/lib/gridEdit";
@@ -430,6 +430,21 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     mockLog.push({ seq: mockLogNext++, timeMs: Date.now(), level, target, message });
   };
   mockLogLine("debug", "rbxport_lib::logging", "logging to the browser preview");
+  /** Library Protection as the mock's backend records it; none yet. */
+  let protection: LibraryProtection | null = null;
+  const protectionListeners = new Set<(now: LibraryProtection) => void>();
+  const recordProtection = (protectLibrary: boolean): LibraryProtection => {
+    protection = { protectLibrary, revision: (protection?.revision ?? 0) + 1 };
+    const now = protection;
+    protectionListeners.forEach((listener) => listener(now));
+    return now;
+  };
+  if (typeof window !== "undefined") {
+    // Library Protection turned from outside the window, as
+    // `wreckordbox protection on|off` turns it.
+    (window as unknown as { __turnLibraryProtection: (on: boolean) => void }).__turnLibraryProtection =
+      (on) => { recordProtection(on); };
+  }
   const playlistFixture = options.playlistFixture ?? readPlaylistFixtureFromUrl();
   const all = makeRows(trackCount);
   // A disposable browser fixture for external file drops. It is opt-in and
@@ -3023,6 +3038,15 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     },
     libraryProblem: () => wait<LibraryProblem | null>(problem),
     ...mockServiceActivity(),
+    // The switch the backend owns, kept for this page's life: nothing is
+    // recorded before the window's first start, so its preference is taken up.
+    libraryProtection: () => wait(protection ?? { protectLibrary: true, revision: 0 }),
+    adoptLibraryProtection: (windowPreference) => wait(protection ?? recordProtection(windowPreference)),
+    setLibraryProtection: (protectLibrary) => wait(recordProtection(protectLibrary)),
+    onLibraryProtectionChanged: (listener) => {
+      protectionListeners.add(listener);
+      return Promise.resolve(() => { protectionListeners.delete(listener); });
+    },
     createLibrary: async () => {
       await wait(undefined);
       libraryFound();

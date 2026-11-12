@@ -9,7 +9,7 @@ import { confirmHandler } from "./confirmHost";
 import type {
   AnalysisStageDescriptor, AnalysisResult, AudioDevices, Backend, Backup, BackupProgress, BackupSizes, ConfirmReplace, Cue, SyncEstimate, DeckEvent, Device, DeviceLibrary,
   DevicePlaylistEditResult, DevicePlaylistImportPlan, DevicePlaylistImportResult, DeviceSettings, DeviceSyncState,
-  Diagnostics, Duplicates, LogPage, GridState, Limiter, PreferencesRequest, SmartRule, SyncDeviceReport, SyncProgress, XmlImportReport,
+  Diagnostics, Duplicates, LibraryProtection, LogPage, GridState, Limiter, PreferencesRequest, SmartRule, SyncDeviceReport, SyncProgress, XmlImportReport,
   ExportProgress, ExportReport, ExplorerChildren, ExplorerRoot, FilterValues, FolderPlaylistReport, Phrase, ImportReport,
   DatabaseDrive, EditHistoryState, ItunesLibrary, LibraryProblem, LibrarySummary, LinkPeerSeen, Meters,
   LinkStatus, MissingExportFile, MissingTrack, MissingTracks, PreviewState, UnanalysedTracks, ReferenceStickSettings, RelocateReport, RowDto, ScriptRequest, Tick,
@@ -177,6 +177,16 @@ function subscribe<T>(event: string, listener: (payload: T) => void): () => void
     live = false;
     stop?.();
   };
+}
+
+/**
+ * [`subscribe`], resolving with the unsubscribe once the listener is in
+ * place, for a caller that must not ask for a state before it can hear
+ * every change after it.
+ */
+async function subscribeListening<T>(event: string, listener: (payload: T) => void): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<T>(event, (e) => listener(e.payload));
 }
 
 async function realBackend(): Promise<Backend> {
@@ -456,6 +466,10 @@ async function realBackend(): Promise<Backend> {
     onServiceStopped: (listener) => subscribe<string>("service:stopped", listener),
     serviceProblem: () => invoke<string | null>("service_problem"),
     serviceActivity: () => invoke<import("./serviceActivity").ServiceActivity>("service_activity"),
+    libraryProtection: () => invoke<LibraryProtection>("library_protection"),
+    adoptLibraryProtection: (windowPreference) => invoke<LibraryProtection>("adopt_library_protection", { windowPreference }),
+    setLibraryProtection: (protectLibrary) => invoke<LibraryProtection>("set_library_protection", { protectLibrary }),
+    onLibraryProtectionChanged: (listener) => subscribeListening<LibraryProtection>("library-protection:changed", listener),
     createLibrary: () => invoke<void>("create_library"),
     useDefaultLibrary: () => invoke<void>("use_default_library"),
     databaseDrives: () => invoke<DatabaseDrive[]>("database_drives"),
