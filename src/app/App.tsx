@@ -98,6 +98,7 @@ import { statusBarListText } from "@/lib/format";
 import { autoRelocated, missingAmong, relocateSteps, relocateTracks } from "@/lib/relocate";
 import { useTooltip } from "@/store/usePreferences";
 import { useTranslation } from "@/i18n";
+import { CommandPaletteButton, CommandPaletteHost } from "@/views/palette/CommandPalette";
 import { nativeMenuLabels } from "@/lib/nativeMenu";
 
 /** The commands the shell itself registers, and so the keys it runs. */
@@ -3476,6 +3477,9 @@ function AppBody() {
   );
   const dialogs = (
       <Suspense fallback={null}>
+      {/* The command palette (#54): in both layouts, since Linux has no menu row. */}
+      <CommandPaletteHost platform={platform} keyOverrides={keyOverrides} shell={shellOn} readOnly={readOnly}
+        runMenu={runMenu} openPreferences={openPreferences} />
       {duplicatePrompt ? (
         <DuplicateTracksDialog playlist={duplicatePrompt.playlist} duplicates={duplicatePrompt.duplicates}
           total={duplicatePrompt.total} onAnswer={duplicatePrompt.settle} />
@@ -3651,6 +3655,7 @@ function AppBody() {
           tree={treeView}
           library={library}
           status={<>{linkStrip}{statusBar}</>}
+          topBarEnd={<CommandPaletteButton platform={platform} />}
         />
         {dialogs}
       </div>
@@ -3668,6 +3673,7 @@ function AppBody() {
         onOpenSettings={openViewSettings}
         layout={chosenLayout}
         onLayoutChange={setLayout}
+        beforeSettings={<CommandPaletteButton platform={platform} />}
       />
       {/* Full Browser draws no deck at all, and no gutter under one. */}
       {deckCount(layout) > 0 ? (

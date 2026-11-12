@@ -366,7 +366,7 @@ export function paletteKey(
   pressed: KeyChord,
   platform: Platform,
   overrides: KeyOverrides = {},
-): "open" | string | null {
+): string | null {
   if (platform.mac ? pressed.ctrlKey === true : pressed.metaKey === true) return null;
   if (chordMatches(PALETTE_OPEN_CHORD, pressed, platform)) return "open";
   if (platform.mac || platform.linux !== true) return null;

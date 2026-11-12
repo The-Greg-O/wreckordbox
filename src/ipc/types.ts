@@ -651,6 +651,13 @@ export interface Backend {
   setMenuEnabled(items: Readonly<Record<string, boolean>>): Promise<void>;
 
   /**
+   * Runs a native menu item the shell does itself (Full screen, Close
+   * Window, Quit) for the command palette, which is the only way to them
+   * where there is no menu row (Linux, #54).
+   */
+  runMenuItem(id: "fullscreen" | "close-window" | "quit"): Promise<void>;
+
+  /**
    * AppleScript's requests to the window: each is run with `handle` and its
    * reply sent back, and the backend is told once they can be heard.
    * Returns its own unsubscribe.

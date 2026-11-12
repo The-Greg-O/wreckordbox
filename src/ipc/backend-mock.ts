@@ -2968,6 +2968,13 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       w.__menuEnabled = { ...w.__menuEnabled, ...items };
       return wait(undefined);
     },
+    // A browser cannot go full screen or quit on its own say: kept where a
+    // test can read what the shell was asked for.
+    runMenuItem: (id) => {
+      const w = window as unknown as { __shellItems?: string[] };
+      w.__shellItems = [...(w.__shellItems ?? []), id];
+      return wait(undefined);
+    },
 
     // No network in a browser, so LINK cannot turn on. Saying why is better
     // than a switch that silently does nothing.
