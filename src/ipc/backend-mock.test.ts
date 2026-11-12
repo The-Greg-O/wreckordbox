@@ -8,7 +8,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createMockBackend } from "./backend-mock";
-import { TREE_ROOT } from "./types";
+import { TREE_ROOT, type Backend, type StickWriteOperation } from "./types";
 
 describe("USB-only playlist files", () => {
   it("adds a loose device file once to both libraries without collection import", async () => {
@@ -17,8 +17,12 @@ describe("USB-only playlist files", () => {
     const libraries = await backend.deviceLibraries(path);
     const playlist = libraries[0]?.nodes.find((node) => node.name === "Melodic Vox")?.id ?? "";
     const file = `file:${path}/Music/loose.mp3`;
-    expect((await backend.devicePlaylistAddFiles(path, "deviceLibrary", playlist, [file])).changed).toBe(1);
-    expect((await backend.devicePlaylistAddFiles(path, "deviceLibrary", playlist, [file])).changed).toBe(0);
+    const add = async () => backend.devicePlaylistAddFiles(path, "deviceLibrary", playlist, [file],
+      await approve(backend, path, { kind: "addFiles", format: "deviceLibrary", playlist, files: [file] }));
+    expect((await add()).changed).toBe(1);
+    expect((await add()).changed).toBe(0);
+    // Without an approval from the plan, nothing is written (wbx-45.4).
+    await expect(backend.devicePlaylistAddFiles(path, "deviceLibrary", playlist, [file])).rejects.toThrow("was not confirmed");
     for (const format of ["deviceLibrary", "oneLibrary"] as const) {
       expect(await backend.devicePlaylistDuplicates(path, format, playlist, [file])).toEqual([file]);
     }
@@ -519,15 +523,20 @@ describe("USB music cleanup", () => {
     await backend.edits.addTracksToPlaylist(b, ["100001"]);
     const destination = (await backend.listDevices()).find(d => !d.export)?.path;
     expect(destination).toBeDefined();
-    await backend.exportTracksToDevice(["100001", "100002"], destination!);
-    const kept = await backend.syncDevices([a, b], [destination!], undefined);
+    const to = destination!;
+    await backend.exportTracksToDevice(["100001", "100002"], to, undefined, undefined,
+      await approve(backend, to, { kind: "exportTracks", tracks: ["100001", "100002"] }));
+    const kept = await backend.syncDevices([a, b], [to], undefined, undefined, undefined, undefined, undefined, undefined,
+      { [to]: await approve(backend, to, { kind: "sync", playlists: [a, b] }) });
     expect(kept[0]?.report).toMatchObject({ tracks: 3, removed: 0 });
-    const cleaned = await backend.syncDevices([a, b], [destination!], undefined, false, false, true);
+    const cleaned = await backend.syncDevices([a, b], [to], undefined, false, false, true, undefined, undefined,
+      { [to]: await approve(backend, to, { kind: "sync", playlists: [a, b], deleteUnlistedMusic: true }) });
     expect(cleaned[0]?.report).toMatchObject({ tracks: 2, removed: 1 });
-    await backend.exportTracksToDevice(["100002"], destination!);
+    await backend.exportTracksToDevice(["100002"], to, undefined, undefined, await approve(backend, to, { kind: "exportTracks", tracks: ["100002"] }));
     // Export Playlist adds to what the stick holds (#304): B stays, and only
     // the loose track outside every playlist is cleaned up.
-    const exported = await backend.exportPlaylist(a, destination!, undefined, true);
+    const exported = await backend.exportPlaylist(a, to, undefined, true, undefined,
+      await approve(backend, to, { kind: "exportPlaylist", playlist: a, deleteUnlistedMusic: true }));
     expect(exported).toMatchObject({ tracks: 2, removed: 1, playlists: 2 });
   });
 });
@@ -617,3 +626,10 @@ describe("mock Relocate Undo (#502)", () => {
     expect(await missingIds(backend)).toEqual(missing);
   });
 });
+
+/** The approval a staged write gets from the plan (wbx-45.4): every Stick write needs one. */
+async function approve(backend: Backend, destination: string, operation: StickWriteOperation): Promise<string> {
+  const plan = await backend.stickWritePlan({ destination, operation });
+  if (plan.approval === null) throw new Error("no approval");
+  return plan.approval;
+}

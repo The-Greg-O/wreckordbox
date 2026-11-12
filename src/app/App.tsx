@@ -50,7 +50,7 @@ import { clampWidth, TREE_BOUNDS } from "@/lib/splitter";
 import { exportSummary } from "@/lib/exportSummary";
 import { prepareDevicePlaylistDrop } from "@/lib/devicePlaylistDrop";
 import { deviceId, devicePath, renamedDevice } from "@/lib/devices";
-import { DEVICE_ASKS, deviceParentFor, devicePlaylistsOf, isDeviceLibraryKind, LIBRARY_NAMES, parseDeviceNodeId } from "@/lib/deviceLibrary";
+import { DEVICE_ASKS, deviceNodeId, deviceParentFor, devicePlaylistsOf, isDeviceLibraryKind, LIBRARY_NAMES, parseDeviceNodeId } from "@/lib/deviceLibrary";
 import { useDeviceLibraries } from "@/store/useDeviceLibraries";
 import { refusal, resolveMenu } from "@/lib/menu";
 import { nextSort, specForNode, type SortState } from "@/lib/viewSpec";
@@ -3035,11 +3035,14 @@ function AppBody() {
         [what, "The tracks stay on the Stick. This cannot be undone."],
         () => t("Deleted {name}.", { name: node.name }),
       ).then((deleted) => {
-        // The selection does not stay on what is gone.
-        if (deleted && selectedNode?.id === node.id) setSelectedNode(null);
+        // The selection stays in the Devices tree, on the library's
+        // Playlists heading, rather than leaving the section.
+        if (!deleted || selectedNode?.id !== node.id) return;
+        const heading = deviceNodeId({ ...ref, role: "playlists", id: "0" });
+        setSelectedNode(treeNodes.find((n) => n.id === heading) ?? null);
       });
     },
-    [stageDeviceEdit, stickName, shellSticks, selectedNode, t],
+    [stageDeviceEdit, stickName, shellSticks, selectedNode, treeNodes, t],
   );
   // Import Playlist over a stick's playlist: a playlist at the end of the
   // collection's top level with the stick's entries, as rekordbox's Devices

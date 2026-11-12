@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { confirmStickWrite } from "./helpers";
 
 /**
  * A stick's own playlists, browsed and edited from the Devices tree, against
@@ -41,6 +42,7 @@ test("a loose file on the TEST USB joins a playlist on that USB once", async ({ 
   await target.dispatchEvent("dragenter", { dataTransfer });
   await target.dispatchEvent("dragover", { dataTransfer });
   await target.dispatchEvent("drop", { dataTransfer });
+  await confirmStickWrite(page);
   await expect(page.getByRole("contentinfo")).toContainText("Added to Melodic Vox.");
   await target.click();
   await expect(rows(page)).toHaveCount(4);
@@ -72,6 +74,7 @@ test("a playlist made, filled and deleted on the stick changes only its own libr
   const menu = page.getByRole("menu", { name: "Playlists" });
   await expect(menu.getByRole("menuitem", { name: "Delete All" })).toBeDisabled();
   await menu.getByRole("menuitem", { name: "Create New Playlist" }).click();
+  await confirmStickWrite(page);
   await expect(page.getByRole("contentinfo")).toContainText("Created Untitled Playlist.");
   // At the top of the heading, as rekordbox puts it, and in that library alone.
   const lists = page.locator('[role="treeitem"][data-kind="devicePlaylist"]');
@@ -85,26 +88,28 @@ test("a playlist made, filled and deleted on the stick changes only its own libr
   const trackMenu = page.getByRole("menu", { name: "Track" });
   await trackMenu.getByRole("menuitem", { name: "Add To Playlist" }).hover();
   await page.getByRole("menuitem", { name: "Untitled Playlist" }).click();
+  await confirmStickWrite(page);
   await expect(page.getByRole("contentinfo")).toContainText("Added to Untitled Playlist.");
   await inLibrary(page, 0, "Untitled Playlist").click();
   await expect(rows(page)).toHaveCount(1);
 
-  // Remove from Playlist inside it, asked first in rekordbox's words:
-  // Cancel keeps the track, OK takes it out.
-  type Asked = { __confirmAnswer?: boolean; __confirmed?: string[] };
+  // Remove from Playlist inside it, asked first, with rekordbox's words in
+  // the staged write's dialog (wbx-45.4): Cancel keeps the track, the hold
+  // takes it out.
   const removeOne = async () => {
     await rows(page).first().click();
     await rows(page).first().click({ button: "right" });
     await page.getByRole("menu", { name: "Track" }).getByRole("menuitem", { name: "Remove from Playlist" }).click();
   };
-  await page.evaluate(() => { (window as unknown as Asked).__confirmAnswer = false; });
   await removeOne();
-  await expect.poll(() => page.evaluate(() => (window as unknown as Asked).__confirmed ?? [])).toContain(
-    "Are you sure you want to remove the selected track(s) from the playlist?\nTrack(s) will be removed from the playlists of all synced devices.",
+  const asked = page.getByRole("alertdialog", { name: /^Write to / });
+  await expect(asked).toContainText(
+    /Are you sure you want to remove the selected track\(s\) from the playlist\?\s*Track\(s\) will be removed from the playlists of all synced devices\./,
   );
+  await asked.getByRole("button", { name: "Cancel" }).click();
   await expect(rows(page)).toHaveCount(1);
-  await page.evaluate(() => { (window as unknown as Asked).__confirmAnswer = true; });
   await removeOne();
+  await confirmStickWrite(page);
   await expect(rows(page)).toHaveCount(0);
   // The note counts the entries that went.
   await expect(page.getByRole("contentinfo")).toContainText("Removed 1 track.");
@@ -115,6 +120,7 @@ test("a playlist made, filled and deleted on the stick changes only its own libr
   const playlistMenu = page.getByRole("menu", { name: "Playlist" });
   await expect(playlistMenu.getByRole("menuitem", { name: /^Rename/ })).toHaveCount(0);
   await playlistMenu.getByRole("menuitem", { name: "Delete Playlist" }).click();
+  await confirmStickWrite(page);
   await expect(page.getByRole("contentinfo")).toContainText("Deleted Untitled Playlist.");
   await expect(lists.filter({ hasText: "Untitled Playlist" })).toHaveCount(0);
   await expect(lists).toHaveCount(6);
@@ -131,6 +137,7 @@ test("device playlist actions work from the secondary Devices tree", async ({ pa
   const create = page.getByRole("menu", { name: "Playlists" }).getByRole("menuitem", { name: "Create New Playlist" });
   await expect(create).toBeEnabled();
   await create.click();
+  await confirmStickWrite(page);
   await expect(page.getByRole("contentinfo")).toContainText("Created Untitled Playlist.");
 
   const created = panel.locator('[role="treeitem"][data-kind="devicePlaylist"]').filter({ hasText: "Untitled Playlist" });
@@ -140,6 +147,7 @@ test("device playlist actions work from the secondary Devices tree", async ({ pa
   const rename = panel.getByRole("textbox", { name: "Rename Untitled Playlist" });
   await rename.fill("Secondary Set");
   await rename.press("Enter");
+  await confirmStickWrite(page);
   await expect(page.getByRole("contentinfo")).toContainText("Renamed to Secondary Set.");
   await expect(created).toHaveCount(0);
   const renamed = panel.locator('[role="treeitem"][data-kind="devicePlaylist"]').filter({ hasText: "Secondary Set" });
@@ -147,6 +155,7 @@ test("device playlist actions work from the secondary Devices tree", async ({ pa
 
   await renamed.click({ button: "right" });
   await page.getByRole("menu", { name: "Playlist" }).getByRole("menuitem", { name: "Delete Playlist" }).click();
+  await confirmStickWrite(page);
   await expect(page.getByRole("contentinfo")).toContainText("Deleted Secondary Set.");
   await expect(renamed).toHaveCount(0);
 
@@ -180,6 +189,7 @@ test("adding a track a stick playlist already holds asks Add or Skip, as rekordb
   let asked = await addTo(2);
   await expect(asked).toContainText("1 of the 2 selected tracks are already in Melodic Vox.");
   await asked.getByRole("button", { name: "Skip duplicates" }).click();
+  await confirmStickWrite(page);
   await expect(page.getByRole("contentinfo")).toContainText("Added to Melodic Vox.");
   await inLibrary(page, 0, "Melodic Vox").click();
   await expect(rows(page)).toHaveCount(4);
@@ -194,6 +204,7 @@ test("adding a track a stick playlist already holds asks Add or Skip, as rekordb
   // Add: the held track goes on the end again.
   asked = await addTo(2);
   await asked.getByRole("button", { name: "Add duplicates" }).click();
+  await confirmStickWrite(page);
   await expect(page.getByRole("contentinfo")).toContainText("Added to Melodic Vox.");
   await inLibrary(page, 0, "Melodic Vox").click();
   await expect(rows(page)).toHaveCount(6);

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { confirmStickWrite } from "./helpers";
 
 /**
  * The Sync Manager on the mock backend: opened from the foot of the rail,
@@ -21,6 +22,8 @@ test("eject after syncing removes successfully synced devices", async ({ page })
   await expect(dialog.getByRole("meter", { name: "DJ STICK storage used" })).toBeVisible();
   await dialog.getByRole("checkbox", { name: "Eject after syncing" }).check();
   await dialog.getByRole("button", { name: "SYNC", exact: true }).click();
+  // Each ticked Stick's sync is staged and held for (wbx-45.4).
+  await confirmStickWrite(page);
   await expect(dialog.getByRole("status")).toContainText("Safely ejected.");
   await expect(dialog.getByRole("checkbox", { name: "DJ STICK", exact: true })).toHaveCount(0);
   await expect(dialog.getByRole("checkbox", { name: "TEST", exact: true })).toBeVisible();
@@ -116,6 +119,9 @@ test("SYNC writes the ticked playlists to both sticks, reports on each, and Clos
   const sync = dialog.getByRole("button", { name: "SYNC", exact: true });
   await expect(sync).toBeEnabled();
   await sync.click();
+  // Each ticked Stick's sync is staged and held for (wbx-45.4).
+  await confirmStickWrite(page);
+  await confirmStickWrite(page);
 
   await expect(dialog.getByLabel("DJ STICK export report")).toContainText(/\d+ tracks updated/);
   await expect(dialog.getByLabel("TEST export report")).toContainText(/\d+ tracks updated/);
@@ -142,6 +148,8 @@ test("ticking a stick again brings back what it was last synced with", async ({ 
   await tree.getByRole("checkbox", { name: "Hardstyle" }).check();
   await dialog.getByRole("checkbox", { name: "DJ STICK", exact: true }).check();
   await dialog.getByRole("button", { name: "SYNC", exact: true }).click();
+  // Each ticked Stick's sync is staged and held for (wbx-45.4).
+  await confirmStickWrite(page);
   await expect(dialog.getByLabel("DJ STICK export report")).toContainText(/\d+ tracks updated/);
 
   // Untick everything, tick the stick: its last selection comes back.
@@ -158,6 +166,8 @@ test("reopened, it shows the stick's playlists and ticks what it was last synced
   await tree.getByRole("checkbox", { name: "Hardstyle" }).check();
   await dialog.getByRole("checkbox", { name: "DJ STICK", exact: true }).check();
   await dialog.getByRole("button", { name: "SYNC", exact: true }).click();
+  // Each ticked Stick's sync is staged and held for (wbx-45.4).
+  await confirmStickWrite(page);
   await expect(dialog.getByLabel("DJ STICK export report")).toContainText(/\d+ tracks updated/);
   await dialog.getByRole("button", { name: "Close" }).filter({ hasText: "Close" }).click();
   await expect(dialog).toBeHidden();
@@ -219,6 +229,8 @@ test("the [Playlists] box selects every playlist, shows mixed, and SYNC writes t
 
   await dialog.getByRole("checkbox", { name: "DJ STICK", exact: true }).check();
   await dialog.getByRole("button", { name: "SYNC", exact: true }).click();
+  // Each ticked Stick's sync is staged and held for (wbx-45.4).
+  await confirmStickWrite(page);
   await expect(dialog.getByLabel("DJ STICK export report")).toContainText(/\d+ tracks updated/);
   await dialog.getByRole("button", { name: "Expand DJ STICK", exact: true }).click();
   await expect(dialog.getByLabel("DJ STICK library")).toContainText("Melodic Vox");

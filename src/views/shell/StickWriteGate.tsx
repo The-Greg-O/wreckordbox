@@ -82,6 +82,10 @@ interface Asking {
   answer: (yes: boolean) => void;
 }
 
+/** How long a Stick's first outline is waited for before a write to it is refused. */
+const OUTLINE_WAIT_MS = 2000;
+const OUTLINE_POLL_MS = 100;
+
 const GateContext = createContext<StickWriteGate | null>(null);
 
 /** Shares the window's gate with the parts that write to a Stick (the device panel, the Sync Manager). */
@@ -168,10 +172,20 @@ export function useStickWriteGate({ sticks, refresh, refuse }: {
     return approval;
   }, [refresh, refuse]);
 
+  /** A Stick just mounted or opened may not be read yet: its first outline is waited for, briefly. */
+  const read = useCallback(async (path: string) => {
+    for (let waited = 0; waited < OUTLINE_WAIT_MS; waited += OUTLINE_POLL_MS) {
+      const stick = live.current.sticks.find((s) => s.path === path);
+      if (stick === undefined || stick.outline !== null) return;
+      await new Promise((resolve) => { window.setTimeout(resolve, OUTLINE_POLL_MS); });
+    }
+  }, []);
+
   const guarded = useCallback(async (
     path: string,
     body: (approve: (question: StickWriteQuestion) => Promise<string | null>) => Promise<unknown>,
   ) => {
+    await read(path);
     const stopped = live.current.refusal(path);
     if (stopped !== null) {
       refuse(stopped);
@@ -187,7 +201,7 @@ export function useStickWriteGate({ sticks, refresh, refuse }: {
     } finally {
       if (approved) await refresh(path);
     }
-  }, [ask, refresh, refuse]);
+  }, [ask, read, refresh, refuse]);
 
   const stage = useCallback(async (write: StagedStickWrite) => {
     let done = false;
@@ -201,17 +215,21 @@ export function useStickWriteGate({ sticks, refresh, refuse }: {
   }, [guarded]);
 
   const approve = useCallback(async (path: string, question: StickWriteQuestion) => {
+    await read(path);
     const stopped = live.current.refusal(path);
     if (stopped !== null) {
       refuse(stopped);
       return null;
     }
     return ask(path, question);
-  }, [ask, refuse]);
+  }, [ask, read, refuse]);
 
   const element = asking ? <HoldDialog key={asking.id} {...asking} /> : null;
   return { refusal, stage, guarded, approve, recheck: refresh, element };
 }
+
+/** How long after it opens the dialog ignores a key's activation of its buttons. */
+const KEY_GRACE_MS = 400;
 
 /** The input that started the hold: only it can finish it. */
 type Holder = { pointer: number } | { key: string };
@@ -226,6 +244,10 @@ function HoldDialog({ name, spare, title, lines, answer }: Asking) {
   const settled = useRef(false);
   const dialog = useRef<HTMLDivElement>(null);
   const cancelButton = useRef<HTMLButtonElement>(null);
+  // A key pressed for what came before the dialog (Enter committing a name,
+  // say) must not answer it: keyboard activation counts only once it has
+  // been on screen a moment.
+  const openedAt = useRef(performance.now());
 
   const settle = useCallback((yes: boolean) => {
     if (settled.current) return;
@@ -335,7 +357,17 @@ function HoldDialog({ name, spare, title, lines, answer }: Asking) {
             : `Hold the button for ${seconds} second${seconds === 1 ? "" : "s"} to write. Letting go early writes nothing.`}
         </p>
         <div className={styles.buttons}>
-          <button ref={cancelButton} type="button" onClick={() => { settle(false); }}>Cancel</button>
+          <button
+            ref={cancelButton}
+            type="button"
+            onClick={(event) => {
+              const byKey = event.detail === 0;
+              if (byKey && performance.now() - openedAt.current < KEY_GRACE_MS) return;
+              settle(false);
+            }}
+          >
+            Cancel
+          </button>
           <button
             type="button"
             className={styles.hold}

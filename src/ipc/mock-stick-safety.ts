@@ -72,8 +72,11 @@ function keep(state: Log): void {
   }
 }
 
+/** Where the log lives without a window (the unit tests). */
+const WINDOWLESS: { __stickSafetyLog?: Log } = {};
+
 function log(): Log {
-  const holder = (typeof window === "undefined" ? {} : window) as { __stickSafetyLog?: Log };
+  const holder = (typeof window === "undefined" ? WINDOWLESS : window) as { __stickSafetyLog?: Log };
   if (!holder.__stickSafetyLog) {
     const restored = kept();
     holder.__stickSafetyLog = {
