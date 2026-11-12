@@ -16,7 +16,7 @@ pub(super) fn begin<'a>(
             .map(|beat| (beat.time_ms, beat.beat_number, beat.tempo_x100))
             .collect::<Vec<_>>()
     };
-    guard.recording_values("window_grid", track, serde_json::json!({
+    guard.recording_values("window_grid", track, &serde_json::json!({
         "analysis": relative,
         "before": values(before), "after": values(after),
         "step": match action { GridAction::Edit { .. } => "write", GridAction::Undo => "undo", GridAction::Redo => "redo" }

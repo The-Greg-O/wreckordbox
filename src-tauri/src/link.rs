@@ -413,7 +413,7 @@ pub(crate) fn save_grid_offset(state: &AppState, track: &str, offset_ms: i16) ->
     if before == Some(offset_ms) { return Ok(()); }
     let bytes = analysis.with_grid_offset(offset_ms)
         .ok_or_else(|| AppError::new(ErrorKind::Malformed, "Track has no complete beat-grid header"))?;
-    let record = edit.recording_values("link_grid_offset", track, serde_json::json!({
+    let record = edit.recording_values("link_grid_offset", track, &serde_json::json!({
         "before": before, "after": offset_ms, "analysis": relative
     })).map_err(crate::commands::write_error)?;
     let journal = match crate::file_journal::FileJournal::prepare(state.backup_dir(), &location, track,

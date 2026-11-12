@@ -28,7 +28,7 @@ impl FileEdit<'_> {
         kind: &'static str,
         track: &str,
     ) -> Result<FileRecord<'_>, rbl_db::DbError> {
-        self.recording_values(kind, track, serde_json::Value::Null)
+        self.recording_values(kind, track, &serde_json::Value::Null)
     }
 
     /// Values already in hand, not snapshots obtained by doing more I/O.
@@ -36,11 +36,11 @@ impl FileEdit<'_> {
         &mut self,
         kind: &'static str,
         track: &str,
-        values: serde_json::Value,
+        values: &serde_json::Value,
     ) -> Result<FileRecord<'_>, rbl_db::DbError> {
         let ledger = self.core.history().lock().ledger();
         if let Some(ledger) = &ledger {
-            ledger.begin_file(kind, track, &values).map_err(|why| {
+            ledger.begin_file(kind, track, values).map_err(|why| {
                 rbl_db::DbError::WriteRefused(format!(
                     "The Ledger cannot record a change, so nothing was changed: {why}"
                 ))
