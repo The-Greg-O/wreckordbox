@@ -28,7 +28,13 @@ export interface DeviceLibraries {
   revision: number;
 }
 
-export function useDeviceLibraries(devices: readonly Device[]): DeviceLibraries {
+/**
+ * `readBack.current` false (the view shell, wbx-45.4): an edit or refresh
+ * only bumps `revision` and does not read the Stick's libraries again, since
+ * that read settles an unfinished export (wbx-45.5); the shell's tree reads
+ * its Sticks with the read-only outline, which follows `revision`.
+ */
+export function useDeviceLibraries(devices: readonly Device[], readBack?: { readonly current: boolean }): DeviceLibraries {
   const [loaded, setLoaded] = useState<ReadonlyMap<string, readonly DeviceLibrary[]>>(() => new Map());
   const [revision, setRevision] = useState(0);
   // Sticks asked for and not yet answered, so a double-click on a twisty
@@ -80,18 +86,18 @@ export function useDeviceLibraries(devices: readonly Device[]): DeviceLibraries 
       const backend = await getBackend();
       const result = await backend.devicePlaylistEdit(path, format, change);
       if (result.changed > 0) {
-        await read(path);
+        if (readBack?.current !== false) await read(path);
         setRevision((r) => r + 1);
       }
       return result;
     },
-    [read],
+    [read, readBack],
   );
 
   const refresh = useCallback(async (path: string) => {
-    await read(path);
+    if (readBack?.current !== false) await read(path);
     setRevision((revision) => revision + 1);
-  }, [read]);
+  }, [read, readBack]);
 
   const nodes = useMemo(() => withDeviceLibraries(deviceNodes(devices), loaded), [devices, loaded]);
 

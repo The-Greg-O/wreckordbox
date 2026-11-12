@@ -961,6 +961,11 @@ export function createMockBackend(options: MockOptions = {}): Backend {
   // stick has had; and the next read of a stick held unanswered until
   // released.
   const outlineReads = new Map<string, number>();
+  const deviceLibrariesReads = new Map<string, number>();
+  if (typeof window !== "undefined") {
+    (window as unknown as { __deviceLibrariesReads: (path: string) => number }).__deviceLibrariesReads =
+      (path) => deviceLibrariesReads.get(path) ?? 0;
+  }
   const heldOutlines = new Map<string, Array<() => void>>();
   const holdingOutlines = new Set<string>();
   const outlineOverrides = new Map<string, StickOutline>();
@@ -3661,7 +3666,12 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       return () => progressListeners.delete(listener);
     },
     // The fake disk above. Copies, as with the tree: the map is the mock's.
-    deviceLibraries: (path) => wait(stickLibraries.libraries(path)),
+    deviceLibraries: (path) => {
+      // Counted, for the shell tree's spec: this is the read that settles
+      // an unfinished export on a real Stick (wbx-45.5).
+      deviceLibrariesReads.set(path, (deviceLibrariesReads.get(path) ?? 0) + 1);
+      return wait(stickLibraries.libraries(path));
+    },
     stickOutline,
     devicePlaylistCollectionTracks: (path, format, tracks) =>
       wait(stickLibraries.collectionTracks(path, format, tracks, [...(looseTracks.get(path) ?? [])])),

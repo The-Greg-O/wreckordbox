@@ -204,7 +204,9 @@ function AppBody() {
   // point is exactly the kind of idle work the budgets forbid.
   const [devices, setDevices] = useState<readonly Device[]>([]);
   // What each stick's own libraries hold, read when a stick is opened.
-  const deviceLibraries = useDeviceLibraries(devices);
+  // Off in the view shell: Stick edits never read back through the recovering path (wbx-45.4).
+  const stickReadBack = useRef(true);
+  const deviceLibraries = useDeviceLibraries(devices, stickReadBack);
   const [syncing, setSyncing] = useState(false);
   const [ejectingDeviceId, setEjectingDeviceId] = useState<string | null>(null);
   const ejectingDeviceRef = useRef(false);
@@ -568,6 +570,7 @@ function AppBody() {
    * the layout menu last chose; the choice itself is kept for the old layout.
    */
   const shellOn = prefs.preferences.view.viewShell;
+  useEffect(() => { stickReadBack.current = !shellOn; }, [shellOn]);
   // The shell's tree reads each Stick's playlists without writing to it
   // (ticket #52); only drawn, so only read, with the shell on.
   const shellSticks = useStickOutlines(shellOn ? devices : NO_DEVICES, deviceLibraries.revision);
@@ -3427,6 +3430,8 @@ function AppBody() {
   const shellTree = useShellTree({
     library: tree, sticks: shellSticks, selectedNode, onSelectNode: setSelectedNode,
     view: shellView, onViewChange: changeShellView,
+    // The old tree's handlers (wbx-45.4); a Stick's own tracks may go on its playlists, as in the main tree.
+    actions: subTree, fromStick: draggedTracks !== null, expansion: treeExpansion, onExpansionChange: setTreeExpansion,
   });
   const library = (
         selectedDevice ? (

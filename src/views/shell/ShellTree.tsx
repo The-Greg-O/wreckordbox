@@ -31,6 +31,7 @@ import type { TreeNode } from "@/ipc/types";
 import { isShellTreePlace, shellTreeRows, type ShellSetPlan, type ShellStick, type ShellTreeRow } from "@/lib/shellTree";
 import { keyTarget, treeLayout, visibleRange, type TreeSizes } from "@/lib/shellTreeNav";
 import styles from "./ShellTree.module.css";
+import { useShellTreeActions, type ShellTreeActionProps } from "./ShellTreeActions";
 
 export interface ShellTreeProps {
   /** The Library's tree, as the backend sends it. */
@@ -43,7 +44,18 @@ export interface ShellTreeProps {
   selectedId: string | null;
   /** A row was chosen. */
   onOpen: (row: ShellTreeRow) => void;
+  /** The old tree's actions (wbx-45.4): menus, rename, drops, moves, Eject. None without. */
+  actions?: ShellTreeActionProps | undefined;
+  /** The Library node selected, which the Playlist menu's commands act on. */
+  selectedNode?: TreeNode | null | undefined;
+  /** The folders closed, when the window keeps them (the session); kept here otherwise. */
+  collapsed?: ReadonlySet<string> | undefined;
+  /** A folder was opened or closed. */
+  onFolderOpen?: ((id: string, open: boolean) => void) | undefined;
 }
+
+/** No actions: a tree that only opens rows. */
+const NO_ACTIONS: ShellTreeActionProps = {};
 
 /** Nothing produces Set plans yet; one empty list, so the rows are not remade each render. */
 const NO_SET_PLANS: readonly ShellSetPlan[] = [];
@@ -105,9 +117,14 @@ function readSizes(element: HTMLElement | null): TreeSizes {
   };
 }
 
-export function ShellTree({ library, sticks, setPlans = NO_SET_PLANS, selectedId, onOpen }: ShellTreeProps) {
+export function ShellTree({
+  library, sticks, setPlans = NO_SET_PLANS, selectedId, onOpen, actions = NO_ACTIONS, selectedNode = null,
+  collapsed: keptCollapsed, onFolderOpen,
+}: ShellTreeProps) {
   const t = useTranslation();
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
+  const [ownCollapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
+  const collapsed = keptCollapsed ?? ownCollapsed;
+  const act = useShellTreeActions({ actions, library, sticks, selectedNode });
   const treeRows = useMemo(
     () => shellTreeRows({ library, sticks, setPlans, collapsed }),
     [library, sticks, setPlans, collapsed],
@@ -166,6 +183,8 @@ export function ShellTree({ library, sticks, setPlans = NO_SET_PLANS, selectedId
   });
 
   const toggle = (id: string, open: boolean) => {
+    onFolderOpen?.(id, open);
+    if (keptCollapsed !== undefined) return;
     setCollapsed((current) => {
       const next = new Set(current);
       if (open) next.delete(id);
@@ -175,6 +194,13 @@ export function ShellTree({ library, sticks, setPlans = NO_SET_PLANS, selectedId
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLElement>, row: ShellTreeRow) => {
+    // Keys typed into the rename field are the field's.
+    if (event.target !== event.currentTarget) return;
+    if (act.key(event, row)) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     if (event.altKey || event.ctrlKey || event.metaKey) return;
     if (event.key === "Enter" || event.key === " ") {
       onOpen(row);
@@ -209,6 +235,7 @@ export function ShellTree({ library, sticks, setPlans = NO_SET_PLANS, selectedId
         title={name}
         className={row.kind === "stick" ? styles.stick : styles.row}
         style={{ "--depth": Math.min(row.depth, MAX_INDENT) } as CSSProperties}
+        {...act.row(row)}
         onClick={() => { onOpen(row); }}
         onFocus={() => { setFocusedId(row.id); }}
         onKeyDown={(event) => { onKeyDown(event, row); }}
@@ -228,8 +255,9 @@ export function ShellTree({ library, sticks, setPlans = NO_SET_PLANS, selectedId
           </button>
         ) : null}
         {row.kind === "stick" ? <span className={styles.stickLabel} aria-hidden>{t("Stick")} ·</span> : null}
-        <span className={styles.name} data-name>{name}</span>
+        {act.rename(row, name) ?? <span className={styles.name} data-name>{name}</span>}
         {row.count !== undefined ? <span className={styles.count} aria-hidden>{row.count}</span> : null}
+        {act.end(row)}
       </div>
     );
   };
@@ -259,13 +287,14 @@ export function ShellTree({ library, sticks, setPlans = NO_SET_PLANS, selectedId
               className={styles.group}
               style={{ top: box.top, height: box.height }}
             >
-              {group.heading !== undefined ? <div className={styles.heading} aria-hidden>{group.heading}</div> : null}
+              {group.heading !== undefined ? <div className={styles.heading} aria-hidden {...act.heading(group.id)}>{group.heading}</div> : null}
               <div style={{ height: first * sizes.row }} aria-hidden />
               {group.rows.slice(first, end).map(drawRow)}
             </div>
           );
         })}
       </div>
+      {act.menu}
     </div>
   );
 }

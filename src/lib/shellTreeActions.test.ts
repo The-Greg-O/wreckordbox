@@ -21,8 +21,8 @@ const library: TreeNode[] = [
 const outline = (pending = false): StickOutline => ({
   pending,
   libraries: pending ? [] : [
-    { format: "deviceLibrary", nodes: [{ id: "10", name: "Gig", folder: true, depth: 0 }, { id: "11", name: "Set", folder: false, depth: 1, count: 2 }] },
-    { format: "oneLibrary", nodes: [{ id: "10", name: "Gig", folder: true, depth: 0 }, { id: "11", name: "Set", folder: false, depth: 1, count: 2 }] },
+    { format: "deviceLibrary", nodes: [{ id: "10", parentId: "0", name: "Gig", folder: true, depth: 0, count: 1 }, { id: "11", parentId: "10", name: "Set", folder: false, depth: 1, count: 2 }] },
+    { format: "oneLibrary", nodes: [{ id: "10", parentId: "0", name: "Gig", folder: true, depth: 0, count: 1 }, { id: "11", parentId: "10", name: "Set", folder: false, depth: 1, count: 2 }] },
   ],
 });
 
@@ -80,7 +80,7 @@ describe("shellRowMenu", () => {
     const split: ShellStick = {
       path: "/media/USB", name: "USB",
       outline: { pending: false, libraries: [
-        { format: "deviceLibrary", nodes: [{ id: "1", name: "A", folder: false, depth: 0 }] },
+        { format: "deviceLibrary", nodes: [{ id: "1", parentId: "0", name: "A", folder: false, depth: 0, count: 0 }] },
         { format: "oneLibrary", nodes: [] },
       ] },
     };
