@@ -62,7 +62,10 @@ fn linux_keeps_no_menu_row_when_the_labels_arrive() {
     .expect("enabled states are accepted");
     rbxport_lib::menu::set_history_menu(app.handle().clone(), Some("Rating".to_owned()), None)
         .expect("history labels are accepted");
-    assert!(app.menu().is_none(), "the labels must not bring the menu row back");
+    assert!(
+        app.menu().is_none(),
+        "the labels must not bring the menu row back"
+    );
 }
 
 #[cfg(target_os = "linux")]
