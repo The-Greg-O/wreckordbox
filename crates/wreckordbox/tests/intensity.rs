@@ -1006,3 +1006,74 @@ fn import_elsewhere_fingerprint(sandbox: &Sandbox, samples: &[f32]) -> Value {
     );
     measured["tracks"][0]["fingerprint"].clone()
 }
+
+#[test]
+fn a_track_removed_and_added_again_keeps_its_intensity_without_decoding() {
+    let sandbox = Sandbox::new();
+    let audio = joined(&[loud_busy(4.0), quiet_sparse(3.0)]);
+    let track = import(&sandbox, "Again.wav", &audio);
+    let first = measure(&sandbox, &[&track]);
+    assert_eq!(first["tracks"][0]["status"], "measured");
+    let fact = first["tracks"][0]["fact_id"].clone();
+
+    // Removed from the Library and imported again: a new identifier.
+    stop_service(&sandbox);
+    let mut again = String::new();
+    sandbox.edit(|writer| {
+        writer.delete_track(&track).unwrap();
+        again = writer
+            .import_file(&audio_path(&sandbox, "Again.wav"))
+            .unwrap();
+    });
+    assert_ne!(track, again);
+
+    sandbox.status();
+    let mut watcher = sandbox.client();
+    watcher.subscribe().unwrap();
+    // The Measurement is re-attached by its fingerprint, as every Fact is,
+    // and is the answer: the same Fact, nothing decoded, nothing new.
+    let measured = measure(&sandbox, &[&again]);
+    assert_eq!(measured["tracks"][0]["status"], "reused", "{measured}");
+    assert_eq!(measured["decoded"], 0);
+    assert_eq!(measured["tracks"][0]["fact_id"], fact);
+    assert_eq!(measured["tracks"][0]["reused_from"], Value::Null);
+    let seen = events(&mut watcher);
+    let reattached = seen
+        .iter()
+        .find(|event| event.event == "facts_reattached")
+        .unwrap_or_else(|| panic!("{seen:?}"));
+    assert_eq!(reattached.data["from_track"], track.as_str());
+    assert_eq!(reattached.data["to_track"], again.as_str());
+    let shown = show(&sandbox, &again);
+    assert_eq!(shown["intensity"]["fact_id"], fact);
+    assert_eq!(shown["intensity"]["track_id"], again.as_str());
+}
+
+#[test]
+fn audio_changed_and_changed_back_makes_the_measurement_current_again() {
+    let sandbox = Sandbox::new();
+    let audio = joined(&[loud_busy(4.0), quiet_sparse(3.0)]);
+    let track = import(&sandbox, "Back.wav", &audio);
+    let first = measure(&sandbox, &[&track]);
+    let fact = first["tracks"][0]["fact_id"].clone();
+
+    let path = audio_path(&sandbox, "Back.wav");
+    let original = std::fs::read(&path).unwrap();
+    write_audio(&path, &quiet_sparse(7.0));
+    let shown = show(&sandbox, &track);
+    assert_eq!(shown["intensity"], Value::Null, "{shown}");
+    assert_eq!(shown["previous"][0]["fact_id"], fact);
+    assert_eq!(shown["previous"][0]["stale"], true);
+
+    // The original audio is back: its Measurement is current again, not
+    // copied, and measuring reuses it without decoding.
+    std::fs::write(&path, original).unwrap();
+    let shown = show(&sandbox, &track);
+    assert_eq!(shown["intensity"]["fact_id"], fact, "{shown}");
+    assert_eq!(shown["intensity"]["stale"], false);
+    let measured = measure(&sandbox, &[&track]);
+    assert_eq!(measured["tracks"][0]["status"], "reused");
+    assert_eq!(measured["tracks"][0]["fact_id"], fact);
+    assert_eq!(measured["tracks"][0]["reused_from"], Value::Null);
+    assert_eq!(measured["decoded"], 0);
+}
