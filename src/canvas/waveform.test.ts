@@ -368,7 +368,9 @@ describe("the hot cue badges on a row preview", () => {
     expect(ops[0]).toMatchObject({ w: Number.parseFloat(token("--s-preview-cue-badge") ?? "") });
     expect(ops[0]).toMatchObject({ style: token("--c-cue-hot")?.toUpperCase() });
     expect(ops[1]).toMatchObject({ style: token("--c-cue-hot-text")?.toUpperCase() });
-    expect(ctx.font).toBe(`700 ${token("--f-size-preview-cue")} ${token("--f-ui")}`);
+    // The canvas keeps upstream's face, which is the role's fallback: a canvas
+    // cannot read a custom property, and the letter sits in a 6px badge.
+    expect(ctx.font).toBe(`700 ${token("--f-size-preview-cue")} ${token("--role-font")}`);
   });
 });
 

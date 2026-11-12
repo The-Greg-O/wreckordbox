@@ -1,17 +1,40 @@
 /* Shipped CSS token values. Their measured design source is maintained privately. */
+/* Theme roles (docs/design/tokens.md): the chrome's colours and face. The app
+   shell overwrites these from the active Omarchy theme and the system
+   monospace font (src-tauri/src/omarchy_theme.rs, src/lib/themeRoles.ts).
+   The values here are the fallbacks, upstream's own, for a machine without
+   Omarchy, for macOS and Windows, and for the browser mock. Only the chrome
+   tokens below refer to a role; a token that describes the music never does. */
+:root {
+  --role-ground: #000000; /* deepest ground: top bar, status line, waveform wells (theme: darker_background) */
+  --role-panel: #0F0F0F; /* panels: tree, player, target list (theme: dark_background) */
+  --role-working: #1E1E1E; /* the working area (theme: background) */
+  --role-hairline: #323232; /* hairlines, unset pips (theme: lighter_background) */
+  --role-control: #2B2B2B; /* a control's fill: player buttons (theme: lighter_background, as hairlines) */
+  --role-selection: #314B67; /* a selected row (theme: selection) */
+  --role-border: #646464; /* control borders (theme: muted) */
+  --role-text: #E6E6E6; /* text (theme: foreground) */
+  --role-text-dim: #9A9A9A; /* secondary text, labels (theme: dark_foreground) */
+  --role-text-bright: #FFFFFF; /* emphasised text (theme: bright_foreground) */
+  --role-accent: #1373EB; /* focus, active filter, deck marker (theme: accent) */
+  --role-tab-from: #1373EB; /* the active view tab's line, left end (theme: bright_magenta) */
+  --role-tab-to: #1373EB; /* the active view tab's line, right end (theme: bright_yellow) */
+  --role-font: Arial, "Helvetica Neue", Helvetica, sans-serif; /* the system monospace font where the system names one */
+}
+
 :root {
   --c-titlebar: #363738; /* docs/screenshots (rekordbox 7.2.11, 2x) 9.09.33 PM: the window's title bar behind 'rekordbox', (54,55,56) at y 78..131 under the 1pt window-edge highlight; the old #262828 was sampled under a modal's dimming */
-  --c-black: #000000; /* player bg, splitters, status bar */
-  --c-top: #0F0F0F; /* top bar, odd rows */
-  --c-panel: #1E1E1E; /* tree, rails, column header, even rows */
-  --c-button: #2B2B2B; /* player buttons */
-  --c-raised: #323232; /* bottom bar, column dividers, inactive tab */
-  --c-select: #314B67; /* measured, modal over both captures (100% / 86% purity) */
-  --c-accent: #1373EB; /* active tab, sort arrow, MASTER border, Q */
+  --c-black: var(--role-ground); /* player bg, splitters, status bar */
+  --c-top: var(--role-panel); /* top bar, odd rows */
+  --c-panel: var(--role-working); /* tree, rails, column header, even rows */
+  --c-button: var(--role-control); /* player buttons */
+  --c-raised: var(--role-hairline); /* bottom bar, column dividers, inactive tab */
+  --c-select: var(--role-selection); /* measured, modal over both captures (100% / 86% purity) */
+  --c-accent: var(--role-accent); /* active tab, sort arrow, MASTER border, Q */
   --c-field: #000000; /* measured: search field interior is black; the old #4B4B4B was its magnifier glyph */
   --c-field-placeholder: #4B4B4B; /* measured: search placeholder text and magnifier glyph */
-  --c-text: #E6E6E6;
-  --c-text-dim: #9A9A9A;
+  --c-text: var(--role-text);
+  --c-text-dim: var(--role-text-dim);
   --c-played: #69B900; /* rekordbox 7.2.19 static: a played track's text in the track list, theme colour 0x30000e1 in the dark theme and the selected-row constant alike (ListViewer::findTextColour @0x1003efb70; the theme table from __GLOBAL__sub_I_ColorTheme.cpp, issue #540) */
   --c-icon-off: #A0A0A0; /* skins/*_off.svg fill rgb(160,160,160) */
   --c-icon-on: #F0F0F0; /* skins/*_on.svg fill rgb(240,240,240) */
@@ -616,7 +639,7 @@
   --s-link-mc-icon: 16px; /* measured from a live 2x capture of rekordbox 7.2 in EXPORT as tempo master (2026-09-14): the master-clock cluster at the strip's left — the recycle two-arrows and the MASTER gear, ~33px at 2x */
   --s-link-mc-gap: 4px; /* measured from a live 2x capture of rekordbox 7.2 in EXPORT as tempo master (2026-09-14): the master-clock cluster at the strip's left — the gap between the boxes and rows */
 
-  --f-ui: Arial, "Helvetica Neue", Helvetica, sans-serif; /* identified by ink-extent fit (0.70% RMS error) and corroborated by rekordbox3.settings MenuFontName=Arial; see design/measure/font-report.json */
+  --f-ui: var(--role-font); /* identified by ink-extent fit (0.70% RMS error) and corroborated by rekordbox3.settings MenuFontName=Arial; see design/measure/font-report.json */
   --f-size-ui: 16.5px; /* best aggregate fit over four measured strings */
   --f-size-sm: 12px; /* status bar 'Analyzing: 8319 Tracks', 128pt wide, bold */
   --f-size-bars: 14px; /* docs/screenshots at 2x: the bar count reads 20px tall over the detail band, which is a 14px face */
@@ -651,6 +674,22 @@
   --f-size-traffic-master: 10px; /* measured from the 2-player capture docs/screenshots (Screenshot 2026-09-08 at 3.00.12 PM, rekordbox 7.2.11, 2x): 'MASTER' in the box, a 14 capture px cap; bold */
   --f-size-link-label: 16px; /* docs/screenshots 2026-09-13 11.16.28 AM (rekordbox 7.2.11 EXPORT, 2x, LINK on, both decks empty): LINK, the player number, MIXER and a loaded title: a 23 capture px cap (11.5pt), Arial at 16px; LINK 68px wide at 2x, Arial 16 gives 72 */
   --f-size-link-lamp: 12.5px; /* docs/screenshots 2026-09-13 11.16.28 AM (rekordbox 7.2.11 EXPORT, 2x, LINK on, both decks empty): MASTER SYNC: an 18 capture px cap (9pt), Arial at 12.5px; 'MASTER SYNC' 184px wide at 2x */
+}
+
+/* A light theme. Upstream's layout draws its icons and many labels from fixed
+   light tokens that vanish on a light ground, so it keeps upstream's dark
+   grounds and text and takes only the accent and the face. The roles
+   themselves stay the theme's, for the view shell. Goes with upstream's
+   layout (#77). */
+:root[data-theme-mode="light"] {
+  --c-black: #000000;
+  --c-top: #0F0F0F;
+  --c-panel: #1E1E1E;
+  --c-button: #2B2B2B;
+  --c-raised: #323232;
+  --c-select: #314B67;
+  --c-text: #E6E6E6;
+  --c-text-dim: #9A9A9A;
 }
 
 /* rekordbox export mode is a single dark design; we commit to it rather than

@@ -35,6 +35,15 @@ Read from the active theme's `colors.toml`; the window re-reads it when the them
 
 The active view tab carries a two-colour line (`bright_magenta` to `bright_yellow`); the Stick load display uses the same pair. These are the only gradients.
 
+The active theme's file is `~/.local/state/omarchy/current/theme/colors.toml`. In CSS each role is a `--role-*` custom property (`src/styles/tokens.css`, set by `src/lib/themeRoles.ts`).
+
+### Fallbacks
+
+- **No theme** (no Omarchy, macOS, Windows, the browser mock, or a file without both `background` and `foreground`): every role keeps upstream's colour, so the window looks as upstream's does.
+- **A partial file:** a missing role is derived from the file's own `background` and `foreground` (darker grounds towards black; hairline, selection and borders a step towards the foreground; secondary text a step towards the background), never taken from upstream, so two palettes are not mixed. A selection colour too close to the text colour to read is replaced the same way.
+- **A light theme:** the roles are the theme's. Upstream's layout, until it is removed, keeps its dark grounds and text and takes only the accent and the font, because its icons are drawn for a dark ground.
+- **Font:** where fontconfig cannot name a monospace family, upstream's face.
+
 ## Fixed colours (meaning, not theme)
 
 - **Prep colour:** rekordbox's own label colours, shown as a 3 px stripe at the row's left edge.
