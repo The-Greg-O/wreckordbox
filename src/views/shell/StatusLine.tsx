@@ -33,6 +33,12 @@ export function StatusLine(props: StatusBarProps) {
       {runText && <span className={styles.runs} title={runs.map(run => run.description).join("\n")}>{runText}</span>}
       </span>
       {problem && <span className={styles.problem} role="alert" title={problem}>{t(problem)}</span>}
+      {(props.sticks ?? []).map((stick) => <button type="button" key={stick.path} className={styles.clip}
+        data-stick-protection={stick.protected ? "protected" : "unlocked"}
+        title={stick.protected ? t("Nothing is written to {name} until it is unlocked", { name: stick.name }) : t("{name} is unlocked until it is ejected or removed", { name: stick.name })}
+        onClick={props.onStickProtection}>
+        {stick.protected ? t("{name} protected", { name: stick.name }) : t("{name} unlocked", { name: stick.name })}
+      </button>)}
       {props.readOnly && <button type="button" title={refusal(props.protectedLibrary ?? false)}
         onClick={props.onExplainReadOnly} onDoubleClick={props.onDisableReadOnly}>{t("Library read-only")}</button>}
       {props.onCancelAnalysis && <button type="button" onClick={props.onCancelAnalysis}>{t("Stop")}</button>}

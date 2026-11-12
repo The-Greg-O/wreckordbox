@@ -1,56 +1,34 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { DeviceFormat } from "@/ipc/types";
-import { prepareDevicePlaylistDrop } from "./devicePlaylistDrop";
+import { askDevicePlaylistDrop } from "./devicePlaylistDrop";
 
-const format: DeviceFormat = "deviceLibrary";
+const backend = (rows: (string | null)[], held: string[]) => ({
+  devicePlaylistCollectionTracks: vi.fn(() => Promise.resolve(rows)),
+  devicePlaylistDuplicates: vi.fn(() => Promise.resolve(held)),
+});
 
-describe("prepareDevicePlaylistDrop", () => {
-  it("exports only missing tracks, maps them to device ids, then honors Skip duplicates", async () => {
-    const backend = {
-      devicePlaylistCollectionTracks: vi.fn()
-        .mockResolvedValueOnce(["device-1", null, "device-2"])
-        .mockResolvedValueOnce(["device-1", "device-3", "device-2"]),
-      devicePlaylistDuplicates: vi.fn().mockResolvedValue(["device-1"]),
-      exportTracksToDevice: vi.fn().mockResolvedValue({}),
-    };
-    const ask = vi.fn().mockResolvedValue(false);
-
-    const edit = await prepareDevicePlaylistDrop(
-      backend, "/Volumes/TEST", format, "7", ["100", "101", "102"], undefined, undefined, ask, "Set",
-    );
-
-    expect(ask).toHaveBeenCalledWith(1, 3, "Set");
-    expect(backend.exportTracksToDevice).toHaveBeenCalledWith(["101"], "/Volumes/TEST", undefined, undefined);
-    expect(edit).toEqual({ kind: "add", playlist: "7", tracks: ["device-3", "device-2"], duplicates: false });
+describe("askDevicePlaylistDrop", () => {
+  it("reads which tracks the Stick and the playlist hold, asks, and writes nothing", async () => {
+    const reads = backend(["row:1", null, "row:3"], ["row:3"]);
+    const ask = vi.fn(() => Promise.resolve(false));
+    const drop = await askDevicePlaylistDrop(reads, "/Volumes/TEST", "deviceLibrary", "7", ["1", "2", "3"], ask, "Friday");
+    expect(ask).toHaveBeenCalledWith(1, 3, "Friday");
+    expect(reads.devicePlaylistDuplicates).toHaveBeenCalledWith("/Volumes/TEST", "deviceLibrary", "7", ["row:1", "row:3"]);
+    expect(drop).toEqual({ tracks: ["1", "2", "3"], duplicates: false, adding: 2, missing: 1 });
   });
 
-  it("cancelling the duplicate prompt does not export tracks", async () => {
-    const backend = {
-      devicePlaylistCollectionTracks: vi.fn().mockResolvedValue([null]),
-      devicePlaylistDuplicates: vi.fn().mockResolvedValue([]),
-      exportTracksToDevice: vi.fn(),
-    };
-
-    const edit = await prepareDevicePlaylistDrop(
-      backend, "/Volumes/TEST", format, "7", ["100"], undefined, undefined,
-      vi.fn().mockResolvedValue(null), "Set",
-    );
-
-    expect(edit).toBeNull();
-    expect(backend.exportTracksToDevice).not.toHaveBeenCalled();
+  it("adds every track when the DJ answers Add", async () => {
+    const drop = await askDevicePlaylistDrop(backend(["row:1"], ["row:1"]), "/s", "oneLibrary", "7", ["1"], () => Promise.resolve(true), "x");
+    expect(drop).toEqual({ tracks: ["1"], duplicates: true, adding: 1, missing: 0 });
   });
 
-  it("refuses to add when the export did not produce a device-library row", async () => {
-    const backend = {
-      devicePlaylistCollectionTracks: vi.fn().mockResolvedValueOnce([null]).mockResolvedValueOnce([null]),
-      devicePlaylistDuplicates: vi.fn().mockResolvedValue([]),
-      exportTracksToDevice: vi.fn().mockResolvedValue({}),
-    };
+  it("stops when the question is cancelled or nothing would be added", async () => {
+    expect(await askDevicePlaylistDrop(backend(["row:1"], []), "/s", "oneLibrary", "7", ["1"], () => Promise.resolve(null), "x")).toBeNull();
+    expect(await askDevicePlaylistDrop(backend(["row:1"], ["row:1"]), "/s", "oneLibrary", "7", ["1"], () => Promise.resolve(false), "x")).toBeNull();
+  });
 
-    await expect(prepareDevicePlaylistDrop(
-      backend, "/Volumes/TEST", format, "7", ["100"], undefined, undefined,
-      vi.fn().mockResolvedValue(false), "Set",
-    )).rejects.toThrow("Only tracks of this library on the device can go into its playlists.");
+  it("refuses an answer that does not cover every track", async () => {
+    await expect(askDevicePlaylistDrop(backend([null], []), "/s", "oneLibrary", "7", ["1", "2"], () => Promise.resolve(true), "x"))
+      .rejects.toThrow("Only tracks of this library");
   });
 });

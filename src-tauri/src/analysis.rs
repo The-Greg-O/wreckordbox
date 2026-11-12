@@ -198,7 +198,7 @@ pub async fn analyse_track<R: tauri::Runtime>(
         // what `key_tag` being sent says.
         if let (Some(notation), Some(key)) = (key_tag, result.detected_key.as_ref()) {
             let path = library.row_of(&track_id).map_or("", |row| library.folder_path.get(row as usize));
-            crate::key_tag::write_logged(&track_id, path, key.name_for(notation));
+            crate::key_tag::write_logged(state.backup_dir(), &track_id, path, key.name_for(notation));
         }
         Ok(result)
     }).await;

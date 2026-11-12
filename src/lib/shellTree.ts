@@ -52,6 +52,8 @@ export interface ShellTreeRow {
   /** A folder: it can be closed and opened. */
   branch?: true;
   open?: boolean;
+  /** A Stick's row: Stick Protection, once known (wbx-45.11). */
+  protection?: "protected" | "unlocked";
 }
 
 /** A Set plan as the tree lists it. Nothing produces these yet (ticket #76). */
@@ -66,6 +68,8 @@ export interface ShellStick {
   path: string;
   name: string;
   outline: StickOutline | null;
+  /** Stick Protection, once read (wbx-45.11). */
+  protection?: "protected" | "unlocked";
 }
 
 export const SHELL_TREE_INTAKE_ID = "shell:intake";
@@ -150,7 +154,10 @@ function stickNodes(path: string, library: StickLibrary): TreeNode[] {
 
 function stickRows(out: ShellTreeRow[], stick: ShellStick, collapsed: ReadonlySet<string>): void {
   const id = `device:${stick.path}`;
-  out.push({ id, kind: "stick", name: stick.name, depth: 0, node: { id, name: stick.name, kind: "device", depth: 0 } });
+  out.push({
+    id, kind: "stick", name: stick.name, depth: 0, node: { id, name: stick.name, kind: "device", depth: 0 },
+    ...(stick.protection === undefined ? {} : { protection: stick.protection }),
+  });
   const outline = stick.outline;
   if (outline === null) return;
   if (outline.pending) {

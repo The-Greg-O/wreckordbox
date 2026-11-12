@@ -50,6 +50,9 @@ pub mod codes {
     /// done; the message is the window's own. See
     /// [`protection`](crate::protection).
     pub const LIBRARY_PROTECTED: &str = "library_protected";
+    /// The Stick is protected (wbx-45.11): nothing is written to it until
+    /// the DJ unlocks it, in the window or with `wreckordbox stick unlock`.
+    pub const STICK_PROTECTED: &str = "stick_protected";
     /// The Library's database is locked by another program.
     pub const LIBRARY_LOCKED: &str = "library_locked";
     /// The Library is there and cannot be read as one.

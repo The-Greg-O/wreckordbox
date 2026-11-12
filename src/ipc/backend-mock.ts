@@ -9,13 +9,14 @@
  * Its sort and search semantics are checked against the Rust view tests by a
  * parity test once `rbl-index` lands.
  */
+import { mockStickPending, mockStickReplaced, mockStickSpare, withStickSafetyLog } from "./mock-stick-safety";
 import { TRACK_SEARCH_OPTIONS, type TrackSearchField } from "@/lib/search";
 import theme from "@/styles/theme";
 import { mockServiceActivity } from "./mock-service-activity";
 import { rowMemoryCueColours } from "@/lib/memoryCueColours";
 import { shiftByGridBeats } from "@/lib/player";
 
-import type {
+import type { StickWritePlan,
   AppErrorDto, Backend, Backup, BackupProgress, BackupSizes, Cue, DeckEvent, Device, DeviceSettings, Edits, ExplorerRoot, ExportReport,
   DatabaseDrive, EditHistoryState, FilterValues, GridState, LibraryProblem, LibrarySummary, Limiter, LinkPeerSeen, LinkStatus, RelatedCriterion, RowDto, RowMyTag, SortKey,
   SelectionDetails, SmartRule, StickDefaults, SyncPlaylist, SyncProgress, Tick, TrackDetails, TrackField,
@@ -1067,6 +1068,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     hooks.__remountDevice = (path, outline) => {
       const device = unmounted.get(path);
       if (!device) return;
+      // Put back: another mount, so approvals for the one pulled out no longer hold.
+      mockStickReplaced(path);
       unmounted.delete(path);
       devices.push(device);
       if (outline) outlineOverrides.set(path, outline);
@@ -1078,13 +1081,48 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       heldOutlines.delete(path);
     };
   }
+  // Read-only views for the shell tree's specs (wbx-45.4): what a Library
+  // playlist and a Stick playlist hold, in order, and the Library's tree.
+  if (typeof window !== "undefined") {
+    const hooks = window as unknown as {
+      __libraryPlaylistTitles: (name: string) => string[];
+      __libraryTree: () => { name: string; kind: string; depth: number }[];
+      __stickPlaylistTitles: (path: string, format: "deviceLibrary" | "oneLibrary", name: string) => string[];
+    };
+    hooks.__libraryPlaylistTitles = (name) => {
+      const node = tree.find((n) => n.name === name && (n.kind === "playlist" || n.kind === "smartPlaylist"));
+      return node ? membersOf(node.id).map((id) => all.find((t) => t.id === id)?.title ?? id) : [];
+    };
+    hooks.__libraryTree = () => tree.map((n) => ({ name: n.name, kind: n.kind, depth: n.depth }));
+    // What a Stick holds from this Library: its playlists by name, with
+    // their tracks' titles, and its loose tracks' titles.
+    (window as unknown as { __stickHolds: (path: string) => { playlists: { name: string; titles: string[] }[]; loose: string[] } }).__stickHolds =
+      (path) => ({
+        playlists: (syncSelections.get(path) ?? []).map((p) => ({
+          name: p.name,
+          titles: (writtenMembers.get(path)?.get(p.libraryId) ?? []).map((id) => all.find((t) => t.id === id)?.title ?? id),
+        })),
+        loose: [...(looseTracks.get(path) ?? [])].map((id) => all.find((t) => t.id === id)?.title ?? id),
+      });
+    (window as unknown as { __trackIdOf: (title: string) => string | null }).__trackIdOf =
+      (title) => all.find((t) => t.title === title)?.id ?? null;
+    hooks.__stickPlaylistTitles = (path, format, name) => {
+      const node = stickLibraries.libraries(path).find((l) => l.format === format)?.nodes.find((n) => n.name === name && !n.folder);
+      return node ? stickLibraries.rows(path, format, node.id).map((row) => row.title) : [];
+    };
+  }
   const stickOutline = async (path: string): Promise<StickOutline> => {
     outlineReads.set(path, (outlineReads.get(path) ?? 0) + 1);
     // What the stick holds when it is asked, not when the answer comes.
-    const answer: StickOutline = unfinishedWrites.has(path) ? { pending: true, libraries: [] } : outlineOverrides.get(path) ?? {
-      pending: false,
-      libraries: stickLibraries.libraries(path).map(({ format, nodes }) => ({ format, nodes })),
-    };
+    // An unfinished write, as wbx-45.5's hooks or the Stick safety log say (wbx-45.4).
+    const unfinished = mockStickPending(path) || unfinishedWrites.has(path);
+    const answer: StickOutline = unfinished
+      ? { pending: true, spare: mockStickSpare(path), libraries: [] }
+      : outlineOverrides.get(path) ?? {
+        pending: false,
+        spare: mockStickSpare(path),
+        libraries: stickLibraries.libraries(path).map(({ format, nodes }) => ({ format, nodes })),
+      };
     // A hold is for the next read only.
     if (holdingOutlines.delete(path)) {
       await new Promise<void>((resolve) => { heldOutlines.set(path, [...(heldOutlines.get(path) ?? []), resolve]); });
@@ -1143,6 +1181,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
   const syncSelections = new Map<string, SyncPlaylist[]>();
   const formattedAs = new Map<string, string>();
   const looseTracks = new Map<string, Set<string>>();
+  /** Each Stick's playlists' members as last written to it. */
+  const writtenMembers = new Map<string, Map<string, string[]>>();
   /** Sticks whose record asks to be synced again when plugged in. */
   const autoSync = new Set<string>();
   const deviceLibraries = new Map<string, string[]>([
@@ -1231,6 +1271,9 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       device.path,
       playlistIds.map((id, i) => ({ libraryId: id, name: names[i] ?? id })),
     );
+    // What each playlist held when it was written: the Stick keeps that,
+    // whatever the Library does after (wbx-45.4, third review).
+    writtenMembers.set(device.path, new Map(playlistIds.map((id) => [id, [...membersOf(id)]])));
     deviceLibraries.set(device.path, names);
     return {
       tracks,
@@ -2353,7 +2396,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       (times) => { for (let i = 0; i < times; i += 1) void bump(false); };
   }
 
-  return {
+  return withStickSafetyLog({
     intakeQueue: intake.intakeQueue,
     intakeCounts: intake.intakeCounts,
     intakeColours: intake.intakeColours,
@@ -2740,6 +2783,86 @@ export function createMockBackend(options: MockOptions = {}): Backend {
         }
       }
       return reports;
+    },
+    // Stick Protection and the plan's confirmation belong to
+    // `withStickSafetyLog`, which wraps this backend: these are its stand-ins.
+    stickWriteApprove: () => Promise.reject(new Error("Not confirmed.")),
+    stickWriteRevoke: () => Promise.resolve(),
+    stickProtection: (path) => Promise.resolve({ protected: true, spare: false, name: path, revision: 0 }),
+    stickUnlock: (path) => Promise.resolve({ protected: false, spare: false, name: path, revision: 0 }),
+    stickLock: (path) => Promise.resolve({ protected: true, spare: false, name: path, revision: 0 }),
+    // The staged Stick write's plan (wbx-45.4), from what the mock stick
+    // holds: its sync selection and loose tracks. The approval token is
+    // added by `withStickSafetyLog`, which also refuses writes without one.
+    stickWritePlan: ({ destination: path, operation: op }) => {
+      if (!devices.some((d) => d.path === path)) return Promise.reject(new Error("That device is no longer connected."));
+      const empty: StickWritePlan = {
+        spare: mockStickSpare(path), pending: false, audioEstimated: true, tracksNew: 0, tracksChanged: 0, audioReused: 0, tracksRemoved: 0,
+        tracksMissing: 0, trackChanges: [], analysisWritten: 0, playlists: [], netAdditionalBytes: 0,
+        onStick: true, stickName: path, protected: true, adding: null, plan: null,
+      };
+      const pendingWrite = mockStickPending(path) || unfinishedWrites.has(path);
+      if (op.kind === "settle") {
+        return pendingWrite ? wait({ ...empty, pending: true }) : Promise.reject(new Error("There is no unfinished write on this Stick to settle."));
+      }
+      if (pendingWrite) return wait({ ...empty, pending: true });
+      const held = syncSelections.get(path) ?? [];
+      const onStick = new Set([...held.flatMap((p) => membersOf(p.libraryId)), ...(looseTracks.get(path) ?? [])]);
+      let adding: string[];
+      let extra: Partial<StickWritePlan> = {};
+      let created: string[] = [];
+      let again = held;
+      switch (op.kind) {
+        case "exportPlaylist":
+          adding = membersOf(op.playlist);
+          created = held.some((p) => p.libraryId === op.playlist) ? [] : [op.playlist];
+          break;
+        case "exportTracks":
+          adding = op.tracks;
+          break;
+        case "sync":
+          adding = op.playlists.flatMap(membersOf);
+          created = op.playlists.filter((id) => !held.some((p) => p.libraryId === id));
+          again = held.filter((p) => op.playlists.includes(p.libraryId));
+          break;
+        case "addLibraryTracks": {
+          const rows = stickLibraries.collectionTracks(path, op.format, op.tracks, [...(looseTracks.get(path) ?? [])]);
+          adding = op.tracks.filter((_, at) => rows[at] === null);
+          if (adding.length === 0) again = [];
+          const present = rows.filter((row): row is string => row !== null);
+          const held = new Set(stickLibraries.duplicates(path, op.format, op.playlist, present));
+          extra = { adding: op.duplicates ? op.tracks.length : op.tracks.length - held.size };
+          break;
+        }
+        default:
+          return wait(empty);
+      }
+      const written = new Set([...adding, ...again.flatMap((p) => membersOf(p.libraryId))]);
+      const fresh = new Set(adding.filter((id) => !onStick.has(id)));
+      return wait({
+        ...empty,
+        tracksNew: fresh.size,
+        audioReused: [...written].filter((id) => onStick.has(id)).length,
+        analysisWritten: written.size,
+        ...extra,
+        playlists: [
+          ...created.map((id) => ({ name: findNode(id)?.name ?? id, folder: false, change: "created" as const, added: membersOf(id).length, removed: 0, reordered: false })),
+          ...again.map((p) => {
+            // Against what the Stick holds: gained, lost, and kept ones moved.
+            const before = writtenMembers.get(path)?.get(p.libraryId);
+            if (before === undefined) return { name: p.name, folder: false, change: "resynchronised" as const, added: null, removed: null, reordered: null };
+            const next = membersOf(p.libraryId);
+            const kept = (from: string[], other: string[]) => from.filter((id) => other.includes(id));
+            return {
+              name: p.name, folder: false, change: "resynchronised" as const,
+              added: next.filter((id) => !before.includes(id)).length,
+              removed: before.filter((id) => !next.includes(id)).length,
+              reordered: kept(before, next).join("\n") !== kept(next, before).join("\n"),
+            };
+          }),
+        ],
+        netAdditionalBytes: fresh.size * 8_000_000,
+      });
     },
     // Synthetic sizes, but the same deduplication and peak/net distinction.
     estimateSync: (playlists, destinations) => wait(destinations.map((path) => {
@@ -3901,6 +4024,27 @@ export function createMockBackend(options: MockOptions = {}): Backend {
         return Promise.reject(error instanceof Error ? error : new Error(String(error)));
       }
     },
+    // Library tracks into a Stick playlist, as one write: those the Stick
+    // lacks put on it first, then each resolved to its row on the Stick.
+    devicePlaylistAddLibraryTracks: async (path, format, playlist, tracks, duplicates, defaults) => {
+      const device = devices.find((d) => d.path === path);
+      if (!device) throw new Error("That device is no longer connected.");
+      const loose = looseTracks.get(path) ?? new Set<string>();
+      const before = stickLibraries.collectionTracks(path, format, tracks, [...loose]);
+      const missing = tracks.filter((_, at) => before[at] === null);
+      if (missing.length > 0) {
+        for (const track of missing) loose.add(track);
+        looseTracks.set(path, loose);
+        await mockExport(path, () => writeTo(device, (syncSelections.get(path) ?? []).map((p) => p.libraryId), defaults));
+      }
+      const rows = stickLibraries.collectionTracks(path, format, tracks, [...loose]);
+      if (rows.some((row) => row === null)) throw new Error("Only tracks of this library on the device can go into its playlists.");
+      const present = rows as string[];
+      const held = new Set(stickLibraries.duplicates(path, format, playlist, present));
+      const adding = present.filter((row) => duplicates || !held.has(row));
+      if (adding.length === 0) return { id: playlist, changed: 0 };
+      return stickLibraries.edit(path, format, { kind: "add", playlist, tracks: adding, duplicates });
+    },
     devicePlaylistAddFiles: (path, format, playlist, tracks) => {
       try {
         return wait(stickLibraries.addFiles(path, format, playlist, tracks));
@@ -4086,7 +4230,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       if (!head) return wait([]);
       return wait(head.myTags.filter((tag) => rest.every((d) => d.myTags.includes(tag))));
     },
-  };
+  });
 }
 
 /** `?grids=101325:none,100004:double`, by track id: see `gridOf`. */

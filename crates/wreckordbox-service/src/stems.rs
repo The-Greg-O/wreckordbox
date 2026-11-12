@@ -242,6 +242,9 @@ pub(crate) fn answer(
 /// that may be running.
 pub(crate) struct Stems {
     sidecar_dir: PathBuf,
+    /// The shared state folder, where Stick Protection is kept: a Sidecar
+    /// on a Stick is used only while that Stick is unlocked (wbx-45.11).
+    state_dir: PathBuf,
     pub(crate) mutant_edits: Mutex<std::collections::HashMap<i64, std::sync::Weak<Mutex<()>>>>,
     pub(crate) run_status: Mutex<crate::run_status::RunStatus>,
     command: Vec<OsString>,
@@ -269,7 +272,7 @@ impl Stems {
     /// For the Library at `master_db`, configured from the environment
     /// ([`SIDECAR_DIR_ENV`], [`SEPARATION_COMMAND_ENV`]). Opens nothing
     /// yet: a service that is never asked about Stems makes no Sidecar.
-    pub(crate) fn from_env(master_db: &Path, events: Sender<Event>) -> Arc<Self> {
+    pub(crate) fn from_env(master_db: &Path, state_dir: &Path, events: Sender<Event>) -> Arc<Self> {
         let sidecar_dir = std::env::var_os(SIDECAR_DIR_ENV)
             .filter(|dir| !dir.is_empty())
             .map_or_else(
@@ -284,6 +287,7 @@ impl Stems {
             mutant_edits: Mutex::new(HashMap::default()),
             run_status: Mutex::new(crate::run_status::RunStatus::new(&sidecar_dir)),
             sidecar_dir,
+            state_dir: state_dir.to_path_buf(),
             command,
             sidecar: Mutex::new(None),
             closed: AtomicBool::new(false),
@@ -350,7 +354,19 @@ impl Stems {
     }
 
     /// The Sidecar, opened on first use; refused once the service stopped.
+    ///
+    /// A Sidecar on a Stick (wbx-45.11) is handed out, opened (which
+    /// writes), or made only while the DJ has that Stick unlocked: checked
+    /// on every use, so a command after a lock or an eject is refused.
     pub(crate) fn sidecar(&self) -> Result<Arc<Sidecar>, ServiceError> {
+        if let Some(root) = wreckordbox_stick_protection::stick_root(&self.sidecar_dir) {
+            if wreckordbox_stick_protection::status(&self.state_dir, &root).protected {
+                return Err(ServiceError::new(
+                    service_codes::STICK_PROTECTED,
+                    wreckordbox_stick_protection::refusal(&root),
+                ));
+            }
+        }
         let mut sidecar =
             crate::mutant_reads::wait_for_slot(&self.sidecar, std::time::Duration::from_secs(5))?;
         if let Some(open) = sidecar.as_ref() {

@@ -68,7 +68,7 @@ pub fn roots() -> Vec<Entry> {
     if let Some(home) = dirs::home_dir().filter(|p| p.is_dir()) {
         out.push(Entry { name: last_component(&home), path: home });
     }
-    let volumes = if std::env::var_os(crate::FAKE_VOLUMES).is_some() {
+    let volumes = if crate::fake_volumes().is_some() {
         fake_volume_roots()
     } else {
         platform_volume_roots()

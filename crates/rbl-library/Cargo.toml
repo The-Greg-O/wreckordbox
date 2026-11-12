@@ -13,6 +13,8 @@ workspace = true
 rbl-db = { path = "../rbl-db" }
 rbl-index = { path = "../rbl-index" }
 rbl-backup = { path = "../rbl-backup" }
+# A Library on a Stick is written only while the Stick is unlocked (wbx-45.11).
+wreckordbox-stick-protection = { path = "../wreckordbox-stick-protection" }
 parking_lot = "0.12"
 serde = { workspace = true }
 serde_json = { workspace = true }

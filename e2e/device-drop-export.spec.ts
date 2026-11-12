@@ -1,3 +1,4 @@
+import { confirmStickWrite } from "./helpers";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 /**
@@ -25,6 +26,8 @@ async function dropRow(page: Page, row: Locator, target: Locator) {
   await target.dispatchEvent("dragover", { dataTransfer: transfer });
   await target.dispatchEvent("drop", { dataTransfer: transfer });
   await row.dispatchEvent("dragend", { dataTransfer: transfer });
+  // Every drop on a Stick is a staged write, held for (wbx-45.4).
+  await confirmStickWrite(page);
 }
 
 async function stickBesideCollection(page: Page, url: string) {
@@ -95,6 +98,7 @@ test("a collection playlist track dropped onto a USB playlist in the sub-browser
   await expect(onStick).toHaveAttribute("data-over", "true");
   await onStick.dispatchEvent("drop", { dataTransfer: transfer });
   await rows.first().dispatchEvent("dragend", { dataTransfer: transfer });
+  await confirmStickWrite(page);
   await expect(page.getByRole("contentinfo")).toContainText("Added to NP3-TEST-MP3.");
   await onStick.click();
   await expect(panel.getByRole("grid").locator('[role="row"]:has([role="gridcell"])')).toHaveCount(3);

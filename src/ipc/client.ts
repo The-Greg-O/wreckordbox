@@ -7,7 +7,7 @@
 import { detectPlatform } from "@/lib/shortcuts";
 import { confirmHandler } from "./confirmHost";
 import type {
-  AnalysisStageDescriptor, AnalysisResult, AudioDevices, Backend, Backup, BackupProgress, BackupSizes, ConfirmReplace, Cue, SyncEstimate, DeckEvent, Device, DeviceLibrary,
+  AnalysisStageDescriptor, AnalysisResult, AudioDevices, Backend, Backup, BackupProgress, BackupSizes, ConfirmReplace, Cue, SyncEstimate, StickWritePlan, StickProtection, DeckEvent, Device, DeviceLibrary,
   DevicePlaylistEditResult, DevicePlaylistImportPlan, DevicePlaylistImportResult, DeviceSettings, DeviceSyncState,
   Diagnostics, Duplicates, LibraryProtection, LogPage, GridState, Limiter, PreferencesRequest, SmartRule, SyncDeviceReport, SyncProgress, XmlImportReport,
   ExportProgress, ExportReport, ExplorerChildren, ExplorerRoot, FilterValues, FolderPlaylistReport, Phrase, ImportReport,
@@ -350,16 +350,19 @@ async function realBackend(): Promise<Backend> {
       if (typeof picked !== "string") return null;
       return invoke<number>("export_xml", { path: picked });
     },
-    exportPlaylist: (playlistId, destination, defaults, deleteUnlistedMusic, compatibilityFormat) =>
+    exportPlaylist: (playlistId, destination, defaults, deleteUnlistedMusic, compatibilityFormat, approval) =>
       invoke<ExportReport>("export_playlist", {
         playlist: playlistId,
         destination,
         defaults: defaults ?? null,
         deleteUnlistedMusic: deleteUnlistedMusic ?? false,
         compatibilityFormat: compatibilityFormat ?? null,
+        approval: approval ?? null,
       }),
-    exportTracksToDevice: (tracks, destination, defaults, compatibilityFormat) =>
-      invoke<ExportReport>("export_tracks_to_device", { tracks, destination, defaults: defaults ?? null, compatibilityFormat: compatibilityFormat ?? null }),
+    exportTracksToDevice: (tracks, destination, defaults, compatibilityFormat, approval) =>
+      invoke<ExportReport>("export_tracks_to_device", {
+        tracks, destination, defaults: defaults ?? null, compatibilityFormat: compatibilityFormat ?? null, approval: approval ?? null,
+      }),
     referenceStickSettings: () => invoke<ReferenceStickSettings>("reference_stick_settings"),
     listDevices: () => invoke<Device[]>("list_devices"),
     onExportProgress: (listener) => subscribe<ExportProgress>("export:progress", listener),
@@ -592,7 +595,7 @@ async function realBackend(): Promise<Backend> {
       await invoke<void>("open_sync_window");
       return true;
     },
-    syncDevices: (playlists, destinations, defaults, automatic, ejectAfterSync, deleteUnlistedMusic, compatibilityFormat, verifyAll) =>
+    syncDevices: (playlists, destinations, defaults, automatic, ejectAfterSync, deleteUnlistedMusic, compatibilityFormat, verifyAll, approvals) =>
       invoke<SyncDeviceReport[]>("sync_devices", {
         playlists,
         destinations,
@@ -602,6 +605,18 @@ async function realBackend(): Promise<Backend> {
         deleteUnlistedMusic: deleteUnlistedMusic ?? false,
         compatibilityFormat: compatibilityFormat ?? null,
         verifyAll: verifyAll ?? false,
+        approvals: approvals ?? {},
+      }),
+    stickWritePlan: (request) => invoke<StickWritePlan>("stick_write_plan", { request }),
+    stickWriteApprove: (plan) => invoke<string>("stick_write_approve", { plan }),
+    stickWriteRevoke: (plan) => invoke<void>("stick_write_revoke", { plan }),
+    stickProtection: (path) => invoke<StickProtection>("stick_protection", { path }),
+    stickUnlock: (path, name) => invoke<StickProtection>("stick_unlock", { path, name: name ?? null }),
+    stickLock: (path) => invoke<StickProtection>("stick_lock", { path }),
+    devicePlaylistAddLibraryTracks: (path, format, playlist, tracks, duplicates, defaults, compatibilityFormat, approval) =>
+      invoke<DevicePlaylistEditResult>("device_playlist_add_library_tracks", {
+        path, format, playlist, tracks, duplicates,
+        defaults: defaults ?? null, compatibilityFormat: compatibilityFormat ?? null, approval: approval ?? null,
       }),
     estimateSync: (playlists, destinations, deleteUnlistedMusic, compatibilityFormat) =>
       invoke<SyncEstimate[]>("estimate_sync", {
@@ -613,20 +628,20 @@ async function realBackend(): Promise<Backend> {
     validateExportFiles: (playlists) => invoke<MissingExportFile[]>("validate_export_files", { playlists }),
     importUsb: (path, cues, history, settings, ratings) => invoke("import_usb", { path, cues, history, settings, ratings }),
     ejectDevice: (path) => invoke<void>("eject_device", { path }),
-    formatDevice: (path, layout) => invoke<void>("format_device", { path, layout }),
+    formatDevice: (path, layout, approval) => invoke<void>("format_device", { path, layout, approval: approval ?? null }),
     deviceSyncState: (path) => invoke<DeviceSyncState>("device_sync_state", { path }),
     smartRule: (playlist) => invoke<SmartRule>("smart_rule", { playlist }),
     onSyncProgress: (listener) => subscribe<SyncProgress>("sync:progress", listener),
     deviceSettings: (path) => invoke<DeviceSettings>("device_settings", { path }),
-    saveDeviceSettings: (path, settings) =>
-      invoke<DeviceSettings>("save_device_settings", { path, settings }),
-    ensureDeviceLibrary: (path, defaults) =>
-      invoke<DeviceSettings>("ensure_device_library", { path, defaults: defaults ?? null }),
+    saveDeviceSettings: (path, settings, approval) =>
+      invoke<DeviceSettings>("save_device_settings", { path, settings, approval: approval ?? null }),
+    ensureDeviceLibrary: (path, defaults, approval) =>
+      invoke<DeviceSettings>("ensure_device_library", { path, defaults: defaults ?? null, approval: approval ?? null }),
     explorerRoots: () => invoke<ExplorerRoot[]>("explorer_roots"),
     explorerChildren: (path) => invoke<ExplorerChildren>("explorer_children", { path }),
     deviceLibraries: (path) => invoke<DeviceLibrary[]>("device_libraries", { path }),
     stickOutline: (path) => invoke<StickOutline>("stick_outline", { path }),
-    settleStick: (path) => invoke<void>("stick_settle", { path }),
+    settleStick: (path, approval) => invoke<void>("stick_settle", { path, approval: approval ?? null }),
     intakeQueue: async (queue, offset, limit) =>
       fromServicePage(await invoke<ServiceQueuePage>("intake_queue", { queue, offset, limit })),
     intakeCounts: async () => {
@@ -639,10 +654,10 @@ async function realBackend(): Promise<Backend> {
     },
     devicePlaylistCollectionTracks: (path, format, tracks) =>
       invoke<(string | null)[]>("device_playlist_collection_tracks", { path, format, tracks }),
-    devicePlaylistEdit: (path, format, edit) =>
-      invoke<DevicePlaylistEditResult>("device_playlist_edit", { path, format, edit }),
-    devicePlaylistAddFiles: (path, format, playlist, tracks) =>
-      invoke<DevicePlaylistEditResult>("device_playlist_add_files", { path, format, playlist, tracks }),
+    devicePlaylistEdit: (path, format, edit, approval) =>
+      invoke<DevicePlaylistEditResult>("device_playlist_edit", { path, format, edit, approval: approval ?? null }),
+    devicePlaylistAddFiles: (path, format, playlist, tracks, approval) =>
+      invoke<DevicePlaylistEditResult>("device_playlist_add_files", { path, format, playlist, tracks, approval: approval ?? null }),
     devicePlaylistDuplicates: (path, format, playlist, tracks) =>
       invoke<string[]>("device_playlist_duplicates", { path, format, playlist, tracks }),
     devicePlaylistImport: (path, format, id, missing, destination) =>

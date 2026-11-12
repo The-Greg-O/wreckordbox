@@ -39,6 +39,10 @@ pub struct Outline {
     /// An earlier write to the Stick did not finish. Nothing is listed until
     /// an explicit operation settles it.
     pub pending: bool,
+    /// The Stick carries the Spare stick marker ([`SPARE_MARKER`] at its
+    /// root): the DJ declared it safe to overwrite. Without it the Stick is
+    /// a Gig stick. Read by the file's existence alone.
+    pub spare: bool,
     /// Device Library first, then `OneLibrary`, as rekordbox lists them.
     pub libraries: Vec<LibraryOutline>,
 }
@@ -89,6 +93,10 @@ struct Raw {
     count: u32,
 }
 
+/// The file at a Stick's root that declares it a Spare stick, as the
+/// real-Stick tests already require of a Stick they may write to.
+pub const SPARE_MARKER: &str = ".rbxport-disposable";
+
 /// Reads the playlist trees of the Stick mounted at `mount`, writing nothing.
 ///
 /// A volume with no export, or a library that cannot be read, lists nothing
@@ -98,7 +106,10 @@ struct Raw {
 pub fn outline(mount: &Path) -> Outline {
     read_outline(mount).unwrap_or_else(|error| {
         tracing::warn!(stick = %mount.display(), %error, "cannot outline a Stick");
-        Outline::default()
+        Outline {
+            spare: is_spare(mount),
+            ..Outline::default()
+        }
     })
 }
 
@@ -112,6 +123,7 @@ pub fn outline(mount: &Path) -> Outline {
 pub fn read_outline(mount: &Path) -> Result<Outline, ReadError> {
     let pending = Outline {
         pending: true,
+        spare: is_spare(mount),
         libraries: Vec::new(),
     };
     match read(mount, |stick| Ok(outline_of(stick.root()))) {
@@ -121,9 +133,18 @@ pub fn read_outline(mount: &Path) -> Result<Outline, ReadError> {
     }
 }
 
+/// Whether the Stick carries the Spare stick marker: its existence alone.
+fn is_spare(mount: &Path) -> bool {
+    mount.join(SPARE_MARKER).is_file()
+}
+
 fn outline_of(mount: &Path) -> Outline {
+    let spare = is_spare(mount);
     let Ok(root) = rbl_export::export_root_name(mount) else {
-        return Outline::default();
+        return Outline {
+            spare,
+            ..Outline::default()
+        };
     };
     let dir = mount.join(root).join("rekordbox");
     let libraries = device::formats(mount)
@@ -145,6 +166,7 @@ fn outline_of(mount: &Path) -> Outline {
         .collect();
     Outline {
         pending: false,
+        spare,
         libraries,
     }
 }

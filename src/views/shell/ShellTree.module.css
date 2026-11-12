@@ -94,6 +94,17 @@
   color: var(--c-text-dim);
 }
 
+/* Stick Protection (wbx-45.11): said beside the Stick's name. */
+.protection {
+  flex: none;
+  font-size: 0.85em;
+  color: var(--c-text-dim);
+}
+
+.protection[data-stick-protection="unlocked"] {
+  color: var(--c-warning, var(--c-text));
+}
+
 /* A group with nothing in it says so, in the dim colour, not as a place. */
 .empty, .library {
   height: var(--s-shell-row-h);
@@ -112,3 +123,40 @@
   letter-spacing: var(--f-tracking-shell-label);
   text-transform: uppercase;
 }
+
+/* The old tree's actions (wbx-45.4). */
+
+/* A name being typed over, in place of the name. */
+.renameWrap { flex: 1; min-width: 0; display: flex; }
+.rename {
+  flex: 1;
+  min-width: 0;
+  height: calc(var(--s-shell-row-h) - 2 * var(--s-shell-space-1));
+  padding: 0 var(--s-shell-space-2);
+  border: var(--s-shell-border) solid var(--c-accent);
+  background: var(--c-black);
+  color: var(--c-text);
+  font: inherit;
+}
+
+/* A Stick's Eject, at the end of its row. */
+.eject {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  padding: 0 var(--s-shell-space-2);
+  border: 0;
+  background: none;
+  color: var(--c-text-dim);
+  cursor: pointer;
+}
+.eject:hover { color: var(--c-text); }
+.eject:disabled { opacity: 0.4; cursor: default; }
+.eject svg { width: 12px; height: 12px; }
+
+/* Where a drag would land: the row that takes it, or the line beside it. */
+.row[data-over], .stick[data-over] { outline: var(--s-shell-border) solid var(--c-accent); outline-offset: calc(-1 * var(--s-shell-border)); }
+.row[data-move="into"] { background: var(--c-select); }
+.row[data-move="above"] { box-shadow: inset 0 calc(2 * var(--s-shell-border)) 0 var(--c-accent); }
+.row[data-move="below"] { box-shadow: inset 0 calc(-2 * var(--s-shell-border)) 0 var(--c-accent); }

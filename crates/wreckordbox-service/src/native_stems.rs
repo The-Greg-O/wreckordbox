@@ -70,6 +70,9 @@ pub mod codes {
     /// The Stems could not be encoded or written, or the Stick's exported
     /// library could not be read. No set appeared on the Stick.
     pub const NATIVE_STEMS_FAILED: &str = "native_stems_failed";
+    /// The Stick's last export did not finish. Nothing was read or written;
+    /// it is settled only by the DJ, from the window (wbx-45.5).
+    pub const UNFINISHED_WRITE: &str = "unfinished_write";
 }
 
 /// The arguments of `stems.write`.
@@ -149,6 +152,7 @@ static WRITING: Mutex<()> = Mutex::new(());
 /// it free.
 pub(crate) fn answer(
     stems: &Arc<Stems>,
+    state_dir: &Path,
     request: &Request,
     lookup: &dyn Fn(&str) -> Result<Found, ServiceError>,
 ) -> Result<Value, ServiceError> {
@@ -179,6 +183,18 @@ pub(crate) fn answer(
             format!("there is no Stick at {}", stick.display()),
         ));
     }
+    // Stick Protection first (wbx-45.11), before anything on the Stick is
+    // inspected: the Stick holding `stick` (a folder inside it is that
+    // Stick), its execution lock taken (shared with the window, the CLI, a
+    // lock and an eject) and held to the end of the write, and refused
+    // unless the DJ unlocked this very mount.
+    let authorized = wreckordbox_stick_protection::authorize(state_dir, stick).map_err(|refused| {
+        let code = match refused {
+            wreckordbox_stick_protection::Refused::Protected { .. } => service_codes::STICK_PROTECTED,
+            _ => codes::STICK_NOT_FOUND,
+        };
+        ServiceError::new(code, refused.to_string())
+    })?;
     if !wreckordbox_native_stems::is_spare_stick(stick) {
         return Err(refused(
             &track,
@@ -219,6 +235,8 @@ pub(crate) fn answer(
     export_checked(&track, stick, library_id, track_id, &set)?;
     let outcome = {
         let _one_at_a_time = WRITING.lock().unwrap_or_else(PoisonError::into_inner);
+        // Still this mount, still unlocked, as the write starts.
+        authorized.recheck().map_err(|refused| ServiceError::new(service_codes::STICK_PROTECTED, refused.to_string()))?;
         wreckordbox_native_stems::write(&wreckordbox_native_stems::Request {
             stick,
             library_id,
@@ -447,6 +465,13 @@ fn refused(track: &Parent, stick: &Path, error: &NativeStemsError) -> ServiceErr
         }
         NativeStemsError::OffStick { .. } => ServiceError::new(
             codes::STICK_UNSAFE,
+            format!(
+                "no Native stems were written for track {} \"{}\": {error}",
+                track.id, track.title
+            ),
+        ),
+        NativeStemsError::UnfinishedWrite { .. } => ServiceError::new(
+            codes::UNFINISHED_WRITE,
             format!(
                 "no Native stems were written for track {} \"{}\": {error}",
                 track.id, track.title

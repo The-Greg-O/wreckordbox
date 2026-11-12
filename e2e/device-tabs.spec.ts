@@ -1,10 +1,14 @@
 import { expect, test, type Page } from "@playwright/test";
+import { confirmStickWrite } from "./helpers";
 
 /**
  * The six tabs a selected device opens, against the mock's TEST stick — the
  * rows read off the real one, so the lists here are the capture's lists.
  */
 async function openTest(page: Page) {
+  // A Spare stick, so each change's confirming hold is the shorter one: every
+  // settings change is a staged Stick write (wbx-45.4).
+  await page.addInitScript(() => sessionStorage.setItem("rbl.mock.stickState", JSON.stringify({ pending: [], spare: ["/Volumes/TEST"] })));
   await page.goto("/");
   await page.getByRole("tablist", { name: "Library sources" }).getByRole("tab", { name: "Devices" }).click();
   await page.getByRole("treeitem", { name: /TEST/ }).click();
@@ -56,6 +60,7 @@ test("General shows the stick's display settings and the space table", async ({ 
 
   // A change is written and survives leaving and coming back.
   await panel.getByRole("radio", { name: "RGB" }).check();
+  await confirmStickWrite(page);
   await page.getByRole("treeitem", { name: /DJ STICK/ }).click();
   await page.getByRole("treeitem", { name: /TEST/ }).click();
   await expect(page.getByRole("region", { name: "Device TEST" }).getByRole("radio", { name: "RGB" })).toBeChecked();
@@ -70,7 +75,9 @@ test("General sets the two background colours separately", async ({ page }) => {
   await expect(deviceLibrary).toHaveValue("0");
 
   await oneLibrary.selectOption({ label: "Purple" });
+  await confirmStickWrite(page);
   await deviceLibrary.selectOption({ label: "Blue" });
+  await confirmStickWrite(page);
   await page.getByRole("treeitem", { name: /DJ STICK/ }).click();
   await page.getByRole("treeitem", { name: /TEST/ }).click();
   const back = page.getByRole("region", { name: "Device TEST" });
@@ -100,24 +107,30 @@ test("Category lists what the stick has, greys the fixed items, and moves them a
   await expect(active.getByRole("option", { name: "TRACK", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(panel.getByRole("button", { name: "Remove from Active Categories" })).toBeDisabled();
   await panel.getByRole("button", { name: "Up" }).click();
+  await confirmStickWrite(page);
   await expect(active.getByRole("option").nth(1)).toHaveText("TRACK");
   await panel.getByRole("button", { name: "Down" }).click();
+  await confirmStickWrite(page);
   await expect(active.getByRole("option").nth(2)).toHaveText("TRACK");
 
   // Right arrow: GENRE goes to the end of the Active list.
   await inactive.getByRole("option", { name: "GENRE" }).click();
   await panel.getByRole("button", { name: "Add to Active Categories" }).click();
+  await confirmStickWrite(page);
   await expect(active.getByRole("option").last()).toHaveText("GENRE");
   await expect(inactive.getByRole("option", { name: "GENRE" })).toHaveCount(0);
 
   // Up moves it above DATE ADDED; Down puts it back.
   await panel.getByRole("button", { name: "Up" }).click();
+  await confirmStickWrite(page);
   await expect(active.getByRole("option").nth(9)).toHaveText("GENRE");
   await panel.getByRole("button", { name: "Down" }).click();
+  await confirmStickWrite(page);
   await expect(active.getByRole("option").last()).toHaveText("GENRE");
 
   // Left arrow: back to the Inactive list, in alphabetical order.
   await panel.getByRole("button", { name: "Remove from Active Categories" }).click();
+  await confirmStickWrite(page);
   await expect(inactive.getByRole("option").nth(4)).toHaveText("GENRE");
   await expect(active.getByRole("option")).toHaveCount(10);
 });
@@ -140,6 +153,7 @@ test("Sort greys DEFAULT and ALPHABET/TRACK NAME and keeps the stick's order", a
   // change is still there after switching tabs.
   await active.getByRole("option", { name: "KEY" }).click();
   await panel.getByRole("button", { name: "Up" }).click();
+  await confirmStickWrite(page);
   await panel.getByRole("tab", { name: "General" }).click();
   await panel.getByRole("tab", { name: "Sort" }).click();
   await expect(panel.getByRole("listbox", { name: "Active Sort Options", exact: true }).getByRole("option")).toHaveText([
@@ -154,6 +168,7 @@ test("Color renames a comment on Enter", async ({ page }) => {
   await expect(orange).toHaveValue("Orange");
   await orange.fill("Peak time");
   await orange.press("Enter");
+  await confirmStickWrite(page);
   await panel.getByRole("tab", { name: "General" }).click();
   await panel.getByRole("tab", { name: "Color" }).click();
   await expect(panel.getByLabel("Color comment 3")).toHaveValue("Peak time");

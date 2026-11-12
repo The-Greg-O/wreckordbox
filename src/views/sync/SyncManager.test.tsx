@@ -8,6 +8,21 @@
  */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+
+// The staged Stick write (wbx-45.4) is the gate's to test: here every write
+// is approved, so the manager's own behaviour is what is tested.
+vi.mock("@/views/shell/StickWriteGate", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/views/shell/StickWriteGate")>();
+  const gate = {
+    refusal: () => null,
+    stage: async (write: { run: (approval: string) => Promise<unknown> }) => { await write.run("approved"); return true; },
+    guarded: async (_path: string, body: (approve: () => Promise<string>) => Promise<unknown>) => { await body(() => Promise.resolve("approved")); },
+    approve: () => Promise.resolve("approved"),
+    recheck: () => Promise.resolve(),
+    element: null,
+  };
+  return { ...actual, useStickWriteGateContext: () => gate };
+});
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { __setBackend, getBackend } from "@/ipc/client";
@@ -372,7 +387,7 @@ describe("SyncManager", () => {
     click(choose("HFS+"));
     click([...document.body.querySelectorAll<HTMLButtonElement>("dialog button")].find(b => b.textContent === "Erase and Format"));
     await settle();
-    expect(formatDevice).toHaveBeenCalledWith("/Volumes/USB A", "hfsPlus");
+    expect(formatDevice).toHaveBeenCalledWith("/Volumes/USB A", "hfsPlus", "approved");
     expect(dialog()).toBeNull();
     expect(status()).toBe("USB A: Formatted.");
     expect(box("USB A")?.checked).toBe(false);
@@ -389,7 +404,7 @@ describe("SyncManager", () => {
     await openFormat("USB B");
     click([...document.body.querySelectorAll<HTMLButtonElement>("dialog button")].find(b => b.textContent === "Erase and Format"));
     await settle();
-    expect(formatDevice).toHaveBeenCalledWith("/Volumes/USB B", "fat32");
+    expect(formatDevice).toHaveBeenCalledWith("/Volumes/USB B", "fat32", "approved");
   });
 
   it("keeps the dialog open and says why when formatting fails", async () => {
@@ -449,7 +464,7 @@ describe("SyncManager", () => {
     await settle();
     click(host.querySelector<HTMLButtonElement>('button[aria-label="SYNC"]'));
     await settle();
-    expect(syncDevices.mock.calls[0]?.slice(5)).toEqual([true, "mp3", false]);
+    expect(syncDevices.mock.calls[0]?.slice(5, 8)).toEqual([true, "mp3", false]);
   });
 
   it("lists the playlists and folders under rekordbox's [Playlists] row, not All Tracks", () => {

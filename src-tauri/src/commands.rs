@@ -1011,6 +1011,7 @@ pub async fn link_take_master_tempo(state: State<'_, Arc<AppState>>) -> AppResul
 /// rekordbox 7.2.18 manual p. 256); only the Sync Manager's SYNC makes a
 /// stick hold exactly a selection (#304).
 #[tauri::command]
+#[allow(clippy::too_many_arguments, reason = "the webview's arguments, the approval included (wbx-45.4)")]
 pub async fn export_playlist<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     state: State<'_, Arc<AppState>>,
@@ -1021,16 +1022,40 @@ pub async fn export_playlist<R: tauri::Runtime>(
     defaults: Option<crate::device_settings::StickDefaultsDto>,
     delete_unlisted_music: Option<bool>,
     compatibility_format: Option<rbl_export::CompatibilityFormat>,
+    // The DJ's approval of this exact write (`stick_write_plan`, wbx-45.4).
+    approval: Option<String>,
 ) -> AppResult<ExportReportDto> {
-    let library = state.library()?;
     let share = state.share_root();
     let state = Arc::clone(&state);
     let progress_app = app.clone();
     let report = blocking("export_playlist", move || {
         let destination = std::path::Path::new(&destination);
+        // The lock order (`stick_guard`): the Library edit gate first, held
+        // while the selection is read; then the Stick, under its lock,
+        // protected or not (wbx-45.11); then, on a Stick, the DJ's
+        // confirmation, checked against the very Library snapshot and gates
+        // the selection is read under (wbx-45.4). An ordinary folder needs
+        // neither. The gate goes before the long write.
+        let gate = state.edit_gate().lock();
+        let (library, generation) = state.library_at_generation()?;
+        let access = crate::stick_guard::enter(state.backup_dir(), destination)?;
+        if access.stick().is_some() {
+            crate::stick_approval::consume(
+                approval.as_deref(),
+                &crate::stick_approval::StickOperation::ExportPlaylist {
+                    playlist: playlist.clone(),
+                    delete_unlisted_music: delete_unlisted_music.unwrap_or(false),
+                    defaults: crate::stick_approval::bound(defaults.as_ref()),
+                    compatibility: crate::stick_approval::bound(compatibility_format.as_ref()),
+                },
+                destination,
+                generation,
+            )?;
+        }
         let reservation = reserve_export(&progress_app, destination)?;
         let selection = playlist_export_selection(&state, &library, &share, destination, &playlist, delete_unlisted_music.unwrap_or(false))?;
-        write_export_registered(&progress_app, destination, &selection, defaults.as_ref(), compatibility_format, &reservation)
+        drop(gate);
+        write_export_registered(&progress_app, destination, &selection, defaults.as_ref(), compatibility_format, &reservation, &access)
     })
     .await?;
 
@@ -1048,7 +1073,7 @@ pub async fn export_playlist<R: tauri::Runtime>(
 /// itself accepts it. Folders, playlists since deleted from the library, and
 /// the stick's own playlists (made on a player or by rekordbox) are left
 /// out: an export with `keep_unlisted` keeps them as the stick has them.
-fn held_on_stick(state: &AppState, library: &rbl_index::Library, stick: &std::path::Path) -> (Vec<String>, bool) {
+pub(crate) fn held_on_stick(state: &AppState, library: &rbl_index::Library, stick: &std::path::Path) -> (Vec<String>, bool) {
     let Some(manifest) = rbl_export::Manifest::load(stick) else { return (Vec::new(), false) };
     let db_id = state.read_db(|db| rbl_db::export_info::db_id(db.connection())).unwrap_or(0);
     let record = rbl_export::sync_record::read(stick);
@@ -1103,6 +1128,7 @@ fn playlist_export_selection(
 /// its progress event, so the window can show each stick moving independently.
 #[tauri::command]
 #[allow(clippy::too_many_arguments, reason = "the Sync Manager's own settings, one per IPC field the frontend already sends")]
+#[allow(clippy::implicit_hasher, reason = "the webview sends a plain map")]
 pub async fn sync_devices<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     state: State<'_, Arc<AppState>>,
@@ -1118,33 +1144,79 @@ pub async fn sync_devices<R: tauri::Runtime>(
     delete_unlisted_music: Option<bool>,
     compatibility_format: Option<rbl_export::CompatibilityFormat>,
     verify_all: Option<bool>,
+    // The DJ's approval of each Stick's sync, by mount path (`stick_write_plan`, wbx-45.4).
+    approvals: Option<std::collections::HashMap<String, String>>,
 ) -> AppResult<Vec<SyncDeviceReportDto>> {
-    let library = state.library()?;
     let share = state.share_root();
     let state = Arc::clone(&state);
     blocking("sync_devices", move || {
-        let mut unique: Vec<&str> = Vec::new();
-        for destination in &destinations {
-            if unique.iter().any(|prior| rbl_core::durable::same_root(std::path::Path::new(prior), std::path::Path::new(destination)).unwrap_or(false)) {
-                return Err(AppError::internal("The same USB device was selected more than once. Select it once and retry."));
+        // The lock order (`stick_guard`): the Library edit gate first, held
+        // while every selection is read; then every destination resolved and
+        // classified, duplicates refused, and each Stick entered in a fixed
+        // order, protected or not (wbx-45.11); then each Stick's token,
+        // checked against the one Library snapshot and gates the selections
+        // are read under. A refused Stick is left alone and reported; the
+        // others go on. The gate goes before the writes.
+        let approvals = approvals.unwrap_or_default();
+        let gate = state.edit_gate().lock();
+        let (library, generation) = state.library_at_generation()?;
+        let base = ExportSelection::from_playlists(&state, &library, &share, &playlists, automatic.unwrap_or(false))?;
+        let entered = crate::stick_guard::enter_many(state.backup_dir(), &destinations)?;
+        let operation = crate::stick_approval::StickOperation::Sync {
+            playlists: playlists.clone(),
+            delete_unlisted_music: delete_unlisted_music.unwrap_or(false),
+            automatic: automatic.unwrap_or(false),
+            defaults: crate::stick_approval::bound(defaults.as_ref()),
+            compatibility: crate::stick_approval::bound(compatibility_format.as_ref()),
+        };
+        let mut refused = Vec::new();
+        let mut approved = Vec::new();
+        let order = destinations.clone();
+        for (destination, access) in destinations.into_iter().zip(entered) {
+            let stick = std::path::Path::new(&destination);
+            let checked = access.and_then(|access| {
+                if access.stick().is_some() {
+                    crate::stick_approval::consume(approvals.get(&destination).map(String::as_str), &operation, stick, generation)?;
+                }
+                Ok(access)
+            });
+            match checked {
+                Ok(access) => approved.push((destination, access)),
+                Err(error) => {
+                    // Said as every Stick of the run is: started, then failed.
+                    for state in ["writing", "failed"] {
+                        let _ = tauri::Emitter::emit(&app, "sync:progress", SyncProgressDto { path: destination.clone(), state });
+                    }
+                    refused.push(SyncDeviceReportDto {
+                        path: destination, report: None, error: Some(error.full_message()), ejected: false, eject_error: None,
+                    });
+                }
             }
-            unique.push(destination);
         }
-        let reservations: Vec<_> = destinations.iter().map(|path| reserve_export(&app, std::path::Path::new(path)).map(|mut ticket| {
-            ticket.verify_all = verify_all.unwrap_or(false); ticket
-        })).collect();
-        let selection =
-            ExportSelection::from_playlists(&state, &library, &share, &playlists, automatic.unwrap_or(false))?;
-        let selection = Arc::new(selection);
+        if approved.is_empty() {
+            return Ok(refused);
+        }
+        let approved_paths: std::collections::HashSet<String> = approved.iter().map(|(path, _)| path.clone()).collect();
+        // Each Stick's own selection (what it keeps, an unfinished write
+        // settled first), read under the gate and its lock.
+        let jobs: Vec<_> = approved.into_iter().map(|(destination, access)| {
+            let stick = std::path::Path::new(&destination);
+            let reservation = reserve_export(&app, stick).map(|mut ticket| { ticket.verify_all = verify_all.unwrap_or(false); ticket });
+            let selection = match &reservation {
+                Ok(ticket) => ticket.check(stick)
+                    .and_then(|()| base.for_stick(&state, &library, &share, stick, delete_unlisted_music.unwrap_or(false)))
+                    .map(std::borrow::Cow::into_owned),
+                Err(error) => Err(error.clone()),
+            };
+            (destination, access, reservation, selection)
+        }).collect();
+        drop(gate);
         // Workers share lazy source descriptors; reservation failures belong
         // only to their destination, not the other sticks in the batch.
         std::thread::scope(|scope| {
-            let workers: Vec<_> = destinations.into_iter().zip(reservations).map(|(destination, reservation)| {
+            let workers: Vec<_> = jobs.into_iter().map(|(destination, access, reservation, selection)| {
                 let app = app.clone();
                 let state = Arc::clone(&state);
-                let library = Arc::clone(&library);
-                let selection = selection.clone();
-                let share = share.clone();
                 let defaults = defaults.clone();
                 scope.spawn(move || match reservation {
                     Err(error) => {
@@ -1154,18 +1226,27 @@ pub async fn sync_devices<R: tauri::Runtime>(
                         SyncDeviceReportDto { path: destination, report: None, error: Some(error.full_message()), ejected: false, eject_error: None }
                     },
                     Ok(mut reservation) => sync_one_device(
-                    &app, &state, &library, &share, &selection, destination,
-                    defaults.as_ref(), delete_unlisted_music.unwrap_or(false),
+                    &app, &state, selection, destination,
+                    defaults.as_ref(),
                     eject_after_sync.unwrap_or(false), compatibility_format,
-                    &mut reservation,
+                    &mut reservation, &access,
                     ),
                 })
             }).collect();
-            Ok(workers.into_iter().map(|worker| worker.join().unwrap_or_else(|_| SyncDeviceReportDto {
+            let reports: Vec<SyncDeviceReportDto> = workers.into_iter().map(|worker| worker.join().unwrap_or_else(|_| SyncDeviceReportDto {
                 path: "Unknown device".to_owned(), report: None,
                 error: Some("The sync worker stopped unexpectedly.".to_owned()),
                 ejected: false, eject_error: None,
-            })).collect())
+            })).collect();
+            // In the order the Sticks were asked for, refused ones included.
+            let mut refused = refused.into_iter();
+            let mut written = reports.into_iter();
+            Ok(order
+                .iter()
+                .filter_map(|path| {
+                    if approved_paths.contains(path) { written.next() } else { refused.next() }
+                })
+                .collect())
         })
     })
     .await
@@ -1203,19 +1284,19 @@ pub async fn validate_export_files(
 
 #[allow(clippy::too_many_arguments, reason = "one independent USB sync worker")]
 fn sync_one_device<R: tauri::Runtime>(
-    app: &tauri::AppHandle<R>, state: &AppState, library: &rbl_index::Library,
-    share: &std::path::Path, selection: &ExportSelection, destination: String,
-    defaults: Option<&crate::device_settings::StickDefaultsDto>, delete_unlisted_music: bool,
+    app: &tauri::AppHandle<R>, state: &AppState, selection: AppResult<ExportSelection>, destination: String,
+    defaults: Option<&crate::device_settings::StickDefaultsDto>,
     eject_after_sync: bool, compatibility_format: Option<rbl_export::CompatibilityFormat>,
     reservation: &mut ExportReservation<R>,
+    // Stick Protection's leave, held for the whole write (wbx-45.11).
+    access: &crate::stick_guard::StickAccess,
 ) -> SyncDeviceReportDto {
     let progress = |state: &'static str| {
         let _ = tauri::Emitter::emit(app, "sync:progress", SyncProgressDto { path: destination.clone(), state });
     };
     progress("writing");
     let stick = std::path::Path::new(&destination);
-    let written = reservation.check(stick).and_then(|()| selection.for_stick(state, library, share, stick, delete_unlisted_music))
-        .and_then(|selection| write_export_registered(app, stick, &selection, defaults, compatibility_format, reservation));
+    let written = selection.and_then(|selection| write_export_registered(app, stick, &selection, defaults, compatibility_format, reservation, access));
     match written {
         Ok(report) => {
             let mut result = SyncDeviceReportDto { path: destination.clone(), report: Some(report), error: None, ejected: false, eject_error: None };
@@ -1226,6 +1307,11 @@ fn sync_one_device<R: tauri::Runtime>(
                     // Keep the export reservation registered while ejecting,
                     // but release its open directory handle before OS unmount.
                     drop(reservation.volume.take());
+                    // An eject ends the unlock (wbx-45.11), recorded under the lock this write holds.
+                    if let Err(error) = access.relock() {
+                        tracing::warn!(%error, "the Stick's unlock could not be recorded as ended; it ends when the Stick is removed");
+                    }
+                    let _ = state;
                     match rbl_devices::eject::eject(stick) {
                         Ok(()) => result.ejected = true,
                         Err(e) => result.eject_error = Some(e.to_string()),
@@ -1361,16 +1447,34 @@ pub async fn export_tracks_to_device<R: tauri::Runtime>(
     destination: String,
     defaults: Option<crate::device_settings::StickDefaultsDto>,
     compatibility_format: Option<rbl_export::CompatibilityFormat>,
+    // The DJ's approval of this exact write (`stick_write_plan`, wbx-45.4).
+    approval: Option<String>,
 ) -> AppResult<ExportReportDto> {
-    let library = state.library()?;
     let share = state.share_root();
     let state = Arc::clone(&state);
     let progress_app = app.clone();
     let report = blocking("export_tracks_to_device", move || {
         let stick = std::path::Path::new(&destination);
+        // The lock order: Library edit gate, then the Stick (see `export_playlist`).
+        let gate = state.edit_gate().lock();
+        let (library, generation) = state.library_at_generation()?;
+        let access = crate::stick_guard::enter(state.backup_dir(), stick)?;
+        if access.stick().is_some() {
+            crate::stick_approval::consume(
+                approval.as_deref(),
+                &crate::stick_approval::StickOperation::ExportTracks {
+                    tracks: tracks.clone(),
+                    defaults: crate::stick_approval::bound(defaults.as_ref()),
+                    compatibility: crate::stick_approval::bound(compatibility_format.as_ref()),
+                },
+                stick,
+                generation,
+            )?;
+        }
         let reservation = reserve_export(&progress_app, stick)?;
         let selection = track_export_selection(&state, &library, &share, stick, &tracks)?;
-        write_export_registered(&progress_app, stick, &selection, defaults.as_ref(), compatibility_format, &reservation)
+        drop(gate);
+        write_export_registered(&progress_app, stick, &selection, defaults.as_ref(), compatibility_format, &reservation, &access)
     })
     .await?;
     let _ = tauri::Emitter::emit(&app, "export:done", &report);
@@ -1379,7 +1483,7 @@ pub async fn export_tracks_to_device<R: tauri::Runtime>(
 
 /// What Export Track writes to `stick`: what it already holds, with
 /// `tracks` added in no playlist.
-fn track_export_selection(
+pub(crate) fn track_export_selection(
     state: &AppState,
     library: &rbl_index::Library,
     share: &std::path::Path,
@@ -1757,7 +1861,7 @@ impl ExportSelection {
     }
 
     #[allow(clippy::too_many_arguments, reason = "shared read-only preview and recovering execution selection")]
-    fn for_stick_inspected<'a>(
+    pub(crate) fn for_stick_inspected<'a>(
         &'a self, state: &AppState, library: &rbl_index::Library, share: &std::path::Path,
         destination: &std::path::Path, delete_unlisted_music: bool, recover_device: bool,
     ) -> AppResult<std::borrow::Cow<'a, Self>> {
@@ -1850,14 +1954,14 @@ static EXPORT_PROGRESS: std::sync::LazyLock<std::sync::Mutex<std::collections::H
     std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 static EXPORT_CANCEL: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, Arc<std::sync::atomic::AtomicBool>>>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
-static EXPORT_CACHE: std::sync::LazyLock<rbl_export::cache::PreparationCache> = std::sync::LazyLock::new(|| {
+pub(crate) static EXPORT_CACHE: std::sync::LazyLock<rbl_export::cache::PreparationCache> = std::sync::LazyLock::new(|| {
     let cache = rbl_export::cache::PreparationCache::new(rbl_backup::state_dir().join("cache/usb-export"));
     if let Err(error) = cache.prune(8 * 1024 * 1024 * 1024) { tracing::warn!(%error, "could not prune export cache"); }
     cache
 });
 static NEXT_EXPORT_JOB: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
-struct ExportReservation<R: tauri::Runtime> {
+pub(crate) struct ExportReservation<R: tauri::Runtime> {
     app: tauri::AppHandle<R>, path: String, id: String,
     cancel: Arc<std::sync::atomic::AtomicBool>, started: std::time::Instant,
     volume: Option<rbl_core::durable::VolumeIdentity>,
@@ -1890,7 +1994,7 @@ impl<R: tauri::Runtime> Drop for ExportReservation<R> {
     }
 }
 
-fn reserve_export<R: tauri::Runtime>(app: &tauri::AppHandle<R>, destination: &std::path::Path) -> AppResult<ExportReservation<R>> {
+pub(crate) fn reserve_export<R: tauri::Runtime>(app: &tauri::AppHandle<R>, destination: &std::path::Path) -> AppResult<ExportReservation<R>> {
     if rbl_db::is_rekordbox_app_running() { return Err(AppError::new(ErrorKind::ReadOnly, "Quit rekordbox before syncing this USB.")); }
     if !destination.is_dir() {
         return Err(AppError::new(ErrorKind::NotFound, "That device is no longer connected. It may have been unplugged or renamed."));
@@ -1975,18 +2079,30 @@ pub fn export_progress() -> Vec<ExportProgressDto> {
 pub async fn eject_device(state: State<'_, Arc<AppState>>, path: String) -> AppResult<()> {
     let handle = Arc::clone(&state);
     blocking("eject_device", move || {
+        // The Stick's execution lock first (wbx-45.11): it waits for any
+        // write to the Stick, from here, the service or the CLI, to finish,
+        // and keeps new ones out until the volume is gone. Then the export
+        // registry, in the order an export takes them.
+        let root = wreckordbox_stick_protection::root_of(std::path::Path::new(&path));
+        let drained = wreckordbox_stick_protection::exec_lock(handle.backup_dir(), &root)
+            .map_err(|e| AppError::internal("The Stick could not be reserved.").with_detail(e.to_string()))?;
         // Keep new exports from starting until the OS has finished ejecting.
         let jobs = EXPORT_CANCEL.lock().map_err(|e| AppError::internal(e.to_string()))?;
         if jobs.keys().any(|active| active == &path || rbl_core::durable::same_root(std::path::Path::new(active), std::path::Path::new(&path)).unwrap_or(false)) {
             return Err(AppError::internal("This device is being exported to. Wait for the export to finish."));
         }
         if rbl_export::recovery_pending(std::path::Path::new(&path)) { return Err(AppError::internal("This USB needs recovery. Sync it before ejecting it.")); }
+        // An unlock ends with the eject (wbx-45.11).
+        if let Err(error) = wreckordbox_stick_protection::lock_held(handle.backup_dir(), &root, &drained) {
+            tracing::warn!(%error, "the Stick's unlock could not be recorded as ended; it ends when the Stick is removed");
+        }
         let result = rbl_devices::eject::eject(std::path::Path::new(&path))
             .map_err(|e| AppError::internal(e.to_string()));
         if result.is_ok() {
             handle.forget_device_assets(std::path::Path::new(&path));
         }
         drop(jobs);
+        drop(drained);
         result
     }).await
 }
@@ -2001,8 +2117,25 @@ pub enum FormatLayout {
 
 /// Erases every partition on the stick at `path` and formats it, keeping its name.
 #[tauri::command]
-pub async fn format_device(path: String, layout: FormatLayout) -> AppResult<()> {
+pub async fn format_device(
+    state: State<'_, Arc<AppState>>,
+    path: String,
+    layout: FormatLayout,
+    // The DJ's approval of this exact write (`stick_write_plan`, wbx-45.4).
+    approval: Option<String>,
+) -> AppResult<()> {
+    let state = Arc::clone(&state);
     blocking("format_device", move || {
+        let stick = std::path::Path::new(&path);
+        let access = crate::stick_guard::enter_stick(state.backup_dir(), stick)?;
+        crate::stick_approval::consume(
+            approval.as_deref(),
+            &crate::stick_approval::StickOperation::Format {
+                layout: match layout { FormatLayout::Fat32 => "fat32", FormatLayout::HfsPlus => "hfsPlus" }.to_owned(),
+            },
+            stick,
+            0,
+        )?;
         // Keep new exports from starting until the stick has been formatted.
         let jobs = EXPORT_CANCEL.lock().map_err(|e| AppError::internal(e.to_string()))?;
         if jobs.keys().any(|active| active == &path || rbl_core::durable::same_root(std::path::Path::new(active), std::path::Path::new(&path)).unwrap_or(false)) {
@@ -2012,6 +2145,7 @@ pub async fn format_device(path: String, layout: FormatLayout) -> AppResult<()> 
             FormatLayout::Fat32 => rbl_devices::format::Layout::Fat32,
             FormatLayout::HfsPlus => rbl_devices::format::Layout::HfsPlus,
         };
+        access.recheck()?;
         let result = rbl_devices::format::format(std::path::Path::new(&path), layout)
             .map_err(|e| AppError::internal(e.to_string()));
         drop(jobs);
@@ -2038,15 +2172,37 @@ fn disconnected_during_export(destination: &std::path::Path, error: AppError) ->
     .with_detail(detail)
 }
 
-fn write_export_registered<R: tauri::Runtime>(
+pub(crate) fn write_export_registered<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     destination: &std::path::Path,
     selection: &ExportSelection,
     defaults: Option<&crate::device_settings::StickDefaultsDto>,
     compatibility_format: Option<rbl_export::CompatibilityFormat>,
     reservation: &ExportReservation<R>,
+    // The capability: Stick Protection's leave to write here (wbx-45.11).
+    access: &crate::stick_guard::StickAccess,
 ) -> AppResult<ExportReportDto> {
     reservation.check(destination)?;
+    access.recheck()?;
+    // Checked again as the export goes: a Stick removed or replaced stops it.
+    let lost: std::cell::RefCell<Option<AppError>> = std::cell::RefCell::new(None);
+    let last_check = std::cell::Cell::new(std::time::Instant::now());
+    let stick_lost = || {
+        if lost.borrow().is_some() {
+            return true;
+        }
+        if last_check.get().elapsed() < std::time::Duration::from_millis(500) {
+            return false;
+        }
+        last_check.set(std::time::Instant::now());
+        match access.recheck() {
+            Ok(()) => false,
+            Err(error) => {
+                *lost.borrow_mut() = Some(error);
+                true
+            }
+        }
+    };
     let total = u32::try_from(selection.tracks.len()).unwrap_or(u32::MAX);
     let path = destination.to_string_lossy().into_owned();
     let cancel = &reservation.cancel;
@@ -2097,6 +2253,7 @@ fn write_export_registered<R: tauri::Runtime>(
     emit("preparing", 0, String::new(), None);
     let done = std::cell::Cell::new(0);
     let result = write_export_with_phase(
+        access,
         destination, selection, defaults, compatibility_format,
         reservation.volume.as_ref(),
         reservation.verify_all,
@@ -2105,9 +2262,10 @@ fn write_export_registered<R: tauri::Runtime>(
             emit(p.stage, done.get(), p.title.clone(), Some(p));
         },
         &mut |phase| emit(phase, 0, String::new(), None),
-        &|| cancel.load(std::sync::atomic::Ordering::Relaxed),
+        &|| cancel.load(std::sync::atomic::Ordering::Relaxed) || stick_lost(),
     )
-    .map_err(|error| disconnected_during_export(destination, error));
+    .map_err(|error| disconnected_during_export(destination, error))
+    .map_err(|error| lost.borrow_mut().take().unwrap_or(error));
     let cancelled = result.as_ref().err().is_some_and(|e| matches!(e.kind, ErrorKind::Cancelled));
     emit(if result.is_ok() { "done" } else if cancelled { "cancelled" } else { "failed" }, if result.is_ok() { total } else { done.get() },
         result.as_ref().err().map_or_else(String::new, |e| e.message.clone()), None);
@@ -2144,6 +2302,8 @@ fn sync_error(e: &rbl_export::ExportError) -> AppError {
 
 #[allow(clippy::too_many_arguments, reason = "export options and independent progress/cancellation callbacks")]
 fn write_export_with_phase(
+    // The capability: Stick Protection's leave to write here (wbx-45.11).
+    access: &crate::stick_guard::StickAccess,
     destination: &std::path::Path,
     selection: &ExportSelection,
     defaults: Option<&crate::device_settings::StickDefaultsDto>,
@@ -2154,6 +2314,7 @@ fn write_export_with_phase(
     phase: &mut dyn FnMut(&'static str),
     cancelled: &dyn Fn() -> bool,
 ) -> AppResult<ExportReportDto> {
+    access.recheck()?;
     if !destination.is_dir() {
         return Err(AppError::new(
             ErrorKind::NotFound,
@@ -4264,6 +4425,8 @@ pub async fn export_loop_wav(
     let library = state.library()?;
     let state = Arc::clone(&state);
     blocking("export_loop_wav", move || {
+        // A file saved onto a Stick is a Stick write (wbx-45.11).
+        let _access = crate::stick_guard::enter(state.backup_dir(), std::path::Path::new(&path))?;
         let Some(source) = library.audio_path_of(&track).map(std::path::PathBuf::from) else {
             return Err(AppError::new(ErrorKind::NotFound, "That track has no file to read."));
         };
@@ -4285,7 +4448,10 @@ pub async fn export_playlist_file(
     format: String,
 ) -> AppResult<u32> {
     let library = state.library()?;
+    let state = Arc::clone(&state);
     blocking("export_playlist_file", move || {
+        // A file saved onto a Stick is a Stick write (wbx-45.11).
+        let _access = crate::stick_guard::enter(state.backup_dir(), std::path::Path::new(&path))?;
         let playlists = library.playlists();
         let Some(index) = playlist.parse::<u64>().ok().and_then(|numeric| playlists.index_of(numeric)) else {
             return Err(AppError::new(ErrorKind::NotFound, "That playlist is not in the library."));
@@ -4356,7 +4522,10 @@ fn playlist_txt(library: &rbl_index::Library, rows: &[u32]) -> String {
 #[tauri::command]
 pub async fn export_xml(state: State<'_, Arc<AppState>>, path: String) -> AppResult<u32> {
     let library = state.library()?;
+    let state = Arc::clone(&state);
     blocking("export_xml", move || {
+        // A file saved onto a Stick is a Stick write (wbx-45.11).
+        let _access = crate::stick_guard::enter(state.backup_dir(), std::path::Path::new(&path))?;
         let text = rbl_index::export_xml(&library);
         std::fs::write(&path, text).map_err(|e| {
             AppError::new(ErrorKind::Internal, "The XML could not be written.").with_detail(e.to_string())
@@ -4411,6 +4580,11 @@ pub fn cancel_backup(state: State<'_, Arc<AppState>>) {
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value, reason = "Tauri's State extractor is injected by value")]
 pub fn start_backup(state: State<'_, Arc<AppState>>) -> AppResult<()> {
+    // A backup folder on a Stick is a Stick write (wbx-45.11): refused at
+    // once on a protected Stick, so the DJ is told now; nothing else is held
+    // here. The worker authorizes itself again against the folder and holds
+    // that for the whole backup (`backups::create_with_progress`).
+    drop(crate::stick_guard::enter(state.backup_dir(), &state.backup_destination())?);
     crate::backups::start(Arc::clone(&state))
 }
 
@@ -4424,19 +4598,28 @@ pub async fn list_backups(state: State<'_, Arc<AppState>>) -> AppResult<Vec<Back
 #[tauri::command]
 pub async fn back_up_library(state: State<'_, Arc<AppState>>) -> AppResult<String> {
     let state = Arc::clone(&state);
+    // Authorized inside, after the Library edit gate (wbx-45.11).
     blocking("back_up_library", move || crate::backups::create(&state)).await
 }
 
 #[tauri::command]
 pub async fn delete_backup(state: State<'_, Arc<AppState>>, path: String) -> AppResult<()> {
     let state = Arc::clone(&state);
+    // Authorized inside, after the Library edit gate (wbx-45.11).
     blocking("delete_backup", move || crate::backups::delete(&state, std::path::Path::new(&path))).await
 }
 
 #[tauri::command]
 pub async fn set_backup_directory(state: State<'_, Arc<AppState>>, directory: String) -> AppResult<String> {
     let state = Arc::clone(&state);
-    blocking("set_backup_directory", move || state.set_backup_destination(std::path::Path::new(&directory))).await
+    blocking("set_backup_directory", move || {
+        // Choosing it writes a probe file there: in the lock order, the
+        // Library edit gate (which the change takes too), then the Stick.
+        let _gate = state.edit_gate().lock();
+        let access = crate::stick_guard::enter(state.backup_dir(), std::path::Path::new(&directory))?;
+        state.set_backup_destination(&access, std::path::Path::new(&directory))
+    })
+    .await
 }
 
 /// A play: the track goes on today's history session and its play count
@@ -4766,7 +4949,10 @@ mod tests {
         drop(writer);
         let state = crate::state::AppState::unprotected(dir.join("backups"));
         reload(&state, &location);
-        (state, location, crate::test_stick::stick())
+        // A temporary folder standing in for a mounted Stick (wbx-45.11).
+        let stick = crate::test_stick::stick();
+        std::fs::write(stick.path().join(wreckordbox_stick_protection::STAND_IN_MARKER), b"").unwrap();
+        (state, location, stick)
     }
 
     /// Reads the library into `state` again, as an edit does.
@@ -4791,13 +4977,13 @@ mod tests {
     fn export_playlist_to(state: &crate::state::AppState, location: &rbl_db::LibraryLocation, stick: &std::path::Path, playlist: &str) {
         let library = state.library().unwrap();
         let selection = super::playlist_export_selection(state, &library, &location.share_root, stick, playlist, false).unwrap();
-        super::write_export_with_phase(stick, &selection, None, None, None, false, &mut |_| {}, &mut |_| {}, &|| false).unwrap();
+        super::write_export_with_phase(&crate::stick_guard::testing::ordinary(), stick, &selection, None, None, None, false, &mut |_| {}, &mut |_| {}, &|| false).unwrap();
     }
 
     fn export_track_to(state: &crate::state::AppState, location: &rbl_db::LibraryLocation, stick: &std::path::Path, track: &str) {
         let library = state.library().unwrap();
         let selection = super::track_export_selection(state, &library, &location.share_root, stick, &[track.to_owned()]).unwrap();
-        super::write_export_with_phase(stick, &selection, None, None, None, false, &mut |_| {}, &mut |_| {}, &|| false).unwrap();
+        super::write_export_with_phase(&crate::stick_guard::testing::ordinary(), stick, &selection, None, None, None, false, &mut |_| {}, &mut |_| {}, &|| false).unwrap();
     }
 
     /// Export Playlist from the tree adds the playlist to what the stick
@@ -4917,7 +5103,7 @@ mod tests {
         let library = state.library().unwrap();
         let everything: Vec<String> = [&first, &second, &in_first, &in_second].iter().map(|s| (*s).clone()).collect();
         let selection = super::ExportSelection::from_playlists(&state, &library, &location.share_root, &everything, false).unwrap();
-        super::write_export_with_phase(&stick, &selection, None, None, None, false, &mut |_| {}, &mut |_| {}, &|| false).unwrap();
+        super::write_export_with_phase(&crate::stick_guard::testing::ordinary(), &stick, &selection, None, None, None, false, &mut |_| {}, &mut |_| {}, &|| false).unwrap();
 
         let order: Vec<String> = on_stick(&stick).into_iter().map(|(id, _)| id).collect();
         let expected = [second.clone(), in_second.clone(), first.clone(), in_first.clone()];
@@ -4957,7 +5143,7 @@ mod tests {
         let options = rbl_export::ExportOptions { sync: Some(&selection.sync), ..Default::default() };
         let plan = rbl_export::plan::preview(&stick, &selection.tracks, &selection.playlists, &selection.my_tags, &options).unwrap();
         assert!(plan.estimate.tracks_new > 0, "the estimate counts the tracks");
-        super::write_export_with_phase(&stick, &selection, None, None, None, false, &mut |_| {}, &mut |_| {}, &|| false).unwrap();
+        super::write_export_with_phase(&crate::stick_guard::testing::ordinary(), &stick, &selection, None, None, None, false, &mut |_| {}, &mut |_| {}, &|| false).unwrap();
         assert!(rbl_export::verify(&stick).unwrap().is_ok());
     }
 
@@ -5152,5 +5338,124 @@ mod tests {
 
         let files = expand_import_paths(&[dir.path().to_string_lossy().into_owned()]);
         assert_eq!(names(&files), ["real.mp3"]);
+    }
+
+    /// Every file on the stick and its bytes, to show a dry run wrote nothing.
+    fn stick_bytes(root: &std::path::Path) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+        let mut out = std::collections::BTreeMap::new();
+        let mut todo = vec![root.to_path_buf()];
+        while let Some(dir) = todo.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() { todo.push(path); } else { out.insert(path.clone(), std::fs::read(&path).unwrap()); }
+            }
+        }
+        out
+    }
+
+    fn plan_for(state: &crate::state::AppState, stick: &std::path::Path, operation: &serde_json::Value) -> crate::stick_write_plan::StickWritePlan {
+        let request = serde_json::from_value(serde_json::json!({ "destination": stick.to_string_lossy(), "operation": operation })).unwrap();
+        crate::stick_write_plan::plan(state, &request).unwrap()
+    }
+
+    /// Changes the fixture Library after the rig is built, as an edit does.
+    fn edit_library(dir: &std::path::Path, state: &crate::state::AppState, location: &rbl_db::LibraryLocation, change: impl FnOnce(&mut rbl_db::write::Writer)) {
+        let mut writer = rbl_db::write::Writer::open(location.clone(), dir.join("backups")).unwrap();
+        writer.disable_automatic_backups();
+        change(&mut writer);
+        drop(writer);
+        reload(state, location);
+    }
+
+    /// wbx-45.4: an Export Playlist is planned with the export's own plan,
+    /// without writing to the stick, and the plan carries the token the
+    /// write needs, bound to this export of this playlist.
+    #[test]
+    fn a_stick_write_plan_says_what_export_playlist_would_add_and_writes_nothing() {
+        use crate::stick_write_plan::PlaylistChange;
+        let dir = tempfile::tempdir().unwrap();
+        let (state, _location, stick_dir) = export_rig(dir.path(), |_| {});
+        let stick = stick_dir.path().to_path_buf();
+        let a = rbl_db::fixture::playlist_id(0);
+        let before = stick_bytes(&stick);
+        let found = plan_for(&state, &stick, &serde_json::json!({ "kind": "exportPlaylist", "playlist": a }));
+        assert_eq!(stick_bytes(&stick), before, "the dry run wrote nothing");
+        assert!(!found.pending && !found.spare, "an unmarked stick is a Gig stick");
+        let per = rbl_db::fixture::Shape::default().tracks_per_playlist;
+        assert_eq!(found.tracks_new, per);
+        assert_eq!(found.audio_reused, 0);
+        assert_eq!(found.playlists.len(), 1);
+        assert_eq!(found.playlists[0].change, PlaylistChange::Created);
+        assert_eq!((found.playlists[0].added, found.playlists[0].removed), (Some(per), Some(0)));
+        assert!(found.on_stick && found.protected, "a Stick, protected until unlocked");
+        let token = crate::stick_approval::approve(state.backup_dir(), &found.plan.unwrap()).unwrap();
+        let generation = u64::from(state.summary().3);
+        let other = crate::stick_approval::StickOperation::ExportPlaylist {
+            playlist: rbl_db::fixture::playlist_id(1),
+            delete_unlisted_music: false,
+            defaults: serde_json::Value::Null,
+            compatibility: serde_json::Value::Null,
+        };
+        assert!(crate::stick_approval::consume(Some(&token), &other, &stick, generation).is_err(), "not for another playlist");
+    }
+
+    /// Export Track re-writes every playlist the stick holds from this
+    /// Library and every track's data: the plan says which audio is reused,
+    /// which tracks' data changes and in which fields, and what each
+    /// playlist written again gains and loses (second review, finding 6).
+    #[test]
+    fn a_track_export_plan_tells_reused_audio_from_changed_track_data_and_playlist_entries() {
+        use crate::stick_write_plan::PlaylistChange;
+        let dir = tempfile::tempdir().unwrap();
+        let (state, location, stick_dir) = export_rig(dir.path(), |_| {});
+        let stick = stick_dir.path().to_path_buf();
+        let a = rbl_db::fixture::playlist_id(0);
+        export_playlist_to(&state, &location, &stick, &a);
+        std::fs::write(stick.join(".rbxport-disposable"), b"").unwrap();
+        let last = rbl_db::fixture::Shape::default().tracks - 1;
+        let per = rbl_db::fixture::Shape::default().tracks_per_playlist;
+        let lone = serde_json::json!({ "kind": "exportTracks", "tracks": [rbl_db::fixture::track_id(last)] });
+
+        // Nothing changed in the Library: only the new track's audio is copied.
+        let found = plan_for(&state, &stick, &lone);
+        assert!(found.spare, "the Spare stick marker is read");
+        assert_eq!((found.tracks_new, found.audio_reused), (1, per));
+        assert_eq!(found.track_changes, Vec::new(), "the exported data matches the Library's");
+        assert_eq!(found.playlists.iter().map(|p| (p.change, p.added, p.removed)).collect::<Vec<_>>(), [(PlaylistChange::Resynchronised, Some(0), Some(0))]);
+
+        // One exported track's Energy changed, and the playlist gained a track.
+        let library = state.library().unwrap();
+        let selection = super::ExportSelection::from_playlists(&state, &library, &location.share_root, std::slice::from_ref(&a), false).unwrap();
+        let first = selection.tracks[0].clone();
+        let before = stick_bytes(&stick);
+        edit_library(dir.path(), &state, &location, |w| {
+            w.set_rating(&first.id.to_string(), if first.rating == 5 { 1 } else { 5 }).unwrap();
+            w.add_tracks(&a, &[rbl_db::fixture::track_id(last - 1)]).unwrap();
+        });
+        let found = plan_for(&state, &stick, &lone);
+        assert_eq!(stick_bytes(&stick), before, "the dry run wrote nothing");
+        assert_eq!(found.audio_reused, per, "the audio on the Stick is reused");
+        let changed: Vec<_> = found.track_changes.iter().map(|c| (c.title.as_str(), c.fields.clone())).collect();
+        assert_eq!(changed, [(first.title.as_str(), vec!["Energy".to_owned()])], "and its data is still rewritten");
+        assert_eq!(found.playlists.iter().map(|p| (p.change, p.added, p.removed)).collect::<Vec<_>>(), [(PlaylistChange::Resynchronised, Some(1), Some(0))]);
+    }
+
+    /// A stick with an unfinished write is planned as pending, settled by
+    /// nothing, with no token: the journal is still there and not a byte changed.
+    #[test]
+    fn a_stick_write_plan_does_not_settle_an_unfinished_write_and_gives_no_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let (state, location, stick_dir) = export_rig(dir.path(), |_| {});
+        let stick = stick_dir.path().to_path_buf();
+        export_playlist_to(&state, &location, &stick, &rbl_db::fixture::playlist_id(0));
+        // The journal an interrupted publication leaves (`rbl_export::recovery_pending`).
+        std::fs::write(stick.join(".rbxport-publication"), b"{}").unwrap();
+        let before = stick_bytes(&stick);
+        let found = plan_for(&state, &stick, &serde_json::json!({ "kind": "exportPlaylist", "playlist": rbl_db::fixture::playlist_id(1) }));
+        assert!(found.pending);
+        assert_eq!(found.plan, None, "nothing may be written");
+        assert_eq!(found.playlists, Vec::new(), "nothing planned");
+        assert_eq!(stick_bytes(&stick), before);
+        assert!(rbl_export::recovery_pending(&stick));
     }
 }
