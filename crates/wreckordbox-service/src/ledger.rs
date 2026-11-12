@@ -1225,12 +1225,11 @@ impl Keeper {
         for open in sidecar.open_intents().map_err(|e| e.to_string())? {
             // What the unconfirmed write did to entries: the Library as it
             // is, and what it planned. A failed read keeps it unsettled.
-            let follow = crate::mutant_follow::recover(
-                &self.location,
-                sidecar,
-                open.mutant_plan.as_ref(),
-            )
-            .map_err(|why| format!("the Mutants of an unconfirmed change could not be recovered: {why}"))?;
+            let follow =
+                crate::mutant_follow::recover(&self.location, sidecar, open.mutant_plan.as_ref())
+                    .map_err(|why| {
+                    format!("the Mutants of an unconfirmed change could not be recovered: {why}")
+                })?;
             let run = match open.run {
                 Some(run) => run,
                 None => late_run(sidecar, &open.source, &open.description)?,
@@ -1761,6 +1760,9 @@ impl rbl_library::ledger::Ledger for Keeper {
             reverses: None,
             part_of: None,
             payload: None,
+            // A file edit moves no playlist entry.
+            follow: Ok(wreckordbox_sidecar::mutant_follow::Follow::default()),
+            plan: None,
         });
     }
 

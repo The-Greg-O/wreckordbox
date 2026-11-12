@@ -50,7 +50,9 @@ pub(crate) fn write_replacing<T>(
     };
     state
         .core()
-        .write_then_prepared(state, History::Caller, &preparation, edit, |_, done| Ok(done))
+        .write_then_prepared(state, History::Caller, &preparation, edit, |_, done| {
+            Ok(done)
+        })
 }
 
 /// One Mutant that would go with the tracks, as the confirmation names it.
@@ -77,19 +79,25 @@ pub async fn collection_removal_mutants(
     tracks: Vec<String>,
 ) -> AppResult<Vec<RemovalMutantDto>> {
     let state = Arc::clone(&state);
-    blocking("collection_removal_mutants", move || removal_mutants(&state, tracks)).await
+    blocking("collection_removal_mutants", move || {
+        removal_mutants(&state, &tracks)
+    })
+    .await
 }
 
 /// [`collection_removal_mutants`], blocking.
 ///
 /// # Errors
 /// The service could not answer.
-pub fn removal_mutants(state: &AppState, tracks: Vec<String>) -> AppResult<Vec<RemovalMutantDto>> {
+pub fn removal_mutants(state: &AppState, tracks: &[String]) -> AppResult<Vec<RemovalMutantDto>> {
     if tracks.is_empty() {
         return Ok(Vec::new());
     }
     let asked = state.with_service(|service| {
-        service.call(TRACKS_REMOVE_FROM_COLLECTION, json!({ "tracks": tracks, "confirm": false }))
+        service.call(
+            TRACKS_REMOVE_FROM_COLLECTION,
+            json!({ "tracks": tracks, "confirm": false }),
+        )
     });
     let Some(answer) = asked else {
         return Ok(Vec::new());
@@ -97,7 +105,10 @@ pub fn removal_mutants(state: &AppState, tracks: Vec<String>) -> AppResult<Vec<R
     let answer = answer.map_err(|error| {
         AppError::new(
             ErrorKind::NotFound,
-            format!("The Mutants of these tracks could not be read: {}", error.message),
+            format!(
+                "The Mutants of these tracks could not be read: {}",
+                error.message
+            ),
         )
     })?;
     Ok(answer["mutants"]

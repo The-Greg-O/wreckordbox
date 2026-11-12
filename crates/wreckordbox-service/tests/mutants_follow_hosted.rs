@@ -418,7 +418,6 @@ fn live_ids(hosted: &Hosted) -> Vec<i64> {
         .collect()
 }
 
-
 /// The window's route for an import's Replace existing: the write declared
 /// as one that replaces entries, then the history entry, under one gate.
 fn window_replaces(hosted: &Hosted, contents: Vec<String>) {
@@ -436,7 +435,9 @@ fn window_replaces(hosted: &Hosted, contents: Vec<String>) {
             &preparation,
             |writer| writer.set_tracks_with_undo(&playlist, &contents),
             |db, (_, replaced)| {
-                hosted.core.refresh_after_edit(&NoHost, db, Touched::Playlists)?;
+                hosted
+                    .core
+                    .refresh_after_edit(&NoHost, db, Touched::Playlists)?;
                 Ok(replaced)
             },
         )
@@ -473,13 +474,20 @@ fn a_replacement_import_carries_a_mutant_with_its_edits_and_undo_and_redo_keep_b
     let first = hosted.mutate(&entries[0], json!({ "key_shift": 1 }));
     let second = hosted.mutate(&entries[1], json!({ "key_shift": -2 }));
     let again = hosted.mutate(&entries[3], json!({ "tempo": 1.04 }));
-    let (first_edits, second_edits, again_edits) =
-        (hosted.edits_of(first), hosted.edits_of(second), hosted.edits_of(again));
+    let (first_edits, second_edits, again_edits) = (
+        hosted.edits_of(first),
+        hosted.edits_of(second),
+        hosted.edits_of(again),
+    );
 
     // Tracks 3, 1 and a new one, every entry written afresh; track 1 once.
     window_replaces(
         &hosted,
-        vec![hosted.tracks[2].clone(), hosted.tracks[0].clone(), fixture::track_id(0)],
+        vec![
+            hosted.tracks[2].clone(),
+            hosted.tracks[0].clone(),
+            fixture::track_id(0),
+        ],
     );
     let new_entries = hosted.entries(&hosted.playlist);
     assert!(new_entries.iter().all(|entry| !entries.contains(entry)));
@@ -508,7 +516,10 @@ fn a_replacement_import_carries_a_mutant_with_its_edits_and_undo_and_redo_keep_b
     assert_eq!(hosted.edits_of(first), first_edits);
     assert_eq!(hosted.edits_of(second), second_edits);
     assert_eq!(hosted.edits_of(again), again_edits);
-    assert_eq!(hosted.mutant(again)["mutant"]["entry_id"], entries[3].as_str());
+    assert_eq!(
+        hosted.mutant(again)["mutant"]["entry_id"],
+        entries[3].as_str()
+    );
 
     hosted.redo();
     assert_eq!(live_ids(&hosted), vec![carried]);
@@ -531,7 +542,11 @@ fn reordering_by_track_or_by_entry_with_a_track_twice_keeps_every_mutant_and_its
     // The window's older reorder, by track: both entries of track 1 move
     // together.
     let playlist = hosted.playlist.clone();
-    let order = vec![hosted.tracks[2].clone(), hosted.tracks[0].clone(), hosted.tracks[1].clone()];
+    let order = vec![
+        hosted.tracks[2].clone(),
+        hosted.tracks[0].clone(),
+        hosted.tracks[1].clone(),
+    ];
     hosted.window("Reorder Playlist", move |writer| {
         writer
             .reorder_with_undo(&playlist, &order)
@@ -547,8 +562,15 @@ fn reordering_by_track_or_by_entry_with_a_track_twice_keeps_every_mutant_and_its
             .map(LibraryEdit::ReorderEntries)
     });
     for step in [true, false, true, true, false] {
-        if step { hosted.undo() } else { hosted.redo() }
-        for (id, entry, edits) in [(first, &entries[0], &first_edits), (again, &entries[3], &again_edits)] {
+        if step {
+            hosted.undo()
+        } else {
+            hosted.redo()
+        }
+        for (id, entry, edits) in [
+            (first, &entries[0], &first_edits),
+            (again, &entries[3], &again_edits),
+        ] {
             let shown = hosted.mutant(id);
             assert_eq!(shown["mutant"]["removed"], false);
             assert_eq!(shown["mutant"]["entry_id"], entry.as_str());
@@ -587,9 +609,15 @@ fn a_copy_is_one_undo_step_and_its_mutants_are_versions_of_their_own() {
         .collect();
     assert_eq!(copies.len(), 2);
     let (copy_first, copy_again) = (copies[0], copies[1]);
-    assert_eq!(hosted.mutant(copy_first)["mutant"]["entry_id"], copy_entries[0].as_str());
+    assert_eq!(
+        hosted.mutant(copy_first)["mutant"]["entry_id"],
+        copy_entries[0].as_str()
+    );
     assert_eq!(hosted.edits_of(copy_first), first_edits);
-    assert_eq!(hosted.mutant(copy_again)["mutant"]["entry_id"], copy_entries[3].as_str());
+    assert_eq!(
+        hosted.mutant(copy_again)["mutant"]["entry_id"],
+        copy_entries[3].as_str()
+    );
     assert_eq!(hosted.edits_of(copy_again), again_edits);
     assert_eq!(hosted.history(copy_first), ["copied"]);
 
@@ -648,20 +676,32 @@ fn a_mutant_change_that_cannot_be_written_keeps_the_entry_waiting_instead_of_dro
     let entries_of = |kind: &str| -> i64 {
         hosted
             .sidecar()
-            .query_row("SELECT count(*) FROM ledger WHERE kind = ?1", [kind], |r| r.get(0))
+            .query_row("SELECT count(*) FROM ledger WHERE kind = ?1", [kind], |r| {
+                r.get(0)
+            })
             .unwrap()
     };
     assert_eq!(entries_of("remove_playlist_tracks"), 0);
     assert_eq!(hosted.mutant(mutant)["mutant"]["removed"], false);
-    assert!(hosted.dir.path().join("sidecar").join("ledger-spill.jsonl").is_file());
+    assert!(hosted
+        .dir
+        .path()
+        .join("sidecar")
+        .join("ledger-spill.jsonl")
+        .is_file());
     // Nothing more is changed while it waits.
     let playlist = hosted.playlist.clone();
     let track = hosted.tracks[2].clone();
-    let refused = hosted.core.recorded_edit(&NoHost, Touched::Playlists, "Remove Tracks from Playlist", |writer| {
-        writer
-            .remove_tracks_with_undo(&playlist, &[track])
-            .map(|(_, edit)| ((), LibraryEdit::RemovePlaylistTracks(edit)))
-    });
+    let refused = hosted.core.recorded_edit(
+        &NoHost,
+        Touched::Playlists,
+        "Remove Tracks from Playlist",
+        |writer| {
+            writer
+                .remove_tracks_with_undo(&playlist, &[track])
+                .map(|(_, edit)| ((), LibraryEdit::RemovePlaylistTracks(edit)))
+        },
+    );
     assert!(refused.is_err());
 
     hosted
@@ -702,7 +742,10 @@ fn a_copy_whose_entry_had_to_wait_gets_the_edits_the_source_had_when_it_was_copi
 
     let copied = hosted
         .service
-        .call(edits::PLAYLISTS_COPY, json!({ "playlist": hosted.playlist }))
+        .call(
+            edits::PLAYLISTS_COPY,
+            json!({ "playlist": hosted.playlist }),
+        )
         .unwrap();
     let copy = copied["playlist"].as_str().unwrap().to_owned();
     // The entry was refused, so the copy's Mutant waits with it.
@@ -751,7 +794,11 @@ fn a_playlist_edits_change_is_told_to_the_host_even_when_its_answer_fails() {
 }
 
 /// Hosts a service again on what a stopped one left.
-fn host_again(dir: &std::path::Path, location: &LibraryLocation, core: &Arc<LibraryCore>) -> Service {
+fn host_again(
+    dir: &std::path::Path,
+    location: &LibraryLocation,
+    core: &Arc<LibraryCore>,
+) -> Service {
     let config = Config {
         runtime_dir: dir.join("run"),
         idle_exit: None,
@@ -780,7 +827,15 @@ fn recovery_never_takes_a_failed_read_for_a_removed_entry_and_checks_the_playlis
     let removed = hosted.mutate(&entries[0], json!({ "key_shift": 1 }));
     let parent_gone = hosted.mutate(&entries[1], json!({ "key_shift": 2 }));
     let kept = hosted.mutate(&entries[2], json!({ "key_shift": 3 }));
-    let Hosted { dir, location, core, service, playlist, tracks, .. } = hosted;
+    let Hosted {
+        dir,
+        location,
+        core,
+        service,
+        playlist,
+        tracks,
+        ..
+    } = hosted;
     service.stop();
     drop(service);
 
@@ -791,11 +846,16 @@ fn recovery_never_takes_a_failed_read_for_a_removed_entry_and_checks_the_playlis
         let mut writer =
             rbl_db::write::Writer::open(location.clone(), dir.path().join("backups")).unwrap();
         writer.disable_automatic_backups();
-        writer.remove_tracks(&playlist, &[tracks[0].clone()]).unwrap();
+        writer
+            .remove_tracks(&playlist, &[tracks[0].clone()])
+            .unwrap();
         writer
             .library()
             .connection()
-            .execute("UPDATE djmdContent SET rb_local_deleted = 1 WHERE ID = ?1", [&tracks[1]])
+            .execute(
+                "UPDATE djmdContent SET rb_local_deleted = 1 WHERE ID = ?1",
+                [&tracks[1]],
+            )
             .unwrap();
     }
     let sidecar_db = dir.path().join("sidecar").join("sidecar.db");
@@ -828,7 +888,11 @@ fn recovery_never_takes_a_failed_read_for_a_removed_entry_and_checks_the_playlis
     };
     let mut still = live(&service);
     still.sort_unstable();
-    assert_eq!(still, vec![removed, parent_gone, kept], "nothing is assumed gone");
+    assert_eq!(
+        still,
+        vec![removed, parent_gone, kept],
+        "nothing is assumed gone"
+    );
     assert_eq!(open_intents(), 1, "the change stays to be recovered");
     service.stop();
     drop(service);
@@ -849,7 +913,14 @@ fn five_thousand_mutated_entries_are_reordered_removed_and_put_back_in_bounded_t
     let dir = tempfile::tempdir().unwrap();
     let library = dir.path().join("library");
     std::fs::create_dir_all(&library).unwrap();
-    let location = fixture::build(&library, Shape { tracks: N, ..Shape::default() }).unwrap();
+    let location = fixture::build(
+        &library,
+        Shape {
+            tracks: N,
+            ..Shape::default()
+        },
+    )
+    .unwrap();
     let tracks: Vec<String> = (0..N).map(fixture::track_id).collect();
     let playlist = {
         let mut writer =
@@ -869,11 +940,20 @@ fn five_thousand_mutated_entries_are_reordered_removed_and_put_back_in_bounded_t
     let core = Arc::new(LibraryCore::new(config.recovery_dir.clone()));
     let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
     let (index, _) = rbl_index::load(&db).unwrap();
-    core.set_library(&NoHost, index, false, db.schema().db_version, 0, location.clone());
+    core.set_library(
+        &NoHost,
+        index,
+        false,
+        db.schema().db_version,
+        0,
+        location.clone(),
+    );
     let host: Arc<dyn rbl_library::Host + Send + Sync> = Arc::new(NoHost);
     let service = Service::host(&location, &config, &core, &host).unwrap();
 
-    let entries: Vec<String> = service.call(PLAYLISTS_TRACKS, json!({ "id": playlist, "limit": N })).unwrap()["tracks"]
+    let entries: Vec<String> = service
+        .call(PLAYLISTS_TRACKS, json!({ "id": playlist, "limit": N }))
+        .unwrap()["tracks"]
         .as_array()
         .unwrap()
         .iter()
@@ -881,11 +961,15 @@ fn five_thousand_mutated_entries_are_reordered_removed_and_put_back_in_bounded_t
         .collect();
     assert_eq!(entries.len(), N);
     let made = service
-        .call(commands::MUTANTS_CREATE, json!({ "entry": entries[0], "source": { "kind": "agent", "name": "load" } }))
+        .call(
+            commands::MUTANTS_CREATE,
+            json!({ "entry": entries[0], "source": { "kind": "agent", "name": "load" } }),
+        )
         .unwrap();
     let run = made["run"]["id"].as_i64().unwrap();
     {
-        let mut sidecar = rusqlite::Connection::open(dir.path().join("sidecar").join("sidecar.db")).unwrap();
+        let mut sidecar =
+            rusqlite::Connection::open(dir.path().join("sidecar").join("sidecar.db")).unwrap();
         let tx = sidecar.transaction().unwrap();
         for (entry, track) in entries.iter().zip(&tracks).skip(1) {
             tx.execute(
@@ -912,14 +996,19 @@ fn five_thousand_mutated_entries_are_reordered_removed_and_put_back_in_bounded_t
         assert!(took.as_secs() < 30, "{what} took {took:?}");
     };
     timed("mutants.list of 5000", &mut || {
-        let listed = service.call(commands::MUTANTS_LIST, json!({ "playlist": playlist })).unwrap();
+        let listed = service
+            .call(commands::MUTANTS_LIST, json!({ "playlist": playlist }))
+            .unwrap();
         assert_eq!(listed["total"], N);
     });
     let mut reversed = entries.clone();
     reversed.reverse();
     timed("playlists.reorder of 5000 mutated entries", &mut || {
         let answer = service
-            .call(edits::PLAYLISTS_REORDER, json!({ "playlist": playlist, "entries": reversed }))
+            .call(
+                edits::PLAYLISTS_REORDER,
+                json!({ "playlist": playlist, "entries": reversed }),
+            )
             .unwrap();
         assert_eq!(answer["mutants"].as_array().unwrap().len(), N);
         assert_eq!(answer["mutants"][0]["position"], N);
@@ -927,7 +1016,10 @@ fn five_thousand_mutated_entries_are_reordered_removed_and_put_back_in_bounded_t
     let half: Vec<String> = tracks[..N / 2].to_vec();
     timed("playlists.remove of 2500 mutated entries", &mut || {
         let answer = service
-            .call(edits::PLAYLISTS_REMOVE, json!({ "playlist": playlist, "tracks": half }))
+            .call(
+                edits::PLAYLISTS_REMOVE,
+                json!({ "playlist": playlist, "tracks": half }),
+            )
             .unwrap();
         assert_eq!(answer["mutants"].as_array().unwrap().len(), N / 2);
     });
@@ -935,7 +1027,9 @@ fn five_thousand_mutated_entries_are_reordered_removed_and_put_back_in_bounded_t
         core.step_history(&NoHost, true).unwrap();
     });
     assert_eq!(
-        service.call(commands::MUTANTS_LIST, json!({ "playlist": playlist })).unwrap()["total"],
+        service
+            .call(commands::MUTANTS_LIST, json!({ "playlist": playlist }))
+            .unwrap()["total"],
         N
     );
 }
@@ -947,7 +1041,14 @@ fn host_fresh(dir: &std::path::Path, location: &LibraryLocation) -> (Arc<Library
     let core = Arc::new(LibraryCore::new(recovery));
     let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
     let (index, _) = rbl_index::load(&db).unwrap();
-    core.set_library(&NoHost, index, false, db.schema().db_version, 0, location.clone());
+    core.set_library(
+        &NoHost,
+        index,
+        false,
+        db.schema().db_version,
+        0,
+        location.clone(),
+    );
     let service = host_again(dir, location, &core);
     (core, service)
 }
@@ -974,7 +1075,11 @@ fn replace_and_die() {
     std::env::set_var(SIDECAR_DIR_ENV, dir.join("sidecar"));
     let (core, service) = host_fresh(&dir, &location);
     let playlist = std::env::var(CHILD_PLAYLIST).unwrap();
-    let contents = vec![fixture::track_id(3), fixture::track_id(1), fixture::track_id(0)];
+    let contents = vec![
+        fixture::track_id(3),
+        fixture::track_id(1),
+        fixture::track_id(0),
+    ];
     let _gate = core.edit_gate().lock();
     let preparation = Preparation {
         replaces_entries: true,
@@ -999,7 +1104,13 @@ fn a_replacement_whose_process_died_after_the_write_still_carries_its_mutants() 
     let first = hosted.mutate(&entries[0], json!({ "key_shift": 1 }));
     let second = hosted.mutate(&entries[1], json!({ "key_shift": -2 }));
     let first_edits = hosted.edits_of(first);
-    let Hosted { dir, location, service, playlist, .. } = hosted;
+    let Hosted {
+        dir,
+        location,
+        service,
+        playlist,
+        ..
+    } = hosted;
     service.stop();
     drop(service);
 
@@ -1011,7 +1122,11 @@ fn a_replacement_whose_process_died_after_the_write_still_carries_its_mutants() 
         .env("WRECKORDBOX_LEDGER_FAULTS", "abort_after_write")
         .output()
         .unwrap();
-    assert!(!child.status.success(), "the child did not die: {}", String::from_utf8_lossy(&child.stdout));
+    assert!(
+        !child.status.success(),
+        "the child did not die: {}",
+        String::from_utf8_lossy(&child.stdout)
+    );
 
     // The replacement is in the Library and its entry was never written.
     let (_core, service) = host_fresh(dir.path(), &location);
@@ -1035,10 +1150,14 @@ fn a_replacement_whose_process_died_after_the_write_still_carries_its_mutants() 
     assert_eq!(live[0]["entry_id"], new_entries[1].as_str());
     assert_eq!(live[0]["edits"], first_edits);
     let carried = live[0]["id"].as_i64().unwrap();
-    let shown = service.call(commands::MUTANTS_GET, json!({ "id": carried })).unwrap();
+    let shown = service
+        .call(commands::MUTANTS_GET, json!({ "id": carried }))
+        .unwrap();
     assert_eq!(shown["history"][0]["action"], "carried");
     for gone in [first, second] {
-        let shown = service.call(commands::MUTANTS_GET, json!({ "id": gone })).unwrap();
+        let shown = service
+            .call(commands::MUTANTS_GET, json!({ "id": gone }))
+            .unwrap();
         assert_eq!(shown["mutant"]["removed"], true);
     }
     // Recovered once.

@@ -63,18 +63,28 @@ fn window() -> Window {
     let dir = tempfile::tempdir().unwrap();
     let library = dir.path().join("library");
     std::fs::create_dir_all(&library).unwrap();
-    let location = fixture::build(&library, Shape { tracks: 3, ..Shape::default() }).unwrap();
+    let location = fixture::build(
+        &library,
+        Shape {
+            tracks: 3,
+            ..Shape::default()
+        },
+    )
+    .unwrap();
     let folder = dir.path().join("Warm Up");
     std::fs::create_dir_all(&folder).unwrap();
     let file = folder.join("a.wav");
     write_wav(&file);
     let (playlist, dropped) = {
         let mut writer =
-            rbl_db::write::Writer::open(location.clone(), dir.path().join("fixture-backups")).unwrap();
+            rbl_db::write::Writer::open(location.clone(), dir.path().join("fixture-backups"))
+                .unwrap();
         writer.disable_automatic_backups();
         let dropped = writer.import_file(&file).unwrap();
         let playlist = writer.create_playlist("Warm Up", ROOT).unwrap();
-        writer.add_tracks(&playlist, &[track_id(1), dropped.clone()]).unwrap();
+        writer
+            .add_tracks(&playlist, &[track_id(1), dropped.clone()])
+            .unwrap();
         (playlist, dropped)
     };
     std::fs::create_dir_all(dir.path().join("home")).unwrap();
@@ -84,7 +94,12 @@ fn window() -> Window {
     state.set_library(index, false, db.schema().db_version, 0, location.clone());
     let app = tauri::test::mock_app();
     app.manage(Arc::new(state));
-    let window = Window { dir, app, playlist, dropped };
+    let window = Window {
+        dir,
+        app,
+        playlist,
+        dropped,
+    };
     run(service_host::set_library_protection(window.state(), false)).unwrap();
     let config = Config {
         runtime_dir: window.dir.path().join("run"),
@@ -152,12 +167,24 @@ fn a_folder_drop_replace_existing_carries_the_playlists_mutants_and_undo_and_red
     // The DJ drops the folder "Warm Up" on the tree and chooses Replace.
     let path = w.dir.path().join("Warm Up").display().to_string();
     let asked = run(commands::import_folder_playlist(
-        w.app.handle().clone(), w.state(), path.clone(), ROOT.into(), None, Some(0), None,
+        w.app.handle().clone(),
+        w.state(),
+        path.clone(),
+        ROOT.into(),
+        None,
+        Some(0),
+        None,
     ))
     .unwrap();
     assert_eq!(asked.conflict.as_deref(), Some(w.playlist.as_str()));
     let replaced = run(commands::import_folder_playlist(
-        w.app.handle().clone(), w.state(), path, ROOT.into(), Some(w.playlist.clone()), asked.at, None,
+        w.app.handle().clone(),
+        w.state(),
+        path,
+        ROOT.into(),
+        Some(w.playlist.clone()),
+        asked.at,
+        None,
     ))
     .unwrap();
     let made = replaced.playlist.unwrap();
@@ -197,7 +224,11 @@ fn remove_from_collection_names_the_mutants_that_would_go_before_anything_is_rem
     let (id, _) = w.mutate(&entries[1], json!({ "key_shift": 1 }));
     let (other, _) = w.mutate(&entries[0], json!({ "key_shift": 2 }));
 
-    let named = run(mutant_window::collection_removal_mutants(w.state(), vec![w.dropped.clone()])).unwrap();
+    let named = run(mutant_window::collection_removal_mutants(
+        w.state(),
+        vec![w.dropped.clone()],
+    ))
+    .unwrap();
     assert_eq!(named.len(), 1);
     assert_eq!(named[0].id, id);
     assert_eq!(named[0].playlist_name, "Warm Up");
@@ -210,10 +241,19 @@ fn remove_from_collection_names_the_mutants_that_would_go_before_anything_is_rem
 
     // Confirmed: the window's own command removes the track, and its
     // Mutant goes with it.
-    run(commands::remove_from_collection(w.app.handle().clone(), w.state(), vec![w.dropped.clone()])).unwrap();
+    run(commands::remove_from_collection(
+        w.app.handle().clone(),
+        w.state(),
+        vec![w.dropped.clone()],
+    ))
+    .unwrap();
     let live: Vec<i64> = w.live().iter().map(|m| m["id"].as_i64().unwrap()).collect();
     assert_eq!(live, vec![other]);
     assert_eq!(w.mutant(id)["removed"], true);
-    let none = run(mutant_window::collection_removal_mutants(w.state(), vec![track_id(2)])).unwrap();
+    let none = run(mutant_window::collection_removal_mutants(
+        w.state(),
+        vec![track_id(2)],
+    ))
+    .unwrap();
     assert!(none.is_empty());
 }

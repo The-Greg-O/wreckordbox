@@ -300,8 +300,9 @@ fn live_of(tx: &Transaction, entry: &str) -> Result<Option<Held>> {
 
 /// A playlist's Mutants, newest first, with each one's newest action.
 fn in_playlist(tx: &Transaction, playlist: &str) -> Result<Vec<(Held, String)>> {
-    let mut statement =
-        tx.prepare(&format!("{HELD} WHERE playlist_id = ?1 ORDER BY mutant.id DESC"))?;
+    let mut statement = tx.prepare(&format!(
+        "{HELD} WHERE playlist_id = ?1 ORDER BY mutant.id DESC"
+    ))?;
     let rows = statement
         .query_map([playlist], held)?
         .collect::<rusqlite::Result<Vec<_>>>()?;

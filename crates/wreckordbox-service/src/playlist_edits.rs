@@ -184,13 +184,18 @@ pub(crate) fn answer(
 ) -> Result<Done, ServiceError> {
     let (changed, answer) = make(library, stems, request)?;
     if changed.is_some() && answer_fails() {
-        let injected = ServiceError::new(shared_codes::SERVICE_FAILED, "the answer failed (injected)");
+        let injected =
+            ServiceError::new(shared_codes::SERVICE_FAILED, "the answer failed (injected)");
         return Ok((changed, Err(injected)));
     }
     Ok((changed, answer))
 }
 
-fn make(library: &OpenLibrary, stems: &Arc<Stems>, request: &Request) -> Result<Done, ServiceError> {
+fn make(
+    library: &OpenLibrary,
+    stems: &Arc<Stems>,
+    request: &Request,
+) -> Result<Done, ServiceError> {
     let edits = Edits { library, stems };
     let command = request.command.as_str();
     match command {
@@ -248,14 +253,17 @@ impl Edits<'_> {
         let ((rows, entries), changed) =
             self.library
                 .recorded_edit(Touched::Playlists, "Delete Playlist", move |writer| {
-                    writer.delete_playlist_with_undo(&playlist).map(|(changed, edit)| {
-                        let entries = edit.membership_ids.clone();
-                        ((changed.rows, entries), LibraryEdit::DeletePlaylist(edit))
-                    })
+                    writer
+                        .delete_playlist_with_undo(&playlist)
+                        .map(|(changed, edit)| {
+                            let entries = edit.membership_ids.clone();
+                            ((changed.rows, entries), LibraryEdit::DeletePlaylist(edit))
+                        })
                 })?;
         // The Mutants that went with it: those of its entries, now removed.
         let gone = self.detached_from(&entries);
-        let answer = gone.and_then(|gone| self.answer_edited(&delete.playlist, rows > 0, &changed, &gone));
+        let answer =
+            gone.and_then(|gone| self.answer_edited(&delete.playlist, rows > 0, changed, &gone));
         Ok((Some(changed), answer))
     }
 
@@ -305,32 +313,35 @@ impl Edits<'_> {
         let made = self
             .library
             .recorded_edit(Touched::Playlists, "Copy Playlist", move |writer| {
-                let ids = match crate::mutant_follow::copy_ids() {
-                    Some(ids) => ids,
-                    None => {
-                        let count = rbl_library::entry_order::entries(
-                            writer.library().connection(),
-                            &source,
-                        )?
-                        .len();
-                        rbl_library::entry_copy::CopyIds::fresh(writer.library().connection(), count)?
-                    }
+                let ids = if let Some(ids) = crate::mutant_follow::copy_ids() {
+                    ids
+                } else {
+                    let count =
+                        rbl_library::entry_order::entries(writer.library().connection(), &source)?
+                            .len();
+                    rbl_library::entry_copy::CopyIds::fresh(writer.library().connection(), count)?
                 };
-                rbl_library::entry_copy::copy(writer, &source, &wanted, &ids)
-                    .map(|copy| ((copy.parts().1.to_owned(), copy.parts().2.len()), LibraryEdit::CopyPlaylist(copy)))
+                rbl_library::entry_copy::copy(writer, &source, &wanted, &ids).map(|copy| {
+                    (
+                        (copy.parts().1.to_owned(), copy.parts().2.len()),
+                        LibraryEdit::CopyPlaylist(copy),
+                    )
+                })
             });
         crate::mutant_follow::done_copying();
         let ((playlist, tracks), changed) = made?;
-        let answer = self.listed(json!({ "playlist": playlist })).and_then(|mutants| {
-            to_value(&PlaylistCopied {
-                playlist,
-                name,
-                from: copy.playlist.clone(),
-                tracks,
-                generation: changed.generation,
-                mutants,
-            })
-        });
+        let answer = self
+            .listed(json!({ "playlist": playlist }))
+            .and_then(|mutants| {
+                to_value(&PlaylistCopied {
+                    playlist,
+                    name,
+                    from: copy.playlist.clone(),
+                    tracks,
+                    generation: changed.generation,
+                    mutants,
+                })
+            });
         Ok((Some(changed), answer))
     }
 
@@ -428,7 +439,7 @@ impl Edits<'_> {
     fn detached_from(&self, entries: &[String]) -> Result<Vec<i64>, ServiceError> {
         let wanted: std::collections::HashSet<&str> = entries.iter().map(String::as_str).collect();
         Ok(self
-            .stored(|sidecar| sidecar.mutant_attachments())?
+            .stored(wreckordbox_sidecar::Sidecar::mutant_attachments)?
             .into_iter()
             .filter(|attachment| !attachment.live && wanted.contains(attachment.entry_id.as_str()))
             .map(|attachment| attachment.mutant_id)
@@ -438,9 +449,7 @@ impl Edits<'_> {
     /// Reads the Sidecar, when there is one, without making one.
     fn stored<T: Default>(
         &self,
-        read: impl FnOnce(
-            &wreckordbox_sidecar::Sidecar,
-        ) -> Result<T, wreckordbox_sidecar::SidecarError>,
+        read: impl FnOnce(&wreckordbox_sidecar::Sidecar) -> Result<T, wreckordbox_sidecar::SidecarError>,
     ) -> Result<T, ServiceError> {
         let Some(sidecar) = self.stems.sidecar_if_made()? else {
             return Ok(T::default());
@@ -466,8 +475,14 @@ impl Edits<'_> {
         Ok(answer["mutants"].as_array().cloned().unwrap_or_default())
     }
 
-    fn edited(&self, playlist: &str, changed: bool, change: LibraryChanged, mutants: &[i64]) -> Done {
-        let answer = self.answer_edited(playlist, changed, &change, mutants);
+    fn edited(
+        &self,
+        playlist: &str,
+        changed: bool,
+        change: LibraryChanged,
+        mutants: &[i64],
+    ) -> Done {
+        let answer = self.answer_edited(playlist, changed, change, mutants);
         (Some(change), answer)
     }
 
@@ -475,7 +490,7 @@ impl Edits<'_> {
         &self,
         playlist: &str,
         changed: bool,
-        change: &LibraryChanged,
+        change: LibraryChanged,
         mutants: &[i64],
     ) -> Result<Value, ServiceError> {
         to_value(&PlaylistEdited {

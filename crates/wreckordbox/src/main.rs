@@ -369,28 +369,7 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
             }
         }
         Commands::Backup { command } => print(&backup::run(&config, cli.json, command)?),
-        Commands::Stop => {
-            let library = wreckordbox_service::locate_library()?;
-            let socket = config.socket_path(&library);
-            Client::connect(&socket)?.stop()?;
-            // Answered before it stops: wait until it no longer answers.
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-            while Client::connect(&socket).is_ok() && std::time::Instant::now() < deadline {
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            // And until it has let go of the Library: it stops answering
-            // before it does, and a restore right after would be refused.
-            while !wreckordbox_service::library_released(&library.master_db)
-                && std::time::Instant::now() < deadline
-            {
-                std::thread::sleep(std::time::Duration::from_millis(20));
-            }
-            print(if cli.json {
-                "{}"
-            } else {
-                "Stopped the Library service."
-            });
-        }
+        Commands::Stop => stop(&config, cli.json)?,
         Commands::Serve { spawned: true } => {
             return Ok(if wreckordbox_service::serve_spawned(config) {
                 ExitCode::SUCCESS
@@ -414,6 +393,32 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
 
 /// A client of the service for this machine's Library, started if need be
 /// by running this same program as `wreckordbox serve`.
+/// `wreckordbox stop`: asks the service to stop, then waits until it no
+/// longer answers and has let go of the Library.
+fn stop(config: &Config, as_json: bool) -> Result<(), ServiceError> {
+    let library = wreckordbox_service::locate_library()?;
+    let socket = config.socket_path(&library);
+    Client::connect(&socket)?.stop()?;
+    // Answered before it stops: wait until it no longer answers.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while Client::connect(&socket).is_ok() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    // And until it has let go of the Library: it stops answering
+    // before it does, and a restore right after would be refused.
+    while !wreckordbox_service::library_released(&library.master_db)
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    print(if as_json {
+        "{}"
+    } else {
+        "Stopped the Library service."
+    });
+    Ok(())
+}
+
 fn connect(config: &Config) -> Result<Client, ServiceError> {
     let library = wreckordbox_service::locate_library()?;
     let program = std::env::current_exe().map_err(|e| {

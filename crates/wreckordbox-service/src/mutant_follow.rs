@@ -125,12 +125,16 @@ pub(crate) fn plan_before(
 ) -> Result<Option<Value>, String> {
     let conn = db.connection();
     let mut plan = Plan::default();
-    let source = COPYING.with(|copying| copying.borrow().as_ref().map(|(source, _)| source.clone()));
+    let source =
+        COPYING.with(|copying| copying.borrow().as_ref().map(|(source, _)| source.clone()));
     if let Some(source) = source {
-        let entries = rbl_library::entry_order::entries(conn, &source).map_err(|e| e.to_string())?;
+        let entries =
+            rbl_library::entry_order::entries(conn, &source).map_err(|e| e.to_string())?;
         let ids = CopyIds::fresh(conn, entries.len()).map_err(|e| e.to_string())?;
         let from: Vec<String> = entries.iter().map(|entry| entry.id.clone()).collect();
-        let mutants = sidecar.mutant_snapshots_of(&from).map_err(|e| e.to_string())?;
+        let mutants = sidecar
+            .mutant_snapshots_of(&from)
+            .map_err(|e| e.to_string())?;
         plan.copy = Some(CopyPlan {
             source: source.clone(),
             playlist: ids.playlist.clone(),
@@ -167,13 +171,17 @@ pub(crate) fn plan_before(
     if plan.is_empty() {
         return Ok(None);
     }
-    serde_json::to_value(&plan).map(Some).map_err(|e| e.to_string())
+    serde_json::to_value(&plan)
+        .map(Some)
+        .map_err(|e| e.to_string())
 }
 
 fn read_plan(plan: Option<&Value>) -> Result<Plan, String> {
     plan.map_or_else(
         || Ok(Plan::default()),
-        |value| serde_json::from_value(value.clone()).map_err(|e| format!("a damaged Mutant plan: {e}")),
+        |value| {
+            serde_json::from_value(value.clone()).map_err(|e| format!("a damaged Mutant plan: {e}"))
+        },
     )
 }
 
@@ -201,7 +209,12 @@ pub(crate) fn of_edit(
         }
         LibraryEdit::DeletePlaylist(deletion) => {
             let playlists: Vec<&str> = deletion.playlist_ids.iter().map(String::as_str).collect();
-            left_or_returned(&mut follow, undo, deletion.membership_ids.clone(), &playlists);
+            left_or_returned(
+                &mut follow,
+                undo,
+                deletion.membership_ids.clone(),
+                &playlists,
+            );
         }
         LibraryEdit::AddPlaylistTracks { addition, .. } => {
             let parts = addition.parts();
@@ -216,7 +229,8 @@ pub(crate) fn of_edit(
             let new: Vec<String> = entries.iter().map(|(_, to, _)| to.clone()).collect();
             match step {
                 Step::Edit => {
-                    let from: Vec<String> = entries.iter().map(|(from, _, _)| from.clone()).collect();
+                    let from: Vec<String> =
+                        entries.iter().map(|(from, _, _)| from.clone()).collect();
                     let snapshots = match plan.copy {
                         Some(planned) => planned.mutants,
                         None => live_snapshots(sidecar, &from)?,
@@ -225,7 +239,12 @@ pub(crate) fn of_edit(
                         snapshots.iter().map(|s| (s.entry_id.as_str(), s)).collect();
                     for (from, to, _) in entries {
                         if let Some(snapshot) = by_entry.get(from.as_str()) {
-                            follow.made.push(Made::from_snapshot(actions::COPIED, snapshot, playlist, to));
+                            follow.made.push(Made::from_snapshot(
+                                actions::COPIED,
+                                snapshot,
+                                playlist,
+                                to,
+                            ));
                         }
                     }
                 }
@@ -262,7 +281,12 @@ pub(crate) fn of_edit(
                 Step::Edit => {
                     // The replaced list's own Mutants go to the new playlist;
                     // those of lists inside it (a folder) only leave.
-                    let root = parts.replaced.playlist_ids.first().cloned().unwrap_or_default();
+                    let root = parts
+                        .replaced
+                        .playlist_ids
+                        .first()
+                        .cloned()
+                        .unwrap_or_default();
                     let snapshots: Vec<Snapshot> = planned_or_live(&plan, sidecar, &old)?
                         .into_iter()
                         .filter(|s| s.playlist_id == root)
@@ -273,7 +297,9 @@ pub(crate) fn of_edit(
                 Step::Undo => {
                     follow.left.extend(new);
                     follow.returned.extend(old);
-                    follow.returned_in.extend(parts.replaced.playlist_ids.iter().cloned());
+                    follow
+                        .returned_in
+                        .extend(parts.replaced.playlist_ids.iter().cloned());
                 }
                 Step::Redo => {
                     follow.left.extend(old);
@@ -289,7 +315,9 @@ pub(crate) fn of_edit(
 fn left_or_returned(follow: &mut Follow, undo: bool, entries: Vec<String>, playlists: &[&str]) {
     if undo {
         follow.returned.extend(entries);
-        follow.returned_in.extend(playlists.iter().map(|id| (*id).to_owned()));
+        follow
+            .returned_in
+            .extend(playlists.iter().map(|id| (*id).to_owned()));
     } else {
         follow.left.extend(entries);
     }
@@ -323,7 +351,11 @@ fn planned_or_live(
 fn live_snapshots(sidecar: Option<&Sidecar>, entries: &[String]) -> Result<Vec<Snapshot>, String> {
     sidecar.map_or_else(
         || Ok(Vec::new()),
-        |sidecar| sidecar.mutant_snapshots_of(entries).map_err(|e| e.to_string()),
+        |sidecar| {
+            sidecar
+                .mutant_snapshots_of(entries)
+                .map_err(|e| e.to_string())
+        },
     )
 }
 
@@ -353,7 +385,12 @@ fn carry(
             .get_mut(snapshot.track_id.as_str())
             .and_then(VecDeque::pop_front)
         {
-            follow.made.push(Made::from_snapshot(actions::CARRIED, snapshot, playlist, entry));
+            follow.made.push(Made::from_snapshot(
+                actions::CARRIED,
+                snapshot,
+                playlist,
+                entry,
+            ));
         }
     }
     Ok(())
@@ -400,7 +437,10 @@ fn attached(conn: &Connection, entries: &[String]) -> Result<HashSet<String>, St
         .map_err(|e| e.to_string())?;
     for entry in entries {
         let live = statement
-            .query_row(params![entry, rbl_db::write::ATTRIBUTE_PLAYLIST], |_| Ok(()))
+            .query_row(
+                params![entry, rbl_db::write::ATTRIBUTE_PLAYLIST],
+                |_| Ok(()),
+            )
             .optional()
             .map_err(|e| e.to_string())?;
         if live.is_some() {
@@ -432,7 +472,10 @@ fn live_entries_of(conn: &Connection, playlist: &str) -> Result<Vec<(String, Str
         .map_err(|e| e.to_string())?;
     let rows = statement
         .query_map([playlist], |row| {
-            Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?))
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+            ))
         })
         .map_err(|e| e.to_string())?
         .filter_map(|row| match row {
@@ -499,11 +542,19 @@ pub(crate) fn recover(
     if let Some(copy) = &plan.copy {
         let to: Vec<String> = copy.pairs.iter().map(|(_, to)| to.clone()).collect();
         let live = attached(conn, &to)?;
-        let by_entry: HashMap<&str, &Snapshot> =
-            copy.mutants.iter().map(|s| (s.entry_id.as_str(), s)).collect();
+        let by_entry: HashMap<&str, &Snapshot> = copy
+            .mutants
+            .iter()
+            .map(|s| (s.entry_id.as_str(), s))
+            .collect();
         for (from, to) in &copy.pairs {
             if let (true, Some(snapshot)) = (live.contains(to), by_entry.get(from.as_str())) {
-                follow.made.push(Made::from_snapshot(actions::COPIED, snapshot, &copy.playlist, to));
+                follow.made.push(Made::from_snapshot(
+                    actions::COPIED,
+                    snapshot,
+                    &copy.playlist,
+                    to,
+                ));
             }
         }
     }

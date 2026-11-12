@@ -166,7 +166,15 @@ pub fn copy(
                  rb_data_status, rb_local_data_status, rb_local_deleted, rb_local_synced,
                  usn, rb_local_usn, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, 0, 0, 0, 0, NULL, ?6, ?7, ?7)",
-            params![new, ids.playlist, track_id, track_no, rng.uuid4(), usn, stamp],
+            params![
+                new,
+                ids.playlist,
+                track_id,
+                track_no,
+                rng.uuid4(),
+                usn,
+                stamp
+            ],
         )?;
         copied.push((id, new.clone(), track_id));
     }

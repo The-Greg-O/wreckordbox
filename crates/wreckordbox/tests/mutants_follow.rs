@@ -247,7 +247,15 @@ fn reordering_a_playlist_leaves_every_mutant_on_the_same_entry() {
 fn edit(sandbox: &Sandbox, id: i64, edits: &str) -> Value {
     ok(
         sandbox,
-        &["mutants", "edit", &id.to_string(), "--edits", edits, "--source", "agent:preparer"],
+        &[
+            "mutants",
+            "edit",
+            &id.to_string(),
+            "--edits",
+            edits,
+            "--source",
+            "agent:preparer",
+        ],
     );
     mutant(sandbox, id)["edits"].clone()
 }
@@ -269,7 +277,10 @@ fn copying_a_playlist_copies_its_mutants_with_their_edits_as_versions_of_their_o
     let second_edits = edit(&sandbox, second, r#"{"key_shift":2}"#);
     let again_edits = edit(&sandbox, again, r#"{"tempo":1.04}"#);
 
-    let copied = ok(&sandbox, &["playlists", "copy", &playlist, "--name", "Friday 2"]);
+    let copied = ok(
+        &sandbox,
+        &["playlists", "copy", &playlist, "--name", "Friday 2"],
+    );
     let copy = copied["playlist"].as_str().unwrap().to_owned();
     assert_eq!(copied["name"], "Friday 2");
     assert_eq!(copied["tracks"], 3);
@@ -278,7 +289,10 @@ fn copying_a_playlist_copies_its_mutants_with_their_edits_as_versions_of_their_o
     assert_eq!(copy_entries.len(), 3);
     let in_copy = live(&sandbox, Some(&copy));
     assert_eq!(
-        in_copy.iter().map(|(_, entry)| entry.clone()).collect::<Vec<_>>(),
+        in_copy
+            .iter()
+            .map(|(_, entry)| entry.clone())
+            .collect::<Vec<_>>(),
         vec![copy_entries[1].clone(), copy_entries[2].clone()]
     );
     let (copy_second, copy_again) = (in_copy[0].0, in_copy[1].0);
@@ -529,14 +543,21 @@ fn a_service_killed_between_a_copy_and_its_entry_still_copies_the_mutants_when_i
 
     // The service dies the moment the copy is in the Library, before the
     // Ledger records it or copies its Mutants.
-    let killed = with_faults(&sandbox, "abort_after_write", &["playlists", "copy", &playlist, "--name", "Saved"]);
+    let killed = with_faults(
+        &sandbox,
+        "abort_after_write",
+        &["playlists", "copy", &playlist, "--name", "Saved"],
+    );
     assert!(!killed.status.success());
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while wreckordbox_service::Client::connect(&sandbox.config().socket_path(sandbox.location()))
         .and_then(|mut client| client.status())
         .is_ok()
     {
-        assert!(std::time::Instant::now() < deadline, "the service did not die");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the service did not die"
+        );
         std::thread::sleep(Duration::from_millis(20));
     }
 
