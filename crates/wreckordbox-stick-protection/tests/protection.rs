@@ -125,7 +125,9 @@ fn a_writer_holds_the_sticks_execution_lock_and_locking_waits_for_it_to_finish()
     let spare = stick(sticks.path(), "SPARE", true);
     unlock(state.path(), &spare, None).unwrap();
     let writing = authorize(state.path(), &spare).unwrap();
-    assert!(try_exec_lock(state.path(), &spare).unwrap().is_none(), "held by the writer");
+    let (dir, root) = (state.path().to_path_buf(), spare.clone());
+    let free = std::thread::spawn(move || try_exec_lock(&dir, &root).unwrap().is_some()).join().unwrap();
+    assert!(!free, "held by the writer, against any other thread");
 
     let (done, locked) = mpsc::channel();
     let (dir, root) = (state.path().to_path_buf(), spare.clone());
@@ -164,4 +166,25 @@ fn the_execution_lock_is_kept_in_the_state_folder_not_on_the_stick() {
     assert_eq!(before, after);
     assert!(std::fs::read_dir(state.path().join("stick-locks")).unwrap().count() > 0);
     drop(held);
+}
+
+/// The thread holding a Stick's execution lock takes it again without
+/// waiting on itself (a Library edit on a Stick that recovers its files, a
+/// writer whose write reaches another guarded step); others still wait
+/// until its last hold is let go.
+#[test]
+fn the_execution_lock_is_reentrant_for_its_thread_and_exclusive_for_others() {
+    let (state, sticks) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let spare = stick(sticks.path(), "SPARE", true);
+    unlock(state.path(), &spare, None).unwrap();
+    let outer = authorize(state.path(), &spare).unwrap();
+    let inner = authorize(state.path(), &spare).expect("no wait on itself");
+    let other = |state: &Path, spare: &Path| {
+        let (dir, root) = (state.to_path_buf(), spare.to_path_buf());
+        std::thread::spawn(move || try_exec_lock(&dir, &root).unwrap().is_some()).join().unwrap()
+    };
+    drop(inner);
+    assert!(!other(state.path(), &spare), "still held by the outer write");
+    drop(outer);
+    assert!(other(state.path(), &spare), "free once the last hold is let go");
 }

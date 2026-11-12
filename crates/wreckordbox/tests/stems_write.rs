@@ -325,6 +325,12 @@ fn a_stick_without_the_spare_stick_marker_is_refused_and_not_written_to() {
     rig.record_stems(&track, "Night Bus.wav", FRAMES);
     rig.export(&track, "Night Bus.wav");
     let before = deck::snapshot(rig.stick());
+    // Protected, it is refused as protected before anything on it is read.
+    assert_eq!(rig.write(&track, true).error_json()["error"]["code"], "stick_protected");
+    // A Gig stick unlocked by its name is still not a Spare stick.
+    let name = rig.stick().file_name().unwrap().to_str().unwrap().to_owned();
+    let unlocked = rig.sandbox.cli(&["stick", "unlock", rig.stick().to_str().unwrap(), "--name", &name]);
+    assert!(unlocked.status.success(), "{}", unlocked.stderr);
 
     let run = rig.write(&track, true);
 

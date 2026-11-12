@@ -96,6 +96,13 @@ pub fn enter_stick(state_dir: &Path, root: &Path) -> AppResult<StickAccess> {
     Ok(StickAccess { held: vec![held] })
 }
 
+/// Leave to write, or recover, the Library at `location` (wbx-45.11): a
+/// Library kept on a Stick is written only while that Stick is unlocked,
+/// as the Library core's own edits are (`rbl_library::stick`).
+pub fn enter_library(state_dir: &Path, location: &rbl_db::LibraryLocation) -> AppResult<StickAccess> {
+    enter(state_dir, location.master_db.parent().unwrap_or(&location.master_db))
+}
+
 /// The destinations of one sync: each resolved and classified, refused when
 /// two are the same place, then every Stick entered in path order, before
 /// any approval is used. Each destination's leave, or why it was refused,

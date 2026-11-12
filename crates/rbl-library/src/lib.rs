@@ -16,6 +16,7 @@ pub mod my_tags;
 pub mod protection;
 pub mod file_edit;
 pub mod read;
+pub mod stick;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -372,6 +373,10 @@ impl LibraryCore {
         if self.protection().protect_library {
             return Err(protection::refusal());
         }
+        // Stick Protection (wbx-45.11): a Library on a Stick is written,
+        // and recovered below, only while the DJ has it unlocked; held to
+        // the end of the write. Under the gate, in the one lock order.
+        let _stick = stick::leave(&self.recovery_dir, &location)?;
         if rbl_backup::journal::pending(&self.recovery_dir) {
             return Err(rbl_db::DbError::WriteRefused("A library restore is unfinished. Restart the app to recover it before editing.".into()));
         }

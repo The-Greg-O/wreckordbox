@@ -508,47 +508,132 @@ fn change(state_dir: &Path, edit: impl FnOnce(&mut Stored)) -> std::io::Result<(
 // The execution protocol
 
 /// The Stick's execution lock: an exclusive lock on a file in the state
-/// folder, held across processes. Released when dropped.
+/// folder, held across processes and threads. Re-entrant for the thread
+/// holding it (a writer whose own write reaches another guarded step, a
+/// Library edit that recovers, never waits on itself). Released when the
+/// last hold of that thread is dropped.
 #[derive(Debug)]
 pub struct ExecLock {
-    _file: std::fs::File,
+    key: PathBuf,
 }
 
-fn exec_file(state_dir: &Path, root: &Path) -> std::io::Result<std::fs::File> {
+/// This process's holds: the lock file's path → the thread holding it, how
+/// many times, and the locked file (`None` while it is being taken).
+struct Hold {
+    thread: std::thread::ThreadId,
+    count: usize,
+    file: Option<std::fs::File>,
+}
+
+type Holds = std::collections::HashMap<PathBuf, Hold>;
+
+static HOLDS: std::sync::LazyLock<(std::sync::Mutex<Holds>, std::sync::Condvar)> =
+    std::sync::LazyLock::new(Default::default);
+
+fn holds() -> std::sync::MutexGuard<'static, Holds> {
+    HOLDS.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+impl Drop for ExecLock {
+    fn drop(&mut self) {
+        let mut held = holds();
+        if let Some(hold) = held.get_mut(&self.key) {
+            hold.count -= 1;
+            if hold.count == 0 {
+                // Dropping the file releases the lock for other processes.
+                held.remove(&self.key);
+                HOLDS.1.notify_all();
+            }
+        }
+    }
+}
+
+fn exec_path(state_dir: &Path, root: &Path) -> std::io::Result<PathBuf> {
     use std::hash::{Hash as _, Hasher as _};
     let dir = state_dir.join(EXEC_LOCKS);
     std::fs::create_dir_all(&dir)?;
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     root.as_os_str().hash(&mut hasher);
-    std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(dir.join(format!("{:016x}.lock", hasher.finish())))
+    Ok(dir.join(format!("{:016x}.lock", hasher.finish())))
+}
+
+fn open_exec(key: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new().create(true).truncate(false).read(true).write(true).open(key)
+}
+
+/// The thread's own hold taken again, or `false` when it holds none.
+fn again(held: &mut Holds, key: &Path) -> bool {
+    let me = std::thread::current().id();
+    match held.get_mut(key) {
+        Some(hold) if hold.thread == me => {
+            hold.count += 1;
+            true
+        }
+        _ => false,
+    }
 }
 
 /// Takes the execution lock of the Stick whose root is `root`, waiting for
-/// whoever holds it.
+/// whoever holds it (another thread, another process).
 ///
 /// # Errors
 ///
 /// When the lock file cannot be opened.
 pub fn exec_lock(state_dir: &Path, root: &Path) -> std::io::Result<ExecLock> {
-    let file = exec_file(state_dir, root)?;
-    file.lock()?;
-    Ok(ExecLock { _file: file })
+    let key = exec_path(state_dir, root)?;
+    let mut held = holds();
+    loop {
+        if again(&mut held, &key) {
+            return Ok(ExecLock { key });
+        }
+        if !held.contains_key(&key) {
+            break;
+        }
+        held = HOLDS.1.wait(held).unwrap_or_else(std::sync::PoisonError::into_inner);
+    }
+    let me = std::thread::current().id();
+    held.insert(key.clone(), Hold { thread: me, count: 1, file: None });
+    drop(held);
+    // Across processes: waits here, holding nothing but this process's turn.
+    let taken = open_exec(&key).and_then(|file| file.lock().map(|()| file));
+    let mut held = holds();
+    match taken {
+        Ok(file) => {
+            if let Some(hold) = held.get_mut(&key) {
+                hold.file = Some(file);
+            }
+            Ok(ExecLock { key })
+        }
+        Err(error) => {
+            held.remove(&key);
+            HOLDS.1.notify_all();
+            Err(error)
+        }
+    }
 }
 
-/// [`exec_lock`] without waiting: `None` while someone holds it.
+/// [`exec_lock`] without waiting: `None` while another thread or process
+/// holds it.
 ///
 /// # Errors
 ///
 /// When the lock file cannot be opened.
 pub fn try_exec_lock(state_dir: &Path, root: &Path) -> std::io::Result<Option<ExecLock>> {
-    let file = exec_file(state_dir, root)?;
+    let key = exec_path(state_dir, root)?;
+    let mut held = holds();
+    if again(&mut held, &key) {
+        return Ok(Some(ExecLock { key }));
+    }
+    if held.contains_key(&key) {
+        return Ok(None);
+    }
+    let file = open_exec(&key)?;
     match file.try_lock() {
-        Ok(()) => Ok(Some(ExecLock { _file: file })),
+        Ok(()) => {
+            let me = std::thread::current().id();
+            held.insert(key.clone(), Hold { thread: me, count: 1, file: Some(file) });
+            Ok(Some(ExecLock { key }))
+        }
         Err(std::fs::TryLockError::WouldBlock) => Ok(None),
         Err(std::fs::TryLockError::Error(error)) => Err(error),
     }

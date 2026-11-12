@@ -183,7 +183,7 @@ impl Service {
         let listener = listen(&config.runtime_dir, &socket)?;
         let (queue, queued) = std::sync::mpsc::channel();
         let (sidecar_events, sidecar_queued) = std::sync::mpsc::channel();
-        let stems = crate::stems::Stems::from_env(&master_db, sidecar_events);
+        let stems = crate::stems::Stems::from_env(&master_db, &config.recovery_dir, sidecar_events);
         let ledger = crate::ledger::Keeper::new(Arc::clone(&stems));
 
         let shared = Arc::new(Shared {
@@ -858,6 +858,9 @@ pub(crate) fn open_error(error: &DbError) -> ServiceError {
         // `rbl-db` folds the failure of its first read into a message, so
         // SQLite's own wording for SQLITE_BUSY is all there is to go on.
         DbError::Open(why) if why.contains("database is locked") => locked(),
+        DbError::WriteRefused(why) if rbl_library::stick::refused(&DbError::WriteRefused(why.clone())) => {
+            ServiceError::new(codes::STICK_PROTECTED, why.clone())
+        }
         DbError::WriteRefused(why) => ServiceError::new(
             codes::LIBRARY_LOCKED,
             format!("the Library is locked: {why}"),

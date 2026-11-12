@@ -616,6 +616,11 @@ pub fn pending(root: &Path) -> bool {
 }
 /// A pending restore rolls back on restart; a committed one only needs cleanup.
 pub fn recover(root: &Path, location: &rbl_db::LibraryLocation) -> AppResult<()> {
+    if !rbl_backup::journal::pending(root) {
+        return Ok(());
+    }
+    // A Library on a protected Stick waits, untouched, until it is unlocked (wbx-45.11).
+    let _stick = crate::stick_guard::enter_library(root, location)?;
     rbl_backup::journal::recover(root, location).map_err(error)
 }
 

@@ -4080,6 +4080,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tracing",
+ "wreckordbox-stick-protection",
 ]
 
 [[package]]
