@@ -1154,6 +1154,7 @@ const NOT_STICK_WRITERS: &[&str] = &[
     "set_track_color",
     "set_track_comment",
     "set_track_rating",
+    "set_transport_edge",
     "show_window",
     "smart_rule",
     "sort_missing_tracks",
