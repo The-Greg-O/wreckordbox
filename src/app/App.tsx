@@ -99,6 +99,9 @@ import { autoAnalysisOffer, takeRemainingPages } from "@/lib/autoAnalysis";
 import type { LibraryQuestion } from "@/views/library/NewLibraryDialog";
 import type { QueueItem } from "@/lib/queue";
 import { TrackFilter } from "@/views/browser/TrackFilter";
+import { TrackFilterBar } from "@/views/shell/TrackFilterBar";
+import { useShellTrackFilter } from "@/views/shell/useShellTrackFilter";
+import { hasPicks } from "@/lib/shellTrackFilter";
 import { EMPTY_FILTER, toSpecFilter, type FilterState } from "@/lib/trackFilter";
 import type { AnalysisResult, DeviceFormat, DeviceImportMissing, DevicePlaylistEdit, DevicePlaylistImportPlan, FilterValues, LinkPeerSeen, LinkStatus, ListTotals, RelocateSearch, SmartRule, TrackLookups, UnanalysedTracks } from "@/ipc/types";
 import { statusBarListText } from "@/lib/format";
@@ -945,13 +948,28 @@ function AppBody() {
   const masterBpmX100 = (syncMaster === "b" ? playerTrackB : playerTrack)?.bpmX100 ?? null;
   // Related Tracks relate to the track on Player 1, as rekordbox's do.
   const relatedTo = playerTrack?.id ?? null;
+  // The view shell's Track Filter bar (wbx-57): always shown above the list,
+  // its text is the list's search.
+  const shellFilterBase: ViewSpec = useMemo(() => ({ ...specForNode(selectedNode, "", null, "classic", "alphabetical", relatedTo, deviceLibraries.revision), searchField }),
+    [selectedNode, relatedTo, deviceLibraries.revision, searchField]);
+  // Key match and BPM ±6% follow the track the key lights follow (wbx-57).
+  const shellFilterLoaded = useMemo(() => ({ key: trafficKey || null, bpmX100: trafficTrack?.bpmX100 ?? null }), [trafficKey, trafficTrack?.bpmX100]);
+  const shellFilter = useShellTrackFilter({ enabled: shellOn, base: shellFilterBase, query, setQuery, generation: libraryGeneration, tagListRevision, loaded: shellFilterLoaded });
+  // Selected tracks the filter hid and the list deselected, as last told;
+  // said until the filter is cleared.
+  const [filterDeselected, setFilterDeselected] = useState(0);
+  const shellFilterChange = shellFilter.onChange;
+  const onShellFilterChange = useCallback((next: Parameters<typeof shellFilterChange>[0]) => {
+    if (!hasPicks(next) && next.text.trim() === "") setFilterDeselected(0);
+    shellFilterChange(next);
+  }, [shellFilterChange]);
   const spec: ViewSpec = useMemo(() => {
     const base = { ...specForNode(selectedNode, query, sortState, viewPrefs.keyDisplay, viewPrefs.keySort, relatedTo, deviceLibraries.revision), searchField };
     // Only while the bar is showing: hiding it puts the whole list back,
     // so a closed bar can never be silently narrowing the library.
-    const filter = filterOpen ? toSpecFilter(filterState, masterBpmX100) : undefined;
+    const filter = shellOn ? shellFilter.viewFilter : filterOpen ? toSpecFilter(filterState, masterBpmX100) : undefined;
     return filter ? { ...base, filter } : base;
-  }, [selectedNode, sortState, query, searchField, filterOpen, filterState, masterBpmX100, viewPrefs.keyDisplay, viewPrefs.keySort, relatedTo, deviceLibraries.revision]);
+  }, [selectedNode, sortState, query, searchField, filterOpen, filterState, masterBpmX100, viewPrefs.keyDisplay, viewPrefs.keySort, relatedTo, deviceLibraries.revision, shellOn, shellFilter.viewFilter]);
 
   // What the bar's lists offer, from Rust, for the source and query alone.
   // Re-asked when either changes or the library does, and only while the bar
@@ -3579,9 +3597,14 @@ function AppBody() {
           searchRef={searchRef}
           seed={seed}
           onFirstRows={onFirstRows}
-          filterOpen={filterOpen}
-          onToggleFilter={toggleFilter}
-          filterBar={filterBar}
+          filterOpen={shellOn || filterOpen}
+          {...(shellOn ? { onHiddenSelectionDropped: setFilterDeselected } : { onToggleFilter: toggleFilter })}
+          filterBar={shellOn ? (
+            <TrackFilterBar model={shellFilter.model} onChange={onShellFilterChange} values={shellFilter.values}
+              valuesError={shellFilter.valuesError} categories={shellFilter.categories} dropped={shellFilter.dropped}
+              deselected={filterDeselected} onStick={shellFilter.onStick} count={shellFilter.count} filtering={shellFilter.filtering} loaded={shellFilterLoaded}
+              keyDisplay={viewPrefs.keyDisplay} keySort={viewPrefs.keySort} />
+          ) : filterBar}
         />
         )
   );
