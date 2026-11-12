@@ -29,12 +29,10 @@
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--s-shell-space-6) calc(var(--s-shell-space-6) * 2);
 }
-/* The tags reflow at half width (tokens.md: three columns to two). */
-@container (max-width: 800px) {
-  .dimensions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-@media (max-width: 800px) {
-  .dimensions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* The tags reflow at half width (tokens.md: three columns to two), by the
+   window's own width as the shell's other breakpoints are (wbx-69). */
+@container shell (max-width: 800px) {
+  .dimensions { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s-shell-space-6); }
 }
 .dimension { display: grid; gap: var(--s-shell-space-3); align-content: start; min-width: 0; }
 .dimension[data-hue="0"] { --tag-hue: #bb9af7; }
@@ -53,6 +51,9 @@
   font: inherit;
   cursor: pointer;
   padding: var(--s-shell-space-2) var(--s-shell-space-5);
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  text-align: left;
 }
 .small { border-color: var(--role-border); background: var(--role-control); color: var(--role-text); }
 .chip:hover:not(:disabled), .small:hover { border-color: var(--role-accent); }

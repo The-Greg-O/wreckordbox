@@ -142,9 +142,12 @@
 /* A slot whose write is on its way. */
 .pad[data-pending] { border-style: dashed; }
 
-/* Half width: the pads take the row, the grid wraps under them. */
+/* Half width: the pads take the row; the grid tools move behind the command
+   palette (docs/design/screens/intake "Sizes", wbx-69: Shift Beatgrid
+   left/right and Tap Tempo are the deck's palette entries). */
 @container shell (max-width: 800px) {
   .row { padding: var(--s-shell-space-2) var(--s-shell-space-3); }
+  .grid { display: none; }
   .pads { flex: 1 1 100%; grid-template-columns: repeat(8, minmax(0, 1fr)); }
   .pad { height: 38px; }
 }
