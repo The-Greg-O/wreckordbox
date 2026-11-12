@@ -72,6 +72,9 @@ struct Shared {
     stems: Arc<crate::stems::Stems>,
     /// Keeps the Ledger: told of every edit by the Library core.
     ledger: Arc<crate::ledger::Keeper>,
+    /// The state folder shared with the window, where Stick Protection is
+    /// kept (wbx-45.11).
+    state_dir: PathBuf,
 }
 
 struct Owned {
@@ -200,6 +203,7 @@ impl Service {
             idle_since: Mutex::new(Some(Instant::now())),
             stems,
             ledger,
+            state_dir: config.recovery_dir.clone(),
         });
         // What the Stems commands have to say (progress, a change to the
         // Sidecar), sent off the thread that said it. Ends with the service.
@@ -504,7 +508,7 @@ impl Shared {
             }
             crate::native_stems::commands::STEMS_WRITE => {
                 // To a Stick, not the Library: only the lookup takes it.
-                crate::native_stems::answer(&self.stems, request, &|id| {
+                crate::native_stems::answer(&self.stems, &self.state_dir, request, &|id| {
                     self.with_library(|library| crate::native_stems::parent(library, id))?
                 })
             }

@@ -149,6 +149,7 @@ static WRITING: Mutex<()> = Mutex::new(());
 /// it free.
 pub(crate) fn answer(
     stems: &Arc<Stems>,
+    state_dir: &Path,
     request: &Request,
     lookup: &dyn Fn(&str) -> Result<Found, ServiceError>,
 ) -> Result<Value, ServiceError> {
@@ -219,6 +220,15 @@ pub(crate) fn answer(
     export_checked(&track, stick, library_id, track_id, &set)?;
     let outcome = {
         let _one_at_a_time = WRITING.lock().unwrap_or_else(PoisonError::into_inner);
+        // Stick Protection (wbx-45.11), checked as the write starts, with
+        // this service's writes held: a Stick the DJ has not unlocked is
+        // not written to, whatever the marker says.
+        if !wreckordbox_stick_protection::is_unlocked(state_dir, stick) {
+            return Err(ServiceError::new(
+                service_codes::STICK_PROTECTED,
+                wreckordbox_stick_protection::refusal(stick),
+            ));
+        }
         wreckordbox_native_stems::write(&wreckordbox_native_stems::Request {
             stick,
             library_id,

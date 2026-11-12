@@ -17,6 +17,7 @@ mod reading;
 mod schema;
 mod stems;
 mod stems_write;
+mod stick;
 mod tracks;
 
 use std::fmt::Write as _;
@@ -94,6 +95,15 @@ enum Commands {
     Protection {
         #[command(subcommand)]
         command: Option<protection::ProtectionCommands>,
+    },
+    /// Say whether a Stick is protected, or unlock or lock it.
+    ///
+    /// Every Stick is protected until it is unlocked: nothing writes to it,
+    /// here or in the window. An unlock ends when the Stick is ejected,
+    /// removed or put back. A Gig stick unlocks only with its name typed.
+    Stick {
+        #[command(subcommand)]
+        command: stick::StickCommands,
     },
     /// Separate a track into Stems, kept in the Sidecar beside the Library,
     /// and write them to a Spare stick as Native stems.
@@ -223,7 +233,9 @@ fn main() -> ExitCode {
                 writeln!(stderr, "{}", json!({ "error": error }))
             } else {
                 writeln!(stderr, "wreckordbox: {error}").and_then(|()| {
-                    protection::hint(&error).map_or(Ok(()), |hint| writeln!(stderr, "{hint}"))
+                    protection::hint(&error)
+                        .or_else(|| stick::hint(&error))
+                        .map_or(Ok(()), |hint| writeln!(stderr, "{hint}"))
                 })
             };
             ExitCode::FAILURE
@@ -303,6 +315,9 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
             command: TrackCommands::Query(args),
             ..
         } => print(&tracks::query(&mut connect(&config)?, args, cli.json)?),
+        Commands::Stick { command } => {
+            print(&stick::stick(&config.recovery_dir, cli.json, command)?);
+        }
         Commands::Protection { command } => {
             print(&protection::protection(
                 &mut connect(&config)?,

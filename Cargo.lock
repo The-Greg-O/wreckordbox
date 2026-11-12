@@ -7127,6 +7127,7 @@ dependencies = [
  "tempfile",
  "wreckordbox-service",
  "wreckordbox-sidecar",
+ "wreckordbox-stick-protection",
 ]
 
 [[package]]
@@ -7187,6 +7188,7 @@ dependencies = [
  "wreckordbox-native-stems",
  "wreckordbox-render",
  "wreckordbox-sidecar",
+ "wreckordbox-stick-protection",
 ]
 
 [[package]]
