@@ -16,6 +16,7 @@ pub mod my_tags;
 pub mod protection;
 pub mod file_edit;
 pub mod read;
+pub mod stick;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -311,6 +312,13 @@ impl LibraryCore {
         (inner.read_only, inner.db_version, inner.load_ms, inner.generation)
     }
 
+    /// The loaded index and its generation, read together: what a write
+    /// that takes its contents from the Library checks and uses as one.
+    pub fn library_at_generation(&self) -> Result<(Arc<Library>, u32), NotLoaded> {
+        let inner = self.inner.read();
+        Ok((inner.library.clone().ok_or(NotLoaded)?, inner.generation))
+    }
+
     /// The generation the index is at.
     pub fn generation(&self) -> u32 {
         self.inner.read().generation
@@ -377,6 +385,10 @@ impl LibraryCore {
         if self.protection().protect_library {
             return Err(protection::refusal());
         }
+        // Stick Protection (wbx-45.11): a Library on a Stick is written,
+        // and recovered below, only while the DJ has it unlocked; held to
+        // the end of the write. Under the gate, in the one lock order.
+        let _stick = stick::leave(&self.recovery_dir, &location)?;
         if rbl_backup::journal::pending(&self.recovery_dir) {
             return Err(rbl_db::DbError::WriteRefused("A library restore is unfinished. Restart the app to recover it before editing.".into()));
         }

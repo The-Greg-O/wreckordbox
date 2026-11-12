@@ -149,9 +149,12 @@ fn set_aside(root: &Path, paths: &[&Path]) -> Vec<PathBuf> {
     doomed
 }
 
-/// Deletes `paths` on a background thread. Errors are only logged: whatever
-/// is left keeps its hidden name and the next sweep tries again.
-fn delete_in_background(paths: Vec<PathBuf>) {
+/// Deletes `paths`, inside the backup folder `root`, on a background thread.
+/// Errors are only logged: whatever is left keeps its hidden name and the
+/// next sweep tries again. The thread authorizes itself against `root`
+/// (wbx-45.11): on a protected Stick nothing is deleted, and it holds the
+/// Stick's lock while it deletes.
+fn delete_in_background(state_dir: &Path, root: &Path, paths: Vec<PathBuf>) {
     let paths: Vec<_> = {
         let mut busy = DISCARDING.lock();
         paths.into_iter().filter(|path| busy.insert(path.clone())).collect()
@@ -159,12 +162,20 @@ fn delete_in_background(paths: Vec<PathBuf>) {
     if paths.is_empty() {
         return;
     }
-    let delete = |paths: &[PathBuf]| {
+    let (state_dir, root) = (state_dir.to_path_buf(), root.to_path_buf());
+    let delete = move |paths: &[PathBuf]| {
         #[cfg(test)]
         let _held = HOLD_DISCARDS.read();
-        for path in paths {
-            if let Err(e) = remove(path) {
-                tracing::warn!(path = %path.display(), error = %e, "could not delete an unfinished backup");
+        match crate::stick_guard::enter(&state_dir, &root) {
+            Ok(_access) => {
+                for path in paths {
+                    if let Err(e) = remove(path) {
+                        tracing::warn!(path = %path.display(), error = %e, "could not delete an unfinished backup");
+                    }
+                }
+            }
+            Err(refused) => {
+                tracing::info!(folder = %root.display(), %refused, "unfinished backups left in place: their folder is on a protected Stick");
             }
         }
         let mut busy = DISCARDING.lock();
@@ -178,7 +189,11 @@ fn delete_in_background(paths: Vec<PathBuf>) {
         .spawn(move || delete(&owned))
         .is_err()
     {
-        delete(&paths);
+        // Not here: the caller may hold the Stick's lock. The next sweep tries again.
+        let mut busy = DISCARDING.lock();
+        for path in &paths {
+            busy.remove(path);
+        }
     }
 }
 
@@ -187,20 +202,29 @@ fn delete_in_background(paths: Vec<PathBuf>) {
 /// deleting 150,000 of them took minutes on Windows with the edit gate held
 /// (#472). Moving the unfinished parts aside is immediate; the files are then
 /// deleted without holding anything.
-fn discard(root: &Path, paths: &[&Path]) {
-    delete_in_background(set_aside(root, paths));
+///
+/// `access`: the capability, Stick Protection's leave to write to `root`
+/// (wbx-45.11), for the renames.
+fn discard(access: &crate::stick_guard::StickAccess, state_dir: &Path, root: &Path, paths: &[&Path]) {
+    if access.recheck().is_err() {
+        return;
+    }
+    delete_in_background(state_dir, root, set_aside(root, paths));
 }
 
 /// Deletes unfinished backups set aside by an earlier run, for example one
 /// that quit before its background deletion finished.
-pub fn sweep_discarded(root: &Path) {
+///
+/// Run at start-up on the saved backup folder: on a protected Stick it is
+/// left as it is (the deleting thread authorizes itself).
+pub fn sweep_discarded(state_dir: &Path, root: &Path) {
     let Ok(entries) = fs::read_dir(root) else { return; };
     let doomed = entries
         .filter_map(Result::ok)
         .filter(|entry| entry.file_name().to_string_lossy().starts_with(DISCARD_PREFIX))
         .map(|entry| entry.path())
         .collect();
-    delete_in_background(doomed);
+    delete_in_background(state_dir, root, doomed);
 }
 
 fn checked(root: &Path, path: &Path) -> AppResult<PathBuf> {
@@ -331,8 +355,12 @@ fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&str, u64, u6
     let wal = rbl_backup::sidecar(&location.master_db, "-wal");
     let destination = state.backup_destination();
     let root = destination.as_path();
+    // A backup folder on a Stick is a Stick write (wbx-45.11), held for the
+    // whole backup: refused on a protected Stick before anything is written.
+    // In the lock order: the Library edit gate (above), then the Stick.
+    let access = crate::stick_guard::enter(state.backup_dir(), root)?;
     crate::durable::create_dir_all(root).map_err(error)?;
-    sweep_discarded(root);
+    sweep_discarded(state.backup_dir(), root);
     validate_destination(&root.canonicalize().map_err(error)?, &location)?;
     let created_at = millis();
     let id = uuid::Uuid::new_v4();
@@ -530,7 +558,9 @@ fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&str, u64, u6
         if let Some(error) = refused { return Err(error); }
         packed.map_err(error)?;
         // The archive holds everything now; the staged copies go in the background.
-        discard(root, &[&partial]);
+        discard(&access, state.backup_dir(), root, &[&partial]);
+        // Still the same Stick, still unlocked, before the backup is named.
+        access.recheck()?;
         // A backup folder on an external exFAT or FAT32 drive has no
         // exclusive rename on macOS; `persist_new` still never replaces one.
         rbl_core::durable::persist_new(tempfile::TempPath::try_from_path(&archive).map_err(error)?, &target).map_err(error)?;
@@ -538,7 +568,7 @@ fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&str, u64, u6
         Ok(target.to_string_lossy().into_owned())
     })();
     if result.is_err() {
-        discard(root, &[&partial, &archive]);
+        discard(&access, state.backup_dir(), root, &[&partial, &archive]);
     }
     result
 }
@@ -586,11 +616,18 @@ pub fn pending(root: &Path) -> bool {
 }
 /// A pending restore rolls back on restart; a committed one only needs cleanup.
 pub fn recover(root: &Path, location: &rbl_db::LibraryLocation) -> AppResult<()> {
+    if !rbl_backup::journal::pending(root) {
+        return Ok(());
+    }
+    // A Library on a protected Stick waits, untouched, until it is unlocked (wbx-45.11).
+    let _stick = crate::stick_guard::enter_library(root, location)?;
     rbl_backup::journal::recover(root, location).map_err(error)
 }
 
 pub fn delete(state: &AppState, path: &Path) -> AppResult<()> {
     let _gate = state.edit_gate().lock();
+    // On a Stick, under its lock and its unlock (wbx-45.11), after the gate.
+    let _access = crate::stick_guard::enter(state.backup_dir(), &state.backup_destination())?;
     let path = checked(&state.backup_destination(), path)?;
     if path.is_dir() || path.extension().is_some_and(|e| e == "zip") {
         manifest(&path, &state.location()?)?;
@@ -864,7 +901,7 @@ mod tests {
         let destination = dir.path().join("new backup folder");
         fs::create_dir(&destination).unwrap();
         let canonical = destination.canonicalize().unwrap();
-        state.set_backup_destination(&destination).unwrap();
+        state.set_backup_destination(&crate::stick_guard::testing::ordinary(), &destination).unwrap();
         assert_eq!(state.backup_destination(), canonical);
         assert_eq!(rbl_backup::default_destination(state.backup_dir()), canonical, "RBXport Restore reads the same setting");
         assert!(original.exists());
@@ -889,14 +926,14 @@ mod tests {
         let previous = state.backup_destination();
         let file = dir.path().join("not a folder");
         fs::write(&file, b"keep").unwrap();
-        assert!(state.set_backup_destination(&file).is_err());
-        assert!(state.set_backup_destination(&dir.path().join("missing")).is_err());
+        assert!(state.set_backup_destination(&crate::stick_guard::testing::ordinary(), &file).is_err());
+        assert!(state.set_backup_destination(&crate::stick_guard::testing::ordinary(), &dir.path().join("missing")).is_err());
         let recursive = analysis(&location).join("backups");
         fs::create_dir_all(&recursive).unwrap();
-        assert!(state.set_backup_destination(&recursive).is_err());
+        assert!(state.set_backup_destination(&crate::stick_guard::testing::ordinary(), &recursive).is_err());
         assert_eq!(state.backup_destination(), previous);
         state.backup_progress.lock().running = true;
-        assert!(state.set_backup_destination(dir.path()).is_err());
+        assert!(state.set_backup_destination(&crate::stick_guard::testing::ordinary(), dir.path()).is_err());
         assert_eq!(state.backup_destination(), previous);
         assert_eq!(AppState::unprotected(state.backup_dir()).backup_destination(), previous);
     }
@@ -997,6 +1034,51 @@ mod tests {
         assert_eq!(files_under(&tree), 400, "the library's own analysis files are untouched");
     }
 
+    /// wbx-45.11, round 4 A3: a backup folder on a protected Stick is left
+    /// exactly as it is, by the start-up sweep and by a backup, which is
+    /// refused before it writes anything; unlocked, the sweep goes ahead.
+    #[test]
+    fn nothing_is_swept_or_written_on_a_protected_stick() {
+        let (dir, state, _location) = fixture();
+        let stick = dir.path().join("GIG");
+        fs::create_dir_all(&stick).unwrap();
+        fs::write(stick.join(wreckordbox_stick_protection::STAND_IN_MARKER), b"").unwrap();
+        state.set_backup_destination(&crate::stick_guard::testing::ordinary(), &stick).unwrap();
+        let root = state.backup_destination();
+        let leftover = root.join(format!("{DISCARD_PREFIX}earlier-run"));
+        fs::create_dir_all(&leftover).unwrap();
+        fs::write(leftover.join("ANLZ0000.DAT.zip"), b"staged").unwrap();
+        let before: Vec<_> = walk(&stick);
+
+        sweep_discarded(state.backup_dir(), &root);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let refused = create(&state).unwrap_err();
+        assert_eq!(refused.kind, crate::error::ErrorKind::StickProtected, "{refused:?}");
+        assert_eq!(walk(&stick), before, "not a file swept, staged or written");
+
+        crate::stick_guard::testing::unlock(&state, &stick);
+        sweep_discarded(state.backup_dir(), &root);
+        wait_until_gone(&leftover);
+    }
+
+    fn walk(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+        let mut out = Vec::new();
+        let mut todo = vec![root.to_path_buf()];
+        while let Some(dir) = todo.pop() {
+            for entry in fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    out.push((path.clone(), Vec::new()));
+                    todo.push(path);
+                } else {
+                    out.push((path.clone(), fs::read(&path).unwrap()));
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
     #[test]
     fn leftovers_from_an_earlier_run_are_swept_and_nothing_else_is() {
         let (_dir, state, _location) = fixture();
@@ -1008,7 +1090,7 @@ mod tests {
         let foreign = root.join(".partial-another-process");
         fs::create_dir(&foreign).unwrap();
         fs::write(root.join("notes.txt"), b"keep").unwrap();
-        sweep_discarded(&root);
+        sweep_discarded(state.backup_dir(), &root);
         wait_until_gone(&leftover);
         assert!(saved.is_file());
         assert!(foreign.is_dir());

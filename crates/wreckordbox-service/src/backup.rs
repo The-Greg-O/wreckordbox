@@ -124,6 +124,12 @@ pub(crate) fn recover(recovery_dir: &Path, library: &LibraryLocation) -> Result<
     if !rbl_backup::journal::pending(recovery_dir) {
         return Ok(());
     }
+    // A Library on a protected Stick is not recovered (wbx-45.11): it waits,
+    // untouched, until the DJ unlocks that Stick.
+    let _stick = rbl_library::stick::leave(recovery_dir, library).map_err(|error| match error {
+        rbl_db::DbError::WriteRefused(why) => ServiceError::new(codes::STICK_PROTECTED, why),
+        other => ServiceError::new(codes::STICK_PROTECTED, other.to_string()),
+    })?;
     rbl_backup::journal::recover(recovery_dir, library).map_err(|e| {
         ServiceError::new(
             codes::RESTORE_UNFINISHED,

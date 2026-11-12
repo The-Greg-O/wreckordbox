@@ -311,6 +311,11 @@ const EXPLICIT_ENTRIES: readonly PaletteEntry[] = [
     run: { kind: "preferences", pane: "djSystem" },
   },
   {
+    // Unlock or lock a Stick (wbx-45.11): the window's own dialog.
+    id: "stick-protection", label: "Stick Protection", group: "Devices", keywords: ["unlock", "lock", "usb", "stick", "protect"],
+    run: { kind: "menu", id: "stick-protection" },
+  },
+  {
     id: "backups", label: "Backups", group: "Preferences", keywords: ["restore", "archive"],
     run: { kind: "preferences", pane: "backups" },
   },

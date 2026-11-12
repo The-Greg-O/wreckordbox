@@ -72,6 +72,9 @@ struct Shared {
     stems: Arc<crate::stems::Stems>,
     /// Keeps the Ledger: told of every edit by the Library core.
     ledger: Arc<crate::ledger::Keeper>,
+    /// The state folder shared with the window, where Stick Protection is
+    /// kept (wbx-45.11).
+    state_dir: PathBuf,
 }
 
 struct Owned {
@@ -181,7 +184,7 @@ impl Service {
         let listener = listen(&config.runtime_dir, &socket)?;
         let (queue, queued) = std::sync::mpsc::channel();
         let (sidecar_events, sidecar_queued) = std::sync::mpsc::channel();
-        let stems = crate::stems::Stems::from_env(&master_db, sidecar_events);
+        let stems = crate::stems::Stems::from_env(&master_db, &config.recovery_dir, sidecar_events);
         let ledger = crate::ledger::Keeper::new(Arc::clone(&stems), ledger_location);
 
         let shared = Arc::new(Shared {
@@ -201,6 +204,7 @@ impl Service {
             idle_since: Mutex::new(Some(Instant::now())),
             stems,
             ledger,
+            state_dir: config.recovery_dir.clone(),
         });
         // What the Stems commands have to say (progress, a change to the
         // Sidecar), sent off the thread that said it. Ends with the service.
@@ -505,7 +509,7 @@ impl Shared {
             }
             crate::native_stems::commands::STEMS_WRITE => {
                 // To a Stick, not the Library: only the lookup takes it.
-                crate::native_stems::answer(&self.stems, request, &|id| {
+                crate::native_stems::answer(&self.stems, &self.state_dir, request, &|id| {
                     self.with_library(|library| crate::native_stems::parent(library, id))?
                 })
             }
@@ -860,6 +864,9 @@ pub(crate) fn open_error(error: &DbError) -> ServiceError {
         // `rbl-db` folds the failure of its first read into a message, so
         // SQLite's own wording for SQLITE_BUSY is all there is to go on.
         DbError::Open(why) if why.contains("database is locked") => locked(),
+        DbError::WriteRefused(why) if rbl_library::stick::refused(&DbError::WriteRefused(why.clone())) => {
+            ServiceError::new(codes::STICK_PROTECTED, why.clone())
+        }
         DbError::WriteRefused(why) => ServiceError::new(
             codes::LIBRARY_LOCKED,
             format!("the Library is locked: {why}"),

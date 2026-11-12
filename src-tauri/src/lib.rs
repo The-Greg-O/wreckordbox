@@ -22,7 +22,7 @@ pub mod cues;
 pub mod details;
 mod row_my_tags;
 pub mod grid;
-mod key_tag;
+pub mod key_tag;
 mod durable;
 mod backups;
 mod backup_copy;
@@ -33,14 +33,18 @@ mod file_journal;
 mod new_library;
 mod diagnostics;
 mod explorer;
-mod device_library;
+pub mod device_library;
 mod stick_outline;
-mod stick_recovery;
+pub mod stick_write_plan;
+pub mod stick_approval;
+pub mod stick_add_tracks;
+pub mod stick_guard;
+pub mod stick_recovery;
 mod link;
 mod rx3_link;
 mod network_labels;
 pub mod logging;
-mod log_window;
+pub mod log_window;
 pub mod menu;
 pub mod player;
 pub mod preview;
@@ -55,7 +59,7 @@ mod scripting;
 pub mod service_host;
 pub mod intake_view;
 pub mod service_status;
-mod device_settings;
+pub mod device_settings;
 pub mod dto;
 mod error;
 pub mod state;
@@ -112,7 +116,10 @@ pub(crate) fn spawn_library_load(app: tauri::AppHandle) {
                 }
             }
         }
-        backups::sweep_discarded(&app.state::<Arc<state::AppState>>().backup_destination());
+        {
+            let state = app.state::<Arc<state::AppState>>();
+            backups::sweep_discarded(state.backup_dir(), &state.backup_destination());
+        }
         let cache_path = cache_path(&app);
         let snapshot = cache_path.clone().and_then(|path| {
             std::thread::Builder::new().name("startup-snapshot".into())
@@ -758,6 +765,13 @@ pub fn run() {
             explorer::explorer_children,
             device_library::device_libraries,
             stick_outline::stick_outline,
+            stick_write_plan::stick_write_plan,
+            stick_write_plan::stick_write_approve,
+            stick_write_plan::stick_write_revoke,
+            stick_add_tracks::device_playlist_add_library_tracks,
+            stick_guard::stick_protection,
+            stick_guard::stick_unlock,
+            stick_guard::stick_lock,
             stick_recovery::stick_settle,
             device_library::device_playlist_edit,
             device_library::device_playlist_add_files,

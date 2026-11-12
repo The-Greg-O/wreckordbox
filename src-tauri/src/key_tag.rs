@@ -56,11 +56,19 @@ impl DetectedKey {
 /// Writes `key` into the file at `path` and logs what became of it. Never
 /// fails the caller: the library edit or analysis it follows has already
 /// been saved, as rekordbox's has when it writes the tag.
-pub fn write_logged(track_id: &str, path: &str, key: &str) {
+pub fn write_logged(state_dir: &Path, track_id: &str, path: &str, key: &str) {
     if path.is_empty() {
         tracing::warn!(track_id, "key not written to the file's tag: the track has no file path");
         return;
     }
+    // A file on a Stick is written only while that Stick is unlocked (wbx-45.11).
+    let _access = match crate::stick_guard::enter_files(state_dir, [Path::new(path)]) {
+        Ok(access) => access,
+        Err(refused) => {
+            tracing::warn!(track_id, path, %refused, "key not written to the file's tag: it is on a protected Stick");
+            return;
+        }
+    };
     match write_key(Path::new(path), key) {
         Ok(KeyTagOutcome::Written) => tracing::info!(track_id, path, key, "key written to the file's tag"),
         Ok(KeyTagOutcome::Unsupported) => tracing::info!(
@@ -98,24 +106,46 @@ impl KeyTagWrite {
 
 /// The files one key edit wrote, as its history entry holds them: the
 /// part of the entry the Library core steps without knowing what it is.
-pub(crate) struct KeyTagWrites(pub(crate) Vec<KeyTagWrite>);
+pub(crate) struct KeyTagWrites {
+    pub(crate) files: Vec<KeyTagWrite>,
+    /// Where Stick Protection is kept: Undo and Redo of a file on a Stick
+    /// write only while that Stick is unlocked (wbx-45.11).
+    pub(crate) state_dir: PathBuf,
+}
+
+/// Undo or Redo refused by Stick Protection: kept in the history, to run
+/// once the Stick is unlocked.
+fn protected(undo: bool, label: &str, refused: &crate::error::AppError) -> rbl_db::DbError {
+    rbl_db::DbError::Io(std::io::Error::other(format!("Can't {} {label}: {}", verb(undo), refused.message)))
+}
 
 impl rbl_library::history::OutsideSteps for KeyTagWrites {
     fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.files.is_empty()
     }
 
     fn check(&self, undo: bool, label: &str) -> Result<(), rbl_db::DbError> {
-        check_restore(&self.0, undo, label)
+        let _access = crate::stick_guard::enter_files(&self.state_dir, self.files.iter().map(|f| f.path.as_path()))
+            .map_err(|refused| protected(undo, label, &refused))?;
+        check_restore(&self.files, undo, label)
     }
 
     fn step(&self, undo: bool, label: &str) -> Result<(), rbl_db::DbError> {
-        restore(&self.0, undo, label)
+        let access = crate::stick_guard::enter_files(&self.state_dir, self.files.iter().map(|f| f.path.as_path()))
+            .map_err(|refused| protected(undo, label, &refused))?;
+        restore(&access, &self.files, undo, label)
     }
 
     fn revert(&self, undo: bool) -> (usize, usize) {
-        let written: Vec<_> = if undo { self.0.iter().rev().collect() } else { self.0.iter().collect() };
-        (revert(&written, undo), self.0.len())
+        // Putting back what the step wrote is a write too: under the Sticks'
+        // locks and unlocks again (wbx-45.11). Refused (a Stick locked,
+        // ejected or replaced since), nothing is written and every file is
+        // reported as not put back.
+        let Ok(access) = crate::stick_guard::enter_files(&self.state_dir, self.files.iter().map(|f| f.path.as_path())) else {
+            return (self.files.len(), self.files.len());
+        };
+        let written: Vec<_> = if undo { self.files.iter().rev().collect() } else { self.files.iter().collect() };
+        (revert(&access, &written, undo), self.files.len())
     }
 }
 
@@ -124,11 +154,19 @@ impl rbl_library::history::OutsideSteps for KeyTagWrites {
 /// A file passed over (no path, a format rekordbox writes no key into, a
 /// read-only file, a write that failed) is left out, so Undo of it stays a
 /// library-only Undo.
-pub(crate) fn write_recorded(track_id: &str, path: &str, key: &str) -> Option<KeyTagWrite> {
+pub(crate) fn write_recorded(state_dir: &Path, track_id: &str, path: &str, key: &str) -> Option<KeyTagWrite> {
     if path.is_empty() {
         tracing::warn!(track_id, "key not written to the file's tag: the track has no file path");
         return None;
     }
+    // A file on a Stick is written only while that Stick is unlocked (wbx-45.11).
+    let _access = match crate::stick_guard::enter_files(state_dir, [Path::new(path)]) {
+        Ok(access) => access,
+        Err(refused) => {
+            tracing::warn!(track_id, path, %refused, "key not written to the file's tag: it is on a protected Stick");
+            return None;
+        }
+    };
     match swap_key(Path::new(path), None, Some(key)) {
         Ok(KeySwap::Written { before }) => {
             tracing::info!(track_id, path, key, "key written to the file's tag");
@@ -193,10 +231,22 @@ fn changed(file: &KeyTagWrite) -> rbl_db::DbError {
 /// written, the ones already written are put back as they were and the step
 /// fails with nothing changed, so the library is never left with a key its
 /// files do not hold, nor the files with one the library does not.
-pub(crate) fn restore(files: &[KeyTagWrite], undo: bool, label: &str) -> Result<(), rbl_db::DbError> {
+///
+/// `access`: Stick Protection's leave for every file's Stick (wbx-45.11).
+pub(crate) fn restore(
+    access: &crate::stick_guard::StickAccess,
+    files: &[KeyTagWrite],
+    undo: bool,
+    label: &str,
+) -> Result<(), rbl_db::DbError> {
     let ordered: Vec<&KeyTagWrite> = if undo { files.iter().rev().collect() } else { files.iter().collect() };
     for (at, file) in ordered.iter().enumerate() {
         let (expected, key) = file.step(undo);
+        // Still the same mount of each Stick, still unlocked, before each file.
+        if let Err(refused) = access.recheck() {
+            let stranded = revert(access, ordered.get(..at).unwrap_or_default(), undo);
+            return Err(failure(undo, label, &file.name(), &refused.message, stranded));
+        }
         let why = match swap_key(&file.path, Some(expected), key) {
             Ok(KeySwap::Written { .. }) => continue,
             // Checked before anything was written; another writer got there
@@ -206,7 +256,7 @@ pub(crate) fn restore(files: &[KeyTagWrite], undo: bool, label: &str) -> Result<
             Ok(KeySwap::Unsupported) => Some("the file is no longer one a key is written into".to_owned()),
             Err(error) => Some(error.to_string()),
         };
-        let stranded = revert(ordered.get(..at).unwrap_or_default(), undo);
+        let stranded = revert(access, ordered.get(..at).unwrap_or_default(), undo);
         let why = match why {
             Some(why) => why,
             None if stranded == 0 => return Err(changed(file)),
@@ -220,7 +270,11 @@ pub(crate) fn restore(files: &[KeyTagWrite], undo: bool, label: &str) -> Result<
 
 /// Puts `written` back as they were before [`restore`] wrote them, last
 /// first; answers how many could not be.
-pub(crate) fn revert(written: &[&KeyTagWrite], undo: bool) -> usize {
+pub(crate) fn revert(access: &crate::stick_guard::StickAccess, written: &[&KeyTagWrite], undo: bool) -> usize {
+    if access.recheck().is_err() {
+        // The Stick was locked, ejected or replaced: nothing is written.
+        return written.len();
+    }
     written
         .iter()
         .rev()

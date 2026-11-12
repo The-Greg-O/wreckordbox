@@ -54,7 +54,7 @@ pub struct DeviceNodeDto {
 
 /// An edit to a stick's playlists, as the interface sends it. Tracks are
 /// the rows' own ids: `file:` and the track's path on the stick.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum DeviceEditDto {
     #[serde(rename = "create")]
@@ -205,6 +205,18 @@ fn connected(path: &str) -> AppResult<PathBuf> {
     Ok(mount)
 }
 
+/// A Stick about to be inspected before a write (the duplicate question,
+/// which tracks it already holds, an import's plan): held under its lock
+/// (wbx-45.4), so none of this app's writes can come between the reading
+/// and the approved write. The reads themselves are wbx-45.5's
+/// non-recovering ones (`read_settled`, `StickTracks::read`), which refuse a
+/// Stick with an unfinished write.
+fn inspectable(state_dir: &Path, path: &str) -> AppResult<(PathBuf, crate::stick_approval::StickLock)> {
+    let mount = connected(path)?;
+    let lock = crate::stick_approval::lock(state_dir, &mount)?;
+    Ok((mount, lock))
+}
+
 /// What a failed read or write of the stick says. A refused edit is the
 /// user's to fix, not a bug.
 fn device_error(e: &rbl_export::ExportError) -> AppError {
@@ -294,20 +306,58 @@ fn library_dto(library: &device::Library) -> DeviceLibraryDto {
 
 /// Applies one edit to one library on the stick at `path`.
 #[tauri::command]
-pub async fn device_playlist_edit(path: String, format: String, edit: DeviceEditDto) -> AppResult<DeviceEditResultDto> {
-    blocking("device_playlist_edit", move || apply_edit(&path, &format, edit, rbl_db::is_rekordbox_app_running())).await
+pub async fn device_playlist_edit(
+    state: State<'_, Arc<AppState>>,
+    path: String,
+    format: String,
+    edit: DeviceEditDto,
+    // The DJ's approval of this exact write (`stick_write_plan`, wbx-45.4).
+    approval: Option<String>,
+) -> AppResult<DeviceEditResultDto> {
+    let state = Arc::clone(&state);
+    blocking("device_playlist_edit", move || {
+        let stick = Path::new(&path);
+        let access = crate::stick_guard::enter_stick(state.backup_dir(), stick)?;
+        crate::stick_approval::consume(
+            approval.as_deref(),
+            &crate::stick_approval::StickOperation::PlaylistEdit {
+                format: format.clone(),
+                edit: serde_json::to_value(&edit).map_err(|e| AppError::internal(e.to_string()))?,
+            },
+            stick,
+            0,
+        )?;
+        apply_edit(&access, &path, &format, edit, rbl_db::is_rekordbox_app_running())
+    })
+    .await
 }
 
 /// Analyse loose audio already on this stick and add it to its playlist.
 /// The exporter publishes the track, analysis and membership together.
 #[tauri::command]
 pub async fn device_playlist_add_files(
+    state: State<'_, Arc<AppState>>,
     path: String,
     format: String,
     playlist: String,
     tracks: Vec<String>,
+    // The DJ's approval of this exact write (`stick_write_plan`, wbx-45.4).
+    approval: Option<String>,
 ) -> AppResult<DeviceEditResultDto> {
+    let state = Arc::clone(&state);
     blocking("device_playlist_add_files", move || {
+        let stick = Path::new(&path);
+        let access = crate::stick_guard::enter_stick(state.backup_dir(), stick)?;
+        crate::stick_approval::consume(
+            approval.as_deref(),
+            &crate::stick_approval::StickOperation::PlaylistAddFiles {
+                format: format.clone(),
+                playlist: playlist.clone(),
+                files: tracks.clone(),
+            },
+            stick,
+            0,
+        )?;
         if let Some(refused) = edit_refusal(rbl_db::is_rekordbox_app_running()) {
             return Err(refused);
         }
@@ -358,6 +408,7 @@ pub async fn device_playlist_add_files(
             });
         }
         volume.check(&mount).map_err(|error| AppError::new(ErrorKind::NotFound, error.to_string()))?;
+        access.recheck()?;
         rbl_export::add_in_place_to_playlist(&mount, format, playlist_id, &sources)
             .map_err(|error| device_error(&error))?;
         let after = device::read(&mount, format).map_err(|error| device_error(&error))?;
@@ -381,7 +432,7 @@ pub async fn device_playlist_collection_tracks(
 ) -> AppResult<Vec<Option<String>>> {
     let state = Arc::clone(&state);
     blocking("device_playlist_collection_tracks", move || {
-        let mount = connected(&path)?;
+        let (mount, _lock) = inspectable(state.backup_dir(), &path)?;
         let format = format_from(&format)?;
         let library = read_settled(&mount, format)?;
         let db_id = state
@@ -402,16 +453,88 @@ fn collection_track_rows(mount: &Path, library: &device::Library, db_id: u64, tr
     tracks.iter().map(|id| id.parse::<u64>().ok().and_then(|id| rows.get(&id).cloned())).collect()
 }
 
+/// Library tracks about to go into one of a Stick's playlists, resolved
+/// against what the Stick holds now (wbx-45.4): the ones it lacks, to export
+/// first, and how many entries the add puts in.
+pub(crate) struct ResolvedTracks {
+    pub(crate) missing: Vec<String>,
+    pub(crate) adding: usize,
+}
+
+/// See [`ResolvedTracks`]. The caller holds the Stick's lock; nothing here
+/// writes or settles anything.
+pub(crate) fn resolve_library_tracks(
+    state: &AppState,
+    mount: &Path,
+    format: &str,
+    playlist: &str,
+    tracks: &[String],
+    duplicates: bool,
+) -> AppResult<ResolvedTracks> {
+    let format = format_from(format)?;
+    let library = read_settled(mount, format)?;
+    let playlist_id = id_from(playlist)?;
+    if library.node(playlist_id).is_none_or(|node| node.folder) {
+        return Err(AppError::new(ErrorKind::NotFound, "That playlist is no longer on the device."));
+    }
+    let db_id = state.read_db(|db| rbl_db::export_info::db_id(db.connection())).map_err(crate::commands::write_error)?;
+    let rows = collection_track_rows(mount, &library, db_id, tracks);
+    let missing = tracks.iter().zip(&rows).filter(|(_, row)| row.is_none()).map(|(t, _)| t.clone()).collect();
+    let present: Vec<String> = rows.iter().flatten().cloned().collect();
+    let ids = track_ids_in(&library, mount, &present)?;
+    let held: std::collections::BTreeSet<u32> = library.held(playlist_id, &ids).into_iter().collect();
+    let adding = if duplicates { tracks.len() } else { tracks.len() - held.len().min(tracks.len()) };
+    Ok(ResolvedTracks { missing, adding })
+}
+
+/// Adds Library `tracks`, in order, to `playlist` on the Stick, every one of
+/// them already on it: each resolved to the Stick's own row natively, and
+/// those the playlist holds left out unless `duplicates`. Called by the
+/// approved write under the Stick's lock, after any export it needed.
+pub(crate) fn add_library_rows(
+    access: &crate::stick_guard::StickAccess,
+    state: &AppState,
+    mount: &Path,
+    format: &str,
+    playlist: &str,
+    tracks: &[String],
+    duplicates: bool,
+) -> AppResult<DeviceEditResultDto> {
+    let parsed = format_from(format)?;
+    let library = read_settled(mount, parsed)?;
+    let db_id = state.read_db(|db| rbl_db::export_info::db_id(db.connection())).map_err(crate::commands::write_error)?;
+    let rows = collection_track_rows(mount, &library, db_id, tracks);
+    let Some(rows) = rows.into_iter().collect::<Option<Vec<String>>>() else {
+        return Err(AppError::new(ErrorKind::NotFound, "Only tracks of this library on the device can go into its playlists."));
+    };
+    let playlist_id = id_from(playlist)?;
+    let ids = track_ids_in(&library, mount, &rows)?;
+    let held: std::collections::BTreeSet<u32> = library.held(playlist_id, &ids).into_iter().collect();
+    let tracks: Vec<String> = rows.into_iter().zip(&ids).filter(|(_, id)| duplicates || !held.contains(id)).map(|(row, _)| row).collect();
+    if tracks.is_empty() {
+        return Ok(DeviceEditResultDto { id: playlist.to_owned(), changed: 0 });
+    }
+    let path = mount.to_string_lossy().into_owned();
+    apply_edit(access, &path, format, DeviceEditDto::Add { playlist: playlist.to_owned(), tracks, duplicates }, rbl_db::is_rekordbox_app_running())
+}
+
 /// The rows of `tracks` whose track `playlist` already holds, each once, so
 /// the interface can ask rekordbox's Add or Skip question before adding.
 /// Only reads the stick.
 #[tauri::command]
-pub async fn device_playlist_duplicates(path: String, format: String, playlist: String, tracks: Vec<String>) -> AppResult<Vec<String>> {
-    blocking("device_playlist_duplicates", move || duplicates_of(&path, &format, &playlist, &tracks)).await
+pub async fn device_playlist_duplicates(
+    state: State<'_, Arc<AppState>>,
+    path: String,
+    format: String,
+    playlist: String,
+    tracks: Vec<String>,
+) -> AppResult<Vec<String>> {
+    let state_dir = state.backup_dir().to_path_buf();
+    blocking("device_playlist_duplicates", move || duplicates_of(&state_dir, &path, &format, &playlist, &tracks)).await
 }
 
-fn duplicates_of(path: &str, format: &str, playlist: &str, rows: &[String]) -> AppResult<Vec<String>> {
-    let mount = connected(path)?;
+fn duplicates_of(state_dir: &Path, path: &str, format: &str, playlist: &str, rows: &[String]) -> AppResult<Vec<String>> {
+    let (mount, _lock) = inspectable(state_dir, path)?;
     let format = format_from(format)?;
     let library = read_settled(&mount, format)?;
     let playlist_id = id_from(playlist)?;
@@ -437,7 +560,10 @@ pub fn edit_refusal(rekordbox_running: bool) -> Option<AppError> {
     rekordbox_running.then(|| AppError::new(ErrorKind::ReadOnly, "Quit rekordbox before changing this USB's playlists so only one application writes its libraries."))
 }
 
-fn apply_edit(path: &str, format: &str, edit: DeviceEditDto, rekordbox_running: bool) -> AppResult<DeviceEditResultDto> {
+/// `access`: the capability, Stick Protection's leave to write to this
+/// Stick (wbx-45.11), checked again here.
+fn apply_edit(access: &crate::stick_guard::StickAccess, path: &str, format: &str, edit: DeviceEditDto, rekordbox_running: bool) -> AppResult<DeviceEditResultDto> {
+    access.recheck()?;
     if let Some(refused) = edit_refusal(rekordbox_running) {
         return Err(refused);
     }
@@ -712,7 +838,7 @@ fn copy_destination(chosen: Option<&str>) -> AppResult<PathBuf> {
 
 /// Reads the stick and plans the import against the collection.
 fn read_plan(state: &AppState, path: &str, format: &str, id: &str) -> AppResult<ImportPlan> {
-    let mount = connected(path)?;
+    let (mount, _lock) = inspectable(state.backup_dir(), path)?;
     let (format, id) = (format_from(format)?, id_from(id)?);
     let stick = StickTracks::read(&mount, format)?;
     let Some(node) = stick.library.node(id).filter(|n| !n.folder) else {
@@ -1463,7 +1589,15 @@ mod tests {
         let path = root.to_str().unwrap().to_owned();
         let id = playlist.id.to_string();
         let row = rbl_index::folder::loose_id(&wav);
-        let add = || tauri::async_runtime::block_on(device_playlist_add_files(path.clone(), "deviceLibrary".into(), id.clone(), vec![row.clone()]));
+        // Each add approved as the window's staged write approves it (wbx-45.4).
+        let state = crate::state::AppState::unprotected(local.path().join("backups"));
+        crate::stick_guard::testing::unlock(&state, root);
+        let app = crate::stick_guard::testing::app(state);
+        let add = || {
+            let op = crate::stick_approval::StickOperation::PlaylistAddFiles { format: "deviceLibrary".into(), playlist: id.clone(), files: vec![row.clone()] };
+            let token = crate::stick_guard::testing::token(&tauri::Manager::state::<Arc<AppState>>(&app), Path::new(&path), op);
+            tauri::async_runtime::block_on(device_playlist_add_files(tauri::Manager::state(&app), path.clone(), "deviceLibrary".into(), id.clone(), vec![row.clone()], token))
+        };
         assert_eq!(add().unwrap().changed, 1);
         let legacy = device::read(root, Format::DeviceLibrary).unwrap();
         let one = device::read(root, Format::OneLibrary).unwrap();
@@ -1489,6 +1623,35 @@ mod tests {
         assert_eq!(device::read(root, Format::OneLibrary).unwrap(), one);
         assert_eq!(std::fs::read(&wav).unwrap(), audio);
         assert_eq!(collection_count(), before_collection);
+    }
+
+    /// Every file on the stick and its bytes.
+    fn stick_bytes(root: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+        let mut out = std::collections::BTreeMap::new();
+        let mut todo = vec![root.to_path_buf()];
+        while let Some(dir) = todo.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() { todo.push(path); } else { out.insert(path.clone(), std::fs::read(&path).unwrap()); }
+            }
+        }
+        out
+    }
+
+    /// wbx-45.4, second review: the duplicate question reads a Stick only
+    /// when it holds no unfinished write; otherwise it is refused and the
+    /// Stick, journal included, is left exactly as it was.
+    #[test]
+    fn the_duplicate_inspection_refuses_a_stick_with_an_unfinished_write() {
+        let (_, dest) = stick();
+        let root = dest.path();
+        let library = device::read(root, Format::DeviceLibrary).unwrap();
+        let playlist = library.nodes.iter().find(|node| !node.folder).unwrap().id.to_string();
+        std::fs::write(root.join(".rbxport-publication"), b"{}").unwrap();
+        let before = stick_bytes(root);
+        let refused = duplicates_of(&std::env::temp_dir(), &root.to_string_lossy(), "deviceLibrary", &playlist, &[]).unwrap_err();
+        assert!(refused.to_string().contains("did not finish"), "{refused}");
+        assert_eq!(stick_bytes(root), before);
     }
 
     fn write_test_wav(path: &Path) {
@@ -1631,7 +1794,7 @@ mod tests {
     fn an_edit_from_the_interface_changes_the_library_it_names() {
         let (_src, dest) = stick();
         let path = dest.path().to_str().unwrap();
-        let made = apply_edit(path, "deviceLibrary", DeviceEditDto::Create { parent: "0".into(), name: "Opening".into(), folder: false }, false).unwrap();
+        let made = apply_edit(&crate::stick_guard::testing::ordinary(), path, "deviceLibrary", DeviceEditDto::Create { parent: "0".into(), name: "Opening".into(), folder: false }, false).unwrap();
         assert_eq!(made.changed, 1);
         let rows: Vec<String> = device::read(dest.path(), Format::DeviceLibrary)
             .unwrap()
@@ -1639,14 +1802,14 @@ mod tests {
             .iter()
             .map(|t| rbl_index::folder::loose_id(&audio_path(dest.path(), &t.path)))
             .collect();
-        apply_edit(path, "deviceLibrary", DeviceEditDto::Add { playlist: made.id.clone(), tracks: rows, duplicates: false }, false).unwrap();
+        apply_edit(&crate::stick_guard::testing::ordinary(), path, "deviceLibrary", DeviceEditDto::Add { playlist: made.id.clone(), tracks: rows, duplicates: false }, false).unwrap();
         let found = libraries(dest.path());
         let opening = found[0].nodes.iter().find(|n| n.name == "Opening").unwrap();
         assert_eq!(opening.count, 3);
         assert!(!found[1].nodes.iter().any(|n| n.name == "Opening"), "OneLibrary is left as it was");
-        let refused = apply_edit(path, "deviceLibrary", DeviceEditDto::Rename { id: made.id, name: "   ".into() }, false).unwrap_err();
+        let refused = apply_edit(&crate::stick_guard::testing::ordinary(), path, "deviceLibrary", DeviceEditDto::Rename { id: made.id, name: "   ".into() }, false).unwrap_err();
         assert!(matches!(refused.kind, ErrorKind::Malformed));
-        assert!(apply_edit(path, "elsewhere", DeviceEditDto::Delete { id: "1".into() }, false).is_err());
+        assert!(apply_edit(&crate::stick_guard::testing::ordinary(), path, "elsewhere", DeviceEditDto::Delete { id: "1".into() }, false).is_err());
     }
 
     #[test]
@@ -1659,11 +1822,11 @@ mod tests {
             let friday = library.nodes.iter().find(|n| n.name == "Friday").unwrap();
             let (inside, outside) = (friday.tracks[0], library.tracks.iter().map(|t| t.id).find(|t| !friday.tracks.contains(t)).unwrap());
             let picked = vec![row(outside), row(inside), row(inside)];
-            let held = duplicates_of(path, format, &friday.id.to_string(), &picked).unwrap();
+            let held = duplicates_of(&std::env::temp_dir(), path, format, &friday.id.to_string(), &picked).unwrap();
             assert_eq!(held, vec![row(inside)], "{format}: each held row once, the new one not at all");
 
             let add = |duplicates| {
-                apply_edit(path, format, DeviceEditDto::Add { playlist: friday.id.to_string(), tracks: vec![row(outside), row(inside)], duplicates }, false).unwrap()
+                apply_edit(&crate::stick_guard::testing::ordinary(), path, format, DeviceEditDto::Add { playlist: friday.id.to_string(), tracks: vec![row(outside), row(inside)], duplicates }, false).unwrap()
             };
             assert_eq!(add(false).changed, 1, "{format}: Skip adds only the new track");
             assert_eq!(add(true).changed, 2, "{format}: Add puts both on the end again");
@@ -1677,8 +1840,8 @@ mod tests {
         assert!(matches!(edit, DeviceEditDto::Add { duplicates: false, .. }));
         let edit: DeviceEditDto = serde_json::from_str(r#"{"kind":"add","playlist":"1","tracks":[],"duplicates":true}"#).unwrap();
         assert!(matches!(edit, DeviceEditDto::Add { duplicates: true, .. }));
-        assert!(duplicates_of(path, "deviceLibrary", "1", &["file:/elsewhere/x.mp3".into()]).is_err());
-        assert!(duplicates_of(path, "deviceLibrary", "999", &[]).is_err(), "a missing target is refused before an export starts");
+        assert!(duplicates_of(&std::env::temp_dir(), path, "deviceLibrary", "1", &["file:/elsewhere/x.mp3".into()]).is_err());
+        assert!(duplicates_of(&std::env::temp_dir(), path, "deviceLibrary", "999", &[]).is_err(), "a missing target is refused before an export starts");
     }
 
     #[test]
@@ -1694,7 +1857,7 @@ mod tests {
         let files = || ["export.pdb", "exportLibrary.db"].map(|f| std::fs::read(db.join(f)).unwrap());
         let before = files();
         for format in ["deviceLibrary", "oneLibrary"] {
-            let refused = apply_edit(path, format, DeviceEditDto::Create { parent: "0".into(), name: "Opening".into(), folder: false }, true).unwrap_err();
+            let refused = apply_edit(&crate::stick_guard::testing::ordinary(), path, format, DeviceEditDto::Create { parent: "0".into(), name: "Opening".into(), folder: false }, true).unwrap_err();
             assert!(matches!(refused.kind, ErrorKind::ReadOnly));
             assert_eq!(refused.message, refusal.message);
         }

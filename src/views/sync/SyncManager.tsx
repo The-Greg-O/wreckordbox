@@ -37,7 +37,12 @@ import { ExportProgressDetails } from "@/components/ExportProgressDetails";
 import { FormatDeviceDialog } from "./FormatDeviceDialog";
 import { MissingFilesDialog } from "./MissingFilesDialog";
 import { useTranslation } from "@/i18n";
+import { useStickOutlines } from "@/store/useStickOutlines";
+import { useStickWriteGate, useStickWriteGateContext } from "@/views/shell/StickWriteGate";
 import styles from "./SyncManager.module.css";
+
+/** No Sticks to read outlines of: the main window's gate does that. */
+const NO_DEVICES: readonly Device[] = [];
 
 /** Where Sync Manager's settings buttons open Preferences: USB Export's Sync or Import section. */
 export type UsbExportTarget = "usbExportSync" | "usbExportImport";
@@ -137,6 +142,20 @@ export function SyncManager({ windowed = false, onClose, onSynced, onReady, onOp
   const window_ = useRef<HTMLDivElement>(null);
   const [tree, setTree] = useState<readonly TreeNode[]>([]);
   const [devices, setDevices] = useState<readonly Device[]>([]);
+  // Every write to a Stick is staged and held for (wbx-45.4): the main
+  // window's gate when the manager is drawn in it, its own in its own window.
+  const shared = useStickWriteGateContext();
+  const [outlineRevision, setOutlineRevision] = useState(0);
+  const ownSticks = useStickOutlines(shared ? NO_DEVICES : devices, outlineRevision);
+  const own = useStickWriteGate({
+    sticks: ownSticks,
+    refresh: () => {
+      setOutlineRevision((r) => r + 1);
+      return Promise.resolve();
+    },
+    refuse: (text) => { setStatus([text]); },
+  });
+  const gate = shared ?? own;
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   // rekordbox's column is one tree under a [Playlists] row that can be
   // closed like any folder; it opens open.
@@ -626,7 +645,17 @@ export function SyncManager({ windowed = false, onClose, onSynced, onReady, onOp
     setStatus([t("Formatting {device}…", { device: device.name })]);
     try {
       const backend = await getBackend();
-      await backend.formatDevice(device.path, layout);
+      const formatted = await gate.stage({
+        path: device.path,
+        title: `Erase and format ${device.name}`,
+        lines: [
+          "Everything on the Stick is erased: its music, playlists, settings and anything else on it.",
+          `Formatted as ${layout === "fat32" ? "one FAT32 partition" : "a FAT32 and an HFS+ partition"}, keeping its name.`,
+        ],
+        plan: { kind: "format", layout },
+        run: (approval) => backend.formatDevice(device.path, layout, approval),
+      });
+      if (!formatted) throw new Error(t("The Stick was not formatted: the format was not confirmed."));
       // A FAT volume comes back upper-cased, so it may mount somewhere new:
       // what was read from the old path is gone either way.
       const forget = <T,>(current: ReadonlyMap<string, T>) => { const next = new Map(current); next.delete(device.path); return next; };
@@ -725,10 +754,30 @@ export function SyncManager({ windowed = false, onClose, onSynced, onReady, onOp
           if (progress.state === "writing") setStatus([t("Writing to {device}…", { device: nameOf(progress.path) })]);
           if (progress.state === "ejecting") setStatus([t("Ejecting {device}…", { device: nameOf(progress.path) })]);
         });
+        // Each Stick's sync is staged and held for on its own, then the
+        // confirmed ones are written together with their approvals.
+        const approvals: Record<string, string> = {};
+        for (const path of eligible) {
+          const approval = await gate.approve(path, {
+            title: `Sync ${playlists.length} playlist${playlists.length === 1 ? "" : "s"} to ${nameOf(path)}`,
+            lines: [],
+            plan: {
+              kind: "sync", playlists, deleteUnlistedMusic, automatic: false,
+              ...(stickDefaults ? { defaults: stickDefaults } : {}), ...(compatibilityFormat ? { compatibilityFormat } : {}),
+            },
+          });
+          if (approval !== null) approvals[path] = approval;
+        }
+        const confirmed = eligible.filter((path) => approvals[path] !== undefined);
+        const unconfirmed = eligible.filter((path) => approvals[path] === undefined);
         const reports: SyncDeviceReport[] = [
-          ...await backend.syncDevices(playlists, eligible, stickDefaults, false, ejectAfterSync, deleteUnlistedMusic, compatibilityFormat, verifyAll),
+          ...confirmed.length > 0
+            ? await backend.syncDevices(playlists, confirmed, stickDefaults, false, ejectAfterSync, deleteUnlistedMusic, compatibilityFormat, verifyAll, approvals)
+            : [],
+          ...unconfirmed.map((path) => ({ path, error: t("Not written: the sync to this Stick was not confirmed.") })),
           ...[...ineligible].map(([path, error]) => ({ path, error })),
         ];
+        for (const path of confirmed) void gate.recheck(path);
         setCompletedReports(new Map(reports.flatMap(r => r.report ? [[r.path, r.report] as const] : [])));
         const outcomes = reports.flatMap(r => r.error
           ? [`${nameOf(r.path)}: ${r.error}`]
@@ -770,7 +819,7 @@ export function SyncManager({ windowed = false, onClose, onSynced, onReady, onOp
         setOperation(null);
       }
     })();
-  }, [canSync, nodes, ticked, tickedDevices, estimates, stickDefaults, ejectAfterSync, deleteUnlistedMusic, compatibilityFormat, verifyAll, refreshDevices, readDevice, onSynced, t]);
+  }, [canSync, nodes, ticked, tickedDevices, estimates, stickDefaults, ejectAfterSync, deleteUnlistedMusic, compatibilityFormat, verifyAll, refreshDevices, readDevice, onSynced, t, gate]);
 
   /** One line for a cue import: what changed, and what already matched. */
   const cuesResult = (device: string, result: { tracks: number; skipped: number; unchanged?: number }) => {
@@ -1220,6 +1269,8 @@ export function SyncManager({ windowed = false, onClose, onSynced, onReady, onOp
 
   const dialogs = <>
     {missingPrompt ? <MissingFilesDialog files={missingPrompt.files} onChoose={missingPrompt.resolve} /> : null}
+    {/* Its own staged Stick writes, when in a window of its own (wbx-45.4). */}
+    {shared ? null : own.element}
     {formatTarget ? <FormatDeviceDialog
       device={formatTarget}
       onFormat={layout => formatDevice(formatTarget, layout)}

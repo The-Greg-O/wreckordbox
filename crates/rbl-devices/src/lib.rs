@@ -26,8 +26,23 @@ pub use mounts::MountWatcher;
 use std::path::{Path, PathBuf};
 
 /// Set to a `:`-separated list of directories to use those instead of the real
-/// volumes. Tests and `pnpm dev` use it; nothing else should.
+/// volumes. Tests and `pnpm dev` use it; nothing else should. Honoured only
+/// with [`TEST_MODE`] set to `1` ([`fake_volumes`]).
 pub const FAKE_VOLUMES: &str = "RB_LITE_FAKE_VOLUMES";
+
+/// The test mode every test sets; without it no override is honoured.
+pub const TEST_MODE: &str = "RBXPORT_TEST";
+
+/// [`FAKE_VOLUMES`], when the process runs in test mode: a fake list must
+/// never decide, in normal use, which volumes are treated as Sticks.
+#[must_use]
+pub fn fake_volumes() -> Option<std::ffi::OsString> {
+    if std::env::var_os(TEST_MODE).is_some_and(|v| v == "1") {
+        std::env::var_os(FAKE_VOLUMES)
+    } else {
+        None
+    }
+}
 
 /// A volume an export could be written to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,7 +83,7 @@ pub struct DeviceExport {
 /// Lists the volumes worth offering as an export destination.
 #[must_use]
 pub fn list() -> Vec<Device> {
-    if let Some(fake) = std::env::var_os(FAKE_VOLUMES) {
+    if let Some(fake) = fake_volumes() {
         return fake
             .to_string_lossy()
             .split(':')
@@ -110,7 +125,7 @@ fn devices_from(disks: &sysinfo::Disks) -> Vec<Device> {
 /// one refresh. Under [`FAKE_VOLUMES`] there are no real disks to report.
 #[must_use]
 pub fn list_surveyed() -> (Vec<Device>, Vec<survey::DiskDecision>) {
-    if std::env::var_os(FAKE_VOLUMES).is_some() {
+    if fake_volumes().is_some() {
         return (list(), Vec::new());
     }
     let disks = sysinfo::Disks::new_with_refreshed_list();
@@ -390,11 +405,20 @@ mod tests {
         // the variable, so nothing else can see it half-set.
         std::env::set_var(FAKE_VOLUMES, &stick);
         let devices = list();
+        // Outside the tests the override is not honoured: a real Stick can
+        // never be hidden from what the app treats as a Stick (wbx-45.11).
+        let test = std::env::var_os(TEST_MODE);
+        std::env::remove_var(TEST_MODE);
+        let production = fake_volumes();
+        if let Some(test) = test {
+            std::env::set_var(TEST_MODE, test);
+        }
         std::env::remove_var(FAKE_VOLUMES);
 
         assert_eq!(devices.len(), 1);
         assert_eq!(devices[0].name, "DJ STICK");
         assert_eq!(devices[0].mount_point, stick);
+        assert_eq!(production, None);
     }
 
     #[test]

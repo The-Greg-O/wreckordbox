@@ -28,10 +28,26 @@ export interface ContextMenuProps<A extends string> {
   title?: string | undefined;
   onChoose: (action: A) => void;
   onClose: () => void;
+  /**
+   * Worked from the keyboard (the shell's tree, wbx-45.4): the first live
+   * entry takes the focus when the menu opens, Up and Down (and Home, End)
+   * move between live entries, Right opens a submenu and Left closes it,
+   * Enter or Space chooses, Escape closes. Off, the menu is as it was.
+   */
+  keyboard?: boolean;
+}
+
+/** The live entries of one menu level, top to bottom. */
+function liveItems(menu: Element | null): HTMLButtonElement[] {
+  if (menu === null) return [];
+  // The top level wraps each entry in a row; a submenu holds its entries directly.
+  return [...menu.querySelectorAll<HTMLButtonElement>(
+    ":scope > div > button[role^='menuitem']:not(:disabled), :scope > button[role^='menuitem']:not(:disabled)",
+  )];
 }
 
 export function ContextMenu<A extends string>({
-  x, y, rows, context, label, title, onChoose, onClose,
+  x, y, rows, context, label, title, onChoose, onClose, keyboard = false,
 }: ContextMenuProps<A>) {
   const box = useRef<HTMLDivElement>(null);
   const submenu = useRef<HTMLDivElement>(null);
@@ -87,6 +103,54 @@ export function ContextMenu<A extends string>({
     element.style.top = `${Math.max(EDGE, Math.min(row.top, window.innerHeight - height - EDGE))}px`;
   }, [open, x, y, rows]);
 
+  useEffect(() => {
+    if (keyboard) liveItems(box.current)[0]?.focus();
+  }, [keyboard]);
+  // A submenu opened from the keyboard takes the focus too.
+  const openedByKey = useRef(false);
+  useEffect(() => {
+    if (!keyboard || !openedByKey.current || open === null) return;
+    openedByKey.current = false;
+    liveItems(submenu.current)[0]?.focus();
+  }, [keyboard, open]);
+
+  const onKey = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!keyboard) return;
+    const at = document.activeElement as HTMLElement | null;
+    const inSub = submenu.current?.contains(at) === true;
+    const items = liveItems(inSub ? submenu.current : box.current);
+    const index = items.findIndex((item) => item === at);
+    const move = (to: number) => items[(to + items.length) % items.length]?.focus();
+    switch (event.key) {
+      case "ArrowDown": move(index + 1); break;
+      case "ArrowUp": move(index < 0 ? items.length - 1 : index - 1); break;
+      case "Home": move(0); break;
+      case "End": move(items.length - 1); break;
+      case "ArrowRight":
+        if (!inSub && at?.getAttribute("aria-haspopup") === "menu") {
+          openedByKey.current = true;
+          at.click();
+        }
+        break;
+      case "ArrowLeft":
+        if (inSub) {
+          const parent = submenu.current?.parentElement?.querySelector<HTMLButtonElement>(":scope > button");
+          setOpen(null);
+          parent?.focus();
+        }
+        break;
+      case "Escape": onClose(); break;
+      case "Enter":
+      case " ":
+        // The focused entry's own click.
+        return;
+      default:
+        return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
   return createPortal(
     <div
       ref={box}
@@ -94,6 +158,7 @@ export function ContextMenu<A extends string>({
       style={{ left: x, top: y }}
       role="menu"
       aria-label={label}
+      onKeyDown={onKey}
     >
       {title !== undefined ? (
         <>

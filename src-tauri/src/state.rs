@@ -228,7 +228,14 @@ impl AppState {
 
     /// Persist the destination before publishing it to the running app.
     /// Recovery journals stay local even when snapshots go to a removable drive.
-    pub fn set_backup_destination(&self, directory: &std::path::Path) -> AppResult<String> {
+    ///
+    /// `_access`: Stick Protection's leave to write to `directory` (wbx-45.11):
+    /// choosing it writes a probe file there.
+    pub fn set_backup_destination(
+        &self,
+        _access: &crate::stick_guard::StickAccess,
+        directory: &std::path::Path,
+    ) -> AppResult<String> {
         let _gate = self.edit_gate().lock();
         let progress = self.backup_progress.lock();
         if progress.running {
@@ -502,6 +509,13 @@ impl AppState {
 
     pub fn library(&self) -> AppResult<Arc<Library>> {
         self.core.library().map_err(not_loaded)
+    }
+
+    /// The loaded index with its generation, read under one gate
+    /// (wbx-45.4): a Stick write checks its approval against exactly the
+    /// snapshot it writes from.
+    pub fn library_at_generation(&self) -> AppResult<(Arc<Library>, u64)> {
+        self.core.library_at_generation().map(|(l, g)| (l, u64::from(g))).map_err(not_loaded)
     }
 
     /// Where analysis files live for the loaded library, or nowhere useful

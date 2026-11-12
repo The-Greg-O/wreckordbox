@@ -23,6 +23,9 @@ pub enum ErrorKind {
     /// A Stick's last write did not finish. Reads report it instead of
     /// settling it; settling is an action the DJ chooses (wbx-45.5).
     UnfinishedWrite,
+    /// The Stick is protected (wbx-45.11): nothing is written to it until
+    /// the DJ unlocks it. Nothing was written.
+    StickProtected,
     /// A bug in our code; the detail is a crash-log reference, not a message for the user.
     Internal,
 }

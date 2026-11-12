@@ -22,14 +22,24 @@ function groupStart(rows: readonly ShellTreeRow[], index: number): number {
   return 0;
 }
 
-export function keyTarget(rows: readonly ShellTreeRow[], from: string, key: string): KeyTarget | null {
+/**
+ * `isStop`: the rows the focus may land on. By default the places; the
+ * shell's tree with actions adds what opens a menu without being a place
+ * (the Playlists heading, a Stick library's label; wbx-45.4).
+ */
+export function keyTarget(
+  rows: readonly ShellTreeRow[],
+  from: string,
+  key: string,
+  isStop: (row: ShellTreeRow) => boolean = (row) => isShellTreePlace(row.kind),
+): KeyTarget | null {
   if (!NAVIGATION.has(key)) return null;
   const index = rows.findIndex((row) => row.id === from);
   const row = rows[index];
   if (row === undefined) return {};
   const place = (i: number) => {
     const candidate = rows[i];
-    return candidate !== undefined && isShellTreePlace(candidate.kind) ? candidate : undefined;
+    return candidate !== undefined && isStop(candidate) ? candidate : undefined;
   };
   const step = (direction: 1 | -1) => {
     for (let i = index + direction; i >= 0 && i < rows.length; i += direction) {
@@ -71,7 +81,7 @@ export function keyTarget(rows: readonly ShellTreeRow[], from: string, key: stri
         }
         return {};
       }
-      if (row.branch && next !== undefined && isShellTreePlace(next.kind) && next.depth > row.depth) return { focus: next.id };
+      if (row.branch && next !== undefined && isStop(next) && next.depth > row.depth) return { focus: next.id };
       return {};
     }
     default: return null;

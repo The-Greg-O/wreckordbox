@@ -139,6 +139,8 @@ pub fn recover(root: &Path, location: &rbl_db::LibraryLocation) -> AppResult<()>
         };
         let manifest: Manifest = serde_json::from_slice(&bytes).map_err(error)?;
         if manifest.library != location.master_db { continue; }
+        // A Library on a protected Stick is not recovered (wbx-45.11).
+        let _stick = crate::stick_guard::enter_library(root, location)?;
         if location.is_real_install && rbl_db::is_rekordbox_running() {
             return Err(error("Quit rekordbox so an interrupted analysis edit can be recovered."));
         }
