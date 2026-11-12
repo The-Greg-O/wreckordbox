@@ -457,6 +457,12 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     (window as unknown as { __turnLibraryProtection: (on: boolean) => void }).__turnLibraryProtection =
       (on) => { recordProtection(on); };
   }
+  // Waveform reads refused while on, as an unreadable analysis file is.
+  let failWaveformReads = false;
+  if (typeof window !== "undefined") {
+    (window as unknown as { __failWaveformReads: (on: boolean) => void }).__failWaveformReads =
+      (on) => { failWaveformReads = on; };
+  }
   const playlistFixture = options.playlistFixture ?? readPlaylistFixtureFromUrl();
   const all = readFlagFromUrl("keyLights") ? keyLightRows(makeRows(12)) : makeRows(trackCount);
   // A disposable browser fixture for external file drops. It is opt-in and
@@ -2442,6 +2448,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     },
 
     trackWaveform: (trackId: string, kind: WaveformKind, window) => {
+      if (failWaveformReads) return Promise.reject(new Error("The analysis file could not be read."));
       // Three bytes a column — low, mid, high band energy — which is what the
       // real backend serves from `PWV6` and `PWV7`. Synthesising the old
       // one-byte `PWAV` shape here drew the bands from garbage.

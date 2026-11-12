@@ -41,9 +41,14 @@ describe("exactBackingSize", () => {
     expect(exactBackingSize(1177, 133, 1)).toEqual({ width: 1177, height: 133 });
   });
 
-  it("keeps backingSize's ratio cap, width cap and bad-measurement floor", () => {
-    expect(exactBackingSize(400, 14, 3)).toEqual(exactBackingSize(400, 14, MAX_RATIO));
+  it("is the real device pixels on a display denser than 2x: no ratio cap", () => {
+    expect(exactBackingSize(400, 30, 2.5)).toEqual({ width: 1000, height: 75 });
+    expect(exactBackingSize(400, 30, 3)).toEqual({ width: 1200, height: 90 });
+  });
+
+  it("keeps the allocation limit (MAX_WIDTH a side) and the bad-measurement floor", () => {
     expect(exactBackingSize(100_000, 14, 2).width).toBe(MAX_WIDTH);
+    expect(exactBackingSize(14, 100_000, 3).height).toBe(MAX_WIDTH);
     expect(exactBackingSize(0, 0, 1)).toEqual({ width: 1, height: 1 });
     expect(exactBackingSize(Number.NaN, 14, Number.NaN).width).toBeGreaterThan(0);
   });
@@ -66,9 +71,10 @@ describe("under the whole-interface scale", () => {
     expect(backingSize(400, 20, 0.8)).toEqual({ width: 320, height: 16 });
   });
 
-  it("still stops at twice the display's pixels", () => {
+  it("follows a 3x display at 1.5: 4.5 device pixels to the CSS pixel", () => {
     setPixelZoom(1.5);
-    expect(exactBackingSize(1000, 100, 3 * 1.5)).toEqual(exactBackingSize(1000, 100, MAX_RATIO * 1.5));
+    expect(exactBackingSize(1000, 100, 3 * 1.5)).toEqual({ width: 4500, height: 450 });
+    expect(coveredSize(exactBackingSize(1000, 100, 3 * 1.5), 3 * 1.5)).toEqual({ width: 1000, height: 100 });
   });
 });
 
@@ -89,10 +95,15 @@ describe("the box a store is shown in", () => {
     expect(coveredSize(exactBackingSize(720, 30, 2), 2)).toEqual({ width: 720, height: 30 });
   });
 
-  it("stays the element's size on a display denser than a store is built for", () => {
-    const store = exactBackingSize(400, 30, 3);
-    expect(store).toEqual({ width: 800, height: 60 });
-    expect(coveredSize(store, 3)).toEqual({ width: 400, height: 30 });
+  it("is the element's size on a 2.5x and a 3x display, one store pixel a device pixel", () => {
+    expect(coveredSize(exactBackingSize(400, 30, 2.5), 2.5)).toEqual({ width: 400, height: 30 });
+    expect(coveredSize(exactBackingSize(400, 30, 3), 3)).toEqual({ width: 400, height: 30 });
+  });
+
+  it("is the element's size where the store hit the allocation limit (stretched, as stated)", () => {
+    const store = exactBackingSize(8000, 30, 3);
+    expect(store.width).toBe(MAX_WIDTH);
+    expect(coveredSize(store, 3, { width: 8000, height: 30 })).toEqual({ width: 8000, height: 30 });
   });
 
   it("is a whole number of the display's own pixels on a dense display at a fractional scale", () => {

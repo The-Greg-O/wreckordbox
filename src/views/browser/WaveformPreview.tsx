@@ -24,13 +24,45 @@ import styles from "./TrackTable.module.css";
 /** Shared across every row: bounded, and released when entries fall out. */
 const cache = new WaveformCache(500);
 
+/**
+ * Each row's waveform bytes as last read, by track and tag kind: a change of
+ * waveform theme or colours redraws from these without a read, so a row can
+ * never be left in the old theme because a fresh read failed. A few
+ * kilobytes each, at most `RAW_MOST` of them, the least recently used first
+ * to go.
+ */
+const RAW_MOST = 1000;
+const raw = new Map<string, Uint8Array>();
+
+function rawKey(trackId: string, palette: WavePalette): string {
+  return `${trackId}:${waveformKindOf(palette, false)}`;
+}
+
+function keepRaw(key: string, bytes: Uint8Array): void {
+  raw.delete(key);
+  raw.set(key, bytes);
+  while (raw.size > RAW_MOST) {
+    const oldest = raw.keys().next().value;
+    if (oldest === undefined) break;
+    raw.delete(oldest);
+  }
+}
+
+function forgetRaw(trackId: string): void {
+  for (const key of [...raw.keys()]) if (key.startsWith(`${trackId}:`)) raw.delete(key);
+}
+
 export function clearWaveformPreviewCache(): void {
   cache.clear();
+  raw.clear();
 }
 // A re-analysed track's renderings are stale; its rows draw afresh when they
 // next settle. One subscription for the module rather than one per row.
 void getBackend().then((backend) => {
-  backend.onAnalysisChanged((trackId) => cache.forget(trackId));
+  backend.onAnalysisChanged((trackId) => {
+    cache.forget(trackId);
+    forgetRaw(trackId);
+  });
 });
 
 /**
@@ -106,9 +138,14 @@ async function load(
   const pending = (async () => {
     await acquire();
     try {
-      const backend = await getBackend();
-      const data = await backend.trackWaveform(trackId, waveformKindOf(palette, false));
-      if (data.length === 0) return null;
+      const bytesKey = rawKey(trackId, palette);
+      let data = raw.get(bytesKey);
+      if (!data) {
+        const backend = await getBackend();
+        data = await backend.trackWaveform(trackId, waveformKindOf(palette, false));
+        if (data.length === 0) return null;
+        keepRaw(bytesKey, data);
+      }
       const rendered = await renderPreview(data, width, height, dpr, palette, half, colours);
       if (rendered) cache.set(key, rendered);
       return rendered;
@@ -187,6 +224,7 @@ export const WaveformPreview = memo(function WaveformPreview({
       if (!canvas || cancelled) return;
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
+      canvas.removeAttribute("data-wave-failed");
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(entry.bitmap, 0, 0, canvas.width, canvas.height);
       // A cue without a colour of its own takes its slot's HOT CUE color
@@ -204,12 +242,23 @@ export const WaveformPreview = memo(function WaveformPreview({
     }
 
     // Nothing is asked for until the row has settled. A row a flick goes past
-    // is unmounted before this fires, and the request is never made.
+    // is unmounted before this fires, and the request is never made. A row
+    // whose bytes are already here (a theme change) costs no read and waits
+    // for nothing.
     const timer = window.setTimeout(() => {
       void load(trackId, key, boxWidth, boxHeight, dpr, palette, half, colours).then((rendered) => {
-        if (rendered) paint(rendered);
+        if (rendered) {
+          paint(rendered);
+          return;
+        }
+        // Nothing to draw in this theme (no analysis, or the read failed):
+        // never leave the last theme's pixels standing.
+        const canvas = ref.current;
+        if (!canvas || cancelled) return;
+        canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+        canvas.setAttribute("data-wave-failed", "");
       });
-    }, SETTLE_MS);
+    }, raw.has(rawKey(trackId, palette)) ? 0 : SETTLE_MS);
 
     return () => {
       cancelled = true;

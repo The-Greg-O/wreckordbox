@@ -16,6 +16,7 @@ import { drawPcmWave, drawWave, strideOf, waveformKindOf, type HalfWaveform, typ
 import { getBackend } from "@/ipc/client";
 import type { WaveformKind } from "@/ipc/types";
 import { coveredSize, exactBackingSize } from "@/lib/canvasSize";
+import { usePixelRatio } from "@/lib/pixelRatio";
 import { detailWaveOriginMs, detailWaveWindow, waveSlice } from "@/lib/player";
 import { useWaveColours, useWaveformTheme } from "@/lib/waveTheme";
 
@@ -137,6 +138,9 @@ export const WaveformDetail = memo(function WaveformDetail({
   const { palette } = useWaveformTheme();
   // That palette's colours: the measured ones, or the Omarchy theme's.
   const colours = useWaveColours(palette);
+  // Device pixels per CSS pixel, kept current: a paused waveform is redrawn
+  // when the scale or the display's density changes with no resize.
+  const ratio = usePixelRatio();
   const pcmFromMs = requestedPcmWindow?.fromMs;
   const pcmToMs = requestedPcmWindow?.toMs;
   const pcmDrawFromMs = requestedPcmWindow?.drawFromMs;
@@ -230,14 +234,14 @@ export const WaveformDetail = memo(function WaveformDetail({
     // Exactly the device pixels the strip covers: this redraws on every size
     // change anyway, and a quantised store squeezed onto the strip resamples
     // every bar differently after each redraw — a flicker while playing (#346).
-    const { width: w, height: h } = exactBackingSize(width, height);
+    const { width: w, height: h } = exactBackingSize(width, height, ratio);
     // Assigning either clears the canvas, so only when it actually changed.
     if (canvas.width !== w) canvas.width = w;
     if (canvas.height !== h) canvas.height = h;
     // Shown over exactly those device pixels. The strip's own size is often
     // a fraction of one at a whole-interface scale, and a store stretched
     // over the fraction is resampled: every row blended into the next.
-    const box = coveredSize({ width: w, height: h });
+    const box = coveredSize({ width: w, height: h }, ratio, { width, height });
     canvas.style.width = `${box.width}px`;
     canvas.style.height = `${box.height}px`;
     const ctx = canvas.getContext("2d");
@@ -283,7 +287,7 @@ export const WaveformDetail = memo(function WaveformDetail({
       bottom: inset.bottom * scale,
     }, colours);
     ctx.restore();
-  }, [data, pcmData, trackId, revision, progress, span, durationMs, firstBeatMs, width, height, half, detail, palette, colours, inset.top, inset.bottom, pcmWindow]);
+  }, [data, pcmData, trackId, revision, progress, span, durationMs, firstBeatMs, width, height, half, detail, palette, colours, inset.top, inset.bottom, pcmWindow, ratio]);
 
   return <canvas ref={ref} style={{ width: "100%", height: "100%", display: "block" }} />;
 });

@@ -7,9 +7,15 @@
  *
  * - the width is quantised, so dragging the window edge reallocates the buffer
  *   a handful of times rather than once per pixel;
- * - the device pixel ratio is capped, because past 2× the extra samples are
- *   not visible in a 14-pixel-high waveform and the buffer grows with the
- *   square of the ratio.
+ * - for the quantised store only (`backingSize`, the vocal strip), the
+ *   device pixel ratio is capped at `MAX_RATIO`.
+ *
+ * The waveforms (`exactBackingSize`, `previewBackingSize`) are not capped:
+ * they are built at the real ratio on any display, 2.5x and 3x included, so
+ * one store pixel is one device pixel. Their only limit is allocation:
+ * `MAX_WIDTH` device pixels a side. A strip that would need more is drawn at
+ * `MAX_WIDTH` and stretched over its element (`coveredSize` is then given the
+ * element's size); at 3x that is a strip 5,461 CSS pixels wide.
  *
  * The ratio is the display's times the whole-interface scale
  * (`pixelRatio.ts`), and the limits move with that scale: at 1.25 on a 2×
@@ -23,15 +29,22 @@ import { pixelRatio, pixelZoom } from "./pixelRatio";
 export const STEP = 16;
 
 /**
- * Beyond this the extra resolution is not visible in a waveform strip. The
- * display's ratio: the whole-interface scale multiplies it.
+ * The quantised store's cap (`backingSize`, the vocal strip only): the
+ * display's ratio, which the whole-interface scale multiplies. Waveforms are
+ * not capped.
  */
 export const MAX_RATIO = 2;
 
-/** The ratio a store is built at: `ratio`, within what the window's zoom allows. */
+/** The quantised store's ratio: `ratio`, within what the window's zoom allows. */
 function storeScale(ratio: number): number {
   const zoom = pixelZoom();
   return Math.min(Math.max(finite(ratio, 1), Math.min(1, zoom)), MAX_RATIO * zoom);
+}
+
+/** A waveform store's ratio: the real one, anything not a positive number taken as 1. */
+function exactScale(ratio: number): number {
+  const real = finite(ratio, 1);
+  return real > 0 ? real : 1;
 }
 
 /**
@@ -80,10 +93,10 @@ export function exactBackingSize(
   cssHeight: number,
   ratio: number = pixelRatio(),
 ): BackingSize {
-  const scale = storeScale(ratio);
+  const scale = exactScale(ratio);
   return {
     width: Math.min(MAX_WIDTH, wholePoints(cssWidth, scale)),
-    height: wholePoints(cssHeight, scale),
+    height: Math.min(MAX_WIDTH, wholePoints(cssHeight, scale)),
   };
 }
 
@@ -109,8 +122,7 @@ function wholePoints(css: number, scale: number): number {
  * because the preview's cue badges are drawn at that ratio too.
  */
 export function previewBackingSize(cssWidth: number, cssHeight: number, ratio: number = pixelRatio()): BackingSize {
-  const scale = finite(ratio, 1) > 0 ? finite(ratio, 1) : 1;
-  return { width: wholePoints(cssWidth, scale), height: wholePoints(cssHeight, scale) };
+  return exactBackingSize(cssWidth, cssHeight, ratio);
 }
 
 /**
@@ -124,9 +136,14 @@ export function previewBackingSize(cssWidth: number, cssHeight: number, ratio: n
  * Shown in this box instead, one store pixel is one device pixel; the engine
  * snaps the box's position to whole pixels by itself.
  */
-export function coveredSize(store: BackingSize, ratio: number = pixelRatio()): BackingSize {
-  const scale = storeScale(ratio);
-  return { width: store.width / scale, height: store.height / scale };
+export function coveredSize(store: BackingSize, ratio: number = pixelRatio(), element?: BackingSize): BackingSize {
+  const scale = exactScale(ratio);
+  // At the allocation limit the store is short of the element's pixels:
+  // shown over the element, stretched, rather than leaving it part empty.
+  return {
+    width: element && store.width >= MAX_WIDTH ? element.width : store.width / scale,
+    height: element && store.height >= MAX_WIDTH ? element.height : store.height / scale,
+  };
 }
 
 function finite(value: number, fallback: number): number {
