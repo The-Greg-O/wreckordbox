@@ -58,61 +58,160 @@ test("rows and headings use the design's density", async ({ page }) => {
   expect((await headings(page).first().boundingBox())?.height).toBe(22);
 });
 
-test("Prep colour is a stripe at the row's left edge in rekordbox's label colours", async ({ page }) => {
+test("Prep colour is a stripe at the row's left edge in rekordbox's own track colours", async ({ page }) => {
   await open(page);
   // The mock labels its tracks with every colour in turn, and some with none.
   const stripe = (name: string | RegExp) => page.getByRole("img", { name });
   const pinkRow = rows(page).filter({ has: stripe("Prep colour: Pink") }).first();
   const pink = pinkRow.getByRole("img", { name: "Prep colour: Pink" });
   await expect(pink).toBeVisible();
-  expect(await background(pink)).toBe(await token(page, "--c-label-pink"));
+  // rekordbox's own track colours (cPink, cGreen in its ColorTheme), the
+  // values the old list's Color column is pinned to.
+  expect(await background(pink)).toBe("rgb(248, 112, 248)");
   const rowBox = await pinkRow.boundingBox();
   const stripeBox = await pink.boundingBox();
   expect(stripeBox?.x).toBe(rowBox?.x);
   expect(stripeBox?.width).toBe(3);
   expect(stripeBox?.height).toBe(rowBox?.height);
   const green = rows(page).filter({ has: stripe("Prep colour: Green") }).first().getByRole("img", { name: "Prep colour: Green" });
-  expect(await background(green)).toBe(await token(page, "--c-label-green"));
+  expect(await background(green)).toBe("rgb(0, 224, 0)");
   await expect(rows(page).filter({ hasNot: stripe(/^Prep colour/) }).first()).toBeVisible();
   // Not a column of its own.
   expect(await headingNames(page)).not.toContain("color");
 });
 
+/** A row's Energy control: five pips the DJ can set from the mouse or the keyboard. */
+const energy = (scope: Page | Locator, name: string | RegExp) => scope.getByRole("radiogroup", { name });
+
+/** The mock's record of rating writes, and a track's rating as the mock holds it. */
+async function ratingWrites(page: Page): Promise<{ ids: string[]; stars: number; refused: boolean }[]> {
+  return page.evaluate(() => (window as unknown as { __ratingWrites: { ids: string[]; stars: number; refused: boolean }[] }).__ratingWrites);
+}
+async function storedRating(page: Page, id: string): Promise<number> {
+  return page.evaluate((track) => (window as unknown as { __ratingOf: (id: string) => number }).__ratingOf(track), id);
+}
+
+/** The first row on show whose Energy is not set, held by its title so it is found again after a re-render. */
+async function unratedRow(page: Page): Promise<Locator> {
+  const row = rows(page).filter({ has: energy(page, "Energy not set") }).first();
+  const title = await row.locator('[data-col="title"]').innerText();
+  return rows(page).filter({ has: page.locator('[data-col="title"]', { hasText: title }) }).first();
+}
+
 test("Energy is five pips coloured by level, and an unrated track shows unset pips", async ({ page }) => {
   await open(page);
-  const rated = working(page).getByRole("img", { name: "Energy 3 of 5" }).first();
+  const rated = energy(working(page), "Energy 3 of 5").first();
   await expect(rated).toBeVisible();
-  const pips = rated.locator("[data-pip]");
+  const pips = rated.getByRole("radio");
   await expect(pips).toHaveCount(5);
+  await expect(rated.getByRole("radio", { name: "Energy 3" })).toHaveAttribute("aria-checked", "true");
+  await expect(rated.getByRole("radio", { name: "Energy 4" })).toHaveAttribute("aria-checked", "false");
   const green = await token(page, "--c-energy-3");
   for (const i of [0, 1, 2]) expect(await background(pips.nth(i))).toBe(green);
   const unset = await background(pips.nth(3));
   expect(unset).not.toBe(green);
   expect(await background(pips.nth(4))).toBe(unset);
 
-  const hot = working(page).getByRole("img", { name: "Energy 5 of 5" }).first();
-  expect(await background(hot.locator("[data-pip]").first())).toBe(await token(page, "--c-energy-5"));
+  const hot = energy(working(page), "Energy 5 of 5").first();
+  expect(await background(hot.getByRole("radio").first())).toBe(await token(page, "--c-energy-5"));
 
-  const unrated = working(page).getByRole("img", { name: "Energy not set" }).first();
+  const unrated = energy(working(page), "Energy not set").first();
   await expect(unrated).toBeVisible();
-  for (let i = 0; i < 5; i++) expect(await background(unrated.locator("[data-pip]").nth(i))).toBe(unset);
+  for (let i = 0; i < 5; i++) expect(await background(unrated.getByRole("radio").nth(i))).toBe(unset);
+  await expect(unrated.getByRole("radio", { checked: true })).toHaveCount(0);
 });
 
-test("clicking a pip sets Energy, and clicking the top lit pip clears it", async ({ page }) => {
+test("clicking a pip saves Energy to the Library, clicking it again clears it, and Undo puts each back", async ({ page }) => {
   await open(page);
-  const row = rows(page).filter({ has: page.getByRole("img", { name: "Energy not set" }) }).first();
-  const title = await row.locator('[data-col="title"]').innerText();
-  const same = rows(page).filter({ has: page.locator('[data-col="title"]', { hasText: title }) }).first();
-  await same.locator("[data-pip='4']").click();
-  await expect(same.getByRole("img", { name: "Energy 4 of 5" })).toBeVisible();
-  await same.locator("[data-pip='4']").click();
-  await expect(same.getByRole("img", { name: "Energy not set" })).toBeVisible();
+  const row = await unratedRow(page);
+  await row.getByRole("radio", { name: "Energy 4" }).click();
+  await expect(energy(row, "Energy 4 of 5")).toBeVisible();
+  await expect(page.getByTestId("shell-status")).toContainText("Rated 4 of 5.");
+  const [write] = await ratingWrites(page);
+  expect(write).toEqual({ ids: [expect.any(String)], stars: 4, refused: false });
+  const id = write!.ids[0]!;
+  expect(await storedRating(page, id)).toBe(4);
+
+  await row.getByRole("radio", { name: "Energy 4" }).click();
+  await expect(energy(row, "Energy not set")).toBeVisible();
+  expect(await storedRating(page, id)).toBe(0);
+
+  await page.evaluate(() => (window as unknown as { __menu: (id: string) => void }).__menu("undo"));
+  await expect(energy(row, "Energy 4 of 5")).toBeVisible();
+  expect(await storedRating(page, id)).toBe(4);
+  await page.evaluate(() => (window as unknown as { __menu: (id: string) => void }).__menu("undo"));
+  await expect(energy(row, "Energy not set")).toBeVisible();
+  expect(await storedRating(page, id)).toBe(0);
+});
+
+test("Energy can be set and cleared from the keyboard", async ({ page }) => {
+  await open(page);
+  const row = await unratedRow(page);
+  const three = row.getByRole("radio", { name: "Energy 3" });
+  await three.focus();
+  await expect(three).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(energy(row, "Energy 3 of 5")).toBeVisible();
+  const id = (await ratingWrites(page))[0]!.ids[0]!;
+  expect(await storedRating(page, id)).toBe(3);
+
+  // The checked pip again clears it; Space works as Enter does.
+  await three.focus();
+  await page.keyboard.press(" ");
+  await expect(energy(row, "Energy not set")).toBeVisible();
+  expect(await storedRating(page, id)).toBe(0);
+  // Neither key reached the deck: nothing started playing.
+  await expect(page.getByRole("button", { name: "Pause" })).toHaveCount(0);
+});
+
+test("a pip sets Energy on its own row only, whatever else is selected", async ({ page }) => {
+  await open(page);
+  await rows(page).nth(0).locator('[data-col="title"]').click();
+  await rows(page).nth(2).locator('[data-col="title"]').click({ modifiers: ["ControlOrMeta"] });
+  await expect(rows(page).nth(0)).toHaveAttribute("aria-selected", "true");
+  await expect(rows(page).nth(2)).toHaveAttribute("aria-selected", "true");
+  const target = rows(page).nth(1);
+  const level = (await energy(target, /^Energy/).getAttribute("aria-label")) === "Energy 2 of 5" ? 4 : 2;
+  await target.getByRole("radio", { name: `Energy ${level}` }).click();
+  await expect(energy(target, `Energy ${level} of 5`)).toBeVisible();
+  const writes = await ratingWrites(page);
+  expect(writes).toHaveLength(1);
+  expect(writes[0]!.ids).toHaveLength(1);
+  expect(await storedRating(page, writes[0]!.ids[0]!)).toBe(level);
+});
+
+test("with Library Protection on a pip explains the lock and changes nothing", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("rbl.preferences", JSON.stringify({
+    advanced: { protectLibrary: true }, view: { viewShell: true },
+  })));
+  await page.goto("/?writable=1");
+  await expect(rows(page).first()).toBeVisible({ timeout: 15_000 });
+  const row = await unratedRow(page);
+  await row.getByRole("radio", { name: "Energy 4" }).click();
+  await expect(page.getByTestId("shell-status")).toContainText("Editing is locked by Library Protection");
+  await expect(energy(row, "Energy not set")).toBeVisible();
+  expect(await ratingWrites(page)).toEqual([]);
+});
+
+test("a write the Library refuses leaves Energy as it was", async ({ page }) => {
+  await enableViewShell(page);
+  await page.goto("/?writable=1&refuseRatingWrite=1");
+  await expect(rows(page).first()).toBeVisible({ timeout: 15_000 });
+  const row = await unratedRow(page);
+  await row.getByRole("radio", { name: "Energy 4" }).click();
+  await expect(page.getByTestId("shell-status")).toContainText("That could not be saved.");
+  const [write] = await ratingWrites(page);
+  expect(write?.refused).toBe(true);
+  expect(await storedRating(page, write!.ids[0]!)).toBe(0);
+  await expect(energy(row, "Energy not set")).toBeVisible();
 });
 
 test("MyTags show as tags", async ({ page }) => {
   await open(page);
-  // The mock tags every third track Peak Time.
-  await expect(working(page).locator('[data-col="myTag"]').getByText("Peak Time", { exact: true }).first()).toBeVisible();
+  // The mock's My Tag record holds Peak (Situation) on every fourth track.
+  const peak = working(page).locator('[data-col="myTag"] [data-tag="t-peak"]').first();
+  await expect(peak).toHaveText("Peak");
+  await expect(peak).toHaveAttribute("title", "Situation: Peak");
 });
 
 test("the optional columns are offered off, and turning one on shows it in its place and keeps it", async ({ page }) => {

@@ -19,7 +19,9 @@
   color: var(--c-text-dim);
 }
 
-/* Prep colour: a 3 px stripe down the row's left edge, over its first cell. */
+/* Prep colour: a 3 px stripe down the row's left edge, over its first cell,
+   in rekordbox's own track colours (the old list's Color column's, pinned by
+   TrackTable.colorColumn.test.ts). */
 .prep {
   position: absolute;
   left: 0;
@@ -29,14 +31,14 @@
   z-index: 1;
   pointer-events: none;
 }
-.prep[data-prep="Pink"] { background: var(--c-label-pink); }
-.prep[data-prep="Red"] { background: var(--c-label-red); }
-.prep[data-prep="Orange"] { background: var(--c-label-orange); }
-.prep[data-prep="Yellow"] { background: var(--c-label-yellow); }
-.prep[data-prep="Green"] { background: var(--c-label-green); }
-.prep[data-prep="Aqua"] { background: var(--c-label-aqua); }
-.prep[data-prep="Blue"] { background: var(--c-label-blue); }
-.prep[data-prep="Purple"] { background: var(--c-label-purple); }
+.prep[data-prep="Pink"] { background: var(--c-comment-pink); }
+.prep[data-prep="Red"] { background: var(--c-comment-red); }
+.prep[data-prep="Orange"] { background: var(--c-comment-orange); }
+.prep[data-prep="Yellow"] { background: var(--c-comment-yellow); }
+.prep[data-prep="Green"] { background: var(--c-comment-green); }
+.prep[data-prep="Aqua"] { background: var(--c-comment-aqua); }
+.prep[data-prep="Blue"] { background: var(--c-comment-blue); }
+.prep[data-prep="Purple"] { background: var(--c-comment-purple); }
 
 /* Energy: five pips, lit ones in the level's colour, unset ones in the
    hairline colour (screens/mock.html: 6 x 10 with 2 px between). */
@@ -54,7 +56,15 @@
 .pip {
   width: 6px;
   height: 10px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
   background: var(--c-raised);
+}
+button.pip { cursor: pointer; }
+button.pip:focus-visible {
+  outline: var(--s-shell-border) solid var(--c-accent);
+  outline-offset: 1px;
 }
 .pip[data-on] { background: var(--c-pip); }
 
