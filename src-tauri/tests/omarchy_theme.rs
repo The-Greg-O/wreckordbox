@@ -199,3 +199,44 @@ fn a_font_folder_that_appears_later_is_watched_without_a_false_announcement() {
     std::fs::write(&file, palette("#7daea3")).unwrap();
     assert_eq!(next(&announced).as_deref(), Some("#7daea3"));
 }
+
+/// The switch both halves of the app agree on (see the fixture's `about`).
+const SWITCH: &str = include_str!("../../src/lib/themeSwitch.fixture.json");
+
+#[test]
+fn a_swapped_theme_link_announces_exactly_the_roles_the_window_is_tested_with() {
+    let switch: serde_json::Value = serde_json::from_str(SWITCH).unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let current = root.path().join("current");
+    std::fs::create_dir_all(&current).unwrap();
+    write_theme(&root.path().join("themes/before"), "#7aa2f7");
+    let after = root.path().join("themes/after");
+    std::fs::create_dir_all(&after).unwrap();
+    std::fs::write(
+        after.join("colors.toml"),
+        switch["palette"].as_str().unwrap(),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(root.path().join("themes/before"), current.join("theme")).unwrap();
+
+    let app = tauri::test::mock_app();
+    let (send, announced) = channel();
+    app.listen(CHANGED_EVENT, move |event| {
+        let theme: serde_json::Value = serde_json::from_str(event.payload()).unwrap();
+        let _ = send.send(theme);
+    });
+    follow_sources(app.handle(), omarchy(root.path()));
+    started();
+
+    // `ln -sfn`: a new link renamed over the old one.
+    std::os::unix::fs::symlink(&after, current.join("theme.new")).unwrap();
+    std::fs::rename(current.join("theme.new"), current.join("theme")).unwrap();
+    let theme = announced
+        .recv_timeout(Duration::from_secs(20))
+        .expect("the app should announce the changed theme");
+    assert_eq!(
+        theme["roles"], switch["roles"],
+        "announced: {}",
+        theme["roles"]
+    );
+}

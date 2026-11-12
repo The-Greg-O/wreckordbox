@@ -1,0 +1,20 @@
+{
+  "about": "One theme switch as both halves of the app see it. src-tauri/tests/omarchy_theme.rs writes `palette` into a theme folder, points the Omarchy-shaped `current/theme` link at it and requires the theme:changed event to carry exactly `roles`; src/lib/themeFollow.test.ts sends that event through Tauri's event plumbing and requires the window to show `roles`.",
+  "palette": "background = \"#282828\"\nforeground = \"#d4be98\"\naccent = \"#7daea3\"\nbright_foreground = \"#ddc7a1\"\nbright_magenta = \"#d3869b\"\nbright_yellow = \"#d8a657\"\n",
+  "roles": {
+    "mode": "dark",
+    "ground": "#161616",
+    "panel": "#1e1e1e",
+    "working": "#282828",
+    "hairline": "#393733",
+    "selection": "#47433c",
+    "border": "#5c554a",
+    "text": "#d4be98",
+    "textDim": "#877b66",
+    "textBright": "#ddc7a1",
+    "accent": "#7daea3",
+    "onAccent": "#161616",
+    "tabFrom": "#d3869b",
+    "tabTo": "#d8a657"
+  }
+}
