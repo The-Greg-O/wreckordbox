@@ -94,4 +94,17 @@ describe("the box a store is shown in", () => {
     expect(store).toEqual({ width: 800, height: 60 });
     expect(coveredSize(store, 3)).toEqual({ width: 400, height: 30 });
   });
+
+  it("is a whole number of the display's own pixels on a dense display at a fractional scale", () => {
+    // 0.7 on a 2x display: 1.4 device pixels a CSS pixel. A 122pt by 15pt
+    // row preview covers 170.8 by 21, but the engine draws a canvas over
+    // whole display points, two device pixels each: 171 by 21 is drawn over
+    // 170 or 172 by 20 or 22 and resampled.
+    setPixelZoom(0.7);
+    const store = exactBackingSize(122, 15, 1.4);
+    expect(store).toEqual({ width: 170, height: 22 });
+    const box = coveredSize(store, 1.4);
+    expect(box.width * 1.4).toBeCloseTo(170, 9);
+    expect(box.height * 1.4).toBeCloseTo(22, 9);
+  });
 });

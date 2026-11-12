@@ -14,6 +14,7 @@ import {
 } from "@/canvas";
 import { useTranslation } from "@/i18n";
 import { hotCueColour } from "@/lib/hotCueColours";
+import { previewBackingSize } from "@/lib/canvasSize";
 import { onPixelRatioChange, pixelRatio } from "@/lib/pixelRatio";
 import { useWaveColours, waveColoursKey } from "@/lib/waveTheme";
 import { usePreferences } from "@/store/usePreferences";
@@ -170,6 +171,12 @@ export const WaveformPreview = memo(function WaveformPreview({
   // resize the canvas below and repaint it: `dpr` is one of the effect's keys.
   const dpr = useSyncExternalStore(onPixelRatioChange, pixelRatio, serverPixelRatio);
 
+  // The canvas's own pixels: whole display points, which is all the engine
+  // draws a canvas over, and the box that covers exactly those.
+  const { width: storeWidth, height: storeHeight } = previewBackingSize(width, height, dpr);
+  const boxWidth = storeWidth / dpr;
+  const boxHeight = storeHeight / dpr;
+
   useEffect(() => {
     let cancelled = false;
     const key = `${startupCache ? "startup" : "live"}:${palette}:${waveColoursKey(colours)}:${half ? "half" : "full"}:${WaveformCache.key(trackId, width, dpr)}`;
@@ -198,7 +205,7 @@ export const WaveformPreview = memo(function WaveformPreview({
     // Nothing is asked for until the row has settled. A row a flick goes past
     // is unmounted before this fires, and the request is never made.
     const timer = window.setTimeout(() => {
-      void load(trackId, key, width, height, dpr, palette, half, colours).then((rendered) => {
+      void load(trackId, key, boxWidth, boxHeight, dpr, palette, half, colours).then((rendered) => {
         if (rendered) paint(rendered);
       });
     }, SETTLE_MS);
@@ -207,10 +214,8 @@ export const WaveformPreview = memo(function WaveformPreview({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [trackId, width, height, hotCues, memoryCues, memoryCueColours, durationSec, palette, colours, half, hotCueColor, startupCache, dpr]);
+  }, [trackId, width, boxWidth, boxHeight, hotCues, memoryCues, memoryCueColours, durationSec, palette, colours, half, hotCueColor, startupCache, dpr]);
 
-  const storeWidth = Math.max(1, Math.round(width * dpr));
-  const storeHeight = Math.max(1, Math.round(height * dpr));
   return (
     <span className={styles.previewWave} style={{ width: `${width}px`, height: `${height}px` }}>
       <canvas
@@ -220,7 +225,7 @@ export const WaveformPreview = memo(function WaveformPreview({
         // Shown over exactly its own device pixels: at a whole-interface
         // scale the row's size is often a fraction of one, and a canvas
         // stretched over the fraction has every row blended into the next.
-        style={{ width: `${storeWidth / dpr}px`, height: `${storeHeight / dpr}px` }}
+        style={{ width: `${boxWidth}px`, height: `${boxHeight}px` }}
         data-preview-wave
         aria-hidden
       />

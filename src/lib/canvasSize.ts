@@ -82,9 +82,35 @@ export function exactBackingSize(
 ): BackingSize {
   const scale = storeScale(ratio);
   return {
-    width: Math.min(MAX_WIDTH, Math.max(1, Math.round(Math.max(finite(cssWidth, 1), 1) * scale))),
-    height: Math.max(1, Math.round(Math.max(finite(cssHeight, 1), 1) * scale)),
+    width: Math.min(MAX_WIDTH, wholePoints(cssWidth, scale)),
+    height: wholePoints(cssHeight, scale),
   };
+}
+
+/**
+ * The device pixels a CSS length is drawn over, at `scale` of them a CSS
+ * pixel: a whole number of the display's own points.
+ *
+ * The engine places a canvas on whole points of the display at the window's
+ * zoom, not on whole device pixels: on a 2x display that is two device
+ * pixels, so at a 0.7 scale a store 171 wide is drawn over 170 or 172 and
+ * every column of it is resampled, while 170 and 172 are drawn exactly, at
+ * any position [OBS WebKitGTK, aarch64 Linux, a 2x output: one-pixel stripes
+ * in canvases of each size]. On a 1x display a point is a device pixel.
+ */
+function wholePoints(css: number, scale: number): number {
+  const zoom = pixelZoom();
+  const points = Math.max(1, Math.round(Math.max(finite(css, 1), 1) * zoom));
+  return Math.max(1, Math.round(points * (scale / zoom)));
+}
+
+/**
+ * A row preview's store: `exactBackingSize` at the ratio itself, uncapped,
+ * because the preview's cue badges are drawn at that ratio too.
+ */
+export function previewBackingSize(cssWidth: number, cssHeight: number, ratio: number = pixelRatio()): BackingSize {
+  const scale = finite(ratio, 1) > 0 ? finite(ratio, 1) : 1;
+  return { width: wholePoints(cssWidth, scale), height: wholePoints(cssHeight, scale) };
 }
 
 /**
