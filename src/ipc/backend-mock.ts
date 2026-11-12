@@ -1800,7 +1800,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
   const fieldWrites: { id: string; field: string; value: string }[] = [];
   let holdingFields = false;
   let heldFields: (() => void)[] = [];
-  const writeTrackField = edits.setTrackField;
+  const writeTrackField = edits.setTrackField.bind(edits);
   edits.setTrackField = async (tracks, field, value, options) => {
     for (const id of tracks) fieldWrites.push({ id, field, value });
     if (holdingFields) await new Promise<void>((resolve) => { heldFields.push(resolve); });
