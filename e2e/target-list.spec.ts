@@ -527,3 +527,25 @@ test("a swap clears the target's selection and swaps back to where it started", 
   await expect(page.getByTestId("browser-title")).toContainText("Melodic Vox");
   await expect(target(page).getByRole("heading")).toContainText("Hardstyle");
 });
+
+test("holding Enter in the main list adds the selection once, not once per key repeat", async ({ page }) => {
+  await open(page);
+  await allTracks(page);
+  await showTarget(page, "Eurodance");
+  await mainRow(page, "Bar 07").locator('[data-col="title"]').click();
+
+  // The first press, then the browser's repeats while the key is held.
+  await page.keyboard.down("Enter");
+  await page.keyboard.down("Enter");
+  await page.keyboard.down("Enter");
+  await page.keyboard.up("Enter");
+  await expect(status(page)).toContainText("Added 1 track to Eurodance.");
+
+  // The next add is made after anything the repeats could have started: a
+  // second add of Bar 07 would have opened the duplicate question in its way.
+  await mainRow(page, "Bar 08").locator('[data-col="title"]').click();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => targetTitles(page)).toEqual(bars(7, 8));
+  await expect(page.getByRole("alertdialog", { name: "Duplicate tracks" })).toHaveCount(0);
+  expect(await playlistAsListed(page, "Eurodance")).toEqual(bars(7, 8));
+});
