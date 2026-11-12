@@ -63,9 +63,6 @@ pub struct Sandbox {
     /// (the default): none; a sandbox's service never looks at the
     /// machine's real mounts. Set before the first command.
     pub sticks: Vec<PathBuf>,
-    /// The free space every Stick reports, instead of what its folder's
-    /// file system has (test mode only). Set before the first command.
-    pub stick_free_bytes: Option<u64>,
     /// Services to stop when the test ends.
     pids: Mutex<Vec<u32>>,
 }
@@ -95,6 +92,28 @@ impl Sandbox {
         let sandbox = Self::new();
         std::fs::remove_file(sandbox.protection_file()).unwrap();
         sandbox
+    }
+
+    /// Makes every Stick report `bytes` free, instead of what its folder's
+    /// file system has (test mode only; read by the service each time).
+    pub fn set_stick_free_bytes(&self, bytes: u64) {
+        std::fs::write(
+            self.state_dir()
+                .join(wreckordbox_service::stick_load::TEST_FREE_BYTES_FILE),
+            bytes.to_string(),
+        )
+        .unwrap();
+    }
+
+    /// Makes every Stick's file system store files in clusters of `bytes`
+    /// (test mode only; read by the service each time).
+    pub fn set_stick_cluster_bytes(&self, bytes: u64) {
+        std::fs::write(
+            self.state_dir()
+                .join(wreckordbox_service::stick_load::TEST_CLUSTER_BYTES_FILE),
+            bytes.to_string(),
+        )
+        .unwrap();
     }
 
     /// The folder the window and the service share their state in.
@@ -137,7 +156,6 @@ impl Sandbox {
             idle_exit_secs: 5,
             engine_options: Vec::new(),
             sticks: Vec::new(),
-            stick_free_bytes: None,
             pids: Mutex::new(Vec::new()),
         }
     }
@@ -428,9 +446,6 @@ impl Sandbox {
                 std::env::join_paths(&self.sticks).unwrap(),
             )
             .stdin(Stdio::null());
-        if let Some(free) = self.stick_free_bytes {
-            command.env("WRECKORDBOX_TEST_STICK_FREE_BYTES", free.to_string());
-        }
         command
     }
 

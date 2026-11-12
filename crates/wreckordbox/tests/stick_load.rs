@@ -62,7 +62,9 @@ impl Rig {
             paths.push(path);
         }
         sandbox.sticks.clone_from(&paths);
-        sandbox.stick_free_bytes = free;
+        if let Some(free) = free {
+            sandbox.set_stick_free_bytes(free);
+        }
         let a = sandbox.import_track("Alpha.wav", 2);
         let b = sandbox.import_track("Bravo.wav", 2);
         let c = sandbox.import_track("Charlie.wav", 2);
@@ -154,20 +156,23 @@ impl Rig {
     }
 }
 
-/// Every file under `root` with its bytes: the whole state of a Stick.
-fn snapshot(root: &Path) -> Vec<(String, Vec<u8>)> {
+/// Every file and folder under `root`, each file with its bytes: the whole
+/// state of a folder, to show nothing was written, made or removed.
+fn snapshot(root: &Path) -> Vec<(String, Option<Vec<u8>>)> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir).unwrap() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries {
             let entry = entry.unwrap();
+            let name = entry.path().display().to_string();
             if entry.file_type().unwrap().is_dir() {
+                out.push((format!("{name}/"), None));
                 stack.push(entry.path());
             } else {
-                out.push((
-                    entry.path().display().to_string(),
-                    std::fs::read(entry.path()).unwrap_or_default(),
-                ));
+                out.push((name, Some(std::fs::read(entry.path()).unwrap_or_default())));
             }
         }
     }
@@ -175,6 +180,18 @@ fn snapshot(root: &Path) -> Vec<(String, Vec<u8>)> {
     out
 }
 
+fn assert_unchanged(root: &Path, before: &[(String, Option<Vec<u8>>)], what: &str) {
+    let after = snapshot(root);
+    let names = |s: &[(String, Option<Vec<u8>>)]| -> Vec<String> {
+        s.iter().map(|(n, _)| n.clone()).collect()
+    };
+    assert_eq!(
+        names(&after),
+        names(before),
+        "{what}: files or folders made or removed"
+    );
+    assert!(after == before, "{what}: a file's bytes changed");
+}
 fn titles(lines: &Value) -> Vec<String> {
     let mut titles: Vec<String> = lines
         .as_array()
@@ -451,20 +468,52 @@ fn a_load_that_would_not_fit_is_refused_before_writing_saying_by_how_much() {
     assert_eq!(snapshot(&rig.paths[0]), before, "nothing written");
 }
 
+impl Rig {
+    /// Reverses the entries of the playlist `playlist`.
+    fn reverse(&self, playlist: &str) {
+        let tracks = self.json(&["playlists", "tracks", playlist]);
+        let mut entries: Vec<String> = tracks["tracks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["entry_id"].as_str().unwrap().to_owned())
+            .collect();
+        entries.reverse();
+        let mut args = vec!["playlists", "reorder", playlist];
+        args.extend(entries.iter().map(String::as_str));
+        let run = self.sandbox.cli(&args);
+        assert!(run.status.success(), "{}", run.stderr);
+    }
+
+    /// Arms the test-mode hook that stops the next load once it has
+    /// started writing.
+    fn fail_next_load(&self) {
+        std::fs::write(
+            self.sandbox
+                .state_dir()
+                .join(wreckordbox_service::stick_load::TEST_FAIL_AFTER_FILE),
+            "1",
+        )
+        .unwrap();
+    }
+}
+
 #[test]
-fn a_failed_load_says_what_was_and_was_not_written() {
+fn a_failed_load_tells_changes_not_made_from_content_that_needed_none() {
     let rig = Rig::new(&["FRIDAY"]);
     rig.unlock(0);
-    rig.load_confirmed(0, &[&rig.other]);
+    rig.load_confirmed(0, &[&rig.set, &rig.other]);
+    // An existing track's field and an existing playlist's order change.
+    let rated = rig.sandbox.cli(&["tracks", "rate", &rig.a, "4"]);
+    assert!(rated.status.success(), "{}", rated.stderr);
+    rig.reverse(&rig.set);
     let dry = rig.dry_run(0, &[&rig.set, &rig.other]);
-    // Stops the next load once it has started writing (test mode only).
-    std::fs::write(
-        rig.sandbox
-            .state_dir()
-            .join(wreckordbox_service::stick_load::TEST_FAIL_AFTER_FILE),
-        "1",
-    )
-    .unwrap();
+    assert_eq!(
+        dry["changes"]["playlists"]["reordered"],
+        serde_json::json!(["Set"]),
+        "{dry}"
+    );
+    rig.fail_next_load();
 
     let run = rig.load(0, &[&rig.set, &rig.other], dry["plan"].as_str().unwrap());
 
@@ -472,17 +521,58 @@ fn a_failed_load_says_what_was_and_was_not_written() {
     let load = run.json();
     assert_eq!(load["outcome"], "failed", "{load}");
     assert!(load["error"]["message"].is_string(), "{load}");
-    assert_eq!(titles(&load["written"]["tracks"]), ["Charlie"], "{load}");
+    // The old Energy and the old order are still on the Stick: not written,
+    // and nothing is claimed written.
+    assert_eq!(titles(&load["not_written"]["tracks"]), ["Alpha"], "{load}");
     assert_eq!(
-        titles(&load["not_written"]["tracks"]),
-        ["Alpha", "Bravo"],
+        load["not_written"]["playlists"],
+        serde_json::json!(["Set"]),
         "{load}"
     );
-    assert_eq!(load["written"]["playlists"], serde_json::json!(["Other"]));
-    // The Stick holds what it held before: the earlier load, whole.
+    assert_eq!(load["written"]["tracks"], serde_json::json!([]), "{load}");
+    assert_eq!(
+        load["written"]["playlists"],
+        serde_json::json!([]),
+        "{load}"
+    );
+    // What needed no change is neither.
+    assert_eq!(
+        titles(&load["unchanged"]["tracks"]),
+        ["Bravo", "Charlie"],
+        "{load}"
+    );
+    assert_eq!(
+        load["unchanged"]["playlists"],
+        serde_json::json!(["Other"]),
+        "{load}"
+    );
     assert_eq!(
         rig.on_stick(0),
-        [("Other".to_owned(), vec!["Charlie".to_owned()])]
+        [
+            (
+                "Set".to_owned(),
+                vec!["Alpha".to_owned(), "Bravo".to_owned()]
+            ),
+            ("Other".to_owned(), vec!["Charlie".to_owned()]),
+        ],
+        "the Stick holds what it held before"
+    );
+
+    // Done for real, the same changes read back as written.
+    let dry = rig.dry_run(0, &[&rig.set, &rig.other]);
+    let load = rig.load(0, &[&rig.set, &rig.other], dry["plan"].as_str().unwrap());
+    assert!(load.status.success(), "{}", load.stderr);
+    let load = load.json();
+    assert_eq!(titles(&load["written"]["tracks"]), ["Alpha"], "{load}");
+    assert_eq!(
+        load["written"]["playlists"],
+        serde_json::json!(["Set"]),
+        "{load}"
+    );
+    assert_eq!(
+        load["not_written"]["tracks"],
+        serde_json::json!([]),
+        "{load}"
     );
 }
 
@@ -600,5 +690,352 @@ fn a_spare_stick_gets_the_native_stems_of_tracks_that_have_them() {
             "{} missing",
             folder.join(file).display()
         );
+    }
+}
+
+#[test]
+fn a_dry_run_writes_nothing_to_a_populated_wal_unfinished_or_spare_stick_or_the_sidecar() {
+    let mut rig = Rig::new(&["FRIDAY", "SPARE*", "WAL", "WAL2", "HALF"]);
+    // The WAL fixtures rename a playlist called "Warm Up".
+    let mut warm_up = String::new();
+    let c = rig.c.clone();
+    rig.sandbox.edit(|writer| {
+        warm_up = writer.create_playlist("Warm Up", "root").unwrap();
+        writer
+            .add_tracks(&warm_up, std::slice::from_ref(&c))
+            .unwrap();
+    });
+    rig.other = warm_up;
+    for stick in 0..5 {
+        rig.unlock(stick);
+        rig.load_confirmed(stick, &[&rig.set, &rig.other]);
+    }
+    let rated = rig.sandbox.cli(&["tracks", "rate", &rig.a, "4"]);
+    assert!(rated.status.success(), "{}", rated.stderr);
+
+    // A populated Gig stick with changes to make.
+    let before = snapshot(&rig.paths[0]);
+    let dry = rig.dry_run(0, &[&rig.set]);
+    assert_eq!(dry["changes"]["counts"]["tracks_changed"], 1, "{dry}");
+    assert_unchanged(&rig.paths[0], &before, "a populated Stick");
+
+    // A populated Spare stick (its Sidecar case: the test below).
+    let sidecar = rig.sandbox.sidecar_dir();
+    let before = snapshot(&rig.paths[1]);
+    let sidecar_before = snapshot(&sidecar);
+    rig.dry_run(1, &[&rig.set]);
+    assert_unchanged(&rig.paths[1], &before, "a Spare stick");
+    assert_unchanged(&sidecar, &sidecar_before, "the Sidecar");
+
+    // WAL mode, checkpointed and with a pending -wal: no plan id, said why.
+    wreckordbox_stick_outline::testing::wal_checkpointed(&rig.paths[2]);
+    let before = snapshot(&rig.paths[2]);
+    let dry = rig.dry_run(2, &[&rig.set, &rig.other]);
+    assert_eq!(
+        dry["plan"],
+        Value::Null,
+        "an incomplete plan is never executable: {dry}"
+    );
+    assert!(
+        dry["not_loadable"].as_str().unwrap().contains("WAL"),
+        "{dry}"
+    );
+    assert_unchanged(&rig.paths[2], &before, "a WAL-mode Stick");
+    let text = rig
+        .sandbox
+        .cli(&["stick", "dry-run", rig.path(2), &rig.set]);
+    assert!(
+        text.stdout.contains("It cannot be loaded"),
+        "{}",
+        text.stdout
+    );
+    wreckordbox_stick_outline::testing::wal_pending(&rig.paths[3]);
+    let before = snapshot(&rig.paths[3]);
+    let dry = rig.dry_run(3, &[&rig.set]);
+    assert_eq!(dry["plan"], Value::Null, "{dry}");
+    assert_unchanged(&rig.paths[3], &before, "a Stick with a pending -wal");
+
+    // An unfinished publication: refused, nothing settled.
+    wreckordbox_stick_outline::testing::interrupt(&rig.paths[4]);
+    let before = snapshot(&rig.paths[4]);
+    let refused = rig
+        .sandbox
+        .cli(&["--json", "stick", "dry-run", rig.path(4), &rig.set]);
+    assert_eq!(
+        refused.error_json()["error"]["code"],
+        "stick_unfinished_write",
+        "{}",
+        refused.stderr
+    );
+    assert_unchanged(&rig.paths[4], &before, "a Stick with an unfinished write");
+}
+
+#[test]
+fn a_dry_run_on_a_spare_stick_never_opens_a_writing_sidecar() {
+    let rig = Rig::new(&["SPARE*"]);
+    // The service starts with no Sidecar; one appears after it started.
+    let listed = rig.json(&["stick", "list"]);
+    assert_eq!(listed["sticks"].as_array().unwrap().len(), 1);
+    record_stems(
+        &rig.sandbox,
+        &rig.a,
+        &rig.sandbox.path().join("audio").join("Alpha.wav"),
+    );
+    let sidecar = rig.sandbox.sidecar_dir();
+    let before = snapshot(&sidecar);
+    let stick = snapshot(&rig.paths[0]);
+
+    let dry = rig.dry_run(0, &[&rig.set]);
+
+    assert_eq!(titles(&dry["changes"]["native_stems"]), ["Alpha"], "{dry}");
+    assert_unchanged(&sidecar, &before, "the Sidecar");
+    assert_unchanged(&rig.paths[0], &stick, "the Spare stick");
+}
+
+#[test]
+fn stems_finished_between_the_dry_run_and_the_load_are_refused() {
+    let rig = Rig::new(&["SPARE*"]);
+    rig.unlock(0);
+    let dry = rig.dry_run(0, &[&rig.set]);
+    assert_eq!(
+        dry["changes"]["native_stems"],
+        serde_json::json!([]),
+        "{dry}"
+    );
+    // A separation finishes: the Library generation does not move.
+    let separated = rig.sandbox.cli(&["--json", "stems", "separate", &rig.a]);
+    assert!(separated.status.success(), "{}", separated.stderr);
+    let before = snapshot(&rig.paths[0]);
+
+    let refused = rig.load(0, &[&rig.set], dry["plan"].as_str().unwrap());
+
+    assert!(!refused.status.success());
+    let error = &refused.error_json()["error"];
+    assert_eq!(error["code"], "stick_load_changed", "{}", refused.stderr);
+    let message = error["message"].as_str().unwrap();
+    assert!(
+        message.contains("native_stems: now #"),
+        "says what changed: {message}"
+    );
+    assert!(message.contains("Alpha"), "{message}");
+    assert_unchanged(&rig.paths[0], &before, "nothing written");
+    // A fresh dry run reports the Native stems and loads them.
+    let dry = rig.dry_run(0, &[&rig.set]);
+    assert_eq!(titles(&dry["changes"]["native_stems"]), ["Alpha"], "{dry}");
+}
+
+#[test]
+fn a_source_audio_file_changed_between_the_dry_run_and_the_load_is_refused() {
+    let rig = Rig::new(&["FRIDAY"]);
+    rig.unlock(0);
+    let dry = rig.dry_run(0, &[&rig.set]);
+    let audio = rig.sandbox.path().join("audio").join("Bravo.wav");
+    let mut bytes = std::fs::read(&audio).unwrap();
+    bytes.extend_from_slice(&[0, 0, 0, 0]);
+    std::fs::write(&audio, bytes).unwrap();
+    let before = snapshot(&rig.paths[0]);
+
+    let refused = rig.load(0, &[&rig.set], dry["plan"].as_str().unwrap());
+
+    let error = &refused.error_json()["error"];
+    assert_eq!(error["code"], "stick_load_changed", "{}", refused.stderr);
+    let message = error["message"].as_str().unwrap();
+    assert!(
+        message.contains("tracks: now") && message.contains("Bravo"),
+        "{message}"
+    );
+    assert!(
+        message.contains("dry run") || message.contains("again"),
+        "{message}"
+    );
+    assert_unchanged(&rig.paths[0], &before, "nothing written");
+}
+
+#[test]
+fn a_repeat_load_whose_native_stems_do_not_fit_large_clusters_is_refused() {
+    let rig = Rig::new(&["SPARE*"]);
+    record_stems(
+        &rig.sandbox,
+        &rig.a,
+        &rig.sandbox.path().join("audio").join("Alpha.wav"),
+    );
+    rig.unlock(0);
+    let first = rig.load_confirmed(0, &[&rig.set]);
+    assert_eq!(first["native_stems"][0]["outcome"], "written", "{first}");
+    // exFAT on a large Stick: 128 KiB clusters, and little room left.
+    let cluster = 128 * 1024;
+    rig.sandbox.set_stick_cluster_bytes(cluster);
+    rig.sandbox.set_stick_free_bytes(600_000);
+
+    let dry = rig.dry_run(0, &[&rig.set]);
+
+    // Four Stem files, the identity record and the folder, each at least a
+    // cluster, written beside the set they replace.
+    let stems = dry["space"]["native_stems_bytes"].as_u64().unwrap();
+    assert!(stems >= 6 * cluster, "{dry}");
+    assert!(dry["space"]["shortfall_bytes"].as_u64().is_some(), "{dry}");
+    let before = snapshot(&rig.paths[0]);
+    let refused = rig.load(0, &[&rig.set], dry["plan"].as_str().unwrap());
+    assert_eq!(
+        refused.error_json()["error"]["code"],
+        "stick_too_small",
+        "{}",
+        refused.stderr
+    );
+    assert_unchanged(&rig.paths[0], &before, "nothing written");
+}
+
+#[test]
+fn a_title_two_tracks_share_is_reported_with_an_unknown_id() {
+    let mut sandbox_tracks = Rig::new(&["FRIDAY"]);
+    let twin = sandbox_tracks.sandbox.import_track("twin/Alpha.wav", 2);
+    let mut both = String::new();
+    let a = sandbox_tracks.a.clone();
+    sandbox_tracks.sandbox.edit(|writer| {
+        both = writer.create_playlist("Twins", "root").unwrap();
+        writer
+            .add_tracks(&both, &[a.clone(), twin.clone()])
+            .unwrap();
+    });
+    sandbox_tracks.set = both;
+    let rig = sandbox_tracks;
+    rig.unlock(0);
+    let dry = rig.dry_run(0, &[&rig.set]);
+    let mut listener = rig.sandbox.client();
+    listener.subscribe().unwrap();
+
+    let run = rig.load(0, &[&rig.set], dry["plan"].as_str().unwrap());
+
+    assert!(run.status.success(), "{}", run.stderr);
+    let mut alpha = Vec::new();
+    while let Some(event) = listener.next_event(Duration::from_millis(500)).unwrap() {
+        if event.event == "stick_load_progress" && event.data["track"]["title"] == "Alpha" {
+            alpha.push(event.data["track"]["id"].clone());
+        }
+    }
+    assert!(!alpha.is_empty(), "Alpha was named");
+    assert!(
+        alpha.iter().all(Value::is_null),
+        "never a guessed id: {alpha:?}"
+    );
+}
+
+/// Starts `stick load` in the background, paused at `stage` once it is
+/// writing, and waits until it is.
+fn paused_load(rig: &Rig, stage: &str, plan: &str) -> std::process::Child {
+    let state = rig.sandbox.state_dir();
+    std::fs::write(
+        state.join(wreckordbox_service::stick_load::TEST_PAUSE_AT_FILE),
+        stage,
+    )
+    .unwrap();
+    let child = rig
+        .sandbox
+        .command()
+        .args([
+            "--json",
+            "stick",
+            "load",
+            rig.path(0),
+            &rig.set,
+            "--plan",
+            plan,
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let paused = state.join(wreckordbox_service::stick_load::TEST_PAUSED_FILE);
+    let until = std::time::Instant::now() + Duration::from_secs(60);
+    while !paused.exists() {
+        assert!(
+            std::time::Instant::now() < until,
+            "the load never reached {stage}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    child
+}
+
+/// The window taking the Library over: a `stop` sent to the service while
+/// the load is paused at `stage`, then the load let go.
+fn taken_over_at(stage: &str) -> (Rig, Value) {
+    let rig = Rig::new(&["FRIDAY"]);
+    rig.unlock(0);
+    let dry = rig.dry_run(0, &[&rig.set]);
+    let child = paused_load(&rig, stage, dry["plan"].as_str().unwrap());
+    let mut window = rig.sandbox.client();
+    window.stop().unwrap();
+    std::fs::remove_file(
+        rig.sandbox
+            .state_dir()
+            .join(wreckordbox_service::stick_load::TEST_PAUSE_AT_FILE),
+    )
+    .unwrap();
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let load: Value = serde_json::from_str(stdout.trim()).unwrap_or_else(|_| {
+        panic!(
+            "the caller gets the load's report, not a disconnect: {stdout:?} {:?}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
+    assert!(
+        !rig.paths[0].join(".rbxport-publication").exists(),
+        "no unfinished write is left"
+    );
+    (rig, load)
+}
+
+#[test]
+fn a_window_taking_over_during_copying_stops_the_load_with_a_full_report() {
+    let (rig, load) = taken_over_at("copying");
+
+    assert_eq!(load["outcome"], "failed", "{load}");
+    assert_eq!(load["error"]["code"], "service_failed", "{load}");
+    assert!(
+        load["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("stopped"),
+        "{load}"
+    );
+    assert_eq!(
+        titles(&load["not_written"]["tracks"]),
+        ["Alpha", "Bravo"],
+        "{load}"
+    );
+    assert_eq!(load["written"]["tracks"], serde_json::json!([]), "{load}");
+    assert!(
+        wreckordbox_stick_outline::library(&rig.paths[0], Format::DeviceLibrary).is_err(),
+        "nothing was published"
+    );
+}
+
+#[test]
+fn a_window_taking_over_during_publication_waits_for_it_and_reports_it() {
+    let (rig, load) = taken_over_at("publishing");
+
+    // Publication is not cut off: either it was done and is reported so,
+    // or it was stopped before it began and nothing is on the Stick.
+    match load["outcome"].as_str().unwrap() {
+        "loaded" => assert_eq!(
+            rig.on_stick(0),
+            [(
+                "Set".to_owned(),
+                vec!["Alpha".to_owned(), "Bravo".to_owned()]
+            )]
+        ),
+        "failed" => {
+            assert_eq!(
+                titles(&load["not_written"]["tracks"]),
+                ["Alpha", "Bravo"],
+                "{load}"
+            );
+            assert!(
+                wreckordbox_stick_outline::library(&rig.paths[0], Format::DeviceLibrary).is_err()
+            );
+        }
+        other => panic!("{other}: {load}"),
     }
 }

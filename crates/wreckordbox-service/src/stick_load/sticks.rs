@@ -6,15 +6,18 @@
 //! the path table in `stick-recovery.md`). A volume counts when Stick
 //! Protection classifies it as a Stick. In test mode only the stand-ins the
 //! test names (`RB_LITE_FAKE_VOLUMES`) are looked at, never the machine's
-//! real mounts, and `WRECKORDBOX_TEST_STICK_FREE_BYTES` replaces each
-//! one's free space.
+//! real mounts, and the files [`TEST_FREE_BYTES_FILE`] and
+//! [`TEST_CLUSTER_BYTES_FILE`] in the state folder, read each time, replace
+//! every Stick's free space and cluster size.
 
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// Replaces every Stick's free space, in test mode only.
-pub const TEST_FREE_BYTES_ENV: &str = "WRECKORDBOX_TEST_STICK_FREE_BYTES";
+/// In the state folder, in test mode only: every Stick's free space.
+pub const TEST_FREE_BYTES_FILE: &str = "test-stick-free-bytes";
+/// In the state folder, in test mode only: every Stick's cluster size.
+pub const TEST_CLUSTER_BYTES_FILE: &str = "test-stick-cluster-bytes";
 
 /// A mounted Stick.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,7 +51,7 @@ pub struct Sticks {
     pub sticks: Vec<Stick>,
 }
 
-fn testing() -> bool {
+pub(crate) fn testing() -> bool {
     std::env::var_os(rbl_devices::TEST_MODE).is_some_and(|v| v == "1")
 }
 
@@ -100,22 +103,36 @@ pub(crate) fn describe(state_dir: &Path, root: &Path) -> Stick {
             .filter(|e| e.ours)
             .map(|e| e.written.clone())
             .filter(|w| !w.is_empty()),
-        free_bytes: free_bytes(root),
+        free_bytes: free_bytes(state_dir, root),
         total_bytes: None,
         tracks: export.as_ref().map(|e| e.tracks),
         playlists: export.as_ref().map(|e| e.playlists),
     }
 }
 
+/// A number a test left in the state folder, in test mode only.
+fn test_number(state_dir: &Path, file: &str) -> Option<u64> {
+    testing()
+        .then(|| {
+            std::fs::read_to_string(state_dir.join(file))
+                .ok()?
+                .trim()
+                .parse()
+                .ok()
+        })
+        .flatten()
+}
+
 /// The Stick's free space now.
-pub(crate) fn free_bytes(root: &Path) -> Option<u64> {
-    if testing() {
-        if let Some(free) = std::env::var(TEST_FREE_BYTES_ENV)
-            .ok()
-            .and_then(|v| v.parse().ok())
-        {
-            return Some(free);
-        }
-    }
-    rbl_export::device_import::free_space(root).ok()
+pub(crate) fn free_bytes(state_dir: &Path, root: &Path) -> Option<u64> {
+    test_number(state_dir, TEST_FREE_BYTES_FILE)
+        .or_else(|| rbl_export::device_import::free_space(root).ok())
+}
+
+/// The size of the clusters the Stick's file system stores files in: a
+/// file, a folder, takes whole ones.
+pub(crate) fn cluster_bytes(state_dir: &Path, root: &Path) -> u64 {
+    test_number(state_dir, TEST_CLUSTER_BYTES_FILE)
+        .unwrap_or_else(|| rbl_export::plan::allocation_unit(root))
+        .max(1)
 }

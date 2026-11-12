@@ -86,6 +86,7 @@ impl From<wreckordbox_stick_write::StickWriteError> for AppError {
         match error {
             E::NotFound(message) => Self::new(ErrorKind::NotFound, message),
             E::Conflict(message) => Self::new(ErrorKind::Conflict, message),
+            changed @ E::Changed(_) => Self::new(ErrorKind::Conflict, changed.to_string()),
             E::Db(error) => crate::commands::write_error(error),
             E::Read { mount, error } => crate::stick_recovery::read_error(&mount, error),
             E::Internal { message, detail } => {

@@ -284,13 +284,25 @@ fn dry_run_text(dry: &DryRun) -> String {
         );
     }
     let ids: Vec<&str> = dry.playlists.iter().map(|p| p.id.as_str()).collect();
-    let _ = write!(
-        text,
-        "To load exactly this: wreckordbox stick load {} {} --plan {}",
-        dry.stick.path.display(),
-        ids.join(" "),
-        dry.plan
-    );
+    match &dry.plan {
+        Some(plan) => {
+            let _ = write!(
+                text,
+                "To load exactly this: wreckordbox stick load {} {} --plan {plan}",
+                dry.stick.path.display(),
+                ids.join(" "),
+            );
+        }
+        None => {
+            let _ = write!(
+                text,
+                "It cannot be loaded: {}.",
+                dry.not_loadable
+                    .as_deref()
+                    .unwrap_or("the plan could not be worked out in full")
+            );
+        }
+    }
     text
 }
 
@@ -327,8 +339,17 @@ fn load_text(load: &Load) -> String {
     if let Some(error) = &load.error {
         let _ = writeln!(text, "Error: {}", error.message);
     }
-    held_text(&mut text, "On the Stick:", &load.written);
-    held_text(&mut text, "Not on the Stick:", &load.not_written);
+    held_text(&mut text, "Written:", &load.written);
+    held_text(
+        &mut text,
+        "Not written (the Stick still has it as before):",
+        &load.not_written,
+    );
+    held_text(
+        &mut text,
+        "Unchanged (on the Stick already as planned):",
+        &load.unchanged,
+    );
     for stems in load.native_stems.iter().filter(|s| s.outcome != "written") {
         let _ = writeln!(
             text,

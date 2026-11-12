@@ -322,7 +322,6 @@ pub fn plan(state: &AppState, request: &StickWriteRequest) -> AppResult<StickWri
                 &share_root,
                 destination,
                 delete,
-                false,
             )? {
                 std::borrow::Cow::Owned(kept) => kept,
                 std::borrow::Cow::Borrowed(_) => selection,
@@ -466,7 +465,6 @@ fn playlist_selection(
             &share_root,
             destination,
             delete,
-            false,
         )? {
             std::borrow::Cow::Owned(kept) => kept,
             std::borrow::Cow::Borrowed(_) => selection,

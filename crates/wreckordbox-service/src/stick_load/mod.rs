@@ -34,8 +34,9 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-pub use load::TEST_FAIL_AFTER_FILE;
+pub use load::{TEST_FAIL_AFTER_FILE, TEST_PAUSED_FILE, TEST_PAUSE_AT_FILE};
 pub use sticks::{Stick, Sticks};
+pub use sticks::{TEST_CLUSTER_BYTES_FILE, TEST_FREE_BYTES_FILE};
 
 /// The names of the commands.
 pub mod commands {
@@ -77,6 +78,15 @@ pub mod codes {
     pub const STICK_UNFINISHED_WRITE: &str = "stick_unfinished_write";
     /// The load could not be worked out (the Stick could not be read).
     pub const STICK_LOAD_FAILED: &str = "stick_load_failed";
+    /// What the load would write is not what its dry run reported: a
+    /// track's audio, a Stem set, a playlist or the changes themselves
+    /// differ now. The message says what changed. Make a new dry run.
+    pub const STICK_LOAD_CHANGED: &str = "stick_load_changed";
+    /// The plan could not be worked out in full (the Stick's database is in
+    /// WAL mode or has SQLite companion files beside it, so what the export
+    /// would copy cannot be read without writing to it): no load is issued
+    /// or performed.
+    pub const STICK_LOAD_INCOMPLETE: &str = "stick_load_incomplete";
 }
 
 /// The arguments of `sticks.dry_run`.
@@ -101,7 +111,7 @@ pub struct LoadArgs {
 }
 
 /// A track named in a plan or a report.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TrackLine {
     /// Its Library identifier; `""` for a track that is not the Library's.
     pub id: String,
@@ -202,6 +212,11 @@ pub struct Space {
     /// By how much the load would not fit; `null` when it fits or the free
     /// space is not known.
     pub shortfall_bytes: Option<u64>,
+    /// Of `needed_bytes`, the most the Native stems take at once once the
+    /// export is in place: each set's files and folder, in whole clusters,
+    /// its identity record and its staging, with the set it replaces still
+    /// there until the new one is in.
+    pub native_stems_bytes: u64,
     /// The sizes are estimates.
     pub approximate: bool,
 }
@@ -221,12 +236,18 @@ pub struct DryRun {
     pub playlists: Vec<Chosen>,
     pub changes: Changes,
     pub space: Space,
-    /// The plan id `sticks.load` must carry: good once, for this load, on
-    /// this Stick and Library as they are now, for ten minutes.
-    pub plan: String,
+    /// The plan id `sticks.load` must carry: good once, for exactly what
+    /// this dry run reports, on this Stick and Library as they are now, for
+    /// ten minutes. `null` when the plan could not be worked out in full
+    /// (`not_loadable` says why): such a load is never performed.
+    pub plan: Option<String>,
+    /// Why there is no plan id.
+    pub not_loadable: Option<String>,
 }
 
-/// What a Stick holds of what a load was to put on it, read back after it.
+/// Of the changes a load planned, those the Stick shows (or does not show)
+/// when it is read back after it, by comparing it with the plan again:
+/// fields, membership and order, audio.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Held {
     pub tracks: Vec<TrackLine>,
@@ -266,8 +287,12 @@ pub struct Load {
     /// Of the tracks and playlists the load was to put on the Stick, those
     /// it holds now, read back from it.
     pub written: Held,
-    /// And those it does not.
+    /// And those it does not: the change was not made (an old value, the old
+    /// order or the old audio is still there).
     pub not_written: Held,
+    /// What the load was to put on the Stick that needed no change: on the
+    /// Stick already as planned, neither written nor failed.
+    pub unchanged: Held,
     pub native_stems: Vec<NativeStemsLine>,
 }
 
@@ -279,6 +304,73 @@ pub(crate) fn answers(command: &str) -> bool {
     )
 }
 
+/// The loads running in one service, so that stopping it (idle, a `stop`,
+/// a window taking the Library over) waits for each to end and its caller
+/// to have its answer, after asking it to stop where it safely can: a
+/// load stopped before it publishes is a failure that says what is on the
+/// Stick, never a disconnect.
+#[derive(Default)]
+pub(crate) struct Loads {
+    active: std::sync::Mutex<usize>,
+    idle: std::sync::Condvar,
+    stopping: std::sync::atomic::AtomicBool,
+}
+
+/// One load's hold on its service, from its request to its answer sent.
+pub(crate) struct LoadHold<'a>(&'a Loads);
+
+impl Drop for LoadHold<'_> {
+    fn drop(&mut self) {
+        let mut active = self.0.lock();
+        *active = active.saturating_sub(1);
+        self.0.idle.notify_all();
+    }
+}
+
+impl Loads {
+    fn lock(&self) -> std::sync::MutexGuard<'_, usize> {
+        self.active
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Held by a connection from a load's request until its answer is sent.
+    pub(crate) fn hold(&self) -> LoadHold<'_> {
+        *self.lock() += 1;
+        LoadHold(self)
+    }
+
+    /// The service is stopping: a load not begun is refused, one running
+    /// stops where it safely can.
+    pub(crate) fn stopping(&self) -> bool {
+        self.stopping.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Asks every load to stop and waits, up to `bound`, until each has
+    /// ended and sent its answer.
+    pub(crate) fn shut(&self, bound: std::time::Duration) {
+        self.stopping
+            .store(true, std::sync::atomic::Ordering::Release);
+        let until = std::time::Instant::now() + bound;
+        let mut active = self.lock();
+        while *active > 0 {
+            let left = until.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() {
+                tracing::warn!(
+                    loads = *active,
+                    "a Stick load did not end before the service stopped"
+                );
+                return;
+            }
+            active = self
+                .idle
+                .wait_timeout(active, left)
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .0;
+        }
+    }
+}
+
 /// Answers one of these commands. `with` runs a closure on the service's
 /// Library under its hold: only planning takes it; the export runs with it
 /// free.
@@ -287,13 +379,14 @@ pub(crate) fn answer(
     stems: &std::sync::Arc<crate::stems::Stems>,
     request: &crate::protocol::Request,
     with: &load::WithLibrary<'_>,
+    loads: &Loads,
 ) -> Result<serde_json::Value, crate::protocol::ServiceError> {
     let value = match request.command.as_str() {
         commands::STICKS_LIST => serde_json::to_value(load::list(state_dir)),
         commands::STICKS_DRY_RUN => {
             serde_json::to_value(load::dry_run(state_dir, stems, request, with)?)
         }
-        _ => serde_json::to_value(load::load(state_dir, stems, request, with)?),
+        _ => serde_json::to_value(load::load(state_dir, stems, request, with, loads)?),
     };
     value.map_err(|e| {
         crate::protocol::ServiceError::new(crate::protocol::codes::SERVICE_FAILED, e.to_string())

@@ -458,7 +458,9 @@ pub mod stored {
                         })
                     })
                     .collect::<Option<Vec<_>>>()?;
-                Some(LibraryEdit::Judgements(rbl_library::judgements::Judgements { changes }))
+                Some(LibraryEdit::Judgements(
+                    rbl_library::judgements::Judgements { changes },
+                ))
             }
             _ => None,
         }
@@ -527,15 +529,17 @@ pub mod stored {
                     after: ids("after"),
                 });
             }
-            "dj_judgements" => values.extend(list("changes").iter().map(|change| ValueChange {
-                subject: track(change),
-                field: change
-                    .get("kind")
-                    .and_then(Value::as_str)
-                    .unwrap_or("?")
-                    .to_owned(),
-                before: field(change, "before"),
-                after: field(change, "after"),
+            "dj_judgements" => values.extend(list("changes").iter().map(|change| {
+                ValueChange {
+                    subject: track(change),
+                    field: change
+                        .get("kind")
+                        .and_then(Value::as_str)
+                        .unwrap_or("?")
+                        .to_owned(),
+                    before: field(change, "before"),
+                    after: field(change, "after"),
+                }
             })),
             _ => {}
         }

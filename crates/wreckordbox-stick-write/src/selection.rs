@@ -487,28 +487,10 @@ impl ExportSelection {
     /// Cleanup uses the playlist selection alone; the exporter removes only
     /// stale manifest-owned files after publishing the new databases. The selection itself
     /// when the record names none it does not already hold.
-    pub fn for_stick<'a>(
-        &'a self,
-        state: &dyn LibrarySource,
-        library: &rbl_index::Library,
-        share: &std::path::Path,
-        destination: &std::path::Path,
-        delete_unlisted_music: bool,
-    ) -> AppResult<std::borrow::Cow<'a, Self>> {
-        self.for_stick_inspected(
-            state,
-            library,
-            share,
-            destination,
-            delete_unlisted_music,
-            true,
-        )
-    }
-
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "shared read-only preview and recovering execution selection"
-    )]
+    ///
+    /// Only reads the Stick: nothing in this crate writes to one. A write
+    /// that settles an unfinished export first does so itself, under its
+    /// own guard (the window's `commands::for_stick`).
     pub fn for_stick_inspected<'a>(
         &'a self,
         state: &dyn LibrarySource,
@@ -516,14 +498,9 @@ impl ExportSelection {
         share: &std::path::Path,
         destination: &std::path::Path,
         delete_unlisted_music: bool,
-        recover_device: bool,
     ) -> AppResult<std::borrow::Cow<'a, Self>> {
         if delete_unlisted_music {
             return Ok(std::borrow::Cow::Borrowed(self));
-        }
-        if recover_device {
-            rbl_export::recover(destination)
-                .map_err(|e| StickWriteError::internal(e.to_string()))?;
         }
         let recorded = rbl_export::Manifest::load(destination)
             .filter(|m| m.db_id == self.sync.db_id)

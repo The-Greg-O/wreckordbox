@@ -174,29 +174,71 @@ impl Found {
     }
 }
 
-/// Whether the track `found` has a complete set of current Stems to write:
-/// made from the audio it has now, every role there. Reads the Sidecar
-/// only: nothing is marked stale and nothing is written (a Stick load's
-/// dry run, wbx-70).
-pub(crate) fn has_current_stems(stems: &Stems, found: &Found) -> bool {
-    let Ok(Some(sidecar)) = stems.sidecar_if_made() else {
-        return false;
-    };
+/// The track's complete set of current Stems, as a Stick load plans and
+/// binds it (wbx-70): made from the audio the track has now, every role
+/// there. Read without opening the Sidecar's writer: the writer's own
+/// connection when it is already open, otherwise an immutable read-only
+/// snapshot (`mutant_reads::inspect`), so nothing is created, migrated,
+/// tidied or marked stale. `None` when there is none, or the Sidecar cannot
+/// be read safely now.
+pub(crate) fn current_stems_read_only(stems: &Stems, found: &Found) -> Option<CurrentStems> {
     let track = found.audio.parent();
-    let Ok(fingerprint) = stems::fingerprint(track, found.audio.path()) else {
-        return false;
-    };
-    sidecar
-        .current_stems(&track.id, &fingerprint)
-        .ok()
-        .flatten()
-        .is_some_and(|set| {
-            Role::ALL.iter().all(|role| {
-                set.stems
-                    .iter()
-                    .any(|s| s.role == *role && s.path.is_file())
-            })
+    let fingerprint = stems::fingerprint(track, found.audio.path()).ok()?;
+    let dir = stems.sidecar_dir().to_path_buf();
+    let facts = crate::mutant_reads::inspect(stems, |store| store.stem_facts(&track.id)).ok()?;
+    let set = facts
+        .into_iter()
+        .filter_map(|fact| StemSet::from_fact(&dir, fact))
+        .find(|set| set.is_current() && set.fingerprint == fingerprint && set.audio_present())?;
+    if !Role::ALL.iter().all(|role| {
+        set.stems
+            .iter()
+            .any(|s| s.role == *role && s.path.is_file())
+    }) {
+        return None;
+    }
+    let files: Vec<String> = set
+        .stems
+        .iter()
+        .map(|stem| {
+            let stamp = std::fs::metadata(&stem.path).map_or_else(
+                |_| "missing".to_owned(),
+                |m| format!("{} bytes, {}", m.len(), modified(&m)),
+            );
+            format!("{} {stamp}", stem.role.name())
         })
+        .collect();
+    Some(CurrentStems {
+        identity: format!(
+            "Stems Fact {}, {} frames, made from {:?}: {}",
+            set.fact_id,
+            set.samples,
+            set.fingerprint,
+            files.join(", ")
+        ),
+        samples: set.samples,
+    })
+}
+
+/// A file's modification time, to the nanosecond, for an identity.
+fn modified(metadata: &std::fs::Metadata) -> String {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or_else(
+            || "unknown time".to_owned(),
+            |d| format!("{}ns", d.as_nanos()),
+        )
+}
+
+/// A track's current Stems, as a Stick load plans them.
+pub(crate) struct CurrentStems {
+    /// Which set, and each Stem file's size and modification time: another
+    /// separation, or a Stem file changed, is another identity.
+    pub(crate) identity: String,
+    /// The set's length in sample frames.
+    pub(crate) samples: u64,
 }
 
 /// Writes the Native stems of the track `found` to the Stick at `stick`,

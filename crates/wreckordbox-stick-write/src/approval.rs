@@ -139,6 +139,58 @@ struct Approval {
     op: StickOperation,
     /// Approved by the DJ (`approve`): only then is it a token.
     approved: bool,
+    /// What the planned write was worked out to do, and the identities of
+    /// what that depends on ([`Bound`]); `None` for a plan that records
+    /// only its arguments (the window's).
+    bound: Option<Bound>,
+}
+
+/// The result a plan was approved for, line by line under named parts
+/// (`tracks`, `playlists`, `changes`, `native_stems`, ...): what the write
+/// will do and the identity of each input it depends on (a source audio
+/// file, a Stem set). A write bound to it is refused unless it works out
+/// the same lines again under the Stick's lock (wbx-70).
+pub type Bound = std::collections::BTreeMap<String, Vec<String>>;
+
+/// The parts of `now` that differ from `planned`, in words: what is new and
+/// what is gone in each, a few lines of each at most.
+#[must_use]
+pub fn differences(planned: &Bound, now: &Bound) -> Vec<String> {
+    const SHOWN: usize = 6;
+    let empty = Vec::new();
+    let mut out = Vec::new();
+    let parts: std::collections::BTreeSet<&String> = planned.keys().chain(now.keys()).collect();
+    for part in parts {
+        let before = planned.get(part).unwrap_or(&empty);
+        let after = now.get(part).unwrap_or(&empty);
+        for (word, lines) in [
+            (
+                "now",
+                after
+                    .iter()
+                    .filter(|l| !before.contains(l))
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                "no longer",
+                before
+                    .iter()
+                    .filter(|l| !after.contains(l))
+                    .collect::<Vec<_>>(),
+            ),
+        ] {
+            for line in lines.iter().take(SHOWN) {
+                out.push(format!("{part}: {word} {line}"));
+            }
+            if lines.len() > SHOWN {
+                out.push(format!("{part}: and {} more {word}", lines.len() - SHOWN));
+            }
+        }
+        if out.is_empty() && before != after {
+            out.push(format!("{part}: in another order"));
+        }
+    }
+    out
 }
 
 static APPROVALS: LazyLock<Mutex<HashMap<String, Approval>>> =
@@ -252,6 +304,22 @@ fn refused(why: &str) -> StickWriteError {
     ))
 }
 
+/// [`propose`], the plan also bound to the result it was worked out to
+/// have (`bound`): a write that carries it must work out the same result
+/// ([`consume_bound`]).
+pub fn propose_bound(
+    stick: &Path,
+    op: StickOperation,
+    generation: Option<u64>,
+    bound: Bound,
+) -> AppResult<String> {
+    let id = propose(stick, op, generation)?;
+    if let Some(plan) = approvals().get_mut(&id) {
+        plan.bound = Some(bound);
+    }
+    Ok(id)
+}
+
 /// Records a plan for `op` on the Stick at `stick`, bound to what is
 /// there now, and answers its plan id: not a token. Called by the planners
 /// alone: the window's `stick_write_plan` and the service's `sticks.dry_run`.
@@ -264,6 +332,7 @@ pub fn propose(stick: &Path, op: StickOperation, generation: Option<u64>) -> App
         issued: Instant::now(),
         op,
         approved: false,
+        bound: None,
     };
     let id = uuid::Uuid::new_v4().simple().to_string();
     let mut all = approvals();
@@ -325,6 +394,41 @@ pub fn consume(
     stick: &Path,
     generation: u64,
 ) -> AppResult<()> {
+    take(token, op, stick, generation).map(drop)
+}
+
+/// [`consume`] for a write bound to its result ([`propose_bound`]): also
+/// refused when the plan records no result, or when `now`, the result the
+/// write works out under the Stick's lock, differs from the one approved
+/// ([`StickWriteError::Changed`], saying what changed).
+pub fn consume_bound(
+    token: Option<&str>,
+    op: &StickOperation,
+    stick: &Path,
+    generation: u64,
+    now: &Bound,
+) -> AppResult<()> {
+    let approval = take(token, op, stick, generation)?;
+    let Some(planned) = approval.bound else {
+        return Err(refused(
+            "This plan does not record what the write would do (it was not made by a dry run of this write).",
+        ));
+    };
+    let changed = differences(&planned, now);
+    if changed.is_empty() {
+        Ok(())
+    } else {
+        Err(StickWriteError::Changed(changed))
+    }
+}
+
+/// Checks and takes out the token for `op` on the Stick at `stick`.
+fn take(
+    token: Option<&str>,
+    op: &StickOperation,
+    stick: &Path,
+    generation: u64,
+) -> AppResult<Approval> {
     if !stick.is_dir() {
         return Err(gone());
     }
@@ -364,7 +468,7 @@ pub fn consume(
             "The Library changed since the write was confirmed.",
         ));
     }
-    Ok(())
+    Ok(approval)
 }
 
 #[cfg(test)]
@@ -509,5 +613,60 @@ mod tests {
             Instant::now().checked_sub(APPROVAL_LIFETIME).unwrap();
         let expired = consume(Some(&t), &op, dir.path(), 0).err().unwrap();
         assert!(expired.to_string().contains("expired"), "{expired}");
+    }
+
+    fn bound(lines: &[(&str, &[&str])]) -> Bound {
+        lines
+            .iter()
+            .map(|(part, l)| {
+                (
+                    (*part).to_owned(),
+                    l.iter().map(|x| (*x).to_owned()).collect(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_bound_plan_writes_only_the_result_it_was_approved_for() {
+        let dir = stick();
+        let op = export(&["1"]);
+        let planned = bound(&[("native_stems", &[]), ("tracks", &["#1 A: size 3"])]);
+        let token = |b: &Bound| {
+            approve(
+                &std::env::temp_dir(),
+                &propose_bound(dir.path(), op.clone(), Some(0), b.clone()).unwrap(),
+            )
+            .unwrap()
+        };
+        let t = token(&planned);
+        consume_bound(Some(&t), &op, dir.path(), 0, &planned).unwrap();
+
+        let t = token(&planned);
+        let now = bound(&[
+            ("native_stems", &["#1 A: stems 7"]),
+            ("tracks", &["#1 A: size 4"]),
+        ]);
+        let Err(StickWriteError::Changed(lines)) =
+            consume_bound(Some(&t), &op, dir.path(), 0, &now)
+        else {
+            panic!("a changed result is refused");
+        };
+        assert!(
+            lines.contains(&"native_stems: now #1 A: stems 7".to_owned()),
+            "{lines:?}"
+        );
+        assert!(
+            lines.contains(&"tracks: no longer #1 A: size 3".to_owned()),
+            "{lines:?}"
+        );
+
+        // A plan that records no result never authorises a bound write.
+        let t = approve(
+            &std::env::temp_dir(),
+            &propose(dir.path(), op.clone(), Some(0)).unwrap(),
+        )
+        .unwrap();
+        assert!(consume_bound(Some(&t), &op, dir.path(), 0, &planned).is_err());
     }
 }

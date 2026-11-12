@@ -1088,7 +1088,7 @@ fn playlist_export_selection(
     }
     let mut selection = ExportSelection::from_playlists(state, library, share, &playlists, automatic)?;
     selection.keep_unlisted = true;
-    let kept = selection.for_stick(state, library, share, stick, delete_unlisted_music)?;
+    let kept = for_stick(&selection, state, library, share, stick, delete_unlisted_music)?;
     Ok(match kept {
         std::borrow::Cow::Owned(kept) => kept,
         std::borrow::Cow::Borrowed(_) => selection,
@@ -1181,7 +1181,7 @@ pub async fn sync_devices<R: tauri::Runtime>(
             let reservation = reserve_export(&app, stick).map(|mut ticket| { ticket.verify_all = verify_all.unwrap_or(false); ticket });
             let selection = match &reservation {
                 Ok(ticket) => ticket.check(stick)
-                    .and_then(|()| base.for_stick(&*state, &library, &share, stick, delete_unlisted_music.unwrap_or(false)).map_err(AppError::from))
+                    .and_then(|()| for_stick(&base, &state, &library, &share, stick, delete_unlisted_music.unwrap_or(false)))
                     .map(std::borrow::Cow::into_owned),
                 Err(error) => Err(error.clone()),
             };
@@ -1367,7 +1367,7 @@ pub async fn estimate_sync(
                     Ok(selection) => {
                         let options = rbl_export::ExportOptions { sync: Some(&selection.sync), compatibility: compatibility_format,
                             cache: Some(&EXPORT_CACHE), ..Default::default() };
-                        selection.for_stick_inspected(&*state, &library, &share, std::path::Path::new(&path), delete_unlisted_music.unwrap_or(false), false)
+                        selection.for_stick_inspected(&*state, &library, &share, std::path::Path::new(&path), delete_unlisted_music.unwrap_or(false))
                             .map_err(|e| rbl_export::ExportError::Conflict(AppError::from(e).to_string()))
                             .and_then(|selection| {
                                 // The preview opens the Stick's exportLibrary.db with SQLite
@@ -1552,6 +1552,24 @@ fn playlists_on_device(mount: &std::path::Path) -> Vec<String> {
 }
 
 pub(crate) use wreckordbox_stick_write::selection::{source_my_tag, ExportSelection};
+
+/// The selection the write itself takes to `destination`
+/// (`ExportSelection::for_stick_inspected`), an unfinished export on the
+/// Stick settled first, as the export would: called only by a write that
+/// holds the Stick's guard and consumed its confirmation.
+pub(crate) fn for_stick<'a>(
+    selection: &'a ExportSelection,
+    state: &AppState,
+    library: &rbl_index::Library,
+    share: &std::path::Path,
+    destination: &std::path::Path,
+    delete_unlisted_music: bool,
+) -> AppResult<std::borrow::Cow<'a, ExportSelection>> {
+    if !delete_unlisted_music {
+        rbl_export::recover(destination).map_err(|e| AppError::internal(e.to_string()))?;
+    }
+    Ok(selection.for_stick_inspected(state, library, share, destination, delete_unlisted_music)?)
+}
 
 /// The window's state as the shared selection reads the Library.
 impl wreckordbox_stick_write::selection::LibrarySource for AppState {

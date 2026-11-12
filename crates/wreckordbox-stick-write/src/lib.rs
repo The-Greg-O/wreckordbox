@@ -31,6 +31,9 @@ pub enum StickWriteError {
     /// Refused: the write was not confirmed, or the Stick or the Library
     /// changed since. Nothing was written.
     Conflict(String),
+    /// Refused: what the write works out to do now differs from what was
+    /// approved; each line says what changed. Nothing was written.
+    Changed(Vec<String>),
     /// Reading the Library failed.
     Db(rbl_db::DbError),
     /// Reading the Stick without recovering it failed (wbx-45.5).
@@ -58,6 +61,11 @@ impl std::fmt::Display for StickWriteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotFound(message) | Self::Conflict(message) => f.write_str(message),
+            Self::Changed(lines) => write!(
+                f,
+                "What the write would do changed since it was planned ({}). Nothing was written. Look at what it would do again and confirm that.",
+                lines.join("; ")
+            ),
             Self::Db(error) => write!(f, "{error}"),
             Self::Read { mount, error } => write!(f, "{}: {error}", mount.display()),
             Self::Internal { message, detail } => match detail {
