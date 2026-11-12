@@ -272,6 +272,8 @@ pub struct OpenIntent {
     pub source: Source,
     pub description: String,
     pub command: Option<Value>,
+    /// Native values before a DJ write, for recovery only.
+    pub dj_snapshot: Option<Value>,
 }
 
 impl Sidecar {
@@ -280,6 +282,16 @@ impl Sidecar {
     /// transaction the intents in `settled` are removed: changes known to
     /// have needed no entry. An error means nothing can be recorded now.
     pub fn begin_intent(&self, intent: &Intent, settled: &[i64]) -> Result<i64> {
+        self.begin_intent_with_snapshot(intent, settled, None)
+    }
+
+    /// Reserve an entry and retain the native pre-edit values in the same transaction.
+    pub fn begin_intent_with_snapshot(
+        &self,
+        intent: &Intent,
+        settled: &[i64],
+        snapshot: Option<&Value>,
+    ) -> Result<i64> {
         let mut db = self.db();
         let tx = db.transaction()?;
         settle_in(&tx, settled)?;
@@ -298,6 +310,12 @@ impl Sidecar {
                 intent.command.map(Value::to_string),
             ],
         )?;
+        if let Some(snapshot) = snapshot {
+            tx.execute(
+                "INSERT INTO dj_intent(id,snapshot) VALUES(?1,?2)",
+                params![id, snapshot.to_string()],
+            )?;
+        }
         tx.commit()?;
         Ok(id)
     }
@@ -315,7 +333,7 @@ impl Sidecar {
     pub fn open_intents(&self) -> Result<Vec<OpenIntent>> {
         let db = self.db();
         let mut statement = db.prepare(
-            "SELECT id, run_id, at, source_kind, source_name, description, command
+            "SELECT id, run_id, at, source_kind, source_name, description, command, (SELECT snapshot FROM dj_intent WHERE dj_intent.id = ledger_intent.id)
              FROM ledger_intent ORDER BY id",
         )?;
         let open = statement
@@ -329,6 +347,18 @@ impl Sidecar {
                         name: row.get(4)?,
                     },
                     description: row.get(5)?,
+                    dj_snapshot: row
+                        .get::<_, Option<String>>(7)?
+                        .map(|text| {
+                            serde_json::from_str(&text).map_err(|e| {
+                                rusqlite::Error::FromSqlConversionFailure(
+                                    7,
+                                    rusqlite::types::Type::Text,
+                                    Box::new(e),
+                                )
+                            })
+                        })
+                        .transpose()?,
                     command: row
                         .get::<_, Option<String>>(6)?
                         .and_then(|text| serde_json::from_str(&text).ok()),
@@ -416,7 +446,7 @@ impl Sidecar {
         let db = self.db();
         let total: i64 = db.query_row(
             "SELECT (SELECT COUNT(*) FROM ledger WHERE run_id = ?1)
-                  + (SELECT COUNT(*) FROM fact WHERE run_id = ?1)",
+                  + (SELECT COUNT(*) FROM fact WHERE run_id = ?1 AND id NOT IN (SELECT fact_id FROM dj_fact))",
             [run.0],
             |row| row.get(0),
         )?;
@@ -495,7 +525,7 @@ pub const PAGE_QUERY: &str = "
                 WHERE before.superseded_by = fact.id ORDER BY before.id DESC LIMIT 1),
                ledger_order.seq
         FROM fact JOIN ledger_order ON ledger_order.fact_id = fact.id
-        WHERE fact.run_id = ?1)
+        WHERE fact.run_id = ?1 AND fact.id NOT IN (SELECT fact_id FROM dj_fact))
     ORDER BY seq LIMIT ?2 OFFSET ?3";
 
 fn settle_in(tx: &rusqlite::Transaction, settled: &[i64]) -> Result<()> {
@@ -511,7 +541,7 @@ fn counts_of(db: &rusqlite::Connection, run: RunId) -> Result<Vec<Count>> {
         "SELECT store, kind, SUM(count) FROM (
              SELECT store, kind, COUNT(*) AS count FROM ledger WHERE run_id = ?1 GROUP BY store, kind
              UNION ALL
-             SELECT 'sidecar', kind, COUNT(*) FROM fact WHERE run_id = ?1 GROUP BY kind)
+             SELECT 'sidecar', kind, COUNT(*) FROM fact WHERE run_id = ?1 AND id NOT IN (SELECT fact_id FROM dj_fact) GROUP BY kind)
          GROUP BY store, kind ORDER BY store, kind",
     )?;
     let counts = counts

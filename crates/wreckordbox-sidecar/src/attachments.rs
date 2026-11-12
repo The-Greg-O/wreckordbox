@@ -60,7 +60,7 @@ CREATE TABLE attachment_review (
 ";
 
 /// Identifying fields are evidence for review only. Mix names are never stripped.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IdentifyingFields {
     pub title: String,
     pub artist: String,
@@ -146,77 +146,7 @@ impl Sidecar {
     ) -> Result<Attachments> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        let occupied: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM attached_fact WHERE effective_track_id = ?1)",
-            [track],
-            |row| row.get(0),
-        )?;
-        let mut result = Attachments::default();
-        {
-            let candidates = identities(&tx, fingerprint, fields)?;
-            let removed: Vec<_> = candidates
-                .iter()
-                .filter(|candidate| candidate.track != track && !present(&candidate.track))
-                .collect();
-            let exact: Vec<_> = removed
-                .iter()
-                .copied()
-                .filter(|candidate| {
-                    fingerprint.is_some()
-                        && candidate.fingerprint.as_deref() == fingerprint.map(Fingerprint::as_str)
-                })
-                .collect();
-            if exact.len() == 1 && !occupied {
-                let matched = exact[0];
-                result
-                    .reattached
-                    .push(attach(&tx, &matched.track, track, fingerprint, run)?);
-            } else if exact.is_empty() {
-                result.review = removed
-                    .iter()
-                    .filter(|candidate| fields.matches(&candidate.fields))
-                    .map(|candidate| Review {
-                        from_track: candidate.track.clone(),
-                        reason: "identifying_fields".to_owned(),
-                    })
-                    .collect();
-            } else {
-                result.review = exact
-                    .iter()
-                    .map(|candidate| Review {
-                        from_track: candidate.track.clone(),
-                        reason: if occupied {
-                            "target_has_facts"
-                        } else {
-                            "ambiguous_fingerprint"
-                        }
-                        .to_owned(),
-                    })
-                    .collect();
-            }
-        }
-        tx.execute("DELETE FROM attachment_review WHERE track_id = ?1", [track])?;
-        for review in &result.review {
-            tx.execute(
-                "INSERT INTO attachment_review VALUES (?1, ?2, ?3)",
-                params![track, review.from_track, review.reason],
-            )?;
-        }
-        tx.execute(
-            "INSERT INTO track_identity VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-             ON CONFLICT(track_id) DO UPDATE SET
-                fingerprint = COALESCE(excluded.fingerprint, track_identity.fingerprint),
-                title = excluded.title, artist = excluded.artist,
-                mix_name = excluded.mix_name, duration = excluded.duration",
-            params![
-                track,
-                fingerprint.map(Fingerprint::as_str),
-                normalize(&fields.title),
-                normalize(&fields.artist),
-                normalize(&fields.mix_name),
-                fields.duration
-            ],
-        )?;
+        let result = observe_in(&tx, track, fingerprint, fields, present, run)?;
         tx.commit()?;
         Ok(result)
     }
@@ -338,4 +268,87 @@ fn attach(
         fact_ids,
         run,
     })
+}
+
+/// Transaction form of the shared observation path, used by native edits.
+pub(crate) fn observe_in(
+    tx: &Transaction<'_>,
+    track: &str,
+    fingerprint: Option<&Fingerprint>,
+    fields: &IdentifyingFields,
+    present: impl Fn(&str) -> bool,
+    run: Option<RunId>,
+) -> Result<Attachments> {
+    let occupied: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM attached_fact WHERE effective_track_id = ?1)",
+        [track],
+        |row| row.get(0),
+    )?;
+    let mut result = Attachments::default();
+    {
+        let candidates = identities(tx, fingerprint, fields)?;
+        let removed: Vec<_> = candidates
+            .iter()
+            .filter(|candidate| candidate.track != track && !present(&candidate.track))
+            .collect();
+        let exact: Vec<_> = removed
+            .iter()
+            .copied()
+            .filter(|candidate| {
+                fingerprint.is_some()
+                    && candidate.fingerprint.as_deref() == fingerprint.map(Fingerprint::as_str)
+            })
+            .collect();
+        if exact.len() == 1 && !occupied {
+            let matched = exact[0];
+            result
+                .reattached
+                .push(attach(tx, &matched.track, track, fingerprint, run)?);
+        } else if exact.is_empty() {
+            result.review = removed
+                .iter()
+                .filter(|candidate| fields.matches(&candidate.fields))
+                .map(|candidate| Review {
+                    from_track: candidate.track.clone(),
+                    reason: "identifying_fields".to_owned(),
+                })
+                .collect();
+        } else {
+            result.review = exact
+                .iter()
+                .map(|candidate| Review {
+                    from_track: candidate.track.clone(),
+                    reason: if occupied {
+                        "target_has_facts"
+                    } else {
+                        "ambiguous_fingerprint"
+                    }
+                    .to_owned(),
+                })
+                .collect();
+        }
+    }
+    tx.execute("DELETE FROM attachment_review WHERE track_id = ?1", [track])?;
+    for review in &result.review {
+        tx.execute(
+            "INSERT INTO attachment_review VALUES (?1, ?2, ?3)",
+            params![track, review.from_track, review.reason],
+        )?;
+    }
+    tx.execute(
+        "INSERT INTO track_identity VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(track_id) DO UPDATE SET
+                fingerprint = COALESCE(excluded.fingerprint, track_identity.fingerprint),
+                title = excluded.title, artist = excluded.artist,
+                mix_name = excluded.mix_name, duration = excluded.duration",
+        params![
+            track,
+            fingerprint.map(Fingerprint::as_str),
+            normalize(&fields.title),
+            normalize(&fields.artist),
+            normalize(&fields.mix_name),
+            fields.duration
+        ],
+    )?;
+    Ok(result)
 }
