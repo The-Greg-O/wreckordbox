@@ -139,8 +139,8 @@ fn a_truncated_source_is_an_error_and_not_a_shorter_render() {
 fn a_fast_start_m4a_cut_inside_its_audio_renders_nothing() {
     // Its `mdat` runs "to the end of the file", so the cut file opens with a
     // whole sample table; a render of what is left would be a prefix.
-    let fixture =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../rbl-audio/tests/fixtures/tone-faststart.m4a");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../rbl-audio/tests/fixtures/tone-faststart.m4a");
     let mut bytes = std::fs::read(fixture).unwrap();
     let mdat = bytes.windows(4).position(|w| w == b"mdat").unwrap() - 4;
     bytes[mdat..mdat + 4].copy_from_slice(&0_u32.to_be_bytes());
@@ -224,8 +224,15 @@ fn a_source_that_fails_midway_leaves_nothing() {
             &mut go,
         );
 
-        assert!(matches!(result, Err(RenderError::Io(_))), "{format:?}: {result:?}");
-        assert!(files(dir.path()).is_empty(), "{format:?}: {:?}", files(dir.path()));
+        assert!(
+            matches!(result, Err(RenderError::Io(_))),
+            "{format:?}: {result:?}"
+        );
+        assert!(
+            files(dir.path()).is_empty(),
+            "{format:?}: {:?}",
+            files(dir.path())
+        );
     }
 }
 
@@ -247,8 +254,15 @@ fn a_cancelled_render_leaves_nothing_in_any_format() {
                 }
             },
         );
-        assert!(matches!(result, Err(RenderError::Cancelled)), "{format:?}: {result:?}");
-        assert!(files(dir.path()).is_empty(), "{format:?}: {:?}", files(dir.path()));
+        assert!(
+            matches!(result, Err(RenderError::Cancelled)),
+            "{format:?}: {result:?}"
+        );
+        assert!(
+            files(dir.path()).is_empty(),
+            "{format:?}: {:?}",
+            files(dir.path())
+        );
     }
 }
 
@@ -397,7 +411,11 @@ fn when_every_temporary_name_is_taken_the_render_fails_and_removes_none_of_them(
             .map(|path| path.file_name().unwrap().to_str().unwrap().to_owned())
             .collect();
         want.sort();
-        assert_eq!(files(dir.path()), want, "{format:?}: only the squatters' files");
+        assert_eq!(
+            files(dir.path()),
+            want,
+            "{format:?}: only the squatters' files"
+        );
     }
 }
 
@@ -469,7 +487,11 @@ fn where_nothing_can_refuse_to_replace_the_render_fails_rather_than_rename() {
             matches!(result, Err(RenderError::NoReplaceUnsupported(_))),
             "{format:?}: {result:?}"
         );
-        assert!(files(dir.path()).is_empty(), "{format:?}: {:?}", files(dir.path()));
+        assert!(
+            files(dir.path()).is_empty(),
+            "{format:?}: {:?}",
+            files(dir.path())
+        );
     }
 }
 
@@ -496,10 +518,7 @@ fn two_renders_one_destination(
             std::fs::read(&out).unwrap() == std::fs::read(&reference).unwrap(),
             "{format:?}: the winner's file changed"
         );
-        let mut want = vec![
-            named(format),
-            format!("reference.{}", format.extension()),
-        ];
+        let mut want = vec![named(format), format!("reference.{}", format.extension())];
         want.sort();
         assert_eq!(files(dir.path()), want, "{format:?}");
     }
@@ -508,16 +527,14 @@ fn two_renders_one_destination(
 #[test]
 fn of_two_renders_to_one_destination_the_first_to_publish_wins() {
     two_renders_one_destination(|out, format| {
-        Staged::new(true, true)
-            .at_publish(move || render_tone(&Real, 880.0, out, format).unwrap())
+        Staged::new(true, true).at_publish(move || render_tone(&Real, 880.0, out, format).unwrap())
     });
 }
 
 #[test]
 fn the_first_to_publish_wins_on_a_filesystem_that_can_only_link() {
     two_renders_one_destination(|out, format| {
-        Staged::new(false, true)
-            .at_publish(move || render_tone(&Real, 880.0, out, format).unwrap())
+        Staged::new(false, true).at_publish(move || render_tone(&Real, 880.0, out, format).unwrap())
     });
 }
 

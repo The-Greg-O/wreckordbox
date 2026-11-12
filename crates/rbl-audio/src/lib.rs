@@ -185,8 +185,12 @@ impl MonoStream {
         // An AIFF's own header, where symphonia's count is off (see
         // `aifc::declared_frames`); the container's count otherwise.
         let limit = path.and_then(aifc::declared_frames);
-        let expected = limit
-            .or_else(|| track.codec_params.n_frames.map(|frames| frames.saturating_add_signed(lead)));
+        let expected = limit.or_else(|| {
+            track
+                .codec_params
+                .n_frames
+                .map(|frames| frames.saturating_add_signed(lead))
+        });
         let slack = slack(&track.codec_params, path);
         Ok(Self {
             format,
@@ -426,7 +430,10 @@ fn slack(params: &symphonia::core::codecs::CodecParameters, path: Option<&Path>)
 fn is_mp4(path: &Path) -> bool {
     use std::io::Read;
     let mut head = [0_u8; 8];
-    std::fs::File::open(path).and_then(|mut file| file.read_exact(&mut head)).is_ok() && &head[4..8] == b"ftyp"
+    std::fs::File::open(path)
+        .and_then(|mut file| file.read_exact(&mut head))
+        .is_ok()
+        && &head[4..8] == b"ftyp"
 }
 
 /// Whether a container's frame count for this codec is what the file must
@@ -732,8 +739,14 @@ mod tests {
         let path = dir.path().join("tagged.aiff");
         let plain = aiff_bytes(12_000);
         let mut tagged = plain.clone();
-        let id3 = [b"ID3 ".as_slice(), &16_u32.to_be_bytes(), &[0x49, 0x44, 0x33, 4, 0, 0, 0x7f, 0x7f, 0x7f, 0x7f, 1, 2, 3, 4, 5, 6]]
-            .concat();
+        let id3 = [
+            b"ID3 ".as_slice(),
+            &16_u32.to_be_bytes(),
+            &[
+                0x49, 0x44, 0x33, 4, 0, 0, 0x7f, 0x7f, 0x7f, 0x7f, 1, 2, 3, 4, 5, 6,
+            ],
+        ]
+        .concat();
         tagged.extend_from_slice(&id3);
         let form = u32::try_from(tagged.len() - 8).unwrap();
         tagged[4..8].copy_from_slice(&form.to_be_bytes());
@@ -745,14 +758,21 @@ mod tests {
         let (_, got) = frames_of(&path);
         assert_eq!(want.len(), 12_000);
         assert_eq!(got.len(), want.len(), "the sound's frames and no more");
-        assert_eq!(got, want, "the samples, and nothing of the chunk after them");
-        assert_eq!(drain(&mut MonoStream::open(&path).unwrap()).unwrap(), 12_000);
+        assert_eq!(
+            got, want,
+            "the samples, and nothing of the chunk after them"
+        );
+        assert_eq!(
+            drain(&mut MonoStream::open(&path).unwrap()).unwrap(),
+            12_000
+        );
     }
 
     /// The fixture's fast-start M4A (sample table ahead of the audio) with its
     /// `mdat` box's size written as 0, which means "to the end of the file".
     fn faststart_m4a_to_eof() -> Vec<u8> {
-        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tone-faststart.m4a");
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tone-faststart.m4a");
         let mut bytes = std::fs::read(fixture).unwrap();
         let mdat = bytes.windows(4).position(|w| w == b"mdat").unwrap() - 4;
         let moov = bytes.windows(4).position(|w| w == b"moov").unwrap();
@@ -783,7 +803,13 @@ mod tests {
             return; // refused at the door is as good
         };
         let result = drain(&mut stream);
-        assert!(matches!(result, Err((AudioError::Truncated { .. } | AudioError::Io(_), _))), "{result:?}");
+        assert!(
+            matches!(
+                result,
+                Err((AudioError::Truncated { .. } | AudioError::Io(_), _))
+            ),
+            "{result:?}"
+        );
         // The reader analysis uses still plays what is there.
         assert!(MonoStream::open(&path).unwrap().next_frames().is_some());
     }

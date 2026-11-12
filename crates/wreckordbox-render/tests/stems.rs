@@ -19,8 +19,8 @@ use support::{
     channel, level_at, read, sine, StemBench, AMPLITUDE, AMPLITUDE_RIGHT, HZ, HZ_RIGHT, RATE,
 };
 use wreckordbox_render::{
-    render, Destination, Edits, Format, Kept, MutantSource, Proceed, RenderError, Rendered,
-    StemSum, Source,
+    render, Destination, Edits, Format, Kept, MutantSource, Proceed, RenderError, Rendered, Source,
+    StemSum,
 };
 
 const VOCALS_AND_BASS: Kept = Kept {
@@ -59,7 +59,11 @@ fn every_kept_combination_sums_exactly_on_each_side_and_muted_stems_are_absent()
         let (frames, rate) = read(&out);
         assert_eq!(rate, RATE);
         assert_eq!(rendered.frames, bench.frames as u64);
-        assert_eq!(frames, bench.sum(mask), "{mask:?}: the kept Stems, summed sample for sample");
+        assert_eq!(
+            frames,
+            bench.sum(mask),
+            "{mask:?}: the kept Stems, summed sample for sample"
+        );
 
         // Left and right are each their own Stems' side: a swap or a mix of
         // the two would put a right-hand tone on the left.
@@ -76,11 +80,20 @@ fn every_kept_combination_sums_exactly_on_each_side_and_muted_stems_are_absent()
                         "{mask:?}: {hz} Hz kept on the {side} at {level}"
                     );
                 } else {
-                    assert!(level < 1e-4, "{mask:?}: {hz} Hz muted, yet {level} on the {side}");
+                    assert!(
+                        level < 1e-4,
+                        "{mask:?}: {hz} Hz muted, yet {level} on the {side}"
+                    );
                 }
             }
-            assert!(level_at(&left, HZ_RIGHT[i]) < 1e-4, "{mask:?}: a right tone on the left");
-            assert!(level_at(&right, HZ[i]) < 1e-4, "{mask:?}: a left tone on the right");
+            assert!(
+                level_at(&left, HZ_RIGHT[i]) < 1e-4,
+                "{mask:?}: a right tone on the left"
+            );
+            assert!(
+                level_at(&right, HZ[i]) < 1e-4,
+                "{mask:?}: a left tone on the right"
+            );
         }
     }
 }
@@ -139,7 +152,10 @@ fn a_sum_past_full_scale_saturates_and_never_wraps() {
     // A wrapped sum would flip sign at the peaks: every left sample has the
     // sign of the Stem it was made from.
     for (got, stem) in rendered.iter().zip(&loud) {
-        assert!(i32::from(got[0]) * i32::from(*stem) >= 0, "{got:?} from {stem}");
+        assert!(
+            i32::from(got[0]) * i32::from(*stem) >= 0,
+            "{got:?} from {stem}"
+        );
     }
     assert!(rendered.iter().all(|f| f[1] == 0));
 }
@@ -322,8 +338,8 @@ fn a_lossy_parent_is_refused_until_its_stems_can_be_lined_up() {
         &mut |_| Proceed::Continue,
     )
     .unwrap();
-    let m4a =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../rbl-audio/tests/fixtures/tone-faststart.m4a");
+    let m4a = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../rbl-audio/tests/fixtures/tone-faststart.m4a");
     for parent in [mp3.as_path(), m4a.as_path()] {
         assert!(
             matches!(
@@ -399,12 +415,18 @@ fn a_stem_edit_combines_with_key_shift_and_tempo() {
         let want = hz * shift;
         let got = hz_of(&signal);
         let cents = 1200.0 * (got / want).log2();
-        assert!(cents.abs() < 3.0, "side {side}: {got} Hz, {cents} cents from {want}");
+        assert!(
+            cents.abs() < 3.0,
+            "side {side}: {got} Hz, {cents} cents from {want}"
+        );
         let settled = &signal[signal.len() / 4..signal.len() * 3 / 4];
         for hz in others {
             for shifted in [*hz, hz * shift] {
                 let level = level_at(settled, shifted);
-                assert!(level < 0.01, "muted {hz} Hz measures {level} at {shifted} Hz");
+                assert!(
+                    level < 0.01,
+                    "muted {hz} Hz measures {level} at {shifted} Hz"
+                );
             }
         }
     }
