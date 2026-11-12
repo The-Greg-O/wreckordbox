@@ -7116,6 +7116,7 @@ dependencies = [
  "clap",
  "lewton",
  "rbl-anlz",
+ "rbl-backup",
  "rbl-db",
  "rbl-export",
  "rbl-onelibrary",
