@@ -23,7 +23,9 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::commands::{blocking, held_on_stick, track_export_selection, ExportSelection, EXPORT_CACHE};
+use crate::commands::{
+    blocking, held_on_stick, track_export_selection, ExportSelection, EXPORT_CACHE,
+};
 use crate::device_library::DeviceEditDto;
 use crate::device_settings::DeviceSettingsDto;
 use crate::error::{AppError, AppResult, ErrorKind};
@@ -40,12 +42,23 @@ pub struct StickWriteRequest {
 
 /// The writes the window can ask to plan.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum PlannedOperation {
     /// Export Playlist (or Export Folder).
-    ExportPlaylist { playlist: String, delete_unlisted_music: Option<bool>, compatibility_format: Option<rbl_export::CompatibilityFormat> },
+    ExportPlaylist {
+        playlist: String,
+        delete_unlisted_music: Option<bool>,
+        compatibility_format: Option<rbl_export::CompatibilityFormat>,
+    },
     /// Export Track.
-    ExportTracks { tracks: Vec<String>, compatibility_format: Option<rbl_export::CompatibilityFormat> },
+    ExportTracks {
+        tracks: Vec<String>,
+        compatibility_format: Option<rbl_export::CompatibilityFormat>,
+    },
     /// The Sync Manager's SYNC, for this Stick.
     Sync {
         playlists: Vec<String>,
@@ -67,7 +80,11 @@ pub enum PlannedOperation {
     /// One edit to one library's playlists on the Stick.
     PlaylistEdit { format: String, edit: DeviceEditDto },
     /// Loose files on the Stick added to one of its playlists.
-    AddFiles { format: String, playlist: String, files: Vec<String> },
+    AddFiles {
+        format: String,
+        playlist: String,
+        files: Vec<String>,
+    },
     /// The Stick's own settings.
     SaveSettings { settings: DeviceSettingsDto },
     /// Defaults written to a Stick that has none.
@@ -105,7 +122,7 @@ pub struct PlannedPlaylist {
 #[serde(rename_all = "camelCase")]
 pub struct TrackChange {
     pub title: String,
-    /// The fields that differ, in the window's words ("Energy", "Title", "MyTags").
+    /// The fields that differ, in the window's words (`Energy`, `Title`, `MyTags`).
     pub fields: Vec<String>,
 }
 
@@ -146,83 +163,193 @@ pub async fn stick_write_plan(
 }
 
 /// The plan for `request`, and its token; writes nothing.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one arm per Stick-writing operation, each a few lines"
+)]
 pub fn plan(state: &AppState, request: &StickWriteRequest) -> AppResult<StickWritePlan> {
     let destination = Path::new(&request.destination);
     if !destination.is_dir() {
-        return Err(AppError::new(ErrorKind::NotFound, "That device is no longer connected."));
+        return Err(AppError::new(
+            ErrorKind::NotFound,
+            "That device is no longer connected.",
+        ));
     }
-    let spare = destination.join(wreckordbox_stick_outline::SPARE_MARKER).is_file();
+    let spare = destination
+        .join(wreckordbox_stick_outline::SPARE_MARKER)
+        .is_file();
     // As the writes do: nothing of ours writes to the Stick while it is planned.
     let _lock = stick_approval::lock(destination);
-    let _lease = rbl_core::durable::read_lease(destination).map_err(|e| AppError::internal(e.to_string()))?;
+    let _lease = rbl_core::durable::read_lease(destination)
+        .map_err(|e| AppError::internal(e.to_string()))?;
     if rbl_export::recovery_pending(destination) {
-        return Ok(StickWritePlan { spare, pending: true, ..StickWritePlan::default() });
+        return Ok(StickWritePlan {
+            spare,
+            pending: true,
+            ..StickWritePlan::default()
+        });
     }
     let generation = u64::from(state.summary().3);
     let (mut found, steps, bound) = match &request.operation {
-        PlannedOperation::ExportPlaylist { playlist, delete_unlisted_music, compatibility_format } => {
+        PlannedOperation::ExportPlaylist {
+            playlist,
+            delete_unlisted_music,
+            compatibility_format,
+        } => {
             let delete = delete_unlisted_music.unwrap_or(false);
             let selection = playlist_selection(state, destination, playlist, delete)?;
             let found = export_plan(state, destination, &selection, *compatibility_format)?;
-            (found, vec![Grant::Exact(StickOperation::ExportPlaylist { playlist: playlist.clone(), delete_unlisted_music: delete })], true)
+            (
+                found,
+                vec![Grant::Exact(StickOperation::ExportPlaylist {
+                    playlist: playlist.clone(),
+                    delete_unlisted_music: delete,
+                })],
+                true,
+            )
         }
-        PlannedOperation::ExportTracks { tracks, compatibility_format } => {
+        PlannedOperation::ExportTracks {
+            tracks,
+            compatibility_format,
+        } => {
             let library = state.library()?;
-            let selection = track_export_selection(state, &library, &state.share_root(), destination, tracks)?;
+            let selection =
+                track_export_selection(state, &library, &state.share_root(), destination, tracks)?;
             let found = export_plan(state, destination, &selection, *compatibility_format)?;
-            (found, vec![Grant::Exact(StickOperation::ExportTracks { tracks: tracks.clone() })], true)
+            (
+                found,
+                vec![Grant::Exact(StickOperation::ExportTracks {
+                    tracks: tracks.clone(),
+                })],
+                true,
+            )
         }
-        PlannedOperation::Sync { playlists, delete_unlisted_music, automatic, compatibility_format } => {
+        PlannedOperation::Sync {
+            playlists,
+            delete_unlisted_music,
+            automatic,
+            compatibility_format,
+        } => {
             let delete = delete_unlisted_music.unwrap_or(false);
             let automatic = automatic.unwrap_or(false);
             let library = state.library()?;
             let share_root = state.share_root();
-            let selection = ExportSelection::from_playlists(state, &library, &share_root, playlists, automatic)?;
-            let selection = match selection.for_stick_inspected(state, &library, &share_root, destination, delete, false)? {
+            let selection = ExportSelection::from_playlists(
+                state,
+                &library,
+                &share_root,
+                playlists,
+                automatic,
+            )?;
+            let selection = match selection.for_stick_inspected(
+                state,
+                &library,
+                &share_root,
+                destination,
+                delete,
+                false,
+            )? {
                 std::borrow::Cow::Owned(kept) => kept,
                 std::borrow::Cow::Borrowed(_) => selection,
             };
             let found = export_plan(state, destination, &selection, *compatibility_format)?;
-            (found, vec![Grant::Exact(StickOperation::Sync { playlists: playlists.clone(), delete_unlisted_music: delete, automatic })], true)
+            (
+                found,
+                vec![Grant::Exact(StickOperation::Sync {
+                    playlists: playlists.clone(),
+                    delete_unlisted_music: delete,
+                    automatic,
+                })],
+                true,
+            )
         }
-        PlannedOperation::AddToPlaylist { format, playlist, export_first, count, duplicates, compatibility_format } => {
+        PlannedOperation::AddToPlaylist {
+            format,
+            playlist,
+            export_first,
+            count,
+            duplicates,
+            compatibility_format,
+        } => {
             let found = if export_first.is_empty() {
                 StickWritePlan::default()
             } else {
                 let library = state.library()?;
-                let selection = track_export_selection(state, &library, &state.share_root(), destination, export_first)?;
+                let selection = track_export_selection(
+                    state,
+                    &library,
+                    &state.share_root(),
+                    destination,
+                    export_first,
+                )?;
                 export_plan(state, destination, &selection, *compatibility_format)?
             };
             let mut steps = Vec::new();
             if !export_first.is_empty() {
-                steps.push(Grant::ExportSome(export_first.iter().cloned().collect::<BTreeSet<_>>()));
+                steps.push(Grant::ExportSome(
+                    export_first.iter().cloned().collect::<BTreeSet<_>>(),
+                ));
             }
-            steps.push(Grant::AddTo { format: format.clone(), playlist: playlist.clone(), max: *count, duplicates: *duplicates });
+            steps.push(Grant::AddTo {
+                format: format.clone(),
+                playlist: playlist.clone(),
+                max: *count,
+                duplicates: *duplicates,
+            });
             (found, steps, !export_first.is_empty())
         }
         PlannedOperation::PlaylistEdit { format, edit } => (
             StickWritePlan::default(),
-            vec![Grant::Exact(StickOperation::PlaylistEdit { format: format.clone(), edit: json(edit)? })],
+            vec![Grant::Exact(StickOperation::PlaylistEdit {
+                format: format.clone(),
+                edit: json(edit)?,
+            })],
             false,
         ),
-        PlannedOperation::AddFiles { format, playlist, files } => (
+        PlannedOperation::AddFiles {
+            format,
+            playlist,
+            files,
+        } => (
             StickWritePlan::default(),
-            vec![Grant::Exact(StickOperation::PlaylistAddFiles { format: format.clone(), playlist: playlist.clone(), files: files.clone() })],
+            vec![Grant::Exact(StickOperation::PlaylistAddFiles {
+                format: format.clone(),
+                playlist: playlist.clone(),
+                files: files.clone(),
+            })],
             false,
         ),
         PlannedOperation::SaveSettings { settings } => (
             StickWritePlan::default(),
-            vec![Grant::Exact(StickOperation::SaveSettings { settings: json(settings)? })],
+            vec![Grant::Exact(StickOperation::SaveSettings {
+                settings: json(settings)?,
+            })],
             false,
         ),
-        PlannedOperation::WriteDefaults => (StickWritePlan::default(), vec![Grant::Exact(StickOperation::WriteDefaults)], false),
-        PlannedOperation::EnsureLibrary => (StickWritePlan::default(), vec![Grant::Exact(StickOperation::EnsureLibrary)], false),
-        PlannedOperation::Format { layout } => {
-            (StickWritePlan::default(), vec![Grant::Exact(StickOperation::Format { layout: layout.clone() })], false)
-        }
+        PlannedOperation::WriteDefaults => (
+            StickWritePlan::default(),
+            vec![Grant::Exact(StickOperation::WriteDefaults)],
+            false,
+        ),
+        PlannedOperation::EnsureLibrary => (
+            StickWritePlan::default(),
+            vec![Grant::Exact(StickOperation::EnsureLibrary)],
+            false,
+        ),
+        PlannedOperation::Format { layout } => (
+            StickWritePlan::default(),
+            vec![Grant::Exact(StickOperation::Format {
+                layout: layout.clone(),
+            })],
+            false,
+        ),
     };
     found.spare = spare;
-    found.approval = Some(stick_approval::issue(destination, steps, bound.then_some(generation))?);
+    found.approval = Some(stick_approval::issue(
+        destination,
+        steps,
+        bound.then_some(generation),
+    )?);
     Ok(found)
 }
 
@@ -233,19 +360,34 @@ fn json<T: Serialize>(value: &T) -> AppResult<serde_json::Value> {
 
 /// Export Playlist's selection, as `export_playlist` builds it, without
 /// settling anything first.
-fn playlist_selection(state: &AppState, destination: &Path, playlist: &str, delete: bool) -> AppResult<ExportSelection> {
+fn playlist_selection(
+    state: &AppState,
+    destination: &Path,
+    playlist: &str,
+    delete: bool,
+) -> AppResult<ExportSelection> {
     let library = state.library()?;
     let share_root = state.share_root();
     let (mut playlists, automatic) = held_on_stick(state, &library, destination);
     if !playlists.iter().any(|id| id == playlist) {
         playlists.push(playlist.to_owned());
     }
-    let mut selection = ExportSelection::from_playlists(state, &library, &share_root, &playlists, automatic)?;
+    let mut selection =
+        ExportSelection::from_playlists(state, &library, &share_root, &playlists, automatic)?;
     selection.keep_unlisted = true;
-    Ok(match selection.for_stick_inspected(state, &library, &share_root, destination, delete, false)? {
-        std::borrow::Cow::Owned(kept) => kept,
-        std::borrow::Cow::Borrowed(_) => selection,
-    })
+    Ok(
+        match selection.for_stick_inspected(
+            state,
+            &library,
+            &share_root,
+            destination,
+            delete,
+            false,
+        )? {
+            std::borrow::Cow::Owned(kept) => kept,
+            std::borrow::Cow::Borrowed(_) => selection,
+        },
+    )
 }
 
 /// The audio from the export's own preview, and the rest from comparing the
@@ -263,8 +405,14 @@ fn export_plan(
         cache: Some(&EXPORT_CACHE),
         ..Default::default()
     };
-    let preview = rbl_export::plan::preview(destination, &selection.tracks, &selection.playlists, &selection.my_tags, &options)
-        .map_err(|e| AppError::internal(e.to_string()))?;
+    let preview = rbl_export::plan::preview(
+        destination,
+        &selection.tracks,
+        &selection.playlists,
+        &selection.my_tags,
+        &options,
+    )
+    .map_err(|e| AppError::internal(e.to_string()))?;
     let library = state.library()?;
     let (held, _) = held_on_stick(state, &library, destination);
     let manifest = rbl_export::Manifest::load(destination);
@@ -273,13 +421,23 @@ fn export_plan(
     // Each playlist: created, or written again with what it gains and loses.
     let entries_on_stick: HashMap<u64, Option<Vec<String>>> = manifest
         .as_ref()
-        .map(|m| m.playlists.iter().filter(|p| !p.device_only).map(|p| (p.library_id, p.library_entries.clone())).collect())
+        .map(|m| {
+            m.playlists
+                .iter()
+                .filter(|p| !p.device_only)
+                .map(|p| (p.library_id, p.library_entries.clone()))
+                .collect()
+        })
         .unwrap_or_default();
     let playlists = selection
         .playlists
         .iter()
         .map(|p| {
-            let change = if held.iter().any(|id| *id == p.id.to_string()) { PlaylistChange::Resynchronised } else { PlaylistChange::Created };
+            let change = if held.iter().any(|id| *id == p.id.to_string()) {
+                PlaylistChange::Resynchronised
+            } else {
+                PlaylistChange::Created
+            };
             // Keyed as the export records them (`rbl_export::track_key`).
             let next: Vec<String> = p
                 .track_indices
@@ -297,20 +455,48 @@ fn export_plan(
             } else {
                 (None, None)
             };
-            PlannedPlaylist { name: p.name.clone(), folder: p.folder, change, added, removed }
+            PlannedPlaylist {
+                name: p.name.clone(),
+                folder: p.folder,
+                change,
+                added,
+                removed,
+            }
         })
         .collect();
 
     // Tracks already on the Stick whose data differs.
-    let on_stick: HashMap<u64, u32> = manifest.as_ref().map(|m| m.tracks.iter().map(|t| (t.library_id, t.export_id)).collect()).unwrap_or_default();
-    let stick_tracks: HashMap<u32, &rbl_export::snapshot::Track> =
-        snapshot.as_ref().and_then(|s| s.legacy.as_ref()).map(|l| l.tracks.iter().map(|t| (t.id, t)).collect()).unwrap_or_default();
-    let stick_tag_names: HashMap<u64, &str> = snapshot.as_ref().map(|s| s.my_tags.iter().map(|t| (t.id, t.name.as_str())).collect()).unwrap_or_default();
-    let library_tag_names: HashMap<u64, &str> = selection.my_tags.iter().map(|t| (t.id, t.name.as_str())).collect();
+    let on_stick: HashMap<u64, u32> = manifest
+        .as_ref()
+        .map(|m| {
+            m.tracks
+                .iter()
+                .map(|t| (t.library_id, t.export_id))
+                .collect()
+        })
+        .unwrap_or_default();
+    let stick_tracks: HashMap<u32, &rbl_export::snapshot::Track> = snapshot
+        .as_ref()
+        .and_then(|s| s.legacy.as_ref())
+        .map(|l| l.tracks.iter().map(|t| (t.id, t)).collect())
+        .unwrap_or_default();
+    let stick_tag_names: HashMap<u64, &str> = snapshot
+        .as_ref()
+        .map(|s| s.my_tags.iter().map(|t| (t.id, t.name.as_str())).collect())
+        .unwrap_or_default();
+    let library_tag_names: HashMap<u64, &str> = selection
+        .my_tags
+        .iter()
+        .map(|t| (t.id, t.name.as_str()))
+        .collect();
     let mut track_changes = Vec::new();
     for track in &selection.tracks {
-        let Some(export_id) = on_stick.get(&track.id) else { continue };
-        let Some(was) = stick_tracks.get(export_id) else { continue };
+        let Some(export_id) = on_stick.get(&track.id) else {
+            continue;
+        };
+        let Some(was) = stick_tracks.get(export_id) else {
+            continue;
+        };
         let mut fields: Vec<String> = Vec::new();
         for (name, same) in [
             ("Title", was.title == track.title),
@@ -328,15 +514,28 @@ fn export_plan(
             }
         }
         if let Some(memberships) = snapshot.as_ref().map(|s| &s.tag_memberships) {
-            let before: BTreeSet<&str> =
-                memberships.get(export_id).map(|ids| ids.iter().filter_map(|id| stick_tag_names.get(id).copied()).collect()).unwrap_or_default();
-            let after: BTreeSet<&str> = track.my_tags.iter().filter_map(|id| library_tag_names.get(id).copied()).collect();
+            let before: BTreeSet<&str> = memberships
+                .get(export_id)
+                .map(|ids| {
+                    ids.iter()
+                        .filter_map(|id| stick_tag_names.get(id).copied())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let after: BTreeSet<&str> = track
+                .my_tags
+                .iter()
+                .filter_map(|id| library_tag_names.get(id).copied())
+                .collect();
             if before != after {
                 fields.push("MyTags".to_owned());
             }
         }
         if !fields.is_empty() {
-            track_changes.push(TrackChange { title: track.title.clone(), fields });
+            track_changes.push(TrackChange {
+                title: track.title.clone(),
+                fields,
+            });
         }
     }
     let found = preview.estimate;
@@ -365,7 +564,18 @@ fn multiset_difference(before: &[String], next: &[String]) -> (usize, usize) {
     for id in next {
         *counts.entry(id).or_default() += 1;
     }
-    let gained: u64 = counts.values().filter(|n| **n > 0).map(|n| n.unsigned_abs()).sum();
-    let lost: u64 = counts.values().filter(|n| **n < 0).map(|n| n.unsigned_abs()).sum();
-    (usize::try_from(gained).unwrap_or(usize::MAX), usize::try_from(lost).unwrap_or(usize::MAX))
+    let gained: u64 = counts
+        .values()
+        .filter(|n| **n > 0)
+        .map(|n| n.unsigned_abs())
+        .sum();
+    let lost: u64 = counts
+        .values()
+        .filter(|n| **n < 0)
+        .map(|n| n.unsigned_abs())
+        .sum();
+    (
+        usize::try_from(gained).unwrap_or(usize::MAX),
+        usize::try_from(lost).unwrap_or(usize::MAX),
+    )
 }

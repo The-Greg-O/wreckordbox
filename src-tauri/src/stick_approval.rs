@@ -41,19 +41,37 @@ pub const APPROVAL_LIFETIME: Duration = Duration::from_secs(10 * 60);
 
 /// One write to a Stick, as the command that performs it describes it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum StickOperation {
     /// Export Playlist (or Export Folder).
-    ExportPlaylist { playlist: String, delete_unlisted_music: bool },
+    ExportPlaylist {
+        playlist: String,
+        delete_unlisted_music: bool,
+    },
     /// Export Track: tracks in no playlist (the Stick's playlists from this
     /// Library are written again with them).
     ExportTracks { tracks: Vec<String> },
     /// SYNC of the Sync Manager, for one Stick.
-    Sync { playlists: Vec<String>, delete_unlisted_music: bool, automatic: bool },
+    Sync {
+        playlists: Vec<String>,
+        delete_unlisted_music: bool,
+        automatic: bool,
+    },
     /// A change to one library's playlists on the Stick, as sent.
-    PlaylistEdit { format: String, edit: serde_json::Value },
+    PlaylistEdit {
+        format: String,
+        edit: serde_json::Value,
+    },
     /// Loose files copied to the Stick and added to one of its playlists.
-    PlaylistAddFiles { format: String, playlist: String, files: Vec<String> },
+    PlaylistAddFiles {
+        format: String,
+        playlist: String,
+        files: Vec<String>,
+    },
     /// The Stick's own settings (DJ System, written to the Stick).
     SaveSettings { settings: serde_json::Value },
     /// Defaults written to a Stick that has none.
@@ -73,7 +91,12 @@ pub enum Grant {
     ExportSome(BTreeSet<String>),
     /// An `add` edit of at most `max` entries to this playlist, with this
     /// duplicates choice.
-    AddTo { format: String, playlist: String, max: usize, duplicates: bool },
+    AddTo {
+        format: String,
+        playlist: String,
+        max: usize,
+        duplicates: bool,
+    },
 }
 
 impl Grant {
@@ -83,12 +106,27 @@ impl Grant {
             (Self::ExportSome(allowed), StickOperation::ExportTracks { tracks }) => {
                 !tracks.is_empty() && tracks.iter().all(|t| allowed.contains(t))
             }
-            (Self::AddTo { format, playlist, max, duplicates }, StickOperation::PlaylistEdit { format: f, edit }) => {
+            (
+                Self::AddTo {
+                    format,
+                    playlist,
+                    max,
+                    duplicates,
+                },
+                StickOperation::PlaylistEdit { format: f, edit },
+            ) => {
                 f == format
                     && edit.get("kind").and_then(|k| k.as_str()) == Some("add")
                     && edit.get("playlist").and_then(|p| p.as_str()) == Some(playlist.as_str())
-                    && edit.get("duplicates").and_then(serde_json::Value::as_bool).unwrap_or(false) == *duplicates
-                    && edit.get("tracks").and_then(|t| t.as_array()).is_some_and(|t| !t.is_empty() && t.len() <= *max)
+                    && edit
+                        .get("duplicates")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false)
+                        == *duplicates
+                    && edit
+                        .get("tracks")
+                        .and_then(|t| t.as_array())
+                        .is_some_and(|t| !t.is_empty() && t.len() <= *max)
             }
             _ => false,
         }
@@ -112,12 +150,16 @@ struct Approval {
     steps: VecDeque<Grant>,
 }
 
-static APPROVALS: LazyLock<Mutex<HashMap<String, Approval>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static APPROVALS: LazyLock<Mutex<HashMap<String, Approval>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 /// The Sticks being written to now, and the signal that one is free again.
-static LOCKS: LazyLock<(Mutex<HashSet<PathBuf>>, Condvar)> = LazyLock::new(|| (Mutex::new(HashSet::new()), Condvar::new()));
+static LOCKS: LazyLock<(Mutex<HashSet<PathBuf>>, Condvar)> =
+    LazyLock::new(|| (Mutex::new(HashSet::new()), Condvar::new()));
 
 fn approvals() -> MutexGuard<'static, HashMap<String, Approval>> {
-    APPROVALS.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    APPROVALS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// The Stick's execution lock: every approved write holds it from checking
@@ -130,7 +172,9 @@ pub struct StickLock {
 impl Drop for StickLock {
     fn drop(&mut self) {
         let (held, freed) = &*LOCKS;
-        held.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&self.stick);
+        held.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.stick);
         freed.notify_all();
     }
 }
@@ -139,12 +183,18 @@ impl Drop for StickLock {
 /// already holding it.
 pub fn lock(stick: &Path) -> StickLock {
     let (held, freed) = &*LOCKS;
-    let mut busy = held.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut busy = held
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     while busy.contains(stick) {
-        busy = freed.wait(busy).unwrap_or_else(std::sync::PoisonError::into_inner);
+        busy = freed
+            .wait(busy)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
     }
     busy.insert(stick.to_path_buf());
-    StickLock { stick: stick.to_path_buf() }
+    StickLock {
+        stick: stick.to_path_buf(),
+    }
 }
 
 /// The mounted directory's identity: another volume at the same path differs.
@@ -168,10 +218,18 @@ pub fn volume_identity(stick: &Path) -> AppResult<String> {
 pub fn stick_revision(stick: &Path) -> String {
     let mut seen: Vec<String> = Vec::new();
     let mut note = |path: &Path| {
-        let rel = path.strip_prefix(stick).unwrap_or(path).to_string_lossy().into_owned();
+        let rel = path
+            .strip_prefix(stick)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .into_owned();
         match std::fs::symlink_metadata(path) {
             Ok(meta) => {
-                let modified = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
+                let modified = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map_or(0, |d| d.as_nanos());
                 seen.push(format!("{rel}:{}:{modified}", meta.len()));
             }
             Err(_) => seen.push(format!("{rel}:-")),
@@ -181,11 +239,21 @@ pub fn stick_revision(stick: &Path) -> String {
         note(&stick.join(name));
     }
     if let Ok(entries) = std::fs::read_dir(stick) {
-        let mut roots: Vec<PathBuf> = entries.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+        let mut roots: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect();
         roots.sort();
         for root in roots {
             let mut files = Vec::new();
-            for name in ["DEVSETTING.DAT", "MYSETTING.DAT", "MYSETTING2.DAT", "DJMMYSETTING.DAT", "rbxport/manifest.json"] {
+            for name in [
+                "DEVSETTING.DAT",
+                "MYSETTING.DAT",
+                "MYSETTING2.DAT",
+                "DJMMYSETTING.DAT",
+                "rbxport/manifest.json",
+            ] {
                 files.push(root.join(name));
             }
             if let Ok(inner) = std::fs::read_dir(root.join("rekordbox")) {
@@ -203,7 +271,10 @@ pub fn stick_revision(stick: &Path) -> String {
 }
 
 fn gone() -> AppError {
-    AppError::new(ErrorKind::NotFound, "That device is no longer connected. It may have been unplugged or renamed.")
+    AppError::new(
+        ErrorKind::NotFound,
+        "That device is no longer connected. It may have been unplugged or renamed.",
+    )
 }
 
 fn refused(why: &str) -> AppError {
@@ -254,7 +325,12 @@ impl Consumed {
 /// Checks and uses up the approval for `op` on the Stick at `stick`. Call it
 /// holding [`lock`], before any recovery or write. `generation` is the
 /// Library generation now, for writes whose contents come from the Library.
-pub fn consume(token: Option<&str>, op: &StickOperation, stick: &Path, generation: u64) -> AppResult<Consumed> {
+pub fn consume(
+    token: Option<&str>,
+    op: &StickOperation,
+    stick: &Path,
+    generation: u64,
+) -> AppResult<Consumed> {
     if !stick.is_dir() {
         return Err(gone());
     }
@@ -263,7 +339,9 @@ pub fn consume(token: Option<&str>, op: &StickOperation, stick: &Path, generatio
     };
     // Taken out whatever happens next: a token is good for one try.
     let Some(mut approval) = approvals().remove(token) else {
-        return Err(refused("This confirmation was already used, or is unknown."));
+        return Err(refused(
+            "This confirmation was already used, or is unknown.",
+        ));
     };
     if approval.issued.elapsed() >= APPROVAL_LIFETIME {
         return Err(refused("This confirmation has expired."));
@@ -272,20 +350,36 @@ pub fn consume(token: Option<&str>, op: &StickOperation, stick: &Path, generatio
         return Err(refused("This confirmation was for another Stick."));
     }
     if volume_identity(stick)? != approval.volume {
-        return Err(refused("The Stick at this place is not the one the write was confirmed for."));
+        return Err(refused(
+            "The Stick at this place is not the one the write was confirmed for.",
+        ));
     }
     if stick_revision(stick) != approval.revision {
         return Err(refused("The Stick changed since the write was confirmed."));
     }
     // Only a write whose contents come from the Library is bound to it.
-    let from_library = matches!(op, StickOperation::ExportPlaylist { .. } | StickOperation::ExportTracks { .. } | StickOperation::Sync { .. });
+    let from_library = matches!(
+        op,
+        StickOperation::ExportPlaylist { .. }
+            | StickOperation::ExportTracks { .. }
+            | StickOperation::Sync { .. }
+    );
     if from_library && approval.generation.is_some_and(|g| g != generation) {
-        return Err(refused("The Library changed since the write was confirmed."));
+        return Err(refused(
+            "The Library changed since the write was confirmed.",
+        ));
     }
     while let Some(step) = approval.steps.pop_front() {
         if step.allows(op) {
-            let rest = if approval.steps.is_empty() { None } else { Some(approval) };
-            return Ok(Consumed { token: token.to_owned(), rest });
+            let rest = if approval.steps.is_empty() {
+                None
+            } else {
+                Some(approval)
+            };
+            return Ok(Consumed {
+                token: token.to_owned(),
+                rest,
+            });
         }
         if !step.optional() {
             break;
@@ -321,7 +415,9 @@ mod tests {
         dir
     }
     fn export(tracks: &[&str]) -> StickOperation {
-        StickOperation::ExportTracks { tracks: tracks.iter().map(|t| (*t).to_owned()).collect() }
+        StickOperation::ExportTracks {
+            tracks: tracks.iter().map(|t| (*t).to_owned()).collect(),
+        }
     }
 
     #[test]
@@ -342,18 +438,33 @@ mod tests {
         let op = export(&["1"]);
         let other = stick();
         let token = issue(dir.path(), vec![Grant::Exact(op.clone())], Some(0)).unwrap();
-        assert!(consume(Some(&token), &export(&["2"]), dir.path(), 0).is_err(), "another write");
+        assert!(
+            consume(Some(&token), &export(&["2"]), dir.path(), 0).is_err(),
+            "another write"
+        );
         let token = issue(dir.path(), vec![Grant::Exact(op.clone())], Some(0)).unwrap();
-        assert!(consume(Some(&token), &op, other.path(), 0).is_err(), "another Stick");
+        assert!(
+            consume(Some(&token), &op, other.path(), 0).is_err(),
+            "another Stick"
+        );
         let token = issue(dir.path(), vec![Grant::Exact(op.clone())], Some(0)).unwrap();
-        assert!(consume(Some(&token), &op, dir.path(), 1).is_err(), "the Library changed");
+        assert!(
+            consume(Some(&token), &op, dir.path(), 1).is_err(),
+            "the Library changed"
+        );
         let token = issue(dir.path(), vec![Grant::Exact(op.clone())], Some(0)).unwrap();
         std::thread::sleep(Duration::from_millis(20));
         std::fs::write(dir.path().join("PIONEER/rekordbox/export.pdb"), b"changed").unwrap();
-        assert!(consume(Some(&token), &op, dir.path(), 0).is_err(), "the Stick changed");
+        assert!(
+            consume(Some(&token), &op, dir.path(), 0).is_err(),
+            "the Stick changed"
+        );
         let token = issue(dir.path(), vec![Grant::Exact(op.clone())], Some(0)).unwrap();
         std::fs::write(dir.path().join(".rbxport-publication"), b"{}").unwrap();
-        assert!(consume(Some(&token), &op, dir.path(), 0).is_err(), "an unfinished write appeared");
+        assert!(
+            consume(Some(&token), &op, dir.path(), 0).is_err(),
+            "an unfinished write appeared"
+        );
     }
 
     #[test]
@@ -379,13 +490,25 @@ mod tests {
         };
         let steps = vec![
             Grant::ExportSome(["1".to_owned(), "2".to_owned()].into()),
-            Grant::AddTo { format: "deviceLibrary".into(), playlist: "7".into(), max: 2, duplicates: false },
+            Grant::AddTo {
+                format: "deviceLibrary".into(),
+                playlist: "7".into(),
+                max: 2,
+                duplicates: false,
+            },
         ];
         let token = issue(dir.path(), steps.clone(), Some(0)).unwrap();
-        assert!(consume(Some(&token), &export(&["3"]), dir.path(), 0).is_err(), "not an approved track");
+        assert!(
+            consume(Some(&token), &export(&["3"]), dir.path(), 0).is_err(),
+            "not an approved track"
+        );
         let token = issue(dir.path(), steps.clone(), Some(0)).unwrap();
         let first = consume(Some(&token), &export(&["1"]), dir.path(), 0).unwrap();
-        std::fs::write(dir.path().join("PIONEER/rekordbox/export.pdb"), b"after the export").unwrap();
+        std::fs::write(
+            dir.path().join("PIONEER/rekordbox/export.pdb"),
+            b"after the export",
+        )
+        .unwrap();
         first.finish(dir.path());
         let _ = consume(Some(&token), &add, dir.path(), 0).unwrap();
         // Without anything to export, the add alone.
@@ -398,7 +521,8 @@ mod tests {
         let dir = stick();
         let op = StickOperation::WriteDefaults;
         let token = issue(dir.path(), vec![Grant::Exact(op.clone())], None).unwrap();
-        approvals().get_mut(&token).unwrap().issued = Instant::now().checked_sub(APPROVAL_LIFETIME).unwrap();
+        approvals().get_mut(&token).unwrap().issued =
+            Instant::now().checked_sub(APPROVAL_LIFETIME).unwrap();
         let expired = consume(Some(&token), &op, dir.path(), 0).err().unwrap();
         assert!(expired.to_string().contains("expired"), "{expired}");
     }

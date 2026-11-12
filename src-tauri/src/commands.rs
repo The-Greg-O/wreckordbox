@@ -1009,6 +1009,7 @@ pub async fn link_take_master_tempo(state: State<'_, Arc<AppState>>) -> AppResul
 /// rekordbox 7.2.18 manual p. 256); only the Sync Manager's SYNC makes a
 /// stick hold exactly a selection (#304).
 #[tauri::command]
+#[allow(clippy::too_many_arguments, reason = "the webview's arguments, the approval included (wbx-45.4)")]
 pub async fn export_playlist<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     state: State<'_, Arc<AppState>>,
@@ -1110,6 +1111,7 @@ fn playlist_export_selection(
 /// its progress event, so the window can show each stick moving independently.
 #[tauri::command]
 #[allow(clippy::too_many_arguments, reason = "the Sync Manager's own settings, one per IPC field the frontend already sends")]
+#[allow(clippy::implicit_hasher, reason = "the webview sends a plain map")]
 pub async fn sync_devices<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     state: State<'_, Arc<AppState>>,
@@ -1142,7 +1144,8 @@ pub async fn sync_devices<R: tauri::Runtime>(
             delete_unlisted_music: delete_unlisted_music.unwrap_or(false),
             automatic: automatic.unwrap_or(false),
         };
-        let mut _locks = Vec::new();
+        // Held to the end of the sync: nothing of ours touches these Sticks meanwhile.
+        let mut held_locks = Vec::new();
         let mut refused = Vec::new();
         let mut destinations_approved = Vec::new();
         let order = destinations.clone();
@@ -1151,12 +1154,18 @@ pub async fn sync_devices<R: tauri::Runtime>(
             let lock = crate::stick_approval::lock(stick);
             match crate::stick_approval::consume(approvals.get(&destination).map(String::as_str), &operation, stick, generation) {
                 Ok(_approved) => {
-                    _locks.push(lock);
+                    held_locks.push(lock);
                     destinations_approved.push(destination);
                 }
-                Err(error) => refused.push(SyncDeviceReportDto {
-                    path: destination, report: None, error: Some(error.full_message()), ejected: false, eject_error: None,
-                }),
+                Err(error) => {
+                    // Said as every Stick of the run is: started, then failed.
+                    for state in ["writing", "failed"] {
+                        let _ = tauri::Emitter::emit(&app, "sync:progress", SyncProgressDto { path: destination.clone(), state });
+                    }
+                    refused.push(SyncDeviceReportDto {
+                        path: destination, report: None, error: Some(error.full_message()), ejected: false, eject_error: None,
+                    });
+                }
             }
         }
         let destinations = destinations_approved;
@@ -5233,7 +5242,7 @@ mod tests {
         out
     }
 
-    fn plan_for(state: &crate::state::AppState, stick: &std::path::Path, operation: serde_json::Value) -> crate::stick_write_plan::StickWritePlan {
+    fn plan_for(state: &crate::state::AppState, stick: &std::path::Path, operation: &serde_json::Value) -> crate::stick_write_plan::StickWritePlan {
         let request = serde_json::from_value(serde_json::json!({ "destination": stick.to_string_lossy(), "operation": operation })).unwrap();
         crate::stick_write_plan::plan(state, &request).unwrap()
     }
@@ -5258,7 +5267,7 @@ mod tests {
         let stick = stick_dir.path().to_path_buf();
         let a = rbl_db::fixture::playlist_id(0);
         let before = stick_bytes(&stick);
-        let found = plan_for(&state, &stick, serde_json::json!({ "kind": "exportPlaylist", "playlist": a }));
+        let found = plan_for(&state, &stick, &serde_json::json!({ "kind": "exportPlaylist", "playlist": a }));
         assert_eq!(stick_bytes(&stick), before, "the dry run wrote nothing");
         assert!(!found.pending && !found.spare, "an unmarked stick is a Gig stick");
         let per = rbl_db::fixture::Shape::default().tracks_per_playlist;
@@ -5291,7 +5300,7 @@ mod tests {
         let lone = serde_json::json!({ "kind": "exportTracks", "tracks": [rbl_db::fixture::track_id(last)] });
 
         // Nothing changed in the Library: only the new track's audio is copied.
-        let found = plan_for(&state, &stick, lone.clone());
+        let found = plan_for(&state, &stick, &lone);
         assert!(found.spare, "the Spare stick marker is read");
         assert_eq!((found.tracks_new, found.audio_reused), (1, per));
         assert_eq!(found.track_changes, Vec::new(), "the exported data matches the Library's");
@@ -5299,14 +5308,14 @@ mod tests {
 
         // One exported track's Energy changed, and the playlist gained a track.
         let library = state.library().unwrap();
-        let selection = super::ExportSelection::from_playlists(&state, &library, &location.share_root, &[a.clone()], false).unwrap();
+        let selection = super::ExportSelection::from_playlists(&state, &library, &location.share_root, std::slice::from_ref(&a), false).unwrap();
         let first = selection.tracks[0].clone();
         let before = stick_bytes(&stick);
         edit_library(dir.path(), &state, &location, |w| {
             w.set_rating(&first.id.to_string(), if first.rating == 5 { 1 } else { 5 }).unwrap();
             w.add_tracks(&a, &[rbl_db::fixture::track_id(last - 1)]).unwrap();
         });
-        let found = plan_for(&state, &stick, lone);
+        let found = plan_for(&state, &stick, &lone);
         assert_eq!(stick_bytes(&stick), before, "the dry run wrote nothing");
         assert_eq!(found.audio_reused, per, "the audio on the Stick is reused");
         let changed: Vec<_> = found.track_changes.iter().map(|c| (c.title.as_str(), c.fields.clone())).collect();
@@ -5325,7 +5334,7 @@ mod tests {
         // The journal an interrupted publication leaves (`rbl_export::recovery_pending`).
         std::fs::write(stick.join(".rbxport-publication"), b"{}").unwrap();
         let before = stick_bytes(&stick);
-        let found = plan_for(&state, &stick, serde_json::json!({ "kind": "exportPlaylist", "playlist": rbl_db::fixture::playlist_id(1) }));
+        let found = plan_for(&state, &stick, &serde_json::json!({ "kind": "exportPlaylist", "playlist": rbl_db::fixture::playlist_id(1) }));
         assert!(found.pending);
         assert_eq!(found.approval, None, "nothing may be written");
         assert_eq!(found.playlists, Vec::new(), "nothing planned");
