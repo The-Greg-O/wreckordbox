@@ -557,6 +557,8 @@ impl<'a> Decisions<'a> {
                 },
                 str::to_owned,
             );
+        self.stems
+            .before_record(&fact.found, fact.fingerprint.as_ref(), then.run.map(RunId))?;
         // One transaction: the answer, the Fact, what the Fact supersedes
         // and the Run made for them. Clients are told only once it holds.
         let (decision, answer, recorded) = self

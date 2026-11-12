@@ -37,6 +37,7 @@
 //! No dependency on the desktop framework, the Library service or any
 //! rekordbox-format crate.
 
+pub mod attachments;
 mod audio;
 pub mod decisions;
 mod fingerprint;
@@ -52,7 +53,9 @@ use std::path::{Path, PathBuf};
 pub use audio::{audio_info, AudioInfo};
 pub use fingerprint::{fingerprint_file, Fingerprint};
 pub use kinds::{Declaration, Kinds, ValueType, KINDS_FILE};
-pub use store::{Fact, Kind, Nature, NewFact, Run, RunId, Sidecar, Source, SourceKind};
+pub use store::{
+    Fact, Kind, Nature, NewFact, Run, RunId, Sidecar, Source, SourceKind, SCHEMA_VERSION,
+};
 pub use tag_schema::{TagSchema, TAG_SCHEMA_FILE};
 
 /// The Sidecar's folder when nothing says otherwise: beside the Library's

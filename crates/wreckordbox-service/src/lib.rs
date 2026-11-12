@@ -10,6 +10,7 @@
 //! This crate has no dependency on the desktop framework and needs no
 //! display.
 
+mod attachments;
 mod client;
 pub mod decider;
 pub mod decisions;

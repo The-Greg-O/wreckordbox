@@ -9,8 +9,12 @@
 use std::cmp::Ordering;
 
 /// The wheel, `1A` to `12A` and `1B` to `12B`, as rekordbox spells the keys.
-const MINOR: [&str; 12] = ["Abm", "Ebm", "Bbm", "Fm", "Cm", "Gm", "Dm", "Am", "Em", "Bm", "F#m", "Dbm"];
-const MAJOR: [&str; 12] = ["B", "F#", "Db", "Ab", "Eb", "Bb", "F", "C", "G", "D", "A", "E"];
+const MINOR: [&str; 12] = [
+    "Abm", "Ebm", "Bbm", "Fm", "Cm", "Gm", "Dm", "Am", "Em", "Bm", "F#m", "Dbm",
+];
+const MAJOR: [&str; 12] = [
+    "B", "F#", "Db", "Ab", "Eb", "Bb", "F", "C", "G", "D", "A", "E",
+];
 
 /// The enharmonic spellings a library can hold, onto the wheel's own.
 fn canonical(name: &str) -> &str {
@@ -44,7 +48,9 @@ pub fn camelot_rank(name: &str) -> u32 {
     // A Camelot code stored as the key itself: some libraries hold `8A`.
     let code = name.as_bytes();
     if let Some((&letter, digits)) = code.split_last() {
-        if (letter == b'A' || letter == b'B' || letter == b'a' || letter == b'b') && !digits.is_empty() {
+        if (letter == b'A' || letter == b'B' || letter == b'a' || letter == b'b')
+            && !digits.is_empty()
+        {
             if let Ok(n) = std::str::from_utf8(digits).unwrap_or("").parse::<u32>() {
                 if (1..=12).contains(&n) {
                     return (n - 1) * 2 + u32::from(letter.eq_ignore_ascii_case(&b'B'));
@@ -89,8 +95,16 @@ mod tests {
         assert_eq!(camelot_rank("B"), 1);
         assert_eq!(camelot_rank("Ebm"), 2);
         assert_eq!(camelot_rank("E"), 23);
-        assert_eq!(camelot_rank("G#m"), camelot_rank("Abm"), "an enharmonic spelling is the same key");
-        assert_eq!(camelot_rank("8A"), camelot_rank("Am"), "a code stored as a key");
+        assert_eq!(
+            camelot_rank("G#m"),
+            camelot_rank("Abm"),
+            "an enharmonic spelling is the same key"
+        );
+        assert_eq!(
+            camelot_rank("8A"),
+            camelot_rank("Am"),
+            "a code stored as a key"
+        );
         assert_eq!(camelot_rank(""), u32::MAX);
         assert_eq!(camelot_rank("Unknown"), u32::MAX);
     }

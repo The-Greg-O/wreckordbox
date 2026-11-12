@@ -98,11 +98,10 @@ impl Fingerprint {
     #[must_use]
     pub fn of(master_db: &Path, db_version: u32, content: u64) -> Option<Self> {
         let (db_len, db_modified_ns) = stamp(master_db)?;
-        let wal = master_db.with_extension(
-            master_db
-                .extension()
-                .map_or_else(|| "db-wal".to_owned(), |e| format!("{}-wal", e.to_string_lossy())),
-        );
+        let wal = master_db.with_extension(master_db.extension().map_or_else(
+            || "db-wal".to_owned(),
+            |e| format!("{}-wal", e.to_string_lossy()),
+        ));
         let (wal_len, wal_modified_ns) = stamp(&wal).unwrap_or((0, 0));
         Some(Self {
             format: FORMAT,
@@ -197,7 +196,10 @@ impl Writer {
 
 /// Serialises a loaded library.
 #[must_use]
-#[allow(clippy::too_many_lines, reason = "one column after another; splitting it would only hide the order")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one column after another; splitting it would only hide the order"
+)]
 pub fn encode(library: &Library, fingerprint: Fingerprint) -> Vec<u8> {
     let mut w = Writer::default();
     w.0.extend_from_slice(MAGIC);
@@ -216,8 +218,11 @@ pub fn encode(library: &Library, fingerprint: Fingerprint) -> Vec<u8> {
         &library.title,
         &library.title_folded,
         &library.comment,
-        &library.search_extra[0], &library.search_extra[1], &library.search_extra[2],
-        &library.search_extra[3], &library.search_extra[4],
+        &library.search_extra[0],
+        &library.search_extra[1],
+        &library.search_extra[2],
+        &library.search_extra[3],
+        &library.search_extra[4],
         &library.folder_path,
         &library.file_name,
         &library.analysis_path,
@@ -322,12 +327,19 @@ pub fn encode(library: &Library, fingerprint: Fingerprint) -> Vec<u8> {
     w.strings(&library.date_created);
     w.strings(&library.message);
     w.u64(library.ranks.len() as u64);
-    for rank in &library.ranks { w.u32s(rank); }
+    for rank in &library.ranks {
+        w.u32s(rank);
+    }
     w.strings(&library.search);
     // Format 12: each track's My Tags, as bounds and ids (bit-cast to u32).
     let (bounds, keys) = library.my_tag_parts();
     w.u32s(bounds);
-    w.u32s(&keys.iter().map(|&k| u32::from_ne_bytes(k.to_ne_bytes())).collect::<Vec<_>>());
+    w.u32s(
+        &keys
+            .iter()
+            .map(|&k| u32::from_ne_bytes(k.to_ne_bytes()))
+            .collect::<Vec<_>>(),
+    );
     // Format 15: the path columns of the cloud-shared tracks, as columns.
     let cloud = &library.cloud_paths;
     w.u32s(&cloud.iter().map(|(row, _)| *row).collect::<Vec<_>>());
@@ -340,8 +352,18 @@ pub fn encode(library: &Library, fingerprint: Fingerprint) -> Vec<u8> {
         }
         w.strings(&column);
     }
-    w.u64s(&cloud.iter().map(|(_, p)| p.content_link.cast_unsigned()).collect::<Vec<_>>());
-    w.u64s(&cloud.iter().map(|(_, p)| p.service_id.cast_unsigned()).collect::<Vec<_>>());
+    w.u64s(
+        &cloud
+            .iter()
+            .map(|(_, p)| p.content_link.cast_unsigned())
+            .collect::<Vec<_>>(),
+    );
+    w.u64s(
+        &cloud
+            .iter()
+            .map(|(_, p)| p.service_id.cast_unsigned())
+            .collect::<Vec<_>>(),
+    );
     w.u32(crc32fast::hash(&w.0));
     w.0
 }
@@ -427,7 +449,9 @@ impl<'a> Reader<'a> {
 pub fn decode(data: &[u8], want: Fingerprint) -> Option<Library> {
     let end = data.len().checked_sub(4)?;
     let checksum = u32::from_le_bytes(data.get(end..)?.try_into().ok()?);
-    if crc32fast::hash(data.get(..end)?) != checksum { return None; }
+    if crc32fast::hash(data.get(..end)?) != checksum {
+        return None;
+    }
     let data = data.get(..end)?;
     let mut r = Reader { data, at: 0 };
     if r.take(4)? != MAGIC {
@@ -447,7 +471,8 @@ pub fn decode(data: &[u8], want: Fingerprint) -> Option<Library> {
     // rewrites the WAL without changing a single row, and refusing the
     // snapshot for that made it useless whenever rekordbox was open. What must
     // match is the database, the content counter, the schema, and the format.
-    if found.format != FORMAT || found.format != want.format
+    if found.format != FORMAT
+        || found.format != want.format
         || found.db_version != want.db_version
         || found.content != want.content
         || found.database != want.database
@@ -461,7 +486,9 @@ pub fn decode(data: &[u8], want: Fingerprint) -> Option<Library> {
     lib.title = r.strings()?;
     lib.title_folded = r.strings()?;
     lib.comment = r.strings()?;
-    for column in &mut lib.search_extra { *column = r.strings()?; }
+    for column in &mut lib.search_extra {
+        *column = r.strings()?;
+    }
     lib.folder_path = r.strings()?;
     lib.file_name = r.strings()?;
     lib.analysis_path = r.strings()?;
@@ -507,7 +534,9 @@ pub fn decode(data: &[u8], want: Fingerprint) -> Option<Library> {
         }
         my_tags.push(TagCategory {
             name: column.get(0).to_owned(),
-            tags: (1..column.len()).map(|i| column.get(i).to_owned()).collect(),
+            tags: (1..column.len())
+                .map(|i| column.get(i).to_owned())
+                .collect(),
             ids: ids.into_iter().map(u32::cast_signed).collect(),
         });
     }
@@ -517,7 +546,10 @@ pub fn decode(data: &[u8], want: Fingerprint) -> Option<Library> {
     let cue_count = r.count(14)?;
     let mut cues = Vec::with_capacity(cue_count);
     for _ in 0..cue_count {
-        cues.push(Cue { id: r.u32()?, ..Cue::default() });
+        cues.push(Cue {
+            id: r.u32()?,
+            ..Cue::default()
+        });
     }
     for cue in &mut cues {
         cue.position_ms = r.u32()?;
@@ -581,21 +613,31 @@ pub fn decode(data: &[u8], want: Fingerprint) -> Option<Library> {
     lib.lyricist = r.strings()?;
     lib.date_created = r.strings()?;
     lib.message = r.strings()?;
-    if r.u64()? != crate::SortColumn::ALL.len() as u64 { return None; }
+    if r.u64()? != crate::SortColumn::ALL.len() as u64 {
+        return None;
+    }
     for _ in crate::SortColumn::ALL {
         let rank = r.u32s()?;
-        if rank.len() != count { return None; }
+        if rank.len() != count {
+            return None;
+        }
         let mut seen = vec![false; count];
         for &position in &rank {
             let slot = seen.get_mut(position as usize)?;
-            if *slot { return None; }
+            if *slot {
+                return None;
+            }
             *slot = true;
         }
         lib.ranks.push(rank);
     }
     lib.search = r.strings()?;
     let tag_bounds = r.u32s()?;
-    let tag_keys = r.u32s()?.into_iter().map(|k| i32::from_ne_bytes(k.to_ne_bytes())).collect();
+    let tag_keys = r
+        .u32s()?
+        .into_iter()
+        .map(|k| i32::from_ne_bytes(k.to_ne_bytes()))
+        .collect();
     if !lib.set_my_tag_parts(tag_bounds, tag_keys) {
         return None;
     }
@@ -603,7 +645,13 @@ pub fn decode(data: &[u8], want: Fingerprint) -> Option<Library> {
     let (folder, org, device) = (r.strings()?, r.strings()?, r.strings()?);
     let (links, services) = (r.u64s()?, r.u64s()?);
     let n = cloud_rows.len();
-    if [folder.len(), org.len(), device.len(), links.len(), services.len()] != [n; 5]
+    if [
+        folder.len(),
+        org.len(),
+        device.len(),
+        links.len(),
+        services.len(),
+    ] != [n; 5]
         || cloud_rows.iter().any(|&row| row as usize >= count)
     {
         return None;
@@ -612,22 +660,34 @@ pub fn decode(data: &[u8], want: Fingerprint) -> Option<Library> {
         .into_iter()
         .enumerate()
         .map(|(i, row)| {
-            (row, rbl_db::StoredPath {
-                folder_path: folder.get(i).to_owned(),
-                org_folder_path: org.get(i).to_owned(),
-                content_link: links[i].cast_signed(),
-                service_id: services[i].cast_signed(),
-                device_id: device.get(i).to_owned(),
-            })
+            (
+                row,
+                rbl_db::StoredPath {
+                    folder_path: folder.get(i).to_owned(),
+                    org_folder_path: org.get(i).to_owned(),
+                    content_link: links[i].cast_signed(),
+                    service_id: services[i].cast_signed(),
+                    device_id: device.get(i).to_owned(),
+                },
+            )
         })
         .collect();
-    if lib.search.len() != count || lib.bitrate.len() != count
-        || lib.sample_rate.len() != count || lib.file_size.len() != count
-        || lib.track_number.len() != count || lib.disc_no.len() != count
-        || lib.file_type.len() != count || lib.bit_depth.len() != count
-        || lib.publish.len() != count || lib.lyricist.len() != count
-        || lib.date_created.len() != count || lib.message.len() != count
-        || r.at != data.len() { return None; }
+    if lib.search.len() != count
+        || lib.bitrate.len() != count
+        || lib.sample_rate.len() != count
+        || lib.file_size.len() != count
+        || lib.track_number.len() != count
+        || lib.disc_no.len() != count
+        || lib.file_type.len() != count
+        || lib.bit_depth.len() != count
+        || lib.publish.len() != count
+        || lib.lyricist.len() != count
+        || lib.date_created.len() != count
+        || lib.message.len() != count
+        || r.at != data.len()
+    {
+        return None;
+    }
     Some(lib)
 }
 
@@ -640,8 +700,10 @@ pub struct Prepared {
 impl Prepared {
     pub fn validated(self, want: Fingerprint) -> Option<Library> {
         let found = self.fingerprint;
-        (found.format == want.format && found.db_version == want.db_version
-            && found.content == want.content && found.database == want.database)
+        (found.format == want.format
+            && found.db_version == want.db_version
+            && found.content == want.content
+            && found.database == want.database)
             .then_some(self.library)
     }
 }
@@ -651,13 +713,23 @@ impl Prepared {
 pub fn prepare(path: &Path) -> Option<Prepared> {
     let data = std::fs::read(path).ok()?;
     let mut r = Reader { data: &data, at: 0 };
-    if r.take(4)? != MAGIC { return None; }
+    if r.take(4)? != MAGIC {
+        return None;
+    }
     let fingerprint = Fingerprint {
-        format: r.u32()?, db_len: r.u64()?, db_modified_ns: r.i64()?,
-        wal_len: r.u64()?, wal_modified_ns: r.i64()?, db_version: r.u32()?,
-        content: r.u64()?, database: r.u64()?,
+        format: r.u32()?,
+        db_len: r.u64()?,
+        db_modified_ns: r.i64()?,
+        wal_len: r.u64()?,
+        wal_modified_ns: r.i64()?,
+        db_version: r.u32()?,
+        content: r.u64()?,
+        database: r.u64()?,
     };
-    Some(Prepared { fingerprint, library: decode(&data, fingerprint)? })
+    Some(Prepared {
+        fingerprint,
+        library: decode(&data, fingerprint)?,
+    })
 }
 
 /// Writes a snapshot to the caller's cache directory, atomically.

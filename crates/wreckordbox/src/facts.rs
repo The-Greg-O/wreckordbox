@@ -71,11 +71,11 @@ pub enum FactCommands {
         /// Only Facts of this kind.
         #[arg(long, value_name = "KIND")]
         kind: Option<String>,
-        /// Also the Facts their own source has since replaced.
+        /// Include stale, unverified and replaced Facts in the full history.
         #[arg(long)]
         all: bool,
-        /// Read the track's audio first and mark stale the Measurements
-        /// made from different audio.
+        /// Verify audio and update attachments/staleness. Without this,
+        /// Measurements are reported as unverified and no audio is read.
         #[arg(long)]
         check_audio: bool,
     },
@@ -422,7 +422,11 @@ fn recorded_text(recorded: &Recorded) -> String {
 
 fn shown_text(shown: &TrackFacts) -> String {
     let track = &shown.track;
-    if shown.facts.is_empty() {
+    if shown.facts.is_empty()
+        && shown.stale.is_empty()
+        && shown.unverified.is_empty()
+        && shown.review.is_empty()
+    {
         return format!("Track {} \"{}\" has no Facts.", track.id, track.title);
     }
     let mut rows = vec![[
@@ -437,7 +441,32 @@ fn shown_text(shown: &TrackFacts) -> String {
     ]
     .map(str::to_owned)];
     rows.extend(shown.facts.iter().map(fact_row));
-    format!("Track {} \"{}\"\n{}", track.id, track.title, table(&rows))
+    for fact in shown.stale.iter().chain(&shown.unverified) {
+        if !shown.facts.iter().any(|standing| standing.id == fact.id) {
+            let mut row = fact_row(fact);
+            if !fact.stale {
+                "unverified: audio unavailable".clone_into(&mut row[7]);
+            }
+            rows.push(row);
+        }
+    }
+    let mut text = format!("Track {} \"{}\"\n{}", track.id, track.title, table(&rows));
+    for candidate in &shown.review {
+        let _ = write!(
+            text,
+            "\nAttachment held for review from track {}: {}.",
+            candidate.from_track, candidate.reason
+        );
+    }
+    for attached in &shown.reattached {
+        let _ = write!(
+            text,
+            "\nRe-attached {} Facts from track {} by fingerprint.",
+            attached.fact_ids.len(),
+            attached.from_track
+        );
+    }
+    text
 }
 
 fn fact_row(fact: &Fact) -> [String; 8] {

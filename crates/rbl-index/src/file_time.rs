@@ -68,7 +68,8 @@ impl Library {
     pub(crate) fn file_created_all(&self) -> &[Option<i64>] {
         self.file_created.get_or_init(|| {
             let read = |rows: std::ops::Range<usize>| -> Vec<Option<i64>> {
-                rows.map(|row| created_secs(self.folder_path.get(row))).collect()
+                rows.map(|row| created_secs(self.folder_path.get(row)))
+                    .collect()
             };
             let n = self.count;
             let workers = std::thread::available_parallelism()
@@ -96,7 +97,10 @@ impl Library {
                 for (rows, job) in jobs {
                     // A thread that could not start, or died, has its share
                     // read here instead.
-                    let part = job.ok().and_then(|job| job.join().ok()).unwrap_or_else(|| read(rows));
+                    let part = job
+                        .ok()
+                        .and_then(|job| job.join().ok())
+                        .unwrap_or_else(|| read(rows));
                     all.extend(part);
                 }
                 all
