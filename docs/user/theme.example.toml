@@ -1,0 +1,134 @@
+# wreckordbox's own theme file.
+#
+# Copy this file to ~/.config/wreckordbox/theme.toml (or
+# $XDG_CONFIG_HOME/wreckordbox/theme.toml) and uncomment what you want to
+# change. Saving it changes the open window at once; deleting it puts the
+# window back on your Omarchy theme. As shipped, every line is a comment, so
+# this file changes nothing. It may be a link into a dotfiles folder.
+#
+# A mistake never breaks the window: a bad key or a line that does not parse
+# is left out, the rest applies, and the status line shows each problem with
+# its line number (it is also written to the app's log).
+#
+# Every key the file accepts is below, once. See docs/user/theme.md for how
+# the layers work.
+
+# ── What the look starts from ────────────────────────────────────────────
+#
+# "omarchy" (the default): the active Omarchy theme, live, as with no file.
+# "none": the built-in look (dark greys, blue accent, Arial); the Omarchy
+#   theme and the system font are then not read or watched at all.
+#
+# follow = "omarchy"
+
+# "dark" or "light". Under a light look the old (upstream) layout keeps its
+# dark grounds and takes only the accent and the face.
+#
+# mode = "dark"
+
+# ── Colours that set a role ──────────────────────────────────────────────
+#
+# Each replaces exactly the role it names and nothing else, over the Omarchy
+# theme or the built-in look. The only other thing that can follow is the
+# text on accent-filled controls, chosen again to stay readable when the
+# accent, the deepest ground or the brightest text changes; and a selection
+# your text could not be read on, replaced unless you set `selection` too.
+# Each value is "#rrggbb". The names are an Omarchy colors.toml's, so you
+# can paste one in.
+#
+# Colours that carry meaning (Energy, Prep colours, key lights, cue colours,
+# waveforms, phrases) are not themeable and ignore this file.
+
+# Focus, the active filter, lit controls, the deck marker.
+# accent = "#7aa2f7"
+# A selected row.
+# selection = "#292e42"
+# Control borders.
+# muted = "#414868"
+# The working area.
+# background = "#1a1b26"
+# Panels: tree, player, target list.
+# dark_background = "#13141c"
+# The deepest ground: top bar, status line, waveform wells.
+# darker_background = "#0e0e14"
+# Hairlines, inactive tabs and control fills.
+# lighter_background = "#24283b"
+# Text.
+# foreground = "#a9b1d6"
+# Secondary text and labels.
+# dark_foreground = "#565f89"
+# Emphasised text.
+# bright_foreground = "#c0caf5"
+# The two ends of the active view tab's line. Where neither the theme nor
+# the file gives one, it is the accent's colour.
+# bright_magenta = "#bb9af7"
+# bright_yellow = "#ff9e64"
+
+# ── Colours that stand in for a missing one above ────────────────────────
+#
+# Used only when the file does not give the key they stand in for:
+#   accent            <- blue, then color4
+#   bright_foreground <- color15
+#   bright_magenta    <- color13, magenta, color5
+#   bright_yellow     <- color11, yellow, color3
+#
+# blue = "#7aa2f7"
+# color4 = "#7aa2f7"
+# color15 = "#c0caf5"
+# color13 = "#bb9af7"
+# magenta = "#ad8ee6"
+# color5 = "#ad8ee6"
+# color11 = "#ff9e64"
+# yellow = "#e0af68"
+# color3 = "#e0af68"
+
+# ── Colours accepted and not used ────────────────────────────────────────
+#
+# So that a pasted Omarchy palette reports nothing. They change nothing.
+#
+# light_foreground = "#b4bee6"
+# black = "#15161e"
+# red = "#f7768e"
+# green = "#9ece6a"
+# cyan = "#449dab"
+# white = "#a9b1d6"
+# orange = "#eb927b"
+# brown = "#75493d"
+# bright_red = "#ff7a93"
+# bright_green = "#b9f27c"
+# bright_blue = "#7da6ff"
+# bright_cyan = "#0db9d7"
+# color0 = "#15161e"
+# color1 = "#f7768e"
+# color2 = "#9ece6a"
+# color6 = "#7dcfff"
+# color7 = "#a9b1d6"
+# color8 = "#414868"
+# color9 = "#f7768e"
+# color10 = "#9ece6a"
+# color12 = "#7aa2f7"
+# color14 = "#7dcfff"
+#
+# Omarchy settings for other programs (hyprland_active_border,
+# hyprland_inactive_border and anything else starting with hyprland_,
+# active_border_color, active_tab_background) are passed over in silence.
+
+# ── Type ─────────────────────────────────────────────────────────────────
+#
+# A family name as fontconfig knows it (`fc-list : family`): one name, no
+# commas. Sizes are CSS pixels at 100% interface scale, 8 to 24; rows,
+# headings, list columns, the tree and the status line grow with them, and
+# the whole interface still scales with Ctrl+- and Ctrl+=.
+
+# The interface: tree, tabs, lists, menus, labels, in both layouts. Without
+# it, the window's own face (the system monospace font in the old layout
+# while following Omarchy).
+# font = "JetBrainsMono Nerd Font"
+# Base size of interface text (12 by default). Titles, labels, the status
+# line and the old layout's own sizes keep their proportion to it.
+# font_size = 12
+
+# Text whose digits line up: number, BPM, key, time, bitrate and date added
+# in the Library list. Without them, the interface face and size.
+# mono_font = "JetBrainsMono Nerd Font"
+# mono_font_size = 12

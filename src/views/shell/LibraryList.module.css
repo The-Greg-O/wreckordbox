@@ -12,6 +12,12 @@
   font-size: var(--f-size-shell);
 }
 
+/* Numbers that line up: the theme file's monospace face and size (wbx-45.6). */
+.list [role="gridcell"]:is([data-col="trackNo"], [data-col="bpm"], [data-col="key"], [data-col="duration"], [data-col="bitrate"], [data-col="dateAdded"]) {
+  font-family: var(--f-shell-mono);
+  font-size: var(--f-size-shell-mono);
+}
+
 .list [role="columnheader"] {
   font-size: var(--f-size-shell-label);
   letter-spacing: var(--f-tracking-shell-label);

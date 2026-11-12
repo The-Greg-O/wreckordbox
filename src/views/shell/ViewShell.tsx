@@ -31,7 +31,6 @@ import type { PlayerLayout } from "@/lib/layout";
 import type { IntakeQueue } from "@/lib/shellTree";
 import { useCommands } from "@/store/useCommands";
 import { useEventCallback } from "@/store/useEventCallback";
-import { IntakeView } from "./IntakeView";
 import { LibraryView } from "./LibraryView";
 import { ReviewView } from "./ReviewView";
 import { StickView } from "./StickView";
@@ -64,6 +63,10 @@ export interface ViewShellProps {
   intakeQueue?: IntakeQueue | undefined;
   /** The Stick view's content: the Stick selected in the tree, if any. */
   stick?: ReactNode | undefined;
+  /** The number waiting, drawn on a view's tab ("Intake 23"); absent or `null` draws none. */
+  tabCounts?: Partial<Record<ShellView, number | null>> | undefined;
+  /** The Intake view: given the queue it shows, so the shell stays out of its data. */
+  intake?: ((queue: IntakeQueue) => ReactNode) | undefined;
 }
 
 function tabId(view: ShellView): string {
@@ -71,7 +74,7 @@ function tabId(view: ShellView): string {
 }
 
 export function ViewShell({
-  view, onViewChange, tree, player, status, library, topBarEnd, platform, keyOverrides, intakeQueue, stick,
+  view, onViewChange, tree, player, status, library, topBarEnd, platform, keyOverrides, intakeQueue, stick, tabCounts, intake,
 }: ViewShellProps) {
   const t = useTranslation();
 
@@ -126,6 +129,9 @@ export function ViewShell({
                 >
                   {key !== null ? <span className={styles.key} aria-hidden>{key}</span> : null}
                   <span>{t(entry.label)}</span>
+                  {tabCounts?.[entry.id] != null ? (
+                    <span className={styles.count} data-testid={`shell-tab-count-${entry.id}`}>{tabCounts[entry.id]}</span>
+                  ) : null}
                 </button>
               );
             })}
@@ -142,7 +148,7 @@ export function ViewShell({
           data-testid="shell-working"
         >
           {view === "library" ? <LibraryView list={library} /> : null}
-          {view === "intake" ? <IntakeView queue={intakeQueue} /> : null}
+          {view === "intake" ? intake?.(intakeQueue ?? "intake") ?? null : null}
           {view === "review" ? <ReviewView /> : null}
           {view === "stick" ? <StickView stick={stick} /> : null}
         </main>

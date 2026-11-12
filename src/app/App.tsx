@@ -70,6 +70,8 @@ import { DEFAULT_SHELL_VIEW, type ShellView } from "@/lib/shellViews";
 import { useLibraryColumns } from "@/store/useLibraryColumns";
 import { SHELL_PLAYER_LAYOUT, ViewShell } from "@/views/shell/ViewShell";
 import { useShellTree } from "@/views/shell/useShellTree";
+import { IntakeView } from "@/views/shell/IntakeView";
+import { useIntakeCounts } from "@/views/shell/useIntakeCounts";
 import { useStickOutlines } from "@/store/useStickOutlines";
 import { FIELD_LABEL } from "@/views/info/fieldLabel";
 import { SubBrowser } from "@/views/subbrowser/SubBrowser";
@@ -571,6 +573,7 @@ function AppBody() {
    * the layout menu last chose; the choice itself is kept for the old layout.
    */
   const shellOn = prefs.preferences.view.viewShell;
+  const intakeCounts = useIntakeCounts(shellOn);
   // The shell's tree reads each Stick's playlists without writing to it
   // (ticket #52); only drawn, so only read, with the shell on.
   const shellSticks = useStickOutlines(shellOn ? devices : NO_DEVICES, deviceLibraries.revision);
@@ -3383,6 +3386,7 @@ function AppBody() {
             onExportLoop={exportLoop}
             simple={!isFullDeck(layout)}
             compact={shellOn}
+            large={shellOn && shellView === "intake"}
             dragging={draggedTracks !== null}
             onDropTrack={loadDroppedInto.a}
             onLoadSelected={loadSelectedInto.a}
@@ -3462,9 +3466,21 @@ function AppBody() {
     onColumnAutoSize: cols.autoSize, onColumnAutoSizeAll: cols.autoSizeEvery,
     artworkMode, onArtworkMode: setArtworkMode,
   };
+  // The Intake view (wbx-62): a queued track replaces deck 1's, and the
+  // answer says whether it loaded; a refresh that failed is said in the
+  // status line, and cleared there when it recovers, if it is still ours.
+  const loadFromIntake = useCallback((row: RowDto) => openInDeckA(row), [openInDeckA]);
+  const intakeProblem = useRef<string | null>(null);
+  const reportIntakeProblem = useCallback((message: string | null) => {
+    const before = intakeProblem.current;
+    if (message === before) return;
+    intakeProblem.current = message;
+    if (message !== null) setNote({ text: message, failed: true });
+    else if (before !== null) setNote((current) => (current?.text === before ? null : current));
+  }, []);
   const shellTree = useShellTree({
     library: tree, sticks: shellSticks, selectedNode, onSelectNode: setSelectedNode,
-    view: shellView, onViewChange: changeShellView,
+    view: shellView, onViewChange: changeShellView, queueCounts: intakeCounts,
   });
   const library = (
         selectedDevice ? (
@@ -3733,6 +3749,13 @@ function AppBody() {
           player={deckA}
           tree={shellTree.tree}
           intakeQueue={shellTree.intakeQueue}
+          tabCounts={{ intake: intakeCounts?.intake ?? null }}
+          intake={(queue) => (
+            <IntakeView
+              queue={queue} onQueue={shellTree.showQueue} counts={intakeCounts}
+              loadedTrackId={playerTrack?.id ?? null} onLoad={loadFromIntake} onProblem={reportIntakeProblem}
+            />
+          )}
           stick={selectedDevice ? library : undefined}
           library={library}
           status={<>{linkStrip}{statusBar}</>}

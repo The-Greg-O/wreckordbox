@@ -1703,5 +1703,8 @@
   "Runs unavailable": "Kørsler utilgængelige",
   "{count} Stick loads in progress": "{count} USB-overførsler i gang",
   "Analyzing {done}/{total} tracks": "Analyserer {done}/{total} numre",
-  "{count} failed": "{count} mislykkedes"
+  "{count} failed": "{count} mislykkedes",
+  "Dismiss": "Dismiss",
+  "Theme file": "Theme file",
+  "line {line}": "line {line}"
 }
