@@ -16,5 +16,7 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 rbl-db = { path = "../rbl-db" }
+# Only to give a test track a beat grid.
+rbl-anlz = { path = "../rbl-anlz" }
 serde_json = { workspace = true }
 tempfile = "3"

@@ -433,6 +433,12 @@ impl Shared {
                     self.with_library(|library| crate::stems::parent(library, id))?
                 })
             }
+            intensity if crate::intensity::answers(intensity) => {
+                // As for Stems: only finding the tracks takes the Library.
+                crate::intensity::answer(&self.stems, request, &|wanted| {
+                    self.with_library(|library| crate::intensity::targets(library, wanted))?
+                })
+            }
             intake if crate::intake::answers(intake) => {
                 let (result, changed) = self.with_library(|library| {
                     crate::intake::answer(library, &self.stems, request)
@@ -494,6 +500,8 @@ impl Shared {
         let _ = std::fs::remove_file(&self.socket);
         // A separation in progress is abandoned; nothing of it is kept.
         self.stems.cancel();
+        // A measuring of Intensity keeps the tracks it has finished.
+        crate::intensity::cancel(&self.stems);
         // No more changes to send; the sending thread ends.
         drop(lock(&self.changes).take());
         // Waits for a command in progress, then closes the Library before

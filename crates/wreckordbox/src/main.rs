@@ -6,6 +6,7 @@
 
 mod facts;
 mod intake;
+mod intensity;
 mod mytag_edits;
 mod reading;
 mod stems;
@@ -86,6 +87,13 @@ enum Commands {
     Intake {
         #[command(subcommand)]
         command: intake::IntakeCommands,
+    },
+    /// Measure Intensity: how hard a track hits and how that changes over
+    /// its length, from its audio. Kept in the Sidecar; never changes the
+    /// Library.
+    Intensity {
+        #[command(subcommand)]
+        command: intensity::IntensityCommands,
     },
     /// Run the Library service in the foreground until interrupted.
     ///
@@ -230,6 +238,9 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
         }
         Commands::Intake { command } => {
             print(&intake::run(&mut connect(&config)?, cli.json, command)?);
+        }
+        Commands::Intensity { command } => {
+            print(&intensity::run(&mut connect(&config)?, cli.json, command)?);
         }
         Commands::Serve { spawned: true } => {
             return Ok(if wreckordbox_service::serve_spawned(config) {
