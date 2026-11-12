@@ -153,7 +153,7 @@ fn an_entry_is_never_changed_or_removed_and_survives_reopening() {
 
 #[test]
 fn a_store_from_each_earlier_version_is_given_the_ledger_and_keeps_its_facts_in_order() {
-    for version in [1, 2, 3] {
+    for version in [1, 2, 3, 4] {
         let dir = tempfile::tempdir().unwrap();
         let source = agent();
         let db = rusqlite::Connection::open(dir.path().join("sidecar.db")).unwrap();
@@ -165,6 +165,10 @@ fn a_store_from_each_earlier_version_is_given_the_ledger_and_keeps_its_facts_in_
         }
         if version >= 3 {
             db.execute_batch(include_str!("fixtures/sidecar-v3.sql"))
+                .unwrap();
+        }
+        if version >= 4 {
+            db.execute_batch(include_str!("fixtures/sidecar-v4.sql"))
                 .unwrap();
         }
         drop(db);

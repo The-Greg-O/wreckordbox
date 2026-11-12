@@ -51,6 +51,7 @@ mod relocate;
 mod sync_window;
 mod scripting;
 pub mod service_host;
+pub mod service_status;
 mod device_settings;
 pub mod dto;
 mod error;
@@ -559,6 +560,7 @@ pub fn run() {
             commands::disable_read_only,
             new_library::library_problem,
             service_host::service_problem,
+            service_status::service_activity,
             service_host::library_protection,
             service_host::adopt_library_protection,
             service_host::set_library_protection,
