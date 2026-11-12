@@ -198,15 +198,18 @@ test("Space and Enter on the size selector and the jump buttons press those cont
 test("CUE answers the keyboard as it does the pointer: held, it previews from the cue point; let go, it returns there", async ({ page }) => {
   await load(page);
   // Away from the track's cue point and paused, a press of CUE sets the cue
-  // point at the head and does not play: the same press by key, then a hold.
+  // point at the head (snapped to the nearest beat, as a click of CUE does)
+  // and does not play: the same press by key, then a hold.
   await seekTo(page, 0.3);
   await expect.poll(async () => (await engine(page)).a).toBeGreaterThan(1);
-  const cuePoint = (await engine(page)).a;
+  const clicked = (await engine(page)).a;
+  const beat = await secondsOf(page, 1);
   await cueButton(page).focus();
   await page.keyboard.press("Space");
   await page.waitForTimeout(300);
   await expect(playButton(page)).toBeVisible();
-  expect((await engine(page)).a).toBeCloseTo(cuePoint, 1);
+  const cuePoint = (await engine(page)).a;
+  expect(Math.abs(cuePoint - clicked)).toBeLessThanOrEqual(beat / 2 + 0.01);
 
   await page.keyboard.down("Space");
   await expect(pauseButton(page)).toBeVisible();
