@@ -202,3 +202,5 @@ fn lock_path(master_db: &Path) -> PathBuf {
 }
 
 const LOCK_FILE: &str = ".wreckordbox-service.lock";
+
+mod dj_facts;

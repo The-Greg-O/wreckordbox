@@ -299,3 +299,33 @@ fn an_edit_made_by_hand_says_which_run_it_is_in() {
     assert!(last.starts_with("Run "), "{}", rated.stdout);
     assert!(last.contains("(tool:wreckordbox)"), "{last}");
 }
+
+#[test]
+fn a_crashed_dj_edit_reconciles_its_fact_from_the_library() {
+    let s = Sandbox::new();
+    let killed = with_faults(
+        &s,
+        "abort_after_write",
+        &["tracks", "rate", "10003", "5", "--source", "dj"],
+    );
+    assert!(!killed.status.success());
+    wait_for_no_service(&s);
+    // A fixture-only later native change proves recovery reads the Library,
+    // rather than applying the old command's requested value again.
+    s.edit(|writer| {
+        writer.set_rating("10003", 4).unwrap();
+    });
+    assert_eq!(ok(&s, &["tracks", "show", "10003"])["rating"], 4);
+    let fact = ok(&s, &["facts", "standing", "10003", "energy"])["standing"].clone();
+    assert_eq!(fact["value"], 4);
+    assert_eq!(fact["reconciled"], true);
+    let entries = all_entries(&s);
+    let entry = entries.iter().find(|e| e["kind"] == "unconfirmed").unwrap();
+    assert_eq!(fact["ledger_entry"], entry["id"]);
+    assert_eq!(fact["run"], entry["run"]);
+    stop_service(&s);
+    assert_eq!(
+        ok(&s, &["facts", "standing", "10003", "energy"])["standing"],
+        fact
+    );
+}

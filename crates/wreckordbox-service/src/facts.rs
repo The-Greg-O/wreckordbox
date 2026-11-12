@@ -145,6 +145,10 @@ pub struct Fact {
     pub superseded: bool,
     /// The Fact that took this one's place.
     pub superseded_by: Option<i64>,
+    #[serde(default)]
+    pub ledger_entry: Option<i64>,
+    #[serde(default)]
+    pub reconciled: bool,
 }
 
 impl From<wreckordbox_sidecar::Fact> for Fact {
@@ -163,6 +167,8 @@ impl From<wreckordbox_sidecar::Fact> for Fact {
             recorded_at: fact.recorded_at,
             fingerprint: fact.fingerprint,
             superseded_by: fact.superseded_by,
+            ledger_entry: fact.ledger_entry,
+            reconciled: fact.reconciled,
         }
     }
 }

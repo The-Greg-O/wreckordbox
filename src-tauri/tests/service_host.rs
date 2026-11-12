@@ -1172,3 +1172,75 @@ fn a_window_started_while_a_restore_owns_the_library_waits_and_recovers_nothing_
     assert_eq!(rbl_backup::testing::rating(&location), 1);
     window.cli(&["tracks", "rate", &track_id(1), "3"]).succeeded();
 }
+
+#[test]
+fn a_window_hand_edit_and_its_undo_redo_supersede_the_dj_fact() {
+    let window = window();
+    window.host().unwrap();
+    let track = track_id(1);
+    let fact = || {
+        window
+            .cli(&["--json", "facts", "standing", &track, "energy"])
+            .json()["standing"]
+            .clone()
+    };
+    run(commands::set_track_rating(
+        window.app.handle().clone(),
+        window.state(),
+        vec![track.clone()],
+        3,
+    ))
+    .unwrap();
+    let first = fact();
+    assert_eq!(first["value"], 3);
+    assert_eq!(first["source"]["kind"], "dj");
+    window.undo().unwrap();
+    let undone = fact();
+    assert!(undone["value"].is_null());
+    assert_ne!(first["id"], undone["id"]);
+    window.redo().unwrap();
+    let redone = fact();
+    assert_eq!(redone["value"], 3);
+    assert_ne!(undone["id"], redone["id"]);
+    let shown = window
+        .cli(&["--json", "facts", "standing", &track, "energy"])
+        .json();
+    assert_eq!(shown["superseded"].as_array().unwrap().len(), 2);
+    assert_eq!(shown["superseded"][0]["superseded_by"], redone["id"]);
+}
+
+#[test]
+fn native_title_and_artist_edits_record_names_and_clears() {
+    let window = window();
+    window.host().unwrap();
+    let track = track_id(1);
+    for (field, value) in [
+        ("title", "A new title"),
+        ("artist", "A new artist"),
+        ("artist", ""),
+    ] {
+        run(rbxport_lib::details::set_track_field(
+            window.app.handle().clone(),
+            window.state(),
+            vec![track.clone()],
+            field.into(),
+            value.into(),
+            None,
+        ))
+        .unwrap();
+        let fact = window
+            .cli(&["--json", "facts", "standing", &track, field])
+            .json()["standing"]
+            .clone();
+        assert_eq!(
+            fact["value"],
+            if value.is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::json!(value)
+            }
+        );
+        assert_eq!(fact["source"]["kind"], "dj");
+        assert!(fact["ledger_entry"].is_i64());
+    }
+}
