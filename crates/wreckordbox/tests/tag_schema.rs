@@ -1306,12 +1306,9 @@ fn two_conversions_at_once_are_one_after_the_other() {
             .map(|fact| fact.0)
             .collect();
         assert_eq!(kinds, ["genre", "mood", kind]);
-        assert_eq!(
-            ok(&sandbox, &["schema", "convert", "--dry-run"])["text"]
-                .as_str()
-                .is_some(),
-            true
-        );
+        assert!(ok(&sandbox, &["schema", "convert", "--dry-run"])["text"]
+            .as_str()
+            .is_some());
     }
 }
 
@@ -1369,7 +1366,7 @@ fn a_schema_with_a_mistake_stops_only_the_recording_of_the_kinds_it_governs() {
     let broken = good.replace("parent = \"breaks\"", "parent = \"brakes\"");
     assert_ne!(broken, good);
     write_schema(&sandbox, &broken);
-    assert_eq!(ok_or_invalid(&sandbox), false);
+    assert!(!ok_or_invalid(&sandbox));
 
     // What is stored is still read, whatever the kind.
     assert_eq!(dj_facts(&sandbox, "10001").len(), 3);

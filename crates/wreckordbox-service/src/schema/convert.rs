@@ -394,13 +394,14 @@ pub(super) fn convert(
     }
 }
 
+/// What a track's tags say of one dimension: the track, the dimension by
+/// position, the terms' identifiers.
+type Wanted<'a> = (&'a str, usize, Vec<String>);
+
 /// What each track's tags say, dimension by dimension: `(track, dimension
 /// by position, the terms' identifiers)`. With it, how parents put on by
 /// hand stand, and how many tags on tracks there are.
-fn wanted<'a>(
-    plan: &Plan,
-    library: &'a MyTags,
-) -> (Vec<(&'a str, usize, Vec<String>)>, ImpliedParents, usize) {
+fn wanted<'a>(plan: &Plan, library: &'a MyTags) -> (Vec<Wanted<'a>>, ImpliedParents, usize) {
     let mut implied = ImpliedParents::default();
     let mut track_tags = 0;
     let mut wanted = Vec::new();
@@ -476,7 +477,7 @@ fn sort_out<'a>(
     kinds: &Kinds,
     schema: &TagSchema,
     library: &'a MyTags,
-    wanted: &[(&'a str, usize, Vec<String>)],
+    wanted: &[Wanted<'a>],
     reimport: bool,
 ) -> Result<Sorted<'a>, ServiceError> {
     let dj = Source::new(SourceKind::Dj, "dj");
