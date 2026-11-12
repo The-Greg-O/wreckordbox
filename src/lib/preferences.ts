@@ -14,6 +14,7 @@ import { ANALYSIS_SLOTS, SLOTS } from "./queue";
 import { KEY_PRESETS, type KeyPreset } from "./keyPresets";
 import type { KeyChord } from "./shortcuts";
 import { fromCamelot, toCamelot, type TrafficLightReach } from "./camelot";
+import { COMPACT_JUMP_DEFAULT, compactJumpBeats, type CompactJumpBeats } from "./compactPlayer";
 import type {
   KeyDisplay, MenuSlot, OverviewWaveform, WaveformColor, WaveformPosition,
 } from "@/ipc/types";
@@ -156,6 +157,8 @@ export interface ViewPreferences {
    * this switch with it. No Preferences pane offers it.
    */
   viewShell: boolean;
+  /** The view shell's compact player: the beat jump size on its selector (#51). */
+  shellJumpBeats: CompactJumpBeats;
   /** Key display format: `Ebm` or `2A`. */
   keyDisplay: KeyDisplay;
   /** How the browser's Key column is ordered. */
@@ -410,6 +413,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
     browseLineSpace: BROWSE_SCALE_DEFAULT,
     uiScale: UI_SCALE_DEFAULT,
     viewShell: false,
+    shellJumpBeats: COMPACT_JUMP_DEFAULT,
     keyDisplay: "classic",
     keySort: "alphabetical",
     overviewWaveform: "half",
@@ -593,6 +597,7 @@ export function sanitisePreferences(value: unknown): Preferences {
       // a build with a different set of stops is not a size anyone chose.
       uiScale: isUiScaleStop(view.uiScale) ? view.uiScale : d.view.uiScale,
       viewShell: bool(view.viewShell, d.view.viewShell),
+      shellJumpBeats: compactJumpBeats(view.shellJumpBeats),
       keyDisplay: oneOf(view.keyDisplay, KEY_DISPLAYS, d.view.keyDisplay),
       keySort: oneOf(
         view.keySort,

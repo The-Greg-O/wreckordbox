@@ -26,9 +26,7 @@
 .frame {
   display: grid;
   height: 100%;
-  /* The tree's width, plus the icon rail the old tree carries down its left
-     side; the rail's share goes when ticket #52 builds the shell's tree. */
-  grid-template-columns: calc(var(--s-shell-tree-w) + var(--s-tree-rail-w)) minmax(0, 1fr);
+  grid-template-columns: var(--s-shell-tree-w) minmax(0, 1fr);
   grid-template-rows:
     var(--s-shell-top-bar-h)
     minmax(var(--s-shell-player-h), auto)

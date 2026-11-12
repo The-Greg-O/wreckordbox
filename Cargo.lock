@@ -4203,6 +4203,7 @@ dependencies = [
  "windows-core 0.61.2",
  "windows-sys 0.61.2",
  "wreckordbox-service",
+ "wreckordbox-stick-outline",
  "zip",
 ]
 
@@ -7112,6 +7113,7 @@ dependencies = [
  "rbl-db",
  "rbl-export",
  "rbl-onelibrary",
+ "rusqlite",
  "serde_json",
  "tempfile",
  "wreckordbox-service",
@@ -7173,6 +7175,21 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "toml 0.8.2",
+]
+
+[[package]]
+name = "wreckordbox-stick-outline"
+version = "1.10.0"
+dependencies = [
+ "rbl-anlz",
+ "rbl-core",
+ "rbl-export",
+ "rbl-onelibrary",
+ "rbl-pdb",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]

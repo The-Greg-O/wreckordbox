@@ -11,7 +11,7 @@
  *
  * Where later tickets plug in:
  *  - `player`: the compact player (#51). Today, the old player at its smallest.
- *  - `tree`: the new tree (#52). Today, the old tree.
+ *  - `tree`: the shell's tree (#52, `ShellTree.tsx`).
  *  - `status`: the status line's contents (#53). Today, the old status bar.
  *  - `topBarEnd`: the command palette's opener (#54), the waveform theme and
  *    the scale readout.
@@ -28,6 +28,7 @@ import { runCommand } from "@/lib/commands";
 import { describeChord, type KeyOverrides, type Platform } from "@/lib/shortcuts";
 import { SHELL_VIEWS, shellViewChord, shellViewForKey, type ShellView } from "@/lib/shellViews";
 import type { PlayerLayout } from "@/lib/layout";
+import type { IntakeQueue } from "@/lib/shellTree";
 import { useCommands } from "@/store/useCommands";
 import { useEventCallback } from "@/store/useEventCallback";
 import { IntakeView } from "./IntakeView";
@@ -59,6 +60,10 @@ export interface ViewShellProps {
   platform: Platform;
   /** The DJ's own keys, as every key handler reads them. */
   keyOverrides?: KeyOverrides;
+  /** The queue the Intake view shows, as chosen in the tree. */
+  intakeQueue?: IntakeQueue | undefined;
+  /** The Stick view's content: the Stick selected in the tree, if any. */
+  stick?: ReactNode | undefined;
 }
 
 function tabId(view: ShellView): string {
@@ -66,7 +71,7 @@ function tabId(view: ShellView): string {
 }
 
 export function ViewShell({
-  view, onViewChange, tree, player, status, library, topBarEnd, platform, keyOverrides,
+  view, onViewChange, tree, player, status, library, topBarEnd, platform, keyOverrides, intakeQueue, stick,
 }: ViewShellProps) {
   const t = useTranslation();
 
@@ -137,9 +142,9 @@ export function ViewShell({
           data-testid="shell-working"
         >
           {view === "library" ? <LibraryView list={library} /> : null}
-          {view === "intake" ? <IntakeView /> : null}
+          {view === "intake" ? <IntakeView queue={intakeQueue} /> : null}
           {view === "review" ? <ReviewView /> : null}
-          {view === "stick" ? <StickView /> : null}
+          {view === "stick" ? <StickView stick={stick} /> : null}
         </main>
         <footer className={styles.status} data-testid="shell-status">{status}</footer>
       </div>
