@@ -37,7 +37,7 @@ mod tests {
 
     #[test]
     fn rejects_malformed_or_unbounded_requests_before_reading_a_library() {
-        let state = Arc::new(AppState::with_backups(std::env::temp_dir().join("unused-waveform-backup")));
+        let state = Arc::new(AppState::unprotected(std::env::temp_dir().join("unused-waveform-backup")));
         for request in ["{".to_owned(), "{}".to_owned(), "x".repeat(4097),
             json!({"library_id":"1","track_id":"../file"}).to_string(),
             json!({"library_id":"1","track_id":"1","path":"/tmp/audio"}).to_string()] {
@@ -60,7 +60,7 @@ mod tests {
         let db = Library::open(location.clone(), OpenMode::ReadOnly).unwrap();
         let library_id = rbl_db::export_info::db_id(db.connection()).unwrap().to_string();
         let (library, _) = rbl_index::load(&db).unwrap();
-        let state = Arc::new(AppState::with_backups(dir.path().join("backups")));
+        let state = Arc::new(AppState::unprotected(dir.path().join("backups")));
         state.set_library(library, true, db.schema().db_version, 0, location.clone());
         let before = std::fs::read(&location.master_db).unwrap();
         let run = |library_id: &str, track: String| tauri::async_runtime::block_on(overview(

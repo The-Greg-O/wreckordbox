@@ -292,9 +292,10 @@ fn analyse_and_save_notated(
         result.analysis_artifacts=analysis_artifacts;result.completed_stages=completed_stages;return Ok(result);
     }
 
-    let _edit_guard = state.edit_gate().lock();
+    // Refused before any file is written while the Library may not be
+    // changed (Library Protection among it).
+    let _edit = state.file_edit()?;
     ensure_analysis_unlocked(state, editor, track_id)?;
-    let _files_guard = state.analysis_write().lock();
     let location = state.location()?;
     crate::file_journal::recover(state.backup_dir(), &location)?;
     state.write(|writer| writer.import_artwork(track_id)).map_err(write_error)?;
@@ -727,34 +728,38 @@ pub async fn edit_phrase<R: tauri::Runtime>(
         other => return Err(AppError::new(ErrorKind::Malformed, format!("{other:?} is not a phrase edit."))),
     };
     let reported = track_id.clone();
-    let changed = blocking("edit_phrase", move || {
-        if library_locked(&state) {
-            return Err(AppError::new(ErrorKind::ReadOnly, "rekordbox is running. Quit it before editing phrases."));
-        }
-        let Some(row) = library.row_of(&track_id) else {
-            return Err(AppError::new(ErrorKind::NotFound, "That track is not in the library."));
-        };
-        let relative = state.analysis_path_of(&library, row as usize, &track_id);
-        if relative.is_empty() {
-            return Err(AppError::new(ErrorKind::NotFound, "That track has no analysis."));
-        }
-        let ext = rbl_anlz::sibling(&rbl_anlz::resolve(&share, &relative), "EXT");
-        let _edit_guard = state.edit_gate().lock();
-        let _files = state.analysis_write().lock();
-        let file = rbl_anlz::Anlz::read(&ext).map_err(|e| {
-            AppError::new(ErrorKind::NotFound, "That track's analysis file could not be read.").with_detail(e.to_string())
-        })?;
-        let Some(bytes) = file.with_phrase_edit(edit) else { return Ok(false) };
-        crate::durable::write(&ext, &bytes).map_err(|e| {
-            AppError::new(ErrorKind::Internal, "The analysis file could not be written.").with_detail(e.to_string())
-        })?;
-        Ok(true)
-    })
-    .await?;
+    let changed = blocking("edit_phrase", move || phrase_edit(&state, &library, &share, &track_id, edit)).await?;
     if changed {
         let _ = tauri::Emitter::emit(&app, "analysis:changed", &reported);
     }
     Ok(changed)
+}
+
+/// [`edit_phrase`]'s work: the track's `.EXT` rewritten with one phrase
+/// edit, refused before it is touched while the Library may not be changed
+/// (Library Protection among it). Whether anything changed.
+fn phrase_edit(state: &AppState, library: &rbl_index::Library, share: &std::path::Path, track_id: &str,
+    edit: rbl_anlz::PhraseEdit) -> AppResult<bool> {
+    if library_locked(state) {
+        return Err(AppError::new(ErrorKind::ReadOnly, "rekordbox is running. Quit it before editing phrases."));
+    }
+    let Some(row) = library.row_of(track_id) else {
+        return Err(AppError::new(ErrorKind::NotFound, "That track is not in the library."));
+    };
+    let relative = state.analysis_path_of(library, row as usize, track_id);
+    if relative.is_empty() {
+        return Err(AppError::new(ErrorKind::NotFound, "That track has no analysis."));
+    }
+    let ext = rbl_anlz::sibling(&rbl_anlz::resolve(share, &relative), "EXT");
+    let _edit = state.file_edit()?;
+    let file = rbl_anlz::Anlz::read(&ext).map_err(|e| {
+        AppError::new(ErrorKind::NotFound, "That track's analysis file could not be read.").with_detail(e.to_string())
+    })?;
+    let Some(bytes) = file.with_phrase_edit(edit) else { return Ok(false) };
+    crate::durable::write(&ext, &bytes).map_err(|e| {
+        AppError::new(ErrorKind::Internal, "The analysis file could not be written.").with_detail(e.to_string())
+    })?;
+    Ok(true)
 }
 
 /// Whether the library cannot be written right now: rekordbox holds the
@@ -875,7 +880,7 @@ mod tests {
             .execute("UPDATE djmdContent SET Analysed = 0, AnalysisDataPath = '', ImagePath = '', ContentLink = NULL WHERE ID = ?1", [track_id(0)])
             .unwrap();
         let (library, _) = rbl_index::load(&db).unwrap();
-        let state = AppState::with_backups(dir.join("backups"));
+        let state = AppState::unprotected(dir.join("backups"));
         state.set_library(library, false, None, 0, location.clone());
         crate::backups::create(&state).unwrap();
         (state, location)
@@ -908,6 +913,106 @@ mod tests {
         state.set_library(reloaded, false, None, 0, location);
         assert_eq!(state.registered_analysis(&track), None, "the reloaded index has it, so the note is dropped");
         assert_eq!(read(&state.library().unwrap()), written);
+    }
+
+    /// wbx-43 review A: an analysis is not saved while Library Protection is
+    /// on: no analysis file is written under the share folder and the row
+    /// still has none.
+    #[test]
+    fn an_analysis_is_not_saved_while_protection_is_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let (state, location) = unanalysed_click_track(dir.path());
+        let share = location.share_root.clone();
+        let library = state.library().unwrap();
+        let editor = crate::grid::GridEditor::at(&dir.path().join("editor"));
+        let track = rbl_db::fixture::track_id(0);
+        state.core().set_protection(true).unwrap();
+        let files_before = files_under(&share);
+
+        let refused = analyse_and_save(&state, &library, &share, &track, rbl_analysis::AnalysisPreset::Rbxport,
+            &AnalysisSettings::default(), &editor, None).unwrap_err();
+
+        assert_eq!(refused.message, rbl_library::protection::MESSAGE);
+        assert_eq!(files_under(&share), files_before);
+        let db = rbl_db::Library::open(location, rbl_db::OpenMode::ReadOnly).unwrap();
+        let path: String = db.connection()
+            .query_row("SELECT COALESCE(AnalysisDataPath,'') FROM djmdContent WHERE ID=?1", [&track], |r| r.get(0)).unwrap();
+        assert_eq!(path, "");
+    }
+
+    /// Every file under `root` with its bytes.
+    fn files_under(root: &std::path::Path) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+        let mut found = std::collections::BTreeMap::new();
+        let mut pending = vec![root.to_path_buf()];
+        while let Some(dir) = pending.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else {
+                    found.insert(path.clone(), std::fs::read(&path).unwrap());
+                }
+            }
+        }
+        found
+    }
+
+    /// wbx-43 review A: a phrase edit, which writes only the `.EXT`, is
+    /// refused while Library Protection is on, and the file's bytes and
+    /// modification time stay as they were.
+    #[test]
+    fn a_phrase_edit_leaves_the_analysis_file_alone_while_protection_is_on() {
+        use rbl_db::fixture::{self, track_id, Shape};
+        let dir = tempfile::tempdir().unwrap();
+        let location = fixture::build(dir.path(), Shape::default()).unwrap();
+        let relative = "/PIONEER/USBANLZ/ph/ANLZ0000.DAT";
+        fixture::set_analysis_path(&location, 1, relative).unwrap();
+        let ext = rbl_anlz::sibling(&rbl_anlz::resolve(&location.share_root, relative), "EXT");
+        std::fs::create_dir_all(ext.parent().unwrap()).unwrap();
+        let mut builder = rbl_anlz::AnlzBuilder::new();
+        builder.path("/test.wav");
+        std::fs::write(&ext, builder.finish()).unwrap();
+        let mut file = rbl_anlz::Anlz::read(&ext).unwrap();
+        file.sections.push(three_phrases());
+        std::fs::write(&ext, file.to_bytes()).unwrap();
+        let original = std::fs::read(&ext).unwrap();
+        let stamp = std::fs::metadata(&ext).unwrap().modified().unwrap();
+        let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
+        let (library, _) = rbl_index::load(&db).unwrap();
+        let state = AppState::unprotected(dir.path().join("backups"));
+        state.set_library(library, false, db.schema().db_version, 0, location.clone());
+        let library = state.library().unwrap();
+        let track = track_id(1);
+        state.core().set_protection(true).unwrap();
+
+        let refused = phrase_edit(&state, &library, &location.share_root, &track, rbl_anlz::PhraseEdit::Cut { beat: 25 }).unwrap_err();
+
+        assert_eq!(refused.message, rbl_library::protection::MESSAGE);
+        assert_eq!(std::fs::read(&ext).unwrap(), original);
+        assert_eq!(std::fs::metadata(&ext).unwrap().modified().unwrap(), stamp);
+        state.core().set_protection(false).unwrap();
+        assert!(phrase_edit(&state, &library, &location.share_root, &track, rbl_anlz::PhraseEdit::Cut { beat: 25 }).unwrap());
+        assert_ne!(std::fs::read(&ext).unwrap(), original);
+    }
+
+    /// A rekordbox 7 style `PSSI`: three mid-mood phrases at beats 1, 17, 33.
+    fn three_phrases() -> rbl_anlz::Section {
+        let mut raw = Vec::new();
+        raw.extend_from_slice(&24_u32.to_be_bytes());
+        raw.extend_from_slice(&3_u16.to_be_bytes());
+        raw.extend_from_slice(&2_u16.to_be_bytes());
+        raw.extend_from_slice(&[0; 6]);
+        raw.extend_from_slice(&64_u16.to_be_bytes());
+        raw.extend_from_slice(&[0, 0, 0, 0]);
+        for (index, beat, kind) in [(1_u16, 1_u16, 1_u16), (2, 17, 2), (3, 33, 3)] {
+            let mut entry = vec![0_u8; 24];
+            entry[0..2].copy_from_slice(&index.to_be_bytes());
+            entry[2..4].copy_from_slice(&beat.to_be_bytes());
+            entry[4..6].copy_from_slice(&kind.to_be_bytes());
+            raw.extend_from_slice(&entry);
+        }
+        rbl_anlz::Section::new(b"PSSI", raw[..20].to_vec(), raw[20..].to_vec())
     }
 
     /// A deck that loads an unanalysed track watches its waveform fill in:
@@ -966,7 +1071,7 @@ mod tests {
 
         let db = Db::open(location.clone(), OpenMode::ReadOnly).unwrap();
         let (library, _) = rbl_index::load(&db).unwrap();
-        let state = AppState::with_backups(dir.path().join("backups"));
+        let state = AppState::unprotected(dir.path().join("backups"));
         let share = location.share_root.clone();
         state.set_library(library, false, None, 0, location.clone());
         crate::backups::create(&state).unwrap();
