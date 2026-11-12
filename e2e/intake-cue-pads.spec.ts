@@ -40,7 +40,7 @@ const pauseButton = (page: Page) => player(page).getByRole("button", { name: "Pa
 const failed = (page: Page) => player(page).getByTestId("intake-pads-failed");
 
 const call = (page: Page, name: string, ...args: unknown[]) =>
-  page.evaluate(([hook, rest]) => (window as unknown as Hooks)[hook as string]!(...(rest as unknown[])), [name, args] as const);
+  page.evaluate(([hook, rest]) => (window as unknown as Hooks)[hook]!(...(rest)), [name, args] as const);
 const hotCuesOf = async (page: Page, id: string) => (await call(page, "__hotCuesOf", id)) as HotCue[];
 const gridOf = async (page: Page, id: string) => (await call(page, "__gridOf", id)) as Grid;
 const beatsOf = async (page: Page, id: string) => (await call(page, "__gridBeatsOf", id)) as number[][];
@@ -356,7 +356,7 @@ test("a tap over tempo changes asks first, once a run: No keeps every beat, Yes 
   const id = track!.id;
   const before = await beatsOf(page, id);
   expect(new Set(before.map((b) => b[2])).size).toBe(2);
-  const asked = async () => ((await page.evaluate(() => (window as unknown as { __confirmed?: string[] }).__confirmed ?? [])) as string[])
+  const asked = async () => ((await page.evaluate(() => (window as unknown as { __confirmed?: string[] }).__confirmed ?? [])))
     .filter((q) => q.includes("tempo changes")).length;
 
   await page.evaluate(() => { (window as unknown as { __confirmAnswers: boolean[] }).__confirmAnswers = [false]; });
