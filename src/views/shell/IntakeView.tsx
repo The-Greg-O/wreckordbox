@@ -44,6 +44,7 @@ import type { KeyOverrides, Platform } from "@/lib/shortcuts";
 import { useCommands } from "@/store/useCommands";
 import { useEventCallback } from "@/store/useEventCallback";
 import { usePreferences } from "@/store/usePreferences";
+import { IntakeTagPanel } from "./IntakeTagPanel";
 import { IntakeTrackPanel } from "./IntakeTrackPanel";
 import styles from "./IntakeView.module.css";
 import { useIntakeColours } from "./useIntakeColours";
@@ -379,6 +380,31 @@ export function IntakeView(props: IntakeViewProps) {
     return saving;
   }, [selected, edit, t]);
 
+  // The tag panel's writes (wbx-65): a deck-facing tag is the window's
+  // MyTag edit (one undoable step, Library Protection); any other is the
+  // DJ's Fact. Each resolves why it was not written, or null.
+  const myTagComments = usePreferences().advanced.myTagComments;
+  const putMyTag = useCallback(async (track: string, myTag: string, on: boolean): Promise<string | null> => {
+    let reason: string | null = null;
+    const written = await onEdit(on ? t("My Tag added.") : t("My Tag removed."), async (backend) => {
+      try {
+        return await backend.edits.putMyTag([track], myTag, on, myTagComments);
+      } catch (error) {
+        reason = error instanceof Error ? error.message : String((error as { message?: unknown } | null)?.message ?? error);
+        throw error;
+      }
+    });
+    return written ? null : reason ?? refusal(protectLibrary);
+  }, [onEdit, myTagComments, protectLibrary, t]);
+  const setTagFact = useCallback(async (track: string, dimension: string, terms: readonly string[]): Promise<string | null> => {
+    try {
+      await (await getBackend()).intakeSetTagFact(track, dimension, terms);
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : String((error as { message?: unknown } | null)?.message ?? error);
+    }
+  }, []);
+
   // The view's actions, for the palette and the keys: live while a track is chosen.
   const run = (action: IntakeAction): boolean => {
     if (!selected) return false;
@@ -545,6 +571,7 @@ export function IntakeView(props: IntakeViewProps) {
           }}
           platform={platform}
           suggestionsUnavailable={page.suggestionsUnavailable}
+          tags={<IntakeTagPanel trackId={selected.id} putMyTag={putMyTag} setFact={setTagFact} />}
         />
       ) : (
         <section className={styles.panel} aria-label={t("Track")} data-testid="intake-panel">

@@ -29,9 +29,11 @@ import { applyEditFrom, validateEdit, isDynamicFrom, tempoX100, type EditableBea
 import { fromCamelot, toCamelot } from "@/lib/camelot";
 import { COLOR_NAMES, wholeBpm } from "@/lib/trackFilter";
 import { MY_TAG_LIMIT, newMyTagName } from "@/lib/myTags";
+import { fromServicePanel } from "@/lib/tagPanel";
 import { referenceDeviceSettings } from "./mock-device-settings";
 import { createMockDeviceLibraries, type MockImportEntry } from "./mock-device-library";
 import { createMockIntake } from "./mock-intake";
+import { createMockTagPanel } from "./mock-tag-panel";
 import { keyLightRows } from "./mock-key-lights";
 import { FILTER_FIXTURE_SIZE, filterFixtureColors, filterFixtureMembers, filterFixtureRows, filterFixtureTags } from "./mock-filter-fixture";
 
@@ -2456,6 +2458,11 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     gridLocked: (id) => gridStore.get(id)?.locked ?? false, wait, ready: () => ready,
     setColour: (id, colour) => edits.setTrackColor([id], colour === null ? null : String(colour)),
   });
+  // The Intake tag panel (wbx-65): `mock-tag-panel.ts`.
+  const tagPanel = createMockTagPanel({
+    all, categories: myTagCategories, wait, ready: () => ready,
+    tagsOf: (id) => { const row = all.find((r) => r.id === id); return row ? detailsOf(row).myTags : []; },
+  });
   if (typeof window !== "undefined") {
     // `__setPrepColour(id, colourId)` (0 for none): an edit as the Library list makes it.
     (window as unknown as { __setPrepColour: (id: string, colour: number) => Promise<unknown> }).__setPrepColour =
@@ -2475,6 +2482,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     intakeCounts: intake.intakeCounts,
     intakeColours: intake.intakeColours,
     intakeSetPrepColour: intake.intakeSetPrepColour,
+    intakeTagPanel: async (track) => fromServicePanel(await tagPanel.intakeTagPanel(track)),
+    intakeSetTagFact: tagPanel.intakeSetTagFact,
     rekordboxBrowseSettings: () => Promise.resolve(null),
     librarySummary: () =>
       ready

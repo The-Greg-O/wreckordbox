@@ -1174,6 +1174,18 @@ export interface Backend {
    * one step of Edit › Undo, refused under Library Protection (wbx-63).
    */
   intakeSetPrepColour(id: string, colour: number | null): Promise<void>;
+  /**
+   * The Intake tag panel's description (wbx-65; the service's
+   * `intake.tag_panel`): every dimension in the panel's order, which reach
+   * the deck, their tags, and, given a track, which of them it carries.
+   */
+  intakeTagPanel(track: string | null): Promise<import("@/lib/tagPanel").TagPanel>;
+  /**
+   * Sets a dimension that does not reach the deck to exactly `terms` on a
+   * track, as the DJ's Fact (a Sidecar write, not a Library edit). Deck-facing
+   * tags are set with `edits.putMyTag`.
+   */
+  intakeSetTagFact(track: string, dimension: string, terms: readonly string[]): Promise<void>;
   /** Maps collection track ids to rows already in one of a stick's libraries. */
   devicePlaylistCollectionTracks(path: string, format: DeviceFormat, tracks: string[]): Promise<(string | null)[]>;
   /**
