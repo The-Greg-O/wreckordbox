@@ -398,13 +398,10 @@ impl StateSource {
 /// records remain the common baseline used by every player on the network.
 fn save_grid_offset(state: &AppState, track: &str, offset_ms: i16) -> crate::error::AppResult<()> {
     use crate::error::{AppError, ErrorKind};
-    let _edit_guard = state.edit_gate().lock();
-    let _files = state.analysis_write().lock();
+    // Refused (Library Protection, rekordbox running, not the writer)
+    // before the analysis file is touched.
+    let _edit = state.file_edit()?;
     let location = state.location()?;
-    if let Some(reason) = rbl_db::write_refusal_reason(location.is_real_install,
-        rbl_db::test_mode(), rbl_db::is_rekordbox_running()) {
-        return Err(AppError::new(ErrorKind::ReadOnly, reason));
-    }
     crate::file_journal::recover(state.backup_dir(), &location)?;
     let library = state.library()?;
     let row = library.row_of(track).ok_or_else(|| AppError::new(ErrorKind::NotFound, "Track not found"))?;
@@ -1118,6 +1115,49 @@ mod grid_offset_tests {
         }
         assert_eq!(std::fs::read(&dat).unwrap(), original);
         assert!(save_grid_offset(&state, "999999", 234).is_err());
+    }
+
+    /// wbx-43 review A: a player's grid correction over LINK, with Library
+    /// Protection on, is refused before the analysis file is touched: the
+    /// file's bytes and its modification time stay as they were.
+    #[test]
+    fn a_players_grid_correction_is_refused_and_leaves_the_file_alone_while_protection_is_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let location = rbl_db::fixture::build(dir.path(), rbl_db::fixture::Shape::default()).unwrap();
+        let relative = "/PIONEER/USBANLZ/test/ANLZ0000.DAT";
+        rbl_db::fixture::set_analysis_path(&location, 1, relative).unwrap();
+        let dat = rbl_anlz::resolve(&location.share_root, relative);
+        std::fs::create_dir_all(dat.parent().unwrap()).unwrap();
+        let mut builder = rbl_anlz::AnlzBuilder::new();
+        builder.path("/test.wav").beat_grid(&[rbl_anlz::Beat { beat_number: 1, tempo_x100: 12800, time_ms: 500 }]);
+        let original = builder.finish();
+        std::fs::write(&dat, &original).unwrap();
+        let stamp = std::fs::metadata(&dat).unwrap().modified().unwrap();
+        let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
+        let (library, _) = rbl_index::load(&db).unwrap();
+        let state = Arc::new(AppState::unprotected(dir.path().join("backups")));
+        state.set_library(library, false, db.schema().db_version, 0, location);
+        state.core().set_protection(true).unwrap();
+        let source = StateSource(
+            Arc::downgrade(&state),
+            Arc::new(|_, _| {}),
+            rbl_prolink::DeviceSettings::default(),
+            rbl_link::KeyOrder::Musical,
+        );
+        let track = rbl_db::fixture::track_id(1);
+
+        let applied = source.edit(&rbl_link::Edit::GridOffset { track: track.parse().unwrap(), offset_ms: 234 });
+        let direct = save_grid_offset(&state, &track, -467).unwrap_err();
+
+        assert!(!applied);
+        assert_eq!(direct.message, rbl_library::protection::MESSAGE);
+        assert_eq!(std::fs::read(&dat).unwrap(), original);
+        assert_eq!(std::fs::metadata(&dat).unwrap().modified().unwrap(), stamp);
+
+        // Turned off, the same correction goes through.
+        state.core().set_protection(false).unwrap();
+        assert!(source.edit(&rbl_link::Edit::GridOffset { track: track.parse().unwrap(), offset_ms: 234 }));
+        assert_eq!(rbl_anlz::Anlz::read(&dat).unwrap().grid_offset(), Some(234));
     }
 }
 

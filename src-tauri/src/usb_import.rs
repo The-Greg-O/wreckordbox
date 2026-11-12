@@ -103,8 +103,17 @@ fn import(state: &AppState, editor: &crate::grid::GridEditor, root: &Path, cues:
     rbl_devices::settings::recover(root)
         .map_err(|e| err(format!("Could not recover an interrupted export before importing: {e}")))?;
     let _device_read = rbl_core::durable::read_lock(root).map_err(err)?;
-    let _gate = state.edit_gate().lock();
-    let _files = state.analysis_write().lock();
+    // Cues (analysis files and rows), play history and ratings change the
+    // Library: refused before any file is written while it may not be
+    // changed (Library Protection among it). The players' settings alone go
+    // to the app's own folder, not the Library.
+    let (_edit, _gate, _files);
+    if cues || history || ratings {
+        _edit = state.file_edit()?;
+    } else {
+        _gate = state.edit_gate().lock();
+        _files = state.analysis_write().lock();
+    }
     let mut report = ImportReport::default();
     let location = state.location()?;
     crate::file_journal::recover(state.backup_dir(), &location)?;
@@ -322,6 +331,48 @@ fn validate_settings(name: &str, bytes: &[u8]) -> Result<(), String> {
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+
+    /// wbx-43 review A: importing a stick's cues and grid is refused while
+    /// Library Protection is on, before the Library's analysis file is
+    /// touched: its bytes and modification time stay as they were.
+    #[test]
+    fn a_cue_import_leaves_the_analysis_file_alone_while_protection_is_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let location = rbl_db::fixture::build(dir.path(), rbl_db::fixture::Shape::default()).unwrap();
+        let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
+        let (library, _) = rbl_index::load(&db).unwrap();
+        let state = AppState::unprotected(dir.path().join("backups"));
+        state.set_library(library, false, db.schema().db_version, 0, location.clone());
+        let id = rbl_db::fixture::track_id(0);
+        let source_path: String = db.connection().query_row("SELECT FolderPath FROM djmdContent WHERE ID=?1", [&id], |r| r.get(0)).unwrap();
+        drop(db);
+        let relative = state.write(|w| w.analysis_data_path_for(&id)).unwrap();
+        state.write(|w| w.register_analysis(&id, &rbl_db::write::AnalysisRegistration { bpm_x100: 12000, key: None, analysis_data_path: &relative })).unwrap();
+        let target = rbl_anlz::resolve(&location.share_root, &relative);
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        let mut original = rbl_anlz::write::AnlzBuilder::new();
+        original.path("/original.mp3").beat_grid(&[rbl_anlz::Beat { beat_number: 1, tempo_x100: 12000, time_ms: 0 }]).cue_lists(true);
+        std::fs::write(&target, original.finish()).unwrap();
+        let usb = dir.path().join("usb");
+        let anlz = "PIONEER/USBANLZ/test";
+        std::fs::create_dir_all(usb.join(anlz)).unwrap();
+        let mut changed = rbl_anlz::write::AnlzBuilder::new();
+        changed.path("/usb.mp3").beat_grid(&[rbl_anlz::Beat { beat_number: 1, tempo_x100: 12800, time_ms: 250 }]).cue_lists(true);
+        std::fs::write(usb.join(anlz).join("ANLZ0000.DAT"), changed.finish()).unwrap();
+        rbl_export::Manifest { generation: None, db_id: 0, baseline: None, version: 1, written: String::new(), playlists: vec![], loose: vec![], tracks: vec![rbl_export::manifest::ManifestTrack { analysis_hashes: std::collections::BTreeMap::new(), analysis_extensions: vec!["DAT".into()], audio_hash: 0,
+            export_id: 1, library_id: id.parse().unwrap(), source: source_path, audio: "audio.mp3".into(), anlz_dir: anlz.into(), size: 0, modified: 0, analysis: 0, artwork: String::new(), conversion: String::new(), conversion_source_hash: 0, in_place: false, preserved: Some(false), copy_stamp: None,
+        }] }.save(&usb).unwrap();
+        let editor = crate::grid::GridEditor::at(state.backup_dir());
+        let before = (std::fs::read(&target).unwrap(), std::fs::metadata(&target).unwrap().modified().unwrap());
+        state.core().set_protection(true).unwrap();
+
+        let refused = import(&state, &editor, &usb, true, false, false, false).unwrap_err();
+
+        assert_eq!(refused.message, rbl_library::protection::MESSAGE);
+        assert_eq!((std::fs::read(&target).unwrap(), std::fs::metadata(&target).unwrap().modified().unwrap()), before);
+        state.core().set_protection(false).unwrap();
+        assert_eq!(import(&state, &editor, &usb, true, false, false, false).unwrap().tracks, 1);
+    }
     #[test]
     fn imports_only_cues_and_grid_preserving_local_path_and_waveform() {
         let dir = tempfile::tempdir().unwrap();

@@ -600,6 +600,12 @@ pub async fn device_playlist_import<R: tauri::Runtime>(
             if location.is_real_install && rbl_db::is_rekordbox_running() {
                 return Err(AppError::new(ErrorKind::ReadOnly, "rekordbox is running. Quit it before making changes."));
             }
+            // Nothing is copied for an import the Library would refuse.
+            // (The import itself is checked again under the edit gate, and
+            // the copies are removed if it is refused.)
+            if state.core().protection().protect_library {
+                return Err(crate::commands::write_error(rbl_library::protection::refusal()));
+            }
             let (entries, copies, carried) = blocking("device_playlist_import_copy", {
                 let plan = plan.clone();
                 move || copy_missing(&plan, &to_copy, &copy_destination(destination.as_deref())?)
@@ -815,8 +821,7 @@ fn carry_stick_analysis(state: &AppState, mount: &Path, content: &str, copy: &Pa
     let dat_relative = Path::new(&stick.analysis);
     let dat = if stick.analysis.trim().is_empty() { None } else { read(dat_relative)? };
 
-    let _gate = state.edit_gate().lock();
-    let _files = state.analysis_write().lock();
+    let _edit = state.file_edit()?;
     let location = state.location()?;
     crate::file_journal::recover(state.backup_dir(), &location)?;
     let key = Some(stick.key.as_str()).filter(|k| !k.is_empty());

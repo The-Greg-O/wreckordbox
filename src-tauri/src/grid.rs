@@ -519,23 +519,14 @@ fn apply_options(editor: &GridEditor, library: &Library, location: &rbl_db::Libr
 /// (#505; rekordbox's `djplay::BeatGridAdjustment::ApplyNewBpm` is undoable
 /// too, 7.2.19 symbols).
 pub(crate) fn set_tempo(state: &AppState, editor: &GridEditor, track: &str, value: &str) -> AppResult<()> {
-    let _edit_guard = state.edit_gate().lock();
-    set_tempo_inner(state, editor, track, value)
-}
-
-fn set_tempo_inner(state: &AppState, editor: &GridEditor, track: &str, value: &str) -> AppResult<()> {
     let bpm: f64 = value.trim().parse().map_err(|_| AppError::new(ErrorKind::Malformed, "Enter a BPM from 40 to 499."))?;
     if !bpm.is_finite() || !(40.0..=499.0).contains(&bpm) {
         return Err(AppError::new(ErrorKind::Malformed, "Enter a BPM from 40 to 499."));
     }
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "validated 40..=499 above")]
     let bpm_x100 = (bpm * 100.0).round() as u16;
-    let _files = state.analysis_write().lock();
+    let _edit = state.file_edit()?;
     let location = state.location()?;
-    if let Some(reason) = rbl_db::write_refusal_reason(location.is_real_install,
-        rbl_db::test_mode(), rbl_db::is_rekordbox_running()) {
-        return Err(AppError::new(ErrorKind::ReadOnly, reason));
-    }
     if database_locked(&location, track)? { return Err(AppError::new(ErrorKind::ReadOnly, "The beat grid is locked.")); }
     crate::file_journal::recover(state.backup_dir(), &location)?;
     let library = state.library()?;
@@ -567,6 +558,16 @@ fn wire_beats(beats: &[Beat]) -> Vec<(u32, u8)> {
     beats.iter().map(|beat| (beat.time_ms, u8::try_from(beat.beat_number).unwrap_or(0))).collect()
 }
 
+/// One grid action as the window's commands run it: refused before any
+/// analysis file is published while the Library may not be changed
+/// (Library Protection among it), then the files and the row as one edit.
+pub(crate) fn guarded(state: &AppState, editor: &GridEditor, library: &Library, location: &rbl_db::LibraryLocation,
+    track: &str, action: GridAction, options: &GridOptions) -> AppResult<GridOutcome> {
+    let _edit = state.file_edit()?;
+    let mut set_bpm = |bpm_x100: u32| state.write(|writer| writer.save_grid_revision(track, bpm_x100)).map_err(write_error);
+    apply_options(editor, library, location, track, action, options, &mut set_bpm)
+}
+
 /// Runs one action under `blocking` (a `spawn_blocking` thread: the files
 /// and the row are disk work), then tells the interface and the deck what
 /// changed.
@@ -590,15 +591,7 @@ async fn run<R: tauri::Runtime>(
     let outcome = {
         let state = Arc::clone(&state);
         let track = track.clone();
-        blocking(name, move || {
-            let _edit_guard = state.edit_gate().lock();
-            let _files_guard = state.analysis_write().lock();
-            let mut set_bpm = |bpm_x100: u32| {
-                let track = track.clone();
-                state.write(|writer| writer.save_grid_revision(&track, bpm_x100)).map_err(write_error)
-            };
-            apply_options(&editor, &library, &location, &track, action, &options, &mut set_bpm)
-        })
+        blocking(name, move || guarded(&state, &editor, &library, &location, &track, action, &options))
         .await
     };
     let outcome = match outcome {
@@ -877,6 +870,53 @@ mod tests {
         let _files = state.analysis_write().lock();
         let mut set_bpm = |bpm: u32| state.write(|w| w.save_grid_revision(&Fixture::track(), bpm)).map_err(write_error);
         apply(&f.editor, &f.library, &f.location, &Fixture::track(), action, &mut set_bpm)
+    }
+
+    /// The bytes and modification times of the track's `.DAT` and `.EXT`.
+    fn files_now(f: &Fixture) -> Vec<(Vec<u8>, std::time::SystemTime)> {
+        let dat = rbl_anlz::resolve(&f.location.share_root, RELATIVE);
+        [dat.clone(), dat.with_extension("EXT")]
+            .iter()
+            .map(|file| (std::fs::read(file).unwrap(), std::fs::metadata(file).unwrap().modified().unwrap()))
+            .collect()
+    }
+
+    fn nudge() -> GridAction {
+        GridAction::Edit { edit: GridEdit::Nudge { ms: 20 }, from_ms: None }
+    }
+
+    /// wbx-43 review A: with Library Protection on, a grid edit, its Undo,
+    /// its Redo and the Info panel's typed BPM are refused before any
+    /// analysis file is published: each file's bytes and modification time
+    /// and the row's BPM stay as they were, and the history keeps both steps.
+    #[test]
+    fn grid_edits_undo_redo_and_a_typed_bpm_leave_every_file_alone_while_protection_is_on() {
+        let f = open();
+        let state = app_state(&f);
+        let track = Fixture::track();
+        let options = GridOptions::default();
+        guarded(&state, &f.editor, &f.library, &f.location, &track, nudge(), &options).unwrap();
+        guarded(&state, &f.editor, &f.library, &f.location, &track, nudge(), &options).unwrap();
+        guarded(&state, &f.editor, &f.library, &f.location, &track, GridAction::Undo, &options).unwrap();
+        state.core().set_protection(true).unwrap();
+        let files = files_now(&f);
+        let bpm = row_bpm(&state);
+
+        for action in [nudge(), GridAction::Undo, GridAction::Redo] {
+            let refused = guarded(&state, &f.editor, &f.library, &f.location, &track, action, &options).unwrap_err();
+            assert_eq!(refused.message, rbl_library::protection::MESSAGE, "{action:?}");
+        }
+        let typed = set_tempo(&state, &f.editor, &track, "150").unwrap_err();
+
+        assert_eq!(typed.message, rbl_library::protection::MESSAGE);
+        assert_eq!(files_now(&f), files);
+        assert_eq!(row_bpm(&state), bpm);
+        let grid = f.editor.state_for(&track, &f.dat().beat_grid().unwrap());
+        assert!(grid.can_undo && grid.can_redo);
+
+        state.core().set_protection(false).unwrap();
+        guarded(&state, &f.editor, &f.library, &f.location, &track, GridAction::Redo, &options).unwrap();
+        assert_ne!(files_now(&f), files);
     }
 
     fn row_bpm(state: &AppState) -> u32 {

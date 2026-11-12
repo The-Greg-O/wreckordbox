@@ -176,6 +176,16 @@ impl AppState {
         self.core.analysis_write()
     }
 
+    /// Starts an edit that writes the Library's own files (analysis files
+    /// under the share folder, with or without a row): the edit gate, the
+    /// analysis-file lock and every check a write makes, Library
+    /// Protection included, before anything is published
+    /// ([`LibraryCore::file_edit`]). Every such edit starts here; hold the
+    /// answer until its last file and row are written.
+    pub(crate) fn file_edit(&self) -> crate::error::AppResult<rbl_library::file_edit::FileEdit<'_>> {
+        self.core.file_edit().map_err(crate::commands::write_error)
+    }
+
     /// The colouring marks a LINK session copies its played marks into.
     pub fn link_played(&self) -> rbl_link::Played {
         self.played.link.clone()
