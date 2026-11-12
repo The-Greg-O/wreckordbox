@@ -589,7 +589,7 @@ pub fn run() {
             intake_view::intake_colours,
             intake_view::intake_set_prep_colour,
             intake_tags::intake_tag_panel,
-            intake_tags::intake_set_tag_fact,
+            intake_tags::intake_set_tags,
             service_status::service_activity,
             service_host::library_protection,
             service_host::adopt_library_protection,

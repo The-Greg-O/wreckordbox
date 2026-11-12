@@ -103,6 +103,10 @@ pub enum LibraryEdit {
     /// One Remove from Tag List, Clear Tag List or Remove from History
     /// (#508): the rows taken off the list and its order before and after.
     ListRemoval(rbl_db::write::ListRemoval),
+    /// The DJ's judgements of kinds the Library cannot hold (wbx-65): no
+    /// row is written, Undo and Redo write none; the Ledger records,
+    /// withdraws and records again the Facts (`crate::judgements`).
+    Judgements(crate::judgements::Judgements),
 }
 
 impl LibraryEdit {
@@ -128,6 +132,7 @@ impl LibraryEdit {
             Self::PlaylistEdit(edit) => edit.is_empty(),
             Self::Relocate(edit) => edit.is_empty(),
             Self::ListRemoval(edit) => edit.is_empty(),
+            Self::Judgements(judgements) => judgements.is_empty(),
         }
     }
 
@@ -150,6 +155,9 @@ impl LibraryEdit {
                 rbl_db::write::RemovalList::TagList => Touched::TagList,
                 rbl_db::write::RemovalList::History(_) => Touched::Histories(Vec::new()),
             },
+            // No row changes: the cheapest refresh, which still tells the
+            // clients (and the window) that something changed.
+            Self::Judgements(_) => Touched::Metadata(Vec::new()),
         }
     }
 
@@ -180,6 +188,8 @@ impl LibraryEdit {
             // Every playlist of a replacement is checked in the one transaction
             // that writes them.
             | Self::ReplacePlaylistContents(_) => Ok(()),
+            // Nothing of the Library's to find changed.
+            Self::Judgements(_) => Ok(()),
             // One transaction, but the pad check reads rows the entry does not
             // name, so it is done here as well as in the writer (#504).
             Self::Cues(revision) => match writer.cue_revision_conflict(revision, undo)? {
@@ -253,6 +263,7 @@ impl LibraryEdit {
             Self::PlaylistEdit(value) => if undo { writer.undo_playlist_edit(value) } else { writer.redo_playlist_edit(value) }.map(|_| ()),
             Self::Relocate(value) => if undo { writer.undo_relocation(value) } else { writer.redo_relocation(value) }.map(|_| ()),
             Self::ListRemoval(value) => if undo { writer.undo_list_removal(value) } else { writer.redo_list_removal(value) }.map(|_| ()),
+            Self::Judgements(_) => Ok(()),
         }
     }
 }
@@ -459,6 +470,13 @@ impl EditHistory {
     }
 
     /// The label of the edit Undo would take back, when there is one.
+    /// What the Ledger called the latest entry Undo would take back, when
+    /// there is one and the Ledger recorded it.
+    #[must_use]
+    pub fn latest_ledger_entry(&self) -> Option<i64> {
+        self.undo.last().and_then(|entry| entry.ledger)
+    }
+
     pub fn undo_label(&self) -> Option<&'static str> {
         self.undo.last().map(|entry| entry.label)
     }

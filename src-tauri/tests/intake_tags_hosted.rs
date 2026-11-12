@@ -1,8 +1,10 @@
 //! The Intake tag panel in a window hosting the Library service (wbx-65):
-//! the window reads the panel's description from the service, toggles a
-//! deck-facing tag with its existing MyTag edit (one undoable step, refused
-//! under Library Protection), and sets a vocabulary dimension as the DJ's
-//! Fact.
+//! the window reads the panel's description from the service, and every
+//! click goes through the service's `intake.set_tags` as one entry of the
+//! history the window shares with it: the window's Undo takes back the
+//! DJ's last action whichever store it touched (a MyTag, or the DJ's Fact
+//! of a dimension that does not reach the deck), and Library Protection
+//! refuses every click.
 //!
 //! A fixture Library in a temporary folder and a mock app in place of the
 //! window; nothing here can reach the installed Library.
@@ -125,15 +127,19 @@ fn a_deck_tag_toggled_from_the_panel_is_one_undoable_mytag_edit_refused_under_pr
 
     // Library Protection on: refused, and the track carries nothing.
     window.protect(true);
-    let refused = window.put(&track, MY_TAG_PEAK, true).unwrap_err();
+    let (refused, _) = window.click(&track, &situation, &[MY_TAG_PEAK]).unwrap_err();
     assert!(refused.contains("Library Protection"), "{refused}");
     assert_eq!(window.set(&track)[&situation], json!([]));
     window.protect(false);
 
-    window.put(&track, MY_TAG_PEAK, true).unwrap();
+    window.click(&track, &situation, &[MY_TAG_PEAK]).unwrap();
     assert_eq!(window.set(&track)[&situation], json!([MY_TAG_PEAK]));
+    // The window's own MyTag edit still works beside it.
+    window.put(&track, rbl_db::fixture::MY_TAG_WARM_UP, true).unwrap();
 
-    // One Undo takes the tick back.
+    // Undo, Undo: the window's tick, then the panel's.
+    window.undo();
+    assert_eq!(window.set(&track)[&situation], json!([MY_TAG_PEAK]));
     window.undo();
     assert_eq!(window.set(&track)[&situation], json!([]));
 }
@@ -145,6 +151,7 @@ version = 1
 terms = [
   { id = "house", name = "House" },
   { id = "house-deep", name = "Deep", parent = "house" },
+  { id = "techno", name = "Techno" },
 ]
 
 [dimensions.situation]
@@ -153,55 +160,161 @@ terms = [
   { id = "warm-up", name = "Warm-up" },
 ]
 
+[dimensions.vocals]
+terms = [{ id = "male", name = "Male" }, { id = "female", name = "Female" }]
+
 [deck]
 categories = [{ dimension = "situation", label = "Situation" }]
 "#;
 
-#[test]
-fn a_vocabulary_tag_is_set_and_cleared_as_the_djs_fact() {
-    let window = hosting_window(Some(SCHEMA));
-    let track = track_id(0);
-    let panel = intake_tags::tag_panel(&window.state(), Some(&track)).unwrap();
-    assert_eq!(panel["source"], "tag_schema");
-    assert_eq!(panel["dimensions"][1]["id"], "genre");
-    assert_eq!(panel["dimensions"][1]["edit"], "fact");
+impl Window {
+    /// The panel's click: `dimension` set to `terms` from the panel as shown.
+    fn click(&self, track: &str, dimension: &str, terms: &[&str]) -> Result<Value, (String, String)> {
+        let panel = intake_tags::tag_panel(&self.state(), Some(track)).unwrap();
+        let version = panel["track"]["versions"][dimension].as_str().unwrap().to_owned();
+        let terms: Vec<String> = terms.iter().map(|t| (*t).to_owned()).collect();
+        intake_tags::set_tags(&self.state(), track, dimension, &terms, &version, &[], false)
+            .map_err(|e| (e.message, e.detail.unwrap_or_default()))
+    }
 
-    intake_tags::set_tag_fact(&window.state(), &track, "genre", &["house-deep".to_owned()])
+    fn redo(&self) {
+        tauri::async_runtime::block_on(rbxport_lib::commands::redo_edit(
+            self.app.handle().clone(),
+            self.app.state::<Arc<AppState>>(),
+        ))
         .unwrap();
-    assert_eq!(window.set(&track)["genre"], json!(["house-deep"]));
+    }
 
-    intake_tags::set_tag_fact(&window.state(), &track, "genre", &[]).unwrap();
-    assert_eq!(window.set(&track)["genre"], json!([]));
+    fn rate(&self, track: &str, stars: u8) {
+        tauri::async_runtime::block_on(rbxport_lib::commands::set_track_rating(
+            self.app.handle().clone(),
+            self.app.state::<Arc<AppState>>(),
+            vec![track.to_owned()],
+            stars,
+        ))
+        .unwrap();
+    }
 
-    // A term the schema does not have is refused, and nothing changes.
-    let refused =
-        intake_tags::set_tag_fact(&window.state(), &track, "genre", &["polka".to_owned()])
-            .unwrap_err();
-    assert!(!refused.message.is_empty());
-    assert_eq!(window.set(&track)["genre"], json!([]));
-    assert!(window.sidecar_dir().exists());
+    fn energy(&self, track: &str) -> Value {
+        let page = self
+            .state()
+            .with_service(|service| service.call("tracks.list", json!({ "limit": 50 })))
+            .unwrap()
+            .unwrap();
+        page["tracks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == track)
+            .unwrap()["rating"]
+            .clone()
+    }
+
+    /// The DJ's live Fact of `kind` on `track`, with its source and Run.
+    fn djs(&self, track: &str, kind: &str) -> Option<Value> {
+        let facts = self
+            .state()
+            .with_service(|service| service.call("facts.of_track", json!({ "id": track })))
+            .unwrap()
+            .unwrap();
+        facts["facts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|fact| fact["kind"] == kind && fact["source"]["kind"] == "dj")
+            .max_by_key(|fact| fact["id"].as_i64().unwrap())
+            .cloned()
+    }
 }
 
 #[test]
-fn a_deck_tag_ticked_from_the_panel_is_recorded_as_the_djs_fact() {
+fn undo_takes_back_the_djs_last_action_whichever_store_it_touched() {
+    let window = hosting_window(Some(SCHEMA));
+    let track = track_id(0);
+    let energy_before = window.energy(&track);
+    assert_eq!(energy_before, json!(0));
+
+    // Energy (a Library edit), then a tag kept as a Fact.
+    window.rate(&track, 4);
+    assert_eq!(window.energy(&track), json!(4), "rated");
+    window.click(&track, "genre", &["house-deep"]).unwrap();
+    assert_eq!(window.energy(&track), json!(4), "after the click");
+    assert_eq!(window.djs(&track, "genre").unwrap()["value"], json!(["house-deep"]));
+
+    // Undo: the tag click, not the Energy.
+    window.undo();
+    assert!(window.djs(&track, "genre").is_none(), "the Fact is withdrawn");
+    assert_eq!(window.set(&track)["genre"], json!([]));
+    assert_eq!(window.energy(&track), json!(4));
+
+    // A second Undo: the Energy.
+    window.undo();
+    assert_eq!(window.energy(&track), energy_before);
+
+    // Redo, Redo: Energy, then the tag again, as the DJ's.
+    window.redo();
+    assert_eq!(window.energy(&track), json!(4));
+    window.redo();
+    let again = window.djs(&track, "genre").unwrap();
+    assert_eq!(again["value"], json!(["house-deep"]));
+    assert_eq!(again["source"]["kind"], "dj");
+}
+
+#[test]
+fn undo_of_a_fact_click_reinstates_the_answer_that_stood_before_with_its_source() {
+    let window = hosting_window(Some(SCHEMA));
+    let track = track_id(1);
+    let before = window
+        .state()
+        .with_service(|service| {
+            service.call(
+                "facts.record",
+                json!({ "facts": [{ "track": track, "kind": "vocals", "value": "male" }], "source": { "kind": "dj" } }),
+            )
+        })
+        .unwrap()
+        .unwrap()["facts"][0]["id"]
+        .clone();
+
+    window.click(&track, "vocals", &["female"]).unwrap();
+    assert_eq!(window.djs(&track, "vocals").unwrap()["value"], "female");
+    window.undo();
+
+    let stood = window.djs(&track, "vocals").unwrap();
+    assert_eq!(stood["id"], before, "the same Fact, not a copy");
+    assert_eq!(stood["value"], "male");
+}
+
+#[test]
+fn a_click_is_refused_under_library_protection_and_from_a_stale_panel() {
     let window = hosting_window(Some(SCHEMA));
     let track = track_id(2);
 
-    window.put(&track, MY_TAG_PEAK, true).unwrap();
+    window.protect(true);
+    let (message, code) = window.click(&track, "genre", &["techno"]).unwrap_err();
+    assert_eq!(code, "library_protected", "{message}");
+    window.protect(false);
+    assert!(window.djs(&track, "genre").is_none());
 
-    assert_eq!(window.set(&track)["situation"], json!(["peak"]));
-    let facts = window
-        .state()
-        .with_service(|service| service.call("facts.of_track", json!({ "id": track })))
-        .unwrap()
-        .unwrap();
-    let situation: Vec<&Value> = facts["facts"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|fact| fact["kind"] == "situation")
+    let panel = intake_tags::tag_panel(&window.state(), Some(&track)).unwrap();
+    let old = panel["track"]["versions"]["genre"].as_str().unwrap().to_owned();
+    window.click(&track, "genre", &["techno"]).unwrap();
+    let error = intake_tags::set_tags(&window.state(), &track, "genre", &["house".to_owned()], &old, &[], false)
+        .unwrap_err();
+    assert_eq!(error.detail.as_deref(), Some("tag_panel_stale"));
+    assert_eq!(window.djs(&track, "genre").unwrap()["value"], json!(["techno"]));
+}
+
+#[test]
+fn a_tag_click_tells_every_client_of_the_service() {
+    let window = hosting_window(Some(SCHEMA));
+    let events = window.state().with_service(|service| service.events()).unwrap();
+
+    window.click(&track_id(0), "genre", &["techno"]).unwrap();
+
+    let heard: Vec<String> = std::iter::from_fn(|| events.recv_timeout(std::time::Duration::from_secs(2)).ok())
+        .map(|event| event.event)
+        .take(2)
         .collect();
-    assert_eq!(situation.len(), 1, "{facts}");
-    assert_eq!(situation[0]["value"], json!(["peak"]));
-    assert_eq!(situation[0]["source"]["kind"], "dj");
+    assert!(heard.contains(&"sidecar_changed".to_owned()), "{heard:?}");
 }

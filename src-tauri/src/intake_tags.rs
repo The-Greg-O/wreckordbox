@@ -1,12 +1,12 @@
 //! The Intake view's tag panel (wbx-65).
 //!
-//! The panel's description (its dimensions, which reach the deck, their
-//! tags, and what a track carries) is the hosted Library service's
-//! `intake.tag_panel`. A deck-facing tag is toggled with the window's own
-//! My Tag edit (`details::put_my_tag`): the single edit path, one undoable
-//! step, refused under Library Protection. A dimension that does not reach
-//! the deck is the DJ's Fact of its kind, recorded here through the
-//! service's `facts.record`: a Sidecar write, not a Library edit.
+//! Both the panel's description and every click are the hosted Library
+//! service's (`intake.tag_panel`, `intake.set_tags`): the service checks a
+//! click against the Tag schema as it is now and makes it ONE entry of the
+//! edit history this window shares with it, whether it changed the track's
+//! MyTags or only the DJ's Fact of a dimension that does not reach the
+//! deck. So the window's Undo takes back the DJ's last action whichever
+//! store it touched, and Library Protection refuses every click.
 
 use std::sync::Arc;
 
@@ -23,7 +23,7 @@ fn ask(state: &AppState, command: &str, args: Value) -> AppResult<Result<Value, 
         .ok_or_else(|| {
             AppError::new(
                 ErrorKind::NotFound,
-                "The Library service is not running in this window, so the tags cannot be read.",
+                "The Library service is not running in this window, so the tags cannot be read or set.",
             )
         })
 }
@@ -40,29 +40,39 @@ pub fn tag_panel(state: &Arc<AppState>, track: Option<&str>) -> AppResult<Value>
     })
 }
 
-/// Sets the DJ's tags of one dimension that does not reach the deck to
-/// exactly `terms` (an empty list clears them), as the DJ's Fact.
-pub fn set_tag_fact(
+/// One click of the panel: `dimension` of `track` set to exactly `terms`
+/// (the explicit selection), from the panel at `version`. The answer is
+/// the service's `TagsSet`. A refusal keeps the service's code as the
+/// error's detail: `tag_panel_stale` (read again, click again),
+/// `library_protected`, `tag_not_settable`, `tag_not_in_dimension`.
+pub fn set_tags(
     state: &Arc<AppState>,
     track: &str,
     dimension: &str,
     terms: &[String],
+    version: &str,
+    drop_unmapped: &[String],
+    comments: bool,
 ) -> AppResult<Value> {
     ask(
         state,
-        "facts.record",
+        tag_panel::commands::INTAKE_SET_TAGS,
         json!({
-            "description": "Tags set in Intake",
-            "source": { "kind": "dj" },
-            "facts": [{ "track": track, "kind": dimension, "value": terms }],
+            "id": track,
+            "dimension": dimension,
+            "terms": terms,
+            "version": version,
+            "drop_unmapped": drop_unmapped,
+            "comments": comments,
         }),
     )?
     .map_err(|error| {
-        AppError::new(
-            ErrorKind::Malformed,
-            format!("Not saved: {}", error.message),
-        )
-        .with_detail(error.code.clone())
+        let kind = match error.code.as_str() {
+            "library_protected" | "write_refused" => ErrorKind::ReadOnly,
+            "tag_panel_stale" => ErrorKind::Conflict,
+            _ => ErrorKind::Malformed,
+        };
+        AppError::new(kind, error.message.clone()).with_detail(error.code.clone())
     })
 }
 
@@ -83,21 +93,33 @@ pub async fn intake_tag_panel(
     .await
 }
 
-/// Sets a vocabulary dimension's tags on a track from the tag panel.
+/// One click of the tag panel.
 #[tauri::command]
 #[allow(
     clippy::needless_pass_by_value,
-    reason = "a command is handed its state by value"
+    clippy::too_many_arguments,
+    reason = "a command is handed its state and arguments by value"
 )]
-pub async fn intake_set_tag_fact(
+pub async fn intake_set_tags(
     state: tauri::State<'_, Arc<AppState>>,
     track: String,
     dimension: String,
     terms: Vec<String>,
+    version: String,
+    drop_unmapped: Option<Vec<String>>,
+    comments: Option<bool>,
 ) -> AppResult<Value> {
     let state = Arc::clone(&state);
-    blocking("intake_set_tag_fact", move || {
-        set_tag_fact(&state, &track, &dimension, &terms)
+    blocking("intake_set_tags", move || {
+        set_tags(
+            &state,
+            &track,
+            &dimension,
+            &terms,
+            &version,
+            &drop_unmapped.unwrap_or_default(),
+            comments.unwrap_or(false),
+        )
     })
     .await
 }
