@@ -14,7 +14,7 @@ mod support;
 
 use std::path::{Path, PathBuf};
 
-use support::{channel, level_at, read, sine, write_wav_rate, RATE};
+use support::{read, sine, write_wav_rate, RATE};
 use wreckordbox_render::{render, Destination, Edits, Format, Proceed, Rendered, TrackSource};
 
 /// One MPEG-1 Layer III frame.
@@ -32,10 +32,12 @@ fn render_file(source: &Path, edits: Edits, out: &Path, format: Format) -> Rende
 }
 
 #[test]
-fn the_format_is_the_parents_where_there_is_an_encoder_and_wav_otherwise() {
+fn the_default_format_is_lossless_and_follows_the_parent_only_between_wav_and_aiff() {
+    // A rendered Mutant is lossless unless MP3 is asked for by name: an MP3
+    // parent renders to WAV by default.
     for (name, format) in [
-        ("a.mp3", Format::Mp3),
-        ("a.MP3", Format::Mp3),
+        ("a.mp3", Format::Wav),
+        ("a.MP3", Format::Wav),
         ("a.wav", Format::Wav),
         ("a.aiff", Format::Aiff),
         ("a.aif", Format::Aiff),
@@ -46,13 +48,19 @@ fn the_format_is_the_parents_where_there_is_an_encoder_and_wav_otherwise() {
         ("a", Format::Wav),
     ] {
         assert_eq!(Format::for_parent(Path::new(name)), format, "{name}");
+        assert!(Format::for_parent(Path::new(name)).is_lossless(), "{name}");
     }
+    assert!(!Format::Mp3.is_lossless());
     assert_eq!(Format::Wav.extension(), "wav");
     assert_eq!(Format::Aiff.extension(), "aiff");
     assert_eq!(Format::Mp3.extension(), "mp3");
     assert_eq!(
         Destination::for_parent(Path::new("/music/Song.Mix.aif"), Path::new("/work/m1")),
         Destination::new("/work/m1.aiff", Format::Aiff)
+    );
+    assert_eq!(
+        Destination::for_parent(Path::new("/music/Song.mp3"), Path::new("/work/m2")),
+        Destination::new("/work/m2.wav", Format::Wav)
     );
 }
 
@@ -118,19 +126,33 @@ fn onset(frames: &[[i16; 2]]) -> usize {
         .expect("a burst")
 }
 
+/// The last frame whose level is over a quarter of the burst's.
+fn offset(frames: &[[i16; 2]]) -> usize {
+    frames
+        .iter()
+        .rposition(|frame| frame[0].unsigned_abs() > 4_096)
+        .expect("a burst")
+}
+
+/// Frames `rbl-audio` (rekordbox's timeline as this repo models it) puts
+/// ahead of an MP3's first coded frame: the LAME Info frame, read as a frame
+/// of silence (`rbl_core::mpeg`).
+const INFO_FRAME: usize = MP3_FRAME;
+
 #[test]
-fn an_mp3_render_is_320_kbps_and_lines_up_with_its_source() {
+fn an_mp3_render_keeps_every_frame_and_reports_delay_and_padding_apart() {
     let bench = Bench::new();
-    for rate in [44_100, 48_000] {
+    for rate in [44_100_u32, 48_000] {
+        // Full-level bursts at the very first and the very last frames: a
+        // renderer that cut or moved anything at either end would lose one.
         let frames = rate as usize;
-        let at = frames / 2;
-        let source = burst_source_at(
-            &bench.path(&format!("source-{rate}.wav")),
-            rate,
-            frames,
-            at,
-            0.2,
-        );
+        let edge = 256;
+        let mut samples = vec![0_i16; frames];
+        let tone = sine(1_000.0 * f64::from(RATE) / f64::from(rate), edge, 0.9);
+        samples[..edge].copy_from_slice(&tone);
+        samples[frames - edge..].copy_from_slice(&tone);
+        let source = bench.path(&format!("edges-{rate}.wav"));
+        write_wav_rate(&source, &samples, &samples, rate);
         let out = bench.path(&format!("out-{rate}.mp3"));
         let rendered = render_file(&source, Edits::default(), &out, Format::Mp3);
 
@@ -139,35 +161,33 @@ fn an_mp3_render_is_320_kbps_and_lines_up_with_its_source() {
         assert_eq!(&bytes[..2], &[0xFF, 0xFB]);
         assert_eq!(bytes[2] >> 4, 14);
 
+        // The intended length, and the encoder's additions beside it.
+        assert_eq!(rendered.frames, frames as u64, "every frame given");
+        assert_eq!(rendered.encoder_delay, 576, "LAME's delay at {rate} Hz");
+        assert!(rendered.padding > 0);
+        let coded = rendered.encoder_delay + rendered.frames + rendered.padding;
+        assert_eq!(coded % MP3_FRAME as u64, 0, "whole MPEG frames");
+
         let (decoded, got_rate) = read(&out);
         assert_eq!(got_rate, rate);
-        assert_eq!(rendered.frames, frames as u64);
-        // On rekordbox's timeline the audio is where the source had it, so
-        // the parent's grid and cues fit; an MP3 rounds up to whole frames
-        // at the end.
-        let moved = onset(&decoded) as i64 - onset(&read(&source).0) as i64;
+        assert_eq!(
+            decoded.len() as u64,
+            INFO_FRAME as u64 + coded,
+            "decoded length is the Info frame, the delay, the frames and the padding"
+        );
+        // Both bursts are there, as far apart as in the source: nothing was
+        // dropped at the front or the back and nothing in between moved.
+        let (first, last) = (onset(&decoded), offset(&decoded));
+        let span = last as i64 - first as i64;
+        let want = (frames - 1) as i64;
         assert!(
-            moved.abs() <= 44,
-            "the burst moved {moved} frames at {rate} Hz"
+            (span - want).abs() <= 16,
+            "bursts {span} frames apart, not {want}, at {rate} Hz"
         );
         assert!(
-            (frames..=frames + 2 * MP3_FRAME).contains(&decoded.len()),
-            "{} frames decoded for {frames} at {rate} Hz",
-            decoded.len()
+            first >= INFO_FRAME + rendered.encoder_delay as usize,
+            "the first burst decoded at {first}, ahead of the encoder's delay"
         );
-        // An MP3 parent rendered to MP3 again stays in place too: its own
-        // lead is what the new file's makes room for.
-        let again = bench.path(&format!("again-{rate}.mp3"));
-        render_file(&out, Edits::default(), &again, Format::Mp3);
-        let moved = onset(&read(&again).0) as i64 - onset(&decoded) as i64;
-        assert!(
-            moved.abs() <= 44,
-            "MP3 to MP3 moved the burst {moved} frames"
-        );
-        if rate == RATE {
-            let level = level_at(&channel(&decoded[at + 2_000..at + 6_000], 0), 1_000.0);
-            assert!((level - 0.5).abs() < 0.02, "the tone at {level}");
-        }
     }
 }
 
@@ -188,15 +208,15 @@ fn the_rendered_length_is_the_parents_scaled_by_the_tempo_in_every_format() {
         assert_eq!(rendered.frames, want as u64, "{format:?}");
         let (decoded, _) = read(&out);
         if format == Format::Mp3 {
-            assert!(
-                (want..=want + 2 * MP3_FRAME).contains(&decoded.len()),
-                "{} MP3 frames for {want}",
-                decoded.len()
+            // Exact in what was encoded; what a player adds around it is
+            // reported, never taken out of the audio.
+            assert_eq!(
+                decoded.len() as u64,
+                INFO_FRAME as u64 + rendered.encoder_delay + rendered.frames + rendered.padding
             );
-            let moved = onset(&decoded) as i64 - (22_050.0 / 1.05) as i64;
-            assert!(moved.abs() <= 220, "the burst moved {moved} frames");
         } else {
-            assert_eq!(decoded.len(), want, "{format:?}");
+            assert_eq!(decoded.len(), want, "{format:?} is exact to the frame");
+            assert_eq!((rendered.encoder_delay, rendered.padding), (0, 0));
         }
     }
 }

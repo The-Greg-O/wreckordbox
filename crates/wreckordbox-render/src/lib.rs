@@ -43,14 +43,19 @@ pub enum Format {
     /// PCM AIFF (big-endian).
     Aiff,
     /// MPEG-1 Layer III at 320 kbit/s constant, with a LAME Info frame: the
-    /// export's own MP3 settings. Lined up so that, on rekordbox's timeline,
-    /// the audio is where the source had it (see the README).
+    /// export's own MP3 settings. Only when asked for by name: never a
+    /// default. Lossy, and not exact in length: the encoder's delay and
+    /// padding surround the frames (both reported in [`Rendered`]), and
+    /// where a deck places the audio, and so a beat grid, is not known
+    /// without one (see the README).
     Mp3,
 }
 
 impl Format {
-    /// The parent's own format where there is an encoder for it, WAV
-    /// otherwise: by the parent file's extension, as the Library and the
+    /// The default format for a Mutant of `parent`: always lossless, so the
+    /// render is exact to the frame. AIFF for an AIFF parent, WAV for every
+    /// other, an MP3 parent included (MP3 output is [`Format::Mp3`], asked
+    /// for by name). By the parent file's extension, as the Library and the
     /// export name formats.
     #[must_use]
     pub fn for_parent(parent: &Path) -> Self {
@@ -60,10 +65,16 @@ impl Format {
             .unwrap_or("")
             .to_ascii_lowercase();
         match extension.as_str() {
-            "mp3" => Self::Mp3,
             "aif" | "aiff" => Self::Aiff,
             _ => Self::Wav,
         }
+    }
+
+    /// Whether a file in this format decodes to exactly the frames rendered,
+    /// sample for sample: WAV and AIFF.
+    #[must_use]
+    pub fn is_lossless(self) -> bool {
+        matches!(self, Self::Wav | Self::Aiff)
     }
 
     /// The extension a file in this format is given.
@@ -135,8 +146,17 @@ pub enum Proceed {
 /// What was written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rendered {
+    /// The frames the render made, every one of them in the file: for no
+    /// edits the source's length, for a tempo `round(source / tempo)`. A WAV
+    /// or AIFF decodes to exactly this many.
     pub frames: u64,
     pub sample_rate: u32,
+    /// Frames the encoder put ahead of the first rendered frame: 0 for WAV
+    /// and AIFF, LAME's delay (576) for MP3, as its LAME tag records it.
+    pub encoder_delay: u64,
+    /// Frames the encoder put after the last one to fill its last block: 0
+    /// for WAV and AIFF; for MP3 as the LAME tag records it.
+    pub padding: u64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -293,11 +313,13 @@ pub fn render_on(
     {
         return Err(RenderError::Cancelled);
     }
-    encoder.finish()?;
+    let coding = encoder.finish()?;
     part.commit(&destination.path)?;
     Ok(Rendered {
         frames: written,
         sample_rate,
+        encoder_delay: coding.delay,
+        padding: coding.padding,
     })
 }
 

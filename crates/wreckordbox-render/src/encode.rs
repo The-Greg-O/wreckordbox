@@ -5,14 +5,22 @@ use std::io::{self, BufWriter, Seek, SeekFrom, Write};
 
 use crate::Format;
 
+/// What an encoder put in the file around the frames it was given, in
+/// frames: nothing for PCM.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Coding {
+    pub delay: u64,
+    pub padding: u64,
+}
+
 /// One output file being written. The seam other formats (ticket #82) come
 /// in behind: `render` only ever sees this.
 pub(crate) trait Encoder {
-    /// Appends interleaved stereo.
+    /// Appends interleaved stereo. Every frame given is encoded.
     fn write(&mut self, samples: &[f32]) -> io::Result<()>;
 
     /// Completes the file and flushes it to disk.
-    fn finish(self: Box<Self>) -> io::Result<()>;
+    fn finish(self: Box<Self>) -> io::Result<Coding>;
 }
 
 pub(crate) fn encoder(
@@ -68,7 +76,7 @@ impl Encoder for Wav {
         Ok(())
     }
 
-    fn finish(mut self: Box<Self>) -> io::Result<()> {
+    fn finish(mut self: Box<Self>) -> io::Result<Coding> {
         // A WAV's lengths are 32-bit: a little over six and a half hours of
         // 44.1 kHz stereo. Past that the file would lie about itself.
         let data = u32::try_from(self.data)
@@ -82,7 +90,8 @@ impl Encoder for Wav {
         self.out.seek(SeekFrom::Start(u64::from(HEADER) - 4))?;
         self.out.write_all(&data.to_le_bytes())?;
         self.out.flush()?;
-        self.out.get_ref().sync_all()
+        self.out.get_ref().sync_all()?;
+        Ok(Coding::default())
     }
 }
 
@@ -136,7 +145,7 @@ impl Encoder for Aiff {
         Ok(())
     }
 
-    fn finish(mut self: Box<Self>) -> io::Result<()> {
+    fn finish(mut self: Box<Self>) -> io::Result<Coding> {
         let too_long = || io::Error::new(io::ErrorKind::InvalidInput, "too long for an AIFF file");
         let frames = u32::try_from(self.frames).map_err(|_| too_long())?;
         let data = frames
@@ -151,7 +160,8 @@ impl Encoder for Aiff {
         self.out.seek(SeekFrom::Start(42))?;
         self.out.write_all(&(data + 8).to_be_bytes())?;
         self.out.flush()?;
-        self.out.get_ref().sync_all()
+        self.out.get_ref().sync_all()?;
+        Ok(Coding::default())
     }
 }
 
@@ -169,32 +179,20 @@ fn extended(rate: u32) -> [u8; 10] {
     bytes
 }
 
-/// Frames an MP3 written here puts ahead of its first sample on rekordbox's
-/// timeline: the Info frame, which rekordbox's frame map plays as a frame of
-/// silence (its channel mode is the audio's, see `rbl_core::mpeg`), LAME's
-/// encoder delay (576) and the decoder's (529). Measured through
-/// `rbl-audio` at 44.1 and 48 kHz: 2,257 frames.
-fn mp3_ahead(sample_rate: u32) -> usize {
-    // Samples per frame: MPEG-1 from 32 kHz up, MPEG-2 and 2.5 below.
-    let frame = if sample_rate >= 32_000 { 1_152 } else { 576 };
-    frame + 576 + 529
-}
-
 /// MP3 through LAME, at the export's settings (`rbl_audio::compatibility`):
-/// 320 kbit/s constant, best quality, with an Info frame.
+/// 320 kbit/s constant, best quality, with an Info frame carrying the LAME
+/// tag.
 ///
-/// Lined up for rekordbox's timeline: a deck plays an MP3 with no gapless
-/// trimming, so the Info frame (a frame of silence in rekordbox's frame map),
-/// LAME's encoder delay and the decoder's delay all come before the first
-/// sample given here. That many frames are dropped from the front, so the
-/// render's audio sits where its source's did and the parent's grid fits.
-/// What is dropped is the very start of the render, which for an MP3 parent
-/// is its own lead and encoder delay.
+/// Every frame given is encoded; nothing is dropped or moved to make up for
+/// the encoder's delay. LAME puts its delay (576 frames) ahead of the first
+/// frame and pads the last MPEG frame; both are written in the LAME tag,
+/// read back from it, and reported beside the frame count. Where a player,
+/// a deck or rekordbox then places the first frame (whether it honours the
+/// tag's delay, plays the Info frame as silence, and so where a beat grid
+/// lands) has not been checked on hardware: see the README.
 struct Mp3 {
     out: BufWriter<File>,
     lame: mp3lame_encoder::Encoder,
-    /// Frames still to drop from the front.
-    skip: usize,
     left: Vec<f32>,
     right: Vec<f32>,
     bytes: Vec<u8>,
@@ -226,7 +224,6 @@ impl Mp3 {
         Ok(Self {
             out: BufWriter::new(file),
             lame,
-            skip: mp3_ahead(sample_rate),
             left: Vec::new(),
             right: Vec::new(),
             bytes: Vec::new(),
@@ -236,12 +233,9 @@ impl Mp3 {
 
 impl Encoder for Mp3 {
     fn write(&mut self, samples: &[f32]) -> io::Result<()> {
-        let frames = samples.len() / 2;
-        let skipped = self.skip.min(frames);
-        self.skip -= skipped;
         self.left.clear();
         self.right.clear();
-        for frame in samples[skipped * 2..].chunks_exact(2) {
+        for frame in samples.chunks_exact(2) {
             // The same 16-bit steps and clipping as the PCM formats.
             self.left.push(f32::from(to_i16(frame[0])) / 32_768.0);
             self.right.push(f32::from(to_i16(frame[1])) / 32_768.0);
@@ -264,7 +258,7 @@ impl Encoder for Mp3 {
         self.out.write_all(&self.bytes)
     }
 
-    fn finish(mut self: Box<Self>) -> io::Result<()> {
+    fn finish(mut self: Box<Self>) -> io::Result<Coding> {
         self.bytes.clear();
         self.bytes.reserve(7_200);
         self.lame
@@ -275,12 +269,39 @@ impl Encoder for Mp3 {
         // and padding.
         self.bytes.clear();
         self.bytes.reserve(self.lame.lame_tag_size());
-        if self.lame.lame_tag_encode_to_vec(&mut self.bytes).is_some() {
-            self.out
-                .seek(SeekFrom::Start(self.lame.id3v2_tag_size() as u64))?;
-            self.out.write_all(&self.bytes)?;
+        if self.lame.lame_tag_encode_to_vec(&mut self.bytes).is_none() {
+            return Err(lame_error("no LAME tag to write"));
         }
+        let coding = lame_tag_coding(&self.bytes)
+            .ok_or_else(|| lame_error("the LAME tag has no delay and padding"))?;
+        self.out
+            .seek(SeekFrom::Start(self.lame.id3v2_tag_size() as u64))?;
+        self.out.write_all(&self.bytes)?;
         self.out.flush()?;
-        self.out.get_ref().sync_all()
+        self.out.get_ref().sync_all()?;
+        Ok(coding)
     }
+}
+
+/// The encoder delay and padding a LAME tag records: the Info (or Xing)
+/// header's optional fields, then the LAME extension, whose bytes 21 to 23
+/// hold the two as 12-bit numbers.
+fn lame_tag_coding(frame: &[u8]) -> Option<Coding> {
+    let at = frame
+        .windows(4)
+        .position(|w| w == b"Info" || w == b"Xing")?;
+    let flags = u32::from_be_bytes(frame.get(at + 4..at + 8)?.try_into().ok()?);
+    let mut lame = at + 8;
+    for (flag, size) in [(1, 4), (2, 4), (4, 100), (8, 4)] {
+        if flags & flag != 0 {
+            lame += size;
+        }
+    }
+    if frame.get(lame..lame + 4)? != b"LAME" {
+        return None;
+    }
+    let bytes = frame.get(lame + 21..lame + 24)?;
+    let delay = (u64::from(bytes[0]) << 4) | (u64::from(bytes[1]) >> 4);
+    let padding = (u64::from(bytes[1] & 0x0F) << 8) | u64::from(bytes[2]);
+    Some(Coding { delay, padding })
 }
