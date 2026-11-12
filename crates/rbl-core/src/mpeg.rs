@@ -150,7 +150,7 @@ fn counts_frames(bytes: &[u8]) -> bool {
     match frame.get(tag..tag + 8) {
         // Xing and Info: a flags word whose lowest bit says the frame count
         // is present.
-        Some([b'X', b'i', b'n', b'g', .., flags]) | Some([b'I', b'n', b'f', b'o', .., flags]) => flags & 1 == 1,
+        Some([b'X', b'i', b'n', b'g', .., flags] | [b'I', b'n', b'f', b'o', .., flags]) => flags & 1 == 1,
         // VBRI always carries it.
         _ => frame.get(36..40) == Some(b"VBRI"),
     }

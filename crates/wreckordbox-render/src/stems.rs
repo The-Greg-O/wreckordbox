@@ -26,6 +26,10 @@ pub struct Stems {
 
 /// Which Stems a render keeps. All four is no Stem edit at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "one independent choice per Stem, named as the Stems are"
+)]
 pub struct Kept {
     pub vocals: bool,
     pub other: bool,

@@ -28,7 +28,9 @@ const VOCALS_AND_BASS: Kept = Kept {
 };
 
 fn render_to(source: &mut MutantSource, edits: Edits, out: &Path) -> Result<Rendered, RenderError> {
-    render(source, edits, &Destination::wav(out), &mut |_| Proceed::Continue)
+    render(source, edits, &Destination::wav(out), &mut |_| {
+        Proceed::Continue
+    })
 }
 
 #[test]
@@ -111,7 +113,11 @@ fn refused(stems: &wreckordbox_render::Stems, parent: &Path) -> RenderError {
     let error = MutantSource::open(parent, VOCALS_AND_BASS, Some(stems))
         .and_then(|mut source| render_to(&mut source, Edits::default(), &out))
         .unwrap_err();
-    assert_eq!(std::fs::read_dir(outdir.path()).unwrap().count(), 0, "nothing written");
+    assert_eq!(
+        std::fs::read_dir(outdir.path()).unwrap().count(),
+        0,
+        "nothing written"
+    );
     error
 }
 
@@ -132,7 +138,10 @@ fn stems_whose_length_does_not_match_their_parent_are_refused() {
     // The parent is shorter.
     let mut shorter = bench.stems();
     shorter.frames -= 1;
-    assert!(matches!(refused(&shorter, &parent), RenderError::StemLength { .. }));
+    assert!(matches!(
+        refused(&shorter, &parent),
+        RenderError::StemLength { .. }
+    ));
 
     // One kept Stem is shorter than the others.
     let short = support::sine(HZ[2], bench.frames - 300, AMPLITUDE);
@@ -154,7 +163,8 @@ fn a_stem_cut_short_is_refused_not_rendered_shorter() {
     std::fs::write(&path, &bytes[..bytes.len() / 2]).unwrap();
     assert!(matches!(
         refused(&bench.stems(), &parent),
-        RenderError::Source(rbl_audio::AudioError::Truncated { .. }) | RenderError::StemLength { .. }
+        RenderError::Source(rbl_audio::AudioError::Truncated { .. })
+            | RenderError::StemLength { .. }
     ));
 }
 
@@ -166,7 +176,11 @@ fn stems_at_different_rates_are_refused() {
     support::write_wav_rate(&bench.path("bass.wav"), &samples, &samples, 48_000);
     assert!(matches!(
         refused(&bench.stems(), &parent),
-        RenderError::StemRate { expected: 44_100, found: 48_000, .. }
+        RenderError::StemRate {
+            expected: 44_100,
+            found: 48_000,
+            ..
+        }
     ));
 }
 
@@ -214,7 +228,10 @@ fn a_stem_edit_combines_with_key_shift_and_tempo() {
     for hz in &HZ[1..] {
         for shifted in [*hz, hz * 2.0_f64.powf(2.0 / 12.0)] {
             let level = level_at(settled, shifted);
-            assert!(level < 0.01, "muted {hz} Hz measures {level} at {shifted} Hz");
+            assert!(
+                level < 0.01,
+                "muted {hz} Hz measures {level} at {shifted} Hz"
+            );
         }
     }
 }

@@ -96,7 +96,11 @@ fn an_aiff_render_holds_the_source_sample_for_sample_at_its_rate() {
 /// Silence with a burst of tone from `at` for `secs`, as a WAV at `rate`.
 fn burst_source_at(path: &Path, rate: u32, frames: usize, at: usize, secs: f64) -> PathBuf {
     let mut samples = vec![0_i16; frames];
-    let tone = sine(1_000.0 * f64::from(RATE) / f64::from(rate), (secs * f64::from(rate)) as usize, 0.5);
+    let tone = sine(
+        1_000.0 * f64::from(RATE) / f64::from(rate),
+        (secs * f64::from(rate)) as usize,
+        0.5,
+    );
     samples[at..at + tone.len()].copy_from_slice(&tone);
     write_wav_rate(path, &samples, &samples, rate);
     path.to_path_buf()
@@ -120,7 +124,13 @@ fn an_mp3_render_is_320_kbps_and_lines_up_with_its_source() {
     for rate in [44_100, 48_000] {
         let frames = rate as usize;
         let at = frames / 2;
-        let source = burst_source_at(&bench.path(&format!("source-{rate}.wav")), rate, frames, at, 0.2);
+        let source = burst_source_at(
+            &bench.path(&format!("source-{rate}.wav")),
+            rate,
+            frames,
+            at,
+            0.2,
+        );
         let out = bench.path(&format!("out-{rate}.mp3"));
         let rendered = render_file(&source, Edits::default(), &out, Format::Mp3);
 
@@ -136,7 +146,10 @@ fn an_mp3_render_is_320_kbps_and_lines_up_with_its_source() {
         // the parent's grid and cues fit; an MP3 rounds up to whole frames
         // at the end.
         let moved = onset(&decoded) as i64 - onset(&read(&source).0) as i64;
-        assert!(moved.abs() <= 44, "the burst moved {moved} frames at {rate} Hz");
+        assert!(
+            moved.abs() <= 44,
+            "the burst moved {moved} frames at {rate} Hz"
+        );
         assert!(
             (frames..=frames + 2 * MP3_FRAME).contains(&decoded.len()),
             "{} frames decoded for {frames} at {rate} Hz",
@@ -147,7 +160,10 @@ fn an_mp3_render_is_320_kbps_and_lines_up_with_its_source() {
         let again = bench.path(&format!("again-{rate}.mp3"));
         render_file(&out, Edits::default(), &again, Format::Mp3);
         let moved = onset(&read(&again).0) as i64 - onset(&decoded) as i64;
-        assert!(moved.abs() <= 44, "MP3 to MP3 moved the burst {moved} frames");
+        assert!(
+            moved.abs() <= 44,
+            "MP3 to MP3 moved the burst {moved} frames"
+        );
         if rate == RATE {
             let level = level_at(&channel(&decoded[at + 2_000..at + 6_000], 0), 1_000.0);
             assert!((level - 0.5).abs() < 0.02, "the tone at {level}");
@@ -196,9 +212,12 @@ fn an_mp3_parent_cut_short_is_refused_not_rendered_shorter() {
 
     let out = bench.path("out.mp3");
     let mut track = TrackSource::open(&parent).unwrap();
-    let error = render(&mut track, Edits::default(), &Destination::mp3(&out), &mut |_| {
-        Proceed::Continue
-    })
+    let error = render(
+        &mut track,
+        Edits::default(),
+        &Destination::mp3(&out),
+        &mut |_| Proceed::Continue,
+    )
     .unwrap_err();
     assert!(
         matches!(

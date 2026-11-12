@@ -144,7 +144,8 @@ impl Encoder for Aiff {
             .filter(|data| data.checked_add(AIFF_HEADER).is_some())
             .ok_or_else(too_long)?;
         self.out.seek(SeekFrom::Start(4))?;
-        self.out.write_all(&(data + AIFF_HEADER - 8).to_be_bytes())?;
+        self.out
+            .write_all(&(data + AIFF_HEADER - 8).to_be_bytes())?;
         self.out.seek(SeekFrom::Start(22))?;
         self.out.write_all(&frames.to_be_bytes())?;
         self.out.seek(SeekFrom::Start(42))?;
@@ -160,7 +161,7 @@ fn extended(rate: u32) -> [u8; 10] {
     if rate == 0 {
         return bytes;
     }
-    let shift = 31 - rate.leading_zeros();
+    let shift = rate.ilog2();
     #[allow(clippy::cast_possible_truncation, reason = "at most 16383 + 31")]
     let exponent = (16_383 + shift) as u16;
     bytes[..2].copy_from_slice(&exponent.to_be_bytes());
