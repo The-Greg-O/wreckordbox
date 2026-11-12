@@ -115,7 +115,10 @@ fn a_hosted_service_that_stops_mid_measuring_records_nothing_after_and_hands_ove
     let reached = pause.join(format!("{track}.commit.reached"));
     let deadline = Instant::now() + Duration::from_secs(120);
     while !reached.exists() {
-        assert!(Instant::now() < deadline, "the measuring never got to recording");
+        assert!(
+            Instant::now() < deadline,
+            "the measuring never got to recording"
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
 
@@ -126,7 +129,10 @@ fn a_hosted_service_that_stops_mid_measuring_records_nothing_after_and_hands_ove
         std::thread::spawn(move || first.stop())
     };
     std::thread::sleep(Duration::from_millis(400));
-    assert!(!stopping.is_finished(), "the service stopped under a measuring");
+    assert!(
+        !stopping.is_finished(),
+        "the service stopped under a measuring"
+    );
     std::fs::remove_file(&marker).unwrap();
     stopping.join().unwrap();
 

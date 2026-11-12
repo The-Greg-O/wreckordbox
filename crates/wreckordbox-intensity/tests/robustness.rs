@@ -71,7 +71,9 @@ fn pattern_at(rate: u32, seconds: f64) -> Vec<f32> {
         let start = (at * f64::from(rate)) as usize;
         let len = (length * f64::from(rate)) as usize;
         for i in 0..len {
-            let Some(sample) = out.get_mut(start + i) else { break };
+            let Some(sample) = out.get_mut(start + i) else {
+                break;
+            };
             let decay = 1.0 - i as f64 / len as f64;
             *sample += (amplitude * decay * decay * (2.0 * PI * hz * t(i)).sin()) as f32;
         }
@@ -101,7 +103,11 @@ fn the_same_band_limited_audio_measures_the_same_at_any_sample_rate() {
         analyser.finish(&[]).unwrap()
     };
     let base = at(44_100);
-    assert!(base.summary.features.onset_density > 3.0, "{:?}", base.summary);
+    assert!(
+        base.summary.features.onset_density > 3.0,
+        "{:?}",
+        base.summary
+    );
     for rate in [48_000, 88_200, 96_000] {
         let other = at(rate);
         let (a, b) = (base.summary.features, other.summary.features);
@@ -159,7 +165,13 @@ fn mono_and_stereo_files_measure_as_they_are_heard() {
     let audio = joined(&[quiet_sparse(2.0), loud_busy(4.0)]);
     let file = |name: &str, channels: u16, into: Option<u16>| {
         let path = dir.path().join(name);
-        write_wav(&path, RATE, channels, &spread(&audio, channels, into), false);
+        write_wav(
+            &path,
+            RATE,
+            channels,
+            &spread(&audio, channels, into),
+            false,
+        );
         measure_file(&path, &[], &never).unwrap().unwrap()
     };
     let mono = file("mono.wav", 1, None);

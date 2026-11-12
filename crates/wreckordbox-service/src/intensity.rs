@@ -775,7 +775,15 @@ impl Measuring<'_> {
                 begun
             }
         };
-        record(self.sidecar, &self.source, run, parent, fingerprint, intensity).map(Some)
+        record(
+            self.sidecar,
+            &self.source,
+            run,
+            parent,
+            fingerprint,
+            intensity,
+        )
+        .map(Some)
     }
 
     fn progress(&self, parent: &Parent, status: &str, done: usize) {
@@ -868,7 +876,14 @@ fn show(stems: &Stems, target: Target) -> Result<TrackIntensity, ServiceError> {
     if path.is_file() {
         let fingerprint = stems::fingerprint(&parent, &path)?;
         mark_stale(stems, &sidecar, &parent.id, &fingerprint)?;
-        realign(stems, &sidecar, &activity, &parent, &fingerprint, analysis.as_deref())?;
+        realign(
+            stems,
+            &sidecar,
+            &activity,
+            &parent,
+            &fingerprint,
+            analysis.as_deref(),
+        )?;
     }
     drop(activity);
     let (current, previous): (Vec<Fact>, Vec<Fact>) = ours(&sidecar, &parent.id)?
@@ -1029,7 +1044,9 @@ fn pause(point: &str, track_id: &str) {
         return;
     };
     let marker = Path::new(&dir).join(format!("{track_id}.{point}"));
-    if !marker.exists() || std::fs::write(marker.with_extension(format!("{point}.reached")), b"").is_err() {
+    if !marker.exists()
+        || std::fs::write(marker.with_extension(format!("{point}.reached")), b"").is_err()
+    {
         return;
     }
     let deadline = std::time::Instant::now() + Duration::from_secs(60);

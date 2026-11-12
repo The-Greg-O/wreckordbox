@@ -28,8 +28,8 @@ use realfft::{RealFftPlanner, RealToComplex};
 
 use crate::loudness::{integrated_lufs, lufs, KWeighting, BLOCK_SECONDS, SILENCE_LUFS};
 use crate::{
-    combine, round, BarCurve, Cells, Features, Intensity, Invalid, MeasuredAudio, Method,
-    Summary, TimeCurve, CELL_SECONDS, HIGH_END_ABOVE_HZ, HIGH_END_BELOW_HZ, LOW_END_ABOVE_HZ,
+    combine, round, BarCurve, Cells, Features, Intensity, Invalid, MeasuredAudio, Method, Summary,
+    TimeCurve, CELL_SECONDS, HIGH_END_ABOVE_HZ, HIGH_END_BELOW_HZ, LOW_END_ABOVE_HZ,
     LOW_END_BELOW_HZ, SCALES, SILENCE_DB, STEP_SECONDS, WEIGHTS,
 };
 
@@ -383,7 +383,8 @@ impl Analyser {
 
     /// The cells, rounded as they are stored.
     fn cells(&self) -> Cells {
-        let count = ((self.pushed * CELLS_PER_SECOND).div_ceil(u64::from(self.rate))).max(1) as usize;
+        let count =
+            ((self.pushed * CELLS_PER_SECOND).div_ceil(u64::from(self.rate))).max(1) as usize;
         let mut low = vec![0.0_f64; count];
         let mut high = vec![0.0_f64; count];
         let mut flux = vec![0.0_f64; count];

@@ -322,9 +322,15 @@ impl Intensity {
         let finite = |values: &[f64]| values.iter().all(|value| value.is_finite());
         let unit = |values: &[f64]| values.iter().all(|value| (0.0..=1.0).contains(value));
         let features = |f: &Features<Vec<f64>>, len: usize| {
-            [&f.loudness, &f.low_end, &f.high_end, &f.onset_strength, &f.onset_density]
-                .iter()
-                .all(|values| values.len() == len && finite(values))
+            [
+                &f.loudness,
+                &f.low_end,
+                &f.high_end,
+                &f.onset_strength,
+                &f.onset_density,
+            ]
+            .iter()
+            .all(|values| values.len() == len && finite(values))
         };
         let summary = &self.summary;
         let s = &summary.features;
@@ -364,7 +370,8 @@ impl Intensity {
         let cells = &self.cells;
         let n = cells.loudness.len();
         if n == 0
-            || !(cells.step_seconds > 0.0)
+            || cells.step_seconds.is_nan()
+            || cells.step_seconds <= 0.0
             || [&cells.low_end, &cells.high_end, &cells.flux]
                 .iter()
                 .any(|values| values.len() != n || !finite(values))

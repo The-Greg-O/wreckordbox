@@ -914,7 +914,10 @@ fn the_bars_follow_a_beat_grid_added_or_corrected_after_measuring_without_decodi
     let settled = measure(&sandbox, &[&track]);
     assert_eq!(settled["decoded"], 0);
     assert_eq!(settled["run"], Value::Null);
-    assert_eq!(settled["tracks"][0]["fact_id"], shown["intensity"]["fact_id"]);
+    assert_eq!(
+        settled["tracks"][0]["fact_id"],
+        shown["intensity"]["fact_id"]
+    );
 
     // And once more through measuring: tempo corrected to 128 BPM.
     stop_service(&sandbox);
