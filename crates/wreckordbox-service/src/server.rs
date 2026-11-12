@@ -643,6 +643,9 @@ impl Shared {
         } else {
             self.ledger.close();
         }
+        // And the Sidecar, likewise, before another service or a reader
+        // may have it: not left open until the last thread lets go.
+        self.stems.close();
         *lock(&self.stopped.0) = true;
         self.stopped.1.notify_all();
     }
