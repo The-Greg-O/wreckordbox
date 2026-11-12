@@ -11,7 +11,10 @@
 //! running and, under `RBXPORT_TEST`, for a detected real Library.
 
 pub mod history;
+pub mod ledger;
 pub mod my_tags;
+pub mod protection;
+pub mod file_edit;
 pub mod read;
 
 use std::collections::HashMap;
@@ -217,6 +220,9 @@ pub struct LibraryCore {
     /// Undo and Redo of the edits made through this core, whoever made
     /// them. A leaf lock; see [`Self::history`].
     history: parking_lot::Mutex<history::EditHistory>,
+    /// Library Protection, kept in the recovery folder; checked under the
+    /// edit gate before every write. See [`protection`].
+    protection: protection::Switch,
 }
 
 type Watcher = Box<dyn FnMut(Change) -> bool + Send>;
@@ -226,10 +232,12 @@ impl LibraryCore {
     /// under `recovery_dir`. The location arrives with the Library, in
     /// [`Self::set_library`].
     pub fn new(recovery_dir: impl Into<PathBuf>) -> Self {
+        let recovery_dir = recovery_dir.into();
         Self {
             edit_gate: parking_lot::ReentrantMutex::new(()),
             analysis_write: parking_lot::Mutex::new(()),
-            recovery_dir: recovery_dir.into(),
+            protection: protection::Switch::new(recovery_dir.clone()),
+            recovery_dir,
             inner: RwLock::new(Inner { next_view_id: 1, generation: 1, ..Inner::default() }),
             watchers: parking_lot::Mutex::new(Vec::new()),
             refusal: parking_lot::Mutex::new(None),
@@ -319,7 +327,8 @@ impl LibraryCore {
 
     /// Opens the Library for writing, runs one edit against it, then
     /// `refresh` on the same connection, and closes it. Refused while
-    /// rekordbox is running.
+    /// rekordbox is running, and while Library Protection is on
+    /// ([`protection::refusal`]).
     ///
     /// Opened per edit rather than held: holding it would keep the database
     /// open read-write for the life of the process, and rekordbox launching
@@ -351,6 +360,11 @@ impl LibraryCore {
         if let Some(reason) = self.write_refusal() {
             return Err(rbl_db::DbError::WriteRefused(reason));
         }
+        // Under the gate, so an edit that was waiting for it when the DJ
+        // turned protection on is refused too.
+        if self.protection().protect_library {
+            return Err(protection::refusal());
+        }
         if rbl_backup::journal::pending(&self.recovery_dir) {
             return Err(rbl_db::DbError::WriteRefused("A library restore is unfinished. Restart the app to recover it before editing.".into()));
         }
@@ -360,8 +374,25 @@ impl LibraryCore {
         if let Some(_files) = self.analysis_write.try_lock() {
             host.recover_interrupted_files(&location).map_err(rbl_db::DbError::WriteRefused)?;
         }
+        // Nothing is changed that the Ledger could not record: it records
+        // durably that a write is begun, or the write is refused. Asked
+        // with the history let go: the Ledger may block to write.
+        let ledger = self.history.lock().ledger();
+        if let Some(ledger) = &ledger {
+            ledger.begin().map_err(|why| {
+                rbl_db::DbError::WriteRefused(format!("The Ledger cannot record a change, so nothing was changed: {why}"))
+            })?;
+        }
         let gate_ms = started.elapsed().as_millis();
-        let mut writer = rbl_db::write::Writer::open(location.clone(), self.recovery_dir.clone())?;
+        let mut writer = match rbl_db::write::Writer::open(location.clone(), self.recovery_dir.clone()) {
+            Ok(writer) => writer,
+            Err(error) => {
+                if let Some(ledger) = &ledger {
+                    ledger.written(false);
+                }
+                return Err(error);
+            }
+        };
         writer.disable_automatic_backups();
         let open_ms = started.elapsed().as_millis();
         let result = edit(&mut writer);
@@ -370,6 +401,10 @@ impl LibraryCore {
         // changed rows before it stopped counts too: its rows may not all
         // have been put back.
         let wrote = writer.library().connection().total_changes() > 0;
+        // Told before the refresh, which may fail with the change made.
+        if let Some(ledger) = &ledger {
+            ledger.written(wrote);
+        }
         let result = result.and_then(|value| refresh(writer.library(), value));
         tracing::debug!(gate_ms, open_ms = open_ms - gate_ms,
             edit_ms = edit_ms - open_ms, refresh_ms = started.elapsed().as_millis() - edit_ms,
@@ -381,7 +416,7 @@ impl LibraryCore {
             let ended = {
                 let mut history = self.history.lock();
                 let had = history.redo_label().is_some();
-                history.clear_redo();
+                history.unrecorded(None);
                 had
             };
             host.wrote_outside_history();

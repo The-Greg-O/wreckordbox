@@ -1364,7 +1364,7 @@ mod tests {
         let location = rbl_db::fixture::build(dir.path(), rbl_db::fixture::Shape::default()).unwrap();
         let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
         let (library, _) = rbl_index::load(&db).unwrap();
-        let state = Arc::new(AppState::with_backups(dir.path().join("backups")));
+        let state = Arc::new(AppState::unprotected(dir.path().join("backups")));
         state.set_library(library, false, db.schema().db_version, 0, location);
         crate::backups::create(&state).unwrap();
         let app = tauri::test::mock_app();

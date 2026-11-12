@@ -1,4 +1,9 @@
-#![allow(clippy::pedantic, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::pedantic,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
 
 use rbl_index::testing::{add_folder, add_playlist, add_smart_playlist, library_from, TestTrack};
 

@@ -46,6 +46,10 @@ pub mod events {
 pub mod codes {
     /// No Library where one is configured.
     pub const LIBRARY_MISSING: &str = "library_missing";
+    /// Library Protection is on, so nothing that changes the Library is
+    /// done; the message is the window's own. See
+    /// [`protection`](crate::protection).
+    pub const LIBRARY_PROTECTED: &str = "library_protected";
     /// The Library's database is locked by another program.
     pub const LIBRARY_LOCKED: &str = "library_locked";
     /// The Library is there and cannot be read as one.
@@ -83,6 +87,10 @@ pub struct Request {
     pub command: String,
     #[serde(default)]
     pub args: Value,
+    /// For a command that edits the Library: the Run its changes belong
+    /// to, or who they are by. See [`crate::ledger::RunArg`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<crate::ledger::RunArg>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,6 +98,10 @@ pub struct Response {
     pub id: u64,
     #[serde(flatten)]
     pub outcome: Outcome,
+    /// The Run the command's changes are in, when it edited the Library
+    /// or joined a Run: a `Run` as `runs.start` answers it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<Value>,
 }
 
 /// `"result": …` or `"error": {"code": …, "message": …}`.

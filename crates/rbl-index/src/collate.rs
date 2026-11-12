@@ -42,9 +42,12 @@ impl NameCollator {
             .map(|tag| tag.replace('_', "-"))
             .and_then(|tag| tag.parse::<Locale>().ok())
             .unwrap_or(Locale::UNKNOWN);
-        let collator = Collator::try_new(CollatorPreferences::from(&locale), CollatorOptions::default())
-            .or_else(|_| Collator::try_new(CollatorPreferences::default(), CollatorOptions::default()))
-            .ok();
+        let collator = Collator::try_new(
+            CollatorPreferences::from(&locale),
+            CollatorOptions::default(),
+        )
+        .or_else(|_| Collator::try_new(CollatorPreferences::default(), CollatorOptions::default()))
+        .ok();
         Self { collator }
     }
 
@@ -75,10 +78,15 @@ mod tests {
         // ICU's default (tertiary, non-numeric) order: blanks and
         // punctuation, then digits one at a time, then letters with case and
         // accents settled last — lower before upper, plain before accented.
-        let names = ["b", "B", "Ä", "a", "A", "é", "e", "E", "10", "2", "_x", " z", "#1", "Zebra", "zebra"];
+        let names = [
+            "b", "B", "Ä", "a", "A", "é", "e", "E", "10", "2", "_x", " z", "#1", "Zebra", "zebra",
+        ];
         assert_eq!(
             sorted(Some("en"), &names),
-            [" z", "_x", "#1", "10", "2", "a", "A", "Ä", "b", "B", "e", "E", "é", "zebra", "Zebra"],
+            [
+                " z", "_x", "#1", "10", "2", "a", "A", "Ä", "b", "B", "e", "E", "é", "zebra",
+                "Zebra"
+            ],
         );
     }
 

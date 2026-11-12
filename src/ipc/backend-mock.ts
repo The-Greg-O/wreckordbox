@@ -11,15 +11,16 @@
  */
 import { TRACK_SEARCH_OPTIONS, type TrackSearchField } from "@/lib/search";
 import theme from "@/styles/theme";
+import { mockServiceActivity } from "./mock-service-activity";
 import { rowMemoryCueColours } from "@/lib/memoryCueColours";
 import { shiftByGridBeats } from "@/lib/player";
 
 import type {
   AppErrorDto, Backend, Backup, BackupProgress, BackupSizes, Cue, DeckEvent, Device, DeviceSettings, Edits, ExplorerRoot, ExportReport,
-  DatabaseDrive, EditHistoryState, FilterValues, GridState, LibraryProblem, LibrarySummary, Limiter, LinkPeerSeen, LinkStatus, RelatedCriterion, RowDto, SortKey,
+  DatabaseDrive, EditHistoryState, FilterValues, GridState, LibraryProblem, LibrarySummary, Limiter, LinkPeerSeen, LinkStatus, RelatedCriterion, RowDto, RowMyTag, SortKey,
   SelectionDetails, SmartRule, StickDefaults, SyncPlaylist, SyncProgress, Tick, TrackDetails, TrackField,
   PreferencesRequest, RelocateSearch, ExportProgress,
-  DeckId, TrackFilter, TreeNode, ViewHandle, ViewSpec, WaveformKind, LogLine, LogLevel,
+  DeckId, LibraryProtection, StickOutline, TrackFilter, TreeNode, ViewHandle, ViewSpec, WaveformKind, LogLine, LogLevel,
 } from "./types";
 import { TREE_ROOT } from "./types";
 import { applyEditFrom, validateEdit, isDynamicFrom, tempoX100, type EditableBeat } from "@/lib/gridEdit";
@@ -429,6 +430,21 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     mockLog.push({ seq: mockLogNext++, timeMs: Date.now(), level, target, message });
   };
   mockLogLine("debug", "rbxport_lib::logging", "logging to the browser preview");
+  /** Library Protection as the mock's backend records it; none yet. */
+  let protection: LibraryProtection | null = null;
+  const protectionListeners = new Set<(now: LibraryProtection) => void>();
+  const recordProtection = (protectLibrary: boolean): LibraryProtection => {
+    protection = { protectLibrary, revision: (protection?.revision ?? 0) + 1 };
+    const now = protection;
+    protectionListeners.forEach((listener) => listener(now));
+    return now;
+  };
+  if (typeof window !== "undefined") {
+    // Library Protection turned from outside the window, as
+    // `wreckordbox protection on|off` turns it.
+    (window as unknown as { __turnLibraryProtection: (on: boolean) => void }).__turnLibraryProtection =
+      (on) => { recordProtection(on); };
+  }
   const playlistFixture = options.playlistFixture ?? readPlaylistFixtureFromUrl();
   const all = makeRows(trackCount);
   // A disposable browser fixture for external file drops. It is opt-in and
@@ -623,6 +639,25 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     return candidates;
   };
   const tree = makeTree(playlistFixture);
+  // For the shell tree's tests (ticket #52), before Histories: folders nested
+  // far deeper than the tree is wide (`?deepFolders`), and a Library of tens
+  // of thousands of playlists (`?bigTree`).
+  {
+    const extra: TreeNode[] = [];
+    if (readFlagFromUrl("deepFolders")) {
+      for (let level = 1; level <= 16; level += 1) extra.push({ id: `deep-${level}`, name: `Level ${level}`, kind: "folder", depth: level });
+      extra.push({ id: "deep-end", name: "The Deep End", kind: "playlist", depth: 17, childCount: mockPlaylistSize("deep-end") });
+    }
+    if (readFlagFromUrl("bigTree")) {
+      extra.push({ id: "archive", name: "ARCHIVE", kind: "folder", depth: 1 });
+      for (let i = 1; i <= 20_000; i += 1) extra.push({ id: `archive-${i}`, name: `Archive ${i}`, kind: "playlist", depth: 2, childCount: 1 });
+    }
+    if (extra.length > 0) {
+      const after = tree.splice(tree.findIndex((node) => node.kind === "histories"));
+      for (const node of extra) tree.push(node);
+      for (const node of after) tree.push(node);
+    }
+  }
   type MockEdit = {
     label: string; undo: () => void; redo: () => void;
     /** An Add Tracks to Playlist still open to its next slice (#499). */
@@ -739,6 +774,17 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     editRedo.length = 0;
     return announceHistory();
   };
+
+  /**
+   * Every rating write asked of the mock, refused or not, and a track's
+   * rating as the mock holds it: what a test checks an edit really landed on.
+   */
+  const ratingWrites: { ids: string[]; stars: number; refused: boolean }[] = [];
+  if (typeof window !== "undefined") {
+    const hooks = window as unknown as { __ratingWrites: typeof ratingWrites; __ratingOf: (id: string) => number };
+    hooks.__ratingWrites = ratingWrites;
+    hooks.__ratingOf = (id) => all.find((row) => row.id === id)?.rating ?? -1;
+  }
 
   /**
    * One edit over several tracks, recorded as one step of history the way
@@ -924,6 +970,58 @@ export function createMockBackend(options: MockOptions = {}): Backend {
 
   // What each stick's own libraries hold, for the Devices tree.
   const stickLibraries = createMockDeviceLibraries();
+
+  // The shell's tree reads sticks with `stickOutline`. For its tests: a
+  // stick pulled out, or put back with other contents, behind the window's
+  // back (the next `listDevices` reports it so); how many outline reads each
+  // stick has had; and the next read of a stick held unanswered until
+  // released.
+  const outlineReads = new Map<string, number>();
+  const heldOutlines = new Map<string, Array<() => void>>();
+  const holdingOutlines = new Set<string>();
+  const outlineOverrides = new Map<string, StickOutline>();
+  const unmounted = new Map<string, Device>();
+  if (typeof window !== "undefined") {
+    const hooks = window as unknown as {
+      __unmountDevice: (path: string) => void;
+      __remountDevice: (path: string, outline?: StickOutline) => void;
+      __stickOutlineReads: (path: string) => number;
+      __holdStickOutline: (path: string) => void;
+      __releaseStickOutline: (path: string) => void;
+    };
+    hooks.__unmountDevice = (path) => {
+      const index = devices.findIndex((device) => device.path === path);
+      if (index < 0) return;
+      unmounted.set(path, devices[index] as Device);
+      devices.splice(index, 1);
+    };
+    hooks.__remountDevice = (path, outline) => {
+      const device = unmounted.get(path);
+      if (!device) return;
+      unmounted.delete(path);
+      devices.push(device);
+      if (outline) outlineOverrides.set(path, outline);
+    };
+    hooks.__stickOutlineReads = (path) => outlineReads.get(path) ?? 0;
+    hooks.__holdStickOutline = (path) => { holdingOutlines.add(path); };
+    hooks.__releaseStickOutline = (path) => {
+      for (const release of heldOutlines.get(path) ?? []) release();
+      heldOutlines.delete(path);
+    };
+  }
+  const stickOutline = async (path: string): Promise<StickOutline> => {
+    outlineReads.set(path, (outlineReads.get(path) ?? 0) + 1);
+    // What the stick holds when it is asked, not when the answer comes.
+    const answer: StickOutline = outlineOverrides.get(path) ?? {
+      pending: false,
+      libraries: stickLibraries.libraries(path).map(({ format, nodes }) => ({ format, nodes })),
+    };
+    // A hold is for the next read only.
+    if (holdingOutlines.delete(path)) {
+      await new Promise<void>((resolve) => { heldOutlines.set(path, [...(heldOutlines.get(path) ?? []), resolve]); });
+    }
+    return wait(answer);
+  };
 
   // What each stick's tabs hold. DJ STICK starts empty and gains a library
   // when something is exported to it; TEST carries the rows read off the
@@ -1352,6 +1450,11 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     },
     setTrackRating: (tracks, stars) => {
       const after = Math.max(0, Math.min(5, stars));
+      // `?refuseRatingWrite=1`: the Library refuses the write, as a real one
+      // can (rekordbox took the database, the disk is full).
+      const refused = readFlagFromUrl("refuseRatingWrite");
+      ratingWrites.push({ ids: [...tracks], stars: after, refused });
+      if (refused) return refuse("That could not be saved.");
       return recordTrackEdits(tracks, (track) => {
         const row = all.find((r) => r.id === track);
         const before = row?.rating ?? 0;
@@ -1704,11 +1807,18 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     if (held) return held;
     const row = all[Number.parseInt(trackId, 10) - 100000];
     if (!row || row.analysed === 0 || row.bpmX100 === 0) return null;
+    // `?grids=101325:none,100004:double`, by track id: an analysed row with
+    // a BPM but no grid, or a grid whose second half runs at twice the tempo
+    // (a tempo change).
+    const fixture = GRID_FIXTURES.get(trackId);
+    if (fixture === "none") return null;
     const beatMs = (60 / (row.bpmX100 / 100)) * 1000;
-    const count = Math.min(Math.floor((row.durationSec * 1000) / beatMs) + 1, 65536);
+    const totalMs = row.durationSec * 1000;
     const beats: EditableBeat[] = [];
-    for (let n = 0; n < count; n++) {
-      beats.push({ number: (n % 4) + 1, tempoX100: row.bpmX100, timeMs: Math.round(n * beatMs) });
+    for (let n = 0, at = 0; at <= totalMs && n < 65536; n++) {
+      const fast = fixture === "double" && at >= totalMs / 2;
+      beats.push({ number: (n % 4) + 1, tempoX100: fast ? row.bpmX100 * 2 : row.bpmX100, timeMs: Math.round(at) });
+      at += fast ? beatMs / 2 : beatMs;
     }
     const made = { beats, undo: [], redo: [], locked: false };
     gridStore.set(trackId, made);
@@ -2222,6 +2332,12 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     },
 
     fetchRows: (viewId, offset, len, extraColumns = []) => {
+      // `myTags`: each of the track's MyTags with its id and category, from
+      // the same record the My Tag panel edits.
+      const myTagsOf = (row: RowDto): RowMyTag[] => (row.id.startsWith("file:") ? [] : detailsOf(row).myTags)
+        .flatMap((id) => myTagCategories.flatMap((category) => category.tags
+          .filter((tag) => tag.id === id)
+          .map((tag) => ({ id: tag.id, name: tag.name, category: category.name }))));
       const project = (row: RowDto): RowDto => {
         const { extra, ...base } = row;
         if (extraColumns.length === 0) return base;
@@ -2229,6 +2345,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
           ...base,
           extra: Object.fromEntries(extraColumns.flatMap((key) =>
             extra?.[key] === undefined ? [] : [[key, extra[key]]])),
+          ...(extraColumns.includes("myTags") ? { myTags: myTagsOf(row) } : {}),
         };
       };
       const folder = folderViews.get(viewId);
@@ -2920,9 +3037,16 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       return () => problemListeners.delete(listener);
     },
     libraryProblem: () => wait<LibraryProblem | null>(problem),
-    // The mock has no Library service to lose.
-    onServiceStopped: () => () => {},
-    serviceProblem: () => wait<string | null>(null),
+    ...mockServiceActivity(),
+    // The switch the backend owns, kept for this page's life: nothing is
+    // recorded before the window's first start, so its preference is taken up.
+    libraryProtection: () => wait(protection ?? { protectLibrary: true, revision: 0 }),
+    adoptLibraryProtection: (windowPreference) => wait(protection ?? recordProtection(windowPreference)),
+    setLibraryProtection: (protectLibrary) => wait(recordProtection(protectLibrary)),
+    onLibraryProtectionChanged: (listener) => {
+      protectionListeners.add(listener);
+      return Promise.resolve(() => { protectionListeners.delete(listener); });
+    },
     createLibrary: async () => {
       await wait(undefined);
       libraryFound();
@@ -2966,6 +3090,39 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     setMenuEnabled: (items) => {
       const w = window as unknown as { __menuEnabled?: Record<string, boolean> };
       w.__menuEnabled = { ...w.__menuEnabled, ...items };
+      return wait(undefined);
+    },
+    // A browser cannot go full screen or quit on its own say: kept where a
+    // test can read what the shell was asked for.
+    runMenuItem: (id) => {
+      const w = window as unknown as { __shellItems?: string[] };
+      w.__shellItems = [...(w.__shellItems ?? []), id];
+      return wait(undefined);
+    },
+    // The webview's editing actions, against a clipboard of the mock's own
+    // (`window.__clipboard`): what WebKitGTK's editing commands do to the
+    // field with the keyboard, so a test can see text really move.
+    runEditCommand: (edit) => {
+      const w = window as unknown as { __clipboard?: string; __editCommands?: string[] };
+      w.__editCommands = [...(w.__editCommands ?? []), edit];
+      const field = document.activeElement;
+      if (!(field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)) {
+        if (edit === "copy") w.__clipboard = window.getSelection()?.toString() ?? "";
+        return wait(undefined);
+      }
+      const start = field.selectionStart ?? field.value.length;
+      const end = field.selectionEnd ?? start;
+      const changed = () => field.dispatchEvent(new Event("input", { bubbles: true }));
+      if (edit === "selectAll") field.select();
+      if (edit === "copy" || edit === "cut") w.__clipboard = field.value.slice(start, end);
+      if (edit === "cut") {
+        field.setRangeText("", start, end, "end");
+        changed();
+      }
+      if (edit === "paste") {
+        field.setRangeText(w.__clipboard ?? "", start, end, "end");
+        changed();
+      }
       return wait(undefined);
     },
 
@@ -3561,6 +3718,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     },
     // The fake disk above. Copies, as with the tree: the map is the mock's.
     deviceLibraries: (path) => wait(stickLibraries.libraries(path)),
+    stickOutline,
     devicePlaylistCollectionTracks: (path, format, tracks) =>
       wait(stickLibraries.collectionTracks(path, format, tracks, [...(looseTracks.get(path) ?? [])])),
     devicePlaylistEdit: (path, format, edit) => {
@@ -3753,6 +3911,18 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     },
   };
 }
+
+/** `?grids=101325:none,100004:double`, by track id: see `gridOf`. */
+const GRID_FIXTURES: ReadonlyMap<string, "none" | "double"> = (() => {
+  if (typeof location === "undefined") return new Map();
+  const raw = new URLSearchParams(location.search).get("grids") ?? "";
+  const out = new Map<string, "none" | "double">();
+  for (const part of raw.split(",")) {
+    const [id, kind] = part.split(":");
+    if (id && /^\d+$/.test(id) && (kind === "none" || kind === "double")) out.set(id, kind);
+  }
+  return out;
+})();
 
 /** A bare `?name` flag in the URL. */
 function readFlagFromUrl(name: string): boolean {

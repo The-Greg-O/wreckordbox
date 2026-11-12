@@ -1,0 +1,95 @@
+/* The Library view's list (ticket #55): the look it puts over the list's own
+   styles. See libraryLook.tsx. The list's parts are reached by their roles
+   and `data-col`, which are its public face, not by its class names. Row and
+   heading heights come from the look (24 and 22 px) through the list's own
+   height variables. */
+.list {
+  font-family: var(--f-shell);
+  font-variant-numeric: tabular-nums;
+}
+
+.list [role="gridcell"] {
+  font-size: var(--f-size-shell);
+}
+
+.list [role="columnheader"] {
+  font-size: var(--f-size-shell-label);
+  letter-spacing: var(--f-tracking-shell-label);
+  text-transform: uppercase;
+  color: var(--c-text-dim);
+}
+
+/* Prep colour: a 3 px stripe down the row's left edge, over its first cell,
+   in rekordbox's own track colours (the old list's Color column's, pinned by
+   TrackTable.colorColumn.test.ts). */
+.prep {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  z-index: 1;
+  pointer-events: none;
+}
+.prep[data-prep="Pink"] { background: var(--c-comment-pink); }
+.prep[data-prep="Red"] { background: var(--c-comment-red); }
+.prep[data-prep="Orange"] { background: var(--c-comment-orange); }
+.prep[data-prep="Yellow"] { background: var(--c-comment-yellow); }
+.prep[data-prep="Green"] { background: var(--c-comment-green); }
+.prep[data-prep="Aqua"] { background: var(--c-comment-aqua); }
+.prep[data-prep="Blue"] { background: var(--c-comment-blue); }
+.prep[data-prep="Purple"] { background: var(--c-comment-purple); }
+
+/* Energy: five pips, lit ones in the level's colour, unset ones in the
+   fixed unset colour (screens/mock.html: 6 x 10 with 2 px between). Neither
+   follows the theme. */
+.pips {
+  display: inline-flex;
+  gap: var(--s-shell-space-1);
+  vertical-align: middle;
+  --c-pip: var(--c-energy-0);
+}
+.pips[data-level="1"] { --c-pip: var(--c-energy-1); }
+.pips[data-level="2"] { --c-pip: var(--c-energy-2); }
+.pips[data-level="3"] { --c-pip: var(--c-energy-3); }
+.pips[data-level="4"] { --c-pip: var(--c-energy-4); }
+.pips[data-level="5"] { --c-pip: var(--c-energy-5); }
+.pip {
+  width: 6px;
+  height: 10px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--c-energy-0);
+}
+button.pip { cursor: pointer; }
+button.pip:focus-visible {
+  outline: var(--s-shell-border) solid var(--c-accent);
+  outline-offset: 1px;
+}
+.pip[data-on] { background: var(--c-pip); }
+
+/* MyTags: outlined tags in a row, clipped by the cell. */
+.tags {
+  display: inline-flex;
+  gap: var(--s-shell-space-2);
+  overflow: hidden;
+  max-width: 100%;
+  vertical-align: middle;
+}
+.tag {
+  flex: none;
+  padding: 0 var(--s-shell-space-2);
+  border: var(--s-shell-border) solid var(--c-raised);
+  border-radius: var(--s-shell-radius);
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+/* The list's title stays on one line at narrow widths (it wrapped at 640). */
+.list [data-testid="browser-title"] {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}

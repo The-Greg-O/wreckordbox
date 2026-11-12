@@ -31,7 +31,7 @@
   font-size: var(--f-size-device-tab);
   cursor: default;
 }
-.tab[data-on] { background: var(--c-device-tab-on); }
+.tab[data-on] { background: var(--c-device-tab-on); color: var(--c-on-accent, var(--c-icon-on)); }
 
 .body {
   flex: 1;

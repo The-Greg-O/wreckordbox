@@ -89,7 +89,7 @@
    an achievement to celebrate with a colour. */
 .band[data-killed] {
   background: var(--c-accent);
-  color: var(--c-icon-on);
+  color: var(--c-on-accent, var(--c-icon-on));
 }
 
 .fader {
