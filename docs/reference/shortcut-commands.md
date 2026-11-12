@@ -151,6 +151,21 @@ key handler also answers the menu's keys no other handler does: shift +
 ctrl + O (Import Folder), shift + ctrl + F (Full screen), ctrl + W (Close
 Window) and ctrl + Q (Quit).
 
+Besides the menus' items, every row of the key map that runs a command is
+an entry, asked of the same registration its key reaches: the decks'
+commands (Play/Pause, Cue, the jumps, the pads, Player A's and Player B's
+apart), the lists' movement (on the list or tree last used) and the
+master's Volume and Mute. Typing matches letters in order ("prefs" finds
+Preferences), best match first. An entry is greyed while the Library is
+locked if it writes (the Track and Playlist edits, Analyze Track), while
+there is nothing to undo or redo, and while its deck is empty; it is
+checked again as it runs. In the view shell, Information Window,
+Sub-Browser Window, Display Tempo slider, 1 Player, 2 Players, Simple
+Player and Full Browser switch to the old layout and show that part; "Use
+the view shell" comes back. Cut, Copy and Paste run the webview's own
+editing actions on the field that had the keyboard, over its selection.
+The palette does not open while a modal dialog has the keyboard.
+
 ### Deck
 
 | Command | Key (Player A) | rekordbox id | rekordbox menu bar | On-screen control that calls the same function |
