@@ -19,6 +19,7 @@ These crates are independent of Tauri; application coordination belongs in
 | [rbl-audio](rbl-audio/README.md) | Audio decoding and export compatibility. |
 | [rbl-analysis](rbl-analysis/README.md) | Offline tempo, grid, key, and waveform DSP. |
 | [rbl-deck](rbl-deck/README.md) | Two-deck playback and real-time audio. |
+| [wreckordbox-render](wreckordbox-render/README.md) | Offline rendering of a track with a key shift and a tempo, through the deck's stretcher. |
 | [rbl-backup](rbl-backup/README.md) | Backup archives and recoverable restore. |
 | [rbl-devices](rbl-devices/README.md) | Volume discovery, inspection, and eject. |
 

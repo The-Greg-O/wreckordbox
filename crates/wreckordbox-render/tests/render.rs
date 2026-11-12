@@ -496,6 +496,33 @@ fn the_source_file_is_never_modified() {
 }
 
 #[test]
+fn a_file_that_appears_at_the_destination_during_a_render_is_not_replaced() {
+    // Two renders to one place, or anything else writing there meanwhile:
+    // whoever got there first keeps their file.
+    let bench = Bench::new();
+    let source = bench.source(&tone(440.0, 2.0, 0.5));
+    let mut track = TrackSource::open(&source).unwrap();
+    let out = bench.out();
+
+    let result = render(
+        &mut track,
+        tempo(1.05),
+        &Destination::wav(&out),
+        &mut |_| {
+            std::fs::write(&out, b"someone else's").unwrap();
+            Proceed::Continue
+        },
+    );
+
+    assert!(
+        matches!(result, Err(RenderError::DestinationExists(_))),
+        "{result:?}"
+    );
+    assert_eq!(std::fs::read(&out).unwrap(), b"someone else's");
+    assert_eq!(bench.files(), ["out.wav", "source.wav"]);
+}
+
+#[test]
 fn edits_outside_what_the_stretcher_holds_are_refused() {
     let bench = Bench::new();
     let source = bench.source(&tone(440.0, 0.5, 0.5));

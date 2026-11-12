@@ -62,13 +62,24 @@ fn main() {
         let _ = std::fs::remove_file(&out);
         let mut track = TrackSource::open(&source).unwrap();
         let started = Instant::now();
+        let cpu_before = cpu_seconds();
         match render(&mut track, edits, &Destination::wav(&out), &mut |_| {
             Proceed::Continue
         }) {
             Ok(rendered) => {
                 let took = started.elapsed().as_secs_f64();
+                // Wall time is what a DJ waits; processor time is what the
+                // render costs, and is the figure to trust on a busy machine.
+                let cpu = match (cpu_before, cpu_seconds()) {
+                    (Some(before), Some(after)) if after > before => format!(
+                        ", {:.2} s of processor ({:.1}x)",
+                        after - before,
+                        SECONDS as f64 / (after - before)
+                    ),
+                    _ => String::new(),
+                };
                 println!(
-                    "{name:>18}: {took:6.2} s, {:5.1}x real time ({:.1} s out)",
+                    "{name:>18}: {took:6.2} s, {:5.1}x real time ({:.1} s out){cpu}",
                     SECONDS as f64 / took,
                     rendered.frames as f64 / f64::from(rendered.sample_rate),
                 );
@@ -76,6 +87,18 @@ fn main() {
             Err(error) => println!("{name:>18}: {error}"),
         }
     }
+}
+
+/// Processor time this process has used, on Linux; nothing elsewhere.
+fn cpu_seconds() -> Option<f64> {
+    let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
+    // Past the command name, which is in brackets and may hold spaces.
+    let rest = stat.rsplit_once(')')?.1;
+    let mut fields = rest.split_whitespace().skip(11);
+    let user: f64 = fields.next()?.parse().ok()?;
+    let system: f64 = fields.next()?.parse().ok()?;
+    // Clock ticks, a hundred a second on every Linux this runs on.
+    Some((user + system) / 100.0)
 }
 
 fn generate() -> Vec<f32> {

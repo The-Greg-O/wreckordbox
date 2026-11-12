@@ -270,7 +270,18 @@ impl Part {
     }
 
     fn commit(mut self, destination: &Path) -> Result<(), RenderError> {
-        // Asked again, because a render takes a while and a rename replaces.
+        // A render takes a while, and a rename replaces whatever arrived
+        // meanwhile. A hard link does not: it fails if the name is taken, in
+        // one step, and the temporary name is then dropped as usual.
+        match std::fs::hard_link(&self.path, destination) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(RenderError::DestinationExists(destination.to_path_buf()));
+            }
+            // A filesystem without hard links (FAT, exFAT): ask again and
+            // rename, which leaves a moment between the two.
+            Err(_) => {}
+        }
         if destination.try_exists()? {
             return Err(RenderError::DestinationExists(destination.to_path_buf()));
         }
