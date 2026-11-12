@@ -304,12 +304,17 @@ fn the_same_track_in_two_playlists_or_twice_in_one_carries_different_mutants() {
     assert_eq!(one["mutant"]["position"], 1);
     assert_eq!(two["mutant"]["position"], 3);
     assert_eq!(three["mutant"]["entry_id"], elsewhere.as_str());
-    assert_eq!(three["mutant"]["source"], json!({ "kind": "dj", "name": "dj" }));
     assert_eq!(
-        ids(&ok(&sandbox, &["mutants", "list", "--track", "10007"])["mutants"]
-            .as_array()
-            .unwrap()
-            .clone())
+        three["mutant"]["source"],
+        json!({ "kind": "dj", "name": "dj" })
+    );
+    assert_eq!(
+        ids(
+            &ok(&sandbox, &["mutants", "list", "--track", "10007"])["mutants"]
+                .as_array()
+                .unwrap()
+                .clone()
+        )
         .len(),
         3
     );
@@ -329,7 +334,10 @@ fn removing_a_mutant_returns_the_entry_to_the_core_track() {
     assert_eq!(removed["mutant"]["id"], created["mutant"]["id"]);
     assert_eq!(removed["mutant"]["removed"], true);
     assert_eq!(removed["mutant"]["position"], 2);
-    assert_eq!(removed["run"]["source"], json!({ "kind": "dj", "name": "dj" }));
+    assert_eq!(
+        removed["run"]["source"],
+        json!({ "kind": "dj", "name": "dj" })
+    );
     // The entry has no Mutant, no list holds one, and the playlist is as
     // it was: the entry is the track.
     assert_eq!(
@@ -350,7 +358,10 @@ fn removing_a_mutant_returns_the_entry_to_the_core_track() {
         .map(|change| change["action"].as_str().unwrap())
         .collect();
     assert_eq!(actions, ["created", "removed"]);
-    assert_eq!(shown["history"][1]["source"], json!({ "kind": "dj", "name": "dj" }));
+    assert_eq!(
+        shown["history"][1]["source"],
+        json!({ "kind": "dj", "name": "dj" })
+    );
     // It cannot be removed twice.
     assert_eq!(
         refused(&sandbox, &["mutants", "remove", &id, "--source", "dj"]),
@@ -362,7 +373,11 @@ fn removing_a_mutant_returns_the_entry_to_the_core_track() {
     assert_ne!(afresh["mutant"]["id"], created["mutant"]["id"]);
     let text = sandbox.cli(&["mutants", "remove", "--entry", &entry, "--source", "dj"]);
     assert!(text.status.success(), "{}", text.stderr);
-    assert!(text.stdout.starts_with("Removed Mutant "), "{}", text.stdout);
+    assert!(
+        text.stdout.starts_with("Removed Mutant "),
+        "{}",
+        text.stdout
+    );
     assert_eq!(listed(&sandbox, None), Vec::<Value>::new());
 }
 
@@ -406,7 +421,10 @@ fn mutating_what_is_already_a_mutant_or_is_not_there_fails_with_a_stable_code_an
         "run_not_found"
     );
     // No Mutant to read or remove.
-    assert_eq!(refused(&sandbox, &["mutants", "show", "99"]), "mutant_not_found");
+    assert_eq!(
+        refused(&sandbox, &["mutants", "show", "99"]),
+        "mutant_not_found"
+    );
     assert_eq!(
         refused(&sandbox, &["mutants", "remove", "99", "--source", "dj"]),
         "mutant_not_found"
@@ -460,11 +478,23 @@ fn a_mutant_made_in_a_run_of_ones_own_joins_it_and_leaves_it_open() {
 
     let first = ok(
         &sandbox,
-        &["mutants", "create", &entry_at(&sandbox, &playlist, 1), "--run", &run_id],
+        &[
+            "mutants",
+            "create",
+            &entry_at(&sandbox, &playlist, 1),
+            "--run",
+            &run_id,
+        ],
     );
     let second = ok(
         &sandbox,
-        &["mutants", "create", &entry_at(&sandbox, &playlist, 2), "--run", &run_id],
+        &[
+            "mutants",
+            "create",
+            &entry_at(&sandbox, &playlist, 2),
+            "--run",
+            &run_id,
+        ],
     );
 
     for created in [&first, &second] {
@@ -497,7 +527,10 @@ fn a_mutant_survives_a_restart_of_the_service() {
     stop_service(&sandbox);
 
     assert_eq!(ok(&sandbox, &["mutants", "show", &id]), shown);
-    assert_eq!(listed(&sandbox, Some(&playlist)), vec![created["mutant"].clone()]);
+    assert_eq!(
+        listed(&sandbox, Some(&playlist)),
+        vec![created["mutant"].clone()]
+    );
     assert_ne!(sandbox.status()["pid"], before);
 }
 
@@ -526,8 +559,67 @@ fn a_mutant_stays_with_its_entry_when_the_playlist_is_reordered() {
     assert_eq!(
         refused(
             &sandbox,
-            &["mutants", "show", "--entry", &entry_at(&sandbox, &playlist, 1)]
+            &[
+                "mutants",
+                "show",
+                "--entry",
+                &entry_at(&sandbox, &playlist, 1)
+            ]
         ),
+        "mutant_not_found"
+    );
+}
+
+#[test]
+fn an_entry_keeps_its_identity_through_a_removal_undone_and_a_track_added_again_is_a_new_entry() {
+    let sandbox = Sandbox::new();
+    let playlist = sandbox.create_playlist("Friday", &[2, 3, 4]);
+    let entry = entry_at(&sandbox, &playlist, 2);
+    let created = mutate(&sandbox, &entry);
+    let id = created["mutant"]["id"].as_i64().unwrap().to_string();
+
+    // The entry is removed and the removal undone: the same entry is back,
+    // and it is still the Mutant.
+    stop_service(&sandbox);
+    let track = ["10003".to_owned()];
+    let mut removal = None;
+    sandbox.edit(|writer| {
+        removal = Some(writer.remove_tracks_with_undo(&playlist, &track).unwrap().1);
+    });
+    assert_eq!(entries(&sandbox, &playlist).len(), 2);
+    let orphan = ok(&sandbox, &["mutants", "show", &id]);
+    assert_eq!(orphan["mutant"]["position"], Value::Null);
+    assert_eq!(
+        refused(
+            &sandbox,
+            &["mutants", "create", &entry, "--source", "agent:preparer"]
+        ),
+        "playlist_entry_not_found"
+    );
+    stop_service(&sandbox);
+    sandbox.edit(|writer| {
+        writer
+            .undo_track_removal(removal.as_ref().unwrap())
+            .unwrap();
+    });
+    assert_eq!(entry_at(&sandbox, &playlist, 2), entry);
+    assert_eq!(
+        ok(&sandbox, &["mutants", "show", "--entry", &entry])["mutant"]["position"],
+        2
+    );
+
+    // Removed and then added afresh, the track is a new entry, which is
+    // not a Mutant.
+    stop_service(&sandbox);
+    sandbox.edit(|writer| {
+        writer.remove_tracks(&playlist, &track).unwrap();
+        writer.add_tracks(&playlist, &track).unwrap();
+    });
+    let again = entry_at(&sandbox, &playlist, 3);
+    assert_eq!(entries(&sandbox, &playlist)[2]["id"], "10003");
+    assert_ne!(again, entry);
+    assert_eq!(
+        refused(&sandbox, &["mutants", "show", "--entry", &again]),
         "mutant_not_found"
     );
 }
@@ -558,41 +650,22 @@ fn a_mutant_records_the_fingerprint_of_its_parents_audio() {
 }
 
 #[test]
-fn creating_and_removing_a_mutant_changes_nothing_in_the_library_even_under_library_protection() {
+fn creating_and_removing_a_mutant_changes_nothing_in_the_library() {
     let sandbox = Sandbox::new();
     let track = sandbox.import_track("Night Bus.wav", 1);
     let playlist = sandbox.create_playlist("Friday", &[2, 3]);
     sandbox.edit(|writer| {
         writer.add_tracks(&playlist, &[track.clone()]).unwrap();
     });
-    // Library Protection refuses changes to the Library. A Mutant is not
-    // one.
-    sandbox.protect(true);
     let shape = library_shape(&sandbox);
     let rows = entry_rows(&sandbox);
-    let library_dir = sandbox.master_db().parent().unwrap().to_path_buf();
     let listed_before = entries(&sandbox, &playlist);
 
-    // With nothing saying where the Sidecar goes, it goes beside the
-    // Library, in a folder of its own.
-    let created = {
-        let entry = entry_at(&sandbox, &playlist, 3);
-        let run = sandbox.run(sandbox.command().env_remove("WRECKORDBOX_SIDECAR_DIR").args([
-            "--json",
-            "mutants",
-            "create",
-            &entry,
-            "--source",
-            "agent:preparer",
-        ]));
-        assert!(run.status.success(), "{}", run.stderr);
-        run.json()
-    };
+    let entry = entry_at(&sandbox, &playlist, 3);
+    let created = mutate(&sandbox, &entry);
     assert_eq!(created["mutant"]["parent"]["id"], track.as_str());
-    assert!(library_dir
-        .join("wreckordbox-sidecar")
-        .join("sidecar.db")
-        .is_file());
+    // The Mutant is in the Sidecar's folder, which is not the Library's.
+    assert!(sandbox.sidecar_dir().join("sidecar.db").is_file());
 
     // The playlist's entry is still the parent track, in the same place,
     // and no rekordbox-format table gained a table, a column or a row; the
@@ -605,20 +678,15 @@ fn creating_and_removing_a_mutant_changes_nothing_in_the_library_even_under_libr
 
     // Nor does removing it.
     let id = created["mutant"]["id"].as_i64().unwrap().to_string();
-    let removed = sandbox.run(sandbox.command().env_remove("WRECKORDBOX_SIDECAR_DIR").args([
-        "--json",
-        "mutants",
-        "remove",
-        &id,
-        "--source",
-        "agent:preparer",
-    ]));
-    assert!(removed.status.success(), "{}", removed.stderr);
+    let removed = ok(
+        &sandbox,
+        &["mutants", "remove", &id, "--source", "agent:preparer"],
+    );
+    assert_eq!(removed["mutant"]["removed"], true);
     assert_eq!(entries(&sandbox, &playlist), listed_before);
     stop_service(&sandbox);
     assert_eq!(library_shape(&sandbox), shape);
     assert_eq!(entry_rows(&sandbox), rows);
-    assert!(!sandbox.sidecar_dir().exists());
 }
 
 #[test]

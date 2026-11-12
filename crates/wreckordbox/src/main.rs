@@ -5,6 +5,7 @@
 //! `--json` as JSON; errors go to standard error with a non-zero status.
 
 mod facts;
+mod intake;
 mod mutants;
 mod mytag_edits;
 mod reading;
@@ -86,6 +87,12 @@ enum Commands {
     Mutants {
         #[command(subcommand)]
         command: mutants::MutantCommands,
+    },
+    /// The Intake and Problems queues: tracks with no Prep colour, tracks
+    /// marked Problem, and what each still needs.
+    Intake {
+        #[command(subcommand)]
+        command: intake::IntakeCommands,
     },
     /// Run the Library service in the foreground until interrupted.
     ///
@@ -230,6 +237,9 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
         }
         Commands::Mutants { command } => {
             print(&mutants::run(&mut connect(&config)?, cli.json, command)?);
+        }
+        Commands::Intake { command } => {
+            print(&intake::run(&mut connect(&config)?, cli.json, command)?);
         }
         Commands::Serve { spawned: true } => {
             return Ok(if wreckordbox_service::serve_spawned(config) {

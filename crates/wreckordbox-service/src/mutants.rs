@@ -328,8 +328,11 @@ impl Mutants<'_> {
 
     fn create(&self, create: &CreateMutant) -> Result<MutantChanged, ServiceError> {
         let place = self.read(|library| place(library, create))?;
-        let provenance =
-            self.provenance(create.run, create.source.as_ref(), create.description.as_deref())?;
+        let provenance = self.provenance(
+            create.run,
+            create.source.as_ref(),
+            create.description.as_deref(),
+        )?;
         if let Some(existing) = self
             .sidecar
             .mutant_of_entry(&place.entry.id)
@@ -451,8 +454,11 @@ impl Mutants<'_> {
 
     fn remove(&self, remove: &RemoveMutant) -> Result<MutantChanged, ServiceError> {
         let stored = self.stored(remove.id, remove.entry.as_deref(), false)?;
-        let provenance =
-            self.provenance(remove.run, remove.source.as_ref(), remove.description.as_deref())?;
+        let provenance = self.provenance(
+            remove.run,
+            remove.source.as_ref(),
+            remove.description.as_deref(),
+        )?;
         let (run, created_run) =
             self.run_for(&provenance, || format!("Remove Mutant {}", stored.id))?;
         let removed = self.sidecar.remove_mutant(
@@ -745,10 +751,7 @@ fn already(entry: &str, mutant: i64) -> ServiceError {
 }
 
 fn no_mutant(id: i64) -> ServiceError {
-    ServiceError::new(
-        codes::MUTANT_NOT_FOUND,
-        format!("there is no Mutant {id}"),
-    )
+    ServiceError::new(codes::MUTANT_NOT_FOUND, format!("there is no Mutant {id}"))
 }
 
 fn sidecar_error(error: &SidecarError) -> ServiceError {

@@ -1,0 +1,4 @@
+[tools]
+node = { version = "24", minimum_release_age = "0s", lazy = true }
+pnpm = "10.17.1"
+rust = "1.99.0"
