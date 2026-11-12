@@ -528,7 +528,8 @@ impl crate::LibraryCore {
         let kind = touched.change_kind();
         // The refresh's own failure is kept aside: the edit is made by then
         // and goes into the history (and the Ledger) whatever it says.
-        let (value, reversible, refreshed) = self.write_then(host, crate::History::Caller, action, |db, (value, reversible)| {
+        let preparation = crate::ledger::Preparation::touched(&touched);
+        let (value, reversible, refreshed) = self.write_then_prepared(host, crate::History::Caller, &preparation, action, |db, (value, reversible)| {
             Ok((value, reversible, self.refresh_after_edit(host, db, touched)))
         })?;
         if !reversible.is_empty() {
@@ -584,9 +585,12 @@ impl crate::LibraryCore {
         let _gate = self.edit_gate().lock();
         let entry = self.history.lock().next(undo).cloned().ok_or(StepError::Nothing)?;
         let touched = entry.edit.touched();
-        let result = self.write_then(
+        let mut preparation = crate::ledger::Preparation::touched(&touched);
+        if undo { preparation.undo_of = entry.ledger; } else { preparation.redo_of = entry.ledger; }
+        let result = self.write_then_prepared(
             host,
             crate::History::Caller,
+            &preparation,
             |w| {
                 entry.edit.check(w, undo)?;
                 entry.edit.apply(w, undo)

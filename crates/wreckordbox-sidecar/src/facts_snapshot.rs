@@ -96,7 +96,6 @@ impl FactsSnapshot {
 impl FactsReader {
     /// The track's Facts of `kind`, newest first, as [`Sidecar::facts`](crate::Sidecar::facts).
     pub fn facts(&self, track_id: &str, kind: &str) -> Result<Vec<Fact>> {
-        crate::dj_facts::ready(&self.db)?;
         let mut statement = self.db.prepare_cached(&select(
             "WHERE fact.effective_track_id = ?1 AND fact.kind = ?2 ORDER BY fact.id DESC",
         ))?;

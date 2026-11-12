@@ -310,15 +310,15 @@ fn a_crashed_dj_edit_reconciles_its_fact_from_the_library() {
     );
     assert!(!killed.status.success());
     wait_for_no_service(&s);
-    // A fixture-only later native change proves recovery reads the Library,
-    // rather than applying the old command's requested value again.
+    // An unrelated native change must not be attributed to the interrupted DJ edit.
     s.edit(|writer| {
-        writer.set_rating("10003", 4).unwrap();
+        writer.set_rating("10004", 4).unwrap();
     });
-    assert_eq!(ok(&s, &["tracks", "show", "10003"])["rating"], 4);
+    assert_eq!(ok(&s, &["tracks", "show", "10003"])["rating"], 5);
     let fact = ok(&s, &["facts", "standing", "10003", "energy"])["standing"].clone();
-    assert_eq!(fact["value"], 4);
+    assert_eq!(fact["value"], 5);
     assert_eq!(fact["reconciled"], true);
+    assert!(ok(&s, &["facts", "standing", "10004", "energy"])["standing"].is_null());
     let entries = all_entries(&s);
     let entry = entries.iter().find(|e| e["kind"] == "unconfirmed").unwrap();
     assert_eq!(fact["ledger_entry"], entry["id"]);

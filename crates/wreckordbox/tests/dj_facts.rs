@@ -91,18 +91,18 @@ fn prep_colour_and_schema_terms_follow_native_edits_and_clears() {
 }
 
 #[test]
-fn a_fact_insert_failure_keeps_the_whole_sidecar_transaction_pending_and_visible() {
+fn a_fact_insert_failure_is_reported_without_losing_the_entry_or_blocking_repairs() {
     let s = Sandbox::new();
     ok(&s, &["tracks", "rate", "10003", "2", "--source", "dj"]);
     let db = rusqlite::Connection::open(s.sidecar_dir().join("sidecar.db")).unwrap();
     db.execute_batch("CREATE TRIGGER refuse_dj_fact BEFORE INSERT ON dj_fact BEGIN SELECT RAISE(ABORT, 'injected Fact failure'); END;").unwrap();
-    ok(&s, &["tracks", "rate", "10003", "5", "--source", "dj"]);
+    let edit = ok(&s, &["tracks", "rate", "10003", "5", "--source", "dj"]);
     assert_eq!(ok(&s, &["tracks", "show", "10003"])["rating"], 5);
     for (table, expected) in [
-        ("ledger", 1),
+        ("ledger", 2),
         ("fact", 1),
         ("dj_fact", 1),
-        ("ledger_intent", 1),
+        ("ledger_intent", 0),
     ] {
         assert_eq!(
             db.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r
@@ -111,23 +111,26 @@ fn a_fact_insert_failure_keeps_the_whole_sidecar_transaction_pending_and_visible
             expected
         );
     }
-    let stale = s.cli(&["--json", "facts", "standing", "10003", "energy"]);
-    assert!(
-        !stale.status.success(),
-        "pending edit must not masquerade as old standing data"
-    );
-    assert!(stale.stderr.contains("pending"));
-    db.execute_batch("DROP TRIGGER refuse_dj_fact").unwrap();
-    // The next admitted edit replays the complete entry, once.
-    ok(&s, &["tracks", "rate", "10004", "1", "--source", "dj"]);
-    let fact = ok(&s, &["facts", "standing", "10003", "energy"]);
-    assert_eq!(fact["standing"]["value"], 5);
-    assert_eq!(fact["superseded"].as_array().unwrap().len(), 1);
+    let entry = ok(&s, &["runs", "show", &edit["run"]["id"].to_string()]);
+    assert!(entry["entries"][0]["facts_not_recorded"][0]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("injected Fact failure"));
     assert_eq!(
-        db.query_row("SELECT COUNT(*) FROM ledger_intent", [], |r| r
-            .get::<_, i64>(0))
-            .unwrap(),
-        0
+        ok(&s, &["facts", "standing", "10003", "energy"])["standing"]["value"],
+        2
+    );
+    // The fault is still present: neither an agent nor a DJ repair is wedged.
+    ok(
+        &s,
+        &["tracks", "rate", "10004", "4", "--source", "agent:repair"],
+    );
+    ok(&s, &["tracks", "rate", "10004", "3", "--source", "dj"]);
+    db.execute_batch("DROP TRIGGER refuse_dj_fact").unwrap();
+    ok(&s, &["tracks", "rate", "10003", "4", "--source", "dj"]);
+    assert_eq!(
+        ok(&s, &["facts", "standing", "10003", "energy"])["standing"]["value"],
+        4
     );
 }
 
@@ -152,22 +155,13 @@ fn a_library_write_failure_clears_its_intent_without_a_fact_or_entry() {
 }
 
 #[test]
-fn a_hand_fact_keeps_the_audio_identity_for_reattachment() {
+fn a_hand_judgement_does_not_read_or_require_audio_identity() {
     let s = Sandbox::new();
     let track = s.import_track("Hand-edit.wav", 1);
     ok(&s, &["tracks", "rate", &track, "3", "--source", "dj"]);
     let fact = ok(&s, &["facts", "standing", &track, "energy"])["standing"].clone();
-    assert!(fact["fingerprint"].is_string());
-    let db = rusqlite::Connection::open(s.sidecar_dir().join("sidecar.db")).unwrap();
-    assert_eq!(
-        db.query_row(
-            "SELECT fingerprint FROM track_identity WHERE track_id=?1",
-            [&track],
-            |r| r.get::<_, String>(0)
-        )
-        .unwrap(),
-        fact["fingerprint"].as_str().unwrap()
-    );
+    assert_eq!(fact["value"], 3);
+    assert!(fact["fingerprint"].is_null());
 }
 
 #[test]

@@ -1196,7 +1196,7 @@ fn a_window_hand_edit_and_its_undo_redo_supersede_the_dj_fact() {
     assert_eq!(first["source"]["kind"], "dj");
     window.undo().unwrap();
     let undone = fact();
-    assert!(undone["value"].is_null());
+    assert!(undone.is_null());
     assert_ne!(first["id"], undone["id"]);
     window.redo().unwrap();
     let redone = fact();
@@ -1205,8 +1205,8 @@ fn a_window_hand_edit_and_its_undo_redo_supersede_the_dj_fact() {
     let shown = window
         .cli(&["--json", "facts", "standing", &track, "energy"])
         .json();
-    assert_eq!(shown["superseded"].as_array().unwrap().len(), 2);
-    assert_eq!(shown["superseded"][0]["superseded_by"], redone["id"]);
+    assert_eq!(shown["superseded"].as_array().unwrap().len(), 1);
+    assert_eq!(shown["superseded"][0]["id"], first["id"]);
 }
 
 #[test]
@@ -1240,7 +1240,229 @@ fn native_title_and_artist_edits_record_names_and_clears() {
                 serde_json::json!(value)
             }
         );
-        assert_eq!(fact["source"]["kind"], "dj");
-        assert!(fact["ledger_entry"].is_i64());
+        if value.is_empty() {
+            assert!(fact.is_null(), "clearing a native scalar withdraws the DJ opinion");
+        } else {
+            assert_eq!(fact["source"]["kind"], "dj");
+            assert!(fact["ledger_entry"].is_i64());
+        }
     }
+}
+
+#[test]
+fn an_unnamed_window_write_leaves_fact_reads_and_subsequent_edits_usable() {
+    let window = window();
+    window.host().unwrap();
+    let track = track_id(1);
+    run(commands::set_track_rating(
+        window.app.handle().clone(),
+        window.state(),
+        vec![track.clone()],
+        3,
+    ))
+    .unwrap();
+    let before = window
+        .cli(&["--json", "facts", "standing", &track, "energy"])
+        .json();
+    window
+        .state()
+        .write_then(
+            |w| w.set_comment(&track, "analysis-like outside write"),
+            |_, _| Ok(()),
+        )
+        .unwrap();
+    assert_eq!(
+        window
+            .cli(&["--json", "facts", "standing", &track, "energy"])
+            .json(),
+        before
+    );
+    window.cli(&["--json", "facts", "show", &track]).succeeded();
+    window
+        .cli(&[
+            "--json",
+            "tracks",
+            "rate",
+            &track,
+            "4",
+            "--source",
+            "agent:repair",
+        ])
+        .succeeded();
+}
+#[test]
+fn undo_withdraws_the_djs_fact_and_restores_the_agents_original_source() {
+    let window = window();
+    window.host().unwrap();
+    let track = track_id(1);
+    window
+        .cli(&[
+            "--json",
+            "facts",
+            "record",
+            &track,
+            "energy",
+            "5",
+            "--source",
+            "agent:tagger",
+            "--confidence",
+            "0.8",
+        ])
+        .succeeded();
+    window
+        .cli(&[
+            "--json",
+            "tracks",
+            "rate",
+            &track,
+            "5",
+            "--source",
+            "agent:tagger",
+        ])
+        .succeeded();
+    let fact = || {
+        window
+            .cli(&["--json", "facts", "standing", &track, "energy"])
+            .json()["standing"]
+            .clone()
+    };
+    let agent = fact();
+    run(commands::set_track_rating(
+        window.app.handle().clone(),
+        window.state(),
+        vec![track.clone()],
+        2,
+    ))
+    .unwrap();
+    assert_eq!(fact()["source"]["kind"], "dj");
+    window.undo().unwrap();
+    assert_eq!(window.rating(&track), 5);
+    assert_eq!(fact(), agent);
+    window.redo().unwrap();
+    assert_eq!(window.rating(&track), 2);
+    assert_eq!(fact()["value"], 2);
+    assert_eq!(fact()["source"]["kind"], "dj");
+}
+
+#[test]
+fn bulk_undo_and_redo_restore_prior_sources_without_creating_null_judgements() {
+    let window = window();
+    window.host().unwrap();
+    let tracks = vec![track_id(1), track_id(2), track_id(3)];
+    window
+        .cli(&[
+            "--json",
+            "facts",
+            "record",
+            &tracks[0],
+            "energy",
+            "5",
+            "--source",
+            "agent:tagger",
+            "--confidence",
+            "0.8",
+        ])
+        .succeeded();
+    window
+        .cli(&[
+            "--json",
+            "tracks",
+            "rate",
+            &tracks[0],
+            "5",
+            "--source",
+            "agent:tagger",
+        ])
+        .succeeded();
+    run(commands::set_track_rating(
+        window.app.handle().clone(),
+        window.state(),
+        tracks.clone(),
+        2,
+    ))
+    .unwrap();
+    window.undo().unwrap();
+    for (n, track) in tracks.iter().enumerate() {
+        let fact = window
+            .cli(&["--json", "facts", "standing", track, "energy"])
+            .json()["standing"]
+            .clone();
+        if n == 0 {
+            assert_eq!(fact["source"]["kind"], "agent");
+            assert_eq!(window.rating(track), 5);
+        } else {
+            assert!(fact.is_null());
+            assert_eq!(window.rating(track), 0);
+        }
+    }
+    window.redo().unwrap();
+    for track in &tracks {
+        assert_eq!(window.rating(track), 2);
+        assert_eq!(
+            window
+                .cli(&["--json", "facts", "standing", track, "energy"])
+                .json()["standing"]["source"]["kind"],
+            "dj"
+        );
+    }
+}
+#[test]
+fn undo_restores_the_previous_dj_fact_and_clear_withdraws_an_opinion() {
+    let window = window();
+    window.host().unwrap();
+    let track = track_id(1);
+    let rate = |n| {
+        run(commands::set_track_rating(
+            window.app.handle().clone(),
+            window.state(),
+            vec![track.clone()],
+            n,
+        ))
+        .unwrap()
+    };
+    let fact = || {
+        window
+            .cli(&["--json", "facts", "standing", &track, "energy"])
+            .json()["standing"]
+            .clone()
+    };
+    rate(3);
+    let first = fact();
+    rate(2);
+    window.undo().unwrap();
+    assert_eq!(fact(), first);
+    window.redo().unwrap();
+    let second = fact();
+    assert_eq!(second["value"], 2);
+    rate(0);
+    assert!(fact().is_null());
+    window.undo().unwrap();
+    assert_eq!(fact(), second);
+    window.redo().unwrap();
+    assert!(fact().is_null());
+    run(commands::set_track_color(
+        window.app.handle().clone(),
+        window.state(),
+        vec![track.clone()],
+        Some("5".into()),
+    ))
+    .unwrap();
+    run(commands::set_track_color(
+        window.app.handle().clone(),
+        window.state(),
+        vec![track.clone()],
+        None,
+    ))
+    .unwrap();
+    assert!(window
+        .cli(&["--json", "facts", "standing", &track, "prep_colour"])
+        .json()["standing"]
+        .is_null());
+    window.undo().unwrap();
+    assert_eq!(
+        window
+            .cli(&["--json", "facts", "standing", &track, "prep_colour"])
+            .json()["standing"]["value"],
+        "Green"
+    );
 }

@@ -25,7 +25,7 @@ use crate::{io, Fingerprint, Result, SidecarError};
 /// The version of the stored shape this crate reads and writes. A store from
 /// a newer wreckordbox is refused rather than guessed at; an older one is
 /// brought up to date by [`MIGRATIONS`] when it is opened.
-pub const SCHEMA_VERSION: u32 = 7;
+pub const SCHEMA_VERSION: u32 = 8;
 
 /// What each version after the first adds, in order: the version a store is
 /// at once the statements have run, and the statements. A new store is made
@@ -39,6 +39,7 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (5, crate::attachments::SCHEMA),
     (6, crate::active_runs::SCHEMA),
     (7, crate::dj_facts::SCHEMA),
+    (8, crate::dj_facts::EFFECTS_SCHEMA),
 ];
 
 // A migration added without raising `SCHEMA_VERSION`, or the reverse,
@@ -454,7 +455,6 @@ impl Sidecar {
     /// [`Fact::is_stale`] to tell them apart.
     pub fn facts(&self, track_id: &str, kind: &str) -> Result<Vec<Fact>> {
         let db = self.db();
-        crate::dj_facts::ready(&db)?;
         let mut statement = db.prepare(&select(
             "WHERE fact.effective_track_id = ?1 AND fact.kind = ?2 ORDER BY fact.id DESC",
         ))?;
@@ -467,7 +467,6 @@ impl Sidecar {
     /// Every Fact of every kind recorded for the track, newest first.
     pub fn facts_of_track(&self, track_id: &str) -> Result<Vec<Fact>> {
         let db = self.db();
-        crate::dj_facts::ready(&db)?;
         let mut statement = db.prepare(&select(
             "WHERE fact.effective_track_id = ?1 ORDER BY fact.id DESC",
         ))?;

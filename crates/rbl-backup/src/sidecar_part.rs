@@ -395,7 +395,7 @@ pub const DATABASE_FILE: &str = "sidecar.db";
 /// build reads: `wreckordbox_sidecar::SCHEMA_VERSION`, which this crate
 /// does not depend on; a test holds the two together. A backup whose
 /// Sidecar is newer is refused before anything is replaced.
-pub const SCHEMA_SUPPORTED: u32 = 7;
+pub const SCHEMA_SUPPORTED: u32 = 8;
 
 /// The database `name` (a path in the Sidecar) is a companion of, when its
 /// name is a database's write-ahead log, shared memory or rollback journal.

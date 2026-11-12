@@ -60,6 +60,26 @@ pub struct Link {
     pub part_of: Option<i64>,
 }
 
+/// Bounded evidence for recovery if a recorded write dies before history.record.
+/// Empty targets mean no inference is safe, never “all tracks”.
+#[derive(Debug, Default)]
+pub struct Preparation {
+    pub tracks: Vec<String>,
+    pub undo_of: Option<i64>,
+    pub redo_of: Option<i64>,
+}
+impl Preparation {
+    pub fn touched(touched: &crate::Touched) -> Self {
+        Self {
+            tracks: match touched {
+                crate::Touched::Metadata(ids) => ids.clone(),
+                _ => Vec::new(),
+            },
+            ..Self::default()
+        }
+    }
+}
+
 /// Keeps a durable record of the changes the edit history sees.
 ///
 /// [`Self::record`] and [`Self::note`] are called with the history's lock
@@ -80,6 +100,10 @@ pub trait Ledger: Send + Sync {
     /// The write [`Self::begin`] announced is over: `wrote` is whether it
     /// changed any row. Called before the core re-reads what it touched.
     fn written(&self, wrote: bool);
+
+    /// Best-effort bounded recovery evidence, on the writer's existing connection.
+    /// This must never refuse an accepted Library write or read any audio.
+    fn prepare(&self, _db: &rbl_db::Library, _targets: &Preparation) {}
 
     /// Records one change: `edit` as the history keeps it, under `label`,
     /// tied to earlier entries by `link`. Answers the identifier of this
