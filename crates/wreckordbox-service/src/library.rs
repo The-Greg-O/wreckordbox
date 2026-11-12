@@ -119,6 +119,11 @@ impl OpenLibrary {
         read()
     }
 
+    /// The folder the Library's analysis files are kept under.
+    pub(crate) fn share_root(&self) -> std::path::PathBuf {
+        self.core.share_root()
+    }
+
     /// The index as it stands now: a snapshot an edit does not change.
     pub(crate) fn index(&self) -> Result<Arc<rbl_index::Library>, ServiceError> {
         self.core

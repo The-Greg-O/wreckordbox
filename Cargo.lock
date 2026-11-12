@@ -7114,6 +7114,7 @@ version = "1.10.0"
 dependencies = [
  "clap",
  "lewton",
+ "rbl-anlz",
  "rbl-db",
  "rbl-export",
  "rbl-onelibrary",
@@ -7122,6 +7123,18 @@ dependencies = [
  "tempfile",
  "wreckordbox-service",
  "wreckordbox-sidecar",
+]
+
+[[package]]
+name = "wreckordbox-intensity"
+version = "1.10.0"
+dependencies = [
+ "rbl-audio",
+ "realfft",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -7155,6 +7168,7 @@ name = "wreckordbox-service"
 version = "1.10.0"
 dependencies = [
  "dirs 5.0.1",
+ "rbl-anlz",
  "rbl-backup",
  "rbl-db",
  "rbl-index",
@@ -7164,6 +7178,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tracing",
+ "wreckordbox-intensity",
  "wreckordbox-native-stems",
  "wreckordbox-sidecar",
 ]
