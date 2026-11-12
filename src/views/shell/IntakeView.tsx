@@ -34,10 +34,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 import { useTranslation } from "@/i18n";
+import { getBackend } from "@/ipc/client";
 import type { RowDto } from "@/ipc/types";
+import { energyOf, intakeActionForKey, intakeChord, nextQueuedIndex, type IntakeAction, type PrepColour } from "@/lib/intakeEdits";
 import { needsLine, queuePosition, type IntakeCounts, type IntakeQueueName, type QueuedTrack } from "@/lib/intakeQueue";
+import { refusal } from "@/lib/menu";
+import type { KeyOverrides, Platform } from "@/lib/shortcuts";
+import { useCommands } from "@/store/useCommands";
+import { useEventCallback } from "@/store/useEventCallback";
+import { IntakeTrackPanel } from "./IntakeTrackPanel";
 import styles from "./IntakeView.module.css";
+import { useIntakeColours } from "./useIntakeColours";
 import { useIntakeQueue } from "./useIntakeQueue";
+
+type Backend = Awaited<ReturnType<typeof getBackend>>;
 
 /** How many queued tracks one page holds: the most a refresh ever reads. */
 export const INTAKE_PAGE = 200;
@@ -56,6 +66,16 @@ export interface IntakeViewProps {
   onLoad: (row: RowDto) => Promise<boolean>;
   /** A refresh failed (the message, for the status line), or recovered (`null`). */
   onProblem?: ((message: string | null) => void) | undefined;
+  /**
+   * Writes one Library edit through the window's single edit path (App's
+   * `writeEdit`: Library Protection, the status line's report); resolves
+   * whether it was written (wbx-63).
+   */
+  onEdit: (what: string, edit: (backend: Backend) => Promise<unknown>) => Promise<boolean>;
+  /** Library Protection is on: why `onEdit` refused, when it says no more. */
+  protectLibrary: boolean;
+  platform: Platform;
+  keyOverrides?: KeyOverrides | undefined;
 }
 
 /** When a page was read, as the stale note says it. */
@@ -64,7 +84,7 @@ function clock(at: Date | null): string {
 }
 
 export function IntakeView(props: IntakeViewProps) {
-  const { queue, onQueue, counts, loadedTrackId, onLoad, onProblem } = props;
+  const { queue, onQueue, counts, loadedTrackId, onLoad, onProblem, onEdit, protectLibrary, platform, keyOverrides } = props;
   const t = useTranslation();
   // Only the page shown is read (bounded refreshes); paging moves the offset.
   const [offset, setOffset] = useState(0);
@@ -75,6 +95,11 @@ export function IntakeView(props: IntakeViewProps) {
   const [loadFailed, setLoadFailed] = useState<{ wanted: string; kept: string | null } | null>(null);
   const request = useRef(0);
   const listRef = useRef<HTMLDivElement>(null);
+  const { colours, failed: coloursFailed, retry: retryColours } = useIntakeColours();
+  const [editFailure, setEditFailure] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
 
   // Tell the status line about a failed refresh, and that it recovered.
   const problem = failed !== null && page !== null ? `${t(TITLES[queue])} could not be refreshed: ${failed}` : null;
@@ -84,20 +109,28 @@ export function IntakeView(props: IntakeViewProps) {
   const shownId = pending ?? loadedTrackId;
   const index = page && shownId !== null ? page.tracks.findIndex((track) => track.id === shownId) : -1;
 
-  const choose = useCallback(async (at: number) => {
-    const track = page?.tracks[at];
-    const row = page?.rows[at];
-    if (!track || !row) return;
+  /** Asks the deck to load a queued track; resolves whether it loaded. */
+  const loadQueued = useCallback(async (track: QueuedTrack, row: RowDto): Promise<boolean> => {
     const ask = ++request.current;
     setPending(track.id);
     setLoadFailed(null);
     const kept = page?.tracks.find((queued) => queued.id === loadedTrackId)?.title ?? null;
     const loaded = await onLoad(row);
     // A later choice supersedes this one, whatever became of it.
-    if (ask !== request.current) return;
+    if (ask !== request.current) return loaded;
     setPending(null);
     if (!loaded) setLoadFailed({ wanted: track.title, kept });
+    return loaded;
   }, [page, onLoad, loadedTrackId]);
+
+  const choose = useCallback(async (at: number) => {
+    const track = page?.tracks[at];
+    const row = page?.rows[at];
+    if (!track || !row) return;
+    setEditFailure(null);
+    setNote(null);
+    await loadQueued(track, row);
+  }, [page, loadQueued]);
 
   // Keep the chosen row in view as the keys move it.
   useEffect(() => {
@@ -126,6 +159,144 @@ export function IntakeView(props: IntakeViewProps) {
 
   const title = t(TITLES[queue]);
   const selected = index >= 0 ? page?.tracks[index] : undefined;
+  const selectedRow = index >= 0 ? page?.rows[index] : undefined;
+  // Every track of a queue has the queue's colour: none, or Problem.
+  const queueColour = queue === "problems" ? (colours?.problem ?? null) : null;
+
+  /**
+   * One edit of the chosen track through the window's edit path. A refusal
+   * is said in the panel as well as the status line; resolves whether it
+   * was written.
+   */
+  const edit = useCallback(async (what: string, change: (backend: Backend) => Promise<unknown>): Promise<boolean> => {
+    let reason: string | null = null;
+    const written = await onEdit(what, async (backend) => {
+      try {
+        return await change(backend);
+      } catch (error) {
+        reason = error instanceof Error ? error.message : String((error as { message?: unknown } | null)?.message ?? error);
+        throw error;
+      }
+    });
+    setEditFailure(written ? null : `${t("Not saved")}: ${reason ?? refusal(protectLibrary)}`);
+    return written;
+  }, [onEdit, protectLibrary, t]);
+
+  /**
+   * Moves to the queued track after the chosen one. `left` says the chosen
+   * track has just left the queue (it was given a Prep colour), so a next
+   * page starts one earlier than it did.
+   */
+  const advance = useCallback(async (from: number, left: boolean) => {
+    if (!page) return;
+    const next = nextQueuedIndex(page.tracks.length, from);
+    if (next !== null) {
+      const track = page.tracks[next];
+      const row = page.rows[next];
+      if (track && row) await loadQueued(track, row);
+      return;
+    }
+    if (page.nextOffset === null) {
+      setNote(t("That was the last track in the queue."));
+      return;
+    }
+    // The next track is on the next page: show that page and load its first.
+    const start = page.nextOffset - (left ? 1 : 0);
+    setOffset(start);
+    const backend = await getBackend();
+    const following = await backend.intakeQueue(queue, start, 1).catch(() => null);
+    const track = following?.tracks[0];
+    const row = following?.rows[0];
+    if (track && row) await loadQueued(track, row);
+  }, [page, loadQueued, queue, t]);
+
+  /** Gives the chosen track a Prep colour (or none) and, when that takes it out of this queue, moves on. */
+  const setPrepColour = useCallback(async (colour: PrepColour | null): Promise<void> => {
+    if (!selected || busyRef.current) return;
+    const at = index;
+    const id = selected.id;
+    busyRef.current = true;
+    setBusy(true);
+    setNote(null);
+    try {
+      const what = colour === null ? t("Prep colour cleared.") : `${t("Prep colour")}: ${colour.label}.`;
+      const written = await edit(what, (backend) => backend.intakeSetPrepColour(id, colour?.id ?? null));
+      const stays = (colour?.id ?? null) === (queueColour?.id ?? null);
+      if (written && !stays) await advance(at, true);
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  }, [selected, index, edit, queueColour, advance, t]);
+
+  const markClean = useCallback(() => {
+    if (colours?.clean) void setPrepColour(colours.clean);
+    else if (colours) setEditFailure(t("No colour label is named Clean, so there is no Clean to mark."));
+  }, [colours, setPrepColour, t]);
+  const markProblem = useCallback(() => {
+    if (!selected) return;
+    if (colours?.problem && queueColour?.id === colours.problem.id) {
+      // Already Problem (the Problems queue): only move on.
+      void advance(index, false);
+    } else if (colours?.problem) {
+      void setPrepColour(colours.problem);
+    } else if (colours) {
+      setEditFailure(t("No colour label is named Problem, so there is no Problem to mark."));
+    }
+  }, [selected, colours, queueColour, advance, index, setPrepColour, t]);
+  const skip = useCallback(() => {
+    if (busyRef.current) return;
+    setEditFailure(null);
+    setNote(null);
+    void advance(index, false);
+  }, [advance, index]);
+
+  const setEnergy = useCallback((level: number) => {
+    if (!selected) return Promise.resolve(false);
+    const id = selected.id;
+    return edit(level === 0 ? t("Energy cleared.") : `${t("Energy")} ${level}.`, (backend) => backend.edits.setTrackRating([id], level));
+  }, [selected, edit, t]);
+  const setField = useCallback((field: "title" | "artist", value: string) => {
+    if (!selected) return Promise.resolve(false);
+    const id = selected.id;
+    return edit(field === "title" ? t("Title saved.") : t("Artist saved."), (backend) => backend.edits.setTrackField([id], field, value));
+  }, [selected, edit, t]);
+
+  // The view's actions, for the palette and the keys: live while a track is chosen.
+  const run = (action: IntakeAction): boolean => {
+    if (!selected) return false;
+    const level = energyOf(action);
+    if (level !== null) { void setEnergy(level); return true; }
+    if (action === "intakeMarkClean") markClean();
+    else if (action === "intakeMarkProblem") markProblem();
+    else skip();
+    return true;
+  };
+  useCommands({
+    intakeMarkClean: () => run("intakeMarkClean"),
+    intakeMarkProblem: () => run("intakeMarkProblem"),
+    intakeSkip: () => run("intakeSkip"),
+    intakeEnergy1: () => run("intakeEnergy1"),
+    intakeEnergy2: () => run("intakeEnergy2"),
+    intakeEnergy3: () => run("intakeEnergy3"),
+    intakeEnergy4: () => run("intakeEnergy4"),
+    intakeEnergy5: () => run("intakeEnergy5"),
+  });
+
+  // Their keys: heard on the way down, ahead of the deck (P and Shift with
+  // a digit are deck keys in the Export key map; see `intakeEdits.ts`).
+  // A text field keeps its keys; Ctrl+Enter there is the field's own.
+  const onWindowKey = useEventCallback((event: globalThis.KeyboardEvent) => {
+    const action = intakeActionForKey(event, platform, event.target as HTMLElement | null, keyOverrides);
+    if (action === null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) run(action);
+  });
+  useEffect(() => {
+    window.addEventListener("keydown", onWindowKey, true);
+    return () => window.removeEventListener("keydown", onWindowKey, true);
+  }, [onWindowKey]);
 
   // Nothing read yet: still reading, or the first read failed (the Library
   // still loading, no service). `library:ready` and Retry read again.
@@ -231,7 +402,41 @@ export function IntakeView(props: IntakeViewProps) {
           </nav>
         ) : null}
       </section>
-      <TrackPanel track={selected} suggestionsUnavailable={page.suggestionsUnavailable} />
+      {selected ? (
+        <IntakeTrackPanel
+          track={selected}
+          energy={selectedRow?.rating ?? 0}
+          prepColour={queueColour}
+          colours={colours}
+          coloursFailed={coloursFailed}
+          onRetryColours={retryColours}
+          onTitle={(value) => setField("title", value)}
+          onArtist={(value) => setField("artist", value)}
+          onEnergy={setEnergy}
+          onPrepColour={(colour) => { void setPrepColour(colour); }}
+          onMarkClean={markClean}
+          onMarkProblem={markProblem}
+          onSkip={skip}
+          busy={busy}
+          failure={editFailure}
+          note={note}
+          keys={{
+            markClean: intakeChord("intakeMarkClean", keyOverrides),
+            markProblem: intakeChord("intakeMarkProblem", keyOverrides),
+            skip: intakeChord("intakeSkip", keyOverrides),
+          }}
+          platform={platform}
+          suggestionsUnavailable={page.suggestionsUnavailable}
+        />
+      ) : (
+        <section className={styles.panel} aria-label={t("Track")} data-testid="intake-panel">
+          <p className={styles.hint}>{t("Choose a track in the queue to load it into the player.")}</p>
+          {note !== null ? <p className={styles.hint} data-testid="intake-note" role="status">{note}</p> : null}
+          {page.suggestionsUnavailable !== null ? (
+            <p className={styles.hint} data-testid="intake-suggestions-unavailable">{t("Proposed titles and artists could not be read")}: {page.suggestionsUnavailable}</p>
+          ) : null}
+        </section>
+      )}
     </div>
   );
 }
@@ -260,43 +465,5 @@ function QueueRow({ track, selected, onChoose }: { track: QueuedTrack; selected:
       <span className={styles.rowFacts}>{facts}</span>
       <span className={styles.rowNeeds} data-testid="intake-needs">{t(needsLine(track))}</span>
     </div>
-  );
-}
-
-/**
- * The selected track's panel: what is still empty, informing, never
- * blocking. wbx-63 puts the edits here (title and artist in place, Energy,
- * Prep colour, tags, "mark Clean and next").
- */
-function TrackPanel({ track, suggestionsUnavailable }: { track: QueuedTrack | undefined; suggestionsUnavailable: string | null }) {
-  const t = useTranslation();
-  if (!track) {
-    return (
-      <section className={styles.panel} aria-label={t("Track")} data-testid="intake-panel">
-        <p className={styles.hint}>{t("Choose a track in the queue to load it into the player.")}</p>
-      </section>
-    );
-  }
-  return (
-    <section className={styles.panel} aria-label={t("Track")} data-testid="intake-panel">
-      <dl className={styles.fields}>
-        <dt>{t("Title")}</dt><dd data-testid="intake-panel-title">{track.title}</dd>
-        <dt>{t("Artist")}</dt><dd>{track.artist}</dd>
-      </dl>
-      {track.suggestions.length > 0 ? (
-        <ul className={styles.suggestions} aria-label={t("Proposed")}>
-          {track.suggestions.map((suggestion) => (
-            <li key={`${suggestion.field}:${suggestion.value}`}>
-              <span className={styles.label}>{t(suggestion.field)}</span> {suggestion.value}
-              <span className={styles.source}> {suggestion.source} · {suggestion.confidence.toFixed(2)}</span>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      <p className={styles.open} data-testid="intake-panel-needs">{t(needsLine(track))}</p>
-      {suggestionsUnavailable !== null ? (
-        <p className={styles.hint} data-testid="intake-suggestions-unavailable">{t("Proposed titles and artists could not be read")}: {suggestionsUnavailable}</p>
-      ) : null}
-    </section>
   );
 }

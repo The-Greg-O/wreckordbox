@@ -18,6 +18,7 @@ import type {
 } from "./types";
 import { tauriInvoke } from "./invoke";
 import { liftMyTags } from "./rowMyTags";
+import { fromServiceColours, type ServiceColours } from "@/lib/intakeEdits";
 import { fromServicePage, type ServiceQueuePage } from "@/lib/intakeQueue";
 
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -631,6 +632,10 @@ async function realBackend(): Promise<Backend> {
     intakeCounts: async () => {
       const counts = await invoke<{ intake: number; problems: number | null }>("intake_counts");
       return { intake: counts.intake, problems: counts.problems };
+    },
+    intakeColours: async () => fromServiceColours(await invoke<ServiceColours>("intake_colours")),
+    intakeSetPrepColour: async (id, colour) => {
+      await invoke<unknown>("intake_set_prep_colour", { id, colour });
     },
     devicePlaylistCollectionTracks: (path, format, tracks) =>
       invoke<(string | null)[]>("device_playlist_collection_tracks", { path, format, tracks }),

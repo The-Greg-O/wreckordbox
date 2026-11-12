@@ -2220,12 +2220,17 @@ export function createMockBackend(options: MockOptions = {}): Backend {
   const intake = createMockIntake({
     all, colors, tagsOf: (row) => detailsOf(row).myTags, categories: myTagCategories,
     gridLocked: (id) => gridStore.get(id)?.locked ?? false, wait, ready: () => ready,
+    setColour: (id, colour) => edits.setTrackColor([id], colour === null ? null : String(colour)),
   });
   if (typeof window !== "undefined") {
     // `__setPrepColour(id, colourId)` (0 for none): an edit as the Library list makes it.
     (window as unknown as { __setPrepColour: (id: string, colour: number) => Promise<unknown> }).__setPrepColour =
       (id, colour) => edits.setTrackColor([id], colour === 0 ? null : String(colour));
     // `__emitLibraryChanged(n)`: n changes announced at once, as a burst of an agent's edits.
+    // `__outsideEdit(id, field, value)` (wbx-63): a title, artist or Energy
+    // changed by someone else (the CLI, an agent), announced as any edit is.
+    (window as unknown as { __outsideEdit: (id: string, field: "title" | "artist" | "energy", value: string) => Promise<unknown> }).__outsideEdit =
+      (id, field, value) => field === "energy" ? edits.setTrackRating([id], Number(value)) : edits.setTrackField([id], field, value);
     (window as unknown as { __emitLibraryChanged: (times: number) => void }).__emitLibraryChanged =
       (times) => { for (let i = 0; i < times; i += 1) void bump(false); };
   }
@@ -2233,6 +2238,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
   return {
     intakeQueue: intake.intakeQueue,
     intakeCounts: intake.intakeCounts,
+    intakeColours: intake.intakeColours,
+    intakeSetPrepColour: intake.intakeSetPrepColour,
     rekordboxBrowseSettings: () => Promise.resolve(null),
     librarySummary: () =>
       ready
