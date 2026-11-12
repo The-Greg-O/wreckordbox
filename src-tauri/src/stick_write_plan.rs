@@ -459,13 +459,7 @@ fn playlist_selection(
         ExportSelection::from_playlists(state, library, &share_root, &playlists, automatic)?;
     selection.keep_unlisted = true;
     Ok(
-        match selection.for_stick_inspected(
-            state,
-            library,
-            &share_root,
-            destination,
-            delete,
-        )? {
+        match selection.for_stick_inspected(state, library, &share_root, destination, delete)? {
             std::borrow::Cow::Owned(kept) => kept,
             std::borrow::Cow::Borrowed(_) => selection,
         },
