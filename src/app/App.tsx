@@ -949,7 +949,16 @@ function AppBody() {
   // its text is the list's search.
   const shellFilterBase: ViewSpec = useMemo(() => ({ ...specForNode(selectedNode, "", null, "classic", "alphabetical", relatedTo, deviceLibraries.revision), searchField }),
     [selectedNode, relatedTo, deviceLibraries.revision, searchField]);
-  const shellFilter = useShellTrackFilter({ enabled: shellOn, base: shellFilterBase, query, setQuery, generation: libraryGeneration });
+  // Key match and BPM ±6% follow the track the key lights follow (wbx-57).
+  const shellFilterLoaded = useMemo(() => ({ key: trafficKey || null, bpmX100: trafficTrack?.bpmX100 ?? null }), [trafficKey, trafficTrack?.bpmX100]);
+  const shellFilter = useShellTrackFilter({ enabled: shellOn, base: shellFilterBase, query, setQuery, generation: libraryGeneration, tagListRevision, loaded: shellFilterLoaded });
+  // Selected tracks the filter hid and the list deselected; cleared by the next filter change.
+  const [filterDeselected, setFilterDeselected] = useState(0);
+  const shellFilterChange = shellFilter.onChange;
+  const onShellFilterChange = useCallback((next: Parameters<typeof shellFilterChange>[0]) => {
+    setFilterDeselected(0);
+    shellFilterChange(next);
+  }, [shellFilterChange]);
   const spec: ViewSpec = useMemo(() => {
     const base = { ...specForNode(selectedNode, query, sortState, viewPrefs.keyDisplay, viewPrefs.keySort, relatedTo, deviceLibraries.revision), searchField };
     // Only while the bar is showing: hiding it puts the whole list back,
@@ -3579,10 +3588,12 @@ function AppBody() {
           seed={seed}
           onFirstRows={onFirstRows}
           filterOpen={shellOn || filterOpen}
-          {...(shellOn ? {} : { onToggleFilter: toggleFilter })}
+          {...(shellOn ? { onHiddenSelectionDropped: setFilterDeselected } : { onToggleFilter: toggleFilter })}
           filterBar={shellOn ? (
-            <TrackFilterBar model={shellFilter.model} onChange={shellFilter.onChange} values={shellFilter.values}
-              valuesError={shellFilter.valuesError} count={shellFilter.count} keyDisplay={viewPrefs.keyDisplay} keySort={viewPrefs.keySort} />
+            <TrackFilterBar model={shellFilter.model} onChange={onShellFilterChange} values={shellFilter.values}
+              valuesError={shellFilter.valuesError} categories={shellFilter.categories} dropped={shellFilter.dropped}
+              deselected={filterDeselected} onStick={shellFilter.onStick} count={shellFilter.count} loaded={shellFilterLoaded}
+              keyDisplay={viewPrefs.keyDisplay} keySort={viewPrefs.keySort} />
           ) : filterBar}
         />
         )

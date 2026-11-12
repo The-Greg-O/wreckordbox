@@ -186,3 +186,16 @@
 .swatch[data-colour="Aqua"] { background: var(--c-comment-aqua); }
 .swatch[data-colour="Blue"] { background: var(--c-comment-blue); }
 .swatch[data-colour="Purple"] { background: var(--c-comment-purple); }
+.swatch[data-colour="none"] { background: transparent; outline: var(--s-shell-border) solid var(--c-text-dim); outline-offset: -1px; }
+
+/* What the bar left out or deselected, said in words. */
+.note {
+  margin: 0;
+  padding: 0 var(--s-shell-space-4) var(--s-shell-space-2);
+  color: var(--c-text-dim);
+}
+
+.control[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+}

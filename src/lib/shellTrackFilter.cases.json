@@ -1,43 +1,726 @@
 {
-  "about": "Track Filter bar filters and what the window and the service are sent for each. src/lib/shellTrackFilter.test.ts checks the model produces exactly these; src-tauri/tests/track_filter_agrees.rs checks both narrow a fixture Library to the same tracks. categories: the Library's MyTag categories in the window's order. inPlaylist: open the test's playlist instead of All Tracks.",
-  "categories": ["Situation"],
-  "cases": [
-    {
-      "name": "the design's example: two Situation tags, Energy 3 to 5",
-      "filter": { "text": "", "myTags": [{ "category": "Situation", "tags": ["Tension builder", "Peak time"], "any": false }], "energy": { "min": 3, "max": 5 }, "prepColours": [], "bpm": null, "keys": [] },
-      "window": { "query": "", "filter": { "ratings": [3, 4, 5], "tags": [{ "category": 0, "any": false, "tags": ["Tension builder", "Peak time"] }] } },
-      "service": { "energy": "3..5", "my_tag_picks": [{ "category": "Situation", "tags": ["Tension builder", "Peak time"], "any": false }] }
-    },
-    {
-      "name": "two keys and two Prep colours",
-      "filter": { "text": "", "myTags": [], "energy": null, "prepColours": ["Green", "Red"], "bpm": null, "keys": ["8A", "11B"] },
-      "window": { "query": "", "filter": { "keys": ["8A", "11B"], "colors": ["Green", "Red"] } },
-      "service": { "keys": ["8A", "11B"], "prep_colours": ["Green", "Red"] }
-    },
-    {
-      "name": "a closed BPM range and text",
-      "filter": { "text": "track 01", "myTags": [], "energy": null, "prepColours": [], "bpm": { "min": 121, "max": 123 }, "keys": [] },
-      "window": { "query": "track 01", "filter": { "bpm": { "values": [121, 122, 123], "tolerancePct": 0, "masterBpmX100": null } } },
-      "service": { "search": "track 01", "bpm": "120.50..123.49" }
-    },
-    {
-      "name": "tags in any, a BPM range open above, one Energy",
-      "filter": { "text": "", "myTags": [{ "category": "Situation", "tags": ["Peak time", "Warm-up"], "any": true }], "energy": { "min": 2, "max": 2 }, "prepColours": [], "bpm": { "min": 124, "max": null }, "keys": [] },
-      "window": { "query": "", "filter": { "bpm": { "values": "124..999", "tolerancePct": 0, "masterBpmX100": null }, "ratings": [2], "tags": [{ "category": 0, "any": true, "tags": ["Peak time", "Warm-up"] }] } },
-      "service": { "energy": "2..2", "bpm": "123.50..999.49", "my_tag_picks": [{ "category": "Situation", "tags": ["Peak time", "Warm-up"], "any": true }] }
-    },
-    {
-      "name": "a BPM range open below, on a half-BPM boundary",
-      "filter": { "text": "", "myTags": [], "energy": null, "prepColours": [], "bpm": { "min": null, "max": 122 }, "keys": [] },
-      "window": { "query": "", "filter": { "bpm": { "values": "1..122", "tolerancePct": 0, "masterBpmX100": null } } },
-      "service": { "bpm": "0.50..122.49" }
-    },
-    {
-      "name": "within a playlist: a key and a tag",
-      "inPlaylist": true,
-      "filter": { "text": "", "myTags": [{ "category": "Situation", "tags": ["Peak time"], "any": false }], "energy": null, "prepColours": [], "bpm": null, "keys": ["8A"] },
-      "window": { "query": "", "filter": { "keys": ["8A"], "tags": [{ "category": 0, "any": false, "tags": ["Peak time"] }] } },
-      "service": { "keys": ["8A"], "my_tag_picks": [{ "category": "Situation", "tags": ["Peak time"], "any": false }] }
+ "about": "Track Filter bar filters and what the window and the service are sent for each. src/lib/shellTrackFilter.test.ts checks the model produces exactly these forms; src-tauri/tests/track_filter_agrees.rs runs both forms against one fixture Library and checks they list exactly 'expected' (worked out from the fixture's definition, not from either implementation). categories: the Library's MyTag categories in the window's order. loaded: the track Key match and BPM ±6% follow. inPlaylist / inIntelligent: open the test's playlist or intelligent playlist instead of All Tracks. A case with no 'expected' (text) is checked for agreement only.",
+ "categories": [
+  "Situation",
+  "Mood"
+ ],
+ "cases": [
+  {
+   "name": "the design's example: two Situation tags, Energy 3 to 5",
+   "filter": {
+    "myTags": [
+     {
+      "category": "Situation",
+      "tags": [
+       "Tension builder",
+       "Peak time"
+      ]
+     }
+    ],
+    "energy": {
+     "min": 3,
+     "max": 5
     }
-  ]
+   },
+   "expected": [
+    10006,
+    10018
+   ],
+   "window": {
+    "query": "",
+    "filter": {
+     "ratings": [
+      3,
+      4,
+      5
+     ],
+     "tags": [
+      {
+       "category": 0,
+       "any": false,
+       "tags": [
+        "Tension builder",
+        "Peak time"
+       ]
+      }
+     ]
+    }
+   },
+   "service": {
+    "energies": [
+     "3..5"
+    ],
+    "my_tag_picks": [
+     {
+      "category": "Situation",
+      "tags": [
+       "Tension builder",
+       "Peak time"
+      ],
+      "any": false
+     }
+    ]
+   }
+  },
+  {
+   "name": "two keys by identity and two Prep colours",
+   "filter": {
+    "keys": [
+     "8A",
+     "11B"
+    ],
+    "prepColours": [
+     "Green",
+     "Red"
+    ]
+   },
+   "expected": [
+    10002,
+    10005,
+    10014,
+    10020,
+    10023
+   ],
+   "window": {
+    "query": "",
+    "filter": {
+     "keyIdentities": [
+      "8A",
+      "11B"
+     ],
+     "colors": [
+      "Green",
+      "Red"
+     ]
+    }
+   },
+   "service": {
+    "keys": [
+     "8A",
+     "11B"
+    ],
+    "prep_colours": [
+     "Green",
+     "Red"
+    ]
+   }
+  },
+  {
+   "name": "Energy 1 to 5 is every track that has one",
+   "filter": {
+    "energy": {
+     "min": 1,
+     "max": 5
+    },
+    "prepColours": [
+     "Green"
+    ]
+   },
+   "expected": [
+    10005,
+    10014,
+    10023
+   ],
+   "window": {
+    "query": "",
+    "filter": {
+     "ratings": [
+      1,
+      2,
+      3,
+      4,
+      5
+     ],
+     "colors": [
+      "Green"
+     ]
+    }
+   },
+   "service": {
+    "prep_colours": [
+     "Green"
+    ],
+    "energies": [
+     "1..5"
+    ]
+   }
+  },
+  {
+   "name": "unrated and no Prep colour, each a choice of its own",
+   "filter": {
+    "unrated": true,
+    "prepColours": [
+     "none"
+    ]
+   },
+   "expected": [
+    10000
+   ],
+   "window": {
+    "query": "",
+    "filter": {
+     "ratings": [
+      0
+     ],
+     "colors": [
+      "none"
+     ]
+    }
+   },
+   "service": {
+    "prep_colours": [
+     "none"
+    ],
+    "energies": [
+     "0"
+    ]
+   }
+  },
+  {
+   "name": "unrated together with Energy 5",
+   "filter": {
+    "unrated": true,
+    "energy": {
+     "min": 5,
+     "max": 5
+    },
+    "keys": [
+     "9A"
+    ]
+   },
+   "expected": [
+    10001,
+    10011
+   ],
+   "window": {
+    "query": "",
+    "filter": {
+     "keyIdentities": [
+      "9A"
+     ],
+     "ratings": [
+      0,
+      5
+     ]
+    }
+   },
+   "service": {
+    "keys": [
+     "9A"
+    ],
+    "energies": [
+     "5",
+     "0"
+    ]
+   }
+  },
+  {
+   "name": "a key off the wheel exactly, and every spelling of 8A",
+   "filter": {
+    "keys": [
+     "Mystery",
+     "8A"
+    ],
+    "energy": {
+     "min": 2,
+     "max": 3
+    }
+   },
+   "expected": [
+    10004,
+    10005,
+    10018,
+    10019,
+    10028,
+    10029
+   ],
+   "window": {
+    "query": "",
+    "filter": {
+     "keyIdentities": [
+      "Mystery",
+      "8A"
+     ],
+     "ratings": [
+      2,
+      3
+     ]
+    }
+   },
+   "service": {
+    "keys": [
+     "Mystery",
+     "8A"
+    ],
+    "energies": [
+     "2..3"
+    ]
+   }
+  },
+  {
+   "name": "BPM edges: whole 121 to 122 is 120.50 to 122.49",
+   "filter": {
+    "bpm": {
+     "min": 121,
+     "max": 122
+    }
+   },
+   "expected": [
+    10002,
+    10003,
+    10004,
+    10005,
+    10006,
+    10007,
+    10008,
+    10009
+   ],
+   "window": {
+    "query": "",
+    "filter": {
+     "bpm": {
+      "values": [],
+      "tolerancePct": 0,
+      "masterBpmX100": null,
+      "rangesX100": [
+       [
+        12050,
+        12249
+       ]
+      ]
+     }
+    }
+   },
+   "service": {
+    "bpm_ranges": [
+     "120.50..122.49"
+    ]
+   }
+  },
+  {
+   "name": "BPM open below, up to 120 (up to 120.49)",
+   "filter": {
+    "bpm": {
+     "min": null,
+     "max": 120
+    }
+   },
+   "expected": [
+    10000,
+    10001
+   ],
+   "window": {
+    "query": "",
+    "filter": {
+     "bpm": {
+      "values": [],
+      "tolerancePct": 0,
+      "masterBpmX100": null,
+      "rangesX100": [
+       [
+        50,
+        12049
+       ]
+      ]
+     }
+    }
+   },
+   "service": {
+    "bpm_ranges": [
+     "0.50..120.49"
+    ]
+   }
+  },
+  {
+   "name": "Any within one category, All across two",
+   "filter": {
+    "myTags": [
+     {
+      "category": "Situation",
+      "tags": [
+       "Warm-up",
+       "Tension builder"
+      ]
+     },
+     {
+      "category": "Mood",
+      "tags": [
+       "Dark"
+      ]
+     }
+    ],
+    "anyCategories": [
+     "Situation"
+    ]
+   },
+   "expected": [
+    10000,
+    10012,
+    10020,
+    10024
+   ],
+   "window": {
+    "query": "",
+    "filter": {
+     "tags": [
+      {
+       "category": 0,
+       "any": true,
+       "tags": [
+        "Warm-up",
+        "Tension builder"
+       ]
+      },
+      {
+       "category": 1,
+       "any": false,
+       "tags": [
+        "Dark"
+       ]
+      }
+     ]
+    }
+   },
+   "service": {
+    "my_tag_picks": [
+     {
+      "category": "Situation",
+      "tags": [
+       "Warm-up",
+       "Tension builder"
+      ],
+      "any": true
+     },
+     {
+      "category": "Mood",
+      "tags": [
+       "Dark"
+      ],
+      "any": false
+     }
+    ]
+   }
+  },
+  {
+   "name": "All within both categories",
+   "filter": {
+    "myTags": [
+     {
+      "category": "Situation",
+      "tags": [
+       "Peak time",
+       "Tension builder"
+      ]
+     },
+     {
+      "category": "Mood",
+      "tags": [
+       "Dark",
+       "Dreamy"
+      ]
+     }
+    ]
+   },
+   "expected": [
+    10000
+   ],
+   "window": {
+    "query": "",
+    "filter": {
+     "tags": [
+      {
+       "category": 0,
+       "any": false,
+       "tags": [
+        "Peak time",
+        "Tension builder"
+       ]
+      },
+      {
+       "category": 1,
+       "any": false,
+       "tags": [
+        "Dark",
+        "Dreamy"
+       ]
+      }
+     ]
+    }
+   },
+   "service": {
+    "my_tag_picks": [
+     {
+      "category": "Situation",
+      "tags": [
+       "Peak time",
+       "Tension builder"
+      ],
+      "any": false
+     },
+     {
+      "category": "Mood",
+      "tags": [
+       "Dark",
+       "Dreamy"
+      ],
+      "any": false
+     }
+    ]
+   }
+  },
+  {
+   "name": "Key match and BPM ±6% against a loaded 9A at 123.00",
+   "loaded": {
+    "key": "Em",
+    "bpmX100": 12300
+   },
+   "filter": {
+    "keyMatch": true,
+    "bpmMatch": true
+   },
+   "expected": [
+    10000,
+    10001,
+    10003,
+    10004,
+    10005,
+    10006,
+    10008,
+    10009,
+    10010,
+    10011,
+    10013,
+    10014,
+    10015,
+    10016,
+    10018,
+    10019,
+    10020,
+    10021,
+    10023,
+    10024,
+    10025,
+    10026,
+    10028
+   ],
+   "window": {
+    "query": "",
+    "filter": {
+     "bpm": {
+      "values": [],
+      "tolerancePct": 0,
+      "masterBpmX100": null,
+      "rangesX100": [
+       [
+        11562,
+        13038
+       ]
+      ]
+     },
+     "keyIdentities": [
+      "8A",
+      "9A",
+      "9B",
+      "10A",
+      "11A"
+     ]
+    }
+   },
+   "service": {
+    "keys": [
+     "8A",
+     "9A",
+     "9B",
+     "10A",
+     "11A"
+    ],
+    "bpm_ranges": [
+     "115.62..130.38"
+    ]
+   }
+  },
+  {
+   "name": "Key match with keys picked: both must hold",
+   "loaded": {
+    "key": "9A",
+    "bpmX100": 12300
+   },
+   "filter": {
+    "keyMatch": true,
+    "keys": [
+     "8A",
+     "3A"
+    ]
+   },
+   "expected": [
+    10000,
+    10003,
+    10004,
+    10005,
+    10008,
+    10009,
+    10010,
+    10013,
+    10014,
+    10015,
+    10018,
+    10019,
+    10020,
+    10023,
+    10024,
+    10025,
+    10028
+   ],
+   "window": {
+    "query": "",
+    "filter": {
+     "keyIdentities": [
+      "8A"
+     ]
+    }
+   },
+   "service": {
+    "keys": [
+     "8A"
+    ]
+   }
+  },
+  {
+   "name": "within a playlist: a key and a tag",
+   "inPlaylist": true,
+   "filter": {
+    "keys": [
+     "8A"
+    ],
+    "myTags": [
+     {
+      "category": "Situation",
+      "tags": [
+       "Peak time"
+      ]
+     }
+    ]
+   },
+   "expected": [
+    10004,
+    10008,
+    10010,
+    10014,
+    10018,
+    10020
+   ],
+   "window": {
+    "query": "",
+    "filter": {
+     "keyIdentities": [
+      "8A"
+     ],
+     "tags": [
+      {
+       "category": 0,
+       "any": false,
+       "tags": [
+        "Peak time"
+       ]
+      }
+     ]
+    }
+   },
+   "service": {
+    "keys": [
+     "8A"
+    ],
+    "my_tag_picks": [
+     {
+      "category": "Situation",
+      "tags": [
+       "Peak time"
+      ],
+      "any": false
+     }
+    ]
+   }
+  },
+  {
+   "name": "within an intelligent playlist: Energy and a BPM range",
+   "inIntelligent": true,
+   "filter": {
+    "energy": {
+     "min": 1,
+     "max": 4
+    },
+    "bpm": {
+     "min": 122,
+     "max": 126
+    }
+   },
+   "expected": [
+    10007,
+    10016,
+    10019
+   ],
+   "window": {
+    "query": "",
+    "filter": {
+     "bpm": {
+      "values": [],
+      "tolerancePct": 0,
+      "masterBpmX100": null,
+      "rangesX100": [
+       [
+        12150,
+        12649
+       ]
+      ]
+     },
+     "ratings": [
+      1,
+      2,
+      3,
+      4
+     ]
+    }
+   },
+   "service": {
+    "energies": [
+     "1..4"
+    ],
+    "bpm_ranges": [
+     "121.50..126.49"
+    ]
+   }
+  },
+  {
+   "name": "text with fields",
+   "filter": {
+    "text": "track 01",
+    "bpm": {
+     "min": 121,
+     "max": 124
+    }
+   },
+   "window": {
+    "query": "track 01",
+    "filter": {
+     "bpm": {
+      "values": [],
+      "tolerancePct": 0,
+      "masterBpmX100": null,
+      "rangesX100": [
+       [
+        12050,
+        12449
+       ]
+      ]
+     }
+    }
+   },
+   "service": {
+    "search": "track 01",
+    "bpm_ranges": [
+     "120.50..124.49"
+    ]
+   }
+  }
+ ]
 }

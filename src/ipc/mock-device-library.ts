@@ -36,6 +36,8 @@ interface MockTrack {
    */
   masterContentId: string | null;
   path?: string;
+  /** Stars as the Stick holds them (the Track Filter bar's Stick test, wbx-57). */
+  rating?: number;
 }
 
 /**
@@ -44,9 +46,9 @@ interface MockTrack {
  */
 const TRACKS: readonly MockTrack[] = [
   { id: 1, title: "B2ME (feat. JordinLaine) (Original Mix)", artist: "atDusk", bpmX100: 12_800, key: "Bbm", durationSec: 390, masterContentId: "100000" },
-  { id: 2, title: "Spectrum (Extended Mix)", artist: "Arty", bpmX100: 13_200, key: "Fm", durationSec: 402, masterContentId: "100001" },
+  { id: 2, title: "Spectrum (Extended Mix)", artist: "Arty", bpmX100: 13_200, key: "Fm", durationSec: 402, masterContentId: "100001", rating: 5 },
   { id: 3, title: "Lost Without You", artist: "Ferry Corsten", bpmX100: 13_800, key: "Am", durationSec: 365, masterContentId: "100002" },
-  { id: 4, title: "Gravity", artist: "Gareth Emery", bpmX100: 13_000, key: "Gm", durationSec: 344, masterContentId: "100003" },
+  { id: 4, title: "Gravity", artist: "Gareth Emery", bpmX100: 13_000, key: "Gm", durationSec: 344, masterContentId: "100003", rating: 3 },
   { id: 5, title: "Mirage", artist: "Tinlicker", bpmX100: 12_300, key: "Dm", durationSec: 421, masterContentId: null },
   { id: 6, title: "Cold Blooded", artist: "Ilan Bluestone", bpmX100: 12_600, key: "Ebm", durationSec: 377, masterContentId: "100005" },
 ];
@@ -119,7 +121,7 @@ function trackRow(path: string, track: MockTrack, position: number): RowDto {
     bpmX100: track.bpmX100,
     key: track.key,
     durationSec: track.durationSec,
-    rating: 0,
+    rating: track.rating ?? 0,
     analysed: 0,
     dateAdded: "2026-10-08",
     releaseDate: "",
