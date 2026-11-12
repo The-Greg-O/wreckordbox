@@ -192,21 +192,26 @@ pub(crate) fn parent(library: &OpenLibrary, id: &str) -> Result<ParentAudio, Ser
             format!("there is no track {id} in the Library"),
         ));
     };
+    Ok(audio_at(&index, row))
+}
+
+/// A track of the index by its row, as [`parent`] finds it.
+pub(crate) fn audio_at(index: &Arc<rbl_index::Library>, row: rbl_index::Row) -> ParentAudio {
     let at = row as usize;
-    Ok(ParentAudio {
+    ParentAudio {
         identity: wreckordbox_sidecar::attachments::IdentifyingFields {
             title: index.title.get(at).to_owned(),
             artist: index.artist_name(row).to_owned(),
             mix_name: index.mix_name(row).to_owned(),
             duration: index.length_sec.get(at).copied().unwrap_or(0),
         },
-        index: Arc::clone(&index),
+        index: Arc::clone(index),
         parent: Parent {
             id: index.ids.get(at).copied().unwrap_or(0).to_string(),
             title: index.title.get(at).to_owned(),
         },
         path: PathBuf::from(index.folder_path.get(at)),
-    })
+    }
 }
 
 /// Answers one of this module's commands. `lookup` finds a track in the
@@ -242,6 +247,9 @@ pub(crate) struct Stems {
     running: Mutex<Option<Arc<Job>>>,
     /// Where events go to reach clients and the host.
     events: Mutex<Sender<Event>>,
+    /// The Intensity measuring on this Sidecar, and whether the service has
+    /// closed it.
+    pub(crate) intensity: crate::intensity::Lifecycle,
 }
 
 struct Job {
@@ -273,6 +281,7 @@ impl Stems {
             sidecar: Mutex::new(None),
             running: Mutex::new(None),
             events: Mutex::new(events),
+            intensity: crate::intensity::Lifecycle::default(),
         })
     }
 
