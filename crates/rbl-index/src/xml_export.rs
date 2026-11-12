@@ -17,8 +17,9 @@ use crate::{Cue, Library, Row, TrackSource};
 
 /// rekordbox's `Colour` values for `ColorID` 1 to 8, in the palette's own
 /// order (see `COLOR_NAMES`) [DOC: pyrekordbox's account of the format].
-const COLOURS: [&str; 8] =
-    ["0xFF007F", "0xFF0000", "0xFFA500", "0xFFFF00", "0x00FF00", "0x25FDE9", "0x0000FF", "0x660099"];
+const COLOURS: [&str; 8] = [
+    "0xFF007F", "0xFF0000", "0xFFA500", "0xFFFF00", "0x00FF00", "0x25FDE9", "0x0000FF", "0x660099",
+];
 
 /// The whole library as a document.
 #[must_use]
@@ -80,13 +81,18 @@ fn push_track(out: &mut String, lib: &Library, row: Row) {
 fn push_cue(out: &mut String, cue: &Cue) {
     // `Num` -1 is a memory cue; a hot cue is its slot from 0. `Type` 0 is a
     // cue and 4 a loop, which also carries its `End`.
-    let num = cue.hot_letter().map_or(-1, |letter| i32::from(letter as u8) - i32::from(b'A'));
+    let num = cue
+        .hot_letter()
+        .map_or(-1, |letter| i32::from(letter as u8) - i32::from(b'A'));
     let start = f64::from(cue.position_ms) / 1000.0;
     if cue.out_ms > cue.position_ms {
         let end = f64::from(cue.out_ms) / 1000.0;
         let _ = writeln!(out, "      <POSITION_MARK Name=\"\" Type=\"4\" Start=\"{start:.3}\" End=\"{end:.3}\" Num=\"{num}\"/>");
     } else {
-        let _ = writeln!(out, "      <POSITION_MARK Name=\"\" Type=\"0\" Start=\"{start:.3}\" Num=\"{num}\"/>");
+        let _ = writeln!(
+            out,
+            "      <POSITION_MARK Name=\"\" Type=\"0\" Start=\"{start:.3}\" Num=\"{num}\"/>"
+        );
     }
 }
 
@@ -106,7 +112,11 @@ fn push_tree(out: &mut String, lib: &Library) {
             _ => roots.push(index),
         }
     }
-    let _ = writeln!(out, "    <NODE Type=\"0\" Name=\"ROOT\" Count=\"{}\">", roots.len());
+    let _ = writeln!(
+        out,
+        "    <NODE Type=\"0\" Name=\"ROOT\" Count=\"{}\">",
+        roots.len()
+    );
     // Iterative with a visited set, as the tree command walks it: a corrupt
     // parent cycle must not recurse for ever.
     let mut visited = vec![false; playlists.len()];
@@ -126,7 +136,11 @@ fn push_tree(out: &mut String, lib: &Library) {
         let name = escape(playlists.name(index));
         if playlists.is_folder(index) {
             let below = children.get(index).cloned().unwrap_or_default();
-            let _ = writeln!(out, "{indent}<NODE Name=\"{name}\" Type=\"0\" Count=\"{}\">", below.len());
+            let _ = writeln!(
+                out,
+                "{indent}<NODE Name=\"{name}\" Type=\"0\" Count=\"{}\">",
+                below.len()
+            );
             stack.push((index, depth, true));
             for &child in below.iter().rev() {
                 stack.push((child, depth + 1, false));
@@ -139,9 +153,17 @@ fn push_tree(out: &mut String, lib: &Library) {
             };
             // Read after the guard: `source_rows` takes the playlists lock.
             let rows = lib.source_rows_unlocked(&playlists, &source);
-            let _ = writeln!(out, "{indent}<NODE Name=\"{name}\" Type=\"1\" KeyType=\"0\" Entries=\"{}\">", rows.len());
+            let _ = writeln!(
+                out,
+                "{indent}<NODE Name=\"{name}\" Type=\"1\" KeyType=\"0\" Entries=\"{}\">",
+                rows.len()
+            );
             for row in rows {
-                let _ = writeln!(out, "{indent}  <TRACK Key=\"{}\"/>", lib.ids.get(row as usize).copied().unwrap_or(0));
+                let _ = writeln!(
+                    out,
+                    "{indent}  <TRACK Key=\"{}\"/>",
+                    lib.ids.get(row as usize).copied().unwrap_or(0)
+                );
             }
             let _ = writeln!(out, "{indent}</NODE>");
         }
@@ -160,7 +182,9 @@ fn location(path: &str) -> String {
     }
     for byte in path.bytes() {
         match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => out.push(char::from(byte)),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                out.push(char::from(byte))
+            }
             _ => {
                 let _ = write!(out, "%{byte:02X}");
             }
@@ -176,8 +200,17 @@ mod tests {
 
     #[test]
     fn a_location_is_a_file_url_with_the_path_percent_encoded() {
-        assert_eq!(location("/Users/me/Music/All U Need.mp3"), "file://localhost/Users/me/Music/All%20U%20Need.mp3");
-        assert_eq!(location("C:\\Music\\x&y.mp3"), "file://localhost/C%3A/Music/x%26y.mp3");
-        assert_eq!(location("/Müsic/♪.mp3"), "file://localhost/M%C3%BCsic/%E2%99%AA.mp3");
+        assert_eq!(
+            location("/Users/me/Music/All U Need.mp3"),
+            "file://localhost/Users/me/Music/All%20U%20Need.mp3"
+        );
+        assert_eq!(
+            location("C:\\Music\\x&y.mp3"),
+            "file://localhost/C%3A/Music/x%26y.mp3"
+        );
+        assert_eq!(
+            location("/Müsic/♪.mp3"),
+            "file://localhost/M%C3%BCsic/%E2%99%AA.mp3"
+        );
     }
 }

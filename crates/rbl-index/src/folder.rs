@@ -78,22 +78,28 @@ impl LooseFile {
     /// read alone, and a window of rows pays for its own files when it is
     /// fetched.
     pub fn tags(&self) -> &LooseTags {
-        self.tags.get_or_init(|| match rbl_db::import::read_tags(&self.path) {
-            Ok(read) => LooseTags {
-                title: read.title,
-                artist: read.artist,
-                album: read.album,
-                genre: read.genre,
-                duration_sec: read.duration_sec,
-            },
-            // Unreadable, or not really audio: the name is what there is.
-            Err(_) => LooseTags { title: stem_of(&self.path), ..LooseTags::default() },
-        })
+        self.tags
+            .get_or_init(|| match rbl_db::import::read_tags(&self.path) {
+                Ok(read) => LooseTags {
+                    title: read.title,
+                    artist: read.artist,
+                    album: read.album,
+                    genre: read.genre,
+                    duration_sec: read.duration_sec,
+                },
+                // Unreadable, or not really audio: the name is what there is.
+                Err(_) => LooseTags {
+                    title: stem_of(&self.path),
+                    ..LooseTags::default()
+                },
+            })
     }
 }
 
 fn stem_of(path: &Path) -> String {
-    path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
+    path.file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 /// One row of a folder view.
@@ -146,7 +152,9 @@ impl FolderView {
             .window(offset, len)
             .iter()
             .filter_map(|entry| match *entry {
-                FolderEntry::File(index) => self.files.get(index).filter(|f| f.tags.get().is_none()),
+                FolderEntry::File(index) => {
+                    self.files.get(index).filter(|f| f.tags.get().is_none())
+                }
                 FolderEntry::Track(_) => None,
             })
             .collect();
@@ -238,14 +246,26 @@ impl Library {
         self.open_folder_scoped(files, spec, crate::SearchField::All)
     }
 
-    pub fn open_folder_scoped(&self, files: Vec<(String, PathBuf)>, spec: &ViewSpec, field: crate::SearchField) -> FolderView {
-        let mut view = FolderView { entries: Vec::with_capacity(files.len()), ..FolderView::default() };
+    pub fn open_folder_scoped(
+        &self,
+        files: Vec<(String, PathBuf)>,
+        spec: &ViewSpec,
+        field: crate::SearchField,
+    ) -> FolderView {
+        let mut view = FolderView {
+            entries: Vec::with_capacity(files.len()),
+            ..FolderView::default()
+        };
         for (name, path) in files {
             if let Some(row) = self.row_for_path(&path) {
                 view.entries.push(FolderEntry::Track(row));
             } else {
                 view.entries.push(FolderEntry::File(view.files.len()));
-                view.files.push(LooseFile { name, path, tags: OnceLock::new() });
+                view.files.push(LooseFile {
+                    name,
+                    path,
+                    tags: OnceLock::new(),
+                });
             }
         }
 
@@ -254,19 +274,17 @@ impl Library {
             let files = &view.files;
             view.entries.retain(|entry| match *entry {
                 FolderEntry::Track(row) => self.row_matches_in(row, &query, field),
-                FolderEntry::File(index) => {
-                    files.get(index).is_some_and(|file| {
-                        use crate::SearchField;
-                        let value = match field {
-                            SearchField::All | SearchField::Title => &file.name,
-                            SearchField::Artist => &file.tags().artist,
-                            SearchField::Album => &file.tags().album,
-                            SearchField::Genre => &file.tags().genre,
-                            _ => "",
-                        };
-                        matches_name(&fold(value), &query)
-                    })
-                }
+                FolderEntry::File(index) => files.get(index).is_some_and(|file| {
+                    use crate::SearchField;
+                    let value = match field {
+                        SearchField::All | SearchField::Title => &file.name,
+                        SearchField::Artist => &file.tags().artist,
+                        SearchField::Album => &file.tags().album,
+                        SearchField::Genre => &file.tags().genre,
+                        _ => "",
+                    };
+                    matches_name(&fold(value), &query)
+                }),
             });
         }
 
@@ -274,9 +292,19 @@ impl Library {
         // cheap; the library's rank arrays cannot place a loose file anyway.
         match spec.sort {
             SortColumn::TrackNo => {}
-            SortColumn::Bpm | SortColumn::Duration | SortColumn::Rating | SortColumn::PlayCount | SortColumn::Size
-            | SortColumn::Year | SortColumn::SampleRate | SortColumn::Bitrate | SortColumn::Color
-            | SortColumn::DiscNo | SortColumn::TrackNumber | SortColumn::FileType | SortColumn::BitDepth
+            SortColumn::Bpm
+            | SortColumn::Duration
+            | SortColumn::Rating
+            | SortColumn::PlayCount
+            | SortColumn::Size
+            | SortColumn::Year
+            | SortColumn::SampleRate
+            | SortColumn::Bitrate
+            | SortColumn::Color
+            | SortColumn::DiscNo
+            | SortColumn::TrackNumber
+            | SortColumn::FileType
+            | SortColumn::BitDepth
             | SortColumn::PublishTrackInfo => {
                 let key = |entry: &FolderEntry| match *entry {
                     FolderEntry::Track(row) => self.sort_number(row, spec.sort),
@@ -300,7 +328,8 @@ impl Library {
                     FolderEntry::Track(row) => self.key_name(row),
                     FolderEntry::File(_) => "",
                 };
-                view.entries.sort_by(|a, b| crate::key::cmp_names(name(a), name(b)));
+                view.entries
+                    .sort_by(|a, b| crate::key::cmp_names(name(a), name(b)));
             }
             // Only this folder's files are read, not the whole library's.
             SortColumn::FileCreated => {
@@ -311,7 +340,9 @@ impl Library {
                     .map(|&entry| {
                         let created = match entry {
                             FolderEntry::Track(row) => self.file_created(row),
-                            FolderEntry::File(index) => files.get(index).and_then(|f| crate::file_time::created_secs(&f.path)),
+                            FolderEntry::File(index) => files
+                                .get(index)
+                                .and_then(|f| crate::file_time::created_secs(&f.path)),
                         };
                         (created, entry)
                     })
@@ -325,8 +356,12 @@ impl Library {
                     match *entry {
                         FolderEntry::Track(row) => self.folded_text(row, column),
                         FolderEntry::File(index) => match column {
-                            SortColumn::Title | SortColumn::FileName => files.get(index).map_or("", |f| f.name.as_str()),
-                            SortColumn::Location => files.get(index).and_then(|f| f.path.to_str()).unwrap_or(""),
+                            SortColumn::Title | SortColumn::FileName => {
+                                files.get(index).map_or("", |f| f.name.as_str())
+                            }
+                            SortColumn::Location => {
+                                files.get(index).and_then(|f| f.path.to_str()).unwrap_or("")
+                            }
                             _ => "",
                         },
                     }
@@ -335,7 +370,9 @@ impl Library {
                 // orders the way the collection does.
                 let folded = |text: &str| match column {
                     SortColumn::FileName | SortColumn::Location => crate::strings::fold_smart(text),
-                    SortColumn::DateAdded | SortColumn::ReleaseDate | SortColumn::DateCreated => text.to_owned(),
+                    SortColumn::DateAdded | SortColumn::ReleaseDate | SortColumn::DateCreated => {
+                        text.to_owned()
+                    }
                     _ => fold(text),
                 };
                 let mut keyed: Vec<(String, FolderEntry)> = view
@@ -371,7 +408,9 @@ impl Library {
 
 /// Every token of the query somewhere in the name, as the library search does.
 fn matches_name(folded_name: &str, folded_query: &str) -> bool {
-    folded_query.split_whitespace().all(|token| folded_name.contains(token))
+    folded_query
+        .split_whitespace()
+        .all(|token| folded_name.contains(token))
 }
 
 #[cfg(test)]
@@ -382,9 +421,30 @@ mod tests {
 
     fn library() -> Library {
         library_from(&[
-            TestTrack { id: 1, title: "Zebra", artist: "ARTBAT", bpm_x100: 12800, path: "/music/zebra.mp3", ..TestTrack::default() },
-            TestTrack { id: 2, title: "Apple", artist: "Meduza", bpm_x100: 13000, path: "/music/Café Del Mar.mp3", ..TestTrack::default() },
-            TestTrack { id: 3, title: "Mango", artist: "Tujamo", bpm_x100: 12400, path: "/elsewhere/mango.mp3", ..TestTrack::default() },
+            TestTrack {
+                id: 1,
+                title: "Zebra",
+                artist: "ARTBAT",
+                bpm_x100: 12800,
+                path: "/music/zebra.mp3",
+                ..TestTrack::default()
+            },
+            TestTrack {
+                id: 2,
+                title: "Apple",
+                artist: "Meduza",
+                bpm_x100: 13000,
+                path: "/music/Café Del Mar.mp3",
+                ..TestTrack::default()
+            },
+            TestTrack {
+                id: 3,
+                title: "Mango",
+                artist: "Tujamo",
+                bpm_x100: 12400,
+                path: "/elsewhere/mango.mp3",
+                ..TestTrack::default()
+            },
         ])
     }
 
@@ -399,7 +459,10 @@ mod tests {
     }
 
     fn listed(names: &[&str]) -> Vec<(String, PathBuf)> {
-        names.iter().map(|n| ((*n).to_owned(), PathBuf::from(format!("/music/{n}")))).collect()
+        names
+            .iter()
+            .map(|n| ((*n).to_owned(), PathBuf::from(format!("/music/{n}"))))
+            .collect()
     }
 
     #[test]
@@ -417,14 +480,27 @@ mod tests {
         // Case: both file systems ignore it.
         assert_eq!(lib.row_for_path(Path::new("/music/ZEBRA.MP3")), Some(0));
         // A decomposed `é` from an HFS+ card against the composed one stored.
-        assert_eq!(lib.row_for_path(Path::new("/music/Cafe\u{301} Del Mar.mp3")), Some(1));
+        assert_eq!(
+            lib.row_for_path(Path::new("/music/Cafe\u{301} Del Mar.mp3")),
+            Some(1)
+        );
     }
 
     #[test]
     fn a_folder_lists_library_rows_and_loose_files_in_listing_order() {
         let lib = library();
-        let view = lib.open_folder(listed(&["a.mp3", "Café Del Mar.mp3", "zebra.mp3"]), &spec(SortColumn::TrackNo, false, ""));
-        assert_eq!(view.entries, [FolderEntry::File(0), FolderEntry::Track(1), FolderEntry::Track(0)]);
+        let view = lib.open_folder(
+            listed(&["a.mp3", "Café Del Mar.mp3", "zebra.mp3"]),
+            &spec(SortColumn::TrackNo, false, ""),
+        );
+        assert_eq!(
+            view.entries,
+            [
+                FolderEntry::File(0),
+                FolderEntry::Track(1),
+                FolderEntry::Track(0)
+            ]
+        );
         assert_eq!(view.file(0).unwrap().name, "a.mp3");
         assert_eq!(view.window(1, 10), &view.entries[1..]);
         assert_eq!(view.window(5, 10), &[]);
@@ -433,35 +509,100 @@ mod tests {
     #[test]
     fn sorting_by_title_uses_a_loose_files_name() {
         let lib = library();
-        let view = lib.open_folder(listed(&["zzz.mp3", "Café Del Mar.mp3", "bbb.mp3", "zebra.mp3"]), &spec(SortColumn::Title, false, ""));
+        let view = lib.open_folder(
+            listed(&["zzz.mp3", "Café Del Mar.mp3", "bbb.mp3", "zebra.mp3"]),
+            &spec(SortColumn::Title, false, ""),
+        );
         // Apple (track 2), bbb, Zebra (track 1), zzz.
-        assert_eq!(view.entries, [FolderEntry::Track(1), FolderEntry::File(1), FolderEntry::Track(0), FolderEntry::File(0)]);
-        let down = lib.open_folder(listed(&["zzz.mp3", "Café Del Mar.mp3", "bbb.mp3", "zebra.mp3"]), &spec(SortColumn::Title, true, ""));
-        assert_eq!(down.entries, [FolderEntry::File(0), FolderEntry::Track(0), FolderEntry::File(1), FolderEntry::Track(1)]);
+        assert_eq!(
+            view.entries,
+            [
+                FolderEntry::Track(1),
+                FolderEntry::File(1),
+                FolderEntry::Track(0),
+                FolderEntry::File(0)
+            ]
+        );
+        let down = lib.open_folder(
+            listed(&["zzz.mp3", "Café Del Mar.mp3", "bbb.mp3", "zebra.mp3"]),
+            &spec(SortColumn::Title, true, ""),
+        );
+        assert_eq!(
+            down.entries,
+            [
+                FolderEntry::File(0),
+                FolderEntry::Track(0),
+                FolderEntry::File(1),
+                FolderEntry::Track(1)
+            ]
+        );
     }
 
     #[test]
     fn sorting_by_bpm_puts_loose_files_first_because_they_have_none() {
         let lib = library();
-        let view = lib.open_folder(listed(&["zebra.mp3", "loose.mp3", "Café Del Mar.mp3"]), &spec(SortColumn::Bpm, false, ""));
-        assert_eq!(view.entries, [FolderEntry::File(0), FolderEntry::Track(0), FolderEntry::Track(1)]);
+        let view = lib.open_folder(
+            listed(&["zebra.mp3", "loose.mp3", "Café Del Mar.mp3"]),
+            &spec(SortColumn::Bpm, false, ""),
+        );
+        assert_eq!(
+            view.entries,
+            [
+                FolderEntry::File(0),
+                FolderEntry::Track(0),
+                FolderEntry::Track(1)
+            ]
+        );
     }
 
     #[test]
     fn sorting_by_a_detail_column_orders_tracks_as_the_collection_does() {
         let lib = library_from(&[
-            TestTrack { id: 1, title: "Zebra", path: "/music/zebra.mp3", track_number: 9, ..TestTrack::default() },
-            TestTrack { id: 2, title: "Apple", path: "/music/Café Del Mar.mp3", track_number: 2, ..TestTrack::default() },
+            TestTrack {
+                id: 1,
+                title: "Zebra",
+                path: "/music/zebra.mp3",
+                track_number: 9,
+                ..TestTrack::default()
+            },
+            TestTrack {
+                id: 2,
+                title: "Apple",
+                path: "/music/Café Del Mar.mp3",
+                track_number: 2,
+                ..TestTrack::default()
+            },
         ]);
         let files = || listed(&["zebra.mp3", "loose.mp3", "Café Del Mar.mp3"]);
         // A loose file has no track number, so it goes with the blanks.
         let view = lib.open_folder(files(), &spec(SortColumn::TrackNumber, false, ""));
-        assert_eq!(view.entries, [FolderEntry::File(0), FolderEntry::Track(1), FolderEntry::Track(0)]);
+        assert_eq!(
+            view.entries,
+            [
+                FolderEntry::File(0),
+                FolderEntry::Track(1),
+                FolderEntry::Track(0)
+            ]
+        );
         // Under File Name and Location a loose file sorts by its own.
         let view = lib.open_folder(files(), &spec(SortColumn::FileName, false, ""));
-        assert_eq!(view.entries, [FolderEntry::Track(1), FolderEntry::File(0), FolderEntry::Track(0)]);
+        assert_eq!(
+            view.entries,
+            [
+                FolderEntry::Track(1),
+                FolderEntry::File(0),
+                FolderEntry::Track(0)
+            ]
+        );
         let view = lib.open_folder(files(), &spec(SortColumn::Location, true, ""));
-        assert_eq!(view.entries, [FolderEntry::Track(0), FolderEntry::File(0), FolderEntry::Track(1)]);
+        assert_eq!(
+            view.entries,
+            [
+                FolderEntry::Track(0),
+                FolderEntry::File(0),
+                FolderEntry::Track(1)
+            ]
+        );
     }
 
     #[test]
@@ -507,7 +648,10 @@ mod tests {
     fn a_loose_files_id_answers_with_its_path_wherever_a_track_id_would() {
         let lib = library();
         assert_eq!(lib.audio_path_of("1"), Some("/music/zebra.mp3"));
-        assert_eq!(lib.audio_path_of("file:/loose/one.mp3"), Some("/loose/one.mp3"));
+        assert_eq!(
+            lib.audio_path_of("file:/loose/one.mp3"),
+            Some("/loose/one.mp3")
+        );
         assert_eq!(lib.audio_path_of("nope"), None);
     }
 
@@ -517,7 +661,10 @@ mod tests {
         let path = dir.path().join("not really.mp3");
         std::fs::write(&path, b"nope").unwrap();
         let lib = library();
-        let view = lib.open_folder(vec![("not really.mp3".to_owned(), path.clone())], &spec(SortColumn::TrackNo, false, ""));
+        let view = lib.open_folder(
+            vec![("not really.mp3".to_owned(), path.clone())],
+            &spec(SortColumn::TrackNo, false, ""),
+        );
         let file = view.file(0).unwrap();
         assert_eq!(file.tags().title, "not really");
         assert_eq!(file.tags().duration_sec, 0);

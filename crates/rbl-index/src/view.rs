@@ -89,15 +89,41 @@ impl SortColumn {
     /// Every column, in rank-slot order. Public so the wire mapping's tests
     /// can check that each one is reachable.
     pub const ALL: [SortColumn; 35] = [
-        SortColumn::TrackNo, SortColumn::Title, SortColumn::Artist, SortColumn::Album,
-        SortColumn::Genre, SortColumn::Label, SortColumn::Comment, SortColumn::Key, SortColumn::Bpm,
-        SortColumn::Duration, SortColumn::Rating, SortColumn::PlayCount, SortColumn::DateAdded, SortColumn::ReleaseDate,
-        SortColumn::KeyCamelot, SortColumn::Size, SortColumn::Year, SortColumn::SampleRate,
-        SortColumn::Bitrate, SortColumn::Color, SortColumn::FileName, SortColumn::Location,
-        SortColumn::Composer, SortColumn::AlbumArtist, SortColumn::Remixer, SortColumn::OriginalArtist,
-        SortColumn::MixName, SortColumn::DiscNo, SortColumn::TrackNumber, SortColumn::FileType,
-        SortColumn::BitDepth, SortColumn::Lyricist, SortColumn::DateCreated,
-        SortColumn::PublishTrackInfo, SortColumn::Message,
+        SortColumn::TrackNo,
+        SortColumn::Title,
+        SortColumn::Artist,
+        SortColumn::Album,
+        SortColumn::Genre,
+        SortColumn::Label,
+        SortColumn::Comment,
+        SortColumn::Key,
+        SortColumn::Bpm,
+        SortColumn::Duration,
+        SortColumn::Rating,
+        SortColumn::PlayCount,
+        SortColumn::DateAdded,
+        SortColumn::ReleaseDate,
+        SortColumn::KeyCamelot,
+        SortColumn::Size,
+        SortColumn::Year,
+        SortColumn::SampleRate,
+        SortColumn::Bitrate,
+        SortColumn::Color,
+        SortColumn::FileName,
+        SortColumn::Location,
+        SortColumn::Composer,
+        SortColumn::AlbumArtist,
+        SortColumn::Remixer,
+        SortColumn::OriginalArtist,
+        SortColumn::MixName,
+        SortColumn::DiscNo,
+        SortColumn::TrackNumber,
+        SortColumn::FileType,
+        SortColumn::BitDepth,
+        SortColumn::Lyricist,
+        SortColumn::DateCreated,
+        SortColumn::PublishTrackInfo,
+        SortColumn::Message,
     ];
 
     pub(crate) fn rank_slot(self) -> usize {
@@ -173,7 +199,10 @@ pub enum TrackSource {
     /// rekordbox's Related Tracks: the tracks that go with one track under a
     /// criterion. A `track` past the end of the library — no track loaded —
     /// opens empty.
-    Related { track: Row, criterion: RelatedCriterion },
+    Related {
+        track: Row,
+        criterion: RelatedCriterion,
+    },
     /// rekordbox's Tag List, in its own order.
     TagList,
 }
@@ -206,17 +235,39 @@ pub enum RelatedCriterion {
 #[serde(rename_all = "camelCase")]
 pub enum SearchField {
     #[default]
-    All, Title, Artist, Album, Genre, Year, Bpm, Composer, AlbumArtist,
-    Remixer, Label, Comment, OriginalArtist, MixName,
+    All,
+    Title,
+    Artist,
+    Album,
+    Genre,
+    Year,
+    Bpm,
+    Composer,
+    AlbumArtist,
+    Remixer,
+    Label,
+    Comment,
+    OriginalArtist,
+    MixName,
 }
 
 impl SearchField {
     fn index(self) -> Option<usize> {
         match self {
-            Self::All => None, Self::Title => Some(0), Self::Artist => Some(1), Self::Album => Some(2),
-            Self::Genre => Some(3), Self::Year => Some(4), Self::Bpm => Some(5), Self::Composer => Some(6),
-            Self::AlbumArtist => Some(7), Self::Remixer => Some(8), Self::Label => Some(9),
-            Self::Comment => Some(10), Self::OriginalArtist => Some(11), Self::MixName => Some(12),
+            Self::All => None,
+            Self::Title => Some(0),
+            Self::Artist => Some(1),
+            Self::Album => Some(2),
+            Self::Genre => Some(3),
+            Self::Year => Some(4),
+            Self::Bpm => Some(5),
+            Self::Composer => Some(6),
+            Self::AlbumArtist => Some(7),
+            Self::Remixer => Some(8),
+            Self::Label => Some(9),
+            Self::Comment => Some(10),
+            Self::OriginalArtist => Some(11),
+            Self::MixName => Some(12),
         }
     }
 }
@@ -309,10 +360,20 @@ impl Library {
         // view is filtered and sorted. A map by row would lose duplicate
         // playlist entries, which rekordbox permits.
         let source_rows = self.source_rows(&spec.source);
-        let totals = matches!(&spec.source, TrackSource::Playlist(_) | TrackSource::SmartPlaylist(_))
-            .then(|| self.totals_of(&source_rows));
-        let mut rows: Vec<(Row, u32)> = source_rows.into_iter().enumerate()
-            .map(|(position, row)| (row, u32::try_from(position.saturating_add(1)).unwrap_or(u32::MAX)))
+        let totals = matches!(
+            &spec.source,
+            TrackSource::Playlist(_) | TrackSource::SmartPlaylist(_)
+        )
+        .then(|| self.totals_of(&source_rows));
+        let mut rows: Vec<(Row, u32)> = source_rows
+            .into_iter()
+            .enumerate()
+            .map(|(position, row)| {
+                (
+                    row,
+                    u32::try_from(position.saturating_add(1)).unwrap_or(u32::MAX),
+                )
+            })
             .collect();
 
         let query = fold(spec.query.trim());
@@ -338,13 +399,19 @@ impl Library {
             }
         } else if let Some(rank) = self.rank_of(spec.sort) {
             if spec.descending {
-                rows.sort_unstable_by_key(|&(row, _)| std::cmp::Reverse(rank.get(row as usize).copied().unwrap_or(0)));
+                rows.sort_unstable_by_key(|&(row, _)| {
+                    std::cmp::Reverse(rank.get(row as usize).copied().unwrap_or(0))
+                });
             } else {
                 rows.sort_unstable_by_key(|&(row, _)| rank.get(row as usize).copied().unwrap_or(0));
             }
         }
         let (rows, numbers): (Vec<_>, Vec<_>) = rows.into_iter().unzip();
-        View { rows, playlist_track_nos: playlist_numbers.then_some(numbers), totals }
+        View {
+            rows,
+            playlist_track_nos: playlist_numbers.then_some(numbers),
+            totals,
+        }
     }
 
     /// Sums rows the way rekordbox's status bar does; see [`ListTotals`].
@@ -374,13 +441,24 @@ impl Library {
                 totals: previous.totals,
             };
         }
-        let matched: Vec<_> = previous.rows.iter().copied().enumerate()
+        let matched: Vec<_> = previous
+            .rows
+            .iter()
+            .copied()
+            .enumerate()
             .filter(|&(_, row)| self.row_matches(row, &folded))
             .collect();
         let playlist_track_nos = previous.playlist_track_nos.as_ref().map(|numbers| {
-            matched.iter().filter_map(|&(position, _)| numbers.get(position).copied()).collect()
+            matched
+                .iter()
+                .filter_map(|&(position, _)| numbers.get(position).copied())
+                .collect()
         });
-        View { rows: matched.into_iter().map(|(_, row)| row).collect(), playlist_track_nos, totals: previous.totals }
+        View {
+            rows: matched.into_iter().map(|(_, row)| row).collect(),
+            playlist_track_nos,
+            totals: previous.totals,
+        }
     }
 
     pub(crate) fn row_matches(&self, row: Row, folded_query: &str) -> bool {
@@ -389,20 +467,26 @@ impl Library {
 
     pub(crate) fn row_matches_in(&self, row: Row, folded_query: &str, field: SearchField) -> bool {
         let all = self.search.get(row as usize);
-        let hay = field.index().map_or(all, |index| all.split('\t').nth(index).unwrap_or(""));
+        let hay = field
+            .index()
+            .map_or(all, |index| all.split('\t').nth(index).unwrap_or(""));
         // Every token must appear, so "artbat 128" narrows as a user expects.
-        folded_query.split_whitespace().all(|token| {
-            memchr::memmem::find(hay.as_bytes(), token.as_bytes()).is_some()
-        })
+        folded_query
+            .split_whitespace()
+            .all(|token| memchr::memmem::find(hay.as_bytes(), token.as_bytes()).is_some())
     }
 
     /// Orders rows by a column's precomputed ranks. Public for the link
     /// export, whose menus sort scopes the views do not have (an artist's
     /// tracks, a key's) with the same ranks the browser uses.
     pub fn sort_rows(&self, rows: &mut [Row], column: SortColumn, descending: bool) {
-        let Some(rank) = self.rank_of(column) else { return };
+        let Some(rank) = self.rank_of(column) else {
+            return;
+        };
         if descending {
-            rows.sort_unstable_by_key(|&r| std::cmp::Reverse(rank.get(r as usize).copied().unwrap_or(0)));
+            rows.sort_unstable_by_key(|&r| {
+                std::cmp::Reverse(rank.get(r as usize).copied().unwrap_or(0))
+            });
         } else {
             rows.sort_unstable_by_key(|&r| rank.get(r as usize).copied().unwrap_or(0));
         }
@@ -448,7 +532,8 @@ impl Library {
     /// At most four CPU workers, including the caller. Small libraries avoid
     /// thread startup entirely. Search and independent sort columns overlap.
     pub(crate) fn build_indexes(&mut self) {
-        let workers = std::thread::available_parallelism().map_or(1, |n| n.get().saturating_sub(1).clamp(1, 4));
+        let workers = std::thread::available_parallelism()
+            .map_or(1, |n| n.get().saturating_sub(1).clamp(1, 4));
         if self.count < 4096 || workers < 2 {
             self.build_ranks();
             self.build_search();
@@ -457,16 +542,34 @@ impl Library {
         let library = &*self;
         let (ranks, search) = std::thread::scope(|scope| {
             let chunk = SortColumn::ALL.len().div_ceil(workers - 1);
-            let jobs: Vec<_> = SortColumn::ALL.chunks(chunk).map(|columns| {
-                (columns, std::thread::Builder::new().name("startup-index".into()).spawn_scoped(scope,
-                    move || columns.iter().map(|&c| (c.rank_slot(), library.column_rank(c))).collect::<Vec<_>>()))
-            }).collect();
+            let jobs: Vec<_> = SortColumn::ALL
+                .chunks(chunk)
+                .map(|columns| {
+                    (
+                        columns,
+                        std::thread::Builder::new()
+                            .name("startup-index".into())
+                            .spawn_scoped(scope, move || {
+                                columns
+                                    .iter()
+                                    .map(|&c| (c.rank_slot(), library.column_rank(c)))
+                                    .collect::<Vec<_>>()
+                            }),
+                    )
+                })
+                .collect();
             let search = library.search_column();
             let mut ranks = vec![Vec::new(); SortColumn::ALL.len()];
             for (columns, job) in jobs {
-                let result = job.ok().and_then(|job| job.join().ok())
-                    .unwrap_or_else(|| columns.iter().map(|&c| (c.rank_slot(), library.column_rank(c))).collect());
-                for (slot, rank) in result { ranks[slot] = rank; }
+                let result = job.ok().and_then(|job| job.join().ok()).unwrap_or_else(|| {
+                    columns
+                        .iter()
+                        .map(|&c| (c.rank_slot(), library.column_rank(c)))
+                        .collect()
+                });
+                for (slot, rank) in result {
+                    ranks[slot] = rank;
+                }
             }
             (ranks, search)
         });
@@ -481,14 +584,44 @@ impl Library {
         // is stable and starts from row order.
         match column {
             SortColumn::TrackNo => {}
-            SortColumn::Title => order.sort_by(|&a, &b| self.title_folded.get(a as usize).cmp(self.title_folded.get(b as usize))),
-            SortColumn::Artist => order.sort_by(|&a, &b| Self::folded_lookup(&self.artists, &self.artist, a).cmp(Self::folded_lookup(&self.artists, &self.artist, b))),
-            SortColumn::Album => order.sort_by(|&a, &b| Self::folded_lookup(&self.albums, &self.album, a).cmp(Self::folded_lookup(&self.albums, &self.album, b))),
-            SortColumn::Genre => order.sort_by(|&a, &b| Self::folded_lookup(&self.genres, &self.genre, a).cmp(Self::folded_lookup(&self.genres, &self.genre, b))),
-            SortColumn::Label => order.sort_by(|&a, &b| Self::folded_lookup(&self.labels, &self.label, a).cmp(Self::folded_lookup(&self.labels, &self.label, b))),
+            SortColumn::Title => order.sort_by(|&a, &b| {
+                self.title_folded
+                    .get(a as usize)
+                    .cmp(self.title_folded.get(b as usize))
+            }),
+            SortColumn::Artist => order.sort_by(|&a, &b| {
+                Self::folded_lookup(&self.artists, &self.artist, a).cmp(Self::folded_lookup(
+                    &self.artists,
+                    &self.artist,
+                    b,
+                ))
+            }),
+            SortColumn::Album => order.sort_by(|&a, &b| {
+                Self::folded_lookup(&self.albums, &self.album, a).cmp(Self::folded_lookup(
+                    &self.albums,
+                    &self.album,
+                    b,
+                ))
+            }),
+            SortColumn::Genre => order.sort_by(|&a, &b| {
+                Self::folded_lookup(&self.genres, &self.genre, a).cmp(Self::folded_lookup(
+                    &self.genres,
+                    &self.genre,
+                    b,
+                ))
+            }),
+            SortColumn::Label => order.sort_by(|&a, &b| {
+                Self::folded_lookup(&self.labels, &self.label, a).cmp(Self::folded_lookup(
+                    &self.labels,
+                    &self.label,
+                    b,
+                ))
+            }),
             // By the key's own rule, not the fold: the fold drops `#`,
             // which put F and F# on top of each other.
-            SortColumn::Key => order.sort_by(|&a, &b| crate::key::cmp_names(self.key_name(a), self.key_name(b))),
+            SortColumn::Key => {
+                order.sort_by(|&a, &b| crate::key::cmp_names(self.key_name(a), self.key_name(b)))
+            }
             SortColumn::KeyCamelot => order.sort_by(|&a, &b| {
                 crate::key::camelot_rank(self.key_name(a))
                     .cmp(&crate::key::camelot_rank(self.key_name(b)))
@@ -496,23 +629,40 @@ impl Library {
             }),
             // Text that is a name or prose: the same fold as the artist and
             // comment columns.
-            SortColumn::Comment | SortColumn::Composer | SortColumn::AlbumArtist | SortColumn::Remixer
-            | SortColumn::OriginalArtist | SortColumn::MixName | SortColumn::Lyricist | SortColumn::Message => {
+            SortColumn::Comment
+            | SortColumn::Composer
+            | SortColumn::AlbumArtist
+            | SortColumn::Remixer
+            | SortColumn::OriginalArtist
+            | SortColumn::MixName
+            | SortColumn::Lyricist
+            | SortColumn::Message => {
                 order.sort_by_cached_key(|&r| fold(self.sort_text(r, column)));
             }
             // A path keeps its separators and punctuation, which the general
             // fold drops: without them `A/z.mp3` would sort after `AB/a.mp3`
             // and a folder's tracks would no longer sit together.
             SortColumn::FileName | SortColumn::Location => {
-                order.sort_by_cached_key(|&r| crate::strings::fold_smart(self.sort_text(r, column)));
+                order
+                    .sort_by_cached_key(|&r| crate::strings::fold_smart(self.sort_text(r, column)));
             }
             // Dates are stored as `YYYY-MM-DD` text, which orders as it reads.
             SortColumn::DateAdded | SortColumn::ReleaseDate | SortColumn::DateCreated => {
                 order.sort_by(|&a, &b| self.sort_text(a, column).cmp(self.sort_text(b, column)));
             }
-            SortColumn::Bpm | SortColumn::Duration | SortColumn::Rating | SortColumn::PlayCount | SortColumn::Size
-            | SortColumn::Year | SortColumn::SampleRate | SortColumn::Bitrate | SortColumn::Color
-            | SortColumn::DiscNo | SortColumn::TrackNumber | SortColumn::FileType | SortColumn::BitDepth
+            SortColumn::Bpm
+            | SortColumn::Duration
+            | SortColumn::Rating
+            | SortColumn::PlayCount
+            | SortColumn::Size
+            | SortColumn::Year
+            | SortColumn::SampleRate
+            | SortColumn::Bitrate
+            | SortColumn::Color
+            | SortColumn::DiscNo
+            | SortColumn::TrackNumber
+            | SortColumn::FileType
+            | SortColumn::BitDepth
             | SortColumn::PublishTrackInfo => {
                 order.sort_by_key(|&r| self.sort_number(r, column));
             }
@@ -535,7 +685,10 @@ impl Library {
     pub(crate) fn sort_text(&self, row: Row, column: SortColumn) -> &str {
         let row = row as usize;
         if let Some(slot) = column.extra_slot() {
-            return self.search_extra.get(slot).map_or("", |values| values.get(row));
+            return self
+                .search_extra
+                .get(slot)
+                .map_or("", |values| values.get(row));
         }
         match column {
             SortColumn::Comment => self.comment.get(row),
@@ -600,18 +753,41 @@ impl Library {
     }
 
     pub(crate) fn search_text(&self, row: usize) -> String {
-        let year = self.year.get(row).filter(|&&n| n != 0).map_or_else(String::new, u16::to_string);
-        let bpm = self.bpm_x100.get(row).filter(|&&n| n != 0).map_or_else(String::new, |n| format!("{}.{:02}", n / 100, n % 100));
+        let year = self
+            .year
+            .get(row)
+            .filter(|&&n| n != 0)
+            .map_or_else(String::new, u16::to_string);
+        let bpm = self
+            .bpm_x100
+            .get(row)
+            .filter(|&&n| n != 0)
+            .map_or_else(String::new, |n| format!("{}.{:02}", n / 100, n % 100));
         let values = [
-            self.title.get(row), self.artists.name(self.artist.get(row).copied().unwrap_or(crate::NO_ID)),
-            self.albums.name(self.album.get(row).copied().unwrap_or(crate::NO_ID)),
-            self.genres.name(self.genre.get(row).copied().unwrap_or(crate::NO_ID)), &year, &bpm,
-            self.search_extra[0].get(row), self.search_extra[1].get(row), self.search_extra[2].get(row),
-            self.labels.name(self.label.get(row).copied().unwrap_or(crate::NO_ID)), self.comment.get(row),
-            self.search_extra[3].get(row), self.search_extra[4].get(row),
+            self.title.get(row),
+            self.artists
+                .name(self.artist.get(row).copied().unwrap_or(crate::NO_ID)),
+            self.albums
+                .name(self.album.get(row).copied().unwrap_or(crate::NO_ID)),
+            self.genres
+                .name(self.genre.get(row).copied().unwrap_or(crate::NO_ID)),
+            &year,
+            &bpm,
+            self.search_extra[0].get(row),
+            self.search_extra[1].get(row),
+            self.search_extra[2].get(row),
+            self.labels
+                .name(self.label.get(row).copied().unwrap_or(crate::NO_ID)),
+            self.comment.get(row),
+            self.search_extra[3].get(row),
+            self.search_extra[4].get(row),
         ];
         // Tabs delimit fields; embedded tabs are whitespace inside a value.
-        values.iter().map(|value| fold(&value.replace('\t', " "))).collect::<Vec<_>>().join("\t")
+        values
+            .iter()
+            .map(|value| fold(&value.replace('\t', " ")))
+            .collect::<Vec<_>>()
+            .join("\t")
     }
 }
 
@@ -621,18 +797,23 @@ mod startup_tests {
 
     #[test]
     fn parallel_indexes_match_serial_indexes_including_ties() {
-        let tracks: Vec<_> = (0..5000).map(|i| TestTrack {
-            id: i, title: if i % 2 == 0 { "Écho" } else { "echo" },
-            artist: if i % 3 == 0 { "A" } else { "B" },
-            key: if i % 5 == 0 { "F#" } else { "F" },
-            bpm_x100: 12000 + u32::try_from(i % 11).unwrap_or(0),
-            ..TestTrack::default()
-        }).collect();
+        let tracks: Vec<_> = (0..5000)
+            .map(|i| TestTrack {
+                id: i,
+                title: if i % 2 == 0 { "Écho" } else { "echo" },
+                artist: if i % 3 == 0 { "A" } else { "B" },
+                key: if i % 5 == 0 { "F#" } else { "F" },
+                bpm_x100: 12000 + u32::try_from(i % 11).unwrap_or(0),
+                ..TestTrack::default()
+            })
+            .collect();
         let mut lib = library_from(&tracks);
         let ranks = lib.ranks.clone();
         let search = lib.search.clone();
         lib.build_indexes();
         assert_eq!(lib.ranks, ranks);
-        for row in 0..tracks.len() { assert_eq!(lib.search.get(row), search.get(row)); }
+        for row in 0..tracks.len() {
+            assert_eq!(lib.search.get(row), search.get(row));
+        }
     }
 }

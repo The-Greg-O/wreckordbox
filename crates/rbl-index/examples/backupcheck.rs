@@ -17,7 +17,12 @@
 //! copy that survives here survives the quiet case.
 //!
 //! `cargo run --release -p rbl-index --example backupcheck -- [--keep]`
-#![allow(clippy::pedantic, clippy::print_stdout, clippy::unwrap_used, clippy::expect_used)]
+#![allow(
+    clippy::pedantic,
+    clippy::print_stdout,
+    clippy::unwrap_used,
+    clippy::expect_used
+)]
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;

@@ -37,7 +37,9 @@ pub use load::{
     reload_playlists, reload_tag_list, LoadStats,
 };
 pub use smart::SmartRule;
-pub use view::{ListTotals, RelatedCriterion, SearchField, SortColumn, TrackSource, View, ViewSpec};
+pub use view::{
+    ListTotals, RelatedCriterion, SearchField, SortColumn, TrackSource, View, ViewSpec,
+};
 pub use xml_export::export_xml;
 
 use parking_lot::RwLock;
@@ -508,7 +510,8 @@ impl Library {
             .filter_map(|(row, stored)| {
                 let row = *row as usize;
                 let path = paths.resolve(stored);
-                (row < self.folder_path.len() && self.folder_path.get(row) != path).then_some((row, path))
+                (row < self.folder_path.len() && self.folder_path.get(row) != path)
+                    .then_some((row, path))
             })
             .collect();
         if changed.is_empty() {
@@ -683,10 +686,14 @@ impl Library {
     /// The My Tag ids on row `row`, as [`smart::my_tag_key`] reads them.
     #[must_use]
     pub fn my_tag_keys(&self, row: usize) -> &[i32] {
-        let (Some(&start), Some(&end)) = (self.my_tag_bounds.get(row), self.my_tag_bounds.get(row + 1)) else {
+        let (Some(&start), Some(&end)) =
+            (self.my_tag_bounds.get(row), self.my_tag_bounds.get(row + 1))
+        else {
             return &[];
         };
-        self.my_tag_keys.get(start as usize..end as usize).unwrap_or_default()
+        self.my_tag_keys
+            .get(start as usize..end as usize)
+            .unwrap_or_default()
     }
 
     /// Sets every track's My Tags from `(row, id)` pairs. A pair naming a
@@ -790,7 +797,8 @@ impl Library {
     pub fn unanalysed_rows(&self, from: Row) -> impl Iterator<Item = Row> + '_ {
         (from as usize..self.count)
             .filter(|&index| {
-                self.analysed.get(index).copied() == Some(0) && !self.folder_path.get(index).is_empty()
+                self.analysed.get(index).copied() == Some(0)
+                    && !self.folder_path.get(index).is_empty()
             })
             .filter_map(|index| Row::try_from(index).ok())
     }
