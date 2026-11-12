@@ -531,7 +531,8 @@ fn measure(stems: &Arc<Stems>, targets: &[Target], force: bool) -> Result<Measur
         description: match targets {
             [only] => format!(
                 "Measure the Intensity of track {} \"{}\"",
-                only.found.parent().id, only.found.parent().title
+                only.found.parent().id,
+                only.found.parent().title
             ),
             _ => format!("Measure the Intensity of {total} tracks"),
         },
@@ -564,7 +565,7 @@ fn measure(stems: &Arc<Stems>, targets: &[Target], force: bool) -> Result<Measur
         .map(|(outcome, target)| {
             outcome.unwrap_or_else(|| {
                 TrackOutcome::failed(
-                    &target.found.parent(),
+                    target.found.parent(),
                     None,
                     Vec::new(),
                     ServiceError::new(
@@ -610,12 +611,12 @@ impl Measuring<'_> {
     /// Settles one track and says so.
     fn settle(&self, target: &Target) -> TrackOutcome {
         if self.claim.stopped() {
-            return TrackOutcome::cancelled(&target.found.parent());
+            return TrackOutcome::cancelled(target.found.parent());
         }
         let outcome = self.one(target);
         if outcome.status != Status::Cancelled {
             let done = self.done.fetch_add(1, Ordering::AcqRel) + 1;
-            self.progress(&target.found.parent(), outcome.status.name(), done);
+            self.progress(target.found.parent(), outcome.status.name(), done);
         }
         outcome
     }
@@ -639,7 +640,10 @@ impl Measuring<'_> {
             // re-attached here, and Measurements made from other audio are
             // marked stale, so one of them is never taken for current.
             let run = *lock(&self.run);
-            match self.stems.before_record(&target.found, Some(&fingerprint), run) {
+            match self
+                .stems
+                .before_record(&target.found, Some(&fingerprint), run)
+            {
                 Ok((_, stale)) => marked.extend(stale),
                 Err(error) => return failed(marked, error),
             }
@@ -655,30 +659,29 @@ impl Measuring<'_> {
             pause("decode", &parent.id);
             self.progress(parent, "measuring", self.done.load(Ordering::Acquire));
             self.decoded.fetch_add(1, Ordering::AcqRel);
-            let intensity = match wreckordbox_intensity::measure_file(path, &bars, &|| {
-                self.claim.stopped()
-            }) {
-                Ok(Some(intensity)) => intensity,
-                Ok(None) => {
-                    return TrackOutcome {
-                        fingerprint: Some(fingerprint),
-                        marked_stale: marked,
-                        ..TrackOutcome::cancelled(parent)
+            let intensity =
+                match wreckordbox_intensity::measure_file(path, &bars, &|| self.claim.stopped()) {
+                    Ok(Some(intensity)) => intensity,
+                    Ok(None) => {
+                        return TrackOutcome {
+                            fingerprint: Some(fingerprint),
+                            marked_stale: marked,
+                            ..TrackOutcome::cancelled(parent)
+                        }
                     }
-                }
-                Err(error) => {
-                    return failed(
-                        marked,
-                        ServiceError::new(
-                            codes::INTENSITY_FAILED,
-                            format!(
-                                "the audio of track {} \"{}\" could not be measured: {error}",
-                                parent.id, parent.title
+                    Err(error) => {
+                        return failed(
+                            marked,
+                            ServiceError::new(
+                                codes::INTENSITY_FAILED,
+                                format!(
+                                    "the audio of track {} \"{}\" could not be measured: {error}",
+                                    parent.id, parent.title
+                                ),
                             ),
-                        ),
-                    )
-                }
-            };
+                        )
+                    }
+                };
             // Recorded only against the audio that was decoded: the file
             // is fingerprinted again, and if it is not what it was, the
             // track is measured afresh.
@@ -872,7 +875,7 @@ fn show(stems: &Stems, target: Target) -> Result<TrackIntensity, ServiceError> {
     // found out here too, so nothing reads a stale one as current; and
     // bars made for a beat grid the track no longer has are made again.
     if path.is_file() {
-        let fingerprint = stems::fingerprint(&parent, &path)?;
+        let fingerprint = stems::fingerprint(&parent, path)?;
         stems.before_record(&found, Some(&fingerprint), None)?;
         realign(
             stems,
