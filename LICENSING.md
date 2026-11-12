@@ -29,3 +29,16 @@ cargo build -p rbl-deck --no-default-features
 
 The `rubberband` feature is on by default. With it off, `MASTER TEMPO` falls
 back to the WSOLA backend and key shifting is not offered.
+
+## libvorbis and libogg
+
+`crates/wreckordbox-native-stems` encodes Native stems as Ogg Vorbis with the
+`vorbis_rs` crate, which compiles libvorbis (with the aoTuV and Lancer
+patches) and libogg from source carried in its `aotuv_lancer_vorbis_sys` and
+`ogg_next_sys` crates. All of it is BSD-3-Clause (Xiph.Org Foundation and
+the patch authors), which is compatible with GPL-2.0-or-later; the copyright
+notices travel in those crates' sources.
+
+The layout Native stems follow is published by the AZ-MODS project, which is
+GPL-3.0-only. The writer is implemented from the layout's specification and
+contains no AZ-MODS code.
