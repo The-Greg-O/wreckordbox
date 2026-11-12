@@ -233,3 +233,31 @@ test("the second list's playlist chooser is drawn in the theme's colours, its pl
   }
   await page.screenshot({ path: test.info().outputPath("target-chooser.png") });
 });
+
+test("the palette opens Preferences at Library Protection, and turning it off says why it asks about a backup", async ({ page }) => {
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem("defects-seeded")) return;
+    sessionStorage.setItem("defects-seeded", "1");
+    localStorage.setItem("rbl.preferences", JSON.stringify({ advanced: { protectLibrary: true }, view: { viewShell: true } }));
+  });
+  await page.goto("/");
+  await expect(page.getByTestId("browser-title")).toContainText("Tracks)");
+  await page.keyboard.press("Control+Shift+P");
+  const palette = page.getByRole("dialog", { name: "Command palette" });
+  await palette.getByRole("combobox").fill("library protection");
+  await palette.getByRole("option", { name: /^Library Protection/ }).click();
+
+  const preferences = page.getByRole("dialog", { name: "Preferences" });
+  await expect(preferences.getByRole("tab", { name: "Browse", exact: true })).toHaveAttribute("aria-selected", "true");
+  const protection = preferences.getByRole("switch", { name: "Protect library edit." });
+  await expect(protection).toBeVisible();
+  await expect(protection).toBeChecked();
+
+  // The mock Library has no backup: the question comes, and says what it has to do with protection.
+  await protection.click();
+  const question = preferences.getByRole("dialog", { name: "Library Protection" });
+  await expect(question).toContainText("Turning Library Protection off lets wreckordbox write to your Library");
+  await expect(question).toContainText("No backup of it was found");
+  await question.getByRole("button", { name: "Unlock anyway" }).click();
+  await expect(protection).not.toBeChecked();
+});

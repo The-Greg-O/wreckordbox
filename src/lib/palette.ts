@@ -328,6 +328,12 @@ const EXPLICIT_ENTRIES: readonly PaletteEntry[] = [
     run: { kind: "menu", id: "stick-protection" },
   },
   {
+    // Its switch is on Advanced › Browse, a tab away from where Advanced
+    // opens; this lands on it (wbx-45.15).
+    id: "library-protection", label: "Library Protection", group: "Preferences", keywords: ["protect", "lock", "unlock", "read-only", "edit"],
+    run: { kind: "preferences", pane: "libraryProtection" },
+  },
+  {
     id: "backups", label: "Backups", group: "Preferences", keywords: ["restore", "archive"],
     run: { kind: "preferences", pane: "backups" },
   },
