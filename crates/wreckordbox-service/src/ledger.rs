@@ -226,7 +226,8 @@ pub struct LedgerEntry {
     pub kind: String,
     /// The edit's name for a person, as Undo shows it.
     pub label: String,
-    /// The service command that made it: `{"name", "args"}`.
+    /// The operation that made it: `{"name", "args"}`. `files.edit` is a
+    /// stored descriptor for a file-only edit, not a callable service command.
     pub command: Option<Value>,
     /// The entry an Undo or Redo steps.
     pub reverses: Option<i64>,
