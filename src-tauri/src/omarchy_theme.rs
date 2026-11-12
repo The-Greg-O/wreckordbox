@@ -1422,13 +1422,16 @@ color15 = "#ddc7a1"
     #[test]
     fn the_theme_waveform_comes_from_the_omarchy_palette_alone() {
         let theme = layered(Some(TOKYO_NIGHT), None, no_font);
-        let wave = theme.wave.expect("Tokyo Night has blue, magenta and bright_foreground");
+        let wave = theme
+            .wave
+            .expect("Tokyo Night has blue, magenta and bright_foreground");
         assert_eq!(
             (wave.low.as_str(), wave.mid.as_str(), wave.high.as_str()),
             ("#7aa2f7", "#ad8ee6", "#c0caf5")
         );
         // The theme file's colours are the window's, not the waveform's.
-        let over = file("bright_foreground = \"#ff0000\"\nblue = \"#00ff00\"\nmagenta = \"#0000ff\"\n");
+        let over =
+            file("bright_foreground = \"#ff0000\"\nblue = \"#00ff00\"\nmagenta = \"#0000ff\"\n");
         assert_eq!(
             layered(Some(TOKYO_NIGHT), Some(&over), no_font).wave,
             Some(wave.clone())
@@ -1442,17 +1445,27 @@ color15 = "#ddc7a1"
         );
         // Not following, no Omarchy theme, or an unusable one: none, and the
         // window falls back to its own.
-        assert_eq!(layered(Some(TOKYO_NIGHT), Some(&file("follow = \"none\"")), no_font).wave, None);
+        assert_eq!(
+            layered(Some(TOKYO_NIGHT), Some(&file("follow = \"none\"")), no_font).wave,
+            None
+        );
         assert_eq!(layered(None, None, no_font).wave, None);
-        assert_eq!(layered(Some("blue = \"#7aa2f7\""), None, no_font).wave, None);
+        assert_eq!(
+            layered(Some("blue = \"#7aa2f7\""), None, no_font).wave,
+            None
+        );
     }
 
     #[test]
     fn the_files_waveform_choice_is_passed_on() {
         assert_eq!(
-            layered(Some(TOKYO_NIGHT), Some(&file("waveform = \"rgb\"")), no_font)
-                .waveform
-                .as_deref(),
+            layered(
+                Some(TOKYO_NIGHT),
+                Some(&file("waveform = \"rgb\"")),
+                no_font
+            )
+            .waveform
+            .as_deref(),
             Some("rgb")
         );
         assert_eq!(layered(Some(TOKYO_NIGHT), None, no_font).waveform, None);
