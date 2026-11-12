@@ -205,6 +205,24 @@ fn connected(path: &str) -> AppResult<PathBuf> {
     Ok(mount)
 }
 
+/// A Stick about to be inspected before a write (the duplicate question,
+/// which tracks it already holds, an import's plan; wbx-45.4, second
+/// review): held under its lock, so none of this app's writes can leave an
+/// unfinished one meanwhile, and refused if it already holds one, so the
+/// read that follows never settles anything. Replacing the read itself
+/// with a non-recovering reader is wbx-45.5's.
+fn inspectable(path: &str) -> AppResult<(PathBuf, crate::stick_approval::StickLock)> {
+    let mount = connected(path)?;
+    let lock = crate::stick_approval::lock(&mount);
+    if rbl_export::recovery_pending(&mount) {
+        return Err(AppError::new(
+            ErrorKind::Conflict,
+            "A write to this Stick did not finish. Nothing was read from it or written to it; settling the unfinished write is not offered here yet.",
+        ));
+    }
+    Ok((mount, lock))
+}
+
 /// What a failed read or write of the stick says. A refused edit is the
 /// user's to fix, not a bug.
 fn device_error(e: &rbl_export::ExportError) -> AppError {
@@ -403,7 +421,7 @@ pub async fn device_playlist_collection_tracks(
 ) -> AppResult<Vec<Option<String>>> {
     let state = Arc::clone(&state);
     blocking("device_playlist_collection_tracks", move || {
-        let mount = connected(&path)?;
+        let (mount, _lock) = inspectable(&path)?;
         let format = format_from(&format)?;
         let library = device::read(&mount, format).map_err(|e| device_error(&e))?;
         let db_id = state
@@ -433,7 +451,7 @@ pub async fn device_playlist_duplicates(path: String, format: String, playlist: 
 }
 
 fn duplicates_of(path: &str, format: &str, playlist: &str, rows: &[String]) -> AppResult<Vec<String>> {
-    let mount = connected(path)?;
+    let (mount, _lock) = inspectable(path)?;
     let format = format_from(format)?;
     let library = device::read(&mount, format).map_err(|e| device_error(&e))?;
     let playlist_id = id_from(playlist)?;
@@ -734,7 +752,7 @@ fn copy_destination(chosen: Option<&str>) -> AppResult<PathBuf> {
 
 /// Reads the stick and plans the import against the collection.
 fn read_plan(state: &AppState, path: &str, format: &str, id: &str) -> AppResult<ImportPlan> {
-    let mount = connected(path)?;
+    let (mount, _lock) = inspectable(path)?;
     let (format, id) = (format_from(format)?, id_from(id)?);
     let stick = StickTracks::read(&mount, format)?;
     let Some(node) = stick.library.node(id).filter(|n| !n.folder) else {
@@ -1450,6 +1468,35 @@ mod tests {
         assert_eq!(device::read(root, Format::OneLibrary).unwrap(), one);
         assert_eq!(std::fs::read(&wav).unwrap(), audio);
         assert_eq!(collection_count(), before_collection);
+    }
+
+    /// Every file on the stick and its bytes.
+    fn stick_bytes(root: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+        let mut out = std::collections::BTreeMap::new();
+        let mut todo = vec![root.to_path_buf()];
+        while let Some(dir) = todo.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() { todo.push(path); } else { out.insert(path.clone(), std::fs::read(&path).unwrap()); }
+            }
+        }
+        out
+    }
+
+    /// wbx-45.4, second review: the duplicate question reads a Stick only
+    /// when it holds no unfinished write; otherwise it is refused and the
+    /// Stick, journal included, is left exactly as it was.
+    #[test]
+    fn the_duplicate_inspection_refuses_a_stick_with_an_unfinished_write() {
+        let (_, dest) = stick();
+        let root = dest.path();
+        let library = device::read(root, Format::DeviceLibrary).unwrap();
+        let playlist = library.nodes.iter().find(|node| !node.folder).unwrap().id.to_string();
+        std::fs::write(root.join(".rbxport-publication"), b"{}").unwrap();
+        let before = stick_bytes(root);
+        let refused = duplicates_of(&root.to_string_lossy(), "deviceLibrary", &playlist, &[]).unwrap_err();
+        assert!(refused.to_string().contains("did not finish"), "{refused}");
+        assert_eq!(stick_bytes(root), before);
     }
 
     fn write_test_wav(path: &Path) {
