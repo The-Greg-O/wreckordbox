@@ -354,3 +354,18 @@ describe("the view shell switch", () => {
     }
   });
 });
+
+describe("the compact player's beat jump size", () => {
+  it("starts on 16 beats and keeps a stored 4, 8, 16 or 32", () => {
+    expect(DEFAULT_PREFERENCES.view.shellJumpBeats).toBe(16);
+    for (const beats of [4, 8, 16, 32]) {
+      expect(sanitisePreferences({ view: { shellJumpBeats: beats } }).view.shellJumpBeats).toBe(beats);
+    }
+  });
+
+  it("reads any other stored value as the default", () => {
+    for (const stored of [64, 0, "8", null]) {
+      expect(sanitisePreferences({ view: { shellJumpBeats: stored } }).view.shellJumpBeats, String(stored)).toBe(16);
+    }
+  });
+});

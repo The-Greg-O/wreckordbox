@@ -1,0 +1,159 @@
+/* The compact player (ticket #51). Sizes from docs/design/tokens.md and the
+   render in docs/design/screens/library/library-1280.png (`.strip`, `.meta`,
+   `.ov`, `.phr` and `.bj` in screens/mock.html). Chrome colours are the
+   theme roles (`--role-*`, ticket #47); the phrase and cue colours are the
+   fixed meaning colours upstream measured. */
+
+.strip {
+  /* Local measures, from mock.html: the overview well 32px, the phrase
+     strip 12px with 2px above it, the title column 300px at full width. */
+  --cp-overview-h: 32px;
+  --cp-phrase-h: 12px;
+  --cp-meta-w: 300px;
+
+  display: flex;
+  align-items: center;
+  gap: var(--s-shell-space-5);
+  box-sizing: border-box;
+  min-height: var(--s-shell-player-h);
+  height: 100%;
+  padding: var(--s-shell-space-3) var(--s-shell-space-4);
+  background: linear-gradient(var(--role-ground), var(--role-panel));
+  color: var(--role-text);
+  font-family: var(--f-shell);
+  font-size: var(--f-size-shell);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.strip[data-droppable] { box-shadow: inset 0 0 0 1px var(--role-accent); }
+
+.transport,
+.jump {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-shell-space-1);
+}
+.transport { gap: var(--s-shell-space-3); }
+
+.button,
+.size {
+  box-sizing: border-box;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 var(--s-shell-space-3);
+  border: var(--s-shell-border) solid var(--role-border);
+  border-radius: var(--s-shell-radius);
+  background: none;
+  color: var(--role-text-dim);
+  font: inherit;
+  cursor: pointer;
+}
+.button:disabled { opacity: 0.45; cursor: default; }
+.button:not(:disabled):hover,
+.size:hover { color: var(--role-text-bright); }
+.button:focus-visible,
+.size:focus-visible { outline: 1px solid var(--role-accent); outline-offset: 1px; }
+
+.play { color: var(--c-play-ring-on, var(--role-accent)); }
+.play[data-on] { border-color: var(--role-accent); color: var(--role-accent); }
+
+.sizes { display: flex; gap: var(--s-shell-space-1); }
+.size { padding: 0 var(--s-shell-space-2); }
+.size[aria-checked="true"] {
+  background: var(--role-text);
+  border-color: var(--role-text);
+  color: var(--role-ground);
+}
+
+.meta {
+  flex: 0 1 var(--cp-meta-w);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-shell-space-2);
+}
+.title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--role-text-bright);
+  font-weight: 500;
+}
+.line {
+  display: flex;
+  gap: var(--s-shell-space-3);
+  min-width: 0;
+  overflow: hidden;
+  color: var(--role-text-dim);
+}
+.artist { min-width: 0; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; }
+.line > :not(.artist) { flex: none; }
+.dot { color: var(--role-hairline); }
+.length { color: var(--role-text-dim); }
+.position { color: var(--role-text); }
+
+/* The overview and the phrase strip under it are one scrubber. */
+.band {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  align-self: center;
+  cursor: pointer;
+}
+.overview {
+  position: relative;
+  height: var(--cp-overview-h);
+  background: var(--role-ground);
+  overflow: hidden;
+}
+.overview canvas { display: block; width: 100%; height: 100%; }
+
+.phrases {
+  position: relative;
+  height: var(--cp-phrase-h);
+  margin-top: var(--s-shell-space-1);
+  overflow: hidden;
+}
+.phrase {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  box-sizing: border-box;
+  padding-left: var(--s-shell-space-2);
+  border-right: 1px solid var(--role-ground);
+  overflow: hidden;
+  color: #fff;
+  font-size: 9px;
+  line-height: var(--cp-phrase-h);
+  text-overflow: clip;
+}
+.phrase[data-phrase="intro"] { background: var(--c-phrase-intro); }
+.phrase[data-phrase="verse"] { background: var(--c-phrase-verse); }
+.phrase[data-phrase="bridge"] { background: var(--c-phrase-bridge); }
+.phrase[data-phrase="chorus"] { background: var(--c-phrase-chorus); }
+.phrase[data-phrase="up"] { background: var(--c-phrase-up); }
+.phrase[data-phrase="up2"] { background: var(--c-phrase-up2); }
+.phrase[data-phrase="up3"] { background: var(--c-phrase-up3); }
+.phrase[data-phrase="down"] { background: var(--c-phrase-down); }
+.phrase[data-phrase="outro"] { background: var(--c-phrase-outro); }
+
+/* The head, moved by the deck's frame loop with a transform. */
+.playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 1px;
+  background: var(--c-simple-head, var(--role-text-bright));
+  pointer-events: none;
+  will-change: transform;
+}
+.strip[data-armed] .playhead { background: var(--c-playhead-armed); }
+.strip[data-empty] .playhead { display: none; }
+
+/* At half width and below the title column narrows and the gaps close; the
+   title and the line under it ellipsize rather than wrap. */
+@container shell (max-width: 800px) {
+  .strip { --cp-meta-w: 180px; gap: var(--s-shell-space-3); }
+}

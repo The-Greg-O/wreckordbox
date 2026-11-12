@@ -100,6 +100,8 @@ import { useCommands } from "@/store/useCommands";
 import { keyMap } from "@/lib/keyPresets";
 import { WaveformDetail } from "./WaveformDetail";
 import { SimplePlayer } from "./SimplePlayer";
+import { CompactPlayer } from "./CompactPlayer";
+import { compactJumpBeats, compactJumpSizeId, type CompactJumpBeats } from "@/lib/compactPlayer";
 import { JumpMenu } from "./JumpMenu";
 import { VocalStrip } from "./VocalStrip";
 import { useTrackCues } from "./useTrackCues";
@@ -132,6 +134,14 @@ export interface PlayerProps {
    * the layout switch changes what is on screen and not what is playing.
    */
   simple?: boolean;
+  /**
+   * The view shell's compact player (#51): CUE, PLAY, the readouts, the
+   * overview with its phrase strip and the beat jump selector, drawn by
+   * `CompactPlayer` from this deck's state. Implies `simple`'s one strip.
+   * The jump size is then the stored `view.shellJumpBeats`, for the
+   * buttons and the keys alike, rather than the deck's own menu.
+   */
+  compact?: boolean;
   /**
    * Take the track out of the deck.
    *
@@ -879,12 +889,13 @@ export const Player = memo(function Player({
   track, onEject, onError, onAnalyse, onDropTrack, onLoadSelected, onSkipTrack, selectedTrackId = null,
   onExportTrack, devices = [], onExportLoop,
   dragging = false, deck = "a",
-  simple = false, transportSlot, flipped = false, dual = false, publishZoom, onWheelZoom,
+  simple: simpleLayout = false, compact = false, transportSlot, flipped = false, dual = false, publishZoom, onWheelZoom,
   bars: linkedBars, onBars, jumpSize: linkedJump, onJumpSize,
   publishSync, peerSync, isMaster = false, onMaster, synced = false, syncOn = synced, onSyncToggle, onStartPlaying,
   leaderBpmX100 = null, onPlayingBpm, onKeyShift, onGridNudge, publishGridFollow, readOnly = false,
   drawing = false,
 }: PlayerProps) {
+  const simple = simpleLayout || compact;
   const playback = usePlayback(track?.id ?? null, deck, false);
   // A waveform to draw: the analysis's, or one an analysis is drawing now.
   const hasWaveform = track !== null && (track.analysed > 0 || drawing);
@@ -1048,7 +1059,8 @@ export const Player = memo(function Player({
   );
   /** How far a jump moves, chosen from the size menu. */
   const [ownJumpSizeId, setOwnJumpSizeId] = useState<string>(JUMP_SIZE_ID);
-  const jumpSizeId = linkedJump ?? ownJumpSizeId;
+  const compactJump = compactJumpBeats(viewPrefs.shellJumpBeats);
+  const jumpSizeId = compact ? compactJumpSizeId(compactJump) : linkedJump ?? ownJumpSizeId;
   const setJumpSizeId = onJumpSize ?? setOwnJumpSizeId;
   /** Where the size menu is open, in client coordinates, or closed. */
   const [jumpMenu, setJumpMenu] = useState<{ x: number; y: number } | null>(null);
@@ -1933,6 +1945,15 @@ export const Player = memo(function Player({
 
   // A beat's length, for phrases whose time the grid did not resolve.
   const beatMs = bpmX100 > 0 ? 6_000_000 / bpmX100 : 0;
+  // The compact player's phrase strip, from the same analysis as the bar.
+  const compactPhrases = useMemo(
+    () => (compact ? phraseSpans(phrases, total * 1000, beatMs) : []),
+    [compact, phrases, total, beatMs],
+  );
+  const setCompactJump = useCallback(
+    (beats: CompactJumpBeats) => updatePreferences("view", { shellJumpBeats: beats }),
+    [updatePreferences],
+  );
 
   useEffect(() => {
     publishZoom?.(zoom);
@@ -2238,6 +2259,42 @@ export const Player = memo(function Player({
     event.preventDefault();
     onDropTrack?.();
   };
+
+  // The compact player is the view shell's strip, drawn from the same deck.
+  if (compact) {
+    return (
+      <CompactPlayer
+        track={track}
+        deck={deck}
+        shell={shell}
+        armed={armed}
+        droppable={takesDrop}
+        onDragOver={dragOver}
+        onDrop={drop}
+        playing={playback.playing}
+        idle={playback.idle}
+        onToggle={togglePlay}
+        onCueDown={holdCue}
+        onCueUp={dropCue}
+        positionSource={playback}
+        total={total}
+        bpmX100={Math.round(bpmX100 * playback.tempo)}
+        keyText={track ? formatKey(track.key, viewPrefs.keyDisplay) : ""}
+        cues={cues}
+        phrases={compactPhrases}
+        overviewRef={overviewRef}
+        overview={overview}
+        overviewHead={overviewHead}
+        onScrubStart={scrubOverview}
+        onScrubMove={dragOverview}
+        onScrubEnd={endDrag}
+        drawn={hasWaveform}
+        jumpBeats={compactJump}
+        onJumpBeats={setCompactJump}
+        onJump={jump}
+      />
+    );
+  }
 
   // The simple player is this deck drawn as one strip. Everything above —
   // the engine, the cues, the frame loop, the keys — is still this

@@ -3308,6 +3308,7 @@ function AppBody() {
             devices={menuDevices}
             onExportLoop={exportLoop}
             simple={!isFullDeck(layout)}
+            compact={shellOn}
             dragging={draggedTracks !== null}
             onDropTrack={loadDroppedInto.a}
             onLoadSelected={loadSelectedInto.a}
