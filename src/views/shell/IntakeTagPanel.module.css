@@ -1,0 +1,113 @@
+/* The Intake tag panel (wbx-65): docs/design/screens/intake, tokens.md
+   "Tag dimensions": one fixed hue per dimension for set tags, an unset tag
+   outlined in the hairline colour. The hues carry meaning (which dimension)
+   and so do not follow the theme; they are the mock's (Tokyo Night) set. */
+.tags {
+  display: grid;
+  gap: var(--s-shell-space-4);
+  min-width: 0;
+}
+.label {
+  font-size: var(--f-size-shell-label);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--role-text-dim);
+}
+.legend {
+  margin: 0;
+  font-size: var(--f-size-shell-label);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--role-text-dim);
+}
+.diamond { color: var(--role-accent); }
+.hint { margin: 0; color: var(--role-text-dim); }
+.failed { margin: 0; color: var(--c-energy-5); }
+
+.dimensions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--s-shell-space-6) calc(var(--s-shell-space-6) * 2);
+}
+/* The tags reflow at half width (tokens.md: three columns to two). */
+@container (max-width: 800px) {
+  .dimensions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 800px) {
+  .dimensions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.dimension { display: grid; gap: var(--s-shell-space-3); align-content: start; min-width: 0; }
+.dimension[data-hue="0"] { --tag-hue: #bb9af7; }
+.dimension[data-hue="1"] { --tag-hue: #7dcfff; }
+.dimension[data-hue="2"] { --tag-hue: #e0af68; }
+.dimension[data-hue="3"] { --tag-hue: #9ece6a; }
+.dimension[data-hue="4"] { --tag-hue: #7aa2f7; }
+.dimension[data-hue="5"] { --tag-hue: #f7768e; }
+
+.chips { display: flex; flex-wrap: wrap; gap: var(--s-shell-space-3); }
+.chip, .small {
+  border: var(--s-shell-border) solid var(--role-hairline);
+  border-radius: var(--s-shell-radius);
+  background: transparent;
+  color: var(--role-text-dim);
+  font: inherit;
+  cursor: pointer;
+  padding: var(--s-shell-space-2) var(--s-shell-space-5);
+}
+.small { border-color: var(--role-border); background: var(--role-control); color: var(--role-text); }
+.chip:hover:not(:disabled), .small:hover { border-color: var(--role-accent); }
+.chip:focus-visible { outline: var(--s-shell-border) solid var(--role-accent); outline-offset: 1px; }
+.chip[data-state="set"] {
+  border-color: var(--tag-hue);
+  color: var(--tag-hue);
+  background: color-mix(in srgb, var(--tag-hue) 18%, transparent);
+}
+/* Implied by a child: carried, but not named. */
+.chip[data-state="implied"] {
+  border-color: color-mix(in srgb, var(--tag-hue) 55%, transparent);
+  color: color-mix(in srgb, var(--tag-hue) 80%, var(--role-text-dim));
+}
+.chip[data-depth="1"], .chip[data-depth="2"], .chip[data-depth="3"] { font-size: 0.92em; }
+/* A child is marked by a heavier left edge, not by text, so its name stays its own. */
+.chip[data-depth="1"], .chip[data-depth="2"], .chip[data-depth="3"] { border-left-width: calc(var(--s-shell-border) * 3); }
+.chip:disabled { cursor: not-allowed; opacity: 0.5; }
+.single { text-transform: none; letter-spacing: 0; }
+/* A value no tag stands for: kept, dashed, never mistaken for a tag. */
+.chip[data-state="unmapped"] {
+  border-style: dashed;
+  border-color: var(--c-key-boost, #e0af68);
+  color: var(--role-text-dim);
+}
+.failures { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--s-shell-space-2); color: var(--c-energy-5); }
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: start center;
+  padding-top: 12vh;
+  background: color-mix(in srgb, var(--role-ground, #000) 50%, transparent);
+  z-index: 50;
+}
+.picker {
+  width: min(36em, calc(100vw - 32px));
+  display: grid;
+  gap: var(--s-shell-space-3);
+  padding: var(--s-shell-space-5);
+  border: var(--s-shell-border) solid var(--role-border);
+  border-radius: var(--s-shell-radius);
+  background: var(--role-panel);
+  font-family: var(--f-shell);
+  color: var(--role-text);
+}
+.search {
+  padding: var(--s-shell-space-3) var(--s-shell-space-5);
+  border: var(--s-shell-border) solid var(--role-border);
+  border-radius: var(--s-shell-radius);
+  background: var(--role-ground, var(--role-panel));
+  color: var(--role-text-bright);
+  font: inherit;
+}
+.options { margin: 0; padding: 0; list-style: none; max-height: 50vh; overflow: auto; }
+.option { padding: var(--s-shell-space-2) var(--s-shell-space-4); cursor: pointer; }
+.option[aria-selected="true"] { background: var(--role-selection, var(--role-control)); color: var(--role-text-bright); }

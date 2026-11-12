@@ -254,6 +254,12 @@ impl OpenLibrary {
     /// [`Self::edit`] for an edit Undo can take back: `action` also answers
     /// the entry the edit history keeps under `label`, as the window's own
     /// edit of the kind would. Undo in the hosting window takes it back.
+    /// What the Ledger called the latest entry Undo would take back
+    /// (wbx-65: to read what it could not record).
+    pub(crate) fn latest_ledger_entry(&self) -> Option<i64> {
+        self.core.history().lock().latest_ledger_entry()
+    }
+
     pub(crate) fn recorded_edit<T>(
         &self,
         touched: Touched,

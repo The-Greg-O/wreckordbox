@@ -39,6 +39,10 @@ use crate::state::AppState;
 /// message to show.
 pub const SERVICE_STOPPED: &str = "service:stopped";
 
+/// The interface's event for a Fact changed in the Sidecar:
+/// `{ trackId, kind }` (wbx-65).
+pub const SIDECAR_CHANGED: &str = "sidecar:changed";
+
 /// The interface's event for every turn of Library Protection, by
 /// whoever: a [`ProtectionDto`]. Sent in order; one with a lower revision
 /// than one already applied is stale.
@@ -56,6 +60,10 @@ pub trait FrontEnd: Send + Sync + 'static {
     /// The window is not, or is no longer, the Library's writer; `message`
     /// is for the DJ.
     fn cannot_write(&self, message: &str);
+    /// A Fact of `kind` on `track` changed in the Sidecar (a client's
+    /// `facts.record`, a tag set from Intake): what follows the Sidecar
+    /// reads again (wbx-65).
+    fn sidecar_changed(&self, _track: &str, _kind: &str) {}
 }
 
 /// The service the window is hosting, and for which Library.
@@ -151,6 +159,9 @@ impl AppState {
                         if let Ok(change) = serde_json::from_value::<LibraryChanged>(event.data) {
                             front.library_changed(change);
                         }
+                    } else if event.event == wreckordbox_service::stems::events::SIDECAR_CHANGED {
+                        let field = |name: &str| event.data.get(name).and_then(serde_json::Value::as_str).unwrap_or_default().to_owned();
+                        front.sidecar_changed(&field("track_id"), &field("kind"));
                     }
                 }
             });
@@ -222,6 +233,10 @@ impl<R: tauri::Runtime> FrontEnd for Interface<R> {
 
     fn cannot_write(&self, message: &str) {
         let _ = tauri::Emitter::emit(&self.0, SERVICE_STOPPED, message);
+    }
+
+    fn sidecar_changed(&self, track: &str, kind: &str) {
+        let _ = tauri::Emitter::emit(&self.0, SIDECAR_CHANGED, serde_json::json!({ "trackId": track, "kind": kind }));
     }
 }
 

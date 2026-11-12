@@ -8,7 +8,7 @@
 use std::fmt::Write as _;
 
 use clap::{Args, Subcommand};
-use serde_json::json;
+use serde_json::{json, Value};
 use wreckordbox_service::intake::{
     commands, Colours, Counts, CountsOf, GridState, Page, PrepColour, PrepColourSet, ProblemsPage,
     Queue, QueuedTrack, SetPrepColour,
@@ -64,6 +64,39 @@ pub enum IntakeCommands {
         /// colour's name.
         #[arg(long, value_name = "N", conflicts_with = "prep_colour")]
         colour_id: Option<u8>,
+    },
+    /// Show a track's tags as Intake's tag panel shows them: every
+    /// dimension of the Tag schema (or the Library's MyTag categories when
+    /// there is none), those that reach the deck first and marked `◆`, the
+    /// tags the track has in brackets, implied parents in parentheses, and
+    /// values no tag stands for after `unmapped:`.
+    Tags {
+        /// The track's identifier.
+        #[arg(value_name = "TRACK_ID")]
+        id: String,
+    },
+    /// Set one dimension of a track to exactly the tags given (none clears
+    /// it), as a click in Intake's tag panel does: a deck-facing dimension
+    /// as the track's MyTags, any other as the DJ's Fact (say `--source dj`
+    /// to record it as yours). One step the window's Undo takes back.
+    Tag {
+        /// The track's identifier.
+        #[arg(value_name = "TRACK_ID")]
+        id: String,
+        /// The dimension, as `intake tags --json` names it (`id`).
+        #[arg(value_name = "DIMENSION")]
+        dimension: String,
+        /// The tags' identifiers. In the genre tree, the most specific:
+        /// a parent is implied.
+        #[arg(value_name = "TAG")]
+        terms: Vec<String>,
+        /// Also take off a value no tag stands for (repeatable).
+        #[arg(long, value_name = "VALUE")]
+        drop_unmapped: Vec<String>,
+        /// Rewrite the track's comment with its MyTags (Add "My Tag" to the
+        /// "Comments").
+        #[arg(long)]
+        comments: bool,
     },
 }
 
@@ -143,6 +176,45 @@ pub fn run(
                 colours_text(&colours)
             })
         }
+        IntakeCommands::Tags { id } => {
+            let panel: Value = client.call(
+                wreckordbox_service::tag_panel::commands::INTAKE_TAG_PANEL,
+                json!({ "id": id }),
+            )?;
+            Ok(if as_json {
+                panel.to_string()
+            } else {
+                tags_text(&panel)
+            })
+        }
+        IntakeCommands::Tag {
+            id,
+            dimension,
+            terms,
+            drop_unmapped,
+            comments,
+        } => {
+            let set: Value = client.call(
+                wreckordbox_service::tag_panel::commands::INTAKE_SET_TAGS,
+                json!({
+                    "id": id,
+                    "dimension": dimension,
+                    "terms": terms,
+                    "drop_unmapped": drop_unmapped,
+                    "comments": comments,
+                }),
+            )?;
+            Ok(if as_json {
+                set.to_string()
+            } else {
+                let mut text = tags_text(&set["panel"]);
+                for reason in set["facts_not_recorded"].as_array().into_iter().flatten() {
+                    text.push_str("\nNot recorded as the DJ's Fact: ");
+                    text.push_str(reason.as_str().unwrap_or_default());
+                }
+                text
+            })
+        }
         IntakeCommands::Colour {
             id,
             prep_colour,
@@ -163,6 +235,74 @@ pub fn run(
             })
         }
     }
+}
+
+/// A tag panel as text: one dimension to a line.
+fn tags_text(panel: &Value) -> String {
+    let mut lines = Vec::new();
+    if let Some(problem) = panel["schema_problem"].as_str() {
+        lines.push(problem.to_owned());
+    }
+    let track = &panel["track"];
+    for dimension in panel["dimensions"].as_array().into_iter().flatten() {
+        let id = dimension["id"].as_str().unwrap_or_default();
+        let set: Vec<&str> = track["set"][id]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        let tags = dimension["tags"].as_array().cloned().unwrap_or_default();
+        let parent_of = |tag: &str| {
+            tags.iter()
+                .find(|t| t["id"] == tag)
+                .and_then(|t| t["parent"].as_str().map(str::to_owned))
+        };
+        let mut implied = Vec::new();
+        for carried in &set {
+            let mut at = parent_of(carried);
+            while let Some(parent) = at {
+                at = parent_of(&parent);
+                implied.push(parent);
+            }
+        }
+        let shown: Vec<String> = tags
+            .iter()
+            .map(|tag| {
+                let tag_id = tag["id"].as_str().unwrap_or_default();
+                let name = tag["name"].as_str().unwrap_or_default();
+                if set.contains(&tag_id) {
+                    format!("[{name}]")
+                } else if implied.iter().any(|i| i == tag_id) {
+                    format!("({name})")
+                } else {
+                    name.to_owned()
+                }
+            })
+            .collect();
+        let mut line = format!(
+            "{}{}: {}",
+            if dimension["deck"] == true {
+                "◆ "
+            } else {
+                "  "
+            },
+            dimension["label"].as_str().unwrap_or_default(),
+            shown.join(", ")
+        );
+        let unmapped: Vec<&str> = track["unmapped"][id]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|value| value["name"].as_str())
+            .collect();
+        if !unmapped.is_empty() {
+            line.push_str("  unmapped: ");
+            line.push_str(&unmapped.join(", "));
+        }
+        lines.push(line);
+    }
+    lines.join("\n")
 }
 
 /// The two counts, one to a line; Problems says which Prep colour it
