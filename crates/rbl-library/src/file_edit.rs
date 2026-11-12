@@ -19,6 +19,7 @@ use crate::{protection, LibraryCore};
 /// the analysis-file lock. Dropping it ends the edit.
 #[must_use = "the edit is guarded only while this is held"]
 pub struct FileEdit<'a> {
+    pub(crate) core: &'a LibraryCore,
     _gate: parking_lot::ReentrantMutexGuard<'a, ()>,
     _files: parking_lot::MutexGuard<'a, ()>,
 }
@@ -65,6 +66,7 @@ impl LibraryCore {
             return Err(rbl_db::DbError::WriteRefused(reason.to_owned()));
         }
         Ok(FileEdit {
+            core: self,
             _gate: gate,
             _files: files,
         })

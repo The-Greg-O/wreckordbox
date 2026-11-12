@@ -13,6 +13,8 @@ mod startup;
 mod screen_cache;
 #[cfg(test)]
 mod test_stick;
+#[cfg(test)]
+mod file_ledger_tests;
 pub mod analysis;
 mod analysis_extensions;
 mod analysis_pipeline;

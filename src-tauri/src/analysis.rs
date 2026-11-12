@@ -738,7 +738,7 @@ pub async fn edit_phrase<R: tauri::Runtime>(
 /// [`edit_phrase`]'s work: the track's `.EXT` rewritten with one phrase
 /// edit, refused before it is touched while the Library may not be changed
 /// (Library Protection among it). Whether anything changed.
-fn phrase_edit(state: &AppState, library: &rbl_index::Library, share: &std::path::Path, track_id: &str,
+pub(crate) fn phrase_edit(state: &AppState, library: &rbl_index::Library, share: &std::path::Path, track_id: &str,
     edit: rbl_anlz::PhraseEdit) -> AppResult<bool> {
     if library_locked(state) {
         return Err(AppError::new(ErrorKind::ReadOnly, "rekordbox is running. Quit it before editing phrases."));
@@ -751,14 +751,20 @@ fn phrase_edit(state: &AppState, library: &rbl_index::Library, share: &std::path
         return Err(AppError::new(ErrorKind::NotFound, "That track has no analysis."));
     }
     let ext = rbl_anlz::sibling(&rbl_anlz::resolve(share, &relative), "EXT");
-    let _edit = state.file_edit()?;
+    let mut guard = state.file_edit()?;
     let file = rbl_anlz::Anlz::read(&ext).map_err(|e| {
         AppError::new(ErrorKind::NotFound, "That track's analysis file could not be read.").with_detail(e.to_string())
     })?;
     let Some(bytes) = file.with_phrase_edit(edit) else { return Ok(false) };
+    let kind = match edit {
+        rbl_anlz::PhraseEdit::Cut { .. } => "phrase_cut",
+        rbl_anlz::PhraseEdit::Clear { .. } => "phrase_clear",
+    };
+    let record = guard.recording(kind, track_id).map_err(write_error)?;
     crate::durable::write(&ext, &bytes).map_err(|e| {
         AppError::new(ErrorKind::Internal, "The analysis file could not be written.").with_detail(e.to_string())
     })?;
+    record.written();
     Ok(true)
 }
 

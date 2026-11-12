@@ -15,6 +15,7 @@ pub mod ledger;
 pub mod my_tags;
 pub mod protection;
 pub mod file_edit;
+pub mod file_record;
 pub mod read;
 
 use std::collections::HashMap;

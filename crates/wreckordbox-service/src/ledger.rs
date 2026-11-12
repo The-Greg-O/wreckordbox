@@ -1363,7 +1363,8 @@ impl Keeper {
                     (Err(error.message.clone()), dj, WINDOW_RUN.to_owned())
                 }
             };
-            let command = current.as_ref().map(|scope| scope.command.clone());
+            let command = state.op.as_ref().and_then(|op| op.command.clone())
+                .or_else(|| current.as_ref().map(|scope| scope.command.clone()));
             if let Some(scope) = current.as_mut() {
                 scope.entries += 1;
             }
@@ -1454,8 +1455,8 @@ impl Keeper {
     }
 }
 
-impl rbl_library::ledger::Ledger for Keeper {
-    fn begin(&self) -> Result<(), String> {
+impl Keeper {
+    fn begin_operation(&self, file: Option<Value>) -> Result<(), String> {
         let sidecar = self.stems.sidecar().map_err(|e| e.message)?;
         let mut state = self.state();
         if state.closed {
@@ -1470,7 +1471,7 @@ impl rbl_library::ledger::Ledger for Keeper {
         // Whose change it will be, as far as is known before it is made.
         let (window, run, source, description, command) = CURRENT.with(|current| {
             let current = current.borrow();
-            let command = current.as_ref().map(|scope| scope.command.clone());
+            let command = file.or_else(|| current.as_ref().map(|scope| scope.command.clone()));
             match current.as_ref().map(|scope| &scope.target) {
                 Some(Target::Joined { run, source }) => {
                     (false, Some(*run), source.clone(), String::new(), command)
@@ -1527,6 +1528,32 @@ impl rbl_library::ledger::Ledger for Keeper {
             std::thread::sleep(delay);
         }
         Ok(())
+    }
+}
+
+impl rbl_library::ledger::Ledger for Keeper {
+    fn begin(&self) -> Result<(), String> {
+        self.begin_operation(None)
+    }
+
+    fn begin_file(&self, kind: &str, track: &str) -> Result<(), String> {
+        self.begin_operation(Some(serde_json::json!({
+            "name": "files.edit", "args": {"kind": kind, "track": track}
+        })))
+    }
+
+    fn file_written(&self, kind: &str, track: &str) {
+        let label = format!(
+            "{kind}: track {track}. Cannot reverse: previous analysis bytes were not retained."
+        );
+        self.append(Draft {
+            action: Action::Write,
+            kind,
+            label: &label,
+            reverses: None,
+            part_of: None,
+            payload: None,
+        });
     }
 
     fn prepare(&self, db: &rbl_db::Library, targets: &rbl_library::ledger::Preparation) {
