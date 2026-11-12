@@ -92,6 +92,102 @@ pub fn dir_from(master_db: &Path, chosen: Option<OsString>) -> PathBuf {
     }
 }
 
+/// The Sidecar's folder, checked before a backup reads it or a restore
+/// writes in it, and pinned: every later step uses this path, and
+/// [`Destination::verify`] checks it is still the same folder just before
+/// anything is replaced. A restore's journal records it, so recovery acts
+/// on the folder the restore checked, whatever the environment of the
+/// program that recovers.
+///
+/// Refused: a relative path; a folder that is a symbolic link (the writes
+/// would land wherever it points, a Stick included); something that is
+/// not a folder; and a folder that holds the Library's folder, or overlaps
+/// `share/` or anything a restore replaces.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Destination {
+    /// The folder, with the folders above it resolved.
+    pub path: PathBuf,
+}
+
+impl Destination {
+    /// The Sidecar of the Library at `location`, as [`dir`] names it, checked.
+    pub fn of(location: &rbl_db::LibraryLocation) -> Result<Self> {
+        Self::check(location, &dir(location))
+    }
+
+    /// `path` as the Sidecar of the Library at `location`, checked.
+    pub fn check(location: &rbl_db::LibraryLocation, path: &Path) -> Result<Self> {
+        let shown = path.display();
+        if !path.is_absolute() || path.components().any(|part| !matches!(part, std::path::Component::Normal(_) | std::path::Component::RootDir | std::path::Component::Prefix(_))) {
+            return Err(refused(format!("The Sidecar's folder must be a plain absolute path: {shown}")));
+        }
+        let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+            return Err(refused(format!("The Sidecar's folder cannot be {shown}.")));
+        };
+        own_folder(path)?;
+        let pinned = resolved(parent)?.join(name);
+        let library_root = location.master_db.parent().map(resolved).transpose()?;
+        let mut replaced: Vec<PathBuf> = crate::journal::restorable(location).iter().map(|path| resolved(path)).collect::<Result<_>>()?;
+        replaced.push(resolved(&location.share_root)?);
+        let holds_library = library_root.as_ref().is_some_and(|root| root.starts_with(&pinned));
+        if holds_library || replaced.iter().any(|other| other.starts_with(&pinned) || pinned.starts_with(other)) {
+            return Err(refused(format!(
+                "The Sidecar's folder {shown} overlaps the Library's own files. Choose a folder of its own for the Sidecar."
+            )));
+        }
+        Ok(Self { path: pinned })
+    }
+
+    /// Whether the folder is still the one that was checked: not replaced
+    /// by a symbolic link or a file, and not moved under a link since.
+    pub fn verify(&self) -> Result<()> {
+        own_folder(&self.path)?;
+        let parent = self.path.parent().ok_or_else(|| refused("Invalid Sidecar folder."))?;
+        if resolved(parent)? != parent {
+            return Err(refused(format!("The Sidecar's folder {} moved while it was being restored.", self.path.display())));
+        }
+        Ok(())
+    }
+
+    /// Whether a restore journal may name `target`: only a top-level entry
+    /// of this folder, of a kind a backup can hold.
+    pub(crate) fn may_replace(&self, target: &Path) -> bool {
+        target.parent() == Some(self.path.as_path()) && target.file_name().and_then(|name| name.to_str()).is_some_and(|name| backed_up(name, true))
+    }
+}
+
+/// The Sidecar's folder itself must be a real folder, or not there yet.
+fn own_folder(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => Err(refused(format!(
+            "The Sidecar's folder {} is a symbolic link. Backups and restores do not follow it; point {DIR_ENV} at the folder itself.",
+            path.display()
+        ))),
+        Ok(meta) if !meta.is_dir() => Err(refused(format!("The Sidecar's folder {} is not a folder.", path.display()))),
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// `path` with its nearest existing ancestor resolved and the rest, which
+/// does not exist yet, kept as written.
+fn resolved(path: &Path) -> Result<PathBuf> {
+    let mut missing = Vec::new();
+    let mut existing = path;
+    loop {
+        match existing.canonicalize() {
+            Ok(found) => return Ok(missing.iter().rev().fold(found, |path, name| path.join(name))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let (Some(parent), Some(name)) = (existing.parent(), existing.file_name()) else { return Err(e.into()) };
+                missing.push(name.to_os_string());
+                existing = parent;
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
 /// What a person chooses about the Sidecar's part of a backup.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Options {
@@ -123,6 +219,12 @@ pub struct Contents {
     /// whether or not it is in the backup.
     #[serde(default)]
     pub stems_bytes: u64,
+    /// Every SQLite database in the part, by its path in the Sidecar
+    /// (`sidecar.db`, `recipes/x.db`). A restore checks each of these is
+    /// there and sound, however its first bytes read. Empty in backups
+    /// made before it was recorded.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub databases: Vec<String>,
 }
 
 impl Contents {
@@ -182,28 +284,36 @@ pub struct Collected {
 /// A symbolic link in what would be backed up is refused, as in the rest of
 /// a backup, and so is a database that cannot be snapshotted or fails
 /// SQLite's check: a backup that silently lacked them would not be one.
+///
+/// The folder itself must not be a symbolic link; use [`collect_for`] to
+/// have it checked against the Library as well.
 pub fn collect(sidecar_dir: &Path, options: Options, proceed: &mut dyn FnMut() -> bool) -> Result<Option<Collected>> {
-    match fs::symlink_metadata(sidecar_dir) {
-        Ok(_) if sidecar_dir.is_dir() => {}
-        Ok(_) => return Ok(None),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e.into()),
+    own_folder(sidecar_dir)?;
+    if !sidecar_dir.is_dir() {
+        return Ok(None);
     }
     let stage = tempfile::tempdir()?;
-    let mut walk = Walk { options, proceed, stage: stage.path(), snapshots: 0, directories: vec![ARCHIVE_FOLDER.to_owned()], files: Vec::new() };
+    let mut walk = Walk { options, proceed, stage: stage.path(), snapshots: 0, directories: vec![ARCHIVE_FOLDER.to_owned()], files: Vec::new(), databases: Vec::new() };
     walk.folder(sidecar_dir, ARCHIVE_FOLDER, true)?;
-    let Walk { directories, mut files, .. } = walk;
+    let Walk { directories, mut files, databases, .. } = walk;
     let contents = Contents {
         version: VERSION,
         bytes: files.iter().map(|item| item.bytes).sum(),
         stems: options.stems,
         stems_bytes: tree_bytes(&sidecar_dir.join(STEMS_FOLDER)),
+        databases,
     };
     let record = stage.path().join(NAME);
     let bytes = serde_json::to_vec(&contents)?;
     fs::write(&record, &bytes)?;
     files.push(Item { name: NAME.to_owned(), source: record, bytes: bytes.len() as u64 });
     Ok(Some(Collected { contents, directories, files, _stage: stage }))
+}
+
+/// [`collect`] for the Sidecar of the Library at `location`, its folder
+/// checked first ([`Destination::of`]).
+pub fn collect_for(location: &rbl_db::LibraryLocation, options: Options, proceed: &mut dyn FnMut() -> bool) -> Result<Option<Collected>> {
+    collect(&Destination::of(location)?.path, options, proceed)
 }
 
 struct Walk<'a> {
@@ -213,6 +323,8 @@ struct Walk<'a> {
     snapshots: usize,
     directories: Vec<String>,
     files: Vec<Item>,
+    /// Paths in the Sidecar of the databases snapshotted.
+    databases: Vec<String>,
 }
 
 impl Walk<'_> {
@@ -237,12 +349,17 @@ impl Walk<'_> {
                 self.directories.push(entry.clone());
                 self.folder(&path, &entry, false)?;
             } else if meta.is_file() {
-                if database_companion(&path) {
+                let store = top && name == DATABASE_FILE;
+                if !store && database_companion(&path, top) {
                     continue;
                 }
-                if is_database(&path) {
-                    let source = self.snapshot(&path)?;
+                // The Sidecar's own database is one whatever its first
+                // bytes say: a damaged one fails the backup, never travels
+                // as a plain file.
+                if store || is_database(&path) {
+                    let source = self.snapshot(&path, store)?;
                     let bytes = fs::metadata(&source)?.len();
+                    self.databases.push(entry.strip_prefix(&format!("{ARCHIVE_FOLDER}/")).unwrap_or(&entry).to_owned());
                     self.files.push(Item { name: entry, source, bytes });
                 } else {
                     self.files.push(Item { name: entry, source: path, bytes: meta.len() });
@@ -253,7 +370,7 @@ impl Walk<'_> {
     }
 
     /// A whole copy of a database that may be in use, checked.
-    fn snapshot(&mut self, database: &Path) -> Result<PathBuf> {
+    fn snapshot(&mut self, database: &Path, store: bool) -> Result<PathBuf> {
         self.snapshots += 1;
         let copy = self.stage.join(format!("database-{}", self.snapshots));
         let shown = database.file_name().unwrap_or_default().to_string_lossy().into_owned();
@@ -264,8 +381,34 @@ impl Walk<'_> {
         if !sound(&copy)? {
             return Err(refused(format!("The backup copy of the Sidecar's database {shown} failed its integrity check.")));
         }
+        if store && !sidecar_store(&copy)? {
+            return Err(refused(format!("The Sidecar's database {shown} is not a Sidecar store; it may be damaged. Nothing was backed up.")));
+        }
         Ok(copy)
     }
+}
+
+/// The Sidecar's own database, by name, at the top of its folder.
+pub const DATABASE_FILE: &str = "sidecar.db";
+
+/// Whether the database at `path` is a Sidecar store: SQLite, sound, and
+/// with the schema version the Sidecar writes when it makes one. An empty
+/// file is a valid SQLite database, but not a store. Leaves no companion
+/// file beside it.
+pub(crate) fn sidecar_store(path: &Path) -> Result<bool> {
+    if !is_database(path) || !sound(path)? {
+        return Ok(false);
+    }
+    let version = (|| -> rusqlite::Result<Option<String>> {
+        use rusqlite::OptionalExtension as _;
+        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?
+            .query_row("SELECT value FROM meta WHERE key = 'schema_version'", [], |row| row.get(0))
+            .optional()
+    })();
+    for suffix in COMPANIONS {
+        crate::journal::remove(&crate::sidecar(path, suffix))?;
+    }
+    Ok(version.ok().flatten().and_then(|version| version.parse::<u32>().ok()).is_some_and(|version| version >= 1))
 }
 
 /// Whether SQLite's own check passes on the database at `path`. Leaves no
@@ -288,10 +431,14 @@ pub(crate) fn is_database(path: &Path) -> bool {
     fs::File::open(path).and_then(|mut file| file.read_exact(&mut head)).is_ok() && head == *b"SQLite format 3\0"
 }
 
-/// A database's write-ahead log, shared memory or rollback journal.
-fn database_companion(path: &Path) -> bool {
+/// A database's write-ahead log, shared memory or rollback journal. The
+/// Sidecar's own database's always are, whatever state it is in.
+fn database_companion(path: &Path, top: bool) -> bool {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else { return false };
-    COMPANIONS.iter().any(|suffix| name.strip_suffix(suffix).is_some_and(|base| !base.is_empty() && is_database(&path.with_file_name(base))))
+    COMPANIONS.iter().any(|suffix| {
+        name.strip_suffix(suffix)
+            .is_some_and(|base| !base.is_empty() && ((top && base == DATABASE_FILE) || is_database(&path.with_file_name(base))))
+    })
 }
 
 /// Bytes of the regular files under `path`; nothing for what cannot be read.
@@ -313,12 +460,6 @@ fn tree_bytes(path: &Path) -> u64 {
 pub fn entry(name: &str) -> Option<PathBuf> {
     let mut parts = Path::new(name).components();
     (parts.next()?.as_os_str() == ARCHIVE_FOLDER).then(|| parts.collect())
-}
-
-/// Whether a restore journal may name `target`: only a top-level entry of
-/// this Library's Sidecar, of a kind a backup can hold.
-pub(crate) fn may_replace(location: &rbl_db::LibraryLocation, target: &Path) -> bool {
-    target.parent() == Some(dir(location).as_path()) && target.file_name().and_then(|name| name.to_str()).is_some_and(|name| backed_up(name, true))
 }
 
 /// A friendly refusal ahead of unpacking, on the Sidecar's own volume,
@@ -362,7 +503,7 @@ mod tests {
 
     #[test]
     fn a_record_from_a_newer_version_or_not_a_record_is_refused() {
-        assert_eq!(Contents::parse(br#"{"version":1,"bytes":7,"stems":false}"#).unwrap(), Contents { version: 1, bytes: 7, stems: false, stems_bytes: 0 });
+        assert_eq!(Contents::parse(br#"{"version":1,"bytes":7,"stems":false}"#).unwrap(), Contents { version: 1, bytes: 7, stems: false, stems_bytes: 0, databases: Vec::new() });
         assert!(Contents::parse(br#"{"version":2,"bytes":7,"stems":false}"#).is_err());
         assert!(Contents::parse(b"[]").is_err());
     }

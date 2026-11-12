@@ -218,20 +218,22 @@ impl<R: tauri::Runtime> FrontEnd for Interface<R> {
 
 /// Hosts the service for the Library the app is about to read. A Library
 /// that is not there yet has nothing to host; the next load tries again.
-pub(crate) fn host<R: tauri::Runtime>(app: &tauri::AppHandle<R>, location: &LibraryLocation) {
+///
+/// Returns whether this window now hosts the service: owns the Library,
+/// and so may recover an interrupted restore.
+pub(crate) fn host<R: tauri::Runtime>(app: &tauri::AppHandle<R>, location: &LibraryLocation) -> bool {
     use tauri::Manager as _;
     if !location.master_db.is_file() {
-        return;
+        return false;
     }
     match Config::from_env() {
-        Ok(config) => {
-            let _ = host_with(app, location, &config);
-        }
+        Ok(config) => host_with(app, location, &config).is_ok(),
         Err(error) => {
             let message = cannot_host(&error);
             tracing::error!(error = %error.message, "the window is not hosting the Library service");
             app.state::<Arc<AppState>>().core().refuse_writes(Some(message.clone()));
             Interface(app.clone()).cannot_write(&message);
+            false
         }
     }
 }

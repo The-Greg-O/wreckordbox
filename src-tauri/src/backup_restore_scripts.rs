@@ -1,4 +1,11 @@
 //! Standalone restore helpers embedded in every backup archive.
+//!
+//! They restore the Library's files by themselves only for a backup that
+//! holds no Sidecar. A backup with one (`sidecar.json` beside the script)
+//! must go back with its Sidecar, under the journal and the Library's lock
+//! that `wreckordbox backup restore` uses: the scripts hand such a backup to
+//! that command when it is installed and the backup's `.zip` is found, and
+//! otherwise refuse before changing anything.
 use std::path::Path;
 
 pub const SHELL_NAME: &str = "restore-rekordbox.sh";
@@ -40,6 +47,31 @@ if pgrep -ix rekordbox >/dev/null 2>&1 || pgrep -ix rekordboxAgent >/dev/null 2>
   exit 1
 fi
 echo "rekordbox is not running."
+
+if [[ -f "$SCRIPT_DIR/sidecar.json" ]]; then
+  echo "This backup holds wreckordbox's Sidecar, which must be restored together with the library."
+  WRECKORDBOX="${{WRECKORDBOX_BIN:-$(command -v wreckordbox || true)}}"
+  ARCHIVE="${{WRECKORDBOX_BACKUP:-$SCRIPT_DIR.zip}}"
+  if [[ -z "$WRECKORDBOX" || ! -x "$WRECKORDBOX" ]]; then
+    echo "This script cannot restore a backup that holds the Sidecar, and the wreckordbox command was not found. Nothing was changed." >&2
+    echo "Install wreckordbox, then run: wreckordbox backup restore <this backup's .zip file> --yes" >&2
+    exit 1
+  fi
+  if [[ ! -f "$ARCHIVE" ]]; then
+    echo "The backup's .zip file was not found at $ARCHIVE. Nothing was changed." >&2
+    echo "Run: $WRECKORDBOX backup restore <this backup's .zip file> --yes" >&2
+    echo "or set WRECKORDBOX_BACKUP to the .zip file and run this script again." >&2
+    exit 1
+  fi
+  if [[ -n "${{1:-}}" ]]; then
+    echo "wreckordbox restores the library it is set to use; the library path given here is not used."
+  fi
+  echo "This will replace the rekordbox library and the Sidecar with the backup's, using:"
+  echo "  $WRECKORDBOX backup restore $ARCHIVE"
+  read -r -p "Continue? [y/N] " answer
+  case "$answer" in [yY]|[yY][eE][sS]) ;; *) echo "Restore cancelled."; exit 0 ;; esac
+  exec "$WRECKORDBOX" backup restore "$ARCHIVE" --yes
+fi
 
 echo "This will replace the rekordbox library at:"
 echo "  $MASTER_DB"
@@ -145,6 +177,26 @@ if (Get-Process -Name rekordbox, rekordboxAgent -ErrorAction SilentlyContinue) {
   throw 'Quit rekordbox before restoring this backup.'
 }}
 Write-Host 'rekordbox is not running.'
+
+if (Test-Path -LiteralPath (Join-Path $SourceDir 'sidecar.json') -PathType Leaf) {{
+  Write-Host "This backup holds wreckordbox's Sidecar, which must be restored together with the library."
+  $Wreckordbox = $env:WRECKORDBOX_BIN
+  if (!$Wreckordbox) {{ $Found = Get-Command wreckordbox -ErrorAction SilentlyContinue; if ($Found) {{ $Wreckordbox = $Found.Source }} }}
+  $Archive = $env:WRECKORDBOX_BACKUP
+  if (!$Archive) {{ $Archive = "$SourceDir.zip" }}
+  if (!$Wreckordbox) {{
+    throw "This script cannot restore a backup that holds the Sidecar, and the wreckordbox command was not found. Nothing was changed. Install wreckordbox, then run: wreckordbox backup restore <this backup's .zip file> --yes"
+  }}
+  if (!(Test-Path -LiteralPath $Archive -PathType Leaf)) {{
+    throw "The backup's .zip file was not found at $Archive. Nothing was changed. Run: wreckordbox backup restore <this backup's .zip file> --yes, or set WRECKORDBOX_BACKUP to the .zip file and run this script again."
+  }}
+  Write-Host "This will replace the rekordbox library and the Sidecar with the backup's, using:"
+  Write-Host "  $Wreckordbox backup restore $Archive"
+  $Answer = Read-Host 'Continue? [y/N]'
+  if ($Answer -notmatch '^(?i:y|yes)$') {{ Write-Host 'Restore cancelled.'; exit 0 }}
+  & $Wreckordbox backup restore $Archive --yes
+  exit $LASTEXITCODE
+}}
 
 Write-Host 'This will replace the rekordbox library at:'
 Write-Host "  $MasterDb"
@@ -339,5 +391,77 @@ mod tests {
             fs::read(rollback.join("database/master.db-wal")).unwrap(),
             b"current wal"
         );
+    }
+
+    /// Runs the shell script from an extracted backup holding a Sidecar,
+    /// answering "yes", with `PATH` limited to what `bash` needs.
+    #[cfg(unix)]
+    fn run_on_sidecar_backup(stub: Option<&str>, with_zip: bool) -> (std::process::Output, tempfile::TempDir) {
+        use std::{fs, io::Write, process::{Command, Stdio}};
+        let dir = tempfile::tempdir().unwrap();
+        let extracted = dir.path().join("rbexport-20261111-1200");
+        let live = dir.path().join("live");
+        fs::create_dir_all(extracted.join("analysis")).unwrap();
+        fs::create_dir_all(extracted.join("artwork")).unwrap();
+        fs::create_dir_all(extracted.join("sidecar")).unwrap();
+        fs::create_dir_all(&live).unwrap();
+        fs::write(extracted.join("master.db"), b"saved database").unwrap();
+        fs::write(extracted.join("sidecar.json"), br#"{"version":1,"bytes":1,"stems":false}"#).unwrap();
+        fs::write(live.join("master.db"), b"current database").unwrap();
+        if with_zip {
+            fs::write(dir.path().join("rbexport-20261111-1200.zip"), b"the archive").unwrap();
+        }
+        let script = extracted.join(SHELL_NAME);
+        fs::write(&script, shell(&live.join("master.db"))).unwrap();
+        let mut command = Command::new("/bin/bash");
+        command.arg(&script).env_clear().env("PATH", "/usr/bin:/bin").env("HOME", dir.path());
+        if let Some(stub) = stub {
+            let path = dir.path().join("wreckordbox-stub");
+            fs::write(&path, stub).unwrap();
+            fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+            command.env("WRECKORDBOX_BIN", &path).env("CALLS", dir.path().join("calls"));
+        }
+        let mut child = command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        child.stdin.take().unwrap().write_all(b"yes\n").unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert_eq!(fs::read(live.join("master.db")).unwrap(), b"current database");
+        let leftovers: Vec<_> = fs::read_dir(&live).unwrap().map(|entry| entry.unwrap().file_name()).collect();
+        assert_eq!(leftovers.len(), 1, "{leftovers:?}");
+        (output, dir)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_shell_script_refuses_a_sidecar_backup_without_wreckordbox_and_changes_nothing() {
+        let (output, _dir) = run_on_sidecar_backup(None, true);
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("Nothing was changed"), "{stderr}");
+        assert!(stderr.contains("wreckordbox backup restore"), "{stderr}");
+        // And with wreckordbox but no archive to hand it.
+        let (output, _dir) = run_on_sidecar_backup(Some("#!/bin/sh\necho \"$@\" > \"$CALLS\"\n"), false);
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("was not found"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_shell_script_hands_a_sidecar_backup_to_wreckordbox_backup_restore() {
+        let (output, dir) = run_on_sidecar_backup(Some("#!/bin/sh\necho \"$@\" > \"$CALLS\"\necho restored-by-wreckordbox\n"), true);
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("restored-by-wreckordbox"));
+        let calls = std::fs::read_to_string(dir.path().join("calls")).unwrap();
+        let archive = dir.path().join("rbexport-20261111-1200.zip");
+        assert_eq!(calls.trim(), format!("backup restore {} --yes", archive.canonicalize().unwrap().display()));
+    }
+
+    #[test]
+    fn the_powershell_script_hands_a_sidecar_backup_to_wreckordbox_or_refuses() {
+        let script = powershell(Path::new("/tmp/master.db"));
+        let sidecar = script.find("'sidecar.json'").unwrap();
+        // Before anything is created or moved.
+        assert!(sidecar < script.find("New-Item").unwrap());
+        assert!(script.contains("& $Wreckordbox backup restore $Archive --yes"));
+        assert!(script.contains("Nothing was changed."));
     }
 }

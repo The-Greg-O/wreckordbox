@@ -368,8 +368,8 @@ fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&str, u64, u6
         // The Sidecar beside the Library: its database as a snapshot and
         // the DJ's files, by the rule in `rbl_backup::sidecar_part`.
         let mut stopped = None;
-        let sidecar = rbl_backup::sidecar_part::collect(
-            &rbl_backup::sidecar_part::dir(&location),
+        let sidecar = rbl_backup::sidecar_part::collect_for(
+            &location,
             rbl_backup::sidecar_part::Options::saved(state.backup_dir()),
             &mut || progress("preparing", 0, 0, "Scanning the Sidecar").map_err(|e| stopped = Some(e)).is_ok(),
         );

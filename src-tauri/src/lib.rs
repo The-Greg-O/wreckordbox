@@ -87,8 +87,18 @@ pub(crate) fn spawn_library_load(app: tauri::AppHandle) {
             // Before anything is read or recovered: from here on this window
             // is the Library's one writer, and a service a command started
             // by itself has stopped.
-            service_host::host(&app, &location);
-            if let Err(e) = backups::recover(app.state::<Arc<state::AppState>>().backup_dir(), &location) {
+            // Hosting the service recovers an interrupted restore under
+            // the Library's lock. A window that does not own the Library
+            // leaves a pending restore to the program that does.
+            let hosted = service_host::host(&app, &location);
+            let backup_dir = app.state::<Arc<state::AppState>>().backup_dir().to_path_buf();
+            let recovered = if hosted || !backups::pending(&backup_dir) {
+                backups::recover(&backup_dir, &location)
+            } else {
+                Err(crate::error::AppError::new(crate::error::ErrorKind::ReadOnly,
+                    "A restore of the Library is unfinished, and another program owns the Library. Quit it, then open wreckordbox again."))
+            };
+            if let Err(e) = recovered {
                 report_problem(&app, dto::LibraryProblemDto::Failed { message: e.to_string() });
                 return;
             }

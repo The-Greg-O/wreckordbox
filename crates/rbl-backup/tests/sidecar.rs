@@ -25,8 +25,10 @@ fn entries(archive: &Path) -> Vec<String> {
 }
 
 /// A Library with a Sidecar beside it: a Fact from the DJ in its own Run,
-/// one track's Stems, a table of a later version, a kinds file, a Recipe in
-/// a folder, and data that can be made again.
+/// one track's Stems, a stand-in for a table a later version adds (named
+/// `mutant`; it is not the Mutants store, only proof that a table this code
+/// does not know travels), a kinds file, a Recipe in a folder, and data
+/// that can be made again.
 struct Fixture {
     dir: tempfile::TempDir,
     location: rbl_db::LibraryLocation,
@@ -94,7 +96,8 @@ fn fixture() -> Fixture {
     record(&sidecar, TAGGED, "genre", serde_json::json!("house"));
     separate(&sidecar, &parent);
     drop(sidecar);
-    // What a later version keeps in the same database travels by rule.
+    // What a later version keeps in the same database travels by rule. A
+    // stand-in table, not the real Mutants schema.
     let db = rusqlite::Connection::open(sidecar_dir.join("sidecar.db")).unwrap();
     db.execute_batch("CREATE TABLE mutant (id INTEGER PRIMARY KEY, playlist TEXT, edits TEXT); INSERT INTO mutant VALUES (1, 'Friday', 'no vocals');").unwrap();
     drop(db);
@@ -110,12 +113,13 @@ fn fixture() -> Fixture {
     Fixture { dir, location, sidecar_dir, archive, parent }
 }
 
-/// What the Sidecar knows, read through its own interface.
+/// What the Sidecar knows, read through its own interface, and the rows of
+/// the stand-in table.
 #[derive(Debug, PartialEq)]
 struct Known {
     facts: Vec<Fact>,
     runs: Vec<Option<Run>>,
-    mutants: Vec<(i64, String, String)>,
+    stand_in_rows: Vec<(i64, String, String)>,
 }
 
 impl Fixture {
@@ -130,14 +134,14 @@ impl Fixture {
         let runs = (1..=4).map(|id| sidecar.run(RunId(id)).unwrap()).collect();
         drop(sidecar);
         let db = rusqlite::Connection::open(self.sidecar_dir.join("sidecar.db")).unwrap();
-        let mutants = db
+        let stand_in_rows = db
             .prepare("SELECT id, playlist, edits FROM mutant")
             .unwrap()
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
             .unwrap()
             .map(Result::unwrap)
             .collect();
-        Known { facts, runs, mutants }
+        Known { facts, runs, stand_in_rows }
     }
 
     fn stems(&self) -> Option<StemSet> {
@@ -213,11 +217,11 @@ fn a_backup_holds_the_sidecars_database_and_the_djs_files_but_nothing_that_can_b
 }
 
 #[test]
-fn a_restore_puts_the_sidecar_back_as_it_was_with_the_library_it_was_taken_with() {
+fn a_restore_puts_facts_runs_and_an_unknown_table_back_as_they_were_with_the_library_they_were_taken_with() {
     let fixture = fixture();
     let before = fixture.known();
     assert_eq!(before.facts.len(), 2);
-    assert_eq!(before.mutants, [(1, "Friday".to_owned(), "no vocals".to_owned())]);
+    assert_eq!(before.stand_in_rows, [(1, "Friday".to_owned(), "no vocals".to_owned())]);
     testing::archive(&fixture.location, &fixture.archive, None);
     fixture.change();
     assert_ne!(fixture.known(), before);
@@ -472,6 +476,7 @@ fn journal(fixture: &Fixture, committed: bool, target: &Path) -> (PathBuf, PathB
         library: fixture.location.master_db.clone(),
         committed,
         swaps: vec![Swap { target: target.to_path_buf(), staged: staged.clone(), previous: previous.clone(), existed: true }],
+        sidecar: Some(fixture.sidecar_dir.canonicalize().unwrap()),
     };
     fs::create_dir_all(fixture.state()).unwrap();
     fs::write(rbl_backup::journal::path(&fixture.state()), serde_json::to_vec(&journal).unwrap()).unwrap();
@@ -517,4 +522,201 @@ fn the_sidecars_folder_is_the_one_the_sidecar_itself_uses() {
     let master = Path::new("/library/master.db");
     assert_eq!(rbl_backup::sidecar_part::FOLDER_NAME, wreckordbox_sidecar::FOLDER_NAME);
     assert_eq!(rbl_backup::sidecar_part::dir_from(master, None), wreckordbox_sidecar::default_dir(master));
+}
+
+/// The fixture's Sidecar folder moved aside and a symbolic link put in its
+/// place, pointing at a folder that also holds a file of the DJ's own.
+fn redirect(fixture: &Fixture) -> PathBuf {
+    let elsewhere = fixture.dir.path().join("elsewhere");
+    fs::rename(&fixture.sidecar_dir, &elsewhere).unwrap();
+    fs::write(elsewhere.join("notes.txt"), "keep").unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &fixture.sidecar_dir).unwrap();
+    elsewhere
+}
+
+#[test]
+fn a_sidecar_folder_that_is_a_symbolic_link_is_refused_by_backup_and_restore_and_nothing_is_written_through_it() {
+    let fixture = fixture();
+    testing::archive(&fixture.location, &fixture.archive, None);
+    fixture.change();
+    let elsewhere = redirect(&fixture);
+    let listing = |dir: &Path| {
+        let mut names: Vec<String> = fs::read_dir(dir).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        names
+    };
+    let before = listing(&elsewhere);
+
+    let error = fixture.restore(&fixture.archive, Parts::ALL).unwrap_err().to_string();
+    assert!(error.contains("symbolic link"), "{error}");
+    assert_eq!(testing::rating(&fixture.location), 1);
+    assert_eq!(listing(&elsewhere), before);
+    assert_eq!(fs::read_to_string(elsewhere.join("notes.txt")).unwrap(), "keep");
+    assert!(!rbl_backup::journal::pending(&fixture.state()));
+
+    let error = rbl_backup::sidecar_part::collect_for(&fixture.location, Options::default(), &mut || true).unwrap_err().to_string();
+    assert!(error.contains("symbolic link"), "{error}");
+    assert!(rbl_backup::sidecar_part::collect(&fixture.sidecar_dir, Options::default(), &mut || true).is_err());
+
+    // A journal naming the folder before it was redirected is not acted on.
+    let (_, previous) = journal(&fixture, false, &elsewhere.join("kinds.toml"));
+    drop(previous);
+    let mut recorded: rbl_backup::journal::Journal = serde_json::from_slice(&fs::read(rbl_backup::journal::path(&fixture.state())).unwrap()).unwrap();
+    recorded.sidecar = Some(fixture.sidecar_dir.clone());
+    recorded.swaps[0].target = fixture.sidecar_dir.join("kinds.toml");
+    fs::write(rbl_backup::journal::path(&fixture.state()), serde_json::to_vec(&recorded).unwrap()).unwrap();
+    assert!(rbl_backup::journal::recover(&fixture.state(), &fixture.location).is_err());
+    assert_eq!(listing(&elsewhere), before);
+}
+
+#[test]
+fn a_sidecar_folder_overlapping_the_library_is_refused() {
+    use rbl_backup::sidecar_part::Destination;
+    let fixture = fixture();
+    let root = fixture.location.master_db.parent().unwrap().to_path_buf();
+    for overlapping in [
+        root.clone(),
+        root.parent().unwrap().to_path_buf(),
+        fixture.location.share_root.clone(),
+        fixture.location.share_root.join("PIONEER/USBANLZ/sidecar"),
+        fixture.location.share_root.join("PIONEER"),
+        root.join("master.db"),
+        root.join("masterPlaylists6.xml"),
+    ] {
+        assert!(Destination::check(&fixture.location, &overlapping).is_err(), "{}", overlapping.display());
+    }
+    assert!(Destination::check(&fixture.location, Path::new("relative/sidecar")).is_err());
+    assert!(Destination::check(&fixture.location, &root.join("a/../sidecar")).is_err());
+    let checked = Destination::check(&fixture.location, &fixture.sidecar_dir).unwrap();
+    assert_eq!(checked.path, fixture.sidecar_dir.canonicalize().unwrap());
+    // A folder of its own elsewhere, made by the restore if need be.
+    assert!(Destination::check(&fixture.location, &fixture.dir.path().join("sidecar-elsewhere/new")).is_ok());
+}
+
+/// The fixture's `sidecar.db` bytes with the SQLite header zeroed.
+fn headerless(fixture: &Fixture) -> Vec<u8> {
+    let mut bytes = fs::read(fixture.sidecar_dir.join("sidecar.db")).unwrap();
+    bytes[..16].fill(0);
+    bytes
+}
+
+#[test]
+fn an_empty_or_headerless_sidecar_database_in_a_backup_is_refused_before_anything_is_replaced() {
+    let fixture = fixture();
+    testing::archive(&fixture.location, &fixture.archive, None);
+    let headerless = headerless(&fixture);
+    fixture.change();
+    let changed = fixture.known();
+    for contents in [b"".as_slice(), headerless.as_slice(), b"not a database"] {
+        let bad = rewritten(&fixture, "sidecar/sidecar.db", contents);
+        assert_eq!(refused(&fixture, &bad, &changed), "The backup's Sidecar database sidecar.db is damaged.");
+    }
+    // A sound SQLite database that is not a Sidecar store.
+    let other = fixture.dir.path().join("other.db");
+    rusqlite::Connection::open(&other).unwrap().execute_batch("CREATE TABLE t (x); INSERT INTO t VALUES (1);").unwrap();
+    let bad = rewritten(&fixture, "sidecar/sidecar.db", &fs::read(&other).unwrap());
+    assert_eq!(refused(&fixture, &bad, &changed), "The backup's Sidecar database sidecar.db is damaged.");
+}
+
+#[test]
+fn a_nested_database_that_is_damaged_or_missing_in_a_backup_is_refused() {
+    let fixture = fixture();
+    let nested = fixture.sidecar_dir.join("recipes/index.db");
+    rusqlite::Connection::open(&nested).unwrap().execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE recipe (name TEXT); INSERT INTO recipe VALUES ('friday');").unwrap();
+    testing::archive(&fixture.location, &fixture.archive, None);
+    let contents = Contents::read(&fixture.archive).unwrap().unwrap();
+    assert_eq!(contents.databases, ["recipes/index.db", "sidecar.db"]);
+    assert!(!entries(&fixture.archive).iter().any(|name| name.ends_with("-wal") || name.ends_with("-shm")));
+    let mut bytes = fs::read(&nested).unwrap();
+    bytes[..16].fill(0);
+    fixture.change();
+    let changed = fixture.known();
+    for damaged in [b"".as_slice(), bytes.as_slice()] {
+        let bad = rewritten(&fixture, "sidecar/recipes/index.db", damaged);
+        assert_eq!(refused(&fixture, &bad, &changed), "The backup's Sidecar database recipes/index.db is damaged.");
+    }
+    // A record naming a database the archive does not hold.
+    let mut record = contents.clone();
+    record.databases.push("recipes/gone.db".to_owned());
+    let bad = rewritten(&fixture, "sidecar.json", &serde_json::to_vec(&record).unwrap());
+    assert_eq!(refused(&fixture, &bad, &changed), "The backup's Sidecar database recipes/gone.db is missing.");
+}
+
+#[test]
+fn a_damaged_sidecar_database_on_disk_fails_the_backup_rather_than_travelling_as_a_file() {
+    let fixture = fixture();
+    let database = fixture.sidecar_dir.join("sidecar.db");
+    let headerless = headerless(&fixture);
+    for contents in [b"".as_slice(), headerless.as_slice()] {
+        fs::write(&database, contents).unwrap();
+        let error = rbl_backup::sidecar_part::collect_for(&fixture.location, Options::default(), &mut || true).unwrap_err().to_string();
+        assert!(error.contains("sidecar.db"), "{error}");
+    }
+}
+
+#[test]
+fn a_backup_taken_while_a_writer_holds_the_sidecar_open_has_every_committed_row_and_no_uncommitted_one() {
+    let fixture = fixture();
+    let before = fixture.known();
+    let writer = rusqlite::Connection::open(fixture.sidecar_dir.join("sidecar.db")).unwrap();
+    writer.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; INSERT INTO mutant VALUES (2, 'Saturday', 'committed');").unwrap();
+    assert!(fs::metadata(fixture.sidecar_dir.join("sidecar.db-wal")).unwrap().len() > 0);
+    writer.execute_batch("BEGIN IMMEDIATE; INSERT INTO mutant VALUES (3, 'Sunday', 'not committed');").unwrap();
+    testing::archive(&fixture.location, &fixture.archive, None);
+    writer.execute_batch("ROLLBACK;").unwrap();
+    drop(writer);
+    assert!(!entries(&fixture.archive).iter().any(|name| name.ends_with("-wal") || name.ends_with("-shm")));
+    fixture.change();
+    fixture.restore(&fixture.archive, Parts::ALL).unwrap();
+    let after = fixture.known();
+    assert_eq!(after.facts, before.facts);
+    assert_eq!(after.stand_in_rows, [(1, "Friday".to_owned(), "no vocals".to_owned()), (2, "Saturday".to_owned(), "committed".to_owned())]);
+}
+
+/// Stops before each replacement in turn, as a failure and as a crash,
+/// until one is not reached because the restore has finished.
+#[test]
+fn a_restore_that_fails_or_stops_between_any_two_replacements_ends_with_the_library_and_sidecar_as_they_were() {
+    let fixture = fixture();
+    testing::archive_with(&fixture.location, &fixture.archive, None, Options { stems: true });
+    fixture.change();
+    let changed = fixture.known();
+    let kinds = fixture.sidecar_dir.join(wreckordbox_sidecar::KINDS_FILE);
+    let unchanged = |what: &str| {
+        assert_eq!(testing::rating(&fixture.location), 1, "{what}");
+        assert_eq!(fixture.known(), changed, "{what}");
+        assert_eq!(fs::read_to_string(&kinds).unwrap(), "edited", "{what}");
+        assert_eq!(fs::read_to_string(fixture.sidecar_dir.join("tag-schema.toml")).unwrap(), "written later", "{what}");
+        assert_eq!(fixture.leftovers(), [] as [String; 0], "{what}");
+        assert!(!rbl_backup::journal::pending(&fixture.state()), "{what}");
+    };
+    let mut swaps = 0;
+    loop {
+        // A failure: the restore puts everything back itself.
+        testing::stop_before_swap(swaps, false);
+        if fixture.restore(&fixture.archive, Parts::ALL).is_ok() {
+            break;
+        }
+        unchanged(&format!("failure before replacement {swaps}"));
+        // A crash: the journal is left, and recovery, run twice as an
+        // interrupted recovery would be, puts everything back.
+        testing::stop_before_swap(swaps, true);
+        assert!(fixture.restore(&fixture.archive, Parts::ALL).is_err());
+        assert!(rbl_backup::journal::pending(&fixture.state()));
+        if swaps == 3 {
+            // The Library's database, WAL and SHM are replaced and nothing
+            // of the Sidecar yet: the two disagree until recovery runs.
+            assert_eq!(testing::rating(&fixture.location), 4);
+            assert_eq!(fs::read_to_string(&kinds).unwrap(), "edited");
+        }
+        rbl_backup::journal::recover(&fixture.state(), &fixture.location).unwrap();
+        rbl_backup::journal::recover(&fixture.state(), &fixture.location).unwrap();
+        unchanged(&format!("crash before replacement {swaps}"));
+        swaps += 1;
+    }
+    // The last run went through: the database, its WAL and SHM, the two
+    // trees, the Sidecar's entries.
+    assert!(swaps > 6, "{swaps}");
+    assert_eq!(testing::rating(&fixture.location), 4);
+    assert_eq!(fs::read_to_string(&kinds).unwrap(), KINDS);
 }

@@ -132,6 +132,36 @@ pub mod testing {
     use std::{fs, io::Write, path::Path};
     use zip::{write::SimpleFileOptions, ZipWriter};
 
+    thread_local! {
+        static STOP: std::cell::Cell<Option<(usize, bool)>> = const { std::cell::Cell::new(None) };
+        static CRASHED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// Makes the next restore on this thread stop just before it replaces
+    /// target number `swaps` (counting from 0), with everything before it
+    /// replaced. With `crash`, it stops as a process that died there would:
+    /// the journal is left for the next program to recover. Without, it
+    /// fails as an error there would, and puts everything back itself.
+    pub fn stop_before_swap(swaps: usize, crash: bool) {
+        STOP.with(|stop| stop.set(Some((swaps, crash))));
+        CRASHED.with(|crashed| crashed.set(false));
+    }
+
+    pub(crate) fn step(done: usize) -> crate::Result<()> {
+        match STOP.with(std::cell::Cell::get) {
+            Some((at, crash)) if at == done => {
+                STOP.with(|stop| stop.set(None));
+                CRASHED.with(|crashed| crashed.set(crash));
+                Err(crate::refused(if crash { "Simulated crash." } else { "Simulated failure." }))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    pub(crate) fn crashed() -> bool {
+        CRASHED.with(|crashed| crashed.replace(false))
+    }
+
     pub fn library(dir: &Path) -> rbl_db::LibraryLocation {
         rbl_db::fixture::build(dir, rbl_db::fixture::Shape::default()).unwrap()
     }
@@ -211,7 +241,7 @@ pub mod testing {
                 }
             }
         }
-        if let Some(part) = crate::sidecar_part::collect(&crate::sidecar_part::dir(location), sidecar, &mut || true).unwrap() {
+        if let Some(part) = crate::sidecar_part::collect_for(location, sidecar, &mut || true).unwrap() {
             for directory in &part.directories {
                 zip.add_directory(format!("{directory}/"), SimpleFileOptions::default()).unwrap();
             }

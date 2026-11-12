@@ -10,6 +10,7 @@
 //! This crate has no dependency on the desktop framework and needs no
 //! display.
 
+pub mod backup;
 mod client;
 pub mod facts;
 pub mod intake;

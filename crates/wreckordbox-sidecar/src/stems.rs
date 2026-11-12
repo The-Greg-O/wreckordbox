@@ -14,10 +14,17 @@
 //! {"samples": 13418790, "sample_rate": 44100,
 //!  "produced_by": {"engine_version": "0.1.0", "model": "htdemucs_ft.yaml", ...},
 //!  "stems": [{"role": "vocals", "file": "stems/10003/run-7/vocals.wav",
-//!             "format": "wav", "channels": 2, "bits_per_sample": 16}, ...]}
+//!             "format": "wav", "channels": 2, "bits_per_sample": 16,
+//!             "hash": "b3:<hex>"}, ...]}
 //! ```
 //!
 //! `file` is relative to the Sidecar's folder, so the folder can be moved.
+//! `hash` is the BLAKE3 hash of the file's bytes as recorded. Stem folders
+//! are named after Runs, and a restored Sidecar can rewind Run identifiers,
+//! so a path alone does not say the file there is the one recorded: a
+//! Stem's audio counts as present only when its hash matches. A set
+//! recorded without hashes (before they were kept) cannot be checked, and
+//! reads as needing separation.
 
 use std::path::{Path, PathBuf};
 
@@ -129,8 +136,18 @@ impl StemSet {
     /// not come back. Such a set is not the track's Stems; the track needs
     /// separating again.
     #[must_use]
+    ///
+    /// The files must also be the ones recorded: each is hashed and checked
+    /// against the hash recorded with the set, since a later separation can
+    /// have written other audio at the same path. A set without recorded
+    /// hashes cannot be checked and is not present.
+    #[must_use]
     pub fn audio_present(&self) -> bool {
-        self.stems.iter().all(|stem| stem.path.is_file())
+        self.stems.iter().all(|stem| {
+            stem.hash.as_deref().is_some_and(|recorded| {
+                stem.path.is_file() && content_hash(&stem.path).is_ok_and(|found| found == recorded)
+            })
+        })
     }
 }
 
@@ -144,6 +161,10 @@ pub struct Stem {
     pub format: String,
     pub channels: u16,
     pub bits_per_sample: Option<u32>,
+    /// The BLAKE3 hash of the file as recorded, `b3:<hex>`; `None` for a
+    /// Stem recorded before hashes were kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hash: Option<String>,
 }
 
 /// A Stem as the Fact's value keeps it.
@@ -155,6 +176,16 @@ struct StoredStem {
     format: String,
     channels: u16,
     bits_per_sample: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hash: Option<String>,
+}
+
+/// The BLAKE3 hash of a file's bytes, as a Stem records it.
+fn content_hash(path: &Path) -> Result<String> {
+    let mut file = std::fs::File::open(path).map_err(io("could not read", path))?;
+    let mut hasher = blake3::Hasher::new();
+    std::io::copy(&mut file, &mut hasher).map_err(io("could not read", path))?;
+    Ok(format!("b3:{}", hasher.finalize().to_hex()))
 }
 
 #[derive(Serialize, Deserialize)]
@@ -222,6 +253,7 @@ impl Sidecar {
                 format,
                 channels: info.channels,
                 bits_per_sample: info.bits_per_sample,
+                hash: Some(content_hash(path)?),
             });
         }
 
@@ -309,6 +341,7 @@ impl Sidecar {
                     format: stem.format,
                     channels: stem.channels,
                     bits_per_sample: stem.bits_per_sample,
+                    hash: stem.hash,
                 })
                 .collect(),
             source: fact.source,

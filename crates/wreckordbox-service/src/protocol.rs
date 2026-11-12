@@ -75,6 +75,17 @@ pub mod codes {
     pub const LIBRARY_LOADING: &str = "library_loading";
     /// The service is hosted by the window, which stops it by closing.
     pub const STOP_REFUSED: &str = "stop_refused";
+    /// A restore that stopped midway could not be finished or rolled back,
+    /// so neither the Library nor the Sidecar is opened. The message says
+    /// why.
+    pub const RESTORE_UNFINISHED: &str = "restore_unfinished";
+    /// A restore was refused before anything was changed: the backup is
+    /// damaged or another Library's, the Library is in use, rekordbox is
+    /// running. The message says which.
+    pub const RESTORE_REFUSED: &str = "restore_refused";
+    /// A restore failed while it ran; it put back what it had changed,
+    /// unless the message says otherwise.
+    pub const RESTORE_FAILED: &str = "restore_failed";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
