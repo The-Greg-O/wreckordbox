@@ -180,3 +180,198 @@ test("the queue never pushes the large player out of a half-width window", async
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(640);
 });
 
+
+// ---- Review round (codex/review-wbx-62.md) ----
+
+type Hooks = {
+  __libraryReady: () => void;
+  __setFileMissing: (id: string, missing: boolean) => void;
+  __intakeReads: () => { counts: number; queue: number };
+  __holdIntakeReads: () => void;
+  __releaseIntakeReads: () => void;
+  __failIntakeReads: (on: boolean) => void;
+  __emitLibraryChanged: (times: number) => void;
+  __setPrepColour: (id: string, colour: number) => Promise<unknown>;
+};
+/** Calls one of the mock's test hooks on `window`. */
+const call = <R = unknown>(page: Page, name: keyof Hooks, ...args: unknown[]): Promise<R> =>
+  page.evaluate(([hook, values]) => {
+    const fn = (window as unknown as Record<string, (...given: unknown[]) => unknown>)[hook];
+    if (!fn) throw new Error(`no mock hook ${hook}`);
+    return fn(...values);
+  }, [name, args] as [string, unknown[]]) as Promise<R>;
+const playing = (page: Page) => player(page).getByRole("button", { name: "Pause", exact: true });
+const playButton = (page: Page) => player(page).getByRole("button", { name: "Play", exact: true });
+const analysedRow = (page: Page, n = 0) => options(page).filter({ hasText: /· \d{2,3} ·/ }).nth(n);
+const rowTitle = async (row: ReturnType<typeof analysedRow>) => row.locator("span").first().innerText();
+
+test("a Library still loading at start shows the counts and the queue once it is ready, with no edit", async ({ page }) => {
+  await openIntake(page, "?slow");
+  await expect(tabCount(page)).toHaveCount(0);
+  await expect(page.getByTestId("intake-loading")).toBeVisible();
+
+  await call(page, "__libraryReady");
+
+  await expect(tabCount(page)).toHaveText(/^\d+$/);
+  await expect(options(page).first()).toBeVisible();
+  await expect(treeItem(page, "Intake")).toContainText(await tabCount(page).innerText());
+});
+
+for (const state of ["paused", "playing"] as const) {
+  test(`the detail waveform and its playhead are in place after Intake, Library and Intake again (${state})`, async ({ page }) => {
+    await openIntake(page);
+    await analysedRow(page).click();
+    await expect(detail(page).locator("canvas").first()).toBeAttached();
+    // Somewhere in the middle of the track, so the layer has somewhere to be.
+    const over = player(page).getByTestId("compact-player-overview");
+    const box = (await over.boundingBox())!;
+    await page.mouse.click(box.x + box.width * 0.4, box.y + box.height / 2);
+    if (state === "playing") {
+      await playButton(page).click();
+      await expect(playing(page)).toBeVisible();
+    }
+    const placed = async () => detail(page).evaluate((band) => {
+      const head = band.querySelector<HTMLElement>('[data-testid="large-player-head"]')!;
+      const layer = head.parentElement!.firstElementChild as HTMLElement;
+      const b = band.getBoundingClientRect();
+      const h = head.getBoundingClientRect();
+      return { headOffset: Math.round(h.left + h.width / 2 - (b.left + b.width / 2)), head: head.style.transform, layer: layer.style.transform };
+    });
+    const before = await placed();
+    expect(before.head).toMatch(/translateX\(\d/);
+    expect(Math.abs(before.headOffset)).toBeLessThanOrEqual(2);
+
+    await tab(page, "Library").click();
+    await expect(detail(page)).toHaveCount(0);
+    await tab(page, "Intake").click();
+    await expect(detail(page)).toBeVisible();
+
+    await expect.poll(async () => (await placed()).head).toMatch(/translateX\(\d/);
+    const after = await placed();
+    expect(Math.abs(after.headOffset)).toBeLessThanOrEqual(2);
+    expect(after.layer).toMatch(/translateX\(/);
+    if (state === "paused") expect(after.layer).toBe(before.layer);
+    else await expect.poll(async () => (await placed()).layer).not.toBe(after.layer);
+  });
+}
+
+for (const key of ["Enter", " "] as const) {
+  test(`the next page of the queue is reached by keyboard (${key === " " ? "Space" : key}), without loading a track`, async ({ page }) => {
+    await openIntake(page);
+    await expect(options(page)).toHaveCount(200);
+    const firstTitle = await rowTitle(options(page).first());
+    const next = page.getByRole("button", { name: /Next/ });
+    await next.focus();
+    await page.keyboard.press(key);
+
+    await expect(options(page).first()).not.toHaveText(new RegExp(`^${firstTitle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+    await expect(page.getByTestId("intake-page")).toContainText("201");
+    await expect(loadedTitle(page)).toHaveText("");
+  });
+}
+
+test("the empty state's buttons are pressed by Space without playing or pausing the deck", async ({ page }) => {
+  await seedShell(page);
+  await page.goto("/?intake=empty");
+  await page.locator('[role="gridcell"][data-col="title"]').nth(3).dblclick();
+  await playButton(page).click();
+  await expect(playing(page)).toBeVisible();
+  await tab(page, "Intake").click();
+
+  await page.getByRole("button", { name: /Show Problems/ }).focus();
+  await page.keyboard.press(" ");
+  await expect(page.getByTestId("intake-view")).toHaveAttribute("data-queue", "problems");
+  await expect(playing(page)).toBeVisible();
+});
+
+test("selecting a queued track replaces the loaded one without asking, even while it plays", async ({ page }) => {
+  await openIntake(page);
+  await analysedRow(page, 0).click();
+  await playButton(page).click();
+  await expect(playing(page)).toBeVisible();
+  const next = await rowTitle(analysedRow(page, 1));
+
+  await analysedRow(page, 1).click();
+
+  await expect(loadedTitle(page)).toHaveText(next);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await expect(analysedRow(page, 1)).toHaveAttribute("aria-selected", "true");
+});
+
+test("a track that cannot load leaves the queue on the track that did, and says why", async ({ page }) => {
+  await openIntake(page);
+  const loaded = analysedRow(page, 0);
+  const title = await rowTitle(loaded);
+  await loaded.click();
+  await expect(loadedTitle(page)).toHaveText(title);
+  const broken = analysedRow(page, 1);
+  const brokenId = await broken.getAttribute("data-track");
+  await call(page, "__setFileMissing", brokenId, true);
+
+  await broken.click();
+
+  await expect(page.getByTestId("intake-load-failed")).toContainText(await rowTitle(broken));
+  await expect(loadedTitle(page)).toHaveText(title);
+  await expect(loaded).toHaveAttribute("aria-selected", "true");
+  await expect(broken).toHaveAttribute("aria-selected", "false");
+  await expect(page.getByTestId("intake-panel-title")).toHaveText(title);
+  await expect(page.getByTestId("shell-status")).toContainText(/could not be found/i);
+});
+
+test("a burst of a hundred Library changes while a read is held costs at most one more read, and ends fresh", async ({ page }) => {
+  await openIntake(page);
+  await expect(options(page).first()).toBeVisible();
+  const before = Number(await tabCount(page).innerText());
+  const id = await options(page).first().getAttribute("data-track");
+  const start = await call<{ counts: number; queue: number }>(page, "__intakeReads");
+
+  await call(page, "__holdIntakeReads");
+  await call(page, "__emitLibraryChanged", 1);
+  // A real change during the burst, so the read after it must see it.
+  await call(page, "__setPrepColour", id, 5);
+  await call(page, "__emitLibraryChanged", 100);
+  await call(page, "__releaseIntakeReads");
+
+  await expect(tabCount(page)).toHaveText(String(before - 1));
+  await expect(queue(page).locator(`[data-track="${id}"]`)).toHaveCount(0);
+  const end = await call<{ counts: number; queue: number }>(page, "__intakeReads");
+  // The held read, and one more for the whole burst, for each reader.
+  expect(end.counts - start.counts).toBeLessThanOrEqual(2);
+  expect(end.queue - start.queue).toBeLessThanOrEqual(2);
+});
+
+test("a refresh that fails keeps what was read, marked stale, with a retry", async ({ page }) => {
+  await openIntake(page);
+  await expect(options(page).first()).toBeVisible();
+  const rows = await options(page).count();
+
+  await call(page, "__failIntakeReads", true);
+  await call(page, "__emitLibraryChanged", 1);
+
+  await expect(page.getByTestId("intake-stale")).toContainText(/could not be refreshed/i);
+  await expect(page.getByTestId("intake-view")).toHaveAttribute("data-stale", "");
+  await expect(options(page)).toHaveCount(rows);
+  await expect(page.getByTestId("shell-status")).toContainText(/Intake/);
+
+  await call(page, "__failIntakeReads", false);
+  await page.getByRole("button", { name: "Retry" }).click();
+  await expect(page.getByTestId("intake-stale")).toHaveCount(0);
+  await expect(page.getByTestId("intake-view")).not.toHaveAttribute("data-stale", "");
+});
+
+test("the detail waveform is drawn, backed at the pixels it covers", async ({ page }) => {
+  await openIntake(page);
+  await analysedRow(page).click();
+  const canvas = player(page).getByTestId("large-player-wave").locator("canvas").first();
+  await expect.poll(async () => canvas.evaluate((element: HTMLCanvasElement) => {
+    const zoom = Number(document.documentElement.style.getPropertyValue("zoom") || 1);
+    const ratio = window.devicePixelRatio * zoom;
+    const want = { w: Math.round(element.clientWidth * ratio), h: Math.round(element.clientHeight * ratio) };
+    if (Math.abs(element.width - want.w) > 1 || Math.abs(element.height - want.h) > 1) return `${element.width}x${element.height} for ${want.w}x${want.h}`;
+    const data = element.getContext("2d")!.getImageData(0, 0, element.width, element.height).data;
+    let lit = 0;
+    for (let i = 3; i < data.length; i += 4 * 16) if ((data[i] ?? 0) > 0) lit += 1;
+    return lit > 100 ? "ok" : `only ${lit} sampled pixels drawn`;
+  })).toBe("ok");
+});

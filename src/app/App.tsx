@@ -3466,6 +3466,18 @@ function AppBody() {
     onColumnAutoSize: cols.autoSize, onColumnAutoSizeAll: cols.autoSizeEvery,
     artworkMode, onArtworkMode: setArtworkMode,
   };
+  // The Intake view (wbx-62): a queued track replaces deck 1's, and the
+  // answer says whether it loaded; a refresh that failed is said in the
+  // status line, and cleared there when it recovers, if it is still ours.
+  const loadFromIntake = useCallback((row: RowDto) => openInDeckA(row), [openInDeckA]);
+  const intakeProblem = useRef<string | null>(null);
+  const reportIntakeProblem = useCallback((message: string | null) => {
+    const before = intakeProblem.current;
+    if (message === before) return;
+    intakeProblem.current = message;
+    if (message !== null) setNote({ text: message, failed: true });
+    else if (before !== null) setNote((current) => (current?.text === before ? null : current));
+  }, []);
   const shellTree = useShellTree({
     library: tree, sticks: shellSticks, selectedNode, onSelectNode: setSelectedNode,
     view: shellView, onViewChange: changeShellView, queueCounts: intakeCounts,
@@ -3739,7 +3751,10 @@ function AppBody() {
           intakeQueue={shellTree.intakeQueue}
           tabCounts={{ intake: intakeCounts?.intake ?? null }}
           intake={(queue) => (
-            <IntakeView queue={queue} onQueue={shellTree.showQueue} counts={intakeCounts} loadedTrackId={playerTrack?.id ?? null} onLoad={deckLoaders.a} />
+            <IntakeView
+              queue={queue} onQueue={shellTree.showQueue} counts={intakeCounts}
+              loadedTrackId={playerTrack?.id ?? null} onLoad={loadFromIntake} onProblem={reportIntakeProblem}
+            />
           )}
           stick={selectedDevice ? library : undefined}
           library={library}

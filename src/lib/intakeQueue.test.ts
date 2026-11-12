@@ -54,7 +54,7 @@ describe("fromServicePage", () => {
           grid: "not_confirmed",
           suggestions: [{ field: "title", fact_id: 4, value: "Better", source: { kind: "agent", name: "tagger" }, confidence: 0.9 }],
         }],
-        total: 61, offset: 0, limit: 50, next_offset: 50, prep_colour: null,
+        total: 61, offset: 0, limit: 50, next_offset: 50, prep_colour: null, suggestions_unavailable: "the Sidecar is busy",
       },
       rows: [row],
       unavailable: null,
@@ -64,6 +64,7 @@ describe("fromServicePage", () => {
     expect(page.nextOffset).toBe(50);
     expect(page.rows).toEqual([row]);
     expect(page.unavailable).toBeNull();
+    expect(page.suggestionsUnavailable).toBe("the Sidecar is busy");
     expect(page.tracks[0]).toEqual({
       id: "10", title: "Row title", artist: "Who", bpm: 125.5, key: "7A",
       needs: ["energy", "tags"], emptyDimensions: [{ id: "3", name: "Situation" }], grid: "not_confirmed",

@@ -53,6 +53,8 @@ export interface IntakeQueuePage {
   nextOffset: number | null;
   /** Why the queue cannot be listed now (Problems with no colour named Problem); `null` when it can. */
   unavailable: string | null;
+  /** Why proposed titles and artists could not be read (the Sidecar busy or unreadable); `null` when they were. */
+  suggestionsUnavailable: string | null;
 }
 
 /** How many tracks wait in each queue. `problems` is `null` when no colour is named Problem. */
@@ -74,6 +76,7 @@ export interface ServiceQueuePage {
     total: number;
     offset: number;
     next_offset: number | null;
+    suggestions_unavailable?: string | null;
     limit?: number;
     prep_colour?: unknown;
   } | null;
@@ -100,6 +103,7 @@ export function fromServicePage(raw: ServiceQueuePage): IntakeQueuePage {
     offset: queue?.offset ?? 0,
     nextOffset: queue?.next_offset ?? null,
     unavailable: raw.unavailable?.message ?? null,
+    suggestionsUnavailable: queue?.suggestions_unavailable ?? null,
   };
 }
 

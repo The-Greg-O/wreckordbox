@@ -1228,7 +1228,10 @@ export const Player = memo(function Player({
     // and the head would otherwise sit where the last track left it.
     apply(positionRef.current);
     return subscribe(apply);
-  }, [total, bpm, span, overview.width, detail.width, positionRef, subscribe, beatCount, memorySeconds, grid, overviewRef, simple, dual]);
+    // `large`: the large face's band is a new element each time Intake is
+    // shown again, and at the same size nothing else here changes, so its
+    // head and layer would keep no transform (wbx-62 review).
+  }, [total, bpm, span, overview.width, detail.width, positionRef, subscribe, beatCount, memorySeconds, grid, overviewRef, simple, dual, large]);
 
   /*
    * The layer's new anchor, taken only once it is on screen.
@@ -1245,7 +1248,7 @@ export const Player = memo(function Player({
       const dx = snapOffset(scrollOffset(at, anchor, span, detail.width), pixelRatio());
       scroller.current.style.transform = `translateX(${dx}px)`;
     }
-  }, [anchor, span, total, detail.width, positionRef]);
+  }, [anchor, span, total, detail.width, positionRef, large]);
 
   /**
    * The wheel zooms, over the waveform it is pointing at.

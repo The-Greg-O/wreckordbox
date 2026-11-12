@@ -2219,12 +2219,15 @@ export function createMockBackend(options: MockOptions = {}): Backend {
   // The Intake view's queues (wbx-62): `mock-intake.ts`.
   const intake = createMockIntake({
     all, colors, tagsOf: (row) => detailsOf(row).myTags, categories: myTagCategories,
-    gridLocked: (id) => gridStore.get(id)?.locked ?? false, wait,
+    gridLocked: (id) => gridStore.get(id)?.locked ?? false, wait, ready: () => ready,
   });
   if (typeof window !== "undefined") {
     // `__setPrepColour(id, colourId)` (0 for none): an edit as the Library list makes it.
     (window as unknown as { __setPrepColour: (id: string, colour: number) => Promise<unknown> }).__setPrepColour =
       (id, colour) => edits.setTrackColor([id], colour === 0 ? null : String(colour));
+    // `__emitLibraryChanged(n)`: n changes announced at once, as a burst of an agent's edits.
+    (window as unknown as { __emitLibraryChanged: (times: number) => void }).__emitLibraryChanged =
+      (times) => { for (let i = 0; i < times; i += 1) void bump(false); };
   }
 
   return {

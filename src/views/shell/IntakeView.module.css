@@ -19,8 +19,9 @@
 }
 
 .queue {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  /* Heading, the stale and load notes when there are any, the rows, the pages. */
+  display: flex;
+  flex-direction: column;
   min-height: 0;
   border-right: var(--s-shell-border) solid var(--role-ground);
   background: var(--role-panel);
@@ -42,6 +43,7 @@
 .position { color: var(--role-text-dim); }
 
 .rows {
+  flex: 1;
   min-height: 0;
   overflow-y: auto;
   outline: none;
@@ -157,3 +159,45 @@
   }
   .queue { border-right: 0; border-bottom: var(--s-shell-border) solid var(--role-ground); }
 }
+
+/* A refresh that failed: the page shown is what was read before. */
+.stale {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-shell-space-3) var(--s-shell-space-5);
+  padding: var(--s-shell-space-3) var(--s-shell-space-5);
+  border-bottom: var(--s-shell-border) solid var(--role-hairline);
+  color: var(--iv-missing, var(--role-tab-to));
+  line-height: 1.4;
+}
+.retry {
+  padding: var(--s-shell-space-1) var(--s-shell-space-4);
+  border: var(--s-shell-border) solid var(--role-border);
+  border-radius: var(--s-shell-radius);
+  background: var(--role-control);
+  color: var(--role-text);
+  font: inherit;
+  cursor: pointer;
+}
+.view[data-stale] .rows { opacity: 0.7; }
+
+.loadFailed {
+  margin: 0;
+  padding: var(--s-shell-space-3) var(--s-shell-space-5);
+  border-bottom: var(--s-shell-border) solid var(--role-hairline);
+  color: var(--iv-missing);
+  line-height: 1.4;
+}
+
+/* Paging, outside the listbox. */
+.pages {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-shell-space-4);
+  border-top: var(--s-shell-border) solid var(--role-hairline);
+  color: var(--role-text-dim);
+}
+.pages .more { width: auto; border-top: 0; }
+.more:disabled { opacity: 0.4; cursor: default; }

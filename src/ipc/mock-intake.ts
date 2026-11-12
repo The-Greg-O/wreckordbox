@@ -10,6 +10,12 @@
  *   so the Intake queue is empty; Problems keeps its tracks.
  * - `?noProblemColour`: no colour is named Problem, so Problems cannot be
  *   listed, as with a Library whose labels were never named.
+ *
+ * Hooks on `window` (wbx-62 review): `__intakeReads()` counts the reads
+ * asked of each command; `__holdIntakeReads()` holds every read from then
+ * on until `__releaseIntakeReads()`; `__failIntakeReads(on)` makes reads
+ * fail. Until the mock's Library is ready (`?slow`, then `__libraryReady()`)
+ * both commands fail as the real ones do while the Library loads.
  */
 import type { RowDto } from "./types";
 import type { IntakeCounts, IntakeQueueName, IntakeQueuePage, QueuedTrack } from "@/lib/intakeQueue";
@@ -33,6 +39,8 @@ export interface MockIntakeSource {
   gridLocked: (trackId: string) => boolean;
   /** As the mock answers everything: after a short wait. */
   wait: <T>(value: T) => Promise<T>;
+  /** Whether the mock's Library has finished loading. */
+  ready: () => boolean;
 }
 
 function readUrl(): URLSearchParams {
@@ -40,6 +48,35 @@ function readUrl(): URLSearchParams {
 }
 
 export function createMockIntake(source: MockIntakeSource) {
+  const reads = { counts: 0, queue: 0 };
+  let holding = false;
+  let failing = false;
+  let held: (() => void)[] = [];
+  if (typeof window !== "undefined") {
+    const hooks = window as unknown as {
+      __intakeReads: () => { counts: number; queue: number };
+      __holdIntakeReads: () => void;
+      __releaseIntakeReads: () => void;
+      __failIntakeReads: (on: boolean) => void;
+    };
+    hooks.__intakeReads = () => ({ ...reads });
+    hooks.__holdIntakeReads = () => { holding = true; };
+    hooks.__releaseIntakeReads = () => {
+      holding = false;
+      const waiting = held;
+      held = [];
+      for (const release of waiting) release();
+    };
+    hooks.__failIntakeReads = (on) => { failing = on; };
+  }
+  /** Every read: counted, held while holding, refused while loading or failing. Answered as it stands when it runs. */
+  const guarded = async <T>(which: keyof typeof reads, answer: () => Promise<T>): Promise<T> => {
+    reads[which] += 1;
+    if (holding) await new Promise<void>((resolve) => { held.push(resolve); });
+    if (!source.ready()) throw new Error("The library has not finished loading yet.");
+    if (failing) throw new Error("The Library service did not answer.");
+    return answer();
+  };
   const url = readUrl();
   const problemNamed = !url.has("noProblemColour");
   if (url.get("intake") === "empty") {
@@ -77,9 +114,11 @@ export function createMockIntake(source: MockIntakeSource) {
     };
   };
 
-  const intakeQueue = (queue: IntakeQueueName, offset: number, limit: number): Promise<IntakeQueuePage> => {
+  const intakeQueue = (queue: IntakeQueueName, offset: number, limit: number): Promise<IntakeQueuePage> =>
+    guarded("queue", () => readQueue(queue, offset, limit));
+  const readQueue = (queue: IntakeQueueName, offset: number, limit: number): Promise<IntakeQueuePage> => {
     if (queue === "problems" && !problemNamed) {
-      return source.wait({ tracks: [], rows: [], total: 0, offset, nextOffset: null, unavailable: NO_PROBLEM_COLOUR });
+      return source.wait({ tracks: [], rows: [], total: 0, offset, nextOffset: null, unavailable: NO_PROBLEM_COLOUR, suggestionsUnavailable: null });
     }
     const all = positions(queue);
     const page = all.slice(offset, offset + limit).map((at) => source.all[at]).filter((row): row is RowDto => row !== undefined);
@@ -91,11 +130,12 @@ export function createMockIntake(source: MockIntakeSource) {
       offset,
       nextOffset: next < all.length ? next : null,
       unavailable: null,
+      suggestionsUnavailable: null,
     });
   };
 
-  const intakeCounts = (): Promise<IntakeCounts> =>
-    source.wait({ intake: positions("intake").length, problems: problemNamed ? positions("problems").length : null });
+  const intakeCounts = (): Promise<IntakeCounts> => guarded("counts", () =>
+    source.wait({ intake: positions("intake").length, problems: problemNamed ? positions("problems").length : null }));
 
   return { intakeQueue, intakeCounts };
 }
