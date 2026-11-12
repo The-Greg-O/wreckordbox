@@ -19,7 +19,7 @@ const reachedBy = {
   frontend_budget: "perf-budgets.json",
   scripts: "scripts/release-preflight.mjs",
   rust: "crates/rbl-db/src/export.rs",
-  windows_rust: "src-tauri/windows/install-update-task.ps1",
+  windows_rust: "src-tauri/windows/test-common-controls-v6.manifest",
   windows_file_drop: "src/ipc/file-drop.ts",
   linux_window: ".github/workflows/validate-linux.yml",
   macos_intel: ".github/workflows/validate-macos.yml",

@@ -53,6 +53,11 @@ pub struct Sandbox {
     location: LibraryLocation,
     /// Seconds a service started here stays up with no client connected.
     pub idle_exit_secs: u32,
+    /// Options for the fake separation engine a service started here runs
+    /// (`separation-engine/tests/fake_worker.py`): `--short ROLE`,
+    /// `--delay SECONDS`, `--fail CATEGORY`. Set them before the first
+    /// command, which is what starts the service.
+    pub engine_options: Vec<String>,
     /// Services to stop when the test ends.
     pids: Mutex<Vec<u32>>,
 }
@@ -90,6 +95,7 @@ impl Sandbox {
             dir,
             location,
             idle_exit_secs: 5,
+            engine_options: Vec::new(),
             pids: Mutex::new(Vec::new()),
         }
     }
@@ -162,6 +168,58 @@ impl Sandbox {
         id
     }
 
+    /// Gives the fixture the four MyTag categories every rekordbox Library
+    /// has, and answers their identifiers in order: the fixture's own
+    /// Situation, then Mood, Sound and Sub-genre, each empty.
+    ///
+    /// The Library's writer cannot make a category (rekordbox fixes them),
+    /// so the three rows are written as the fixture builder writes its one:
+    /// `Attribute` 1 under `root`, numbered on after it.
+    pub fn four_categories(&self) -> [String; 4] {
+        let added = [
+            ("700101", "Mood"),
+            ("700102", "Sound"),
+            ("700103", "Sub-genre"),
+        ];
+        self.edit(|writer| {
+            for (place, (id, name)) in added.iter().enumerate() {
+                writer
+                    .library()
+                    .connection()
+                    .execute_batch(&format!(
+                        "INSERT INTO djmdMyTag
+                            (ID, Seq, Name, Attribute, ParentID, UUID,
+                             rb_data_status, rb_local_data_status, rb_local_deleted,
+                             rb_local_synced, usn, rb_local_usn, created_at, updated_at)
+                         SELECT '{id}', {seq}, '{name}', 1, 'root', 'fixture-mytag-{id}',
+                                0, 0, 0, 0, NULL, rb_local_usn, created_at, updated_at
+                         FROM djmdMyTag WHERE ID = '{first}'",
+                        seq = place + 2,
+                        first = fixture::MY_TAG_CATEGORY,
+                    ))
+                    .unwrap();
+            }
+        });
+        [
+            fixture::MY_TAG_CATEGORY.to_owned(),
+            "700101".to_owned(),
+            "700102".to_owned(),
+            "700103".to_owned(),
+        ]
+    }
+
+    /// Adds a MyTag called `name` to the end of `category` and answers its
+    /// identifier.
+    pub fn create_my_tag_in(&self, category: &str, name: &str) -> String {
+        let mut id = String::new();
+        self.edit(|writer| {
+            let tag = writer.create_my_tag(category).unwrap();
+            writer.rename_my_tag(&tag.id, name).unwrap();
+            id = tag.id;
+        });
+        id
+    }
+
     /// Adds a playlist holding the fixture tracks at `indexes`, in that
     /// order, and answers its identifier.
     pub fn create_playlist(&self, name: &str, indexes: &[usize]) -> String {
@@ -223,6 +281,36 @@ impl Sandbox {
         self.dir.path().join("run")
     }
 
+    /// The Sidecar of this sandbox's Library: a folder of its own under the
+    /// temporary folder, named to the service by `WRECKORDBOX_SIDECAR_DIR`.
+    pub fn sidecar_dir(&self) -> PathBuf {
+        self.dir.path().join("sidecar")
+    }
+
+    /// How many separations the fake engine has been asked for.
+    pub fn engine_runs(&self) -> usize {
+        std::fs::read_to_string(self.engine_log()).map_or(0, |log| log.lines().count())
+    }
+
+    fn engine_log(&self) -> PathBuf {
+        self.dir.path().join("engine.log")
+    }
+
+    /// The command a service here runs as the separation engine: the
+    /// engine's real worker protocol over its fake backend. Never a model.
+    fn separation_command(&self) -> String {
+        let fake = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../separation-engine/tests/fake_worker.py");
+        let mut command = vec![
+            "python3".to_owned(),
+            fake.to_str().unwrap().to_owned(),
+            "--log".to_owned(),
+            self.engine_log().to_str().unwrap().to_owned(),
+        ];
+        command.extend(self.engine_options.iter().cloned());
+        serde_json::to_string(&command).unwrap()
+    }
+
     /// What a second client in this sandbox connects with.
     pub fn config(&self) -> Config {
         Config {
@@ -249,6 +337,8 @@ impl Sandbox {
             .env("RBXPORT_OPTIONS", self.dir.path().join("options.json"))
             .env("RBXPORT_TEST_FIXTURE", self.dir.path().join("library"))
             .env("WRECKORDBOX_RUNTIME_DIR", self.runtime_dir())
+            .env("WRECKORDBOX_SIDECAR_DIR", self.sidecar_dir())
+            .env("WRECKORDBOX_SEPARATION_COMMAND", self.separation_command())
             .env(
                 "WRECKORDBOX_IDLE_EXIT_SECS",
                 self.idle_exit_secs.to_string(),

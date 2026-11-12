@@ -174,16 +174,11 @@ describe("sanitisePreferences", () => {
     expect(sanitisePreferences({ advanced: { relocateFolders: ["/a"] } }).advanced.relocateUserFolders).toBe(true);
   });
 
-  it("checks for updates unless the store plainly says not to", () => {
-    // A store written before the switch existed has no such key.
-    expect(sanitisePreferences({ advanced: {} }).advanced.checkUpdates).toBe(true);
-    expect(sanitisePreferences({ advanced: { checkUpdates: "no" } }).advanced.checkUpdates).toBe(true);
-    expect(sanitisePreferences({ advanced: { checkUpdates: 0 } }).advanced.checkUpdates).toBe(true);
-    expect(sanitisePreferences({ advanced: { checkUpdates: false } }).advanced.checkUpdates).toBe(false);
-    expect(sanitisePreferences({ advanced: {} }).advanced.updateFrequency).toBe("start");
+  it("drops the update settings an older store may still hold", () => {
+    const kept = sanitisePreferences({ advanced: { checkUpdates: true, updateFrequency: "daily" } }).advanced;
+    expect(kept).not.toHaveProperty("checkUpdates");
+    expect(kept).not.toHaveProperty("updateFrequency");
   });
-
-
 
   it("copies a device playlist's missing tracks by default and keeps each other choice (#198)", () => {
     expect(DEFAULT_PREFERENCES.advanced.deviceImportMissing).toBe("copy");

@@ -104,7 +104,6 @@ fn the_menu_rebuilds_with_translated_labels() {
         ("File".to_owned(), "Datei".to_owned()),
         ("Edit".to_owned(), "Bearbeiten".to_owned()),
         ("View".to_owned(), "Ansicht".to_owned()),
-        ("Help".to_owned(), "Hilfe".to_owned()),
     ]);
     rbxport_lib::menu::set_menu_labels(app.handle().clone(), labels)
         .expect("translated menu installs");
@@ -116,7 +115,7 @@ fn the_menu_rebuilds_with_translated_labels() {
         .iter()
         .filter_map(|item| item.as_submenu().and_then(|submenu| submenu.text().ok()))
         .collect();
-    for translated in ["Datei", "Bearbeiten", "Ansicht", "Hilfe"] {
+    for translated in ["Datei", "Bearbeiten", "Ansicht"] {
         assert!(
             titles.iter().any(|title| title == translated),
             "no {translated} menu; got {titles:?}"

@@ -526,30 +526,6 @@ button.keyBadge:hover { background: var(--c-button-hover, var(--c-raised)); }
 .aboutName { font-size: var(--f-size-pref-title); font-weight: 700; }
 .aboutVersion { color: var(--c-text-dim); font-variant-numeric: tabular-nums; }
 .aboutLine { margin: 0 0 10px; max-width: 560px; line-height: 1.5; color: var(--c-text); }
-.aboutLinks { display: flex; gap: 8px; margin-top: 4px; }
-.aboutLink {
-  border: 0;
-  border-radius: 2px;
-  padding: 5px 12px;
-  background: var(--c-button);
-  color: var(--c-text);
-  font: inherit;
-  font-size: var(--f-size-xs);
-  font-weight: 700;
-  cursor: default;
-}
-.aboutLink:hover { background: var(--c-pad-active); color: var(--c-icon-on); }
-/* `margin-top: auto` in the sections column puts the foot at the bottom of
-   the window when the sections are short, and after them when they are not. */
-.aboutFoot {
-  margin-top: auto;
-  padding-top: 16px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-}
-.aboutMade { margin: 0; color: var(--c-text-dim); }
 
 /* The Audio pane's meters: a channel letter, the bar, and its figure. */
 .meters {
@@ -605,13 +581,6 @@ button.keyBadge:hover { background: var(--c-button-hover, var(--c-raised)); }
 .networkInterfaces input { margin: 0; accent-color: var(--c-accent); }
 
 .networkInterfaces:disabled label { cursor: default; }
-
-.reportBug {
-  margin-top: auto;
-  margin-bottom: 12px;
-  align-self: center;
-  font-size: var(--f-size-sm);
-}
 
 
 .linkSummary {
@@ -704,55 +673,26 @@ button.keyBadge:hover { background: var(--c-button-hover, var(--c-raised)); }
 .analysisSwitch .row .toggle { order: 1; margin-left: auto; }
 .analysisSwitch p { max-width: 480px; margin: 6px 0 0; padding-right: calc(var(--s-pref-toggle-w) + 16px); color: var(--c-text-dim); font-size: var(--f-size-sm); line-height: 1.5; font-weight: 400; }
 
-/* About keeps update settings aligned with its version and description. */
-.updateControls { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; }
-.updateControls .row, .updateControls .selectRow { margin: 0; }
-.updateHint { margin: 8px 0 0; color: var(--c-text-dim); }
-.updateError { color: var(--c-error); margin: 0 0 12px; }
 
-.updateProgressRow { display: flex; align-items: center; gap: 10px; margin: 10px 0 0; }
-.updateProgress { position: relative; flex: 1; height: 6px; overflow: hidden; border-radius: 3px; background: var(--c-meter-track); }
-.updateProgressFill { display: block; height: 100%; width: 0; background: var(--c-accent); transition: width 120ms linear; }
 /* No total to measure against: a third of the bar slides back and forth. */
-.updateProgress[data-indeterminate] .updateProgressFill { position: absolute; width: 33%; animation: updateProgressSlide 1.2s ease-in-out infinite alternate; }
-@keyframes updateProgressSlide { from { left: 0; } to { left: 67%; } }
-.updateProgressText { flex: none; min-width: 10em; text-align: right; color: var(--c-text-dim); font-size: var(--f-size-sm); font-variant-numeric: tabular-nums; }
 
 .aboutIdentity { display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px; }
 .aboutIdentity .aboutName { font-size: 22px; letter-spacing: -0.03em; }
 .aboutIdentity .aboutVersion { font-size: var(--f-size-sm); }
-.aboutLinks { flex-wrap: wrap; }
-.aboutLink { border: 1px solid var(--c-raised); background: transparent; border-radius: 4px; cursor: pointer; }
-.aboutLink:focus-visible, .aboutLegal summary:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 3px; }
 .aboutLegal { padding: 0 var(--s-pref-section-pad-x); }
 .aboutLegal details { border-bottom: 1px solid var(--c-raised); }
 .aboutLegal summary { padding: 12px 0; cursor: pointer; color: var(--c-text-dim); font-size: var(--f-size-sm); }
 .aboutLegal summary:hover { color: var(--c-text); }
+.aboutCredit { border-top: 1px solid var(--c-raised); padding-top: 20px; }
+.aboutCredit p { max-width: 540px; margin: 6px 0; color: var(--c-text-dim); font-size: var(--f-size-sm); line-height: 1.5; }
 .aboutLegal .aboutLine { font-size: var(--f-size-sm); color: var(--c-text-dim); }
-.aboutFoot { gap: 8px; padding-top: 24px; }
-.aboutMade { display: inline-flex; align-items: center; gap: 4px; font-size: var(--f-size-sm); }
-.updateControls { justify-content: space-between; }
-.updateControls .select { width: 160px; }
 
-.aboutUpdateHeader { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; padding-bottom: 16px; margin-bottom: 16px; border-bottom: 1px solid var(--c-raised); }
-.aboutUpdateHeader [data-testid="about-version"] { font-variant-numeric: tabular-nums; }
 
 .aboutByline { margin: 8px 0 0; color: var(--c-text-dim); }
-.aboutSocial { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; padding: 0; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--c-text-dim); cursor: pointer; }
-.aboutSocial:hover { background: var(--c-raised); color: var(--c-text); }
-.aboutSocial:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 2px; }
-.aboutFoot { padding-bottom: 16px; }
 
 .aboutHeader { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; padding: 4px 0 20px; }
 .aboutHeader .aboutName { margin: 0; font-size: 26px; line-height: 1.2; letter-spacing: -0.03em; }
 .aboutHeader .aboutVersion { margin: 6px 0 0; font-size: var(--f-size-sm); }
-.aboutUpdates { border-top: 1px solid var(--c-raised); padding-top: 20px; }
-.aboutUpdates > p:last-child { margin-bottom: 0; }
-.aboutSupport { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--c-raised); }
-.aboutSupport h2 { margin: 0 0 8px; font-size: var(--f-size-pref-sub); }
-.aboutSupport p { max-width: 540px; margin: 6px 0; color: var(--c-text-dim); font-size: var(--f-size-sm); line-height: 1.5; }
-.supportButton { display: inline-flex; align-items: center; gap: 6px; margin-top: 10px; }
-.supportHeart { fill: var(--c-error); color: var(--c-error); }
 
 .paneGroupHeading { margin: 16px 8px 8px; padding-top: 12px; border-top: 1px solid var(--c-raised); color: var(--c-text-dim); font-size: var(--f-size-sm); font-weight: 600; }
 

@@ -60,7 +60,6 @@ impl AppError {
     pub fn internal(detail: impl Into<String>) -> Self {
         let detail = detail.into();
         tracing::error!(error.detail = %detail, "internal error");
-        crate::sentry::capture_internal_error();
         Self::new(ErrorKind::Internal, "Something went wrong inside wreckordbox.").with_detail(detail)
     }
 }

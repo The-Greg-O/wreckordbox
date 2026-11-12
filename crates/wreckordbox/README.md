@@ -13,6 +13,8 @@ The headless `wreckordbox` command: a thin client of the Library service. It ope
 - Results go to standard output: text by default, JSON with `--json`.
 - Errors go to standard error with exit status 1 (2 for a usage error). With `--json` an error is `{"error": {"code", "message"}}`, with the service's stable code.
 - `wreckordbox serve` runs the service in the foreground. The hidden `serve --spawned` is how a client starts one in the background.
+- `wreckordbox stems separate <TRACK_ID>` is the one slow command: the service runs the separation engine and the command waits, printing progress to standard error. Interrupting it does not stop the separation; running it again waits for the same result.
+- Tests never run a separation model: the sandbox points the service at the engine's fake backend (`separation-engine/tests/fake_worker.py`) and at a Sidecar in the temporary folder.
 - Tests never touch the installed Library: the sandbox clears the environment and sets a private home, runtime directory and `RBXPORT_OPTIONS`.
 
 ## Run focused checks

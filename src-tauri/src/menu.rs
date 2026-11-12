@@ -84,7 +84,8 @@ pub fn set_history_menu<R: Runtime>(
 }
 
 /// What the About item shows: the product name, its version, the copyright
-/// line and the window icon, all from the bundle's own configuration.
+/// line and the window icon, all from the bundle's own configuration, and a
+/// plain-text credit to the project wreckordbox is based on.
 ///
 /// rekordbox's About "displays your installed version" (rekordbox 7 manual,
 /// menu list p.252). On macOS the standard About panel reads all of this from
@@ -92,12 +93,16 @@ pub fn set_history_menu<R: Runtime>(
 /// does nothing at all unless it is given these fields (muda 0.19
 /// `platform_impl/gtk` and `platform_impl/windows` only act on
 /// `About(Some(..))`), which is why About never appeared there.
+/// The credit to upstream: text, not a link, so About opens no address.
+const BASED_ON: &str = "wreckordbox is based on rbxport.";
+
 pub fn about_metadata<R: Runtime>(app: &AppHandle<R>) -> AboutMetadata<'static> {
     let package = app.package_info();
     AboutMetadata {
         name: Some(package.name.clone()),
         version: Some(package.version.to_string()),
         copyright: app.config().bundle.copyright.clone(),
+        comments: Some(BASED_ON.into()),
         icon: app
             .default_window_icon()
             .cloned()
@@ -153,10 +158,6 @@ fn build_with_labels<R: Runtime>(app: &AppHandle<R>, labels: &Labels) -> tauri::
         label(labels, "Export Collection in xml format…"),
     )
     .build(app)?;
-    // rekordbox calls its own "Update Manager"; the item is worded the way
-    // every other Mac app words it, since that is where people look for it.
-    let updates =
-        MenuItemBuilder::with_id("updates", label(labels, "Check for Updates…")).build(app)?;
 
     // The application menu, whose first item macOS names after the app.
     let mut application = SubmenuBuilder::new(app, "wreckordbox")
@@ -165,7 +166,6 @@ fn build_with_labels<R: Runtime>(app: &AppHandle<R>, labels: &Labels) -> tauri::
             Some(&label(labels, "About wreckordbox")),
             about_metadata_for_platform(app),
         )?)
-        .item(&updates)
         .separator()
         .item(&settings)
         .separator();
@@ -291,12 +291,9 @@ fn build_with_labels<R: Runtime>(app: &AppHandle<R>, labels: &Labels) -> tauri::
         )?)
         .build()?;
 
-    let help = SubmenuBuilder::new(app, label(labels, "Help"))
-        .item(&MenuItemBuilder::with_id("report-bug", label(labels, "Report bug…")).build(app)?)
-        .build()?;
     Menu::with_items(
         app,
-        &[&application, &file, &edit, &track, &playlist, &view, &help],
+        &[&application, &file, &edit, &track, &playlist, &view],
     )
 }
 

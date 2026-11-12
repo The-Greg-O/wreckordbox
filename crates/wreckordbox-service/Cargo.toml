@@ -18,6 +18,9 @@ rbl-index = { path = "../rbl-index" }
 rbl-library = { path = "../rbl-library" }
 # Only for where the window keeps its recovery journals.
 rbl-backup = { path = "../rbl-backup" }
+# The Sidecar: the store of Facts beside the Library, which the service owns
+# as it owns the Library.
+wreckordbox-sidecar = { path = "../wreckordbox-sidecar" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 dirs = "5"

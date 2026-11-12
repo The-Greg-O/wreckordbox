@@ -49,17 +49,18 @@ later `dev` commits for the next release. Installer jobs build from that
 promoted commit. Validation failure creates no tag; the next release reverts
 the untagged cut before choosing its version.
 
-Installers and update feeds are published to R2; the workflow does not create
+Installers and the download index (`latest.json`) are published to R2; the workflow does not create
 a GitHub Release. Payloads precede the `latest.json` update. When `CDN_BASE_URL`
 is configured, publication checks the live feeds' versions and installer URLs.
 Only after publication succeeds does it prune old versioned artifacts, keeping
-the five newest versions, and announce the notes on Discord.
+the five newest versions. Wreckordbox has no updater: nothing in the app
+reads that index.
 
 When the repository ships the Nix packaging, the publish job also writes
 `packaging/nix/pin.json` (the published Linux AppImage's version and SRI hash,
 preserving the source-build hashes) and pushes `chore(nix): seed <version>` to
 `dev`, so the Nix package ships that release. That pin is the only way a Nix
-install updates: the built-in updater is unavailable under Nix (#177).
+install updates.
 
 ## Linux AppImage GTK hook
 

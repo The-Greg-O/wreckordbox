@@ -313,54 +313,12 @@ pub async fn set_my_tags<R: tauri::Runtime>(
         let (_, edit) = w.set_my_tags_with_undo(&track, &tags)?;
         let tags = vec![edit];
         let comments = if comments.unwrap_or(false) {
-            refresh_comments(w, std::slice::from_ref(&track), &tags)?
+            rbl_library::my_tags::refresh_comments(w, std::slice::from_ref(&track), &tags)?
         } else {
             Vec::new()
         };
         Ok(LibraryEdit::TrackTags { tags, comments })
     }).await
-}
-
-/// Add "My Tag" to the "Comments" (#605): rewrites the comment of each of
-/// `tracks` with its My Tags, as rekordbox's `BrowseListViewer::
-/// updateCommentWithMyTag` does for every selected track after a My Tag
-/// edit, whether or not that track's own tags changed. A track no longer in
-/// the collection is passed over. On a failure the comments already
-/// written and `tags` are put back, and the error returned.
-fn refresh_comments(
-    w: &mut rbl_db::write::Writer,
-    tracks: &[String],
-    tags: &[rbl_db::write::TrackTagEdit],
-) -> Result<Vec<rbl_db::write::TrackEdit>, rbl_db::DbError> {
-    let mut comments: Vec<rbl_db::write::TrackEdit> = Vec::with_capacity(tracks.len());
-    for track in tracks {
-        let step = match w.has_track(track) {
-            Ok(false) => continue,
-            Ok(true) => w.refresh_my_tag_comment_with_undo(track),
-            Err(error) => Err(error),
-        };
-        match step {
-            Ok((_, edit)) => {
-                if !edit.is_empty() {
-                    comments.push(edit);
-                }
-            }
-            Err(error) => {
-                for applied in comments.iter().rev() {
-                    if let Err(undo) = w.undo_track_edit(applied) {
-                        tracing::error!(%undo, "a My Tag comment could not be put back after a failure");
-                    }
-                }
-                for applied in tags.iter().rev().filter(|edit| !edit.is_empty()) {
-                    if let Err(undo) = w.undo_tag_edit(applied) {
-                        tracing::error!(%undo, "a My Tag edit could not be put back after a failure");
-                    }
-                }
-                return Err(error);
-            }
-        }
-    }
-    Ok(comments)
 }
 
 /// The My Tags every one of `tracks` has: the ticks of the My Tag panel.
@@ -392,30 +350,8 @@ pub async fn put_my_tag<R: tauri::Runtime>(
     comments: Option<bool>,
 ) -> AppResult<crate::dto::EditHistoryDto> {
     recorded_edit(app, state, "put_my_tag", Touched::Tracks, "Track Edit", move |w| {
-        let mut edits: Vec<rbl_db::write::TrackTagEdit> = Vec::with_capacity(tracks.len());
-        for track in &tracks {
-            let step = match w.has_track(track) {
-                Ok(false) => continue,
-                Ok(true) => w.put_my_tag_with_undo(track, &tag, on),
-                Err(error) => Err(error),
-            };
-            match step {
-                Ok((_, edit)) => {
-                    if !edit.is_empty() {
-                        edits.push(edit);
-                    }
-                }
-                Err(error) => {
-                    for applied in edits.iter().rev() {
-                        if let Err(undo) = w.undo_tag_edit(applied) {
-                            tracing::error!(%undo, "a My Tag edit could not be put back after a failure");
-                        }
-                    }
-                    return Err(error);
-                }
-            }
-        }
-        let comments = if comments.unwrap_or(false) { refresh_comments(w, &tracks, &edits)? } else { Vec::new() };
+        let edits = rbl_library::my_tags::put_on_tracks(w, &tracks, &tag, on)?;
+        let comments = if comments.unwrap_or(false) { rbl_library::my_tags::refresh_comments(w, &tracks, &edits)? } else { Vec::new() };
         Ok(LibraryEdit::TrackTags { tags: edits, comments })
     }).await
 }
@@ -486,7 +422,7 @@ pub async fn rename_my_tag<R: tauri::Runtime>(
 ) -> AppResult<u32> {
     edit(app, state, "rename_my_tag", Touched::Tracks, move |w| {
         w.rename_my_tag(&id, &name)?;
-        rewrite_comments(w, comments.as_deref().unwrap_or_default())
+        rbl_library::my_tags::rewrite_comments(w, comments.as_deref().unwrap_or_default())
     }).await
 }
 
@@ -503,20 +439,9 @@ pub async fn delete_my_tag<R: tauri::Runtime>(
 ) -> AppResult<u32> {
     crate::commands::permanent_edit(app, state, "delete_my_tag", Touched::Tracks, move |w| {
         w.delete_my_tag(&id)?;
-        rewrite_comments(w, comments.as_deref().unwrap_or_default())
+        rbl_library::my_tags::rewrite_comments(w, comments.as_deref().unwrap_or_default())
     })
     .await
-}
-
-/// The comment rewrite after a rename or a delete, which no history entry
-/// holds: each track still in the collection, written as it comes.
-fn rewrite_comments(w: &mut rbl_db::write::Writer, tracks: &[String]) -> Result<(), rbl_db::DbError> {
-    for track in tracks {
-        if w.has_track(track)? {
-            w.refresh_my_tag_comment_with_undo(track)?;
-        }
-    }
-    Ok(())
 }
 
 /// Add Artwork: the image at `image` is filed in the share tree and each of

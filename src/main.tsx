@@ -3,9 +3,7 @@ import { createRoot } from "react-dom/client";
 import "./styles/base.css";
 import { Localization } from "./i18n";
 import { syncRekordboxBrowseAtStartup } from "./lib/rekordboxBrowse";
-import { initializeSentry } from "./lib/sentry";
 import { followUiScale } from "./lib/uiScale";
-import * as Sentry from "@sentry/react";
 
 // Suppress the webview's Reload/Inspect menu in every app window. Leave
 // propagation intact so the app's context-menu handlers still receive it.
@@ -17,20 +15,11 @@ followUiScale();
 
 const el = document.getElementById("root");
 if (!el) throw new Error("#root missing from index.html");
-initializeSentry();
-const root = createRoot(el, {
-  onCaughtError: (error, errorInfo) => {
-    Sentry.captureReactException(error, { componentStack: errorInfo.componentStack ?? null });
-  },
-  onUncaughtError: (error, errorInfo) => {
-    Sentry.captureReactException(error, { componentStack: errorInfo.componentStack ?? null });
-  },
-});
+const root = createRoot(el);
 
-// The same bundle serves the Preferences, Sync Manager, Report bug and Log
-// windows: the shell opens them at `#preferences/<pane>`, `#sync`, `#report`
-// and `#log`, and that is all each draws.
-const report = window.location.hash.startsWith("#report");
+// The same bundle serves the Preferences, Sync Manager and Log windows: the
+// shell opens them at `#preferences/<pane>`, `#sync` and `#log`, and that is
+// all each draws.
 const preferences = window.location.hash.startsWith("#preferences");
 const sync = window.location.hash.startsWith("#sync");
 const log = window.location.hash.startsWith("#log");
@@ -53,7 +42,6 @@ function mount(view: ReactNode) {
 function secondaryWindow(): Promise<ReactNode> | null {
   if (preferences) return import("./views/settings/PreferencesWindow").then(({ PreferencesWindow }) => <PreferencesWindow />);
   if (sync) return import("./views/sync/SyncWindow").then(({ SyncWindow }) => <SyncWindow />);
-  if (report) return import("./views/report/ReportBug").then(({ ReportWindow }) => <ReportWindow />);
   if (log) return import("./views/log/LogView").then(({ LogWindow }) => <LogWindow />);
   return null;
 }

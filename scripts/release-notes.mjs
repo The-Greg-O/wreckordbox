@@ -1,9 +1,8 @@
 /**
- * Validates structured release-notes.json and renders updater Markdown or
- * a Discord webhook JSON payload. Exports helpers for preflight and tests.
- * Run: node scripts/release-notes.mjs validate FILE [VERSION], markdown FILE OUTPUT,
- * or discord FILE VERSION OUTPUT URL. Writes output files for rendering modes;
- * the Discord mode creates a payload but does not send it.
+ * Validates structured release-notes.json and renders it as Markdown.
+ * Exports helpers for preflight and tests.
+ * Run: node scripts/release-notes.mjs validate FILE [VERSION] or
+ * markdown FILE OUTPUT. The Markdown mode writes its output file.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -70,31 +69,14 @@ function releaseBody(release) {
   return sections.join("\n\n");
 }
 
-export function updaterMarkdown(notes) {
+export function releaseMarkdown(notes) {
   return notes.map((release) =>
     `## [${release.version}] — ${release.date}\n\n${releaseBody(release)}`,
   ).join("\n\n");
 }
 
-export function discordPayload(release, whatsNewUrl) {
-  let description = releaseBody(release);
-  if (description.length > 3900) description = `${description.slice(0, 3897).trimEnd()}…`;
-  const base = whatsNewUrl.replace(/\/$/, "");
-  return {
-    username: "rbxport releases",
-    embeds: [{
-      title: `rbxport ${release.version} released`,
-      description,
-      color: 0x3571E3,
-      url: `${base}/#v${encodeURIComponent(release.version)}`,
-      footer: { text: `Release v${release.version}` },
-      timestamp: new Date().toISOString(),
-    }],
-  };
-}
-
 function usage() {
-  throw new Error("Usage: release-notes.mjs validate FILE [VERSION] | markdown FILE OUTPUT | discord FILE VERSION OUTPUT URL");
+  throw new Error("Usage: release-notes.mjs validate FILE [VERSION] | markdown FILE OUTPUT");
 }
 
 function main(args) {
@@ -114,13 +96,7 @@ function main(args) {
   if (command === "markdown") {
     const [output] = rest;
     if (!output) usage();
-    writeFileSync(output, `${updaterMarkdown(notes)}\n`);
-    return;
-  }
-  if (command === "discord") {
-    const [version, output, url] = rest;
-    if (!version || !output || !url) usage();
-    writeFileSync(output, JSON.stringify(discordPayload(releaseForVersion(notes, version), url)));
+    writeFileSync(output, `${releaseMarkdown(notes)}\n`);
     return;
   }
   usage();

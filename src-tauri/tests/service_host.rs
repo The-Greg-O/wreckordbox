@@ -212,6 +212,27 @@ fn a_rating_set_from_the_command_shows_in_the_window_as_a_library_change() {
 }
 
 #[test]
+fn a_mytag_put_on_a_track_from_the_command_shows_in_the_window_as_a_library_change() {
+    let window = window();
+    window.host().unwrap();
+    let id = track_id(1);
+    let before = window.generation();
+
+    let assigned = window.cli(&["--json", "mytags", "assign", fixture::MY_TAG_PEAK, &id]).json();
+
+    assert_eq!(assigned["changed"], 1);
+    let index = window.state().library().unwrap();
+    let carried = index.my_tag_keys(index.row_of(&id).unwrap() as usize);
+    assert_eq!(carried, [rbl_index::smart::my_tag_key(fixture::MY_TAG_PEAK)], "the window's own index has the tag, with no reload");
+    assert_eq!(assigned["generation"], window.generation(), "one generation for both");
+    // The interface is told with the event its own edits send, once.
+    eventually("library:changed", || !window.changes.lock().unwrap().is_empty());
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(*window.changes.lock().unwrap(), [window.generation()]);
+    assert!(window.generation() > before);
+}
+
+#[test]
 fn a_rating_set_in_the_window_is_what_the_command_lists_next_and_a_client_hears_of_it() {
     let window = window();
     window.host().unwrap();
