@@ -12,6 +12,9 @@
 //! [OBS]. The frontend draws the new BPM, key and analysed mark from the
 //! answer itself, and asks for one reload when its queue drains.
 
+#[path = "phrase_ledger.rs"]
+mod phrase_ledger;
+
 use std::sync::Arc;
 
 use tauri::State;
@@ -760,7 +763,7 @@ pub(crate) fn phrase_edit(state: &AppState, library: &rbl_index::Library, share:
         rbl_anlz::PhraseEdit::Cut { .. } => "phrase_cut",
         rbl_anlz::PhraseEdit::Clear { .. } => "phrase_clear",
     };
-    let record = guard.recording(kind, track_id).map_err(write_error)?;
+    let record = guard.recording_values(kind, track_id, phrase_ledger::values(&file, &bytes, &relative)).map_err(write_error)?;
     crate::durable::write(&ext, &bytes).map_err(|e| {
         AppError::new(ErrorKind::Internal, "The analysis file could not be written.").with_detail(e.to_string())
     })?;

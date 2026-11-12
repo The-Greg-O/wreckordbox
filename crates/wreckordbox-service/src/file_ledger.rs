@@ -1,5 +1,5 @@
-//! Recovery observations for file edits. Called during recovery, never by a
-//! query or on the write path. Evidence is metadata, never audio or fingerprints.
+//! Recovery observations for unresolved file intents, never for a query or a
+//! confirmed write. Evidence is metadata, never audio or fingerprints.
 use serde_json::Value;
 
 pub(super) const PLAYER_RUN: &str = "Changes from a player";
@@ -28,6 +28,7 @@ pub(super) fn recovery_label(
 }
 
 fn observed(location: &rbl_db::LibraryLocation, args: &Value) -> Option<&'static str> {
+    args.get("before")?;
     let relative = args["analysis"].as_str()?;
     let path = rbl_anlz::resolve(&location.share_root, relative)
         .canonicalize()
@@ -35,7 +36,7 @@ fn observed(location: &rbl_db::LibraryLocation, args: &Value) -> Option<&'static
     if !path.starts_with(location.share_root.canonicalize().ok()?)
         || !path
             .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("DAT"))
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("DAT") || ext.eq_ignore_ascii_case("EXT"))
         || std::fs::metadata(&path).ok()?.len() > 4 * 1024 * 1024
     {
         return None;
@@ -43,6 +44,16 @@ fn observed(location: &rbl_db::LibraryLocation, args: &Value) -> Option<&'static
     let file = rbl_anlz::Anlz::read(&path).ok()?;
     let value = match args["kind"].as_str()? {
         "link_grid_offset" => Value::from(file.grid_offset()?),
+        "phrase_cut" | "phrase_clear" => {
+            let section = file
+                .sections
+                .iter()
+                .find(|section| &section.tag.0 == b"PSSI")?;
+            if section.header.len().saturating_add(section.payload.len()) > 64 * 1024 {
+                return None;
+            }
+            serde_json::json!({"header": section.header, "payload": section.payload})
+        }
         "window_grid" => serde_json::json!(file
             .beat_grid()?
             .iter()

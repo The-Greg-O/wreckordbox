@@ -1638,11 +1638,14 @@ impl rbl_library::ledger::Ledger for Keeper {
     fn file_written(&self, kind: &str, track: &str) {
         let command = self.state().op.as_ref().and_then(|op| op.command.clone());
         let args = command.as_ref().and_then(|command| command.get("args"));
-        let reason = if args.is_some_and(|args| args.get("before").is_some()) {
-            "Unwind does not yet reverse analysis file edits"
-        } else {
-            "previous analysis bytes were not retained"
-        };
+        let reason =
+            if let Some(reason) = args.and_then(|args| args["not_reversible_reason"].as_str()) {
+                reason
+            } else if args.is_some_and(|args| args.get("before").is_some()) {
+                "Unwind does not yet reverse analysis file edits"
+            } else {
+                "previous analysis bytes were not retained"
+            };
         let label = format!("{kind}: track {track}. Cannot reverse: {reason}.");
         let action = match args.and_then(|args| args["step"].as_str()) {
             Some("undo") => Action::Undo,

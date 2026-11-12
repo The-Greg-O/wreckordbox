@@ -184,7 +184,7 @@ fn file_only_edits_are_named_once_in_the_window_run() {
         assert!(entry["label"]
             .as_str()
             .unwrap()
-            .contains("previous analysis bytes were not retained"));
+            .contains("Unwind does not yet reverse analysis file edits"));
     }
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     assert_eq!(f.state.core().generation(), generation);
@@ -311,9 +311,13 @@ fn file_ledger_fault_child() {
     std::fs::write(
         std::path::PathBuf::from(std::env::var_os("WBX22_CHILD_ROOT").unwrap())
             .join("fixture.json"),
-        serde_json::to_vec(&json!({"dir":f.dir.path(), "dat":f.dat})).unwrap(),
+        serde_json::to_vec(&json!({"dir":f.dir.path(), "dat":f.dat, "ext":f.ext, "original_ext":std::fs::read(&f.ext).unwrap()})).unwrap(),
     )
     .unwrap();
+    if mode.starts_with("phrase_") {
+        f.phrase(rbl_anlz::PhraseEdit::Cut { beat: 25 }).unwrap();
+        panic!("the crash fault must have terminated the process");
+    }
     f.grid(234).unwrap();
     assert_eq!(
         rbl_anlz::Anlz::read(&f.dat).unwrap().grid_offset(),
@@ -359,6 +363,16 @@ fn file_crash_after_publication() {
     fault_case("crash", "abort_after_write");
 }
 
+#[test]
+fn phrase_crash_before_publication() {
+    fault_case("phrase_before", "abort_before_file_publish");
+}
+
+#[test]
+fn phrase_crash_after_publication() {
+    fault_case("phrase_crash", "abort_after_write");
+}
+
 fn fault_case(mode: &str, fault: &str) {
     let root = tempfile::tempdir().unwrap();
     let output = Command::new(std::env::current_exe().unwrap())
@@ -393,10 +407,16 @@ fn fault_case(mode: &str, fault: &str) {
         serde_json::from_slice(&std::fs::read(root.path().join("fixture.json")).unwrap()).unwrap();
     let dir = PathBuf::from(fixture["dir"].as_str().unwrap());
     let dat = PathBuf::from(fixture["dat"].as_str().unwrap());
-    assert_eq!(
-        rbl_anlz::Anlz::read(&dat).unwrap().grid_offset(),
-        Some(if mode == "before" { 0 } else { 234 })
-    );
+    if mode.starts_with("phrase_") {
+        let actual = std::fs::read(fixture["ext"].as_str().unwrap()).unwrap();
+        let original: Vec<u8> = serde_json::from_value(fixture["original_ext"].clone()).unwrap();
+        assert_eq!(actual == original, mode.ends_with("before"));
+    } else {
+        assert_eq!(
+            rbl_anlz::Anlz::read(&dat).unwrap().grid_offset(),
+            Some(if mode == "before" { 0 } else { 234 })
+        );
+    }
     let runs = cli_at(&dir, &["runs", "list"]);
     assert_eq!(runs["total"], 1);
     let entries = cli_at(&dir, &["runs", "show", &runs["runs"][0]["id"].to_string()]);
@@ -405,14 +425,23 @@ fn fault_case(mode: &str, fault: &str) {
     let entry = &entries["entries"][0];
     assert_eq!(entry["kind"], "unconfirmed");
     assert_eq!(entry["reversible"], false);
-    assert_eq!(entry["command"]["args"]["before"], 0);
-    assert_eq!(entry["command"]["args"]["after"], 234);
-    assert_eq!(entry["source"], json!({"kind":"tool", "name":"link"}));
+    if mode.starts_with("phrase_") {
+        assert!(entry["command"]["args"]["before"].is_object());
+        assert_ne!(
+            entry["command"]["args"]["before"],
+            entry["command"]["args"]["after"]
+        );
+        assert_eq!(entry["source"], json!({"kind":"dj", "name":"dj"}));
+    } else {
+        assert_eq!(entry["command"]["args"]["before"], 0);
+        assert_eq!(entry["command"]["args"]["after"], 234);
+        assert_eq!(entry["source"], json!({"kind":"tool", "name":"link"}));
+    }
     assert!(
         entry["label"]
             .as_str()
             .unwrap()
-            .contains(if mode == "before" {
+            .contains(if mode.ends_with("before") {
                 "before state"
             } else {
                 "after state"
@@ -426,7 +455,7 @@ fn fault_case(mode: &str, fault: &str) {
 fn file_edit_latency_at_twenty_thousand_tracks() {
     let f = Fixture::new(20_000);
     let original = std::fs::read(&f.ext).unwrap();
-    for kind in ["link_grid_offset", "phrase_cut"] {
+    for kind in ["link_grid_offset", "phrase_cut", "unchanged_link_offset"] {
         let mut times = Vec::new();
         for n in 1..=7 {
             // Fixture reset is outside the measured write and not a production path.
@@ -437,7 +466,12 @@ fn file_edit_latency_at_twenty_thousand_tracks() {
             if kind == "phrase_cut" {
                 assert!(f.phrase(rbl_anlz::PhraseEdit::Cut { beat: 25 }).unwrap());
             } else {
-                f.grid(n).unwrap();
+                f.grid(if kind == "unchanged_link_offset" {
+                    7
+                } else {
+                    n
+                })
+                .unwrap();
             }
             times.push(begin.elapsed().as_secs_f64() * 1000.0);
         }
