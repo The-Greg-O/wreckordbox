@@ -55,6 +55,23 @@ README, code map, safety contracts, and focused checks.
 | `rbl-fakecdj` | A stand-in CDJ for testing the link servers over loopback. |
 | `rbl-difftool` | Records what rekordbox itself changes in `master.db`, so writes copy rekordbox rather than guess. |
 
+## The view shell
+
+The window is being moved from upstream's single layout to a view shell
+(ADR 0007): one frame (top bar with view tabs, player, tree, status line)
+whose working area changes between the Library, Intake, Review and Stick
+views. The shell is `src/views/shell/ViewShell.tsx`; the views and their
+keys are listed in `src/lib/shellViews.ts`. It is built beside the old
+layout and drawn only when the stored preference `view.viewShell` is true
+(off by default, no Preferences control; in a browser test use
+`enableViewShell` from `e2e/helpers.ts`). `AppBody` in `src/app/App.tsx`
+makes the tree, the deck, the track list, the status bar and the dialogs
+once and places them in whichever layout is on, so it remains the owner of
+playback, the loaded track and the tree's selection in both. The shell's
+layout answers to the window's own width through a container query, with
+the breakpoint from `docs/design/tokens.md` (`src/styles/tokens-shell.css`).
+The old layout goes when every view has moved (ticket #77).
+
 ## How a request flows
 
 1. A view calls a function on the backend object from `getBackend()` in

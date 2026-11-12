@@ -65,6 +65,8 @@ import { useLimiter } from "@/store/useLimiter";
 import { onPreviewError, stopPreview } from "@/store/usePreview";
 import { MasterOutputProvider, MasterOutputConnection, useMasterControls, useMasterDisplay } from "@/store/MasterOutput";
 import { asLayout, deckCount, isFullDeck, type PlayerLayout } from "@/lib/layout";
+import { DEFAULT_SHELL_VIEW, type ShellView } from "@/lib/shellViews";
+import { SHELL_PLAYER_LAYOUT, ViewShell } from "@/views/shell/ViewShell";
 import { FIELD_LABEL } from "@/views/info/fieldLabel";
 import { SubBrowser } from "@/views/subbrowser/SubBrowser";
 import { RightRail } from "@/views/browser/RightRail";
@@ -550,7 +552,18 @@ function AppBody() {
   const deleteUnlistedMusic = prefs.preferences.usbExport.deleteUnlistedMusic;
   const compatibilityFormat = prefs.preferences.usbExport.maximumCompatibility ? prefs.preferences.usbExport.conversionFormat : undefined;
   /** How much of the window the deck takes, kept across restarts. */
-  const [layout, setLayout] = useState<PlayerLayout>(restored.layout);
+  const [chosenLayout, setLayout] = useState<PlayerLayout>(restored.layout);
+  /**
+   * The view shell (ticket #50): the four-view frame drawn in place of the
+   * layout below, behind a switch that is off unless turned on. Its player
+   * area holds one deck at its smallest until ticket #51 builds the compact
+   * player, so while the shell is on the deck layout is that one, whatever
+   * the layout menu last chose; the choice itself is kept for the old layout.
+   */
+  const shellOn = prefs.preferences.view.viewShell;
+  const layout: PlayerLayout = shellOn ? SHELL_PLAYER_LAYOUT : chosenLayout;
+  /** The view in the shell's working area. Here, so it outlives nothing it should not. */
+  const [shellView, setShellView] = useState<ShellView>(DEFAULT_SHELL_VIEW);
   /**
    * The Traffic Light: which deck's key the browser lights rows against —
    * the MASTER menu above the track list. The key itself is that deck's
@@ -2265,6 +2278,23 @@ function AppBody() {
     setSelectedTracks(tracks);
     setInfoSelection(tracks.map((t) => t.id));
   }, []);
+  /**
+   * The shell's view changes. The Library list is unmounted while another
+   * view shows and comes back with nothing selected, so what this window
+   * holds for it (the tracks Analyze and the panels act on, the highlighted
+   * row, the count) is dropped with it: what a command targets is always
+   * what the list shows as selected.
+   */
+  const changeShellView = useEventCallback((next: ShellView) => {
+    if (shellView === "library" && next !== "library") {
+      setSelectedTracks([]);
+      setInfoSelection([]);
+      setSelectedRow(null);
+      setSelectedCount(0);
+      setBarShowsSelection(false);
+    }
+    setShellView(next);
+  });
   const reportSubSelection = useCallback((tracks: { id: string; title: string }[]) => {
     setInfoSelection(tracks.map((t) => t.id));
   }, []);
@@ -3147,7 +3177,7 @@ function AppBody() {
       tree: [...tree].slice(0, SEEDED_NODES),
       rows: screen.rows.slice(0, SEEDED_ROWS),
       count: screen.count,
-      layout,
+      layout: chosenLayout,
       subWidth,
       subTreeWidth,
       trafficLight,
@@ -3156,7 +3186,7 @@ function AppBody() {
       jumpSize,
       dualControl: dual,
     });
-  }, [sessionReady, treeWidth, selectedNode, treeExpansion, sortState, infoOpen, myTagOpen, subOpen, filterOpen, tree, screen, layout, subWidth, subTreeWidth, trafficLight, savedArtworkMode, waveformZoom, jumpSize, dual]);
+  }, [sessionReady, treeWidth, selectedNode, treeExpansion, sortState, infoOpen, myTagOpen, subOpen, filterOpen, tree, screen, chosenLayout, subWidth, subTreeWidth, trafficLight, savedArtworkMode, waveformZoom, jumpSize, dual]);
 
   // The last screen, handed to the table until the backend answers. Dropped as
   // soon as the library is up, so a stale row cannot outlive its replacement —
@@ -3249,11 +3279,12 @@ function AppBody() {
   useEffect(() => {
     if (loggedActivity) void getBackend().then(backend => backend.logStatusMessage(false, loggedActivity)).catch(() => {});
   }, [loggedActivity]);
-  return (
-    <PreferencesProvider value={prefs}>
-    <MasterOutputConnection mode={viewPrefs.vuMeter} />
-    <ConfirmHost />
-    <div className={styles.window} data-platform={platform.linux ? "linux" : platform.mac ? "mac" : "windows"}>
+  // The parts of the window both layouts draw, each made once here: upstream's
+  // layout places them in its rows below, and the view shell (ticket #50,
+  // `view.viewShell`) places the same ones in its frame. They are the same
+  // elements either way, so this window stays the one owner of playback, the
+  // loaded track and the tree's selection.
+  const titleBar = (
       <div
         className={styles.titleBar}
         data-testid="title-bar"
@@ -3265,46 +3296,8 @@ function AppBody() {
         <AppCost className={styles.cost} />
         <span className={styles.appName}>wreckordbox</span>
       </div>
-      <ConnectedTopBar
-        clock={clock}
-        onOpenSettings={openViewSettings}
-        layout={layout}
-        onLayoutChange={setLayout}
-      />
-      {/* Full Browser draws no deck at all, and no gutter under one. */}
-      {deckCount(layout) > 0 ? (
-        <div
-          className={styles.decks}
-          data-mixer={deckCount(layout) > 1 ? "" : undefined}
-        >
-          {/* One transport column for the pair, as rekordbox draws it: deck A
-              down from the top, deck B up from the bottom, and the mixer strip
-              beside it. Each deck still owns its own transport — it is
-              portalled into the half of the column that belongs to it. */}
-          {deckCount(layout) > 1 ? (
-            <div className={styles.deckRail}>
-              <div className={styles.transportSlot} ref={setTransportA} />
-              {/* DUAL CONTROL, on the centre line where the capture has it:
-                  it links what the two decks are showing rather than what
-                  they are playing, so it belongs between them. */}
-              <button
-                type="button"
-                className={styles.dual}
-                aria-label="Dual control"
-                aria-pressed={dual}
-                title={tip("Link the waveform controls and beat jump across both decks.")}
-                data-on={dual || undefined}
-                onClick={() => setDual((was) => !was)}
-              >
-                <LayoutDualIcon className={styles.dualGlyph} />
-              </button>
-              <div className={styles.transportSlot} ref={setTransportB} />
-            </div>
-          ) : null}
-          {/* Only with two decks. The one-player layout has no mixer and no
-              crossfader, which is what rekordbox does — and what keeps a deck
-              nobody has touched a fader for playing at the level of its file. */}
-          {deckCount(layout) > 1 ? <MixerStrip /> : null}
+  );
+  const deckA = (
           <Player
             track={playerTrack}
             drawing={playerTrack !== null && drawingIds.has(playerTrack.id)}
@@ -3343,66 +3336,8 @@ function AppBody() {
             onKeyShift={reportKeyShift.a}
             readOnly={readOnly}
           />
-          {deckCount(layout) > 1 ? (
-            <Player
-              deck="b"
-              track={playerTrackB}
-              drawing={playerTrackB !== null && drawingIds.has(playerTrackB.id)}
-              onEject={ejectB}
-              onAnalyse={analyseOne}
-              onExportTrack={exportDeckTrack}
-              devices={menuDevices}
-              onExportLoop={exportLoop}
-              onError={setPlayerError}
-              simple={!isFullDeck(layout)}
-              dragging={draggedTracks !== null}
-              onDropTrack={loadDroppedInto.b}
-              onLoadSelected={loadSelectedInto.b}
-              selectedTrackId={selectedRow?.id ?? null}
-              transportSlot={transportB}
-              flipped
-              dual
-              publishZoom={publishZoom.b}
-              onWheelZoom={zoomBoth}
-              bars={dual ? dualBars : waveformZoom.b}
-              onBars={dual ? setLinkedZoom : setZoomB}
-              jumpSize={dual ? jumpSize.a : jumpSize.b}
-              onJumpSize={dual ? setLinkedJump : setJumpB}
-              publishSync={publishSync.b}
-              peerSync={peerSync.b}
-              isMaster={syncMaster === "b"}
-              onMaster={masterB}
-              synced={isFollowing(sync, "b")}
-              syncOn={sync.on.b}
-              onStartPlaying={startedPlaying.b}
-              onSyncToggle={toggleSync.b}
-              leaderBpmX100={syncMaster === "b" ? null : leaderBpmX100}
-              onPlayingBpm={reportPlayingBpm.b}
-              publishGridFollow={publishGridFollow.b}
-              onGridNudge={gridNudged.b}
-              onKeyShift={reportKeyShift.b}
-              readOnly={readOnly}
-            />
-          ) : null}
-          {/* Over the line between the decks, where the capture floats it.
-              After the decks, so it paints over both. */}
-          {deckCount(layout) > 1 ? (
-            <div className={styles.zoomSlot}>
-              <DualZoom onZoom={zoomBoth} onReset={resetZoom} />
-            </div>
-          ) : null}
-          <div className={styles.playerGutter} aria-hidden />
-        </div>
-      ) : null}
-      <div
-        data-testid="body"
-        className={styles.body}
-        ref={bodyRef}
-        style={{ ["--tree-w" as string]: `${treeWidth}px` }}
-        data-info={infoOpen || myTagOpen ? "" : undefined}
-        data-mytag={myTagOpen ? "" : undefined}
-        data-sub={subOpen ? "" : undefined}
-      >
+  );
+  const treeView = (
         <TreeView
           nodes={treeNodes}
           selectedId={selectedNode?.id ?? null}
@@ -3445,17 +3380,9 @@ function AppBody() {
           onDeviceDelete={deleteOnDevice}
           onDeviceImport={importFromDevice}
         />
-        <div
-          className={styles.splitter}
-          onPointerDown={onSplitterDown}
-          onPointerMove={onSplitterMove}
-          onPointerUp={onSplitterUp}
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="Resize the library tree"
-          aria-valuenow={treeWidth}
-        />
-        {selectedDevice ? (
+  );
+  const library = (
+        selectedDevice ? (
           <Suspense fallback={null}><DevicePanel
             device={selectedDevice}
             playlists={tree}
@@ -3545,60 +3472,9 @@ function AppBody() {
           onToggleFilter={toggleFilter}
           filterBar={filterBar}
         />
-        )}
-        {subOpen ? (
-          <SubBrowser
-            nodes={treeNodes}
-            libraryGeneration={libraryGeneration}
-            width={subWidth}
-            treeWidth={subTreeWidth}
-            onWidthChange={setSubWidth}
-            onTreeWidthChange={setSubTreeWidth}
-            // Its tree and list take part in everything the main pair does:
-            // a drag from either list lands on either tree, and its rows
-            // load decks and take edits the same way.
-            tree={subTree}
-            list={subList}
-            artworkMode={subArtworkMode}
-            onArtworkMode={setSubArtworkMode}
-          />
-        ) : null}
-        {infoOpen ? (
-          <Suspense fallback={null}><InfoPanel
-            // The browser's selection, as rekordbox's Information Window
-            // follows it; the deck's track only when nothing is selected —
-            // never for a multiple selection, which the panel shows as one.
-            track={infoSelection.length > 1 ? null : selectedRow ?? playerTrack}
-            selection={infoSelection}
-            readOnly={readOnly}
-            libraryGeneration={libraryGeneration}
-            onRate={rateTracks}
-            onComment={commentTracks}
-            onEdit={runEdit}
-            onOpenPlaylist={(id) => {
-              const node = tree.find((n) => n.id === id);
-              if (node) setSelectedNode(node);
-            }}
-          /></Suspense>
-        ) : null}
-        {myTagOpen ? (
-          <MyTagPanel
-            selection={infoSelection}
-            readOnly={readOnly}
-            libraryGeneration={libraryGeneration}
-            onEdit={runEdit}
-          />
-        ) : null}
-        <RightRail
-          className={styles.rightRail}
-          myTagOpen={myTagOpen}
-          onToggleMyTag={() => { setMyTagOpen((open) => !open); setInfoOpen(false); }}
-          infoOpen={infoOpen}
-          onToggleInfo={() => { setInfoOpen((open) => !open); setMyTagOpen(false); }}
-          subOpen={subOpen}
-          onToggleSub={() => setSubOpen((open) => !open)}
-        />
-      </div>
+        )
+  );
+  const dialogs = (
       <Suspense fallback={null}>
       {duplicatePrompt ? (
         <DuplicateTracksDialog playlist={duplicatePrompt.playlist} duplicates={duplicatePrompt.duplicates}
@@ -3700,9 +3576,8 @@ function AppBody() {
       ) : null}
 
       </Suspense>
-      {/* The LINK strip: present from the moment a player or mixer is heard,
-          and the whole LINK interface from then on. It draws nothing at all
-          before that, so the row it sits in collapses. */}
+  );
+  const linkStrip = (
       <div className={styles.linkStrip}>
         <LinkDeckStrip
           peers={linkPeers}
@@ -3716,7 +3591,8 @@ function AppBody() {
           onTakeMasterTempo={takeLinkMasterTempo}
         />
       </div>
-
+  );
+  const statusBar = (
       <StatusBar
         jobs={jobList}
         onStopJob={stopJob}
@@ -3758,6 +3634,208 @@ function AppBody() {
           }).catch(error => refuse(error instanceof Error ? error.message : String(error)));
         }}
       />
+  );
+  if (shellOn) {
+    return (
+      <PreferencesProvider value={prefs}>
+      <MasterOutputConnection mode={viewPrefs.vuMeter} />
+      <ConfirmHost />
+      <div className={styles.shellWindow} data-platform={platform.linux ? "linux" : platform.mac ? "mac" : "windows"}>
+        {titleBar}
+        <ViewShell
+          view={shellView}
+          onViewChange={changeShellView}
+          platform={platform}
+          keyOverrides={keyOverrides}
+          player={deckA}
+          tree={treeView}
+          library={library}
+          status={<>{linkStrip}{statusBar}</>}
+        />
+        {dialogs}
+      </div>
+      </PreferencesProvider>
+    );
+  }
+  return (
+    <PreferencesProvider value={prefs}>
+    <MasterOutputConnection mode={viewPrefs.vuMeter} />
+    <ConfirmHost />
+    <div className={styles.window} data-platform={platform.linux ? "linux" : platform.mac ? "mac" : "windows"}>
+      {titleBar}
+      <ConnectedTopBar
+        clock={clock}
+        onOpenSettings={openViewSettings}
+        layout={chosenLayout}
+        onLayoutChange={setLayout}
+      />
+      {/* Full Browser draws no deck at all, and no gutter under one. */}
+      {deckCount(layout) > 0 ? (
+        <div
+          className={styles.decks}
+          data-mixer={deckCount(layout) > 1 ? "" : undefined}
+        >
+          {/* One transport column for the pair, as rekordbox draws it: deck A
+              down from the top, deck B up from the bottom, and the mixer strip
+              beside it. Each deck still owns its own transport — it is
+              portalled into the half of the column that belongs to it. */}
+          {deckCount(layout) > 1 ? (
+            <div className={styles.deckRail}>
+              <div className={styles.transportSlot} ref={setTransportA} />
+              {/* DUAL CONTROL, on the centre line where the capture has it:
+                  it links what the two decks are showing rather than what
+                  they are playing, so it belongs between them. */}
+              <button
+                type="button"
+                className={styles.dual}
+                aria-label="Dual control"
+                aria-pressed={dual}
+                title={tip("Link the waveform controls and beat jump across both decks.")}
+                data-on={dual || undefined}
+                onClick={() => setDual((was) => !was)}
+              >
+                <LayoutDualIcon className={styles.dualGlyph} />
+              </button>
+              <div className={styles.transportSlot} ref={setTransportB} />
+            </div>
+          ) : null}
+          {/* Only with two decks. The one-player layout has no mixer and no
+              crossfader, which is what rekordbox does — and what keeps a deck
+              nobody has touched a fader for playing at the level of its file. */}
+          {deckCount(layout) > 1 ? <MixerStrip /> : null}
+          {deckA}
+          {deckCount(layout) > 1 ? (
+            <Player
+              deck="b"
+              track={playerTrackB}
+              drawing={playerTrackB !== null && drawingIds.has(playerTrackB.id)}
+              onEject={ejectB}
+              onAnalyse={analyseOne}
+              onExportTrack={exportDeckTrack}
+              devices={menuDevices}
+              onExportLoop={exportLoop}
+              onError={setPlayerError}
+              simple={!isFullDeck(layout)}
+              dragging={draggedTracks !== null}
+              onDropTrack={loadDroppedInto.b}
+              onLoadSelected={loadSelectedInto.b}
+              selectedTrackId={selectedRow?.id ?? null}
+              transportSlot={transportB}
+              flipped
+              dual
+              publishZoom={publishZoom.b}
+              onWheelZoom={zoomBoth}
+              bars={dual ? dualBars : waveformZoom.b}
+              onBars={dual ? setLinkedZoom : setZoomB}
+              jumpSize={dual ? jumpSize.a : jumpSize.b}
+              onJumpSize={dual ? setLinkedJump : setJumpB}
+              publishSync={publishSync.b}
+              peerSync={peerSync.b}
+              isMaster={syncMaster === "b"}
+              onMaster={masterB}
+              synced={isFollowing(sync, "b")}
+              syncOn={sync.on.b}
+              onStartPlaying={startedPlaying.b}
+              onSyncToggle={toggleSync.b}
+              leaderBpmX100={syncMaster === "b" ? null : leaderBpmX100}
+              onPlayingBpm={reportPlayingBpm.b}
+              publishGridFollow={publishGridFollow.b}
+              onGridNudge={gridNudged.b}
+              onKeyShift={reportKeyShift.b}
+              readOnly={readOnly}
+            />
+          ) : null}
+          {/* Over the line between the decks, where the capture floats it.
+              After the decks, so it paints over both. */}
+          {deckCount(layout) > 1 ? (
+            <div className={styles.zoomSlot}>
+              <DualZoom onZoom={zoomBoth} onReset={resetZoom} />
+            </div>
+          ) : null}
+          <div className={styles.playerGutter} aria-hidden />
+        </div>
+      ) : null}
+      <div
+        data-testid="body"
+        className={styles.body}
+        ref={bodyRef}
+        style={{ ["--tree-w" as string]: `${treeWidth}px` }}
+        data-info={infoOpen || myTagOpen ? "" : undefined}
+        data-mytag={myTagOpen ? "" : undefined}
+        data-sub={subOpen ? "" : undefined}
+      >
+        {treeView}
+        <div
+          className={styles.splitter}
+          onPointerDown={onSplitterDown}
+          onPointerMove={onSplitterMove}
+          onPointerUp={onSplitterUp}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize the library tree"
+          aria-valuenow={treeWidth}
+        />
+        {library}
+        {subOpen ? (
+          <SubBrowser
+            nodes={treeNodes}
+            libraryGeneration={libraryGeneration}
+            width={subWidth}
+            treeWidth={subTreeWidth}
+            onWidthChange={setSubWidth}
+            onTreeWidthChange={setSubTreeWidth}
+            // Its tree and list take part in everything the main pair does:
+            // a drag from either list lands on either tree, and its rows
+            // load decks and take edits the same way.
+            tree={subTree}
+            list={subList}
+            artworkMode={subArtworkMode}
+            onArtworkMode={setSubArtworkMode}
+          />
+        ) : null}
+        {infoOpen ? (
+          <Suspense fallback={null}><InfoPanel
+            // The browser's selection, as rekordbox's Information Window
+            // follows it; the deck's track only when nothing is selected —
+            // never for a multiple selection, which the panel shows as one.
+            track={infoSelection.length > 1 ? null : selectedRow ?? playerTrack}
+            selection={infoSelection}
+            readOnly={readOnly}
+            libraryGeneration={libraryGeneration}
+            onRate={rateTracks}
+            onComment={commentTracks}
+            onEdit={runEdit}
+            onOpenPlaylist={(id) => {
+              const node = tree.find((n) => n.id === id);
+              if (node) setSelectedNode(node);
+            }}
+          /></Suspense>
+        ) : null}
+        {myTagOpen ? (
+          <MyTagPanel
+            selection={infoSelection}
+            readOnly={readOnly}
+            libraryGeneration={libraryGeneration}
+            onEdit={runEdit}
+          />
+        ) : null}
+        <RightRail
+          className={styles.rightRail}
+          myTagOpen={myTagOpen}
+          onToggleMyTag={() => { setMyTagOpen((open) => !open); setInfoOpen(false); }}
+          infoOpen={infoOpen}
+          onToggleInfo={() => { setInfoOpen((open) => !open); setMyTagOpen(false); }}
+          subOpen={subOpen}
+          onToggleSub={() => setSubOpen((open) => !open)}
+        />
+      </div>
+      {dialogs}
+      {/* The LINK strip: present from the moment a player or mixer is heard,
+          and the whole LINK interface from then on. It draws nothing at all
+          before that, so the row it sits in collapses. */}
+      {linkStrip}
+
+      {statusBar}
     </div>
     </PreferencesProvider>
   );

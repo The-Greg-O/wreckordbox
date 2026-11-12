@@ -1,0 +1,177 @@
+/* The view shell (ticket #50): one frame, four views. See ViewShell.tsx.
+
+   The shell is the container the layout answers to: the frame inside it is
+   laid out by the shell's own width, not the screen's, so a window tiled to
+   half the screen gets the half-width layout whatever the monitor is. The
+   shell fills the window, so its width is the window's. */
+.shell {
+  container-type: inline-size;
+  container-name: shell;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  background: var(--c-black);
+  color: var(--c-text);
+}
+
+/* The shell's own chrome is set in the shell's face and sizes. The areas
+   that still hold the old layout's parts (player, tree, list, status bar)
+   leave those parts in the face they were measured in, until each is
+   rebuilt for the shell. */
+.topBar, .empty {
+  font: var(--f-size-shell) / 1.2 var(--f-shell);
+  font-variant-numeric: tabular-nums;
+}
+
+.frame {
+  display: grid;
+  height: 100%;
+  /* The tree's width, plus the icon rail the old tree carries down its left
+     side; the rail's share goes when ticket #52 builds the shell's tree. */
+  grid-template-columns: calc(var(--s-shell-tree-w) + var(--s-tree-rail-w)) minmax(0, 1fr);
+  grid-template-rows:
+    var(--s-shell-top-bar-h)
+    minmax(var(--s-shell-player-h), auto)
+    minmax(0, 1fr)
+    minmax(var(--s-shell-status-h), auto);
+  grid-template-areas:
+    "top top"
+    "player player"
+    "tree working"
+    "status status";
+}
+
+.topBar {
+  grid-area: top;
+  display: flex;
+  align-items: stretch;
+  gap: var(--s-shell-space-2);
+  min-width: 0;
+  padding: 0 var(--s-shell-space-4);
+  background: var(--c-top);
+  border-bottom: var(--s-shell-border) solid var(--c-panel);
+}
+
+.tabs {
+  display: flex;
+  align-items: stretch;
+  gap: var(--s-shell-space-1);
+  min-width: 0;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: var(--s-shell-space-3);
+  padding: 0 var(--s-shell-space-5);
+  border: 0;
+  /* The line the active tab carries, held open on every tab so the labels do
+     not move when the line appears. */
+  border-top: calc(2 * var(--s-shell-border)) solid transparent;
+  border-radius: 0;
+  background: none;
+  color: var(--c-text-dim);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.tab:hover { color: var(--c-text); }
+.tab[aria-selected="true"] {
+  background: var(--c-panel);
+  border-top-color: var(--c-accent);
+  color: var(--c-text);
+}
+
+/* The key a tab is on, drawn as a key cap. */
+.key {
+  display: inline-grid;
+  place-items: center;
+  min-width: var(--s-shell-space-6);
+  padding: 0 var(--s-shell-space-1);
+  border: var(--s-shell-border) solid currentColor;
+  border-radius: var(--s-shell-radius);
+  font-size: var(--f-size-shell-label);
+  line-height: 1.3;
+}
+
+.topBarEnd {
+  display: flex;
+  align-items: center;
+  gap: var(--s-shell-space-4);
+  margin-left: auto;
+  min-width: 0;
+}
+
+.player {
+  grid-area: player;
+  display: grid;
+  min-width: 0;
+  background: var(--c-panel);
+  border-bottom: var(--s-shell-border) solid var(--c-black);
+}
+
+.tree {
+  grid-area: tree;
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--c-panel);
+  border-right: var(--s-shell-border) solid var(--c-black);
+}
+
+.working {
+  grid-area: working;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.status {
+  grid-area: status;
+  min-width: 0;
+  background: var(--c-top);
+}
+
+/* A view that is not built yet: its name, and what will be here. */
+.empty {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: var(--s-shell-space-4);
+  padding: var(--s-shell-space-6);
+  background: var(--c-top);
+  text-align: center;
+}
+.emptyTitle {
+  margin: 0;
+  font-size: var(--f-size-shell-title);
+  font-weight: 700;
+  color: var(--c-text);
+}
+.emptyNote {
+  margin: 0;
+  max-width: 48ch;
+  color: var(--c-text-dim);
+  line-height: 1.5;
+}
+
+/* docs/design/tokens.md, Breakpoints: at 800px and below the tree gives way.
+   The number is `--s-shell-narrow-max` (tokens-shell.css), written out
+   because a container query's condition cannot read a custom property. The
+   tree stays mounted, so what is selected in it is still selected when the
+   window widens again. */
+@container shell (max-width: 800px) {
+  .frame {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "top"
+      "player"
+      "working"
+      "status";
+  }
+  .tree { display: none; }
+}
