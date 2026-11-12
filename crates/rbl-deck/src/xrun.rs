@@ -40,7 +40,9 @@ impl Underruns {
     /// the last line, and the last line is at least `REPORT_EVERY` old. Those
     /// not yet due stay counted for the next line, so none is lost.
     pub fn due(&self, now: Instant) -> Option<u64> {
-        let Ok(mut reported_at) = self.reported_at.lock() else { return None };
+        let Ok(mut reported_at) = self.reported_at.lock() else {
+            return None;
+        };
         if reported_at.is_some_and(|at| now.saturating_duration_since(at) < REPORT_EVERY) {
             return None;
         }
@@ -56,7 +58,11 @@ impl Underruns {
     /// stream, never from the audio callback.
     pub fn report(&self, now: Instant) {
         if let Some(count) = self.due(now) {
-            tracing::warn!(count, total = self.total(), "audio buffer underruns or overruns since the last report");
+            tracing::warn!(
+                count,
+                total = self.total(),
+                "audio buffer underruns or overruns since the last report"
+            );
         }
     }
 }

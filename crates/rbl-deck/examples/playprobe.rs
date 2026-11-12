@@ -8,7 +8,12 @@
 //! generated WAV in the system's temporary folder.
 //!
 //! `cargo run --release -p rbl-deck --example playprobe -- <normal|key|tempo> [seconds] [gain]`
-#![allow(clippy::pedantic, clippy::print_stdout, clippy::unwrap_used, clippy::expect_used)]
+#![allow(
+    clippy::pedantic,
+    clippy::print_stdout,
+    clippy::unwrap_used,
+    clippy::expect_used
+)]
 
 use std::io::Write as _;
 use std::sync::mpsc;
@@ -40,11 +45,12 @@ fn main() {
     let engine = Engine::new(&events).expect("an output device");
     engine.master().set_gain(gain);
     engine.load(Deck::A, &wav);
-    loop {
-        match rx.recv_timeout(Duration::from_secs(10)).expect("loaded in time") {
-            DeckEvent::Loaded { .. } => break,
-            DeckEvent::Error { message, .. } => panic!("{message}"),
-        }
+    if let DeckEvent::Error { message, .. } = rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("loaded in time")
+    {
+        println!("could not load the generated track: {message}");
+        return;
     }
     match mode.as_str() {
         "key" => engine.set_key_shift(Deck::A, 2),
@@ -54,7 +60,11 @@ fn main() {
         }
         _ => {}
     }
-    println!("mode {mode}, {seconds} s, device rate {} Hz, load {}", engine.sample_rate(), loadavg());
+    println!(
+        "mode {mode}, {seconds} s, device rate {} Hz, load {}",
+        engine.sample_rate(),
+        loadavg()
+    );
     if mode == "toggle" {
         // Play and pause by turns, for a capture of what the device plays
         // across each start and stop.
@@ -65,7 +75,11 @@ fn main() {
             engine.pause(Deck::A);
             std::thread::sleep(Duration::from_millis(1500));
         }
-        println!("RESULT mode=toggle cycles={seconds} underruns={} load_end={}", engine.audio_health().underruns, loadavg());
+        println!(
+            "RESULT mode=toggle cycles={seconds} underruns={} load_end={}",
+            engine.audio_health().underruns,
+            loadavg()
+        );
         let _ = std::fs::remove_dir_all(&dir);
         return;
     }
