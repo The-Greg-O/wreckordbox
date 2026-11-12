@@ -14,7 +14,7 @@ use wreckordbox_intensity::{Analyser, Intensity};
 fn measure(samples: &[f32]) -> Intensity {
     let mut analyser = Analyser::new(RATE);
     analyser.push_mono(samples);
-    analyser.finish(&[])
+    analyser.finish(&[]).unwrap()
 }
 
 /// The time of the curve's `point`th value, in seconds.
@@ -135,7 +135,7 @@ fn the_same_audio_measures_the_same_however_it_is_cut_up() {
     for piece in audio.chunks(1_152) {
         analyser.push_mono(piece);
     }
-    let pieces = analyser.finish(&[]);
+    let pieces = analyser.finish(&[]).unwrap();
     assert_eq!(
         serde_json::to_string(&whole).unwrap(),
         serde_json::to_string(&pieces).unwrap()
@@ -153,7 +153,7 @@ fn a_beat_grid_gives_one_point_per_bar_and_no_grid_gives_only_the_time_curve() {
     let starts: Vec<f64> = (0..10).map(|bar| f64::from(bar) * 1.875).collect();
     let mut analyser = Analyser::new(RATE);
     analyser.push_mono(&audio);
-    let with = analyser.finish(&starts);
+    let with = analyser.finish(&starts).unwrap();
     let bars = with.bars.as_ref().unwrap();
     assert_eq!(
         bars.starts_seconds,

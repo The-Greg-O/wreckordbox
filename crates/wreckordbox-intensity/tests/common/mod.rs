@@ -74,3 +74,38 @@ pub fn loud_busy(seconds: f64) -> Vec<f32> {
 pub fn joined(parts: &[Vec<f32>]) -> Vec<f32> {
     parts.concat()
 }
+
+/// Writes interleaved samples as a WAV file of `channels` channels at
+/// `rate`: 16-bit integer, or 32-bit float when `float`.
+pub fn write_wav(
+    path: &std::path::Path,
+    rate: u32,
+    channels: u16,
+    interleaved: &[f32],
+    float: bool,
+) {
+    let width: u16 = if float { 4 } else { 2 };
+    let data_len = u32::try_from(interleaved.len() * usize::from(width)).unwrap();
+    let mut out = Vec::new();
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data_len).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16_u32.to_le_bytes());
+    out.extend_from_slice(&(if float { 3_u16 } else { 1_u16 }).to_le_bytes());
+    out.extend_from_slice(&channels.to_le_bytes());
+    out.extend_from_slice(&rate.to_le_bytes());
+    out.extend_from_slice(&(rate * u32::from(channels * width)).to_le_bytes());
+    out.extend_from_slice(&(channels * width).to_le_bytes());
+    out.extend_from_slice(&(width * 8).to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data_len.to_le_bytes());
+    for sample in interleaved {
+        if float {
+            out.extend_from_slice(&sample.to_le_bytes());
+        } else {
+            let value = (sample.clamp(-1.0, 1.0) * 32_767.0) as i16;
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    std::fs::write(path, out).unwrap();
+}
