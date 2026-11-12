@@ -145,3 +145,22 @@ test("a Stick that is unmounted leaves the tree", async ({ page }) => {
   await expect(group(page, "Stick TEST")).toHaveCount(0);
   await expect(group(page, "Stick DJ STICK")).toBeVisible();
 });
+
+test("the tree is worked from the keyboard: arrows move, Enter opens, Left and Right close and open a folder", async ({ page }) => {
+  await open(page);
+  await item(page, "All Tracks").click();
+  await expect(item(page, "All Tracks")).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(item(page, "Intake")).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(tab(page, "Intake")).toHaveAttribute("aria-selected", "true");
+
+  await item(page, "CURRENT").focus();
+  await page.keyboard.press("ArrowLeft");
+  await expect(item(page, "CURRENT")).toHaveAttribute("aria-expanded", "false");
+  await page.keyboard.press("ArrowDown");
+  await expect(item(page, "USB")).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("ArrowRight");
+  await expect(item(page, "Melodic Vox")).toBeVisible();
+});
