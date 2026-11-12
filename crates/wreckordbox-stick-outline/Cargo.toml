@@ -9,15 +9,24 @@ description = "A mounted Stick's playlist trees, read without writing anything t
 [lints]
 workspace = true
 
+[features]
+# Temporary-folder Sticks for this crate's tests and the app's.
+testing = ["dep:rbl-anlz"]
+
 [dependencies]
+rbl-anlz = { path = "../rbl-anlz", optional = true }
+tempfile = "3"
 rbl-core = { path = "../rbl-core" }
 rbl-export = { path = "../rbl-export" }
 rbl-onelibrary = { path = "../rbl-onelibrary" }
 rbl-pdb = { path = "../rbl-pdb" }
+rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
 serde = { workspace = true }
+thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+wreckordbox-stick-outline = { path = ".", features = ["testing"] }
 tempfile = "3"
 serde_json = { workspace = true }
 rbl-anlz = { path = "../rbl-anlz" }

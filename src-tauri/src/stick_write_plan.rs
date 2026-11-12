@@ -87,12 +87,13 @@ pub enum PlannedOperation {
     },
     /// The Stick's own settings.
     SaveSettings { settings: DeviceSettingsDto },
-    /// Defaults written to a Stick that has none.
-    WriteDefaults,
     /// An empty library put on a blank Stick.
     EnsureLibrary,
     /// The Stick erased.
     Format { layout: String },
+    /// The unfinished write finished or rolled back (`stick_settle`): the one
+    /// write planned on a Stick that holds one.
+    Settle,
 }
 
 /// How a playlist on the Stick is changed by the write.
@@ -134,6 +135,9 @@ pub struct StickWritePlan {
     /// An earlier write did not finish: nothing may be written until it is
     /// settled, nothing is planned and there is no token.
     pub pending: bool,
+    /// Whether the audio counts below were worked out: not on a Stick whose
+    /// library the export's preview could not open without writing to it.
+    pub audio_estimated: bool,
     /// Tracks whose audio is copied to the Stick (new, or changed at the source).
     pub tracks_new: usize,
     pub tracks_changed: usize,
@@ -182,7 +186,28 @@ pub fn plan(state: &AppState, request: &StickWriteRequest) -> AppResult<StickWri
     let _lock = stick_approval::lock(destination);
     let _lease = rbl_core::durable::read_lease(destination)
         .map_err(|e| AppError::internal(e.to_string()))?;
-    if rbl_export::recovery_pending(destination) {
+    let pending = rbl_export::recovery_pending(destination);
+    if matches!(request.operation, PlannedOperation::Settle) {
+        // Settling is for a Stick with an unfinished write, and only then:
+        // bound to the Stick as it is, journal and all.
+        if !pending {
+            return Err(AppError::new(
+                ErrorKind::NotFound,
+                "There is no unfinished write on this Stick to settle.",
+            ));
+        }
+        return Ok(StickWritePlan {
+            spare,
+            pending: true,
+            approval: Some(stick_approval::issue(
+                destination,
+                vec![Grant::Exact(StickOperation::Settle)],
+                None,
+            )?),
+            ..StickWritePlan::default()
+        });
+    }
+    if pending {
         return Ok(StickWritePlan {
             spare,
             pending: true,
@@ -326,11 +351,6 @@ pub fn plan(state: &AppState, request: &StickWriteRequest) -> AppResult<StickWri
             })],
             false,
         ),
-        PlannedOperation::WriteDefaults => (
-            StickWritePlan::default(),
-            vec![Grant::Exact(StickOperation::WriteDefaults)],
-            false,
-        ),
         PlannedOperation::EnsureLibrary => (
             StickWritePlan::default(),
             vec![Grant::Exact(StickOperation::EnsureLibrary)],
@@ -343,6 +363,7 @@ pub fn plan(state: &AppState, request: &StickWriteRequest) -> AppResult<StickWri
             })],
             false,
         ),
+        PlannedOperation::Settle => unreachable!("settling is planned above"),
     };
     found.spare = spare;
     found.approval = Some(stick_approval::issue(
@@ -392,6 +413,10 @@ fn playlist_selection(
 
 /// The audio from the export's own preview, and the rest from comparing the
 /// selection with what the Stick holds.
+#[allow(
+    clippy::too_many_lines,
+    reason = "the plan's parts, each read from the Stick once"
+)]
 fn export_plan(
     state: &AppState,
     destination: &Path,
@@ -405,18 +430,38 @@ fn export_plan(
         cache: Some(&EXPORT_CACHE),
         ..Default::default()
     };
-    let preview = rbl_export::plan::preview(
-        destination,
-        &selection.tracks,
-        &selection.playlists,
-        &selection.my_tags,
-        &options,
-    )
-    .map_err(|e| AppError::internal(e.to_string()))?;
+    // The Stick's databases are read through the non-recovering reader
+    // (wbx-45.5): its off-Stick copies, validated when the read finishes.
+    let read = wreckordbox_stick_outline::StickRead::begin(destination)
+        .map_err(|e| crate::stick_recovery::read_error(destination, e))?;
+    let mirror = read
+        .mirror()
+        .map_err(|e| crate::stick_recovery::read_error(destination, e))?;
+    let snapshot = rbl_export::snapshot::Snapshot::read(mirror.path()).ok();
+    read.finish()
+        .map_err(|e| crate::stick_recovery::read_error(destination, e))?;
+    // The audio preview is the export's own code, which opens the Stick's
+    // `exportLibrary.db` in place: on a Stick where that could create files,
+    // it is not run, and the plan says the audio was not estimated, as the
+    // Sync Manager's estimate does (wbx-45.5).
+    let audio_estimated = !wreckordbox_stick_outline::one_library::sqlite_untouchable(destination);
+    let preview = if audio_estimated {
+        Some(
+            rbl_export::plan::preview(
+                destination,
+                &selection.tracks,
+                &selection.playlists,
+                &selection.my_tags,
+                &options,
+            )
+            .map_err(|e| AppError::internal(e.to_string()))?,
+        )
+    } else {
+        None
+    };
     let library = state.library()?;
     let (held, _) = held_on_stick(state, &library, destination);
     let manifest = rbl_export::Manifest::load(destination);
-    let snapshot = rbl_export::snapshot::Snapshot::read(destination).ok();
 
     // Each playlist: created, or written again with what it gains and loses.
     let entries_on_stick: HashMap<u64, Option<Vec<String>>> = manifest
@@ -538,10 +583,14 @@ fn export_plan(
             });
         }
     }
-    let found = preview.estimate;
+    let found = preview
+        .as_ref()
+        .map(|p| p.estimate.clone())
+        .unwrap_or_default();
     Ok(StickWritePlan {
         spare: false,
         pending: false,
+        audio_estimated,
         tracks_new: found.tracks_new,
         tracks_changed: found.tracks_changed,
         audio_reused: found.tracks_kept,
@@ -550,7 +599,7 @@ fn export_plan(
         track_changes,
         analysis_written: selection.tracks.len().saturating_sub(found.tracks_missing),
         playlists,
-        net_additional_bytes: preview.net_additional_bytes,
+        net_additional_bytes: preview.as_ref().map_or(0, |p| p.net_additional_bytes),
         approval: None,
     })
 }

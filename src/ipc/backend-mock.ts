@@ -994,6 +994,18 @@ export function createMockBackend(options: MockOptions = {}): Backend {
   const holdingOutlines = new Set<string>();
   const outlineOverrides = new Map<string, StickOutline>();
   const unmounted = new Map<string, Device>();
+  // Sticks whose last write did not finish (wbx-45.5): every read rejects
+  // with `unfinishedWrite` until `settleStick`, the DJ's explicit action.
+  const unfinishedWrites = new Set<string>();
+  // `deviceLibraries` reads held unanswered until released, for the old
+  // tree's stale-answer test; what the Stick held when asked is answered.
+  const holdingLibraries = new Set<string>();
+  const heldLibraries = new Map<string, Array<() => void>>();
+  const settles = new Map<string, number>();
+  const unfinished = (path: string): Promise<never> | null =>
+    unfinishedWrites.has(path)
+      ? Promise.reject(Object.assign(new Error("A write to this Stick did not finish. Nothing on it has been changed; settle it from the Stick's panel to use it again."), { kind: "unfinishedWrite" }))
+      : null;
   if (typeof window !== "undefined") {
     const hooks = window as unknown as {
       __unmountDevice: (path: string) => void;
@@ -1001,7 +1013,22 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       __stickOutlineReads: (path: string) => number;
       __holdStickOutline: (path: string) => void;
       __releaseStickOutline: (path: string) => void;
+      __interruptStickWrite: (path: string) => void;
+      __stickSettles: (path: string) => number;
     };
+    hooks.__interruptStickWrite = (path) => { unfinishedWrites.add(path); };
+    const held = hooks as unknown as Record<string, (path: string) => number | void>;
+    held.__holdDeviceLibraries = (path) => { holdingLibraries.add(path); };
+    held.__releaseDeviceLibraries = (path) => {
+      for (const release of heldLibraries.get(path) ?? []) release();
+      heldLibraries.delete(path);
+    };
+    held.__deviceLibrariesHeld = (path) => heldLibraries.get(path)?.length ?? 0;
+    // Set before the page loads, so the first read already finds them.
+    for (const path of (window as unknown as { __initialUnfinishedWrites?: string[] }).__initialUnfinishedWrites ?? []) {
+      unfinishedWrites.add(path);
+    }
+    hooks.__stickSettles = (path) => settles.get(path) ?? 0;
     hooks.__unmountDevice = (path) => {
       const index = devices.findIndex((device) => device.path === path);
       if (index < 0) return;
@@ -1056,7 +1083,9 @@ export function createMockBackend(options: MockOptions = {}): Backend {
   const stickOutline = async (path: string): Promise<StickOutline> => {
     outlineReads.set(path, (outlineReads.get(path) ?? 0) + 1);
     // What the stick holds when it is asked, not when the answer comes.
-    const answer: StickOutline = mockStickPending(path)
+    // An unfinished write, as wbx-45.5's hooks or the Stick safety log say (wbx-45.4).
+    const unfinished = mockStickPending(path) || unfinishedWrites.has(path);
+    const answer: StickOutline = unfinished
       ? { pending: true, spare: mockStickSpare(path), libraries: [] }
       : outlineOverrides.get(path) ?? {
         pending: false,
@@ -1084,8 +1113,29 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     sorts: s.sorts.map((slot) => ({ ...slot })),
     colors: s.colors.map((c) => ({ ...c })),
   });
+  // Writes of a Stick's settings, per Stick: opening its panel makes none
+  // (wbx-45.5). A Stick listed in `__initialNoDevSetting` before the page
+  // loads holds an export but no DEVSETTING.DAT.
+  const settingsWrites = new Map<string, number>();
+  const noDevSetting = new Set<string>(typeof window === "undefined" ? [] : (window as unknown as { __initialNoDevSetting?: string[] }).__initialNoDevSetting ?? []);
+  if (typeof window !== "undefined") {
+    (window as unknown as { __stickSettingsWrites: (path: string) => number }).__stickSettingsWrites = (path) => settingsWrites.get(path) ?? 0;
+  }
   const settingsOf = (path: string): DeviceSettings => {
     const known = deviceSettings.get(path);
+    if (known && noDevSetting.delete(path)) {
+      const rekordboxDefaults = referenceDeviceSettings("", false);
+      const without: DeviceSettings = {
+        ...known,
+        hasDevSetting: false,
+        waveformColor: rekordboxDefaults.waveformColor,
+        waveformPosition: rekordboxDefaults.waveformPosition,
+        overviewWaveform: rekordboxDefaults.overviewWaveform,
+        keyDisplay: rekordboxDefaults.keyDisplay,
+      };
+      deviceSettings.set(path, without);
+      return without;
+    }
     if (known) return known;
     const device = devices.find((d) => d.path === path);
     const fresh = referenceDeviceSettings(device?.name ?? "", device?.export !== null);
@@ -2303,6 +2353,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       // summary was still failing would not be standing in for anything.
       if (!ready) return notReady();
       if (spec.source.kind === "device") {
+        const refused = unfinished(spec.source.path);
+        if (refused) return refused;
         const q = fold(spec.query.trim());
         let rows: RowDto[];
         try {
@@ -2661,10 +2713,14 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     stickWritePlan: ({ destination: path, operation: op }) => {
       if (!devices.some((d) => d.path === path)) return Promise.reject(new Error("That device is no longer connected."));
       const empty: StickWritePlan = {
-        spare: mockStickSpare(path), pending: false, tracksNew: 0, tracksChanged: 0, audioReused: 0, tracksRemoved: 0,
+        spare: mockStickSpare(path), pending: false, audioEstimated: true, tracksNew: 0, tracksChanged: 0, audioReused: 0, tracksRemoved: 0,
         tracksMissing: 0, trackChanges: [], analysisWritten: 0, playlists: [], netAdditionalBytes: 0, approval: null,
       };
-      if (mockStickPending(path)) return wait({ ...empty, pending: true });
+      const pendingWrite = mockStickPending(path) || unfinishedWrites.has(path);
+      if (op.kind === "settle") {
+        return pendingWrite ? wait({ ...empty, pending: true }) : Promise.reject(new Error("There is no unfinished write on this Stick to settle."));
+      }
+      if (pendingWrite) return wait({ ...empty, pending: true });
       const held = syncSelections.get(path) ?? [];
       const onStick = new Set([...held.flatMap((p) => membersOf(p.libraryId)), ...(looseTracks.get(path) ?? [])]);
       let adding: string[];
@@ -3723,8 +3779,9 @@ export function createMockBackend(options: MockOptions = {}): Backend {
 
     // The device tabs. Held per stick so a change survives switching tabs
     // and devices, the way a written file would.
-    deviceSettings: (path) => wait(copySettings(settingsOf(path))),
+    deviceSettings: (path) => unfinished(path) ?? wait(copySettings(settingsOf(path))),
     ensureDeviceLibrary: (path, defaults) => {
+      settingsWrites.set(path, (settingsWrites.get(path) ?? 0) + 1);
       const current = settingsOf(path);
       if (current.hasDeviceLibrary) return wait(copySettings(current));
       // The empty database a blank stick gets: the reference rows, the
@@ -3751,8 +3808,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     },
     // The mock's sticks carry their settings from the start, so there is
     // nothing to give; what the stick holds comes back.
-    writeDeviceDefaults: (path) => wait(copySettings(settingsOf(path))),
     saveDeviceSettings: (path, settings) => {
+      settingsWrites.set(path, (settingsWrites.get(path) ?? 0) + 1);
       const current = settingsOf(path);
       // A stick without a library keeps its reference rows: nothing to
       // write them into, as the real backend also refuses.
@@ -3829,10 +3886,23 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       return () => progressListeners.delete(listener);
     },
     // The fake disk above. Copies, as with the tree: the map is the mock's.
-    deviceLibraries: (path) => wait(stickLibraries.libraries(path)),
+    deviceLibraries: async (path) => {
+      const refused = unfinished(path);
+      if (refused) return refused;
+      const answer = stickLibraries.libraries(path);
+      if (holdingLibraries.delete(path)) {
+        await new Promise<void>((resolve) => { heldLibraries.set(path, [...(heldLibraries.get(path) ?? []), resolve]); });
+      }
+      return wait(answer);
+    },
     stickOutline,
+    settleStick: (path) => {
+      settles.set(path, (settles.get(path) ?? 0) + 1);
+      unfinishedWrites.delete(path);
+      return wait(undefined);
+    },
     devicePlaylistCollectionTracks: (path, format, tracks) =>
-      wait(stickLibraries.collectionTracks(path, format, tracks, [...(looseTracks.get(path) ?? [])])),
+      unfinished(path) ?? wait(stickLibraries.collectionTracks(path, format, tracks, [...(looseTracks.get(path) ?? [])])),
     devicePlaylistEdit: (path, format, edit) => {
       try {
         return wait(stickLibraries.edit(path, format, edit));
@@ -3848,6 +3918,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       }
     },
     devicePlaylistDuplicates: (path, format, playlist, tracks) => {
+      const refused = unfinished(path);
+      if (refused) return refused;
       try {
         return wait(stickLibraries.duplicates(path, format, playlist, tracks));
       } catch (error) {
@@ -3907,6 +3979,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       }));
     },
     devicePlaylistImportPlan: (path, format, id, destination) => {
+      const refused = unfinished(path);
+      if (refused) return refused;
       let source: { name: string; entries: MockImportEntry[] };
       try {
         source = stickLibraries.playlist(path, format, id);

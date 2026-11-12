@@ -264,8 +264,12 @@ export interface AppErrorDto {
    * `conflict`: an Undo or Redo was refused because what it would write was
    * changed since by something outside the history; nothing was written and
    * the entry is gone (#506).
+   *
+   * `unfinishedWrite`: a Stick's last write did not finish. Reads of it
+   * report this instead of settling it; `settleStick` is the action that
+   * does (wbx-45.5).
    */
-  kind: "readOnly" | "notFound" | "malformed" | "cancelled" | "conflict" | "internal";
+  kind: "readOnly" | "notFound" | "malformed" | "cancelled" | "conflict" | "unfinishedWrite" | "internal";
   message: string;
   detail?: string;
 }
@@ -1098,12 +1102,6 @@ export interface Backend {
    * flags clear.
    */
   deviceSettings(path: string): Promise<DeviceSettings>;
-  /**
-   * Gives a stick that holds an export but no DEVSETTING.DAT the DJ System
-   * defaults, as rekordbox does when its device panel opens; a stick that
-   * has one keeps it. Resolves to what the stick now holds.
-   */
-  writeDeviceDefaults(path: string, defaults: StickDefaults, approval?: string): Promise<DeviceSettings>;
   /** Writes them back and resolves to what the stick now holds. */
   saveDeviceSettings(path: string, settings: DeviceSettings, approval?: string): Promise<DeviceSettings>;
   /**
@@ -1135,6 +1133,14 @@ export interface Backend {
    * first, and reports one as `pending` with no playlists instead.
    */
   stickOutline(path: string): Promise<StickOutline>;
+  /**
+   * Settles a Stick's unfinished write: finishes the interrupted export if
+   * it can, otherwise puts back the files the Stick held before it; files
+   * another program wrote since are kept. This writes to the Stick: only for
+   * the action the DJ chose. Every read of such a Stick rejects with
+   * `unfinishedWrite` instead.
+   */
+  settleStick(path: string, approval?: string): Promise<void>;
   /**
    * A page of the Intake or Problems queue (wbx-62), from the Library
    * service the window hosts: each track with what it still needs, and the
@@ -1568,7 +1574,7 @@ export type StickWriteOperation =
   | { kind: "playlistEdit"; format: DeviceFormat; edit: DevicePlaylistEdit }
   | { kind: "addFiles"; format: DeviceFormat; playlist: string; files: string[] }
   | { kind: "saveSettings"; settings: DeviceSettings }
-  | { kind: "writeDefaults" }
+  | { kind: "settle" }
   | { kind: "ensureLibrary" }
   | { kind: "format"; layout: FormatLayout };
 
@@ -1585,6 +1591,8 @@ export interface StickWriteRequest {
 export interface StickWritePlan {
   spare: boolean;
   pending: boolean;
+  /** Whether the audio counts were worked out (not on a Stick whose library could not be read for them without writing). */
+  audioEstimated: boolean;
   /** Tracks whose audio is copied (new, or changed at the source). */
   tracksNew: number;
   tracksChanged: number;

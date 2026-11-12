@@ -622,7 +622,6 @@ async function realBackend(): Promise<Backend> {
     smartRule: (playlist) => invoke<SmartRule>("smart_rule", { playlist }),
     onSyncProgress: (listener) => subscribe<SyncProgress>("sync:progress", listener),
     deviceSettings: (path) => invoke<DeviceSettings>("device_settings", { path }),
-    writeDeviceDefaults: (path, defaults, approval) => invoke<DeviceSettings>("write_device_defaults", { path, defaults, approval: approval ?? null }),
     saveDeviceSettings: (path, settings, approval) =>
       invoke<DeviceSettings>("save_device_settings", { path, settings, approval: approval ?? null }),
     ensureDeviceLibrary: (path, defaults, approval) =>
@@ -631,6 +630,7 @@ async function realBackend(): Promise<Backend> {
     explorerChildren: (path) => invoke<ExplorerChildren>("explorer_children", { path }),
     deviceLibraries: (path) => invoke<DeviceLibrary[]>("device_libraries", { path }),
     stickOutline: (path) => invoke<StickOutline>("stick_outline", { path }),
+    settleStick: (path, approval) => invoke<void>("stick_settle", { path, approval: approval ?? null }),
     intakeQueue: async (queue, offset, limit) =>
       fromServicePage(await invoke<ServiceQueuePage>("intake_queue", { queue, offset, limit })),
     intakeCounts: async () => {

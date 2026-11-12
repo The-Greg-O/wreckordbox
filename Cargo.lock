@@ -7211,10 +7211,13 @@ dependencies = [
  "rbl-export",
  "rbl-onelibrary",
  "rbl-pdb",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.20",
  "tracing",
+ "wreckordbox-stick-outline",
 ]
 
 [[package]]

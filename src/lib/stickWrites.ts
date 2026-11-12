@@ -59,6 +59,9 @@ const LISTED_CHANGES = 10;
  */
 export function describeStickPlan(plan: StickWritePlan): string[] {
   const out: string[] = [];
+  if (!plan.audioEstimated) {
+    out.push("Audio not estimated: the Stick's library could not be read for it without writing to the Stick");
+  }
   if (plan.tracksNew > 0) out.push(`${tracksPossessive(plan.tracksNew)} audio copied to the Stick`);
   if (plan.tracksChanged > 0) out.push(`${tracksPossessive(plan.tracksChanged)} audio copied again (changed at ${plan.tracksChanged === 1 ? "its" : "their"} source)`);
   if (plan.audioReused > 0) out.push(`${tracksPossessive(plan.audioReused)} audio already on the Stick, reused; their data is written again`);

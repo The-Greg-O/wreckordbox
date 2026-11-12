@@ -9,6 +9,7 @@
  */
 import { TREE_ROOT, type RelatedCriterion, type TreeNode } from "@/ipc/types";
 import { isDeviceLibraryKind } from "./deviceLibrary";
+import { isUnfinishedWriteNote } from "./stickRecovery";
 
 /**
  * Where a new playlist made from `node`'s menu goes: the folder itself, or
@@ -249,7 +250,7 @@ export function nodesForSource(nodes: readonly TreeNode[], source: Source): Tree
       return nodes.filter((n) => n.kind === "histories" || n.kind === "history");
     case "devices":
       // Each stick, and what its own libraries hold under it.
-      return nodes.filter((n) => n.kind === "device" || isDeviceLibraryKind(n.kind));
+      return nodes.filter((n) => n.kind === "device" || isDeviceLibraryKind(n.kind) || isUnfinishedWriteNote(n));
     case "related":
       return nodes.filter((n) => n.kind === "related" || n.kind === "relatedCriterion");
     case "tagList":
@@ -258,7 +259,7 @@ export function nodesForSource(nodes: readonly TreeNode[], source: Source): Tree
       // The heading first, as with histories: jumping there lands on the
       // section, which rekordbox opens as an empty Explorer. A note is the
       // Explorer's own — a folder cut short says how many were left out.
-      return nodes.filter((n) => n.kind === "explorer" || n.kind === "directory" || n.kind === "note");
+      return nodes.filter((n) => n.kind === "explorer" || n.kind === "directory" || (n.kind === "note" && !isUnfinishedWriteNote(n)));
     case "playlists":
       // All Tracks belongs here: rekordbox shows it above the playlists and
       // in no other section.

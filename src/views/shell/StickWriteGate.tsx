@@ -60,7 +60,12 @@ export interface StickWriteGate {
    * asks `approve` right before its first write, which answers the token or
    * null. The Stick is read again afterwards whenever a write was approved.
    */
-  guarded: (path: string, body: (approve: (question: StickWriteQuestion) => Promise<string | null>) => Promise<unknown>) => Promise<void>;
+  guarded: (
+    path: string,
+    body: (approve: (question: StickWriteQuestion) => Promise<string | null>) => Promise<unknown>,
+    /** Settling: the one write a Stick with an unfinished write takes. */
+    settling?: boolean,
+  ) => Promise<void>;
   /**
    * One write's approval on its own (the Sync Manager asks one per Stick,
    * then writes them together): the token, or null when refused or not
@@ -149,7 +154,7 @@ export function useStickWriteGate({ sticks, refresh, refuse }: {
       return null;
     }
     if (latest.current !== id) return null;
-    if (plan.pending || plan.approval === null) {
+    if ((plan.pending && question.plan.kind !== "settle") || plan.approval === null) {
       refuse(stickRefusal({ path, name: stick?.name ?? path, outline: { pending: true, libraries: [] } }, false) ?? "");
       void refresh(path);
       return null;
@@ -184,9 +189,11 @@ export function useStickWriteGate({ sticks, refresh, refuse }: {
   const guarded = useCallback(async (
     path: string,
     body: (approve: (question: StickWriteQuestion) => Promise<string | null>) => Promise<unknown>,
+    settling = false,
   ) => {
     await read(path);
-    const stopped = live.current.refusal(path);
+    const stick = live.current.sticks.find((s) => s.path === path);
+    const stopped = settling && stick?.outline?.pending === true ? null : live.current.refusal(path);
     if (stopped !== null) {
       refuse(stopped);
       return;
@@ -210,7 +217,7 @@ export function useStickWriteGate({ sticks, refresh, refuse }: {
       if (token === null) return;
       await write.run(token);
       done = true;
-    });
+    }, write.plan.kind === "settle");
     return done;
   }, [guarded]);
 

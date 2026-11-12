@@ -130,7 +130,7 @@ function key(op: StickWriteOperation): string {
     case "addFiles": return canonical({ kind: op.kind, format: op.format, playlist: op.playlist, files: op.files });
     case "saveSettings": return canonical({ kind: op.kind, settings: op.settings });
     case "format": return canonical({ kind: op.kind, layout: op.layout });
-    case "writeDefaults":
+    case "settle":
     case "ensureLibrary":
     case "addToPlaylist":
       return canonical({ kind: op.kind });
@@ -188,7 +188,7 @@ const WRITES: Record<string, { path: number; approval: number; op: (a: unknown[]
   devicePlaylistEdit: { path: 0, approval: 3, op: (a) => ({ kind: "playlistEdit", format: a[1] as never, edit: a[2] as never }) },
   devicePlaylistAddFiles: { path: 0, approval: 4, op: (a) => ({ kind: "addFiles", format: a[1] as never, playlist: a[2] as string, files: [...(a[3] as string[])] }) },
   saveDeviceSettings: { path: 0, approval: 2, op: (a) => ({ kind: "saveSettings", settings: a[1] as never }) },
-  writeDeviceDefaults: { path: 0, approval: 2, op: () => ({ kind: "writeDefaults" }) },
+  settleStick: { path: 0, approval: 1, op: () => ({ kind: "settle" }) },
   ensureDeviceLibrary: { path: 0, approval: 2, op: () => ({ kind: "ensureLibrary" }) },
   formatDevice: { path: 0, approval: 2, op: (a) => ({ kind: "format", layout: a[1] as never }) },
 };
@@ -258,7 +258,8 @@ export function withStickSafetyLog(backend: Backend): Backend {
   const plan = original("stickWritePlan");
   wrapped.stickWritePlan = async (request: { destination: string; operation: StickWriteOperation }) => {
     const found = await (plan?.(request) as Promise<StickWritePlan>);
-    if (found.pending) return { ...found, approval: null };
+    // Settling is the one write a Stick with an unfinished write takes.
+    if (found.pending && request.operation.kind !== "settle") return { ...found, approval: null };
     const state = log();
     const token = `mock-${Math.random().toString(36).slice(2)}-${Date.now()}`;
     state.tokens.set(token, {

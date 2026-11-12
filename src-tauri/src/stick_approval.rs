@@ -74,8 +74,8 @@ pub enum StickOperation {
     },
     /// The Stick's own settings (DJ System, written to the Stick).
     SaveSettings { settings: serde_json::Value },
-    /// Defaults written to a Stick that has none.
-    WriteDefaults,
+    /// The unfinished write on the Stick finished or rolled back.
+    Settle,
     /// An empty library put on a blank Stick.
     EnsureLibrary,
     /// The Stick erased and formatted.
@@ -398,8 +398,8 @@ pub const STICK_WRITING_COMMANDS: &[&str] = &[
     "device_playlist_edit",
     "device_playlist_add_files",
     "save_device_settings",
-    "write_device_defaults",
     "ensure_device_library",
+    "stick_settle",
     "format_device",
 ];
 
@@ -519,7 +519,7 @@ mod tests {
     #[test]
     fn an_expired_token_is_refused() {
         let dir = stick();
-        let op = StickOperation::WriteDefaults;
+        let op = StickOperation::EnsureLibrary;
         let token = issue(dir.path(), vec![Grant::Exact(op.clone())], None).unwrap();
         approvals().get_mut(&token).unwrap().issued =
             Instant::now().checked_sub(APPROVAL_LIFETIME).unwrap();

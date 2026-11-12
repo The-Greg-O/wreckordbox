@@ -5,7 +5,7 @@ import type { ShellStick } from "./shellTree";
 import { describeStickPlan, stickHoldMs, stickKind, stickRefusal } from "./stickWrites";
 
 const plan = (over: Partial<StickWritePlan> = {}): StickWritePlan => ({
-  spare: false, pending: false, tracksNew: 0, tracksChanged: 0, audioReused: 0, tracksRemoved: 0, tracksMissing: 0,
+  spare: false, pending: false, audioEstimated: true, tracksNew: 0, tracksChanged: 0, audioReused: 0, tracksRemoved: 0, tracksMissing: 0,
   trackChanges: [], analysisWritten: 0, playlists: [], netAdditionalBytes: 0, approval: "t", ...over,
 });
 const stick = (outline: ShellStick["outline"]): ShellStick => ({ path: "/media/USB", name: "USB", outline });

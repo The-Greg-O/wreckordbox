@@ -206,20 +206,14 @@ fn connected(path: &str) -> AppResult<PathBuf> {
 }
 
 /// A Stick about to be inspected before a write (the duplicate question,
-/// which tracks it already holds, an import's plan; wbx-45.4, second
-/// review): held under its lock, so none of this app's writes can leave an
-/// unfinished one meanwhile, and refused if it already holds one, so the
-/// read that follows never settles anything. Replacing the read itself
-/// with a non-recovering reader is wbx-45.5's.
+/// which tracks it already holds, an import's plan): held under its lock
+/// (wbx-45.4), so none of this app's writes can come between the reading
+/// and the approved write. The reads themselves are wbx-45.5's
+/// non-recovering ones (`read_settled`, `StickTracks::read`), which refuse a
+/// Stick with an unfinished write.
 fn inspectable(path: &str) -> AppResult<(PathBuf, crate::stick_approval::StickLock)> {
     let mount = connected(path)?;
     let lock = crate::stick_approval::lock(&mount);
-    if rbl_export::recovery_pending(&mount) {
-        return Err(AppError::new(
-            ErrorKind::Conflict,
-            "A write to this Stick did not finish. Nothing was read from it or written to it; settling the unfinished write is not offered here yet.",
-        ));
-    }
     Ok((mount, lock))
 }
 
@@ -243,7 +237,7 @@ fn id_from(text: &str) -> AppResult<u32> {
 pub async fn device_libraries(path: String) -> AppResult<Vec<DeviceLibraryDto>> {
     blocking("device_libraries", move || {
         let mount = connected(&path)?;
-        Ok(readable_libraries(&mount))
+        readable_libraries(&mount)
     })
     .await
 }
@@ -256,21 +250,35 @@ pub async fn device_libraries(path: String) -> AppResult<Vec<DeviceLibraryDto>> 
 /// the whole stick's tree with it (#631). Why it could not be read goes to
 /// the log: the interface shows the stick with nothing under it, as it
 /// shows a folder it may not open, and says nothing more.
-fn readable_libraries(mount: &Path) -> Vec<DeviceLibraryDto> {
-    if let Err(error) = rbl_export::export_root_name(mount) {
-        tracing::warn!(device = %mount.display(), %error, "the device's libraries cannot be listed");
-        return Vec::new();
-    }
-    device::formats(mount)
-        .into_iter()
-        .filter_map(|format| match device::read(mount, format) {
-            Ok(library) => Some(library_dto(&library)),
-            Err(error) => {
-                tracing::warn!(device = %mount.display(), library = format_name(format), %error, "a library on the device cannot be read; it is left out of the tree");
-                None
+///
+/// Never settles or writes anything: the libraries are read by
+/// [`wreckordbox_stick_outline::StickRead`], which cannot recover, and a
+/// Stick whose last write did not finish answers
+/// [`crate::stick_recovery::unfinished_write`] (wbx-45.5).
+fn readable_libraries(mount: &Path) -> AppResult<Vec<DeviceLibraryDto>> {
+    wreckordbox_stick_outline::read(mount, |stick| {
+        if let Err(error) = rbl_export::export_root_name(stick.root()) {
+            tracing::warn!(device = %mount.display(), %error, "the device's libraries cannot be listed");
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::new();
+        for format in device::formats(stick.root()) {
+            match stick.library(format) {
+                Ok(library) => out.push(library_dto(&library)),
+                Err(error) => {
+                    tracing::warn!(device = %mount.display(), library = format_name(format), %error, "a library on the device cannot be read; it is left out of the tree");
+                }
             }
-        })
-        .collect()
+        }
+        Ok(out)
+    })
+    .map_err(|error| crate::stick_recovery::read_error(mount, error))
+}
+
+/// Reads one library of a Stick for showing it, by a reader that cannot
+/// settle or write anything (see [`crate::stick_recovery`]).
+fn read_settled(mount: &Path, format: Format) -> AppResult<device::Library> {
+    wreckordbox_stick_outline::library(mount, format).map_err(|error| crate::stick_recovery::read_error(mount, error))
 }
 
 fn library_dto(library: &device::Library) -> DeviceLibraryDto {
@@ -423,7 +431,7 @@ pub async fn device_playlist_collection_tracks(
     blocking("device_playlist_collection_tracks", move || {
         let (mount, _lock) = inspectable(&path)?;
         let format = format_from(&format)?;
-        let library = device::read(&mount, format).map_err(|e| device_error(&e))?;
+        let library = read_settled(&mount, format)?;
         let db_id = state
             .read_db(|db| rbl_db::export_info::db_id(db.connection()))
             .map_err(crate::commands::write_error)?;
@@ -453,7 +461,7 @@ pub async fn device_playlist_duplicates(path: String, format: String, playlist: 
 fn duplicates_of(path: &str, format: &str, playlist: &str, rows: &[String]) -> AppResult<Vec<String>> {
     let (mount, _lock) = inspectable(path)?;
     let format = format_from(format)?;
-    let library = device::read(&mount, format).map_err(|e| device_error(&e))?;
+    let library = read_settled(&mount, format)?;
     let playlist_id = id_from(playlist)?;
     if library.node(playlist_id).is_none_or(|node| node.folder) {
         return Err(AppError::new(ErrorKind::NotFound, "That playlist is no longer on the device."));
@@ -933,17 +941,23 @@ struct StickTracks {
 }
 
 impl StickTracks {
+    /// Both of the Stick's libraries are read in one read, by a reader that
+    /// cannot settle or write anything (wbx-45.5).
     fn read(mount: &Path, format: Format) -> AppResult<Self> {
-        let library = device::read(mount, format).map_err(|e| device_error(&e))?;
-        let mut masters_by_path = std::collections::HashMap::new();
-        if format == Format::DeviceLibrary && device::formats(mount).contains(&Format::OneLibrary) {
-            // Only a help for older rows: a OneLibrary that cannot be read
-            // leaves the Device Library's own rows to say what they can (#631).
-            match device::read(mount, Format::OneLibrary) {
-                Ok(one) => masters_by_path = one.tracks.iter().map(|t| (t.path.clone(), (t.master_db_id, t.master_content_id))).collect(),
-                Err(error) => tracing::warn!(device = %mount.display(), %error, "the device's OneLibrary cannot be read; Device Library tracks are matched by their own rows"),
+        let (library, masters_by_path) = wreckordbox_stick_outline::read(mount, |stick| {
+            let library = stick.library(format)?;
+            let mut masters_by_path = std::collections::HashMap::new();
+            if format == Format::DeviceLibrary && device::formats(stick.root()).contains(&Format::OneLibrary) {
+                // Only a help for older rows: a OneLibrary that cannot be read
+                // leaves the Device Library's own rows to say what they can (#631).
+                match stick.library(Format::OneLibrary) {
+                    Ok(one) => masters_by_path = one.tracks.iter().map(|t| (t.path.clone(), (t.master_db_id, t.master_content_id))).collect(),
+                    Err(error) => tracing::warn!(device = %mount.display(), %error, "the device's OneLibrary cannot be read; Device Library tracks are matched by their own rows"),
+                }
             }
-        }
+            Ok((library, masters_by_path))
+        })
+        .map_err(|error| crate::stick_recovery::read_error(mount, error))?;
         Ok(Self { mount: mount.to_path_buf(), library, masters_by_path })
     }
 }
@@ -1136,13 +1150,19 @@ pub async fn open_view(state: &State<'_, Arc<AppState>>, path: String, format: S
         let mount = connected(&path)?;
         let format = format_from(&format)?;
         let playlist = id_from(&playlist)?;
-        let library = device::read(&mount, format).map_err(|e| device_error(&e))?;
+        // The library and its OneLibrary cues in one read of the Stick that
+        // cannot recover or write anything (wbx-45.5).
+        let (library, one_cues) = wreckordbox_stick_outline::read(&mount, |stick| {
+            let library = stick.library(format)?;
+            let cues = if format == Format::OneLibrary { one_library_cues(stick.root()) } else { HashMap::new() };
+            Ok((library, cues))
+        })
+        .map_err(|error| crate::stick_recovery::read_error(&mount, error))?;
         let ids: Vec<u32> = if playlist == 0 {
             library.tracks.iter().map(|t| t.id).collect()
         } else {
             library.node(playlist).map(|n| n.tracks.clone()).unwrap_or_default()
         };
-        let one_cues = if format == Format::OneLibrary { one_library_cues(&mount) } else { HashMap::new() };
         let rows: Vec<DeviceRow> = ids
             .iter()
             .enumerate()
@@ -1283,15 +1303,18 @@ fn cue_from_analysis(entry: &rbl_anlz::CueEntry) -> Option<rbl_index::Cue> {
     })
 }
 
-/// `OneLibrary`'s cue table supplies its own cue identity and timing. The
-/// connection is explicitly read-only; malformed individual rows are ignored.
+/// `OneLibrary`'s cue table supplies its own cue identity and timing.
+/// Opened so that nothing on the Stick is created or written (see
+/// [`wreckordbox_stick_outline::one_library`]); malformed individual rows
+/// are ignored.
 fn one_library_cues(mount: &Path) -> HashMap<u32, Vec<rbl_index::Cue>> {
     let read = || -> rbl_onelibrary::Result<HashMap<u32, Vec<rbl_index::Cue>>> {
         let root = rbl_export::export_root_name(mount)
             .map_err(|error| rbl_onelibrary::Error::Io(std::io::Error::other(error)))?;
-        let db = rbl_onelibrary::ExportLibrary::open_read_only(
+        let db = wreckordbox_stick_outline::one_library::OneLibraryRead::open(
             &mount.join(root).join("rekordbox/exportLibrary.db"),
-        )?;
+        )
+        .map_err(|error| rbl_onelibrary::Error::Io(std::io::Error::other(error)))?;
         let mut stmt = db.connection().prepare(
             "SELECT content_id, kind, colorTableIndex, inUsec, outUsec FROM cue ORDER BY cue_id",
         )?;
@@ -1571,14 +1594,14 @@ mod tests {
         // #631: one unreadable library emptied the whole stick in the tree.
         let (_src, dest) = stick();
         damage(dest.path(), Format::OneLibrary);
-        let found = readable_libraries(dest.path());
+        let found = readable_libraries(dest.path()).unwrap();
         assert_eq!(found.iter().map(|l| l.format).collect::<Vec<_>>(), ["deviceLibrary"]);
         let tree: Vec<&str> = found[0].nodes.iter().map(|n| n.name.as_str()).collect();
         assert_eq!(tree, ["Sets", "Friday", "Warm Up"]);
 
         let (_src, dest) = stick();
         damage(dest.path(), Format::DeviceLibrary);
-        let found = readable_libraries(dest.path());
+        let found = readable_libraries(dest.path()).unwrap();
         assert_eq!(found.iter().map(|l| l.format).collect::<Vec<_>>(), ["oneLibrary"]);
         assert_eq!(found[0].tracks, 3);
     }
@@ -1588,15 +1611,15 @@ mod tests {
         let (_src, dest) = stick();
         damage(dest.path(), Format::DeviceLibrary);
         damage(dest.path(), Format::OneLibrary);
-        assert!(readable_libraries(dest.path()).is_empty());
+        assert!(readable_libraries(dest.path()).unwrap().is_empty());
         let blank = tempfile::tempdir().unwrap();
-        assert!(readable_libraries(blank.path()).is_empty());
+        assert!(readable_libraries(blank.path()).unwrap().is_empty());
         // Libraries under both PIONEER and .PIONEER: which is the stick's is
         // not this tree's to guess, so neither is listed (and the log says why).
         let (_src, dest) = stick();
         std::fs::create_dir_all(dest.path().join(".PIONEER/rekordbox")).unwrap();
         std::fs::copy(dest.path().join("PIONEER/rekordbox/export.pdb"), dest.path().join(".PIONEER/rekordbox/export.pdb")).unwrap();
-        assert!(readable_libraries(dest.path()).is_empty());
+        assert!(readable_libraries(dest.path()).unwrap().is_empty());
     }
 
     #[test]

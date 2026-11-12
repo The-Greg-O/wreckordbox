@@ -15,7 +15,7 @@ use rbl_db::fixture::{self, playlist_id, track_id, Shape};
 use rbl_db::{Library as Db, OpenMode};
 use rbxport_lib::state::AppState;
 use rbxport_lib::stick_approval::STICK_WRITING_COMMANDS;
-use rbxport_lib::{commands, device_library, device_settings};
+use rbxport_lib::{commands, device_library, device_settings, stick_recovery};
 use tauri::test::MockRuntime;
 use tauri::{App, Manager};
 
@@ -165,18 +165,10 @@ fn every_stick_writing_command_refuses_without_a_token_and_writes_nothing() {
             None,
         )),
     );
-    called.push("write_device_defaults");
-    let defaults = serde_json::from_value(serde_json::json!({
-        "waveformColor": "blue", "waveformPosition": "center", "overviewWaveform": "half", "keyDisplay": "classic",
-        "categories": null, "sorts": null, "subColumn": null,
-    })).unwrap();
+    called.push("stick_settle");
     refused(
-        "write_device_defaults",
-        tauri::async_runtime::block_on(device_settings::write_device_defaults(
-            path.clone(),
-            defaults,
-            None,
-        )),
+        "stick_settle",
+        tauri::async_runtime::block_on(stick_recovery::stick_settle(path.clone(), None)),
     );
     called.push("ensure_device_library");
     refused(
@@ -216,6 +208,7 @@ fn every_stick_writing_command_refuses_without_a_token_and_writes_nothing() {
 /// that calls one must be in `STICK_WRITING_COMMANDS` and consume a token.
 const STICK_WRITES: &[&str] = &[
     "write_export_registered",
+    "settle(&",
     "write_export_with_phase",
     "export_cancellable",
     "apply_edit(",
