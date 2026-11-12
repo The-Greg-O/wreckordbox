@@ -35,7 +35,10 @@ fn the_transport_edge_is_kept_until_the_engine_exists_and_then_applied_live() {
     set(&app, "1ms").unwrap();
     assert_eq!(engine.transport_edge(), TransportEdge::OneMs);
     let same = app.state::<Arc<Player>>().engine(app.handle()).unwrap();
-    assert!(Arc::ptr_eq(&engine, &same), "changing the edge rebuilt the engine");
+    assert!(
+        Arc::ptr_eq(&engine, &same),
+        "changing the edge rebuilt the engine"
+    );
     set(&app, "immediate").unwrap();
     assert_eq!(engine.transport_edge(), TransportEdge::Immediate);
 
