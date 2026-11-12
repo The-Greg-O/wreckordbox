@@ -123,10 +123,24 @@
 .bpm[data-tapping] { border-color: var(--role-accent, var(--c-accent)); }
 
 .failed {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-shell-space-4);
   flex-basis: 100%;
   margin: 0;
   color: var(--role-tab-to);
 }
+.dismiss {
+  padding: 0 var(--s-shell-space-2);
+  border: var(--s-shell-border) solid var(--role-border, var(--c-outline));
+  border-radius: var(--s-shell-radius);
+  background: none;
+  color: var(--role-text, var(--c-text));
+  font: inherit;
+  cursor: pointer;
+}
+/* A slot whose write is on its way. */
+.pad[data-pending] { border-style: dashed; }
 
 /* Half width: the pads take the row, the grid wraps under them. */
 @container shell (max-width: 800px) {

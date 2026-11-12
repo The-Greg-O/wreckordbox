@@ -105,7 +105,7 @@ import { WaveformDetail } from "./WaveformDetail";
 import { SimplePlayer } from "./SimplePlayer";
 import { CompactPlayer } from "./CompactPlayer";
 import { DetailPhrases, LARGE_PHRASE_H, LargePlayer, largePlayerStyles } from "./LargePlayer";
-import { IntakeCueRow } from "./IntakeCueRow";
+import { IntakeCueRow, useTrackWriteFailures } from "./IntakeCueRow";
 import { compactJumpBeats, compactJumpSizeId, type CompactJumpBeats } from "@/lib/compactPlayer";
 import { JumpMenu } from "./JumpMenu";
 import { VocalStrip } from "./VocalStrip";
@@ -116,7 +116,6 @@ import { useTrackDetails } from "./useTrackDetails";
 import { useTrackGrid } from "./useTrackGrid";
 import { useGridEditor } from "./useGridEditor";
 import { nudgeGrid } from "@/lib/gridEdit";
-import { listenEditHistory } from "@/lib/editHistory";
 import { registerDeck } from "@/lib/scripting";
 import { useHoldRepeat } from "./useHoldRepeat";
 import { jumpHead } from "./beatJump";
@@ -656,6 +655,9 @@ const PHASE_SETTLE_MS = 250;
  */
 const CALL_DRIFT = 0.15;
 
+/** No cues: the loaded track's own have not been read yet. */
+const NO_CUE_LIST: Cue[] = [];
+
 /**
  * What GRID puts in the pad row, read off `docs/screenshots`.
  *
@@ -996,10 +998,15 @@ export const Player = memo(function Player({
   const [cuePoint, setCuePoint] = useState(0);
   // Kept current by the backend: an edit from any deck refetches. The cue
   // point is settled from the first fetch only — see `useTrackCues`.
-  const cues = useTrackCues(track, (loaded) => {
+  const cuesRead = useTrackCues(track, (loaded) => {
     const first = cuesFor(loaded, "memory")[0];
     setCuePoint(first ? first.positionMs / 1000 : 0);
   });
+  // The cues of the loaded track, never the previous one's while its read
+  // is on its way (wbx-64 review 1): nothing acts on, or draws, another
+  // track's cues.
+  const cuesOwned = track !== null && cuesRead.track === track.id;
+  const cues = cuesOwned ? cuesRead.cues : NO_CUE_LIST;
   // The INFO tab's record, fetched only while that tab is showing — see
   // `useTrackDetails` for why not on every load.
   const details = useTrackDetails(track?.id ?? null, panel === "info");
@@ -1534,19 +1541,16 @@ export const Player = memo(function Player({
   // The Auto Beat Loop's length while it is the loop playing (#411); read at
   // press time, so `beatLoopOn` and `loopBeats`, declared below, are set by then.
   const beatLoopBeats = useEventCallback(() => (beatLoopOn ? loopBeats : null));
-  // The large face shows the last cue or grid write's failure under its pads
-  // (wbx-64) as well as passing it on; a new track starts clean.
-  const [writeFailure, setWriteFailure] = useState<string | null>(null);
-  useEffect(() => setWriteFailure(null), [track?.id]);
-  const reportWrite = useCallback((message: string | null) => {
-    setWriteFailure(message);
-    onError?.(message);
-  }, [onError]);
+  // The loaded track's cue and grid writes that failed, kept with that track
+  // (wbx-64 review 3): shown under the large face's pads.
+  const writeFailures = useTrackWriteFailures(track?.id ?? null);
   const hot = useHotCues({
-    trackId: playback.idle ? null : track?.id ?? null,
+    // Nothing to set, call or clear until the loaded track's cues are read.
+    trackId: playback.idle || !cuesOwned ? null : track?.id ?? null,
+    readAt: cuesRead.readAt,
     cues, positionSeconds, seek, play: playFromCue, playing: deckPlaying, jumpAt, setLoop: playback.setLoop,
     activeLoop: playingLoop, beatLoopBeats, exitLoop: leaveLoop,
-    quantiseTo: quantize ? quantizeGrid : null, readOnly, onError: reportWrite,
+    quantiseTo: quantize ? quantizeGrid : null, readOnly, onError,
   });
   // The hooks own editability, so the disabled state and its explanation
   // must come from that same result. Keeping a second readOnly-only branch
@@ -1590,25 +1594,21 @@ export const Player = memo(function Player({
   // A save that fails leaves the saved grid as it was, so the deck goes back to it.
   const onGridError = useCallback((message: string | null) => {
     if (message !== null) setNudge(null);
-    reportWrite(message);
-  }, [reportWrite]);
+    onError?.(message);
+  }, [onError]);
+  // The grid editor acts only on the loaded track's own grid (wbx-64
+  // review 1): after a switch, not until the new track's grid is read.
+  const gridOwned = track !== null && gridTrackId === track.id;
   const gridEditor = useGridEditor({
-    trackId: playback.idle ? null : track?.id ?? null,
-    deck, state: gridState, setState: setGridState, positionMs, readOnly, onError: onGridError,
+    trackId: playback.idle || !gridOwned ? null : track?.id ?? null,
+    deck, state: gridOwned ? gridState : null, setState: setGridState, positionMs, readOnly, onError: onGridError,
     durationMs: totalMs,
     isDynamicFrom,
     onNudge,
   });
-  const { state: historyState, undo: undoGrid, redo: redoGrid } = gridEditor;
-  useEffect(() => {
-    if (!armed || readOnly) return;
-    return listenEditHistory((action) => {
-      if (action === "undo" && historyState?.canUndo) undoGrid();
-      if (action === "redo" && historyState?.canRedo) redoGrid();
-    },
-    historyState?.canUndo ? historyState.undoLabel ?? "Beat Grid Edit" : null,
-    historyState?.canRedo ? historyState.redoLabel ?? "Beat Grid Edit" : null);
-  }, [armed, readOnly, historyState, undoGrid, redoGrid]);
+  // Ctrl+Z and Edit › Undo take back the latest step of the one shared
+  // history, grid edits among them, whatever has the focus (wbx-64 review
+  // 2): the deck no longer claims them while it is armed.
   const hold = useHoldRepeat();
 
   // Loops. AU sets a beat loop of the chosen length from the head, snapped
@@ -2242,6 +2242,15 @@ export const Player = memo(function Player({
     shiftGridLeft: live(() => gridEditor.shift(-1)),
     shiftGridRight: live(() => gridEditor.shift(1)),
     shiftGridToCenter: once(gridEditor.align),
+    // TAP from the palette or a key the DJ gave it: registered only while the
+    // button is on, so the palette greys it exactly when the button is
+    // (wbx-64 review 8). A key's repeats do not tap.
+    ...(gridEditor.canEdit && !playback.idle ? {
+      tapTempo: (input: CommandInput) => {
+        if (!input.repeat) gridEditor.tap();
+        return true;
+      },
+    } : {}),
   };
   // A fixed-distance jump moves by its own beats, the menu's size aside; a
   // held key repeats it, as the menu-driven jumps repeat.
@@ -2412,24 +2421,32 @@ export const Player = memo(function Player({
           <span ref={detailHead} className={styles.playhead} data-testid="large-player-head" aria-hidden />
         </div>
         <IntakeCueRow
+          ready={cuesOwned && !playback.idle}
           at={hot.at}
+          pending={hot.pending}
           press={hot.press}
           clear={hot.clear}
           canEdit={hot.canEdit}
           editReason={hotCueEditReason}
           padStyle={(cue) => cueStyle(undefined, cue, viewPrefs.hotCueColor)}
           grid={{
+            ready: gridOwned && !playback.idle,
             bpmX100: gridEditor.tapBpmX100 ?? gridEditor.state?.bpmX100 ?? 0,
             tapping: gridEditor.tapBpmX100 !== null,
             canEdit: gridEditor.canEdit,
-            reason: !gridEditor.hasGrid ? "This track has no beat grid to edit"
-              : readOnly ? READ_ONLY_REASON
-                : gridEditor.state?.locked ? "The beat grid is locked" : "",
+            reason: !gridOwned ? "Reading this track's beat grid"
+              : !gridEditor.hasGrid ? "This track has no beat grid to edit"
+                : readOnly ? READ_ONLY_REASON
+                  : gridEditor.state?.locked ? "The beat grid is locked" : "",
+            // A pointer press moves the grid SHIFT_MS; held, each repeat
+            // HELD_SHIFT_MS, all one hold.
             earlier: hold((repeat) => gridEditor.shift(-1, repeat)),
             later: hold((repeat) => gridEditor.shift(1, repeat)),
+            // A key moves it SHIFT_MS a press and a repeat, a held key one hold.
+            key: (direction, repeat) => gridEditor.shift(direction, false, repeat),
             tap: gridEditor.tap,
           }}
-          failure={writeFailure}
+          failures={writeFailures}
         />
       </LargePlayer>
     );
