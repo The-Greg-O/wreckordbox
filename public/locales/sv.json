@@ -1683,11 +1683,16 @@
   "wreckordbox is based on rbxport.": "wreckordbox is based on rbxport.",
   "Facts waiting for you and past Runs will be listed here. Nothing is here yet.": "Facts waiting for you and past Runs will be listed here. Nothing is here yet.",
   "Intake": "Intake",
-  "Loading a Stick will happen here. Nothing is here yet: until then, select the Stick in the tree from the Library view.": "Loading a Stick will happen here. Nothing is here yet: until then, select the Stick in the tree from the Library view.",
+  "Select a Stick in the tree to load it. Nothing is here yet.": "Select a Stick in the tree to load it. Nothing is here yet.",
   "Player": "Player",
   "Review": "Review",
   "Stick": "Stick",
   "Tracks with no Prep colour will queue here to be prepared. Nothing is here yet.": "Tracks with no Prep colour will queue here to be prepared. Nothing is here yet.",
   "Tree": "Tree",
-  "Views": "Views"
+  "Views": "Views",
+  "No Set plans yet": "No Set plans yet",
+  "No playlists": "No playlists",
+  "Problems": "Problems",
+  "Set plans": "Set plans",
+  "Tracks marked Problem will queue here to be fixed. Nothing is here yet.": "Tracks marked Problem will queue here to be fixed. Nothing is here yet."
 }
