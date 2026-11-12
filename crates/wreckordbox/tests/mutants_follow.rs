@@ -365,3 +365,85 @@ fn library_protection_refuses_a_playlist_edit_and_keeps_every_mutant() {
     // Reading never writes: a report changes nothing either.
     assert_eq!(ok(&sandbox, &["tracks", "remove", "10002"])["removed"], false);
 }
+
+const FAULTS: &str = "WRECKORDBOX_LEDGER_FAULTS";
+
+/// Stops the service running here and waits until it is gone.
+fn stop_service(sandbox: &Sandbox) {
+    let Ok(mut client) =
+        wreckordbox_service::Client::connect(&sandbox.config().socket_path(sandbox.location()))
+    else {
+        return;
+    };
+    let pid = client.status().ok().map(|status| u64::from(status.pid));
+    let _ = client.stop();
+    if let Some(pid) = pid {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while common::alive(pid) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the service did not stop"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+fn with_faults(sandbox: &Sandbox, faults: &str, args: &[&str]) -> common::Run {
+    let mut command = sandbox.command();
+    command.env(FAULTS, faults).arg("--json").args(args);
+    sandbox.run(&mut command)
+}
+
+#[test]
+fn a_service_killed_between_a_removal_and_its_entry_still_removes_the_mutant_when_it_recovers() {
+    let sandbox = Sandbox::new();
+    let playlist = sandbox.create_playlist("Friday", &[1, 2]);
+    let entries = entries(&sandbox, &playlist);
+    let removed = mutate(&sandbox, &entries[1]);
+    let kept = mutate(&sandbox, &entries[0]);
+    stop_service(&sandbox);
+
+    // The service dies the moment the entry is out of the Library, before
+    // the Ledger records the change or its Mutant's consequence.
+    let killed = with_faults(&sandbox, "abort_after_write", &["playlists", "remove", &playlist, "10002"]);
+    assert!(!killed.status.success());
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while wreckordbox_service::Client::connect(&sandbox.config().socket_path(sandbox.location()))
+        .and_then(|mut client| client.status())
+        .is_ok()
+    {
+        assert!(std::time::Instant::now() < deadline, "the service did not die");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    // The next service records the change as unconfirmed and brings the
+    // Mutants into line with the Library as it is, in that entry's Run.
+    assert_eq!(live(&sandbox, None), vec![(kept, entries[0].clone())]);
+    let history = ok(&sandbox, &["mutants", "show", &removed.to_string()])["history"].clone();
+    assert_eq!(history[1]["action"], "detached");
+    let run = ok(&sandbox, &["runs", "show", &history[1]["run"].to_string()]);
+    assert_eq!(run["entries"][0]["kind"], "unconfirmed", "{run}");
+}
+
+#[test]
+fn a_removal_whose_entry_had_to_wait_removes_its_mutant_when_the_entry_is_written() {
+    let sandbox = Sandbox::new();
+    let playlist = sandbox.create_playlist("Friday", &[1, 2]);
+    let entries = entries(&sandbox, &playlist);
+    let removed = mutate(&sandbox, &entries[1]);
+    stop_service(&sandbox);
+
+    // The Sidecar refuses the entry: it is kept, with its consequence.
+    let run = with_faults(&sandbox, "fail_append=1", &["playlists", "remove", &playlist, "10002"]);
+    assert!(run.status.success(), "{}", run.stderr);
+    assert!(sandbox.sidecar_dir().join("ledger-spill.jsonl").is_file());
+    stop_service(&sandbox);
+
+    // The next service writes the entry and the Mutant's change together.
+    assert!(live(&sandbox, None).is_empty());
+    let history = ok(&sandbox, &["mutants", "show", &removed.to_string()])["history"].clone();
+    assert_eq!(history.as_array().unwrap().len(), 2, "{history}");
+    assert_eq!(history[1]["action"], "detached");
+    assert!(!sandbox.sidecar_dir().join("ledger-spill.jsonl").exists());
+}
