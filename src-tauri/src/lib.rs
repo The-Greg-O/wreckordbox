@@ -52,6 +52,7 @@ mod sync_window;
 mod scripting;
 pub mod service_host;
 pub mod intake_view;
+pub mod service_status;
 mod device_settings;
 pub mod dto;
 mod error;
@@ -562,6 +563,7 @@ pub fn run() {
             service_host::service_problem,
             intake_view::intake_queue,
             intake_view::intake_counts,
+            service_status::service_activity,
             service_host::library_protection,
             service_host::adopt_library_protection,
             service_host::set_library_protection,
