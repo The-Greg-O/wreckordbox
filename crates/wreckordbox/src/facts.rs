@@ -74,7 +74,8 @@ pub enum FactCommands {
         /// Include stale, unverified and replaced Facts in the full history.
         #[arg(long)]
         all: bool,
-        /// Retained for compatibility; every read now checks the audio.
+        /// Verify audio and update attachments/staleness. Without this,
+        /// Measurements are reported as unverified and no audio is read.
         #[arg(long)]
         check_audio: bool,
     },

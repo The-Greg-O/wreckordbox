@@ -193,7 +193,7 @@ pub struct FactsOfTrack {
     /// Also stale, unverified and superseded Facts.
     #[serde(default)]
     pub all: bool,
-    /// Retained for compatibility. Audio is now checked on every read.
+    /// Explicitly verify audio and update attachments/staleness. Default reads are read-only.
     #[serde(default)]
     pub check_audio: bool,
 }
@@ -290,6 +290,7 @@ pub(crate) struct CheckedFact {
     pub(crate) value: Value,
     /// Of the track's audio now, when its file is there.
     pub(crate) fingerprint: Option<Fingerprint>,
+    pub(crate) found: ParentAudio,
 }
 
 /// Checks one Fact as `facts.record` would (its kind's declaration, its
@@ -314,14 +315,15 @@ pub(crate) fn checked(
         &mut tracks,
         lookup,
     )?;
+    let (found, fingerprint) = tracks.remove(&one.track_id).ok_or_else(|| {
+        ServiceError::new(service_codes::SERVICE_FAILED, "checked Fact has no track")
+    })?;
     Ok(CheckedFact {
         track_id: one.track_id,
         kind: one.kind,
         value: one.value,
-        fingerprint: tracks
-            .into_values()
-            .next()
-            .and_then(|(_, fingerprint)| fingerprint),
+        fingerprint,
+        found,
     })
 }
 
@@ -503,7 +505,9 @@ impl Facts<'_> {
         seen.sort();
         for track_id in seen {
             let (found, fingerprint) = &tracks[track_id];
-            let (_, stale) = self.stems.observe_audio(found, fingerprint.as_ref())?;
+            let (_, stale) = self
+                .stems
+                .before_record(found, fingerprint.as_ref(), Some(run.id))?;
             marked_stale.extend(stale);
         }
 
@@ -574,8 +578,22 @@ impl Facts<'_> {
             fact
         };
         let track = found.parent().clone();
-        let fingerprint = stems::fingerprint(&track, found.path()).ok();
-        let (attachments, _) = self.stems.observe_audio(&found, fingerprint.as_ref())?;
+        let (fingerprint, attachments) = if wanted.check_audio {
+            let fingerprint = stems::fingerprint(&track, found.path()).ok();
+            let (attachments, _) = self.stems.observe_audio(&found, fingerprint.as_ref())?;
+            (fingerprint, attachments)
+        } else {
+            (
+                None,
+                wreckordbox_sidecar::attachments::Attachments {
+                    reattached: Vec::new(),
+                    review: self
+                        .sidecar
+                        .attachment_reviews(&track.id)
+                        .map_err(|e| sidecar_error(&e))?,
+                },
+            )
+        };
         let facts = match &wanted.kind {
             Some(kind) => self.sidecar.facts(&track.id, kind),
             None => self.sidecar.facts_of_track(&track.id),

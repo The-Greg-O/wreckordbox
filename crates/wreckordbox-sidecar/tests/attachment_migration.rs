@@ -7,10 +7,7 @@
 )]
 mod common;
 
-use serde_json::json;
-use wreckordbox_sidecar::{
-    attachments::IdentifyingFields, fingerprint_file, Kind, NewFact, Sidecar, Source, SourceKind,
-};
+use wreckordbox_sidecar::{attachments::IdentifyingFields, fingerprint_file, Sidecar};
 
 #[test]
 fn old_facts_can_reattach_after_migration_but_known_stale_audio_is_not_an_identity() {
@@ -23,50 +20,24 @@ fn old_facts_can_reattach_after_migration_but_known_stale_audio_is_not_an_identi
         common::write_audio(&audio, 100, 1, None);
         let fingerprint = fingerprint_file(&audio).unwrap();
         let folder = dir.path().join("sidecar");
-        let sidecar = Sidecar::open(&folder).unwrap();
-        let source = Source::new(SourceKind::Tool, "fixture");
-        let run = sidecar.begin_run(&source, "Fixture measurement").unwrap();
-        let original = sidecar
-            .record(&NewFact {
-                track_id: "removed",
-                fingerprint: Some(&fingerprint),
-                kind: Kind::measurement("intensity"),
-                value: json!({"summary": 0.7}),
-                source: &source,
-                confidence: 1.0,
-                run,
-            })
-            .unwrap();
-        if stale {
-            common::write_audio(&audio, 100, 2, None);
-            sidecar
-                .mark_stale("removed", &fingerprint_file(&audio).unwrap())
-                .unwrap();
-        }
-        drop(sidecar);
-        // Downgrade only this throwaway fixture, then exercise the real
-        // migration path from each previously shipped schema version.
+        std::fs::create_dir_all(&folder).unwrap();
         let db = rusqlite::Connection::open(folder.join("sidecar.db")).unwrap();
-        db.execute_batch(
-            "DROP VIEW attached_fact;
-            DROP TABLE fact_attachment; DROP TABLE attachment_change;
-            DROP TABLE attachment_review; DROP TABLE track_identity;
-            ",
-        )
-        .unwrap();
-        if version < 3 {
-            db.execute_batch("DROP TABLE decision_answer; DROP TABLE decision;")
+        db.execute_batch(include_str!("fixtures/sidecar-v1.sql"))
+            .unwrap();
+        if version >= 2 {
+            db.execute_batch(include_str!("fixtures/sidecar-v2.sql"))
                 .unwrap();
         }
-        if version < 2 {
-            db.execute_batch("DROP TABLE mutant_change; DROP TABLE mutant;")
+        if version >= 3 {
+            db.execute_batch(include_str!("fixtures/sidecar-v3.sql"))
                 .unwrap();
         }
-        db.execute(
-            "UPDATE meta SET value = ?1 WHERE key = 'schema_version'",
-            [version.to_string()],
-        )
-        .unwrap();
+        // Add multiple Facts using only the historical schema, never today's writer.
+        db.execute("INSERT INTO fact (track_id,fingerprint,kind,value,source_kind,source_name,confidence,run_id,recorded_at,stale_at) VALUES ('removed',?1,'intensity','{\"summary\":0.7}','tool','fixture',1,7,1794400003000,?2)", rusqlite::params![fingerprint.as_str(), stale.then_some(1794400004000_i64)]).unwrap();
+        let original_id = db.last_insert_rowid();
+        db.execute("INSERT INTO fact (track_id,fingerprint,kind,value,source_kind,source_name,confidence,run_id,recorded_at) VALUES ('removed',NULL,'genre','\"Techno\"','dj','dj',1,7,1794400003001)", []).unwrap();
+        let judgement_id = db.last_insert_rowid();
+        let before: String = db.query_row("SELECT group_concat(quote(id)||quote(track_id)||quote(fingerprint)||quote(value)||quote(run_id)||quote(stale_at)) FROM fact", [], |r| r.get(0)).unwrap();
         drop(db);
         let sidecar = Sidecar::open(&folder).unwrap();
         let result = sidecar
@@ -79,23 +50,27 @@ fn old_facts_can_reattach_after_migration_but_known_stale_audio_is_not_an_identi
             .unwrap();
         if stale {
             assert!(result.reattached.is_empty());
-            assert!(sidecar.fact(original.id).unwrap().unwrap().is_stale());
+            assert!(sidecar.fact(original_id).unwrap().unwrap().is_stale());
         } else {
-            assert_eq!(result.reattached[0].fact_ids, [original.id]);
-            let mut expected = original;
-            expected.track_id = "readded".into();
-            assert_eq!(
-                sidecar.facts_of_track("readded").unwrap(),
-                [expected.clone()]
-            );
+            assert_eq!(result.reattached[0].fact_ids, [original_id, judgement_id]);
+            let facts = sidecar.facts_of_track("readded").unwrap();
+            assert_eq!(facts.len(), 2);
+            assert_eq!(facts[1].run.0, 7);
+            assert_eq!(facts[1].source.name, "fixture");
             drop(sidecar);
             assert_eq!(
                 Sidecar::open(&folder)
                     .unwrap()
                     .facts_of_track("readded")
                     .unwrap(),
-                [expected]
+                facts
             );
         }
+        let db = rusqlite::Connection::open(folder.join("sidecar.db")).unwrap();
+        let after: String = db.query_row("SELECT group_concat(quote(id)||quote(track_id)||quote(fingerprint)||quote(value)||quote(run_id)||quote(stale_at)) FROM fact", [], |r| r.get(0)).unwrap();
+        assert_eq!(
+            before, after,
+            "migration/attachment must preserve provenance"
+        );
     }
 }

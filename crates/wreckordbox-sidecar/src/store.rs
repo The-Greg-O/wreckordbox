@@ -10,7 +10,7 @@
 //!
 //! Times are milliseconds since the Unix epoch, UTC. `value` is JSON. A
 //! Fact row is written once; afterwards only `stale_at` and the two
-//! `superseded_*` columns are ever set, each once.
+//! `superseded_*` columns change. Matching audio clears a stale mark.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -477,10 +477,18 @@ impl Sidecar {
     /// Says the track's audio is now `current`: every Measurement recorded
     /// for the track from different audio is marked stale, and their
     /// identifiers are answered. Judgements are left alone; they follow the
-    /// music. A stale Fact is kept, not removed.
+    /// music. Matching audio clears staleness, but never supersession.
     pub fn mark_stale(&self, track_id: &str, current: &Fingerprint) -> Result<Vec<i64>> {
-        let db = self.db();
-        let mut statement = db.prepare(
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        tx.execute(
+            "UPDATE fact SET stale_at = NULL
+             WHERE id IN (SELECT fact_id FROM fact_track WHERE track_id = ?1)
+             AND stale_at IS NOT NULL AND fingerprint = ?2
+             AND kind IN (SELECT name FROM kind WHERE nature = 'measurement')",
+            params![track_id, current.as_str()],
+        )?;
+        let mut statement = tx.prepare(
             "UPDATE fact SET stale_at = ?1
              WHERE id IN (SELECT id FROM attached_fact WHERE effective_track_id = ?2) AND stale_at IS NULL
                AND fingerprint IS NOT NULL AND fingerprint <> ?3
@@ -491,6 +499,8 @@ impl Sidecar {
             .query_map(params![now(), track_id, current.as_str()], |row| row.get(0))?
             .collect::<rusqlite::Result<Vec<i64>>>()?;
         ids.sort_unstable();
+        drop(statement);
+        tx.commit()?;
         Ok(ids)
     }
 

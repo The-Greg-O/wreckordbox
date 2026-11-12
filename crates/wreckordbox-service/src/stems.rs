@@ -193,20 +193,11 @@ pub(crate) fn parent(library: &OpenLibrary, id: &str) -> Result<ParentAudio, Ser
         ));
     };
     let at = row as usize;
-    let mix_name = library.with_db(|db| {
-        db.connection()
-            .query_row(
-                "SELECT COALESCE(Subtitle, '') FROM djmdContent WHERE ID = ?1",
-                [id],
-                |row| row.get(0),
-            )
-            .map_err(|e| ServiceError::new(service_codes::SERVICE_FAILED, e.to_string()))
-    })?;
     Ok(ParentAudio {
         identity: wreckordbox_sidecar::attachments::IdentifyingFields {
             title: index.title.get(at).to_owned(),
             artist: index.artist_name(row).to_owned(),
-            mix_name,
+            mix_name: index.mix_name(row).to_owned(),
             duration: index.length_sec.get(at).copied().unwrap_or(0),
         },
         index: Arc::clone(&index),
@@ -322,7 +313,7 @@ impl Stems {
 
     fn separate(self: &Arc<Self>, found: ParentAudio) -> Result<Separated, ServiceError> {
         let fingerprint = fingerprint(found.parent(), found.path())?;
-        let (_, marked_stale) = self.observe_audio(&found, Some(&fingerprint))?;
+        let (_, marked_stale) = self.before_record(&found, Some(&fingerprint), None)?;
         let ParentAudio { parent, path, .. } = found;
         let job = {
             // Held while deciding, so two requests for one track cannot

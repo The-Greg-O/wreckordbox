@@ -15,6 +15,9 @@ use std::time::Duration;
 fn ok(s: &Sandbox, args: &[&str]) -> Value {
     let mut words = vec!["--json"];
     words.extend_from_slice(args);
+    if args.starts_with(&["facts", "show"]) && !args.contains(&"--check-audio") {
+        words.push("--check-audio");
+    }
     let result = s.cli(&words);
     assert!(result.status.success(), "{args:?}: {}", result.stderr);
     result.json()
@@ -70,7 +73,7 @@ fn readd(s: &Sandbox, id: &str) -> String {
 }
 
 #[test]
-fn ordinary_reads_report_stale_measurements_but_only_judgements_stand() {
+fn verified_reads_report_stale_measurements_but_only_judgements_stand() {
     let s = Sandbox::new();
     let id = s.import_track("Track.wav", 1);
     ok(&s, &["status"]);
@@ -140,8 +143,7 @@ fn a_fingerprint_reattaches_facts_with_their_provenance_and_survives_restart() {
     assert_eq!(shown["reattached"][0]["from_track"], id);
     assert_eq!(shown["review"], json!([]));
     let event = watcher.next_event(Duration::from_secs(2)).unwrap().unwrap();
-    assert_eq!(event.event, "sidecar_changed");
-    assert_eq!(event.data["kind"], "attachment");
+    assert_eq!(event.event, "facts_reattached");
     assert_eq!(event.data["from_track"], id);
     assert!(watcher
         .next_event(Duration::from_millis(150))
@@ -356,7 +358,7 @@ fn unavailable_audio_does_not_serve_stems_as_current() {
 }
 
 #[test]
-fn attachments_follow_repeated_readds_without_copying_or_reviving_stale_facts() {
+fn attachments_follow_repeated_readds_and_restore_matching_measurements() {
     let s = Sandbox::new();
     let id = s.import_track("Track.wav", 1);
     let mut service = s.serve();
@@ -377,11 +379,11 @@ fn attachments_follow_repeated_readds_without_copying_or_reviving_stale_facts() 
     let shown = ok(&s, &["facts", "show", &last]);
     assert_eq!(shown["facts"][0]["id"], recorded[0]["id"]);
     assert_eq!(shown["facts"][0]["track_id"], last);
-    // Returning to the original audio does not undo a stale mark.
+    // Returning to the original audio makes its Measurement current again.
     change_audio(&s);
     let shown = ok(&s, &["facts", "show", &last]);
-    assert_eq!(shown["facts"].as_array().unwrap().len(), 1);
-    assert_eq!(shown["stale"][0]["id"], recorded[1]["id"]);
+    assert_eq!(shown["facts"].as_array().unwrap().len(), 2);
+    assert_eq!(shown["stale"], json!([]));
 }
 
 #[test]
@@ -404,4 +406,102 @@ fn retagging_the_container_does_not_make_measurements_stale() {
     let shown = ok(&s, &["facts", "show", &id]);
     assert_eq!(shown["facts"], json!([recorded[1], recorded[0]]));
     assert_eq!(shown["stale"], json!([]));
+}
+
+#[test]
+fn decision_first_preserves_reattachment() {
+    let s = Sandbox::new();
+    let id = s.import_track("Track.wav", 1);
+    let mut service = s.serve();
+    let old = record(&s, &id);
+    service.kill().unwrap();
+    service.wait().unwrap();
+    let next = readd(&s, &id);
+    let decision = ok(
+        &s,
+        &[
+            "decisions",
+            "create",
+            "--type",
+            "choice",
+            "--question",
+            "Genre?",
+            "--context",
+            "{}",
+            "--candidate",
+            "House",
+            "--candidate",
+            "Techno",
+            "--track",
+            &next,
+        ],
+    );
+    ok(
+        &s,
+        &[
+            "decisions",
+            "answer",
+            &decision["id"].to_string(),
+            "House",
+            "--decider",
+            "agent:test",
+            "--probability",
+            "1",
+            "--fact",
+            "genre",
+        ],
+    );
+    let shown = ok(&s, &["facts", "show", &next, "--check-audio"]);
+    assert!(
+        shown["facts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["id"] == old[1]["id"]),
+        "{shown}"
+    );
+}
+
+#[test]
+fn conversion_first_preserves_reattachment() {
+    let s = Sandbox::new();
+    let id = s.import_track("Track.wav", 1);
+    let mut service = s.serve();
+    let old = record(&s, &id);
+    service.kill().unwrap();
+    service.wait().unwrap();
+    let next = readd(&s, &id);
+    s.edit(|w| {
+        w.set_my_tags(&next, &[rbl_db::fixture::MY_TAG_PEAK.to_string()])
+            .unwrap();
+    });
+    ok(&s, &["schema", "convert"]);
+    let shown = ok(&s, &["facts", "show", &next, "--check-audio"]);
+    assert!(
+        shown["facts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["id"] == old[1]["id"]),
+        "{shown}"
+    );
+}
+
+#[test]
+fn ordinary_fact_reads_do_not_observe_audio_or_write_sidecar() {
+    let s = Sandbox::new();
+    let id = s.import_track("Track.wav", 1);
+    let old = record(&s, &id);
+    let db = rusqlite::Connection::open(s.sidecar_dir().join("sidecar.db")).unwrap();
+    let version = || {
+        db.query_row("PRAGMA data_version", [], |r| r.get::<_, i64>(0))
+            .unwrap()
+    };
+    let before = version();
+    change_audio(&s);
+    let shown = s.cli(&["--json", "facts", "show", &id]).json();
+    assert_eq!(version(), before, "a read must not write");
+    assert_eq!(shown["unverified"][0]["id"], old[1]["id"]);
+    let checked = ok(&s, &["facts", "show", &id, "--check-audio"]);
+    assert_eq!(checked["stale"][0]["id"], old[1]["id"]);
 }

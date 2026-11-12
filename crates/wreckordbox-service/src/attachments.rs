@@ -1,7 +1,19 @@
 //! One audio observation path for Fact and Stems clients.
 
+use serde::Serialize;
 use serde_json::json;
-use wreckordbox_sidecar::{attachments::Attachments, Fingerprint};
+
+/// Attachment notifications are distinct from Fact-kind changes.
+#[derive(Serialize)]
+struct AttachmentChanged<'a> {
+    #[serde(flatten)]
+    attachment: &'a Attachment,
+    run: Option<RunId>,
+}
+use wreckordbox_sidecar::{
+    attachments::{Attachment, Attachments},
+    Fingerprint, RunId,
+};
 
 use crate::{
     stems::{events, ParentAudio, SidecarChanged, Stems},
@@ -14,19 +26,34 @@ impl Stems {
         found: &ParentAudio,
         fingerprint: Option<&Fingerprint>,
     ) -> Result<(Attachments, Vec<i64>), ServiceError> {
+        self.before_record(found, fingerprint, None)
+    }
+
+    /// Shared pre-write observation for EVERY Fact producer, including
+    /// producers which own the transaction that records the Fact.
+    pub(crate) fn before_record(
+        &self,
+        found: &ParentAudio,
+        fingerprint: Option<&Fingerprint>,
+        run: Option<RunId>,
+    ) -> Result<(Attachments, Vec<i64>), ServiceError> {
         let sidecar = self.sidecar()?;
         let track = &found.parent().id;
         let attachments = sidecar
-            .observe_audio(track, fingerprint, &found.identity, |id| {
-                found.index.row_of(id).is_some()
-            })
+            .observe_audio_in_run(
+                track,
+                fingerprint,
+                &found.identity,
+                |id| found.index.row_of(id).is_some(),
+                run,
+            )
             .map_err(|e| super::stems::sidecar_error(&e))?;
         for attached in &attachments.reattached {
             self.publish(
-                events::SIDECAR_CHANGED,
-                json!({
-                    "track_id": track, "kind": "attachment", "fact_id": null, "stale": [],
-                    "from_track": attached.from_track, "fact_ids": attached.fact_ids,
+                "facts_reattached",
+                json!(AttachmentChanged {
+                    attachment: attached,
+                    run
                 }),
             );
         }

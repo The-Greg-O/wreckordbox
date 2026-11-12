@@ -4,7 +4,7 @@
 use rusqlite::{params, Transaction};
 use serde::{Deserialize, Serialize};
 
-use crate::{store::now, Fingerprint, Result, Sidecar};
+use crate::{store::now, Fingerprint, Result, RunId, Sidecar};
 
 pub(crate) const SCHEMA: &str = "
 CREATE TABLE track_identity (
@@ -16,6 +16,7 @@ CREATE TABLE track_identity (
     duration INTEGER NOT NULL
 ) STRICT;
 CREATE INDEX identity_audio ON track_identity(fingerprint);
+CREATE INDEX identity_fields ON track_identity(title, artist, mix_name, duration);
 INSERT INTO track_identity
     SELECT f.track_id, CASE WHEN NOT EXISTS (
         SELECT 1 FROM fact old WHERE old.track_id = f.track_id
@@ -30,19 +31,26 @@ CREATE TABLE attachment_change (
     from_track TEXT NOT NULL,
     to_track TEXT NOT NULL,
     fingerprint TEXT NOT NULL,
-    attached_at INTEGER NOT NULL
+    attached_at INTEGER NOT NULL,
+    run_id INTEGER REFERENCES run(id)
 ) STRICT;
 CREATE TABLE fact_attachment (
     fact_id INTEGER NOT NULL REFERENCES fact(id),
     change_id INTEGER NOT NULL REFERENCES attachment_change(id),
     PRIMARY KEY(fact_id, change_id)
 ) STRICT;
+CREATE TABLE fact_track (
+    fact_id INTEGER PRIMARY KEY REFERENCES fact(id),
+    track_id TEXT NOT NULL
+) STRICT;
+CREATE INDEX fact_track_by_track ON fact_track(track_id);
+INSERT INTO fact_track SELECT id, track_id FROM fact;
+CREATE TRIGGER fact_initial_track AFTER INSERT ON fact BEGIN
+    INSERT INTO fact_track VALUES (NEW.id, NEW.track_id);
+END;
 CREATE VIEW attached_fact AS
-    SELECT fact.*, COALESCE((
-        SELECT c.to_track FROM fact_attachment a
-        JOIN attachment_change c ON c.id = a.change_id
-        WHERE a.fact_id = fact.id ORDER BY c.id DESC LIMIT 1
-    ), fact.track_id) AS effective_track_id FROM fact;
+    SELECT fact.*, fact_track.track_id AS effective_track_id
+    FROM fact_track JOIN fact ON fact.id = fact_track.fact_id;
 CREATE TABLE attachment_review (
     track_id TEXT NOT NULL,
     from_track TEXT NOT NULL,
@@ -94,7 +102,7 @@ pub struct Attachment {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Review {
     pub from_track: String,
-    /// `identifying_fields` or `ambiguous_fingerprint`.
+    /// `identifying_fields`, `ambiguous_fingerprint` or `target_has_facts`.
     pub reason: String,
 }
 
@@ -123,6 +131,18 @@ impl Sidecar {
         fields: &IdentifyingFields,
         present: impl Fn(&str) -> bool,
     ) -> Result<Attachments> {
+        self.observe_audio_in_run(track, fingerprint, fields, present, None)
+    }
+
+    /// Observe before a producer writes, attributing attachments to its Run.
+    pub fn observe_audio_in_run(
+        &self,
+        track: &str,
+        fingerprint: Option<&Fingerprint>,
+        fields: &IdentifyingFields,
+        present: impl Fn(&str) -> bool,
+        run: Option<RunId>,
+    ) -> Result<Attachments> {
         let mut db = self.db();
         let tx = db.transaction()?;
         let occupied: bool = tx.query_row(
@@ -131,8 +151,8 @@ impl Sidecar {
             |row| row.get(0),
         )?;
         let mut result = Attachments::default();
-        if !occupied {
-            let candidates = identities(&tx)?;
+        {
+            let candidates = identities(&tx, fingerprint, fields)?;
             let removed: Vec<_> = candidates
                 .iter()
                 .filter(|candidate| candidate.track != track && !present(&candidate.track))
@@ -145,10 +165,11 @@ impl Sidecar {
                         && candidate.fingerprint.as_deref() == fingerprint.map(Fingerprint::as_str)
                 })
                 .collect();
-            if let [matched] = exact.as_slice() {
+            if exact.len() == 1 && !occupied {
+                let matched = exact[0];
                 result
                     .reattached
-                    .push(attach(&tx, &matched.track, track, fingerprint)?);
+                    .push(attach(&tx, &matched.track, track, fingerprint, run)?);
             } else if exact.is_empty() {
                 result.review = removed
                     .iter()
@@ -163,7 +184,12 @@ impl Sidecar {
                     .iter()
                     .map(|candidate| Review {
                         from_track: candidate.track.clone(),
-                        reason: "ambiguous_fingerprint".to_owned(),
+                        reason: if occupied {
+                            "target_has_facts"
+                        } else {
+                            "ambiguous_fingerprint"
+                        }
+                        .to_owned(),
                     })
                     .collect();
             }
@@ -184,35 +210,66 @@ impl Sidecar {
             params![
                 track,
                 fingerprint.map(Fingerprint::as_str),
-                fields.title,
-                fields.artist,
-                fields.mix_name,
+                normalize(&fields.title),
+                normalize(&fields.artist),
+                normalize(&fields.mix_name),
                 fields.duration
             ],
         )?;
         tx.commit()?;
         Ok(result)
     }
+    /// Stored candidates for this track. No observation or mutation.
+    pub fn attachment_reviews(&self, track: &str) -> Result<Vec<Review>> {
+        let db = self.db();
+        let mut query = db.prepare("SELECT from_track, reason FROM attachment_review WHERE track_id = ?1 ORDER BY from_track")?;
+        let reviews = query
+            .query_map([track], |row| {
+                Ok(Review {
+                    from_track: row.get(0)?,
+                    reason: row.get(1)?,
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(reviews)
+    }
 }
 
-fn identities(tx: &Transaction<'_>) -> Result<Vec<Identity>> {
+fn identities(
+    tx: &Transaction<'_>,
+    fingerprint: Option<&Fingerprint>,
+    fields: &IdentifyingFields,
+) -> Result<Vec<Identity>> {
     let mut statement = tx.prepare(
         "SELECT track_id, fingerprint, title, artist, mix_name, duration FROM track_identity
-         WHERE track_id IN (SELECT effective_track_id FROM attached_fact) ORDER BY track_id",
+         WHERE (fingerprint = ?1 OR
+             (?2 <> '' AND ?3 <> '' AND duration > 0 AND title = ?2 AND artist = ?3 AND mix_name = ?4 AND duration BETWEEN ?5 AND ?6))
+         AND EXISTS (SELECT 1 FROM fact_track WHERE fact_track.track_id = track_identity.track_id)
+         ORDER BY track_id",
     )?;
     let identities = statement
-        .query_map([], |row| {
-            Ok(Identity {
-                track: row.get(0)?,
-                fingerprint: row.get(1)?,
-                fields: IdentifyingFields {
-                    title: row.get(2)?,
-                    artist: row.get(3)?,
-                    mix_name: row.get(4)?,
-                    duration: row.get(5)?,
-                },
-            })
-        })?
+        .query_map(
+            params![
+                fingerprint.map(Fingerprint::as_str),
+                normalize(&fields.title),
+                normalize(&fields.artist),
+                normalize(&fields.mix_name),
+                fields.duration.saturating_sub(2),
+                fields.duration.saturating_add(2)
+            ],
+            |row| {
+                Ok(Identity {
+                    track: row.get(0)?,
+                    fingerprint: row.get(1)?,
+                    fields: IdentifyingFields {
+                        title: row.get(2)?,
+                        artist: row.get(3)?,
+                        mix_name: row.get(4)?,
+                        duration: row.get(5)?,
+                    },
+                })
+            },
+        )?
         .collect::<rusqlite::Result<_>>()?;
     Ok(identities)
 }
@@ -222,14 +279,15 @@ fn attach(
     from: &str,
     to: &str,
     fingerprint: Option<&Fingerprint>,
+    run: Option<RunId>,
 ) -> Result<Attachment> {
     let mut statement =
         tx.prepare("SELECT id FROM attached_fact WHERE effective_track_id = ?1 ORDER BY id")?;
     let fact_ids = statement
         .query_map([from], |row| row.get(0))?
         .collect::<rusqlite::Result<Vec<i64>>>()?;
-    tx.execute("INSERT INTO attachment_change (from_track, to_track, fingerprint, attached_at) VALUES (?1, ?2, ?3, ?4)",
-        params![from, to, fingerprint.map(Fingerprint::as_str), now()])?;
+    tx.execute("INSERT INTO attachment_change (from_track, to_track, fingerprint, attached_at, run_id) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![from, to, fingerprint.map(Fingerprint::as_str), now(), run.map(|run| run.0)])?;
     let change = tx.last_insert_rowid();
     for id in &fact_ids {
         tx.execute(
@@ -237,6 +295,10 @@ fn attach(
             params![id, change],
         )?;
     }
+    tx.execute(
+        "UPDATE fact_track SET track_id = ?2 WHERE track_id = ?1",
+        params![from, to],
+    )?;
     Ok(Attachment {
         from_track: from.to_owned(),
         to_track: to.to_owned(),

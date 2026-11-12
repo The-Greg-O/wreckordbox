@@ -456,9 +456,12 @@ impl Shared {
             schema if crate::schema::answers(schema) => {
                 // Reads the Library's MyTags and writes only beside the
                 // Sidecar: the Library does not change.
-                crate::schema::answer(&self.stems, request, &|| {
-                    self.with_library(crate::schema::my_tags)?
-                })
+                crate::schema::answer(
+                    &self.stems,
+                    request,
+                    &|| self.with_library(crate::schema::my_tags)?,
+                    &|id| self.with_library(|library| crate::stems::parent(library, id))?,
+                )
             }
             intake if crate::intake::answers(intake) => {
                 let (result, changed) = self.with_library(|library| {
