@@ -1091,12 +1091,6 @@ export interface Backend {
    * flags clear.
    */
   deviceSettings(path: string): Promise<DeviceSettings>;
-  /**
-   * Gives a stick that holds an export but no DEVSETTING.DAT the DJ System
-   * defaults, as rekordbox does when its device panel opens; a stick that
-   * has one keeps it. Resolves to what the stick now holds.
-   */
-  writeDeviceDefaults(path: string, defaults: StickDefaults): Promise<DeviceSettings>;
   /** Writes them back and resolves to what the stick now holds. */
   saveDeviceSettings(path: string, settings: DeviceSettings): Promise<DeviceSettings>;
   /**

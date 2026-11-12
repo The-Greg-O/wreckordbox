@@ -985,6 +985,10 @@ export function createMockBackend(options: MockOptions = {}): Backend {
   // Sticks whose last write did not finish (wbx-45.5): every read rejects
   // with `unfinishedWrite` until `settleStick`, the DJ's explicit action.
   const unfinishedWrites = new Set<string>();
+  // `deviceLibraries` reads held unanswered until released, for the old
+  // tree's stale-answer test; what the Stick held when asked is answered.
+  const holdingLibraries = new Set<string>();
+  const heldLibraries = new Map<string, Array<() => void>>();
   const settles = new Map<string, number>();
   const unfinished = (path: string): Promise<never> | null =>
     unfinishedWrites.has(path)
@@ -1001,6 +1005,13 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       __stickSettles: (path: string) => number;
     };
     hooks.__interruptStickWrite = (path) => { unfinishedWrites.add(path); };
+    const held = hooks as unknown as Record<string, (path: string) => number | void>;
+    held.__holdDeviceLibraries = (path) => { holdingLibraries.add(path); };
+    held.__releaseDeviceLibraries = (path) => {
+      for (const release of heldLibraries.get(path) ?? []) release();
+      heldLibraries.delete(path);
+    };
+    held.__deviceLibrariesHeld = (path) => heldLibraries.get(path)?.length ?? 0;
     // Set before the page loads, so the first read already finds them.
     for (const path of (window as unknown as { __initialUnfinishedWrites?: string[] }).__initialUnfinishedWrites ?? []) {
       unfinishedWrites.add(path);
@@ -1054,8 +1065,29 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     sorts: s.sorts.map((slot) => ({ ...slot })),
     colors: s.colors.map((c) => ({ ...c })),
   });
+  // Writes of a Stick's settings, per Stick: opening its panel makes none
+  // (wbx-45.5). A Stick listed in `__initialNoDevSetting` before the page
+  // loads holds an export but no DEVSETTING.DAT.
+  const settingsWrites = new Map<string, number>();
+  const noDevSetting = new Set<string>(typeof window === "undefined" ? [] : (window as unknown as { __initialNoDevSetting?: string[] }).__initialNoDevSetting ?? []);
+  if (typeof window !== "undefined") {
+    (window as unknown as { __stickSettingsWrites: (path: string) => number }).__stickSettingsWrites = (path) => settingsWrites.get(path) ?? 0;
+  }
   const settingsOf = (path: string): DeviceSettings => {
     const known = deviceSettings.get(path);
+    if (known && noDevSetting.delete(path)) {
+      const rekordboxDefaults = referenceDeviceSettings("", false);
+      const without: DeviceSettings = {
+        ...known,
+        hasDevSetting: false,
+        waveformColor: rekordboxDefaults.waveformColor,
+        waveformPosition: rekordboxDefaults.waveformPosition,
+        overviewWaveform: rekordboxDefaults.overviewWaveform,
+        keyDisplay: rekordboxDefaults.keyDisplay,
+      };
+      deviceSettings.set(path, without);
+      return without;
+    }
     if (known) return known;
     const device = devices.find((d) => d.path === path);
     const fresh = referenceDeviceSettings(device?.name ?? "", device?.export !== null);
@@ -3648,6 +3680,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     // and devices, the way a written file would.
     deviceSettings: (path) => unfinished(path) ?? wait(copySettings(settingsOf(path))),
     ensureDeviceLibrary: (path, defaults) => {
+      settingsWrites.set(path, (settingsWrites.get(path) ?? 0) + 1);
       const current = settingsOf(path);
       if (current.hasDeviceLibrary) return wait(copySettings(current));
       // The empty database a blank stick gets: the reference rows, the
@@ -3674,8 +3707,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     },
     // The mock's sticks carry their settings from the start, so there is
     // nothing to give; what the stick holds comes back.
-    writeDeviceDefaults: (path) => unfinished(path) ?? wait(copySettings(settingsOf(path))),
     saveDeviceSettings: (path, settings) => {
+      settingsWrites.set(path, (settingsWrites.get(path) ?? 0) + 1);
       const current = settingsOf(path);
       // A stick without a library keeps its reference rows: nothing to
       // write them into, as the real backend also refuses.
@@ -3752,7 +3785,15 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       return () => progressListeners.delete(listener);
     },
     // The fake disk above. Copies, as with the tree: the map is the mock's.
-    deviceLibraries: (path) => unfinished(path) ?? wait(stickLibraries.libraries(path)),
+    deviceLibraries: async (path) => {
+      const refused = unfinished(path);
+      if (refused) return refused;
+      const answer = stickLibraries.libraries(path);
+      if (holdingLibraries.delete(path)) {
+        await new Promise<void>((resolve) => { heldLibraries.set(path, [...(heldLibraries.get(path) ?? []), resolve]); });
+      }
+      return wait(answer);
+    },
     stickOutline,
     settleStick: (path) => {
       settles.set(path, (settles.get(path) ?? 0) + 1);

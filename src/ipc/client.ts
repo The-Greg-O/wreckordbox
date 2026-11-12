@@ -617,7 +617,6 @@ async function realBackend(): Promise<Backend> {
     smartRule: (playlist) => invoke<SmartRule>("smart_rule", { playlist }),
     onSyncProgress: (listener) => subscribe<SyncProgress>("sync:progress", listener),
     deviceSettings: (path) => invoke<DeviceSettings>("device_settings", { path }),
-    writeDeviceDefaults: (path, defaults) => invoke<DeviceSettings>("write_device_defaults", { path, defaults }),
     saveDeviceSettings: (path, settings) =>
       invoke<DeviceSettings>("save_device_settings", { path, settings }),
     ensureDeviceLibrary: (path, defaults) =>

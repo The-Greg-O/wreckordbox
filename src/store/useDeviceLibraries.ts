@@ -49,9 +49,19 @@ export function useDeviceLibraries(devices: readonly Device[]): DeviceLibraries 
   useEffect(() => {
     known.current = loaded;
   }, [loaded]);
+  // Every read carries a token, kept per mount point with the volume it was
+  // read for. Only the latest read of a Stick still mounted is kept: an
+  // answer for a Stick pulled out while it was read, or for one since
+  // replaced at the same mount point, is dropped (as `useStickOutlines`).
+  const reads = useRef(new Map<string, { token: number; volume: string | null }>());
+  const tokens = useRef(0);
+  const volumes = useRef(new Map<string, string | null>());
 
   const read = useCallback(async (path: string) => {
     pending.current.add(path);
+    tokens.current += 1;
+    const token = tokens.current;
+    reads.current.set(path, { token, volume: volumes.current.get(path) ?? null });
     const backend = await getBackend();
     let found: readonly DeviceLibrary[] = [];
     let interrupted = false;
@@ -62,6 +72,7 @@ export function useDeviceLibraries(devices: readonly Device[]): DeviceLibraries 
       // shows a folder it may not open. An unfinished write is said.
       interrupted = isUnfinishedWrite(error);
     }
+    if (reads.current.get(path)?.token !== token) return;
     pending.current.delete(path);
     setUnfinished((current) => {
       if (current.has(path) === interrupted) return current;
@@ -84,14 +95,33 @@ export function useDeviceLibraries(devices: readonly Device[]): DeviceLibraries 
 
   // A stick that left is forgotten; one still here is read again, since the
   // list changes when an export has just rewritten it.
+  // Another volume at the same mount point is another stick: it is
+  // forgotten too, and its reads in flight with it.
   useEffect(() => {
-    const present = new Set(devices.map((d) => d.path));
+    const now = new Map(devices.map((d) => [d.path, d.volumeId ?? null] as const));
+    const forget = new Set<string>();
+    for (const [path, volume] of volumes.current) {
+      if (!now.has(path) || now.get(path) !== volume) forget.add(path);
+    }
+    for (const path of reads.current.keys()) {
+      if (!now.has(path)) forget.add(path);
+    }
+    volumes.current = now;
+    for (const path of forget) {
+      reads.current.delete(path);
+      pending.current.delete(path);
+    }
+    const kept = (path: string) => now.has(path) && !forget.has(path);
     setLoaded((current) => {
-      const kept = new Map([...current].filter(([path]) => present.has(path)));
-      return kept.size === current.size ? current : kept;
+      const next = new Map([...current].filter(([path]) => kept(path)));
+      return next.size === current.size ? current : next;
+    });
+    setUnfinished((current) => {
+      const next = new Set([...current].filter(kept));
+      return next.size === current.size ? current : next;
     });
     for (const path of known.current.keys()) {
-      if (present.has(path) && !pending.current.has(path)) void read(path);
+      if (kept(path) && !pending.current.has(path)) void read(path);
     }
   }, [devices, read]);
 

@@ -83,6 +83,67 @@ test.describe("the old layout", () => {
   });
 });
 
+test("an answer for a Stick pulled out while it was read is dropped, so the Stick put back in its place shows its own state", async ({ page }) => {
+  await page.goto("/?writable=1");
+  await expect(page.getByTestId("browser-title")).toContainText("Tracks)");
+  await page.getByRole("tablist", { name: "Library sources" }).getByRole("tab", { name: "Devices" }).click();
+  await page.getByRole("button", { name: "Expand TEST" }).dispatchEvent("mousedown");
+  await expect(page.locator('[role="treeitem"][data-kind="deviceLibrary"]')).toHaveCount(2);
+  const hooks = (name: string, path: string) => page.evaluate(([n, p]) => (window as unknown as Record<string, (p: string) => void>)[n as string]!(p as string), [name, path]);
+  const refresh = () => page.evaluate(() => window.dispatchEvent(new Event("focus")));
+
+  // The next read of TEST is held; a refresh starts it.
+  await hooks("__holdDeviceLibraries", TEST);
+  await refresh();
+  await expect.poll(() => page.evaluate((p) => (window as unknown as { __deviceLibrariesHeld: (p: string) => number }).__deviceLibrariesHeld(p), TEST)).toBe(1);
+  // TEST is pulled out, and a Stick with an unfinished write goes in at the same place.
+  await hooks("__unmountDevice", TEST);
+  await refresh();
+  await expect(page.getByRole("treeitem", { name: /TEST/ })).toHaveCount(0);
+  await hooks("__interruptStickWrite", TEST);
+  await hooks("__remountDevice", TEST);
+  await refresh();
+  await expect(page.getByRole("treeitem", { name: /TEST/ })).toHaveCount(1);
+
+  // The old Stick's answer arrives: it must never be shown for the new one,
+  // not even for a moment.
+  await page.evaluate(() => {
+    const seen = window as unknown as { __sawStaleLibraries: boolean };
+    seen.__sawStaleLibraries = false;
+    const look = () => {
+      if (document.querySelector('[role="treeitem"][data-kind="deviceLibrary"]')) seen.__sawStaleLibraries = true;
+    };
+    new MutationObserver(look).observe(document.body, { childList: true, subtree: true });
+  });
+  await hooks("__releaseDeviceLibraries", TEST);
+  await page.waitForTimeout(1000);
+  expect(await page.evaluate(() => (window as unknown as { __sawStaleLibraries: boolean }).__sawStaleLibraries)).toBe(false);
+  // Opened again, the Stick in its place shows its own state.
+  await page.getByRole("button", { name: "Collapse TEST" }).dispatchEvent("mousedown");
+  await page.getByRole("button", { name: "Expand TEST" }).dispatchEvent("mousedown");
+  await expect(page.getByRole("treeitem", { name: NOTICE })).toBeVisible();
+  expect(await page.evaluate(() => (window as unknown as { __sawStaleLibraries: boolean }).__sawStaleLibraries)).toBe(false);
+  expect(await settles(page)).toBe(0);
+});
+
+test("opening the panel of a Stick with an export but no DEVSETTING.DAT shows the DJ System defaults and writes nothing", async ({ page }) => {
+  await page.addInitScript((path) => {
+    (window as unknown as { __initialNoDevSetting: string[] }).__initialNoDevSetting = [path];
+    window.localStorage.setItem("rbl.preferences", JSON.stringify({ djSystem: { waveformColor: "rgb" } }));
+  }, TEST);
+  await page.goto("/");
+  await expect(page.getByTestId("browser-title")).toContainText("Tracks)");
+  await page.getByRole("tablist", { name: "Library sources" }).getByRole("tab", { name: "Devices" }).click();
+  await page.getByRole("treeitem", { name: /TEST/ }).first().click();
+  const panel = page.getByRole("region", { name: "Device TEST" });
+  await expect(panel.getByRole("radio", { name: "RGB" })).toBeChecked();
+  const writes = () => page.evaluate((path) => (window as unknown as { __stickSettingsWrites: (p: string) => number }).__stickSettingsWrites(path), TEST);
+  expect(await writes()).toBe(0);
+  // Choosing a setting is the DJ's write: then the Stick gets its file.
+  await panel.getByRole("radio", { name: "BLUE", exact: true }).check();
+  await expect.poll(writes).toBe(1);
+});
+
 test.describe("the view shell", () => {
   const tree = (page: Page) => page.getByTestId("shell-tree").getByRole("tree", { name: "Tree" });
   const stick = (page: Page) => tree(page).getByRole("group", { name: "Stick TEST", exact: true });

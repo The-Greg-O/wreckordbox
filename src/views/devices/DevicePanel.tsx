@@ -6,8 +6,8 @@
  * 7.2.11, the TEST stick). The strip and every measurement in the tabs come
  * from them; My Settings has no capture and says so.
  *
- * The settings are the stick's own files, read when the panel opens and
- * written on every change — there is no Apply button in the captures. Each
+ * The settings are the stick's own files, read when the panel opens (never
+ * written then) and written on every change — there is no Apply button in the captures. Each
  * write resolves to what the stick now holds, which is what is shown, so a
  * write that did not take cannot leave the panel claiming it did.
  *
@@ -79,9 +79,10 @@ export function DevicePanel({
   // Read when the device changes, and again after a sync: an export writes a
   // library, and with it the rows the Category, Sort and Color tabs edit.
   const exportStamp = device.export?.written ?? "";
-  // Opening the panel on a stick that holds an export but no DEVSETTING.DAT
-  // gives it the DJ System defaults, which is when rekordbox writes one too;
-  // an export on its own leaves the stick without.
+  // A stick that holds an export but no DEVSETTING.DAT is shown with the DJ
+  // System defaults. Opening the panel writes nothing to the stick
+  // (wbx-45.5): the file is written with the first change the DJ makes here,
+  // or by an export, both writes the DJ asked for.
   const stickDefaults = usePreferences().djSystem;
   const hasExport = device.export !== null;
   useEffect(() => {
@@ -91,9 +92,14 @@ export function DevicePanel({
     void getBackend()
       .then(async (backend) => {
         const read = await backend.deviceSettings(device.path);
-        // A stick with an export but no DEVSETTING.DAT gets the defaults.
         if (read.hasDevSetting || !hasExport) return read;
-        return backend.writeDeviceDefaults(device.path, stickDefaults);
+        return {
+          ...read,
+          waveformColor: stickDefaults.waveformColor,
+          waveformPosition: stickDefaults.waveformPosition,
+          overviewWaveform: stickDefaults.overviewWaveform,
+          keyDisplay: stickDefaults.keyDisplay,
+        };
       })
       .then((read) => {
         if (!cancelled) setSettings(read);
