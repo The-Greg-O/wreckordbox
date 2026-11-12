@@ -16,6 +16,9 @@ const tabs = (page: Page) => page.getByRole("tablist", { name: "Views" });
 const tab = (page: Page, name: string) => tabs(page).getByRole("tab", { name });
 const working = (page: Page) => page.getByRole("tabpanel");
 const titles = (page: Page) => page.locator('[role="gridcell"][data-col="title"]');
+/** A playlist in the tree's Playlists group (a Stick can hold one of the same name). */
+const shellPlaylist = (page: Page, name: string) =>
+  page.getByTestId("shell-tree").getByRole("group", { name: "Playlists" }).getByRole("treeitem", { name });
 
 async function open(page: Page) {
   await page.goto("/");
@@ -108,7 +111,7 @@ test("switching views does not stop playback, change the loaded track or lose th
   await open(page);
 
   // A playlist selected in the tree, one of its tracks loaded and playing.
-  const playlist = page.getByRole("treeitem", { name: "Melodic Vox" });
+  const playlist = shellPlaylist(page, "Melodic Vox");
   await playlist.click();
   await expect(page.getByTestId("browser-title")).toContainText("Melodic Vox");
   const loaded = await titles(page).nth(1).innerText();
@@ -228,17 +231,17 @@ test("what Analyze targets is what the list shows as selected, before and after 
 });
 
 test("a view key pressed in a confirmation prompt leaves the view alone", async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem("rbl.preferences", JSON.stringify({
-    advanced: { protectLibrary: false, deviceImportMissing: "ask" },
-    view: { viewShell: true },
-  })));
+  await enableViewShell(page);
   await page.goto("/?writable=1");
   await expect(page.getByTestId("browser-title")).toContainText("Tracks)");
-  await page.getByRole("tablist", { name: "Library sources" }).getByRole("tab", { name: "Devices" }).click();
-  await page.getByRole("button", { name: "Expand TEST" }).dispatchEvent("mousedown");
-  await page.locator('[role="treeitem"][data-kind="devicePlaylist"]').filter({ hasText: /^\s*NP3-TEST-MP3/ }).nth(1).click({ button: "right" });
-  await page.getByRole("menu", { name: "Playlist" }).getByRole("menuitem", { name: "Import Playlist" }).click();
-  const question = page.getByRole("alertdialog", { name: "Import Playlist from Device" });
+  // A track added to the playlist that already holds it: the window asks
+  // whether to add it again.
+  await shellPlaylist(page, "Melodic Vox").click();
+  await expect(page.getByTestId("browser-title")).toContainText("Melodic Vox");
+  await titles(page).first().click({ button: "right" });
+  await page.getByRole("menu", { name: "Track" }).getByRole("menuitem", { name: "Add To Playlist" }).hover();
+  await page.getByRole("menuitem", { name: "Melodic Vox" }).first().click();
+  const question = page.getByRole("alertdialog", { name: "Duplicate tracks" });
   await expect(question).toBeVisible();
 
   // The prompt has the keyboard: one of its buttons is focused.
@@ -284,7 +287,7 @@ test("the layout follows the window's own width: the tree gives way at 800 and b
   expect((await box("shell-working")).x).toBeGreaterThan((await box("shell-tree")).x);
 
   // A playlist chosen in the tree, to see that it survives the tree giving way.
-  const playlist = page.getByRole("treeitem", { name: "Melodic Vox" });
+  const playlist = shellPlaylist(page, "Melodic Vox");
   await playlist.click();
   await expect(page.getByTestId("browser-title")).toContainText("Melodic Vox");
 
