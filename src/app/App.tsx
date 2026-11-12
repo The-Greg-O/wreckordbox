@@ -69,6 +69,8 @@ import { DEFAULT_SHELL_VIEW, type ShellView } from "@/lib/shellViews";
 import { useLibraryColumns } from "@/store/useLibraryColumns";
 import { SHELL_PLAYER_LAYOUT, ViewShell } from "@/views/shell/ViewShell";
 import { useShellTree } from "@/views/shell/useShellTree";
+import { IntakeView } from "@/views/shell/IntakeView";
+import { useIntakeCounts } from "@/views/shell/useIntakeCounts";
 import { useStickOutlines } from "@/store/useStickOutlines";
 import { FIELD_LABEL } from "@/views/info/fieldLabel";
 import { SubBrowser } from "@/views/subbrowser/SubBrowser";
@@ -568,6 +570,7 @@ function AppBody() {
    * the layout menu last chose; the choice itself is kept for the old layout.
    */
   const shellOn = prefs.preferences.view.viewShell;
+  const intakeCounts = useIntakeCounts(shellOn);
   // The shell's tree reads each Stick's playlists without writing to it
   // (ticket #52); only drawn, so only read, with the shell on.
   const shellSticks = useStickOutlines(shellOn ? devices : NO_DEVICES, deviceLibraries.revision);
@@ -3345,6 +3348,7 @@ function AppBody() {
             onExportLoop={exportLoop}
             simple={!isFullDeck(layout)}
             compact={shellOn}
+            large={shellOn && shellView === "intake"}
             dragging={draggedTracks !== null}
             onDropTrack={loadDroppedInto.a}
             onLoadSelected={loadSelectedInto.a}
@@ -3426,7 +3430,7 @@ function AppBody() {
   };
   const shellTree = useShellTree({
     library: tree, sticks: shellSticks, selectedNode, onSelectNode: setSelectedNode,
-    view: shellView, onViewChange: changeShellView,
+    view: shellView, onViewChange: changeShellView, queueCounts: intakeCounts,
   });
   const library = (
         selectedDevice ? (
@@ -3690,6 +3694,10 @@ function AppBody() {
           player={deckA}
           tree={shellTree.tree}
           intakeQueue={shellTree.intakeQueue}
+          tabCounts={{ intake: intakeCounts?.intake ?? null }}
+          intake={(queue) => (
+            <IntakeView queue={queue} onQueue={shellTree.showQueue} counts={intakeCounts} loadedTrackId={playerTrack?.id ?? null} onLoad={deckLoaders.a} />
+          )}
           stick={selectedDevice ? library : undefined}
           library={library}
           status={<>{linkStrip}{statusBar}</>}

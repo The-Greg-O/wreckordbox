@@ -1080,6 +1080,14 @@ export interface Backend {
    * first, and reports one as `pending` with no playlists instead.
    */
   stickOutline(path: string): Promise<StickOutline>;
+  /**
+   * A page of the Intake or Problems queue (wbx-62), from the Library
+   * service the window hosts: each track with what it still needs, and the
+   * row a deck loads for it.
+   */
+  intakeQueue(queue: import("@/lib/intakeQueue").IntakeQueueName, offset: number, limit: number): Promise<import("@/lib/intakeQueue").IntakeQueuePage>;
+  /** How many tracks wait in Intake and in Problems (the Intake tab). */
+  intakeCounts(): Promise<import("@/lib/intakeQueue").IntakeCounts>;
   /** Maps collection track ids to rows already in one of a stick's libraries. */
   devicePlaylistCollectionTracks(path: string, format: DeviceFormat, tracks: string[]): Promise<(string | null)[]>;
   /**

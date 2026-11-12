@@ -102,6 +102,7 @@ import { keyMap } from "@/lib/keyPresets";
 import { WaveformDetail } from "./WaveformDetail";
 import { SimplePlayer } from "./SimplePlayer";
 import { CompactPlayer } from "./CompactPlayer";
+import { DetailPhrases, LARGE_PHRASE_H, LargePlayer, largePlayerStyles } from "./LargePlayer";
 import { compactJumpBeats, compactJumpSizeId, type CompactJumpBeats } from "@/lib/compactPlayer";
 import { JumpMenu } from "./JumpMenu";
 import { VocalStrip } from "./VocalStrip";
@@ -143,6 +144,13 @@ export interface PlayerProps {
    * buttons and the keys alike, rather than the deck's own menu.
    */
   compact?: boolean;
+  /**
+   * The Intake view's large player (wbx-62): the compact strip with the
+   * phrases and the detail waveform, beat grid and cue markers under it,
+   * drawn by `LargePlayer`. Only with `compact`; the same deck, so playback
+   * and the loaded track survive the view switch that turns it on and off.
+   */
+  large?: boolean;
   /**
    * Take the track out of the deck.
    *
@@ -893,13 +901,17 @@ export const Player = memo(function Player({
   track, onEject, onError, onAnalyse, onDropTrack, onLoadSelected, onSkipTrack, selectedTrackId = null,
   onExportTrack, devices = [], onExportLoop,
   dragging = false, deck = "a",
-  simple: simpleLayout = false, compact = false, transportSlot, flipped = false, dual = false, publishZoom, onWheelZoom,
+  simple: simpleLayout = false, compact = false, large: largeFace = false, transportSlot, flipped = false, dual = false, publishZoom, onWheelZoom,
   bars: linkedBars, onBars, jumpSize: linkedJump, onJumpSize,
   publishSync, peerSync, isMaster = false, onMaster, synced = false, syncOn = synced, onSyncToggle, onStartPlaying,
   leaderBpmX100 = null, onPlayingBpm, onKeyShift, onGridNudge, publishGridFollow, readOnly = false,
   drawing = false,
 }: PlayerProps) {
   const simple = simpleLayout || compact;
+  const large = compact && largeFace;
+  // In the large face the deck's element is the large player around the
+  // strip; the strip's own element is then just a part of it.
+  const stripShell = useRef<HTMLElement>(null);
   const playback = usePlayback(track?.id ?? null, deck, false);
   // A waveform to draw: the analysis's, or one an analysis is drawing now.
   const hasWaveform = track !== null && (track.analysed > 0 || drawing);
@@ -2289,11 +2301,12 @@ export const Player = memo(function Player({
 
   // The compact player is the view shell's strip, drawn from the same deck.
   if (compact) {
-    return (
+    const strip = (
       <CompactPlayer
         track={track}
         deck={deck}
-        shell={shell}
+        shell={large ? stripShell : shell}
+        region={!large}
         armed={armed}
         droppable={takesDrop}
         onDragOver={dragOver}
@@ -2323,6 +2336,62 @@ export const Player = memo(function Player({
         onJumpBeats={setCompactJump}
         onJump={jump}
       />
+    );
+    if (!large) return strip;
+    return (
+      <LargePlayer shell={shell} armed={armed} empty={!track} strip={strip}>
+        <div
+          ref={detailRef}
+          className={largePlayerStyles.band}
+          data-testid="large-player-detail"
+          data-pcm={bars <= 0.5 || undefined}
+          onWheel={wheelZoom}
+          onPointerDown={startDrag}
+          onPointerMove={dragDetail}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+        >
+          <div ref={scroller} className={styles.scroller}>
+            <DetailPhrases phrases={compactPhrases} window={window} />
+            <div className={largePlayerStyles.wave} data-testid="large-player-wave">
+              {track && hasWaveform && detail.height > LARGE_PHRASE_H ? (
+                <WaveformDetail
+                  // As the full deck's detail: PCM and PWV7 are different
+                  // byte layouts, so crossing the zoom boundary remounts.
+                  key={bars <= 0.5 ? "pcm" : "pwv7"}
+                  trackId={track.id}
+                  progress={anchor}
+                  span={span * OVERDRAW}
+                  durationMs={total * 1000}
+                  firstBeatMs={grid.times[0]}
+                  width={detail.width * OVERDRAW}
+                  height={detail.height - LARGE_PHRASE_H}
+                  detail
+                  pcmWindow={bars <= 0.5 ? {
+                    fromMs: Math.max(0, window.from * total * 1000 - 2000),
+                    toMs: Math.min(total * 1000, window.to * total * 1000 + 2000),
+                    drawFromMs: window.from * total * 1000,
+                    drawToMs: window.to * total * 1000,
+                  } : undefined}
+                  half={false}
+                  inset={waveInsetOf()}
+                />
+              ) : null}
+              <BeatGrid
+                grid={grid}
+                beats={beats}
+                totalMs={total * 1000}
+                window={window}
+                everyBeat={showsEveryBeat(bars)}
+                fromMs={gridEditor.fromMs}
+              />
+              <CueMarkers cues={cues} totalMs={total * 1000} band="detail" window={window} loop={playback.loop} />
+            </div>
+          </div>
+          {track ? null : <span className={largePlayerStyles.blank}>No track loaded</span>}
+          <span ref={detailHead} className={styles.playhead} data-testid="large-player-head" aria-hidden />
+        </div>
+      </LargePlayer>
     );
   }
 
