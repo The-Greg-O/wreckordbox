@@ -107,13 +107,14 @@ it("unlocks immediately when a backup exists", async () => {
   expect(host.querySelector('[role="dialog"]')).toBeNull();
 });
 
-it("gently recommends a backup and offers Unlock anyway or Cancel", async () => {
+it("says why a backup is asked about, and offers Unlock anyway or Cancel", async () => {
   mount();
 
   await toggleProtection();
 
   const dialog = host.querySelector('[role="dialog"]');
-  expect(dialog?.textContent).toContain("It looks like you haven’t made a backup yet. We strongly recommend creating one before using wreckordbox.");
+  expect(dialog?.textContent).toContain("Turning Library Protection off lets wreckordbox write to your Library. No backup of it was found");
+  expect(dialog?.textContent).toContain("Make one under Preferences › Backups first, or unlock anyway.");
   expect([...dialog!.querySelectorAll("button")].map(button => button.textContent)).toEqual([
     "Unlock anyway", "Cancel",
   ]);

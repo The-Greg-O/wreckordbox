@@ -101,6 +101,15 @@
   font-weight: 600;
 }
 .markClean:disabled, .small:disabled, .chip:disabled { opacity: 0.45; cursor: default; }
+/* A Mark Clean that cannot run is an ordinary control, not a dimmed green
+   one: at any opacity a green fill still reads as lit (wbx-45.15). */
+.markClean:disabled {
+  border-color: var(--role-border);
+  background: var(--role-control);
+  color: var(--role-text-dim);
+  font-weight: normal;
+}
+.noClean { color: var(--role-text-dim); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .small { padding: var(--s-shell-space-2) var(--s-shell-space-4); }
 .key {
   padding: 0 var(--s-shell-space-3);
