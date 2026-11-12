@@ -1,5 +1,10 @@
 //! Intelligent playlists: the rule in `SmartList` decides the rows.
-#![allow(clippy::pedantic, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::pedantic,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
 
 use rbl_index::testing::{add_smart_playlist, library_from, TestTrack};
 use rbl_index::{smart::Date, SmartRule, SortColumn, TrackSource, ViewSpec};
@@ -302,5 +307,7 @@ fn a_smart_playlist_opens_as_a_view_and_sorts_and_searches_like_any_other() {
 
     // A rule that does not parse is a playlist with nothing in it.
     let broken = add_smart_playlist(&mut lib, "Broken", "not xml at all");
-    assert!(lib.source_rows(&TrackSource::SmartPlaylist(broken)).is_empty());
+    assert!(lib
+        .source_rows(&TrackSource::SmartPlaylist(broken))
+        .is_empty());
 }

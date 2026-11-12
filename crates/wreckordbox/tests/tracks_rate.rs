@@ -49,15 +49,22 @@ fn rating_a_track_reports_the_old_and_new_rating_and_the_next_list_shows_it() {
 }
 
 #[test]
-fn by_hand_the_result_is_one_readable_line() {
+fn by_hand_the_result_is_one_readable_line_and_the_run_it_is_in() {
     let sandbox = Sandbox::new();
     sandbox.describe_track(3, "Midnight Drive", "Ada Lovelace", "8A", 1);
 
     let run = sandbox.cli(&["tracks", "rate", "10003", "5"]);
     assert!(run.status.success(), "{}", run.stderr);
+    let lines: Vec<&str> = run.stdout.lines().collect();
     assert_eq!(
-        run.stdout,
-        "Rated track 10003 \"Midnight Drive\": 5 stars, was 1 star.\n"
+        lines[0],
+        "Rated track 10003 \"Midnight Drive\": 5 stars, was 1 star."
+    );
+    assert_eq!(lines.len(), 2, "{}", run.stdout);
+    assert!(
+        lines[1].starts_with("Run ") && lines[1].ends_with("(tool:wreckordbox)."),
+        "{}",
+        run.stdout
     );
     assert_eq!(run.stderr, "");
 

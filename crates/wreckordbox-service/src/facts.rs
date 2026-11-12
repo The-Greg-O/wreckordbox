@@ -190,11 +190,10 @@ pub struct FactsOfTrack {
     /// Only Facts of this kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
-    /// Also the Facts their own source has superseded.
+    /// Also stale, unverified and superseded Facts.
     #[serde(default)]
     pub all: bool,
-    /// Fingerprint the track's audio first and mark the Measurements made
-    /// from other audio stale. One read of the audio file.
+    /// Explicitly verify audio and update attachments/staleness. Default reads are read-only.
     #[serde(default)]
     pub check_audio: bool,
 }
@@ -205,6 +204,12 @@ pub struct TrackFacts {
     pub track: Parent,
     /// Newest first.
     pub facts: Vec<Fact>,
+    /// Measurements from different audio, kept for inspection only.
+    pub stale: Vec<Fact>,
+    /// Measurements whose audio could not be read, excluded from standing Facts.
+    pub unverified: Vec<Fact>,
+    pub reattached: Vec<wreckordbox_sidecar::attachments::Attachment>,
+    pub review: Vec<wreckordbox_sidecar::attachments::Review>,
 }
 
 /// What `facts.kinds` answers.
@@ -254,6 +259,27 @@ pub(crate) fn answer(
     request: &Request,
     lookup: &dyn Fn(&str) -> Result<ParentAudio, ServiceError>,
 ) -> Result<Value, ServiceError> {
+    if request.command == commands::FACTS_OF_TRACK {
+        let wanted: FactsOfTrack = arguments(request)?;
+        if !wanted.check_audio && stems.sidecar_if_made()?.is_none() {
+            let found = lookup(&wanted.id)?;
+            let kinds = Kinds::load(stems.sidecar_dir()).map_err(|e| sidecar_error(&e))?;
+            if let Some(kind) = &wanted.kind {
+                if kinds.get(kind).is_none() && !kinds.schema_is_broken() {
+                    return Err(not_declared(kind, &kinds));
+                }
+            }
+            return serde_json::to_value(TrackFacts {
+                track: found.parent().clone(),
+                facts: Vec::new(),
+                stale: Vec::new(),
+                unverified: Vec::new(),
+                reattached: Vec::new(),
+                review: Vec::new(),
+            })
+            .map_err(|e| ServiceError::new(service_codes::SERVICE_FAILED, e.to_string()));
+        }
+    }
     let facts = Facts {
         sidecar: stems.sidecar()?,
         stems,
@@ -285,6 +311,7 @@ pub(crate) struct CheckedFact {
     pub(crate) value: Value,
     /// Of the track's audio now, when its file is there.
     pub(crate) fingerprint: Option<Fingerprint>,
+    pub(crate) found: ParentAudio,
 }
 
 /// Checks one Fact as `facts.record` would (its kind's declaration, its
@@ -309,14 +336,15 @@ pub(crate) fn checked(
         &mut tracks,
         lookup,
     )?;
+    let (found, fingerprint) = tracks.remove(&one.track_id).ok_or_else(|| {
+        ServiceError::new(service_codes::SERVICE_FAILED, "checked Fact has no track")
+    })?;
     Ok(CheckedFact {
         track_id: one.track_id,
         kind: one.kind,
         value: one.value,
-        fingerprint: tracks
-            .into_values()
-            .next()
-            .and_then(|(_, fingerprint)| fingerprint),
+        fingerprint,
+        found,
     })
 }
 
@@ -334,7 +362,7 @@ pub(crate) fn recorded(
     };
     facts.changed(&fact.track_id, &fact.kind, Some(fact.id), &[]);
     if let Some(fingerprint) = fingerprint {
-        facts.mark_stale(&fact.track_id, fingerprint)?;
+        stems.mark_stale(&fact.track_id, fingerprint)?;
     }
     Ok(())
 }
@@ -453,7 +481,7 @@ impl Facts<'_> {
 
         // Every check, for every Fact, before anything is written.
         let many = record.facts.len() > 1;
-        let mut tracks: HashMap<String, (Parent, Option<Fingerprint>)> = HashMap::new();
+        let mut tracks: HashMap<String, (ParentAudio, Option<Fingerprint>)> = HashMap::new();
         let mut checked = Vec::with_capacity(record.facts.len());
         for (at, fact) in record.facts.into_iter().enumerate() {
             let one = check(
@@ -497,9 +525,11 @@ impl Facts<'_> {
         let mut seen: Vec<&String> = tracks.keys().collect();
         seen.sort();
         for track_id in seen {
-            if let Some(fingerprint) = &tracks[track_id].1 {
-                marked_stale.extend(self.mark_stale(track_id, fingerprint)?);
-            }
+            let (found, fingerprint) = &tracks[track_id];
+            let (_, stale) = self
+                .stems
+                .before_record(found, fingerprint.as_ref(), Some(run.id))?;
+            marked_stale.extend(stale);
         }
 
         let new: Vec<NewFact> = checked
@@ -569,51 +599,52 @@ impl Facts<'_> {
             fact
         };
         let track = found.parent().clone();
-        if wanted.check_audio {
-            let fingerprint = stems::fingerprint(&track, found.path())?;
-            self.mark_stale(&track.id, &fingerprint)?;
-        }
+        let (fingerprint, attachments) = if wanted.check_audio {
+            let fingerprint = stems::fingerprint(&track, found.path()).ok();
+            let (attachments, _) = self.stems.observe_audio(&found, fingerprint.as_ref())?;
+            (fingerprint, attachments)
+        } else {
+            (
+                None,
+                wreckordbox_sidecar::attachments::Attachments {
+                    reattached: Vec::new(),
+                    review: self
+                        .sidecar
+                        .attachment_reviews(&track.id)
+                        .map_err(|e| sidecar_error(&e))?,
+                },
+            )
+        };
         let facts = match &wanted.kind {
             Some(kind) => self.sidecar.facts(&track.id, kind),
             None => self.sidecar.facts_of_track(&track.id),
         }
         .map_err(|e| sidecar_error(&e))?;
+        let facts: Vec<Fact> = facts.into_iter().map(Fact::from).map(as_now).collect();
+        let stale = facts.iter().filter(|fact| fact.stale).cloned().collect();
+        let unverified = facts
+            .iter()
+            .filter(|fact| {
+                !fact.stale && fact.nature == Nature::Measurement && fingerprint.is_none()
+            })
+            .cloned()
+            .collect();
         Ok(TrackFacts {
             track,
+            stale,
+            unverified,
+            reattached: attachments.reattached,
+            review: attachments.review,
             facts: facts
                 .into_iter()
-                .filter(|fact| wanted.all || fact.is_live())
-                .map(Fact::from)
-                .map(as_now)
+                .filter(|fact| {
+                    wanted.all
+                        || (!fact.superseded
+                            && !fact.stale
+                            && (fact.nature == Nature::Judgement || fingerprint.is_some()))
+                })
                 .collect(),
         })
-    }
-
-    /// Marks the track's Measurements made from other audio stale and says
-    /// so, one event per kind.
-    fn mark_stale(
-        &self,
-        track_id: &str,
-        fingerprint: &Fingerprint,
-    ) -> Result<Vec<i64>, ServiceError> {
-        let stale = self
-            .sidecar
-            .mark_stale(track_id, fingerprint)
-            .map_err(|e| sidecar_error(&e))?;
-        let mut by_kind: Vec<(String, Vec<i64>)> = Vec::new();
-        for id in &stale {
-            let Some(fact) = self.sidecar.fact(*id).map_err(|e| sidecar_error(&e))? else {
-                continue;
-            };
-            match by_kind.iter_mut().find(|(kind, _)| *kind == fact.kind) {
-                Some((_, ids)) => ids.push(*id),
-                None => by_kind.push((fact.kind, vec![*id])),
-            }
-        }
-        for (kind, ids) in by_kind {
-            self.changed(track_id, &kind, None, &ids);
-        }
-        Ok(stale)
     }
 
     fn changed(&self, track_id: &str, kind: &str, fact_id: Option<i64>, stale: &[i64]) {
@@ -636,7 +667,7 @@ fn check(
     kinds: &Kinds,
     default_source: Option<&Source>,
     default_confidence: Option<f64>,
-    tracks: &mut HashMap<String, (Parent, Option<Fingerprint>)>,
+    tracks: &mut HashMap<String, (ParentAudio, Option<Fingerprint>)>,
     lookup: &dyn Fn(&str) -> Result<ParentAudio, ServiceError>,
 ) -> Result<Checked, ServiceError> {
     // A Tag schema with a mistake holds back the kinds it governs, and
@@ -691,9 +722,10 @@ fn check(
         } else {
             None
         };
-        tracks.insert(fact.track.clone(), (found.parent().clone(), fingerprint));
+        tracks.insert(fact.track.clone(), (found, fingerprint));
     }
-    let (parent, fingerprint) = &tracks[&fact.track];
+    let (found, fingerprint) = &tracks[&fact.track];
+    let parent = found.parent();
     if kind.nature == Nature::Measurement && fingerprint.is_none() {
         return Err(ServiceError::new(
             stems::codes::TRACK_FILE_MISSING,

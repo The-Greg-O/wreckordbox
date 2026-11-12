@@ -53,7 +53,7 @@
 .tick {
   width: 9px;
   height: 6px;
-  color: var(--c-filter-text);
+  color: var(--c-on-accent, var(--c-filter-text));
 }
 
 /* --- BPM and its ± list ------------------------------------------------- */
@@ -169,7 +169,7 @@
   display: flex;
   align-items: center;
 }
-.row[data-picked] { background: var(--c-filter-accent); }
+.row[data-picked] { background: var(--c-filter-accent); color: var(--c-on-accent, var(--c-filter-text)); }
 .list[data-inert] .row { color: var(--c-filter-chip-text); }
 .list[data-inert] .row[data-picked] { background: var(--c-raised); }
 
@@ -236,7 +236,7 @@
   overflow: hidden;
   cursor: default;
 }
-.chip[data-picked] { background: var(--c-filter-accent); }
+.chip[data-picked] { background: var(--c-filter-accent); color: var(--c-on-accent, var(--c-filter-text)); }
 /* No category behind the column: drawn grey, as the capture's unused ones. */
 .list[data-inert] .chip { color: var(--c-filter-chip-text); }
 

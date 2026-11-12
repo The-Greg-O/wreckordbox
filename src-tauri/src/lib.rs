@@ -45,6 +45,7 @@ pub mod player;
 pub mod preview;
 mod preferences;
 mod browse_settings;
+pub mod omarchy_theme;
 mod protocol;
 mod relocate;
 mod sync_window;
@@ -456,6 +457,8 @@ pub fn run() {
                 Err(e) => tracing::warn!(error = %e, "could not read the webview's version"),
             }
             screen_cache::initialize(app.handle());
+            // The chrome follows the Omarchy theme; a switch reaches every window.
+            omarchy_theme::follow(app.handle());
             // A write outside the library history (a player over LINK, a cue,
             // analysis) that ends its Redo branch updates the Edit menu.
             {
@@ -539,6 +542,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             browse_settings::rekordbox_browse_settings,
+            omarchy_theme::theme_roles,
             startup::startup_milestone,
             startup::show_window,
             screen_cache::remember_screen_assets,

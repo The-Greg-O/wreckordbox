@@ -10,12 +10,14 @@
 //! This crate has no dependency on the desktop framework and needs no
 //! display.
 
+mod attachments;
 mod client;
 pub mod decider;
 pub mod decisions;
 mod entries;
 pub mod facts;
 pub mod intake;
+pub mod ledger;
 mod library;
 pub mod mutants;
 pub mod mytag_edits;

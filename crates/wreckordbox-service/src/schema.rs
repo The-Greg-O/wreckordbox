@@ -114,10 +114,11 @@ pub(crate) fn answer(
     stems: &Arc<Stems>,
     request: &Request,
     read: &dyn Fn() -> Result<convert::MyTags, ServiceError>,
+    lookup: &dyn Fn(&str) -> Result<crate::stems::ParentAudio, ServiceError>,
 ) -> Result<Value, ServiceError> {
     let answer = match request.command.as_str() {
         commands::SCHEMA_CHECK => serde_json::to_value(check(stems, &arguments(request)?)?),
-        _ => serde_json::to_value(convert::convert(stems, &arguments(request)?, read)?),
+        _ => serde_json::to_value(convert::convert(stems, &arguments(request)?, read, lookup)?),
     };
     answer.map_err(|e| ServiceError::new(service_codes::SERVICE_FAILED, e.to_string()))
 }

@@ -83,7 +83,7 @@ fn refusal(sandbox: &Sandbox, args: &[&str]) -> String {
     with_json.extend_from_slice(args);
     let run = sandbox.cli(&with_json);
     assert!(!run.status.success(), "{}", run.stdout);
-    assert_eq!(run.stdout, "");
+    assert_eq!(common::without_run(&run.stdout), "");
     run.error_json()["error"]["code"]
         .as_str()
         .expect(&run.stderr)
@@ -282,7 +282,7 @@ fn creating_a_tag_puts_it_at_the_end_of_its_category_and_tells_a_second_client()
     assert!(run.status.success(), "{}", run.stderr);
     let made_id = vocabulary_ids(sandbox, "Sub-genre")[0].clone();
     assert_eq!(
-        run.stdout,
+        common::without_run(&run.stdout),
         format!("Created MyTag {made_id} \"Tech House\" in Sub-genre.\n")
     );
 }
@@ -323,7 +323,7 @@ fn renaming_a_tag_keeps_its_tracks_and_a_category_can_be_renamed_too() {
     let run = sandbox.cli(&["mytags", "rename", &made.mood, "Mood/Emotion"]);
     assert!(run.status.success(), "{}", run.stderr);
     assert_eq!(
-        run.stdout,
+        common::without_run(&run.stdout),
         format!(
             "Renamed MyTag category {} from \"Mood\" to \"Mood/Emotion\".\n",
             made.mood
@@ -380,7 +380,7 @@ fn moving_a_tag_gives_it_a_new_place_in_its_category() {
     let run = sandbox.cli(&["mytags", "move", &melancholic, "9"]);
     assert!(run.status.success(), "{}", run.stderr);
     assert_eq!(
-        run.stdout,
+        common::without_run(&run.stdout),
         "Mood is now in the order: Dark, Uplifting, Melancholic.\n"
     );
     assert_eq!(
@@ -499,14 +499,20 @@ fn assigning_puts_a_tag_on_many_tracks_and_unassigning_takes_it_off() {
     // One track, by hand; its other tags stay.
     let run = sandbox.cli(&["mytags", "unassign", MY_TAG_PEAK, &track_id(2)]);
     assert!(run.status.success(), "{}", run.stderr);
-    assert_eq!(run.stdout, "Took MyTag \"Peak\" off 1 of 1 track.\n");
+    assert_eq!(
+        common::without_run(&run.stdout),
+        "Took MyTag \"Peak\" off 1 of 1 track.\n"
+    );
     told_of_one_change(&mut watcher);
     assert_eq!(tags_of(sandbox, 2), ["Warm-up", "Acid"]);
     assert_eq!(tags_of(sandbox, 1), ["Peak", "Dark"]);
 
     let run = sandbox.cli(&["mytags", "assign", &made.acid, &track_id(2), &track_id(6)]);
     assert!(run.status.success(), "{}", run.stderr);
-    assert_eq!(run.stdout, "Put MyTag \"Acid\" on 1 of 2 tracks.\n");
+    assert_eq!(
+        common::without_run(&run.stdout),
+        "Put MyTag \"Acid\" on 1 of 2 tracks.\n"
+    );
 }
 
 #[test]
@@ -540,7 +546,7 @@ fn deleting_a_tag_takes_it_off_every_track() {
     let run = sandbox.cli(&["mytags", "delete", &made.uplifting]);
     assert!(run.status.success(), "{}", run.stderr);
     assert_eq!(
-        run.stdout,
+        common::without_run(&run.stdout),
         format!(
             "Deleted MyTag {} \"Uplifting\" from Mood; no track carried it.\n",
             made.uplifting
@@ -582,7 +588,7 @@ fn merging_moves_every_track_to_the_other_tag_and_removes_the_first() {
     let run = sandbox.cli(&["mytags", "merge", &made.dark, &made.acid]);
     assert!(run.status.success(), "{}", run.stderr);
     assert_eq!(
-        run.stdout,
+        common::without_run(&run.stdout),
         "Merged MyTag \"Dark\" (Mood) into \"Acid\" (Sound): 2 tracks moved.\n"
     );
     assert_eq!(tags_of(sandbox, 1), ["Warm-up", "Acid"]);
@@ -717,7 +723,7 @@ fn an_invalid_request_fails_with_a_stable_code_and_changes_nothing() {
     // By hand the refusal is one line on standard error.
     let run = sandbox.cli(&["mytags", "create-category", "Energy"]);
     assert!(!run.status.success());
-    assert_eq!(run.stdout, "");
+    assert_eq!(common::without_run(&run.stdout), "");
     assert!(run.stderr.contains("four"), "{}", run.stderr);
 
     // The same name in another category is not a clash.
