@@ -827,3 +827,86 @@ fn a_row_left_under_a_folder_or_an_intelligent_playlist_is_not_an_entry_to_mutat
     );
     assert_eq!(listed(&sandbox, None), Vec::<Value>::new());
 }
+
+#[test]
+fn a_mutant_change_the_sidecar_cannot_finish_is_not_kept_announced_or_answered_as_made() {
+    let sandbox = Sandbox::new();
+    let playlist = sandbox.create_playlist("Friday", &[2, 3]);
+    let entry = entry_at(&sandbox, &playlist, 1);
+    let kept = mutate(&sandbox, &entry_at(&sandbox, &playlist, 2));
+    let kept_id = kept["mutant"]["id"].as_i64().unwrap().to_string();
+    let mut watcher = sandbox.client();
+    watcher.subscribe().unwrap();
+    // The kept Mutant's own event may still be on its way.
+    while watcher
+        .next_event(Duration::from_millis(500))
+        .unwrap()
+        .is_some()
+    {}
+
+    // The Sidecar refuses to end a Run: the Run made for a command is the
+    // last thing its transaction writes.
+    let sidecar = rusqlite::Connection::open(sandbox.sidecar_dir().join("sidecar.db")).unwrap();
+    sidecar
+        .execute_batch(
+            "CREATE TRIGGER no_ending BEFORE UPDATE OF finished_at ON run
+             BEGIN SELECT RAISE(ABORT, 'no ending'); END;",
+        )
+        .unwrap();
+    let who = ["--source", "agent:preparer"];
+    let mut create = vec!["mutants", "create", entry.as_str()];
+    create.extend_from_slice(&who);
+    let mut remove = vec!["mutants", "remove", kept_id.as_str()];
+    remove.extend_from_slice(&who);
+    assert_eq!(refused(&sandbox, &create), "sidecar_failed");
+    assert_eq!(refused(&sandbox, &remove), "sidecar_failed");
+
+    // Nothing was kept and nobody was told.
+    assert_eq!(listed(&sandbox, None), vec![kept["mutant"].clone()]);
+    assert_eq!(
+        refused(&sandbox, &["mutants", "show", "--entry", &entry]),
+        "mutant_not_found"
+    );
+    assert_eq!(
+        watcher.next_event(Duration::from_millis(500)).unwrap(),
+        None
+    );
+
+    // Once it can, the same commands go through: neither was half made.
+    sidecar.execute_batch("DROP TRIGGER no_ending").unwrap();
+    let made = ok(&sandbox, &create);
+    assert_eq!(made["mutant"]["entry_id"], entry.as_str());
+    assert!(!made["run"]["finished_at"].is_null());
+    let removed = ok(&sandbox, &remove);
+    assert_eq!(removed["mutant"]["removed"], true);
+    let heard: Vec<String> = std::iter::from_fn(|| {
+        watcher
+            .next_event(Duration::from_millis(500))
+            .unwrap()
+            .map(|event| event.data["action"].as_str().unwrap_or("").to_owned())
+    })
+    .collect();
+    assert_eq!(heard, ["created", "removed"]);
+}
+
+#[test]
+fn a_mutant_cannot_be_removed_in_a_run_that_has_ended() {
+    let sandbox = Sandbox::new();
+    let playlist = sandbox.create_playlist("Friday", &[2, 3]);
+    let made = mutate(&sandbox, &entry_at(&sandbox, &playlist, 1));
+    let id = made["mutant"]["id"].as_i64().unwrap().to_string();
+    let run = ok(
+        &sandbox,
+        &["runs", "start", "--source", "dj", "--description", "Tidy"],
+    )["id"]
+        .as_i64()
+        .unwrap()
+        .to_string();
+    ok(&sandbox, &["runs", "finish", &run]);
+
+    assert_eq!(
+        refused(&sandbox, &["mutants", "remove", &id, "--run", &run]),
+        "run_finished"
+    );
+    assert_eq!(listed(&sandbox, None), vec![made["mutant"].clone()]);
+}

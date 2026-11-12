@@ -7035,6 +7035,7 @@ version = "1.10.0"
 dependencies = [
  "clap",
  "rbl-db",
+ "rusqlite",
  "serde_json",
  "tempfile",
  "wreckordbox-service",
