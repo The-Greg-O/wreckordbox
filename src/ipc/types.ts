@@ -611,6 +611,8 @@ export interface Backend {
     deleteUnlistedMusic?: boolean,
     /** Convert incompatible USB copies; undefined preserves the source format. */
     compatibilityFormat?: "wav" | "aiff" | "mp3",
+    /** The DJ's approval of this exact write, from `stickWritePlan` (wbx-45.4); without it the backend refuses. */
+    approval?: string,
   ): Promise<ExportReport>;
 
   /**
@@ -618,7 +620,7 @@ export interface Backend {
    * beside what the stick already holds. A later sync keeps them unless
    * deleteUnlistedMusic is enabled.
    */
-  exportTracksToDevice(tracks: string[], destination: string, defaults?: StickDefaults, compatibilityFormat?: "wav" | "aiff" | "mp3"): Promise<ExportReport>;
+  exportTracksToDevice(tracks: string[], destination: string, defaults?: StickDefaults, compatibilityFormat?: "wav" | "aiff" | "mp3", approval?: string): Promise<ExportReport>;
 
   /**
    * rekordbox's reference browse categories and sort options: what a
@@ -1042,6 +1044,8 @@ export interface Backend {
     compatibilityFormat?: "wav" | "aiff" | "mp3",
     /** Read every exported asset instead of trusting unchanged receipts. */
     verifyAll?: boolean,
+    /** Each Stick's approval, by mount path, from `stickWritePlan` (wbx-45.4); a Stick without one is refused. */
+    approvals?: Readonly<Record<string, string>>,
   ): Promise<SyncDeviceReport[]>;
 
   /** Missing source audio in the exact playlists selected for USB export. */
@@ -1055,7 +1059,7 @@ export interface Backend {
    * partition, or a FAT32 and an HFS+ one, keeping its name. Fails if it is
    * in use.
    */
-  formatDevice(path: string, layout: FormatLayout): Promise<void>;
+  formatDevice(path: string, layout: FormatLayout, approval?: string): Promise<void>;
 
   /** What a stick was last synced with, and what it holds now. */
   deviceSyncState(path: string): Promise<DeviceSyncState>;
@@ -1099,15 +1103,15 @@ export interface Backend {
    * defaults, as rekordbox does when its device panel opens; a stick that
    * has one keeps it. Resolves to what the stick now holds.
    */
-  writeDeviceDefaults(path: string, defaults: StickDefaults): Promise<DeviceSettings>;
+  writeDeviceDefaults(path: string, defaults: StickDefaults, approval?: string): Promise<DeviceSettings>;
   /** Writes them back and resolves to what the stick now holds. */
-  saveDeviceSettings(path: string, settings: DeviceSettings): Promise<DeviceSettings>;
+  saveDeviceSettings(path: string, settings: DeviceSettings, approval?: string): Promise<DeviceSettings>;
   /**
    * Gives a stick with no database the folders rekordbox creates on connect
    * (an empty database from `defaults`), and reads its settings back. A
    * stick that has one is only read.
    */
-  ensureDeviceLibrary(path: string, defaults: StickDefaults | undefined): Promise<DeviceSettings>;
+  ensureDeviceLibrary(path: string, defaults: StickDefaults | undefined, approval?: string): Promise<DeviceSettings>;
 
   /**
    * The Explorer.
@@ -1146,9 +1150,9 @@ export interface Backend {
    * does: that library only, never the other. Resolves to the playlist or
    * folder the edit was about (the new one for a create).
    */
-  devicePlaylistEdit(path: string, format: DeviceFormat, edit: DevicePlaylistEdit): Promise<DevicePlaylistEditResult>;
+  devicePlaylistEdit(path: string, format: DeviceFormat, edit: DevicePlaylistEdit, approval?: string): Promise<DevicePlaylistEditResult>;
   /** Analyse files already on this stick and add them to an existing device playlist in one publication. */
-  devicePlaylistAddFiles(path: string, format: DeviceFormat, playlist: string, tracks: string[]): Promise<DevicePlaylistEditResult>;
+  devicePlaylistAddFiles(path: string, format: DeviceFormat, playlist: string, tracks: string[], approval?: string): Promise<DevicePlaylistEditResult>;
   /**
    * The rows of `tracks` whose track a stick playlist already holds, each
    * once: what rekordbox asks Add or Skip about before adding. Only reads.
@@ -1552,22 +1556,49 @@ export interface MissingExportFile {
 }
 
 /** One playlist a stick was last synced with. */
-/** A Stick write to plan (`stickWritePlan`). */
-export type StickWriteRequest =
-  | { kind: "playlist"; playlist: string; destination: string; deleteUnlistedMusic?: boolean; compatibilityFormat?: "wav" | "aiff" | "mp3" }
-  | { kind: "tracks"; tracks: string[]; destination: string; compatibilityFormat?: "wav" | "aiff" | "mp3" };
+type StickCompat = "wav" | "aiff" | "mp3";
 
-/** What a Stick write would do; `pending` means nothing may be written and nothing was planned. */
+/** A Stick write the window asks to plan (`stickWritePlan`); each matches one Stick-writing call. */
+export type StickWriteOperation =
+  | { kind: "exportPlaylist"; playlist: string; deleteUnlistedMusic?: boolean; compatibilityFormat?: StickCompat }
+  | { kind: "exportTracks"; tracks: string[]; compatibilityFormat?: StickCompat }
+  | { kind: "sync"; playlists: string[]; deleteUnlistedMusic?: boolean; automatic?: boolean; compatibilityFormat?: StickCompat }
+  /** Tracks into a Stick playlist: `exportFirst` (Library ids) go on the Stick first, then at most `count` entries. */
+  | { kind: "addToPlaylist"; format: DeviceFormat; playlist: string; exportFirst: string[]; count: number; duplicates: boolean; compatibilityFormat?: StickCompat }
+  | { kind: "playlistEdit"; format: DeviceFormat; edit: DevicePlaylistEdit }
+  | { kind: "addFiles"; format: DeviceFormat; playlist: string; files: string[] }
+  | { kind: "saveSettings"; settings: DeviceSettings }
+  | { kind: "writeDefaults" }
+  | { kind: "ensureLibrary" }
+  | { kind: "format"; layout: FormatLayout };
+
+export interface StickWriteRequest {
+  destination: string;
+  operation: StickWriteOperation;
+}
+
+/**
+ * What a Stick write would do, and the approval the write must carry.
+ * `pending`: the Stick holds an unfinished write; nothing is planned and
+ * there is no approval.
+ */
 export interface StickWritePlan {
   spare: boolean;
   pending: boolean;
+  /** Tracks whose audio is copied (new, or changed at the source). */
   tracksNew: number;
   tracksChanged: number;
-  tracksKept: number;
+  /** Tracks whose audio is on the Stick already and reused; their data is still written. */
+  audioReused: number;
   tracksRemoved: number;
   tracksMissing: number;
-  playlists: { name: string; folder: boolean; change: "created" | "resynchronised" }[];
+  /** Tracks on the Stick whose exported data differs from the Library's, by field. */
+  trackChanges: { title: string; fields: string[] }[];
+  /** Tracks whose cues and analysis are written from the Library (not itemised). */
+  analysisWritten: number;
+  playlists: { name: string; folder: boolean; change: "created" | "resynchronised"; added: number | null; removed: number | null }[];
   netAdditionalBytes: number;
+  approval: string | null;
 }
 
 export interface SyncPlaylist {

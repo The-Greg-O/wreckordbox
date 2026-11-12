@@ -30,7 +30,7 @@ type Hooks = {
   __libraryTree: () => Node[];
   __libraryPlaylistTitles: (name: string) => string[];
   __stickPlaylistTitles: (path: string, format: string, name: string) => string[];
-  __stickWrites: () => { method: string; path: string }[];
+  __stickWrites: () => { method: string; path: string; args?: unknown }[];
   __stickRecovered: () => string[];
   __confirmAnswer?: boolean;
   __confirmed?: string[];
@@ -45,6 +45,8 @@ const titlesOf = (page: Page, name: string) => page.evaluate((n) => (window as u
 const stickTitles = (page: Page, name: string, format = "deviceLibrary") =>
   page.evaluate(([n, f]) => (window as unknown as Hooks).__stickPlaylistTitles("/Volumes/TEST", f as string, n as string), [name, format]);
 const stickWrites = (page: Page) => page.evaluate(() => (window as unknown as Hooks).__stickWrites());
+const stickHolds = (page: Page) => page.evaluate(() =>
+  (window as unknown as { __stickHolds: (p: string) => { playlists: { name: string; titles: string[] }[]; loose: string[] } }).__stickHolds("/Volumes/TEST"));
 const recovered = (page: Page) => page.evaluate(() => (window as unknown as Hooks).__stickRecovered());
 const answerConfirm = (page: Page, yes: boolean) => page.evaluate((a) => { (window as unknown as Hooks).__confirmAnswer = a; }, yes);
 const confirmed = (page: Page) => page.evaluate(() => (window as unknown as Hooks).__confirmed ?? []);
@@ -414,30 +416,35 @@ test.describe("writes to a Stick", () => {
     expect(await stickWrites(page)).toEqual([]);
   });
 
-  test("Export Playlist shows the export's own plan, writes nothing on Cancel, and exports on the hold", async ({ page }) => {
+  test("Export Playlist shows the export's own plan, writes nothing on Cancel, and exports exactly that playlist on the hold", async ({ page }) => {
     await open(page);
+    const titles = await titlesOf(page, "Hardstyle");
+    const id = await inPlaylists(page, "Hardstyle").getAttribute("data-row-id");
     const menu = await menuOn(page, inPlaylists(page, "Hardstyle"), "Playlist");
     await menu.getByRole("menuitem", { name: "Export Playlist" }).hover();
     await page.getByRole("menuitem", { name: "TEST", exact: true }).click();
     const dialog = writeDialog(page);
     await expect(dialog).toContainText("Export the playlist “Hardstyle” to TEST");
-    await expect(dialog).toContainText("Playlist “Hardstyle” created");
-    await expect(dialog).toContainText(/\d+ tracks? copied to the Stick/);
+    await expect(dialog).toContainText(`Playlist “Hardstyle” created with ${titles.length} tracks`);
+    await expect(dialog).toContainText(`${titles.length} tracks' audio copied to the Stick`);
     await dialog.getByRole("button", { name: "Cancel" }).click();
     expect(await stickWrites(page)).toEqual([]);
+    expect(await stickHolds(page)).toEqual({ playlists: [], loose: [] });
 
     // Dropped on the Stick: the same plan, and the playlist stays where it was.
     const before = await shape(page);
     await drop(page, inPlaylists(page, "Hardstyle"), onStick(page, "TEST"));
     await expect(dialog).toContainText("Export the playlist “Hardstyle” to TEST");
     await holdToWrite(page);
-    await expect.poll(() => stickWrites(page)).toEqual([{ method: "exportPlaylist", path: TEST }]);
+    await expect.poll(async () => (await stickWrites(page)).map((w) => [w.method, w.path, (w.args as unknown[])[0]])).toEqual([["exportPlaylist", TEST, id]]);
+    expect(await stickHolds(page)).toEqual({ playlists: [{ name: "Hardstyle", titles }], loose: [] });
     expect(await shape(page)).toEqual(before);
   });
 
-  test("tracks dropped on the Stick itself are exported after the hold, with the playlists it holds named", async ({ page }) => {
+  test("tracks dropped on the Stick itself are exported after the hold, with the playlists it re-writes named", async ({ page }) => {
     await open(page);
     // A first export, so the Stick holds a playlist of this Library.
+    const hardstyle = await titlesOf(page, "Hardstyle");
     const menu = await menuOn(page, inPlaylists(page, "Hardstyle"), "Playlist");
     await menu.getByRole("menuitem", { name: "Export Playlist" }).hover();
     await page.getByRole("menuitem", { name: "TEST", exact: true }).click();
@@ -446,7 +453,8 @@ test.describe("writes to a Stick", () => {
     await expect(onStick(page, "TEST")).toBeVisible();
 
     await allTracks(page).click();
-    await pick(page, 2);
+    const picked = await pick(page, 2);
+    const ids = await page.evaluate((titles) => titles.map((t) => (window as unknown as { __trackIdOf: (t: string) => string }).__trackIdOf(t)), picked);
     await expect.poll(async () => {
       await drop(page, rows(page).first(), onStick(page, "TEST"));
       return writeDialog(page).count();
@@ -454,14 +462,14 @@ test.describe("writes to a Stick", () => {
     const dialog = writeDialog(page);
     await expect(dialog).toContainText("Export 2 tracks to TEST");
     // Export Track writes again every playlist the Stick holds from this Library.
-    await expect(dialog).toContainText("Playlist “Hardstyle” written again from the Library");
+    await expect(dialog).toContainText("Playlist “Hardstyle” written again with the tracks the Library holds");
     await dialog.getByRole("button", { name: "Cancel" }).click();
     expect((await stickWrites(page)).length).toBe(1);
     await drop(page, rows(page).first(), onStick(page, "TEST"));
     await holdToWrite(page);
-    await expect.poll(() => stickWrites(page)).toEqual([
-      { method: "exportPlaylist", path: TEST }, { method: "exportTracksToDevice", path: TEST },
-    ]);
+    await expect.poll(async () => (await stickWrites(page)).map((w) => w.method)).toEqual(["exportPlaylist", "exportTracksToDevice"]);
+    expect(((await stickWrites(page))[1]?.args as unknown[])[0]).toEqual(ids);
+    expect(await stickHolds(page)).toEqual({ playlists: [{ name: "Hardstyle", titles: hardstyle }], loose: picked });
   });
 
   test("a Stick's playlists are made, renamed, deleted and imported, each write held for", async ({ page }) => {

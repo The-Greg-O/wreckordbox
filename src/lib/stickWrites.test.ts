@@ -5,8 +5,8 @@ import type { ShellStick } from "./shellTree";
 import { describeStickPlan, stickHoldMs, stickKind, stickRefusal } from "./stickWrites";
 
 const plan = (over: Partial<StickWritePlan> = {}): StickWritePlan => ({
-  spare: false, pending: false, tracksNew: 0, tracksChanged: 0, tracksKept: 0, tracksRemoved: 0, tracksMissing: 0,
-  playlists: [], netAdditionalBytes: 0, ...over,
+  spare: false, pending: false, tracksNew: 0, tracksChanged: 0, audioReused: 0, tracksRemoved: 0, tracksMissing: 0,
+  trackChanges: [], analysisWritten: 0, playlists: [], netAdditionalBytes: 0, approval: "t", ...over,
 });
 const stick = (outline: ShellStick["outline"]): ShellStick => ({ path: "/media/USB", name: "USB", outline });
 
@@ -32,24 +32,37 @@ describe("stickRefusal", () => {
 });
 
 describe("describeStickPlan", () => {
-  it("says every track and playlist the write changes", () => {
+  it("tells audio copied from audio reused, and says the reused tracks' data is still written", () => {
     expect(describeStickPlan(plan({
-      tracksNew: 2, tracksChanged: 1, tracksRemoved: 0, tracksKept: 40,
+      tracksNew: 2, tracksChanged: 1, audioReused: 40, analysisWritten: 43,
+      trackChanges: [{ title: "Ritual", fields: ["Energy", "MyTags"] }],
       playlists: [
-        { name: "Warmup", folder: false, change: "resynchronised" },
-        { name: "Peak", folder: false, change: "created" },
-        { name: "Crate", folder: true, change: "created" },
+        { name: "Warmup", folder: false, change: "resynchronised", added: 1, removed: 2 },
+        { name: "Peak", folder: false, change: "created", added: 5, removed: 0 },
+        { name: "Crate", folder: true, change: "created", added: null, removed: null },
+        { name: "Old", folder: false, change: "resynchronised", added: 0, removed: 0 },
+        { name: "Unknown", folder: false, change: "resynchronised", added: null, removed: null },
       ],
       netAdditionalBytes: 16_000_000,
     }))).toEqual([
-      "2 tracks copied to the Stick",
-      "1 track on the Stick rewritten",
-      "40 tracks already there left as they are",
-      "Playlist “Peak” created",
+      "2 tracks' audio copied to the Stick",
+      "1 track's audio copied again (changed at its source)",
+      "40 tracks' audio already on the Stick, reused; their data is written again",
+      "“Ritual”: Energy, MyTags changed",
+      "Cues and analysis of 43 tracks written from the Library (changes to them are not listed)",
+      "Playlist “Peak” created with 5 tracks",
       "Folder “Crate” created",
-      "Playlist “Warmup” written again from the Library",
+      "Playlist “Warmup” written again: 1 track added, 2 removed",
+      "Playlist “Old” written again, its tracks unchanged",
+      "Playlist “Unknown” written again with the tracks the Library holds",
       "About 16 MB more used on the Stick",
     ]);
+  });
+  it("lists at most ten changed tracks, then counts the rest", () => {
+    const many = Array.from({ length: 12 }, (_, i) => ({ title: `T${i}`, fields: ["Title"] }));
+    const lines = describeStickPlan(plan({ trackChanges: many }));
+    expect(lines).toHaveLength(11);
+    expect(lines.at(-1)).toBe("…and 2 more tracks whose data changes");
   });
   it("names removals and missing files, and a write that frees space", () => {
     expect(describeStickPlan(plan({ tracksRemoved: 3, tracksMissing: 1, netAdditionalBytes: -5_000_000 }))).toEqual([

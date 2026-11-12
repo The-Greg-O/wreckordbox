@@ -22,7 +22,7 @@ export interface DeviceLibraries {
    * Changes one library's playlists on a stick, then reads the stick again.
    * Rejects with the backend's reason, having changed nothing.
    */
-  edit: (path: string, format: DeviceFormat, edit: DevicePlaylistEdit) => Promise<DevicePlaylistEditResult>;
+  edit: (path: string, format: DeviceFormat, edit: DevicePlaylistEdit, approval: string) => Promise<DevicePlaylistEditResult>;
   refresh: (path: string) => Promise<void>;
   /** Bumped after every edit, so a view of a stick's library opens again. */
   revision: number;
@@ -87,9 +87,9 @@ export function useDeviceLibraries(devices: readonly Device[], readBack?: { read
   }, [devices, read, readBack]);
 
   const edit = useCallback(
-    async (path: string, format: DeviceFormat, change: DevicePlaylistEdit) => {
+    async (path: string, format: DeviceFormat, change: DevicePlaylistEdit, approval: string) => {
       const backend = await getBackend();
-      const result = await backend.devicePlaylistEdit(path, format, change);
+      const result = await backend.devicePlaylistEdit(path, format, change, approval);
       if (result.changed > 0) {
         if (readBack?.current !== false) await read(path);
         setRevision((r) => r + 1);

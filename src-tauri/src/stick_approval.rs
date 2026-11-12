@@ -277,7 +277,9 @@ pub fn consume(token: Option<&str>, op: &StickOperation, stick: &Path, generatio
     if stick_revision(stick) != approval.revision {
         return Err(refused("The Stick changed since the write was confirmed."));
     }
-    if approval.generation.is_some_and(|g| g != generation) {
+    // Only a write whose contents come from the Library is bound to it.
+    let from_library = matches!(op, StickOperation::ExportPlaylist { .. } | StickOperation::ExportTracks { .. } | StickOperation::Sync { .. });
+    if from_library && approval.generation.is_some_and(|g| g != generation) {
         return Err(refused("The Library changed since the write was confirmed."));
     }
     while let Some(step) = approval.steps.pop_front() {

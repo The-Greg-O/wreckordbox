@@ -23,12 +23,11 @@ import { deleteQuestion, setShellFolderOpen, shellCollapsed } from "@/lib/shellT
 import type { ShellView } from "@/lib/shellViews";
 import { ShellTree } from "./ShellTree";
 import type { ShellTreeActionProps } from "./ShellTreeActions";
-import { stagedStickActions, type ShellStickHandlers } from "./shellStickWrites";
 import type { StickWriteGate } from "./StickWriteGate";
 
 export function useShellTree({
   library, sticks, selectedNode, onSelectNode, view, onViewChange, queueCounts, actions, fromStick = false, expansion, onExpansionChange,
-  stickGate, stickHandlers, confirmDelete,
+  stickGate, confirmDelete,
 }: {
   /** The Library's tree, as the backend sends it. */
   library: readonly TreeNode[];
@@ -45,9 +44,12 @@ export function useShellTree({
   /** The folders' open and closed state, kept in the session as the old tree's is. */
   expansion?: TreeExpansion;
   onExpansionChange?: (expansion: TreeExpansion) => void;
-  /** Every Stick write staged and confirmed first (wbx-45.4 review, finding 5). Without it the tree offers no Stick writes. */
+  /**
+   * The window's Stick write gate (wbx-45.4): the actions' Stick writes are
+   * staged by the window's own handlers; the tree asks it which Sticks may
+   * take a drop or an export. Without it the tree offers no Stick writes.
+   */
   stickGate?: StickWriteGate;
-  stickHandlers?: ShellStickHandlers;
   /** Asks before a Library playlist or folder is deleted (wbx-45.4 review, finding 8). Without it nothing is deleted from the tree. */
   confirmDelete?: (question: string) => Promise<boolean>;
   /** What waits in Intake and Problems, drawn beside them in the tree (wbx-62). */
@@ -83,11 +85,11 @@ export function useShellTree({
         } }
         : {}),
     };
-    if (stickGate && stickHandlers) return stagedStickActions(base, stickGate, sticks, stickHandlers);
+    if (stickGate) return base;
     // No gate: nothing in the tree may write to a Stick.
     const { onExport: _e, onDropTracksOnDevice: _t, onDropDeviceTracks: _d, onDeviceCreate: _c, onDeviceRename: _r, onDeviceDelete: _x, onDeviceImport: _i, ...rest } = base;
     return rest;
-  }, [actions, fromStick, stickGate, stickHandlers, sticks, confirmDelete, library]);
+  }, [actions, fromStick, stickGate, confirmDelete, library]);
   const collapsed = useMemo(() => (expansion ? shellCollapsed(expansion) : undefined), [expansion]);
   const folderOpen = useCallback((id: string, isOpen: boolean) => {
     if (expansion && onExpansionChange) onExpansionChange(setShellFolderOpen(expansion, id, isOpen));
@@ -99,6 +101,5 @@ export function useShellTree({
       stickRefusal={stickGate?.refusal} queueCounts={queueCounts}
     />
   );
-  const withGate = stickGate?.element ? <>{tree}{stickGate.element}</> : tree;
-  return { tree: withGate, intakeQueue, showQueue };
+  return { tree, intakeQueue, showQueue };
 }

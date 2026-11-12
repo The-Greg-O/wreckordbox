@@ -9,14 +9,14 @@
  * Its sort and search semantics are checked against the Rust view tests by a
  * parity test once `rbl-index` lands.
  */
-import { mockStickPending, mockStickSpare, withStickSafetyLog } from "./mock-stick-safety";
+import { mockStickPending, mockStickReplaced, mockStickSpare, withStickSafetyLog } from "./mock-stick-safety";
 import { TRACK_SEARCH_OPTIONS, type TrackSearchField } from "@/lib/search";
 import theme from "@/styles/theme";
 import { mockServiceActivity } from "./mock-service-activity";
 import { rowMemoryCueColours } from "@/lib/memoryCueColours";
 import { shiftByGridBeats } from "@/lib/player";
 
-import type {
+import type { StickWritePlan,
   AppErrorDto, Backend, Backup, BackupProgress, BackupSizes, Cue, DeckEvent, Device, DeviceSettings, Edits, ExplorerRoot, ExportReport,
   DatabaseDrive, EditHistoryState, FilterValues, GridState, LibraryProblem, LibrarySummary, Limiter, LinkPeerSeen, LinkStatus, RelatedCriterion, RowDto, RowMyTag, SortKey,
   SelectionDetails, SmartRule, StickDefaults, SyncPlaylist, SyncProgress, Tick, TrackDetails, TrackField,
@@ -1000,6 +1000,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     hooks.__remountDevice = (path, outline) => {
       const device = unmounted.get(path);
       if (!device) return;
+      // Put back: another mount, so approvals for the one pulled out no longer hold.
+      mockStickReplaced(path);
       unmounted.delete(path);
       devices.push(device);
       if (outline) outlineOverrides.set(path, outline);
@@ -1024,6 +1026,17 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       return node ? membersOf(node.id).map((id) => all.find((t) => t.id === id)?.title ?? id) : [];
     };
     hooks.__libraryTree = () => tree.map((n) => ({ name: n.name, kind: n.kind, depth: n.depth }));
+    // What a Stick holds from this Library: its playlists by name, with
+    // their tracks' titles, and its loose tracks' titles.
+    (window as unknown as { __stickHolds: (path: string) => { playlists: { name: string; titles: string[] }[]; loose: string[] } }).__stickHolds =
+      (path) => ({
+        playlists: (syncSelections.get(path) ?? []).map((p) => ({
+          name: p.name, titles: membersOf(p.libraryId).map((id) => all.find((t) => t.id === id)?.title ?? id),
+        })),
+        loose: [...(looseTracks.get(path) ?? [])].map((id) => all.find((t) => t.id === id)?.title ?? id),
+      });
+    (window as unknown as { __trackIdOf: (title: string) => string | null }).__trackIdOf =
+      (title) => all.find((t) => t.title === title)?.id ?? null;
     hooks.__stickPlaylistTitles = (path, format, name) => {
       const node = stickLibraries.libraries(path).find((l) => l.format === format)?.nodes.find((n) => n.name === name && !n.folder);
       return node ? stickLibraries.rows(path, format, node.id).map((row) => row.title) : [];
@@ -2631,28 +2644,51 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       }
       return reports;
     },
-    // The shell's staged Stick write (wbx-45.4): what Export Playlist or
-    // Export Track would put on the stick, from what the mock stick holds.
-    stickWritePlan: (request) => {
-      const path = request.destination;
+    // The staged Stick write's plan (wbx-45.4), from what the mock stick
+    // holds: its sync selection and loose tracks. The approval token is
+    // added by `withStickSafetyLog`, which also refuses writes without one.
+    stickWritePlan: ({ destination: path, operation: op }) => {
       if (!devices.some((d) => d.path === path)) return Promise.reject(new Error("That device is no longer connected."));
-      const spare = mockStickSpare(path);
-      const none = { tracksNew: 0, tracksChanged: 0, tracksKept: 0, tracksRemoved: 0, tracksMissing: 0, playlists: [], netAdditionalBytes: 0 };
-      if (mockStickPending(path)) return wait({ spare, pending: true, ...none });
+      const empty: StickWritePlan = {
+        spare: mockStickSpare(path), pending: false, tracksNew: 0, tracksChanged: 0, audioReused: 0, tracksRemoved: 0,
+        tracksMissing: 0, trackChanges: [], analysisWritten: 0, playlists: [], netAdditionalBytes: 0, approval: null,
+      };
+      if (mockStickPending(path)) return wait({ ...empty, pending: true });
       const held = syncSelections.get(path) ?? [];
       const onStick = new Set([...held.flatMap((p) => membersOf(p.libraryId)), ...(looseTracks.get(path) ?? [])]);
-      const chosen = request.kind === "playlist" && !held.some((p) => p.libraryId === request.playlist)
-        ? [{ libraryId: request.playlist, name: findNode(request.playlist)?.name ?? request.playlist }]
-        : [];
-      const adding = request.kind === "playlist" ? membersOf(request.playlist) : request.tracks;
+      let adding: string[];
+      let created: string[] = [];
+      let again = held;
+      switch (op.kind) {
+        case "exportPlaylist":
+          adding = membersOf(op.playlist);
+          created = held.some((p) => p.libraryId === op.playlist) ? [] : [op.playlist];
+          break;
+        case "exportTracks":
+          adding = op.tracks;
+          break;
+        case "sync":
+          adding = op.playlists.flatMap(membersOf);
+          created = op.playlists.filter((id) => !held.some((p) => p.libraryId === id));
+          again = held.filter((p) => op.playlists.includes(p.libraryId));
+          break;
+        case "addToPlaylist":
+          adding = op.exportFirst;
+          if (adding.length === 0) again = [];
+          break;
+        default:
+          return wait(empty);
+      }
+      const written = new Set([...adding, ...again.flatMap((p) => membersOf(p.libraryId))]);
       const fresh = new Set(adding.filter((id) => !onStick.has(id)));
       return wait({
-        spare, pending: false, ...none,
+        ...empty,
         tracksNew: fresh.size,
-        tracksKept: onStick.size,
+        audioReused: [...written].filter((id) => onStick.has(id)).length,
+        analysisWritten: written.size,
         playlists: [
-          ...held.map((p) => ({ name: p.name, folder: false, change: "resynchronised" as const })),
-          ...chosen.map((p) => ({ name: p.name, folder: false, change: "created" as const })),
+          ...created.map((id) => ({ name: findNode(id)?.name ?? id, folder: false, change: "created" as const, added: membersOf(id).length, removed: 0 })),
+          ...again.map((p) => ({ name: p.name, folder: false, change: "resynchronised" as const, added: null, removed: null })),
         ],
         netAdditionalBytes: fresh.size * 8_000_000,
       });

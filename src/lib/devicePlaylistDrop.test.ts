@@ -15,14 +15,32 @@ describe("prepareDevicePlaylistDrop", () => {
       exportTracksToDevice: vi.fn().mockResolvedValue({}),
     };
     const ask = vi.fn().mockResolvedValue(false);
+    const approve = vi.fn().mockResolvedValue("token");
 
-    const edit = await prepareDevicePlaylistDrop(
-      backend, "/Volumes/TEST", format, "7", ["100", "101", "102"], undefined, undefined, ask, "Set",
+    const prepared = await prepareDevicePlaylistDrop(
+      backend, "/Volumes/TEST", format, "7", ["100", "101", "102"], undefined, undefined, ask, "Set", approve,
     );
 
     expect(ask).toHaveBeenCalledWith(1, 3, "Set");
-    expect(backend.exportTracksToDevice).toHaveBeenCalledWith(["101"], "/Volumes/TEST", undefined, undefined);
-    expect(edit).toEqual({ kind: "add", playlist: "7", tracks: ["device-3", "device-2"], duplicates: false });
+    // Approved before anything is written: one to export, two going in.
+    expect(approve).toHaveBeenCalledWith(["101"], 2, false);
+    expect(backend.exportTracksToDevice).toHaveBeenCalledWith(["101"], "/Volumes/TEST", undefined, undefined, "token");
+    expect(prepared).toEqual({ edit: { kind: "add", playlist: "7", tracks: ["device-3", "device-2"], duplicates: false }, approval: "token" });
+  });
+
+  it("a write not approved exports nothing and adds nothing", async () => {
+    const backend = {
+      devicePlaylistCollectionTracks: vi.fn().mockResolvedValue(["device-1", null]),
+      devicePlaylistDuplicates: vi.fn().mockResolvedValue([]),
+      exportTracksToDevice: vi.fn(),
+    };
+    const prepared = await prepareDevicePlaylistDrop(
+      backend, "/Volumes/TEST", format, "7", ["100", "101"], undefined, undefined,
+      vi.fn().mockResolvedValue(true), "Set", vi.fn().mockResolvedValue(null),
+    );
+    expect(prepared).toBeNull();
+    expect(backend.exportTracksToDevice).not.toHaveBeenCalled();
+    expect(backend.devicePlaylistCollectionTracks).toHaveBeenCalledTimes(1);
   });
 
   it("cancelling the duplicate prompt does not export tracks", async () => {
@@ -34,7 +52,7 @@ describe("prepareDevicePlaylistDrop", () => {
 
     const edit = await prepareDevicePlaylistDrop(
       backend, "/Volumes/TEST", format, "7", ["100"], undefined, undefined,
-      vi.fn().mockResolvedValue(null), "Set",
+      vi.fn().mockResolvedValue(null), "Set", vi.fn().mockResolvedValue("token"),
     );
 
     expect(edit).toBeNull();
@@ -50,7 +68,7 @@ describe("prepareDevicePlaylistDrop", () => {
 
     await expect(prepareDevicePlaylistDrop(
       backend, "/Volumes/TEST", format, "7", ["100"], undefined, undefined,
-      vi.fn().mockResolvedValue(false), "Set",
+      vi.fn().mockResolvedValue(false), "Set", vi.fn().mockResolvedValue("token"),
     )).rejects.toThrow("Only tracks of this library on the device can go into its playlists.");
   });
 });

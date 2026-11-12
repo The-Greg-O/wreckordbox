@@ -19,13 +19,14 @@ export async function prepareDevicePlaylistDrop(
   askDuplicates: (held: number, total: number, name: string) => Promise<boolean | null>,
   name: string,
   /**
-   * Asked once the duplicate question is answered and before anything is
-   * written (the view shell's staged Stick write, wbx-45.4): the tracks to
-   * export to the Stick first and how many go into the playlist. False
-   * stops here, having written nothing.
+   * The staged write (wbx-45.4), asked once the duplicate question is
+   * answered and before anything is written: the tracks to export to the
+   * Stick first, how many go into the playlist and the duplicates choice.
+   * Answers the approval both writes carry, or null to stop, having
+   * written nothing.
    */
-  beforeWrite?: (missing: readonly string[], adding: number) => Promise<boolean>,
-): Promise<Extract<DevicePlaylistEdit, { kind: "add" }> | null> {
+  approve: (missing: readonly string[], adding: number, duplicates: boolean) => Promise<string | null>,
+): Promise<{ edit: Extract<DevicePlaylistEdit, { kind: "add" }>; approval: string } | null> {
   if (ids.length === 0) return null;
 
   const before = await backend.devicePlaylistCollectionTracks(path, format, [...ids]);
@@ -37,8 +38,10 @@ export async function prepareDevicePlaylistDrop(
 
   const missing = ids.filter((_, index) => before[index] === null);
   const adding = duplicates ? ids.length : ids.length - new Set(held).size;
-  if (beforeWrite && !(await beforeWrite(missing, adding))) return null;
-  if (missing.length > 0) await backend.exportTracksToDevice([...missing], path, defaults, compatibility);
+  if (adding === 0) return null;
+  const approval = await approve(missing, adding, duplicates);
+  if (approval === null) return null;
+  if (missing.length > 0) await backend.exportTracksToDevice([...missing], path, defaults, compatibility, approval);
 
   const after = await backend.devicePlaylistCollectionTracks(path, format, [...ids]);
   if (after.length !== ids.length || after.some((row) => row === null)) {
@@ -46,5 +49,5 @@ export async function prepareDevicePlaylistDrop(
   }
   const heldSet = new Set(held);
   const tracks = (after as string[]).filter((row) => duplicates || !heldSet.has(row));
-  return { kind: "add", playlist, tracks, duplicates };
+  return { edit: { kind: "add", playlist, tracks, duplicates }, approval };
 }
