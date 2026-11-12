@@ -41,13 +41,18 @@ pub fn integrated_lufs(blocks: &[f64]) -> f64 {
             vec![blocks.iter().sum::<f64>() / blocks.len() as f64]
         }
     } else {
-        blocks.windows(GATE_BLOCKS).map(|window| window.iter().sum::<f64>() / GATE_BLOCKS as f64).collect()
+        blocks
+            .windows(GATE_BLOCKS)
+            .map(|window| window.iter().sum::<f64>() / GATE_BLOCKS as f64)
+            .collect()
     };
     let mean_above = |gate_lufs: f64| {
         let (sum, count) = windows
             .iter()
             .filter(|mean_square| lufs(**mean_square) > gate_lufs)
-            .fold((0.0, 0_usize), |(sum, count), mean_square| (sum + mean_square, count + 1));
+            .fold((0.0, 0_usize), |(sum, count), mean_square| {
+                (sum + mean_square, count + 1)
+            });
         (count > 0).then(|| sum / count as f64)
     };
     let Some(ungated) = mean_above(ABSOLUTE_GATE_LUFS) else {
@@ -70,7 +75,13 @@ struct Biquad {
 
 impl Biquad {
     fn new(c: [f64; 5]) -> Self {
-        Self { c, x1: 0.0, x2: 0.0, y1: 0.0, y2: 0.0 }
+        Self {
+            c,
+            x1: 0.0,
+            x2: 0.0,
+            y1: 0.0,
+            y2: 0.0,
+        }
     }
 
     #[inline]
@@ -98,7 +109,10 @@ impl KWeighting {
     #[must_use]
     pub fn new(sample_rate: u32) -> Self {
         let [shelf, high_pass] = Self::coefficients(sample_rate);
-        Self { shelf: Biquad::new(shelf), high_pass: Biquad::new(high_pass) }
+        Self {
+            shelf: Biquad::new(shelf),
+            high_pass: Biquad::new(high_pass),
+        }
     }
 
     /// The two sections' coefficients (`b0 b1 b2 a1 a2`) at `sample_rate`.
@@ -111,7 +125,11 @@ impl KWeighting {
     pub fn coefficients(sample_rate: u32) -> [[f64; 5]; 2] {
         let rate = f64::from(sample_rate.max(1));
 
-        let (f0, gain_db, q) = (1_681.974_450_955_533, 3.999_843_853_973_347, 0.707_175_236_955_419_6);
+        let (f0, gain_db, q) = (
+            1_681.974_450_955_533,
+            3.999_843_853_973_347,
+            0.707_175_236_955_419_6,
+        );
         let k = (std::f64::consts::PI * f0 / rate).tan();
         let vh = 10_f64.powf(gain_db / 20.0);
         let vb = vh.powf(0.499_666_774_154_541_6);
@@ -127,7 +145,13 @@ impl KWeighting {
         let (f0, q) = (38.135_470_876_024_44, 0.500_327_037_323_877_3);
         let k = (std::f64::consts::PI * f0 / rate).tan();
         let a0 = 1.0 + k / q + k * k;
-        let high_pass = [1.0, -2.0, 1.0, 2.0 * (k * k - 1.0) / a0, (1.0 - k / q + k * k) / a0];
+        let high_pass = [
+            1.0,
+            -2.0,
+            1.0,
+            2.0 * (k * k - 1.0) / a0,
+            (1.0 - k / q + k * k) / a0,
+        ];
 
         [shelf, high_pass]
     }

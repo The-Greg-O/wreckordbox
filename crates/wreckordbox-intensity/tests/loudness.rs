@@ -1,6 +1,11 @@
 //! Loudness after ITU-R BS.1770 / EBU R128, on signals whose loudness the
 //! standards state.
-#![allow(clippy::pedantic, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::pedantic,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
 
 use wreckordbox_intensity::loudness::{integrated_lufs, lufs, KWeighting, BLOCK_SECONDS};
 
@@ -29,7 +34,13 @@ fn blocks_of_sine(rate: u32, hz: f64, amplitude: f64, seconds: f64) -> Vec<f64> 
 fn the_k_weighting_at_48_khz_is_the_filter_the_standard_tabulates() {
     let [shelf, high_pass] = KWeighting::coefficients(48_000);
     // ITU-R BS.1770-4, tables 1 and 2.
-    let table_1 = [1.53512485958697, -2.69169618940638, 1.19839281085285, -1.69065929318241, 0.73248077421585];
+    let table_1 = [
+        1.53512485958697,
+        -2.69169618940638,
+        1.19839281085285,
+        -1.69065929318241,
+        0.73248077421585,
+    ];
     let table_2 = [1.0, -2.0, 1.0, -1.99004745483398, 0.99007225036621];
     for (got, want) in shelf.iter().zip(table_1) {
         assert!((got - want).abs() < 1e-9, "shelf {shelf:?}");
@@ -72,6 +83,9 @@ fn integrated_loudness_leaves_out_the_quiet_stretches_as_the_gate_says() {
 
 #[test]
 fn silence_has_no_loudness_and_is_reported_at_the_floor() {
-    assert_eq!(integrated_lufs(&[0.0; 50]), wreckordbox_intensity::loudness::SILENCE_LUFS);
+    assert_eq!(
+        integrated_lufs(&[0.0; 50]),
+        wreckordbox_intensity::loudness::SILENCE_LUFS
+    );
     assert_eq!(lufs(0.0), wreckordbox_intensity::loudness::SILENCE_LUFS);
 }

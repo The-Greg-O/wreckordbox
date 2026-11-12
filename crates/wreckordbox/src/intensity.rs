@@ -107,8 +107,10 @@ pub fn run(
         IntensityCommands::Measure(args) => {
             // Progress comes as events, which a connection must ask for.
             client.subscribe()?;
-            let measured: Measured =
-                client.call_watching(commands::INTENSITY_MEASURE, json!(args.request()), |event| {
+            let measured: Measured = client.call_watching(
+                commands::INTENSITY_MEASURE,
+                json!(args.request()),
+                |event| {
                     if as_json || event.event != events::INTENSITY_PROGRESS {
                         return;
                     }
@@ -129,7 +131,8 @@ pub fn run(
                             progress.title
                         );
                     }
-                })?;
+                },
+            )?;
             Ok(if as_json {
                 json!(measured).to_string()
             } else {
@@ -166,22 +169,21 @@ fn measured_text(measured: &Measured) -> String {
     if measured.total == 0 {
         return "No tracks to measure.".to_owned();
     }
-    let mut text = match measured.tracks.as_slice() {
-        [only] => one_text(only),
-        _ => {
-            let mut text = format!("Measured {}", tracks(measured.measured));
-            if measured.reused > 0 {
-                let _ = write!(text, ", {} already measured", measured.reused);
-            }
-            if measured.failed > 0 {
-                let _ = write!(text, ", {} failed", measured.failed);
-            }
-            let _ = write!(text, ", of {}.", measured.total);
-            for outcome in &measured.tracks {
-                let _ = write!(text, "\n{}", line_text(outcome));
-            }
-            text
+    let mut text = if let [only] = measured.tracks.as_slice() {
+        one_text(only)
+    } else {
+        let mut text = format!("Measured {}", tracks(measured.measured));
+        if measured.reused > 0 {
+            let _ = write!(text, ", {} already measured", measured.reused);
         }
+        if measured.failed > 0 {
+            let _ = write!(text, ", {} failed", measured.failed);
+        }
+        let _ = write!(text, ", of {}.", measured.total);
+        for outcome in &measured.tracks {
+            let _ = write!(text, "\n{}", line_text(outcome));
+        }
+        text
     };
     if measured.cancelled {
         text.push_str("\nThe measuring was cancelled before every track was done.");
@@ -248,13 +250,12 @@ fn one_text(outcome: &TrackOutcome) -> String {
                 .as_ref()
                 .map_or("no reason given", |error| error.message.as_str())
         ),
-        Status::Cancelled => format!(
-            "Track {} \"{}\" was not measured.",
-            track.id, track.title
-        ),
+        Status::Cancelled => format!("Track {} \"{}\" was not measured.", track.id, track.title),
     };
     if !outcome.marked_stale.is_empty() {
-        text.push_str("\nThe track's audio has changed: its earlier Measurements were marked stale and kept.");
+        text.push_str(
+            "\nThe track's audio has changed: its earlier Measurements were marked stale and kept.",
+        );
     }
     if let Some(summary) = &outcome.summary {
         let _ = write!(
@@ -303,7 +304,11 @@ fn shown_text(shown: &TrackIntensity) -> String {
             (true, false) => "stale",
             _ => "replaced",
         };
-        let _ = write!(text, "\nEarlier Intensity ({why}): Fact {}", earlier.fact_id);
+        let _ = write!(
+            text,
+            "\nEarlier Intensity ({why}): Fact {}",
+            earlier.fact_id
+        );
         if let Ok(intensity) = earlier.intensity() {
             let _ = write!(text, ", {:.2}", intensity.summary.intensity);
         }
@@ -351,7 +356,11 @@ fn measurement_text(measurement: &Measurement) -> String {
         }
         Err(_) => text.push_str("Its value is of a shape this version does not read."),
     }
-    let _ = write!(text, "\nFact         {}, Run {}", measurement.fact_id, measurement.run.0);
+    let _ = write!(
+        text,
+        "\nFact         {}, Run {}",
+        measurement.fact_id, measurement.run.0
+    );
     if let Some(fingerprint) = &measurement.fingerprint {
         let _ = write!(text, "\nFingerprint  {fingerprint}");
     }

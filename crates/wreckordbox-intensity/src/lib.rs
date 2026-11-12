@@ -72,7 +72,13 @@ pub struct Features<T> {
 }
 
 /// The features' names, in order.
-pub const FEATURES: [&str; 5] = ["loudness", "low_end", "high_end", "onset_strength", "onset_density"];
+pub const FEATURES: [&str; 5] = [
+    "loudness",
+    "low_end",
+    "high_end",
+    "onset_strength",
+    "onset_density",
+];
 
 /// The straight line that maps a feature onto 0 to 1: `floor` and below is
 /// 0, `ceiling` and above is 1.
@@ -97,8 +103,13 @@ impl Scale {
 /// stretch that is louder hits harder whatever else is true; how many
 /// things happen per second comes next; the weight of the low end, the
 /// size of each hit and the brightness share the rest.
-pub const WEIGHTS: Features<f64> =
-    Features { loudness: 0.40, low_end: 0.15, high_end: 0.10, onset_strength: 0.15, onset_density: 0.20 };
+pub const WEIGHTS: Features<f64> = Features {
+    loudness: 0.40,
+    low_end: 0.15,
+    high_end: 0.10,
+    onset_strength: 0.15,
+    onset_density: 0.20,
+};
 
 /// Where each feature's 0 and 1 lie.
 ///
@@ -111,11 +122,26 @@ pub const WEIGHTS: Features<f64> =
 /// - `onset_density`: onsets per second, from none to sixteenths at
 ///   120 BPM (8 a second).
 pub const SCALES: Features<Scale> = Features {
-    loudness: Scale { floor: -40.0, ceiling: -5.0 },
-    low_end: Scale { floor: -50.0, ceiling: -10.0 },
-    high_end: Scale { floor: -60.0, ceiling: -20.0 },
-    onset_strength: Scale { floor: 0.0, ceiling: 10.0 },
-    onset_density: Scale { floor: 0.0, ceiling: 8.0 },
+    loudness: Scale {
+        floor: -40.0,
+        ceiling: -5.0,
+    },
+    low_end: Scale {
+        floor: -50.0,
+        ceiling: -10.0,
+    },
+    high_end: Scale {
+        floor: -60.0,
+        ceiling: -20.0,
+    },
+    onset_strength: Scale {
+        floor: 0.0,
+        ceiling: 10.0,
+    },
+    onset_density: Scale {
+        floor: 0.0,
+        ceiling: 8.0,
+    },
 };
 
 /// The one place the features become Intensity: each mapped onto 0 to 1 by
@@ -253,10 +279,14 @@ pub fn measure_file(
             None => break,
         }
         let rate = stream.sample_rate();
-        analyser.get_or_insert_with(|| Analyser::new(rate)).push(&mono, &stereo);
+        analyser
+            .get_or_insert_with(|| Analyser::new(rate))
+            .push(&mono, &stereo);
     }
     match analyser {
         Some(analyser) if analyser.frames() > 0 => Ok(Some(analyser.finish(bar_starts))),
-        _ => Err(rbl_audio::AudioError::Unsupported("decoded no samples".into())),
+        _ => Err(rbl_audio::AudioError::Unsupported(
+            "decoded no samples".into(),
+        )),
     }
 }

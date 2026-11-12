@@ -10,7 +10,8 @@ fn frames(seconds: f64) -> usize {
 
 fn sine(out: &mut [f32], hz: f64, amplitude: f32) {
     for (i, sample) in out.iter_mut().enumerate() {
-        *sample += (i as f64 * 2.0 * std::f64::consts::PI * hz / f64::from(RATE)).sin() as f32 * amplitude;
+        *sample +=
+            (i as f64 * 2.0 * std::f64::consts::PI * hz / f64::from(RATE)).sin() as f32 * amplitude;
     }
 }
 
@@ -21,7 +22,9 @@ fn hit(out: &mut [f32], at: f64, length: f64, hz: f64, amplitude: f32) {
     let n = frames(length);
     let mut noise: u32 = 0x1234_5678;
     for i in 0..n {
-        let Some(sample) = out.get_mut(start + i) else { break };
+        let Some(sample) = out.get_mut(start + i) else {
+            break;
+        };
         let decay = 1.0 - i as f32 / n as f32;
         let wave = if hz > 0.0 {
             (i as f64 * 2.0 * std::f64::consts::PI * hz / f64::from(RATE)).sin() as f32

@@ -6,7 +6,13 @@
 //! folder, measures it through the decoder as the service does, and prints
 //! the seconds of work per minute of audio. Never give it a real track: it
 //! takes no path.
-#![allow(clippy::pedantic, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::print_stdout)]
+#![allow(
+    clippy::pedantic,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stdout
+)]
 
 #[path = "../tests/common/mod.rs"]
 mod signals;
@@ -15,7 +21,10 @@ use std::io::Write;
 use std::time::Instant;
 
 fn main() {
-    let minutes: f64 = std::env::args().nth(1).and_then(|text| text.parse().ok()).unwrap_or(6.0);
+    let minutes: f64 = std::env::args()
+        .nth(1)
+        .and_then(|text| text.parse().ok())
+        .unwrap_or(6.0);
     let samples = signals::loud_busy(minutes * 60.0);
     let folder = tempfile::tempdir().unwrap();
     let path = folder.path().join("generated.wav");
@@ -42,7 +51,9 @@ fn main() {
     drop(samples);
 
     let started = Instant::now();
-    let intensity = wreckordbox_intensity::measure_file(&path, &[], &|| false).unwrap().unwrap();
+    let intensity = wreckordbox_intensity::measure_file(&path, &[], &|| false)
+        .unwrap()
+        .unwrap();
     let took = started.elapsed().as_secs_f64();
     println!(
         "{minutes} minutes of generated 44.1 kHz stereo WAV: {took:.3} s, {:.3} s per minute of audio ({} points, Intensity {})",

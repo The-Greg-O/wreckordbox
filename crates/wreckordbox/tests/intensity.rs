@@ -152,9 +152,9 @@ fn library_state(sandbox: &Sandbox) -> (Vec<(String, String, i64)>, Vec<u8>) {
 
 /// Stops the service, so the Library can be looked at from here.
 fn stop_service(sandbox: &Sandbox) {
-    if let Ok(mut client) = wreckordbox_service::Client::connect(
-        &sandbox.config().socket_path(sandbox.location()),
-    ) {
+    if let Ok(mut client) =
+        wreckordbox_service::Client::connect(&sandbox.config().socket_path(sandbox.location()))
+    {
         let pid = client.status().unwrap().pid;
         let _ = client.stop();
         let gone = Instant::now() + Duration::from_secs(10);
@@ -202,7 +202,10 @@ fn measuring_a_track_stores_a_summary_and_a_curve_that_rises_where_the_audio_doe
     let stored = &shown["intensity"];
     assert_eq!(stored["fact_id"], outcome["fact_id"]);
     assert_eq!(stored["run"], run);
-    assert_eq!(stored["source"], json!({"kind": "tool", "name": "wreckordbox-intensity"}));
+    assert_eq!(
+        stored["source"],
+        json!({"kind": "tool", "name": "wreckordbox-intensity"})
+    );
     assert_eq!(stored["stale"], false);
     assert!(stored["fingerprint"].as_str().unwrap().starts_with("a1:"));
     assert_eq!(shown["previous"], json!([]));
@@ -212,7 +215,13 @@ fn measuring_a_track_stores_a_summary_and_a_curve_that_rises_where_the_audio_doe
     assert_eq!(value["method"]["version"], 1);
     assert_eq!(
         value["method"]["features"],
-        json!(["loudness", "low_end", "high_end", "onset_strength", "onset_density"])
+        json!([
+            "loudness",
+            "low_end",
+            "high_end",
+            "onset_strength",
+            "onset_density"
+        ])
     );
     assert!(value["method"]["weights"]["loudness"].is_number());
     assert_eq!(value["summary"], outcome["summary"]);
@@ -231,19 +240,36 @@ fn measuring_a_track_stores_a_summary_and_a_curve_that_rises_where_the_audio_doe
         .unwrap();
     assert_eq!(biggest_step, 8, "{curve:?}");
     let summary = value["summary"]["intensity"].as_f64().unwrap();
-    assert!(highest_quiet < summary && summary < lowest_loud, "{summary} {curve:?}");
+    assert!(
+        highest_quiet < summary && summary < lowest_loud,
+        "{summary} {curve:?}"
+    );
     // The raw features are kept beside the combined curve.
-    for feature in ["loudness", "low_end", "high_end", "onset_strength", "onset_density"] {
+    for feature in [
+        "loudness",
+        "low_end",
+        "high_end",
+        "onset_strength",
+        "onset_density",
+    ] {
         let raw = numbers(&value["curve"]["features"][feature]);
         assert_eq!(raw.len(), 16, "{feature}");
         assert!(raw[12] > raw[4], "{feature} rises too: {raw:?}");
     }
-    assert!(value["summary"]["loudness_integrated_lufs"].as_f64().unwrap() < 0.0);
+    assert!(
+        value["summary"]["loudness_integrated_lufs"]
+            .as_f64()
+            .unwrap()
+            < 0.0
+    );
     // No beat grid, so no bars; the time curve is there all the same.
     assert_eq!(value["bars"], Value::Null);
 
     // It is an ordinary Fact of the built-in kind.
-    let facts = ok(&sandbox, &["--json", "facts", "show", &track, "--kind", "intensity"]);
+    let facts = ok(
+        &sandbox,
+        &["--json", "facts", "show", &track, "--kind", "intensity"],
+    );
     assert_eq!(facts["facts"][0]["id"], outcome["fact_id"]);
     assert_eq!(facts["facts"][0]["nature"], "measurement");
 
@@ -265,10 +291,16 @@ fn measuring_a_track_stores_a_summary_and_a_curve_that_rises_where_the_audio_doe
     assert!(seen.iter().any(|event| event.event == "sidecar_changed"
         && event.data["kind"] == "intensity"
         && event.data["fact_id"] == outcome["fact_id"]));
-    assert!(seen.iter().all(|event| event.event != "library_changed"), "{seen:?}");
+    assert!(
+        seen.iter().all(|event| event.event != "library_changed"),
+        "{seen:?}"
+    );
     drop(watcher);
     stop_service(&sandbox);
-    assert!(before == library_state(&sandbox), "measuring changed the Library");
+    assert!(
+        before == library_state(&sandbox),
+        "measuring changed the Library"
+    );
 }
 
 #[test]
@@ -320,7 +352,11 @@ fn unchanged_audio_is_not_measured_again_and_the_same_audio_measures_the_same() 
     assert_eq!(again["reused"], 1);
     assert_eq!(again["measured"], 0);
     assert_eq!(again["decoded"], 0, "the audio was not decoded again");
-    assert_eq!(again["run"], Value::Null, "nothing was done, so there is no Run");
+    assert_eq!(
+        again["run"],
+        Value::Null,
+        "nothing was done, so there is no Run"
+    );
     assert_eq!(again["tracks"][0]["fact_id"], first["tracks"][0]["fact_id"]);
     assert_eq!(again["tracks"][0]["summary"], first["tracks"][0]["summary"]);
     assert_eq!(show(&sandbox, &track), stored, "nothing new was stored");
@@ -339,7 +375,10 @@ fn unchanged_audio_is_not_measured_again_and_the_same_audio_measures_the_same() 
     );
 
     // Asked to, it measures again, to the same values.
-    let forced = ok(&sandbox, &["--json", "intensity", "measure", &track, "--force"]);
+    let forced = ok(
+        &sandbox,
+        &["--json", "intensity", "measure", &track, "--force"],
+    );
     assert_eq!(forced["tracks"][0]["status"], "measured");
     assert_eq!(forced["decoded"], 1);
     let now = show(&sandbox, &track);
@@ -455,7 +494,12 @@ fn a_playlist_is_measured_in_one_run_with_progress_and_a_bad_track_does_not_stop
         writer
             .add_tracks(
                 &playlist,
-                &[first.clone(), missing.clone(), second.clone(), third.clone()],
+                &[
+                    first.clone(),
+                    missing.clone(),
+                    second.clone(),
+                    third.clone(),
+                ],
             )
             .unwrap();
     });
@@ -506,7 +550,10 @@ fn a_playlist_is_measured_in_one_run_with_progress_and_a_bad_track_does_not_stop
         .map(|event| &event.data)
         .collect();
     assert_eq!(settled.len(), 4, "{seen:?}");
-    let mut done: Vec<u64> = settled.iter().map(|data| data["done"].as_u64().unwrap()).collect();
+    let mut done: Vec<u64> = settled
+        .iter()
+        .map(|data| data["done"].as_u64().unwrap())
+        .collect();
     done.sort_unstable();
     assert_eq!(done, [1, 2, 3, 4]);
     assert!(settled.iter().all(|data| data["total"] == 4));
@@ -519,7 +566,16 @@ fn a_playlist_is_measured_in_one_run_with_progress_and_a_bad_track_does_not_stop
     assert!(text.stdout.contains("1 failed"), "{}", text.stdout);
 
     // Nothing selected is an answer, not an error.
-    let none = ok(&sandbox, &["--json", "intensity", "measure", "--search", "no such track anywhere"]);
+    let none = ok(
+        &sandbox,
+        &[
+            "--json",
+            "intensity",
+            "measure",
+            "--search",
+            "no such track anywhere",
+        ],
+    );
     assert_eq!(none["total"], 0);
     assert_eq!(none["run"], Value::Null);
     // Naming nothing at all is refused, so the whole Library is never
@@ -557,7 +613,9 @@ fn start_service_measuring_one_at_a_time(sandbox: &Sandbox) -> u64 {
 }
 
 /// Starts measuring every track and answers once the first
-/// has been recorded, with the command still running.
+/// has been recorded, with the command still running. The caller waits
+/// for it.
+#[allow(clippy::zombie_processes)]
 fn start_measuring_all(
     sandbox: &Sandbox,
     watcher: &mut wreckordbox_service::Client,
@@ -612,7 +670,10 @@ fn a_long_measuring_can_be_cancelled_and_keeps_what_it_finished() {
     assert_eq!(done + skipped, 8);
 
     // What was finished is kept, and the rest is measured next time.
-    let rest = ok(&sandbox, &["--json", "intensity", "measure", "--search", "Long"]);
+    let rest = ok(
+        &sandbox,
+        &["--json", "intensity", "measure", "--search", "Long"],
+    );
     assert_eq!(rest["cancelled"], false);
     assert_eq!(rest["reused"], done);
     assert_eq!(rest["measured"], 8 - done);
@@ -647,7 +708,10 @@ fn a_service_killed_part_way_leaves_a_sidecar_that_still_works() {
 
     // A new service opens the same Sidecar: what was recorded is whole
     // and is reused, and the rest is measured.
-    let rest = ok(&sandbox, &["--json", "intensity", "measure", "--search", "Long"]);
+    let rest = ok(
+        &sandbox,
+        &["--json", "intensity", "measure", "--search", "Long"],
+    );
     assert_eq!(rest["total"], 8);
     assert_eq!(rest["failed"], 0, "{rest}");
     let reused = rest["reused"].as_u64().unwrap();

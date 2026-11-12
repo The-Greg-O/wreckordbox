@@ -45,8 +45,8 @@ use wreckordbox_sidecar::{Fact, Kind, Kinds, NewFact, Sidecar, SidecarError};
 
 use crate::library::OpenLibrary;
 use crate::protocol::{codes as service_codes, Request, ServiceError};
-pub use crate::stems::{Fingerprint, Parent, RunId, Source, SourceKind};
 use crate::stems::{self, SidecarChanged, Stems};
+pub use crate::stems::{Fingerprint, Parent, RunId, Source, SourceKind};
 use crate::tracks::TrackSelection;
 
 /// The kind of Fact an Intensity is.
@@ -98,7 +98,7 @@ pub struct Measure {
     /// Tracks by identifier, measured in this order.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub ids: Vec<String>,
-    /// Tracks as `tracks.query` selects them: by any field, by MyTag, by
+    /// Tracks as `tracks.query` selects them: by any field, by `MyTag`, by
     /// playlist. Its `limit` and `offset` are not applied: every match is
     /// measured.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -262,7 +262,10 @@ pub(crate) struct Target {
 
 /// Finds the tracks a command is about. The only thing here that reads
 /// the Library.
-pub(crate) fn targets(library: &OpenLibrary, wanted: &Measure) -> Result<Vec<Target>, ServiceError> {
+pub(crate) fn targets(
+    library: &OpenLibrary,
+    wanted: &Measure,
+) -> Result<Vec<Target>, ServiceError> {
     let index = library.index()?;
     let share_root = library.share_root();
     let mut rows = Vec::new();
@@ -320,10 +323,11 @@ pub(crate) fn answer(
                 ));
             }
             let targets = lookup(&wanted)?;
-            serde_json::to_value(measure(stems, targets, wanted.force)?)
+            serde_json::to_value(measure(stems, &targets, wanted.force)?)
         }
         commands::INTENSITY_SHOW => {
-            let track: stems::TrackId = serde_json::from_value(request.args.clone()).map_err(bad)?;
+            let track: stems::TrackId =
+                serde_json::from_value(request.args.clone()).map_err(bad)?;
             let found = lookup(&Measure {
                 ids: vec![track.id],
                 ..Measure::default()
@@ -413,7 +417,7 @@ struct Measuring<'a> {
     decoded: AtomicUsize,
 }
 
-fn measure(stems: &Arc<Stems>, targets: Vec<Target>, force: bool) -> Result<Measured, ServiceError> {
+fn measure(stems: &Arc<Stems>, targets: &[Target], force: bool) -> Result<Measured, ServiceError> {
     let total = targets.len();
     if total == 0 {
         return Ok(Measured {
@@ -436,7 +440,7 @@ fn measure(stems: &Arc<Stems>, targets: Vec<Target>, force: bool) -> Result<Meas
         source: Source::new(SourceKind::Tool, SOURCE_NAME),
         force,
         total,
-        description: match targets.as_slice() {
+        description: match targets {
             [only] => format!(
                 "Measure the Intensity of track {} \"{}\"",
                 only.parent.id, only.parent.title
@@ -467,7 +471,7 @@ fn measure(stems: &Arc<Stems>, targets: Vec<Target>, force: bool) -> Result<Meas
 
     let tracks: Vec<TrackOutcome> = lock(&settled)
         .drain(..)
-        .zip(&targets)
+        .zip(targets)
         // A worker that died left its track unsettled: it was not measured.
         .map(|(outcome, target)| {
             outcome.unwrap_or_else(|| {
@@ -475,7 +479,10 @@ fn measure(stems: &Arc<Stems>, targets: Vec<Target>, force: bool) -> Result<Meas
                     &target.parent,
                     None,
                     Vec::new(),
-                    ServiceError::new(codes::INTENSITY_FAILED, "the measuring stopped unexpectedly"),
+                    ServiceError::new(
+                        codes::INTENSITY_FAILED,
+                        "the measuring stopped unexpectedly",
+                    ),
                 )
             })
         })
@@ -500,7 +507,11 @@ fn measure(stems: &Arc<Stems>, targets: Vec<Target>, force: bool) -> Result<Meas
                 measured.reused,
                 measured.failed,
                 total,
-                if measured.cancelled { "; cancelled" } else { "" }
+                if measured.cancelled {
+                    "; cancelled"
+                } else {
+                    ""
+                }
             ),
         );
     }
@@ -603,16 +614,15 @@ impl Measuring<'_> {
         }
         let run = {
             let mut run = lock(&self.run);
-            match *run {
-                Some(run) => run,
-                None => {
-                    let begun = self
-                        .sidecar
-                        .begin_run(&self.source, &self.description)
-                        .map_err(|e| sidecar_error(&e))?;
-                    *run = Some(begun);
-                    begun
-                }
+            if let Some(run) = *run {
+                run
+            } else {
+                let begun = self
+                    .sidecar
+                    .begin_run(&self.source, &self.description)
+                    .map_err(|e| sidecar_error(&e))?;
+                *run = Some(begun);
+                begun
             }
         };
         self.sidecar

@@ -20,8 +20,9 @@ use realfft::{RealFftPlanner, RealToComplex};
 
 use crate::loudness::{integrated_lufs, lufs, KWeighting, BLOCK_SECONDS};
 use crate::{
-    combine, BarCurve, Features, Intensity, MeasuredAudio, Method, Summary, TimeCurve, HIGH_END_ABOVE_HZ,
-    LOW_END_ABOVE_HZ, LOW_END_BELOW_HZ, SCALES, SILENCE_DB, STEP_SECONDS, WEIGHTS,
+    combine, BarCurve, Features, Intensity, MeasuredAudio, Method, Summary, TimeCurve,
+    HIGH_END_ABOVE_HZ, LOW_END_ABOVE_HZ, LOW_END_BELOW_HZ, SCALES, SILENCE_DB, STEP_SECONDS,
+    WEIGHTS,
 };
 
 /// Seconds of audio in one spectral frame, before rounding up to a power
@@ -94,7 +95,9 @@ impl Analyser {
     #[must_use]
     pub fn new(sample_rate: u32) -> Self {
         let rate = sample_rate.max(1);
-        let frame_len = ((f64::from(rate) * FRAME_SECONDS) as usize).next_power_of_two().max(64);
+        let frame_len = ((f64::from(rate) * FRAME_SECONDS) as usize)
+            .next_power_of_two()
+            .max(64);
         let window: Vec<f32> = (0..frame_len)
             .map(|i| {
                 let phase = 2.0 * std::f64::consts::PI * i as f64 / frame_len as f64;
@@ -104,7 +107,8 @@ impl Analyser {
         let window_sum: f32 = window.iter().sum();
         let window_squares: f32 = window.iter().map(|w| w * w).sum();
         let bins = frame_len / 2 + 1;
-        let bin_of = |hz: f64| ((hz * frame_len as f64 / f64::from(rate)).ceil() as usize).min(bins);
+        let bin_of =
+            |hz: f64| ((hz * frame_len as f64 / f64::from(rate)).ceil() as usize).min(bins);
         let transform = RealFftPlanner::<f32>::new().plan_fft_forward(frame_len);
         Self {
             rate,
@@ -176,15 +180,22 @@ impl Analyser {
         self.pending.extend_from_slice(mono);
         while self.pending.len() - self.consumed >= self.frame_len {
             let start = self.consumed;
-            for ((slot, sample), weight) in
-                self.input.iter_mut().zip(&self.pending[start..start + self.frame_len]).zip(&self.window)
+            for ((slot, sample), weight) in self
+                .input
+                .iter_mut()
+                .zip(&self.pending[start..start + self.frame_len])
+                .zip(&self.window)
             {
                 *slot = sample * weight;
             }
             self.consumed += self.hop;
             // The lengths are the transform's own, so this cannot fail; a
             // frame that somehow did would count as silence.
-            if self.transform.process_with_scratch(&mut self.input, &mut self.spectrum, &mut self.scratch).is_err() {
+            if self
+                .transform
+                .process_with_scratch(&mut self.input, &mut self.spectrum, &mut self.scratch)
+                .is_err()
+            {
                 self.spectrum.fill(Complex::new(0.0, 0.0));
             }
             self.frame();
@@ -199,7 +210,9 @@ impl Analyser {
     /// Keeps what is wanted of the spectrum just computed.
     fn frame(&mut self) {
         let power = |bins: &Range<usize>| -> f32 {
-            self.spectrum.get(bins.clone()).map_or(0.0, |bins| bins.iter().map(Complex::norm_sqr).sum())
+            self.spectrum
+                .get(bins.clone())
+                .map_or(0.0, |bins| bins.iter().map(Complex::norm_sqr).sum())
         };
         let low = power(&self.low_bins) * self.power_norm;
         let high = power(&self.high_bins) * self.power_norm;
@@ -212,7 +225,11 @@ impl Analyser {
         }
         // The first frame rises from nothing, which is the file starting,
         // not the music.
-        let flux = if self.has_previous { rise / (self.previous.len() - 1).max(1) as f32 } else { 0.0 };
+        let flux = if self.has_previous {
+            rise / (self.previous.len() - 1).max(1) as f32
+        } else {
+            0.0
+        };
         self.has_previous = true;
         self.frames.push(Frame { low, high, flux });
     }
@@ -227,11 +244,20 @@ impl Analyser {
         }
         let seconds = self.pushed as f64 / f64::from(self.rate);
         let onsets = self.onsets();
-        let view = View { analyser: &self, onsets: &onsets };
+        let view = View {
+            analyser: &self,
+            onsets: &onsets,
+        };
 
         let points = ((seconds / STEP_SECONDS).round() as usize).max(usize::from(self.pushed > 0));
-        let spans: Vec<(f64, f64)> =
-            (0..points).map(|point| (point as f64 * STEP_SECONDS, (point + 1) as f64 * STEP_SECONDS)).collect();
+        let spans: Vec<(f64, f64)> = (0..points)
+            .map(|point| {
+                (
+                    point as f64 * STEP_SECONDS,
+                    (point + 1) as f64 * STEP_SECONDS,
+                )
+            })
+            .collect();
         let (intensity, features) = view.curve(&spans);
 
         let mut ordered = intensity.clone();
@@ -240,7 +266,10 @@ impl Analyser {
         let whole = view.features(0.0, seconds.max(STEP_SECONDS));
         let summary = Summary {
             intensity: round(mean(&intensity), 4),
-            high: round(mean(ordered.get(ordered.len() - quarter..).unwrap_or(&[])), 4),
+            high: round(
+                mean(ordered.get(ordered.len() - quarter..).unwrap_or(&[])),
+                4,
+            ),
             low: round(mean(ordered.get(..quarter).unwrap_or(&[])), 4),
             loudness_integrated_lufs: round(integrated_lufs(&self.blocks), 2),
             loudness_short_term_max_lufs: round(self.short_term_max(), 2),
@@ -249,9 +278,17 @@ impl Analyser {
 
         Intensity {
             method: Method::current(),
-            audio: MeasuredAudio { sample_rate: self.rate, seconds: round(seconds, 3) },
+            audio: MeasuredAudio {
+                sample_rate: self.rate,
+                seconds: round(seconds, 3),
+            },
             summary,
-            curve: TimeCurve { offset_seconds: 0.0, step_seconds: STEP_SECONDS, intensity, features },
+            curve: TimeCurve {
+                offset_seconds: 0.0,
+                step_seconds: STEP_SECONDS,
+                intensity,
+                features,
+            },
             bars: view.bars(bar_starts, seconds),
         }
     }
@@ -292,7 +329,10 @@ impl Analyser {
         if self.blocks.len() < window {
             return lufs(mean(&self.blocks));
         }
-        self.blocks.windows(window).map(|blocks| lufs(mean(blocks))).fold(f64::NEG_INFINITY, f64::max)
+        self.blocks
+            .windows(window)
+            .map(|blocks| lufs(mean(blocks)))
+            .fold(f64::NEG_INFINITY, f64::max)
     }
 }
 
@@ -311,18 +351,29 @@ impl View<'_> {
         let length = (to - from).max(f64::EPSILON);
 
         let block = analyser.block_len as f64 / rate;
-        let blocks = &analyser.blocks[centred_in(from, to, block / 2.0, block, analyser.blocks.len())];
+        let blocks =
+            &analyser.blocks[centred_in(from, to, block / 2.0, block, analyser.blocks.len())];
 
         let hop = analyser.hop as f64 / rate;
         let first_centre = analyser.frame_len as f64 / 2.0 / rate;
         let range = centred_in(from, to, first_centre, hop, analyser.frames.len());
         let frames = &analyser.frames[range.clone()];
-        let level = |power: f64| if power > 0.0 { (10.0 * power.log10()).max(SILENCE_DB) } else { SILENCE_DB };
+        let level = |power: f64| {
+            if power > 0.0 {
+                (10.0 * power.log10()).max(SILENCE_DB)
+            } else {
+                SILENCE_DB
+            }
+        };
         let mean_of = |pick: fn(&Frame) -> f32| {
             if frames.is_empty() {
                 0.0
             } else {
-                frames.iter().map(|frame| f64::from(pick(frame))).sum::<f64>() / frames.len() as f64
+                frames
+                    .iter()
+                    .map(|frame| f64::from(pick(frame)))
+                    .sum::<f64>()
+                    / frames.len() as f64
             }
         };
 
@@ -330,8 +381,13 @@ impl View<'_> {
             loudness: lufs(mean(blocks)),
             low_end: level(mean_of(|frame| frame.low)),
             high_end: level(mean_of(|frame| frame.high)),
-            onset_strength: frames.iter().map(|frame| f64::from(frame.flux)).sum::<f64>() / length,
-            onset_density: self.onsets[range].iter().filter(|onset| **onset).count() as f64 / length,
+            onset_strength: frames
+                .iter()
+                .map(|frame| f64::from(frame.flux))
+                .sum::<f64>()
+                / length,
+            onset_density: self.onsets[range].iter().filter(|onset| **onset).count() as f64
+                / length,
         }
     }
 
@@ -366,7 +422,7 @@ impl View<'_> {
     fn bars(&self, bar_starts: &[f64], seconds: f64) -> Option<BarCurve> {
         let inside = |start: &f64| start.is_finite() && *start >= 0.0 && *start < seconds;
         let starts: Vec<f64> = bar_starts.iter().copied().filter(inside).collect();
-        let last_at = bar_starts.iter().rposition(|start| inside(start))?;
+        let last_at = bar_starts.iter().rposition(inside)?;
         let last = bar_starts[last_at];
         let last_length = match (bar_starts.get(last_at + 1), last_at.checked_sub(1)) {
             // The grid's own next bar, when it has one past the audio.
@@ -393,7 +449,8 @@ impl View<'_> {
 /// Which of `len` things, the first centred at `first_centre` seconds and
 /// each `step` after the last, have their centre in `from..to`.
 fn centred_in(from: f64, to: f64, first_centre: f64, step: f64, len: usize) -> Range<usize> {
-    let index = |seconds: f64| (((seconds - first_centre) / step).ceil().max(0.0) as usize).min(len);
+    let index =
+        |seconds: f64| (((seconds - first_centre) / step).ceil().max(0.0) as usize).min(len);
     let start = index(from);
     start..index(to).max(start)
 }
