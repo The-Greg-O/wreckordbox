@@ -10,10 +10,15 @@
 )]
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use rbl_index::{Row, SortColumn, TrackFilter, TrackSource, ViewSpec, COLOR_NAMES};
+use rbl_library::history::{LibraryEdit, TRACK_EDIT};
+use rbl_library::Touched;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use wreckordbox_sidecar::{Fact, Sidecar};
+pub use wreckordbox_sidecar::{Source, SourceKind};
 
 use crate::library::OpenLibrary;
 use crate::protocol::{codes as service_codes, LibraryChanged, Request, ServiceError};
@@ -32,6 +37,11 @@ pub mod commands {
     /// How many tracks wait in each queue, without listing them. Takes a
     /// [`CountsOf`](super::CountsOf), answers a [`Counts`](super::Counts).
     pub const INTAKE_COUNTS: &str = "intake.counts";
+    /// Sets or clears one track's Prep colour. Takes a
+    /// [`SetPrepColour`](super::SetPrepColour), answers a
+    /// [`PrepColourSet`](super::PrepColourSet). The only command here that
+    /// changes the Library.
+    pub const TRACKS_SET_PREP_COLOUR: &str = "tracks.set_prep_colour";
 }
 
 /// The error codes of the Intake commands, beside the service's own.
@@ -41,6 +51,9 @@ pub mod codes {
     pub const PROBLEM_COLOUR_NOT_FOUND: &str = "problem_colour_not_found";
     /// More than one colour label carries that name.
     pub const PROBLEM_COLOUR_AMBIGUOUS: &str = "problem_colour_ambiguous";
+    /// The Prep colour asked for is neither a name the DJ gave a colour
+    /// label, nor a colour, nor `none`; or it names two different colours.
+    pub const PREP_COLOUR_NOT_FOUND: &str = "prep_colour_not_found";
 }
 
 /// The name the DJ gives the colour label that marks a Problem, when
@@ -103,6 +116,33 @@ pub struct Counts {
     pub problems_unavailable: Option<ServiceError>,
 }
 
+/// The arguments of `tracks.set_prep_colour`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetPrepColour {
+    /// The track's identifier.
+    pub id: String,
+    /// The Prep colour, in any case: the DJ's name for a colour label
+    /// (`Clean`), the colour itself (`Green`), or `none` to clear it.
+    pub prep_colour: String,
+}
+
+/// What `tracks.set_prep_colour` answers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrepColourSet {
+    pub id: String,
+    pub title: String,
+    /// The track's Prep colour now, read back; `null` for none.
+    pub prep_colour: Option<PrepColour>,
+    /// What it was before.
+    pub previous: Option<PrepColour>,
+    /// Whether the track was not already in that Prep colour.
+    pub changed: bool,
+    /// The Library's generation after the edit, as the change event
+    /// carries it.
+    pub generation: u32,
+}
+
 /// A colour label of the Library: one of rekordbox's eight colours, and
 /// the name the DJ gave it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,10 +188,37 @@ pub struct QueuedTrack {
     pub empty_dimensions: Vec<Dimension>,
     /// Where the beat grid stands; the detail of [`needs::GRID`].
     pub grid: GridState,
+    /// The waiting Facts that flag the title or the artist; the detail of
+    /// [`needs::TITLE`] and [`needs::ARTIST`]. Newest first.
+    pub suggestions: Vec<Suggestion>,
+}
+
+/// A title or an artist proposed for a track by a waiting Fact.
+///
+/// A Fact is waiting when it is live (its source has not replaced it), its
+/// source is not the DJ, the DJ has recorded no Fact of the same kind for
+/// the track since, and its value is not what the Library already holds.
+/// Accepting and rejecting Facts do not exist yet; when they do, they
+/// decide this instead.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Suggestion {
+    /// The field it proposes a value for: `title` or `artist`. Also the
+    /// kind of the Fact.
+    pub field: String,
+    /// The Fact, as `facts.of_track` numbers it.
+    pub fact_id: i64,
+    /// The proposed text.
+    pub value: String,
+    pub source: Source,
+    pub confidence: f64,
 }
 
 /// The stable names of what a queued track can still need.
 pub mod needs {
+    /// A waiting Fact proposes another title.
+    pub const TITLE: &str = "title";
+    /// A waiting Fact proposes another artist.
+    pub const ARTIST: &str = "artist";
     /// No Energy: the track has no star rating.
     pub const ENERGY: &str = "energy";
     /// No tag in at least one dimension that reaches the deck; which ones
@@ -195,7 +262,10 @@ pub enum GridState {
 pub(crate) fn answers(command: &str) -> bool {
     matches!(
         command,
-        commands::INTAKE_LIST | commands::INTAKE_PROBLEMS | commands::INTAKE_COUNTS
+        commands::INTAKE_LIST
+            | commands::INTAKE_PROBLEMS
+            | commands::INTAKE_COUNTS
+            | commands::TRACKS_SET_PREP_COLOUR
     )
 }
 
@@ -203,20 +273,24 @@ pub(crate) fn answers(command: &str) -> bool {
 /// when it changed the Library.
 pub(crate) fn answer(
     library: &OpenLibrary,
-    _stems: &Stems,
+    stems: &Stems,
     request: &Request,
 ) -> Result<(Value, Option<LibraryChanged>), ServiceError> {
+    if request.command == commands::TRACKS_SET_PREP_COLOUR {
+        let (set, changed) = set_prep_colour(library, &required_arguments(request)?)?;
+        return Ok((to_value(&set)?, Some(changed)));
+    }
     let index = library.index()?;
     let list = |rows: &[Row], page: &Page, colour: Option<PrepColour>| {
         let mut queue = queue(rows, page, colour);
         let on_page = rows
             .get(queue.offset..queue.offset + page_len(rows.len(), &queue))
             .unwrap_or(&[]);
-        let known = Known::read(library, &index, on_page)?;
+        let known = Known::read(library, stems, &index, on_page)?;
         queue.tracks = on_page
             .iter()
             .map(|&row| known.describe(&index, row))
-            .collect();
+            .collect::<Result<_, _>>()?;
         to_value(&queue)
     };
     let answer = match request.command.as_str() {
@@ -279,20 +353,124 @@ fn labels(library: &OpenLibrary) -> Result<Vec<PrepColour>, ServiceError> {
                 format!("the Library's colour labels could not be read: {e}"),
             )
         })?;
-        Ok(rows
-            .into_iter()
-            .filter_map(|(id, name)| {
-                let id = id.trim().parse::<u8>().ok()?;
-                let colour = *COLOR_NAMES.get(usize::from(id).checked_sub(1)?)?;
-                let name = name.trim();
-                Some(PrepColour {
+        // Every colour is there to be named; one the Library does not
+        // name goes by the colour's own name.
+        Ok((1..=8_u8)
+            .zip(COLOR_NAMES)
+            .map(|(id, colour)| {
+                let name = rows
+                    .iter()
+                    .find(|(row, _)| row.trim().parse::<u8>() == Ok(id))
+                    .map_or("", |(_, name)| name.trim());
+                PrepColour {
                     id,
                     colour: colour.to_owned(),
                     label: if name.is_empty() { colour } else { name }.to_owned(),
-                })
+                }
             })
             .collect())
     })
+}
+
+/// Sets one track's Prep colour through the Library's single edit path:
+/// the write the window's colour command makes (`set_color_with_undo`),
+/// recorded in the edit history as the window records it.
+fn set_prep_colour(
+    library: &OpenLibrary,
+    edit: &SetPrepColour,
+) -> Result<(PrepColourSet, LibraryChanged), ServiceError> {
+    let labels = labels(library)?;
+    let wanted = named_colour(&labels, &edit.prep_colour)?;
+    let before = library.index()?;
+    let Some(row) = before.row_of(&edit.id) else {
+        return Err(ServiceError::new(
+            service_codes::TRACK_NOT_FOUND,
+            format!("there is no track {} in the Library", edit.id),
+        ));
+    };
+    let colour_of = |index: &rbl_index::Library, row: Row| {
+        let id = index.color.get(row as usize).copied().unwrap_or(NO_COLOUR);
+        labels.iter().find(|colour| colour.id == id).cloned()
+    };
+    let previous = colour_of(&before, row);
+    let id = before
+        .ids
+        .get(row as usize)
+        .map_or_else(|| edit.id.clone(), u64::to_string);
+    let title = before.title.get(row as usize).to_owned();
+    let colour = wanted.as_ref().map(|colour| colour.id.to_string());
+    let (rows, change) = library.recorded_edit(
+        Touched::Metadata(vec![id.clone()]),
+        TRACK_EDIT,
+        |writer| {
+            let (changed, recorded) = writer.set_color_with_undo(&id, colour.as_deref())?;
+            Ok((changed.rows, LibraryEdit::Track(vec![recorded])))
+        },
+    )?;
+    // Read back from the index the edit refreshed, not assumed.
+    let after = library.index()?;
+    let prep_colour = after.row_of(&id).map_or(wanted, |row| colour_of(&after, row));
+    Ok((
+        PrepColourSet {
+            id,
+            title,
+            prep_colour,
+            previous,
+            changed: rows > 0,
+            generation: change.generation,
+        },
+        change,
+    ))
+}
+
+/// The colour label `text` names: by the DJ's name for it or by the colour
+/// itself, in any case. `None` for `none`.
+fn named_colour(labels: &[PrepColour], text: &str) -> Result<Option<PrepColour>, ServiceError> {
+    let wanted = text.trim().to_lowercase();
+    if wanted == "none" {
+        return Ok(None);
+    }
+    let named: Vec<&PrepColour> = labels
+        .iter()
+        .filter(|colour| {
+            colour.label.to_lowercase() == wanted || colour.colour.to_lowercase() == wanted
+        })
+        .collect();
+    let choices = || {
+        labels
+            .iter()
+            .map(|colour| {
+                if colour.label == colour.colour {
+                    colour.colour.clone()
+                } else {
+                    format!("{} ({})", colour.label, colour.colour)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    match named.as_slice() {
+        [one] => Ok(Some((*one).clone())),
+        [] => Err(ServiceError::new(
+            codes::PREP_COLOUR_NOT_FOUND,
+            format!(
+                "{text:?} is not a Prep colour: it is one of {}, or none",
+                choices()
+            ),
+        )),
+        several => Err(ServiceError::new(
+            codes::PREP_COLOUR_NOT_FOUND,
+            format!(
+                "{text:?} names {} Prep colours, one by its label and another by its colour ({}); say which by the other name",
+                several.len(),
+                several
+                    .iter()
+                    .map(|colour| format!("{} ({})", colour.label, colour.colour))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        )),
+    }
 }
 
 /// The name the DJ uses for Problem: the command's, else the
@@ -353,7 +531,7 @@ const NO_COLOUR: u8 = 0;
 
 /// The collection's tracks carrying the colour label `colour`, as the
 /// window's Track Filter picks them.
-fn rows_coloured(index: &std::sync::Arc<rbl_index::Library>, colour: u8) -> Vec<Row> {
+fn rows_coloured(index: &Arc<rbl_index::Library>, colour: u8) -> Vec<Row> {
     index
         .open_view(&ViewSpec {
             source: TrackSource::Collection,
@@ -395,11 +573,14 @@ struct Known {
     dimensions: Vec<Dimension>,
     /// The identifiers of the page's tracks whose analysis is locked.
     locked: HashSet<String>,
+    /// The Sidecar, when there is one: where waiting Facts are.
+    sidecar: Option<Arc<Sidecar>>,
 }
 
 impl Known {
     fn read(
         library: &OpenLibrary,
+        stems: &Stems,
         index: &rbl_index::Library,
         on_page: &[Row],
     ) -> Result<Self, ServiceError> {
@@ -422,11 +603,25 @@ impl Known {
         Ok(Self {
             dimensions: dimensions_reaching_the_deck(&my_tags),
             locked,
+            // Reading a queue is not what first makes a Sidecar.
+            sidecar: stems.sidecar_if_made()?,
         })
     }
 
-    fn describe(&self, index: &rbl_index::Library, row: Row) -> QueuedTrack {
+    fn describe(&self, index: &rbl_index::Library, row: Row) -> Result<QueuedTrack, ServiceError> {
         let track = crate::tracks::record(index, row);
+        let mut suggestions = Vec::new();
+        if let Some(sidecar) = &self.sidecar {
+            for (field, held) in [(needs::TITLE, &track.title), (needs::ARTIST, &track.artist)] {
+                let facts = sidecar.facts(&track.id, field).map_err(|e| {
+                    ServiceError::new(
+                        crate::stems::codes::SIDECAR_FAILED,
+                        format!("the Sidecar failed: {e}"),
+                    )
+                })?;
+                suggestions.extend(waiting(&facts, field, held));
+            }
+        }
         let carried = index.my_tag_keys(row as usize);
         let empty_dimensions: Vec<Dimension> = self
             .dimensions
@@ -442,6 +637,11 @@ impl Known {
             GridState::NotConfirmed
         };
         let mut needs = Vec::new();
+        for field in [needs::TITLE, needs::ARTIST] {
+            if suggestions.iter().any(|suggestion| suggestion.field == field) {
+                needs.push(field);
+            }
+        }
         if track.energy.is_none() {
             needs.push(needs::ENERGY);
         }
@@ -454,13 +654,41 @@ impl Known {
         if grid != GridState::Confirmed {
             needs.push(needs::GRID);
         }
-        QueuedTrack {
+        Ok(QueuedTrack {
             track,
             needs: needs.into_iter().map(str::to_owned).collect(),
             empty_dimensions,
             grid,
-        }
+            suggestions,
+        })
     }
+}
+
+/// The Facts among `facts` (one track's, of the kind `field`, newest
+/// first) that are waiting for the DJ and propose something other than
+/// `held`, the text the Library has. See [`Suggestion`] for the rule.
+fn waiting(facts: &[Fact], field: &str, held: &str) -> Vec<Suggestion> {
+    // Facts are numbered in the order they were recorded.
+    let decided = facts
+        .iter()
+        .filter(|fact| fact.is_live() && fact.source.kind == SourceKind::Dj)
+        .map(|fact| fact.id)
+        .max();
+    facts
+        .iter()
+        .filter(|fact| fact.is_live() && fact.source.kind != SourceKind::Dj)
+        .filter(|fact| decided.is_none_or(|decision| fact.id > decision))
+        .filter_map(|fact| {
+            let value = fact.value.as_str()?.trim();
+            (!value.is_empty() && value != held.trim()).then(|| Suggestion {
+                field: field.to_owned(),
+                fact_id: fact.id,
+                value: value.to_owned(),
+                source: fact.source.clone(),
+                confidence: fact.confidence,
+            })
+        })
+        .collect()
 }
 
 /// The dimensions of the DJ's tags that reach the deck, in the order the
@@ -518,6 +746,17 @@ fn arguments<T: serde::de::DeserializeOwned + Default>(
     if request.args.is_null() {
         return Ok(T::default());
     }
+    serde_json::from_value(request.args.clone()).map_err(|e| {
+        ServiceError::new(
+            service_codes::BAD_REQUEST,
+            format!("bad arguments to {}: {e}", request.command),
+        )
+    })
+}
+
+fn required_arguments<T: serde::de::DeserializeOwned>(
+    request: &Request,
+) -> Result<T, ServiceError> {
     serde_json::from_value(request.args.clone()).map_err(|e| {
         ServiceError::new(
             service_codes::BAD_REQUEST,

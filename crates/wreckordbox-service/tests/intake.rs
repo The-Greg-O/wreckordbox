@@ -288,3 +288,191 @@ fn each_queued_track_says_what_it_still_needs() {
         .unwrap()
         .contains(&json!("grid")));
 }
+
+impl Fixture {
+    /// Declares the `title` and `artist` kinds of Fact, as the DJ declares
+    /// a kind: in the kinds file in the Sidecar's folder.
+    fn declare_title_and_artist(&self) {
+        let sidecar = wreckordbox_sidecar_dir(&self.location);
+        std::fs::create_dir_all(&sidecar).unwrap();
+        std::fs::write(
+            sidecar.join("kinds.toml"),
+            "[kinds.title]\nnature = \"judgement\"\nvalue = \"text\"\n\n\
+             [kinds.artist]\nnature = \"judgement\"\nvalue = \"text\"\n",
+        )
+        .unwrap();
+    }
+}
+
+/// Where a service by itself keeps the Sidecar: beside the Library.
+fn wreckordbox_sidecar_dir(location: &LibraryLocation) -> std::path::PathBuf {
+    location
+        .master_db
+        .parent()
+        .unwrap()
+        .join("wreckordbox-sidecar")
+}
+
+impl Hosted {
+    fn record(&self, track: &str, kind: &str, value: &str, source: Value) {
+        self.call(
+            "facts.record",
+            json!({
+                "facts": [{ "track": track, "kind": kind, "value": value }],
+                "source": source,
+                "confidence": 0.8,
+            }),
+        );
+    }
+}
+
+fn needs(page: &Value, id: &str) -> Vec<String> {
+    track(page, id)["needs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|need| need.as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn a_title_or_artist_an_agent_proposed_is_needed_until_the_dj_decides() {
+    let fixture = Fixture::new(3);
+    fixture.declare_title_and_artist();
+    let hosted = fixture.start();
+    let agent = json!({ "kind": "agent", "name": "tagger" });
+    hosted.record("10000", "title", "A Better Title", agent.clone());
+    hosted.record("10001", "artist", "Someone", agent.clone());
+    // Agreeing with what the Library already says flags nothing.
+    hosted.record("10002", "title", "Track 002", agent.clone());
+
+    let page = hosted.call("intake.list", json!({}));
+
+    assert_eq!(needs(&page, "10000")[0], "title");
+    assert!(!needs(&page, "10000").contains(&"artist".to_owned()));
+    assert_eq!(needs(&page, "10001")[0], "artist");
+    assert!(!needs(&page, "10002").contains(&"title".to_owned()));
+    let suggestion = &track(&page, "10000")["suggestions"][0];
+    assert_eq!(suggestion["field"], "title");
+    assert_eq!(suggestion["value"], "A Better Title");
+    assert_eq!(suggestion["source"], agent);
+    assert_eq!(suggestion["confidence"], 0.8);
+    assert!(suggestion["fact_id"].is_i64());
+    assert_eq!(track(&page, "10002")["suggestions"], json!([]));
+
+    // The DJ's own word on the title is the decision: nothing waits.
+    hosted.call(
+        "facts.record",
+        json!({
+            "facts": [{ "track": "10000", "kind": "title", "value": "Track 000" }],
+            "source": { "kind": "dj" },
+        }),
+    );
+    let page = hosted.call("intake.list", json!({}));
+    assert!(!needs(&page, "10000").contains(&"title".to_owned()));
+
+    // A proposal made after the DJ's decision waits again.
+    hosted.record("10000", "title", "Third Time Lucky", agent);
+    let page = hosted.call("intake.list", json!({}));
+    assert_eq!(needs(&page, "10000")[0], "title");
+}
+
+#[test]
+fn asking_for_a_queue_does_not_make_a_sidecar() {
+    let fixture = Fixture::new(2);
+    let sidecar = wreckordbox_sidecar_dir(&fixture.location);
+    let hosted = fixture.start();
+
+    hosted.call("intake.list", json!({}));
+    hosted.call("intake.counts", json!({}));
+
+    assert!(!sidecar.exists());
+}
+
+#[test]
+fn setting_a_prep_colour_moves_a_track_between_the_queues() {
+    let fixture = Fixture::new(3);
+    dj_labels(&fixture);
+    let hosted = fixture.start();
+    let events = hosted.service.events();
+
+    // By the DJ's own name for the colour.
+    let clean = hosted.call(
+        "tracks.set_prep_colour",
+        json!({ "id": "10000", "prep_colour": "Clean" }),
+    );
+    assert_eq!(clean["title"], "Track 000");
+    assert_eq!(
+        clean["prep_colour"],
+        json!({ "id": 5, "colour": "Green", "label": "Clean" })
+    );
+    assert_eq!(clean["previous"], Value::Null);
+    assert_eq!(clean["changed"], true);
+    let told = events.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+    assert_eq!(told.event, "library_changed");
+    assert_eq!(told.data["generation"], clean["generation"]);
+
+    let intake = hosted.call("intake.list", json!({}));
+    assert_eq!(ids(&intake), ["10001", "10002"]);
+
+    hosted.call(
+        "tracks.set_prep_colour",
+        json!({ "id": "10001", "prep_colour": "problem" }),
+    );
+    assert_eq!(ids(&hosted.call("intake.list", json!({}))), ["10002"]);
+    assert_eq!(ids(&hosted.call("intake.problems", json!({}))), ["10001"]);
+
+    // By the colour itself, and back to none.
+    let red = hosted.call(
+        "tracks.set_prep_colour",
+        json!({ "id": "10000", "prep_colour": "red" }),
+    );
+    assert_eq!(red["prep_colour"]["label"], "Problem");
+    assert_eq!(red["previous"]["label"], "Clean");
+    let none = hosted.call(
+        "tracks.set_prep_colour",
+        json!({ "id": "10000", "prep_colour": "none" }),
+    );
+    assert_eq!(none["prep_colour"], Value::Null);
+    assert_eq!(ids(&hosted.call("intake.list", json!({}))), ["10000", "10002"]);
+    let counts = hosted.call("intake.counts", json!({}));
+    assert_eq!((&counts["intake"], &counts["problems"]), (&json!(2), &json!(1)));
+}
+
+#[test]
+fn a_prep_colour_edit_that_cannot_be_made_changes_nothing() {
+    let fixture = Fixture::new(2);
+    dj_labels(&fixture);
+    let hosted = fixture.start();
+    let generation = |hosted: &Hosted| {
+        hosted.call(
+            "tracks.set_prep_colour",
+            json!({ "id": "10001", "prep_colour": "none" }),
+        )["generation"]
+            .as_u64()
+            .unwrap()
+    };
+    let before = generation(&hosted);
+
+    let unknown_colour = hosted
+        .service
+        .call(
+            "tracks.set_prep_colour",
+            json!({ "id": "10000", "prep_colour": "Mauve" }),
+        )
+        .unwrap_err();
+    assert_eq!(unknown_colour.code, "prep_colour_not_found");
+    assert!(unknown_colour.message.contains("Clean"), "{}", unknown_colour.message);
+
+    let unknown_track = hosted
+        .service
+        .call(
+            "tracks.set_prep_colour",
+            json!({ "id": "77", "prep_colour": "Clean" }),
+        )
+        .unwrap_err();
+    assert_eq!(unknown_track.code, "track_not_found");
+
+    assert_eq!(ids(&hosted.call("intake.list", json!({}))), ["10000", "10001"]);
+    assert_eq!(generation(&hosted), before + 1);
+}
