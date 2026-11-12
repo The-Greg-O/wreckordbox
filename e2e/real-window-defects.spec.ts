@@ -48,13 +48,12 @@ test("a track loaded before it was analysed shows its waveform once the analysis
   await openProtected(page);
   const bpm = (at: number) => page.locator('[role="gridcell"][data-col="bpm"]').nth(at);
   const dialog = page.getByRole("dialog", { name: "Analysis Setting" });
-  let protectedNow = true;
   // The mock fails every seventh track's analysis on purpose: go on to the
   // next unanalysed row until one is analysed.
   let analysed = -1;
   for (const at of await unanalysedRows(page)) {
     // Loaded while the Library is protected: nothing analyses it on load.
-    if (!protectedNow) await turnProtection(page, (protectedNow = true));
+    await turnProtection(page, true);
     const title = await titles(page).nth(at).innerText();
     await titles(page).nth(at).dblclick();
     await expect(player(page).getByTestId("compact-player-title")).toHaveText(title);
@@ -63,7 +62,7 @@ test("a track loaded before it was analysed shows its waveform once the analysis
     expect(await overviewDrawnTo(page), "nothing to draw before the analysis").toBe(0);
 
     // Protection off, then the row analysed from the list as the DJ would.
-    await turnProtection(page, (protectedNow = false));
+    await turnProtection(page, false);
     await titles(page).nth(at).click();
     await page.keyboard.press("Control+Shift+A");
     await dialog.getByRole("button", { name: "OK", exact: true }).click();
