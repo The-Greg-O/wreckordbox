@@ -169,7 +169,17 @@ fn edits_and_facts_made_in_one_run_are_listed_and_shown_together_also_after_a_re
     assert_eq!(coloured["run"]["id"], run);
     ok(
         &sandbox,
-        &["facts", "record", "10003", "genre", "House", "--run", &id],
+        &[
+            "facts",
+            "record",
+            "10003",
+            "genre",
+            "House",
+            "--confidence",
+            "0.8",
+            "--run",
+            &id,
+        ],
     );
     ok(
         &sandbox,
@@ -179,6 +189,8 @@ fn edits_and_facts_made_in_one_run_are_listed_and_shown_together_also_after_a_re
             "10003",
             "genre",
             "Tech House",
+            "--confidence",
+            "0.8",
             "--run",
             &id,
         ],
@@ -411,7 +423,10 @@ fn runs_and_a_runs_entries_are_paged_and_read_as_tables() {
         shown.stdout
     );
 
-    // In text, an edit says which Run it is in.
+    // In text, an edit given a Run says which Run it is in; one made by
+    // hand with none stays one line.
+    let plain = sandbox.cli(&["tracks", "rate", "10005", "1"]);
+    assert_eq!(plain.stdout.lines().count(), 1, "{}", plain.stdout);
     let rated = sandbox.cli(&["tracks", "rate", "10005", "2", "--run", &run]);
     assert!(
         rated

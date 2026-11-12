@@ -80,15 +80,16 @@ pub fn attribute(client: &mut Client) {
 }
 
 /// `output` with the Run the command's changes are in: a `run` key in the
-/// JSON object, a last line in the text. Unchanged when the command
-/// changed nothing in the Library.
+/// JSON object; in text a last line, when the caller named a Run or a
+/// source (an edit made by hand with neither stays one readable line).
+/// Unchanged when the command changed nothing in the Library.
 pub fn with_run(output: &str) -> String {
     let (reported, as_json) = match INVOCATION
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .as_ref()
     {
-        Some(invocation) => (
+        Some(invocation) if invocation.as_json || invocation.options.named().is_some() => (
             invocation
                 .reported
                 .lock()
@@ -96,7 +97,7 @@ pub fn with_run(output: &str) -> String {
                 .clone(),
             invocation.as_json,
         ),
-        None => (None, false),
+        _ => (None, false),
     };
     let Some(run) = reported else {
         return output.to_owned();

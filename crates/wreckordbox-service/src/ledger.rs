@@ -49,8 +49,8 @@
 //! The Keeper is called under the Library's edit gate, and for an entry
 //! under the edit history's lock. It takes only its own state lock and
 //! the Sidecar's, both leaves: it never takes the service's Library lock,
-//! the edit gate or the history, and never calls a host. What it has to
-//! say to clients is queued, not sent.
+//! the edit gate or the history, and never calls a host or sends an
+//! event.
 
 use std::cell::RefCell;
 use std::io::Write;
@@ -75,12 +75,6 @@ pub mod commands {
     pub const RUNS_LIST: &str = "runs.list";
     /// One Run and what it changed.
     pub const RUNS_SHOW: &str = "runs.show";
-}
-
-/// Event names.
-pub mod events {
-    /// An entry was added to the Ledger: `{"run": N, "entry": N}`.
-    pub const LEDGER_CHANGED: &str = "ledger_changed";
 }
 
 /// The name of the `tool` source a client's edit has when the client names
@@ -1048,15 +1042,7 @@ impl Keeper {
                 (_, Err(error)) => Err(error.clone()),
             };
             match written {
-                Ok(id) => {
-                    if let Ok(run) = run {
-                        self.stems.publish(
-                            events::LEDGER_CHANGED,
-                            json!({"run": run.0, "entry": id}),
-                        );
-                    }
-                    Some(id)
-                }
+                Ok(id) => Some(id),
                 Err(error) => {
                     // The Library has changed. Keep the entry: here, and on
                     // disk in case this process ends before it is written.
