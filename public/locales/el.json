@@ -1709,5 +1709,8 @@
   "Runs unavailable": "Μη διαθέσιμες εκτελέσεις",
   "{count} Stick loads in progress": "{count} μεταφορές σε USB σε εξέλιξη",
   "Analyzing {done}/{total} tracks": "Ανάλυση {done}/{total} κομματιών",
-  "{count} failed": "{count} απέτυχαν"
+  "{count} failed": "{count} απέτυχαν",
+  "Dismiss": "Dismiss",
+  "Theme file": "Theme file",
+  "line {line}": "line {line}"
 }

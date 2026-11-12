@@ -19,6 +19,11 @@ export interface ListLook {
   /** The headings' row height. */
   headingHeight: number;
   /**
+   * Columns drawn in the theme file's monospace face and size, which grow
+   * with that size rather than the interface's (wbx-45.6).
+   */
+  numberColumns?: readonly ColumnKey[];
+  /**
    * The extra fields to fetch for the columns on show, in place of the
    * table's own choice: the Library view adds `color` for the Prep colour
    * stripe and asks for `myTags` (structured) rather than `myTag` (text).

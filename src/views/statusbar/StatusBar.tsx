@@ -1,4 +1,5 @@
 import styles from "./StatusBar.module.css";
+import { ThemeFileStatus } from "@/views/shell/ThemeFileStatus";
 import { useTooltip } from "@/store/usePreferences";
 import { refusal } from "@/lib/menu";
 import type { ExportProgress } from "@/ipc/types";
@@ -101,6 +102,8 @@ export function StatusBar({
         wreckordbox
         {version === null ? null : <> <span className={styles.version}>{version}</span></>}
       </span>
+      {/* The theme file's mistakes (wbx-45.6). */}
+      <ThemeFileStatus />
       {readOnly ? (
         <button type="button" className={styles.readOnly} title={refusal(protectedLibrary)}
           onClick={onExplainReadOnly} onDoubleClick={onDisableReadOnly}>
