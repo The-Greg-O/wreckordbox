@@ -19,6 +19,7 @@ These crates are independent of Tauri; application coordination belongs in
 | [rbl-audio](rbl-audio/README.md) | Audio decoding and export compatibility. |
 | [rbl-analysis](rbl-analysis/README.md) | Offline tempo, grid, key, and waveform DSP. |
 | [rbl-deck](rbl-deck/README.md) | Two-deck playback and real-time audio. |
+| [wreckordbox-render](wreckordbox-render/README.md) | Offline rendering of a track with a key shift and a tempo, through the deck's stretcher. |
 | [rbl-backup](rbl-backup/README.md) | Backup archives and recoverable restore. |
 | [rbl-devices](rbl-devices/README.md) | Volume discovery, inspection, and eject. |
 
@@ -37,6 +38,8 @@ These crates are independent of Tauri; application coordination belongs in
 | [wreckordbox-service](wreckordbox-service/README.md) | The Library service, its client and their protocol. |
 | [wreckordbox](wreckordbox/README.md) | The headless `wreckordbox` command. |
 | [wreckordbox-sidecar](wreckordbox-sidecar/README.md) | The Sidecar: a store of Facts beside the Library, with Stems as its first kind. |
+| [wreckordbox-intensity](wreckordbox-intensity/README.md) | Intensity: how hard a track hits and how that changes over its length, measured from its audio. |
+| [wreckordbox-native-stems](wreckordbox-native-stems/README.md) | Native stems: a track's Stems written to a Spare stick in the layout a modded XDJ-AZ plays. |
 
 ## Link Export and diagnostics
 

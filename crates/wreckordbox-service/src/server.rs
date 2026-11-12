@@ -70,6 +70,8 @@ struct Shared {
     idle_since: Mutex<Option<Instant>>,
     /// The Sidecar and the separation engine (`stems.*` commands).
     stems: Arc<crate::stems::Stems>,
+    /// Keeps the Ledger: told of every edit by the Library core.
+    ledger: Arc<crate::ledger::Keeper>,
 }
 
 struct Owned {
@@ -149,23 +151,37 @@ impl Service {
         hosted: bool,
         open: impl FnOnce(LibraryLocation) -> Result<OpenLibrary, ServiceError>,
     ) -> Result<Self, ServiceError> {
-        if !library.master_db.is_file() {
-            return Err(ServiceError::new(
+        let missing = || {
+            ServiceError::new(
                 codes::LIBRARY_MISSING,
                 format!(
                     "the Library is missing: there is no {}",
                     library.master_db.display()
                 ),
-            ));
+            )
+        };
+        // A restore stopped between its renames leaves no `master.db` and a
+        // journal to recover it by: that Library is owned and recovered
+        // first, and only then must the database be there.
+        if !library.master_db.is_file() && !rbl_backup::journal::pending(&config.recovery_dir) {
+            return Err(missing());
         }
         let socket = config.socket_path(&library);
         let library_lock = take_lock(&library.master_db, &socket)?;
+        // A restore that stopped midway is finished or rolled back now,
+        // while this process owns the Library and before the Library or the
+        // Sidecar is opened, so neither is ever read half restored.
+        crate::backup::recover(&config.recovery_dir, &library)?;
+        if !library.master_db.is_file() {
+            return Err(missing());
+        }
         let master_db = library.master_db.clone();
         let open = open(library)?;
-        let core = open.core();
         let listener = listen(&config.runtime_dir, &socket)?;
         let (queue, queued) = std::sync::mpsc::channel();
         let (sidecar_events, sidecar_queued) = std::sync::mpsc::channel();
+        let stems = crate::stems::Stems::from_env(&master_db, sidecar_events);
+        let ledger = crate::ledger::Keeper::new(Arc::clone(&stems));
 
         let shared = Arc::new(Shared {
             library: Mutex::new(Some(Owned {
@@ -182,7 +198,8 @@ impl Service {
             listeners: Mutex::new(Vec::new()),
             changes: Mutex::new(Some(queue)),
             idle_since: Mutex::new(Some(Instant::now())),
-            stems: crate::stems::Stems::from_env(&master_db, sidecar_events),
+            stems,
+            ledger,
         });
         // What the Stems commands have to say (progress, a change to the
         // Sidecar), sent off the thread that said it. Ends with the service.
@@ -201,16 +218,35 @@ impl Service {
         // or the front end this service shares the core with. The core calls
         // this under its own lock, so the change is only queued here.
         {
-            let shared = Arc::downgrade(&shared);
-            core.watch(move |change| {
-                let Some(shared) = shared.upgrade() else {
-                    return false;
-                };
-                let queue = lock(&shared.changes);
-                queue
-                    .as_ref()
-                    .is_some_and(|queue| queue.send(LibraryChanged::from(change).event()).is_ok())
-            });
+            let watching = Arc::downgrade(&shared);
+            if let Some(owned) = lock(&shared.library).as_ref() {
+                owned.library.watch(move |change| {
+                    let Some(shared) = watching.upgrade() else {
+                        return false;
+                    };
+                    let queue = lock(&shared.changes);
+                    queue.as_ref().is_some_and(|queue| {
+                        queue.send(LibraryChanged::from(change).event()).is_ok()
+                    })
+                });
+                // Every turn of Library Protection, likewise in order, on
+                // the same queue. A hosting window hears of it from the core.
+                let watching = Arc::downgrade(&shared);
+                owned.library.watch_protection(move |state| {
+                    let Some(shared) = watching.upgrade() else {
+                        return false;
+                    };
+                    let queue = lock(&shared.changes);
+                    queue.as_ref().is_some_and(|queue| {
+                        queue
+                            .send(Event {
+                                event: crate::protection::PROTECTION_CHANGED.to_owned(),
+                                data: json!(crate::protection::Protection::from(state)),
+                            })
+                            .is_ok()
+                    })
+                });
+            }
         }
         {
             let shared = Arc::clone(&shared);
@@ -224,6 +260,17 @@ impl Service {
         if let Some(idle_exit) = config.idle_exit {
             let shared = Arc::clone(&shared);
             std::thread::spawn(move || stop_when_idle(&shared, idle_exit));
+        }
+        // From here on every edit through the core, a client's or the
+        // hosting front end's, is recorded in the Ledger: installed, and
+        // what an earlier service left settled, before any client is
+        // accepted. A Ledger that cannot be settled now refuses every write
+        // and every read of it, saying why, until it can.
+        if let Some(owned) = lock(&shared.library).as_ref() {
+            owned.library.keep_ledger(shared.ledger.clone());
+        }
+        if let Err(error) = shared.ledger.recover() {
+            tracing::error!(%error, "the Ledger could not be brought up to date");
         }
         {
             let shared = Arc::clone(&shared);
@@ -253,8 +300,21 @@ impl Service {
             id: 0,
             command: command.to_owned(),
             args,
+            run: None,
         };
-        self.shared.dispatch(None, &request)
+        self.shared.answer(None, &request).0
+    }
+
+    /// A track's Stems for the renderer, verified current for its audio as
+    /// it is now (fingerprinted, with stale marking): the only way the
+    /// service hands Stems to `wreckordbox_render`. See `render_stems`.
+    pub fn current_stems_for_render(
+        &self,
+        track_id: &str,
+    ) -> Result<crate::render_stems::StemsForRender, ServiceError> {
+        let shared = &self.shared;
+        let found = shared.with_library(|library| crate::stems::parent(library, track_id))??;
+        crate::render_stems::current(&shared.stems, &found)
     }
 
     /// What the process hosting the service has not seen for itself, from
@@ -362,6 +422,19 @@ impl Shared {
         }
     }
 
+    /// Answers one request with its edits attributed in the Ledger: the
+    /// result, and the Run the command's changes are in.
+    fn answer(
+        &self,
+        connection: Option<&Connection>,
+        request: &Request,
+    ) -> (Result<Value, ServiceError>, Option<Value>) {
+        let (result, run) = self.ledger.attributed(connection.is_some(), request, || {
+            self.dispatch(connection, request)
+        });
+        (result, run.and_then(|run| serde_json::to_value(run).ok()))
+    }
+
     /// The one place a command name becomes behaviour.
     fn dispatch(
         &self,
@@ -405,6 +478,16 @@ impl Shared {
                 self.stop_requested.store(true, Ordering::Release);
                 Ok(json!({}))
             }
+            crate::protection::commands::GET => {
+                to_value(&self.with_library(OpenLibrary::protection)?)
+            }
+            crate::protection::commands::SET => {
+                // Turned through the core, which tells the clients (the
+                // watcher below) and a hosting window (its own watcher) in
+                // order, with the change's revision.
+                let set: crate::protection::SetProtection = required_arguments(request)?;
+                to_value(&self.with_library(|library| library.protect(set.protect_library))??)
+            }
             reading if crate::reading::answers(reading) => self
                 .with_library(|library| crate::reading::answer(library, reading, &request.args))?,
             edit if crate::mytag_edits::answers(edit) => {
@@ -419,11 +502,29 @@ impl Shared {
             crate::tracks::TRACKS_GET | crate::tracks::TRACKS_QUERY => {
                 self.with_library(|library| crate::tracks::answer(library, request))?
             }
+            crate::native_stems::commands::STEMS_WRITE => {
+                // To a Stick, not the Library: only the lookup takes it.
+                crate::native_stems::answer(&self.stems, request, &|id| {
+                    self.with_library(|library| crate::native_stems::parent(library, id))?
+                })
+            }
             stems if crate::stems::answers(stems) => {
                 // Only the lookup takes the Library; a separation runs
                 // with it free.
                 crate::stems::answer(&self.stems, request, &|id| {
                     self.with_library(|library| crate::stems::parent(library, id))?
+                })
+            }
+            crate::run_status::RUNS_ACTIVE => crate::run_status::active(&self.stems),
+            runs if crate::ledger::answers(runs) => {
+                crate::ledger::answer(&self.ledger, &self.stems, request)
+            }
+            crate::facts::commands::RUNS_FINISH => {
+                // Not while a command admitted to the Run is still in it.
+                self.ledger.finishing(&request.args, || {
+                    crate::facts::answer(&self.stems, request, &|id| {
+                        self.with_library(|library| crate::stems::parent(library, id))?
+                    })
                 })
             }
             facts if crate::facts::answers(facts) => {
@@ -432,6 +533,36 @@ impl Shared {
                 crate::facts::answer(&self.stems, request, &|id| {
                     self.with_library(|library| crate::stems::parent(library, id))?
                 })
+            }
+            intensity if crate::intensity::answers(intensity) => {
+                // As for Stems: only finding the tracks takes the Library.
+                crate::intensity::answer(&self.stems, request, &|wanted| {
+                    self.with_library(|library| crate::intensity::targets(library, wanted))?
+                })
+            }
+            decisions if crate::decisions::answers(decisions) => {
+                // The Sidecar's too: the Library is only read, to find a
+                // track a Decision or its Fact is about.
+                crate::decisions::answer(&self.stems, request, &|id| {
+                    self.with_library(|library| crate::stems::parent(library, id))?
+                })
+            }
+            mutants if crate::mutants::answers(mutants) => {
+                // The Sidecar's, not the Library's: the Library is only
+                // read, to find the entry, its playlist and its track.
+                crate::mutants::answer(&self.stems, request, &|read| {
+                    self.with_library(|library| read(library))?
+                })
+            }
+            schema if crate::schema::answers(schema) => {
+                // Reads the Library's MyTags and writes only beside the
+                // Sidecar: the Library does not change.
+                crate::schema::answer(
+                    &self.stems,
+                    request,
+                    &|| self.with_library(crate::schema::my_tags)?,
+                    &|id| self.with_library(|library| crate::stems::parent(library, id))?,
+                )
             }
             intake if crate::intake::answers(intake) => {
                 let (result, changed) = self.with_library(|library| {
@@ -494,11 +625,27 @@ impl Shared {
         let _ = std::fs::remove_file(&self.socket);
         // A separation in progress is abandoned; nothing of it is kept.
         self.stems.cancel();
+        // A measuring of Intensity keeps the tracks it has finished, and
+        // is waited for: nothing of it may be recorded once another service
+        // can have the Library and the Sidecar.
+        crate::intensity::shut(&self.stems);
         // No more changes to send; the sending thread ends.
         drop(lock(&self.changes).take());
+        // No write is begun from now on; one already begun is recorded.
+        self.ledger.shut();
         // Waits for a command in progress, then closes the Library before
-        // letting another service have it.
-        drop(lock(&self.library).take());
+        // letting another service have it. The core, which a hosting front
+        // end keeps, is no longer this service's to record: its edit gate
+        // is taken first, so an edit the window is making is over, and
+        // recorded, before the Ledger is taken off it.
+        if let Some(owned) = lock(&self.library).take() {
+            owned.library.let_go_of_ledger(|| self.ledger.close());
+        } else {
+            self.ledger.close();
+        }
+        // And the Sidecar, likewise, before another service or a reader
+        // may have it: not left open until the last thread lets go.
+        self.stems.close();
         *lock(&self.stopped.0) = true;
         self.stopped.1.notify_all();
     }
@@ -552,13 +699,17 @@ fn serve_client(shared: &Shared, connection: &Connection, stream: UnixStream) {
             continue;
         }
         let response = match serde_json::from_str::<Request>(&line) {
-            Ok(request) => Response {
-                id: request.id,
-                outcome: match shared.dispatch(Some(connection), &request) {
-                    Ok(result) => Outcome::Result(result),
-                    Err(error) => Outcome::Error(error),
-                },
-            },
+            Ok(request) => {
+                let (result, run) = shared.answer(Some(connection), &request);
+                Response {
+                    id: request.id,
+                    outcome: match result {
+                        Ok(result) => Outcome::Result(result),
+                        Err(error) => Outcome::Error(error),
+                    },
+                    run,
+                }
+            }
             // Nothing to answer to by id; 0 is never a client's id.
             Err(e) => Response {
                 id: 0,
@@ -566,6 +717,7 @@ fn serve_client(shared: &Shared, connection: &Connection, stream: UnixStream) {
                     codes::BAD_REQUEST,
                     format!("not a request: {e}"),
                 )),
+                run: None,
             },
         };
         let Ok(line) = serde_json::to_string(&response) else {
@@ -592,8 +744,10 @@ fn stop_when_idle(shared: &Shared, idle_exit: Duration) {
     }
 }
 
-/// Takes the Library's lock, or says which service has it.
-fn take_lock(master_db: &Path, socket: &Path) -> Result<File, ServiceError> {
+/// Takes the Library's lock, or says which service has it. `socket` is
+/// written into the lock file for a person to read: where the holder
+/// listens, or what it is doing.
+pub(crate) fn take_lock(master_db: &Path, socket: &Path) -> Result<File, ServiceError> {
     let path = crate::lock_path(master_db);
     let failed = |e: &dyn std::fmt::Display| {
         ServiceError::new(

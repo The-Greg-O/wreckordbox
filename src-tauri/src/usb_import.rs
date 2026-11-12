@@ -31,7 +31,8 @@ pub fn library_trees(root: &Path) -> AppResult<Vec<DeviceLibraryTreeDto>> {
     }
     let one = export.join("rekordbox/exportLibrary.db");
     if one.exists() {
-        let db = rbl_onelibrary::ExportLibrary::open_read_only(&one).map_err(err)?;
+        // Never creates or changes a companion file on the Stick (wbx-45.5).
+        let db = wreckordbox_stick_outline::one_library::OneLibraryRead::open(&one).map_err(err)?;
         let mut q = db.connection().prepare("SELECT playlist_id, COALESCE(playlist_id_parent,0), name, attribute FROM playlist ORDER BY sequenceNo").map_err(err)?;
         let nodes = q.query_map([], |r| Ok(DevicePlaylistNodeDto { id: r.get::<_,i64>(0)?.to_string(), parent_id: r.get::<_,i64>(1)?.to_string(), name: r.get(2)?, folder: r.get::<_,i64>(3)? != 0 })).map_err(err)?.collect::<Result<Vec<_>,_>>().map_err(err)?;
         libraries.push(DeviceLibraryTreeDto { name: "OneLibrary".into(), nodes });
@@ -94,23 +95,75 @@ pub async fn import_usb<R: tauri::Runtime>(app: tauri::AppHandle<R>, state: Stat
     }
 }
 
+/// One analysis file the Stick names, read before anything is applied.
+enum Analysis {
+    /// The library names it but the Stick has no such file.
+    Missing,
+    /// The `.DAT`, and the `.EXT` when there is one (the `.DAT` again when not).
+    Read { dat: rbl_anlz::Anlz, cues: rbl_anlz::Anlz },
+}
+
+/// Everything Round-trip takes from the Stick, read in full before the read
+/// is validated and before anything is applied to the Library (wbx-45.5).
+struct Source {
+    db_id: u64,
+    /// USB id -> master id, analysis path.
+    tracks: HashMap<u32, (String, String)>,
+    /// Stick tracks the Library no longer has.
+    gone: usize,
+    manifest: Option<rbl_export::Manifest>,
+    rating_tracks: HashMap<u32, String>,
+    /// The Stick's libraries, for ratings and history; read from off-Stick
+    /// copies of its databases.
+    snapshot: Option<Result<rbl_export::snapshot::Snapshot, String>>,
+    /// By the analysis path the library names; a read failure is kept and
+    /// reported only when that track is imported.
+    analysis: HashMap<String, AppResult<Analysis>>,
+    /// The players' settings files present, by name.
+    settings: Vec<(&'static str, Vec<u8>)>,
+    volume: String,
+}
+
 #[allow(clippy::fn_params_excessive_bools, reason = "the same independent choices as import_usb")]
-fn import(state: &AppState, editor: &crate::grid::GridEditor, root: &Path, cues: bool, history: bool, settings: bool, ratings: bool) -> AppResult<ImportReport> {
+pub(crate) fn import(state: &AppState, editor: &crate::grid::GridEditor, root: &Path, cues: bool, history: bool, settings: bool, ratings: bool) -> AppResult<ImportReport> {
+    import_with(state, editor, root, cues, history, settings, ratings, || {})
+}
+
+/// [`import`], running `between` after the Stick has been read and before
+/// the read is validated: where a test puts a writer.
+#[allow(clippy::fn_params_excessive_bools, clippy::too_many_arguments, reason = "the same independent choices as import_usb")]
+pub(crate) fn import_with(state: &AppState, editor: &crate::grid::GridEditor, root: &Path, cues: bool, history: bool, settings: bool, ratings: bool, between: impl FnOnce()) -> AppResult<ImportReport> {
+    // Library Protection is said first: the DJ is not sent to settle a Stick
+    // for an import that would be refused anyway. Checked again, under the
+    // gate, by `file_edit` below.
+    if (cues || history || ratings) && state.core().protection().protect_library {
+        return Err(write_error(rbl_library::protection::refusal()));
+    }
     // The stick first, the library after: an import waiting here for an
     // export to finish writing the stick must not hold the library's edit
     // gate, or every analysis and the next sync's preparation wait behind
     // it (#284). An export never asks for the gate while it holds the stick.
-    rbl_devices::settings::recover(root)
-        .map_err(|e| err(format!("Could not recover an interrupted export before importing: {e}")))?;
-    let _device_read = rbl_core::durable::read_lock(root).map_err(err)?;
-    let _gate = state.edit_gate().lock();
-    let _files = state.analysis_write().lock();
-    let mut report = ImportReport::default();
-    let location = state.location()?;
-    crate::file_journal::recover(state.backup_dir(), &location)?;
+    //
+    // Never settles or writes to the Stick (wbx-45.5): one whose last write
+    // did not finish is refused, naming the action that settles it; the
+    // lease is taken only on an existing lock (none is created); everything
+    // is read first, under the root as resolved here, then the read is
+    // validated (no journal, lock or rewritten database appeared, the path
+    // still names that folder), and only then is the Library changed.
+    let device_read = wreckordbox_stick_outline::StickRead::begin(root).map_err(|e| crate::stick_recovery::read_error(root, e))?;
+    let source = read_source(state, &device_read, cues, history, settings, ratings)?;
+    between();
+    device_read.finish().map_err(|e| crate::stick_recovery::read_error(root, e))?;
+    apply(state, editor, source, cues, history, settings, ratings)
+}
+
+#[allow(clippy::fn_params_excessive_bools, reason = "the same independent choices as import_usb")]
+fn read_source(state: &AppState, stick: &wreckordbox_stick_outline::StickRead, cues: bool, history: bool, settings: bool, ratings: bool) -> AppResult<Source> {
+    let root = stick.root();
     let export = rbl_devices::settings::export_root(root);
     let one_path = export.join("rekordbox/exportLibrary.db");
-    let one = if one_path.exists() { Some(rbl_onelibrary::ExportLibrary::open_read_only(&one_path).map_err(err)?) } else { None };
+    // Never creates or changes a companion file on the Stick.
+    let one = if one_path.exists() { Some(wreckordbox_stick_outline::one_library::OneLibraryRead::open(&one_path).map_err(err)?) } else { None };
     let db_id = state.read_db(|db| rbl_db::export_info::db_id(db.connection())).map_err(write_error)?;
     // USB id -> master id, analysis path. masterDbId prevents importing another library's ids.
     let mut tracks: HashMap<u32, (String, String)> = HashMap::new();
@@ -120,6 +173,7 @@ fn import(state: &AppState, editor: &crate::grid::GridEditor, root: &Path, cues:
             let (id, value) = entry.map_err(err)?; tracks.insert(id, value);
         }
     }
+    drop(one);
     // Checked before the manifest's entries join: theirs are already checked.
     let gone = retain_live(state, &mut tracks)?;
     // Our manifest also works on legacy-only exports; validate its source path against master.db.
@@ -139,9 +193,71 @@ fn import(state: &AppState, editor: &crate::grid::GridEditor, root: &Path, cues:
             }
         }
     }
+    // The protected `Snapshot` reader opens the databases with SQLite
+    // itself, so it reads off-Stick copies of them.
+    let snapshot = (ratings || history).then(|| {
+        stick.mirror().map_err(|e| e.to_string()).and_then(|mirror| rbl_export::snapshot::Snapshot::read(mirror.path()).map_err(|e| e.to_string()))
+    });
+    let mut analysis = HashMap::new();
+    if cues {
+        for (_, relative) in tracks.values() {
+            if relative.is_empty() || analysis.contains_key(relative) { continue; }
+            analysis.insert(relative.clone(), read_analysis(root, relative));
+        }
+    }
+    let mut found = Vec::new();
+    if settings {
+        for name in ["MYSETTING.DAT", "MYSETTING2.DAT", "DJMMYSETTING.DAT"] {
+            let source = export.join(name);
+            if !source.exists() { continue; }
+            let bytes = std::fs::read(within(root, &source.strip_prefix(root).map_err(err)?.to_string_lossy())?).map_err(err)?;
+            found.push((name, bytes));
+        }
+    }
+    Ok(Source { db_id, tracks, gone, manifest, rating_tracks, snapshot, analysis, settings: found, volume: rbl_devices::volume_id(root) })
+}
+
+/// One analysis file and its `.EXT`, as the Stick holds them.
+fn read_analysis(root: &Path, analysis: &str) -> AppResult<Analysis> {
+    let source_path = root.join(analysis.trim_start_matches('/'));
+    match std::fs::metadata(&source_path) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Analysis::Missing),
+        Err(e) => return Err(err(e)),
+    }
+    let source = within(root, analysis)?;
+    let dat = rbl_anlz::Anlz::read(&source).map_err(err)?;
+    // `source` is canonical and `root` need not be (a symlinked mount),
+    // so the `.EXT` is found from the relative path, not by stripping.
+    let ext_relative = Path::new(analysis).with_extension("EXT");
+    let cues = if source.with_extension("EXT").exists() { rbl_anlz::Anlz::read(&within(root, &ext_relative.to_string_lossy())?).map_err(err)? } else { dat.clone() };
+    Ok(Analysis::Read { dat, cues })
+}
+
+/// Applies what was read from the Stick to the Library and the settings
+/// stash, under the Library's gates.
+#[allow(clippy::fn_params_excessive_bools, reason = "the same independent choices as import_usb")]
+fn apply(state: &AppState, editor: &crate::grid::GridEditor, source: Source, cues: bool, history: bool, settings: bool, ratings: bool) -> AppResult<ImportReport> {
+    let Source { db_id, tracks, gone, manifest, rating_tracks, snapshot, analysis, settings: found, volume } = source;
+    // Cues (analysis files and rows), play history and ratings change the
+    // Library: refused before any file is written while it may not be
+    // changed (Library Protection among it). The players' settings alone go
+    // to the app's own folder, not the Library.
+    let (_edit, _gate, _files);
+    if cues || history || ratings {
+        _edit = state.file_edit()?;
+    } else {
+        _gate = state.edit_gate().lock();
+        _files = state.analysis_write().lock();
+    }
+    let mut report = ImportReport::default();
+    let location = state.location()?;
+    crate::file_journal::recover(state.backup_dir(), &location)?;
+    let snapshot = snapshot.as_ref().map(|read| read.as_ref().map_err(String::as_str));
     // Resolve all rating conflicts before any requested imports write to the library.
-    if ratings { ratings::import(state, root, manifest.as_ref(), &rating_tracks, db_id, &mut report)?; }
+    if ratings { ratings::import(state, snapshot.unwrap_or(Err("not read")), manifest.as_ref(), &rating_tracks, db_id, &mut report)?; }
     if cues && tracks.is_empty() { return Err(err("No tracks from this library were found on the device.")); }
+    let read = analysis;
     if cues {
         report.skipped += gone;
         // Open the guarded writer even for an empty device; read-only must not look like success.
@@ -154,22 +270,16 @@ fn import(state: &AppState, editor: &crate::grid::GridEditor, root: &Path, cues:
             // an hour (#284).
             if editor.is_locked(id) || state.read_db(|db| crate::grid::locked_in(db, id)).map_err(write_error)? { report.skipped += 1; continue; }
             if analysis.is_empty() { report.skipped += 1; continue; }
-            let source_path = root.join(analysis.trim_start_matches('/'));
-            match std::fs::metadata(&source_path) {
-                Ok(_) => {},
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let (source_dat, source_cues) = match read.get(analysis) {
+                Some(Ok(Analysis::Read { dat, cues })) => (dat, cues),
+                Some(Ok(Analysis::Missing)) => {
                     report.skipped += 1;
                     report.warnings.push(format!("Track {id}: USB analysis file is missing ({analysis}); cues and grid were left unchanged."));
                     continue;
                 }
-                Err(e) => return Err(err(e)),
-            }
-            let source = within(root, analysis)?;
-            let source_dat = rbl_anlz::Anlz::read(&source).map_err(err)?;
-            // `source` is canonical and `root` need not be (a symlinked mount),
-            // so the `.EXT` is found from the relative path, not by stripping.
-            let ext_relative = Path::new(analysis).with_extension("EXT");
-            let source_cues = if source.with_extension("EXT").exists() { rbl_anlz::Anlz::read(&within(root, &ext_relative.to_string_lossy())?).map_err(err)? } else { source_dat.clone() };
+                Some(Err(e)) => return Err(e.clone()),
+                None => return Err(err(format!("Track {id}: its analysis file was not read"))),
+            };
             if source_cues.section(b"PCO2").is_none() { report.skipped += 1; continue; }
             let entries = source_cues.cue_entries();
             let beats = source_dat.beat_grid().unwrap_or_default();
@@ -188,7 +298,7 @@ fn import(state: &AppState, editor: &crate::grid::GridEditor, root: &Path, cues:
                 let target = target.with_extension(extension);
                 if !target.exists() { continue; }
                 let mut dest = rbl_anlz::Anlz::read(&target).map_err(err)?;
-                let src = if extension == "DAT" { &source_dat } else { &source_cues };
+                let src = if extension == "DAT" { source_dat } else { source_cues };
                 differs |= !dest.sections.iter().filter(|s| s.is_cue_list()).eq(src.sections.iter().filter(|s| s.is_cue_list()));
                 if extension == "DAT" && !beats.is_empty() {
                     differs |= !dest.sections.iter().filter(|s| s.as_beat_grid().is_some()).eq(source_dat.section(b"PQTZ"));
@@ -214,7 +324,7 @@ fn import(state: &AppState, editor: &crate::grid::GridEditor, root: &Path, cues:
         }
     }
     if history {
-        let snapshot = rbl_export::snapshot::Snapshot::read(root)
+        let snapshot = snapshot.unwrap_or(Err("not read"))
             .map_err(|e| err(format!("Could not read play history: {e}")))?;
         for session in snapshot.history.iter().filter(|h| !h.folder) {
             let matched: Vec<String> = session.tracks.iter().filter_map(|id| tracks.get(id).map(|t| t.0.clone())).collect();
@@ -226,7 +336,7 @@ fn import(state: &AppState, editor: &crate::grid::GridEditor, root: &Path, cues:
             if matched.is_empty() { continue; }
             // A session keeps one identity as more tracks are appended. The
             // writer rejects a changed prefix instead of silently duplicating it.
-            let key = format!("{}:{}:{}", rbl_devices::volume_id(root), session.id, session.name);
+            let key = format!("{}:{}:{}", volume, session.id, session.name);
             let hash = rbl_export::manifest::hash(key.as_bytes());
             let uuid = format!("00000000-0000-4000-8000-{:012x}", hash & 0xffff_ffff_ffff);
             report.histories += state.write(|w| w.import_usb_history(&format!("{} (USB {:06x})", session.name, hash & 0x00ff_ffff), &uuid, &matched)).map_err(write_error)?;
@@ -234,10 +344,7 @@ fn import(state: &AppState, editor: &crate::grid::GridEditor, root: &Path, cues:
     }
     if settings {
         let destination = settings_stash(state.backup_dir());
-        for name in ["MYSETTING.DAT", "MYSETTING2.DAT", "DJMMYSETTING.DAT"] {
-            let source = export.join(name);
-            if !source.exists() { continue; }
-            let bytes = std::fs::read(within(root, &source.strip_prefix(root).map_err(err)?.to_string_lossy())?).map_err(err)?;
+        for (name, bytes) in found {
             validate_settings(name, &bytes)
                 .map_err(|e| err(format!("Could not import {name}: {e}")))?;
             std::fs::create_dir_all(&destination).map_err(err)?;
@@ -322,13 +429,55 @@ fn validate_settings(name: &str, bytes: &[u8]) -> Result<(), String> {
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+
+    /// wbx-43 review A: importing a stick's cues and grid is refused while
+    /// Library Protection is on, before the Library's analysis file is
+    /// touched: its bytes and modification time stay as they were.
+    #[test]
+    fn a_cue_import_leaves_the_analysis_file_alone_while_protection_is_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let location = rbl_db::fixture::build(dir.path(), rbl_db::fixture::Shape::default()).unwrap();
+        let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
+        let (library, _) = rbl_index::load(&db).unwrap();
+        let state = AppState::unprotected(dir.path().join("backups"));
+        state.set_library(library, false, db.schema().db_version, 0, location.clone());
+        let id = rbl_db::fixture::track_id(0);
+        let source_path: String = db.connection().query_row("SELECT FolderPath FROM djmdContent WHERE ID=?1", [&id], |r| r.get(0)).unwrap();
+        drop(db);
+        let relative = state.write(|w| w.analysis_data_path_for(&id)).unwrap();
+        state.write(|w| w.register_analysis(&id, &rbl_db::write::AnalysisRegistration { bpm_x100: 12000, key: None, analysis_data_path: &relative })).unwrap();
+        let target = rbl_anlz::resolve(&location.share_root, &relative);
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        let mut original = rbl_anlz::write::AnlzBuilder::new();
+        original.path("/original.mp3").beat_grid(&[rbl_anlz::Beat { beat_number: 1, tempo_x100: 12000, time_ms: 0 }]).cue_lists(true);
+        std::fs::write(&target, original.finish()).unwrap();
+        let usb = dir.path().join("usb");
+        let anlz = "PIONEER/USBANLZ/test";
+        std::fs::create_dir_all(usb.join(anlz)).unwrap();
+        let mut changed = rbl_anlz::write::AnlzBuilder::new();
+        changed.path("/usb.mp3").beat_grid(&[rbl_anlz::Beat { beat_number: 1, tempo_x100: 12800, time_ms: 250 }]).cue_lists(true);
+        std::fs::write(usb.join(anlz).join("ANLZ0000.DAT"), changed.finish()).unwrap();
+        rbl_export::Manifest { generation: None, db_id: 0, baseline: None, version: 1, written: String::new(), playlists: vec![], loose: vec![], tracks: vec![rbl_export::manifest::ManifestTrack { analysis_hashes: std::collections::BTreeMap::new(), analysis_extensions: vec!["DAT".into()], audio_hash: 0,
+            export_id: 1, library_id: id.parse().unwrap(), source: source_path, audio: "audio.mp3".into(), anlz_dir: anlz.into(), size: 0, modified: 0, analysis: 0, artwork: String::new(), conversion: String::new(), conversion_source_hash: 0, in_place: false, preserved: Some(false), copy_stamp: None,
+        }] }.save(&usb).unwrap();
+        let editor = crate::grid::GridEditor::at(state.backup_dir());
+        let before = (std::fs::read(&target).unwrap(), std::fs::metadata(&target).unwrap().modified().unwrap());
+        state.core().set_protection(true).unwrap();
+
+        let refused = import(&state, &editor, &usb, true, false, false, false).unwrap_err();
+
+        assert_eq!(refused.message, rbl_library::protection::MESSAGE);
+        assert_eq!((std::fs::read(&target).unwrap(), std::fs::metadata(&target).unwrap().modified().unwrap()), before);
+        state.core().set_protection(false).unwrap();
+        assert_eq!(import(&state, &editor, &usb, true, false, false, false).unwrap().tracks, 1);
+    }
     #[test]
     fn imports_only_cues_and_grid_preserving_local_path_and_waveform() {
         let dir = tempfile::tempdir().unwrap();
         let location = rbl_db::fixture::build(dir.path(), rbl_db::fixture::Shape::default()).unwrap();
         let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
         let (library, _) = rbl_index::load(&db).unwrap();
-        let state = AppState::with_backups(dir.path().join("backups"));
+        let state = AppState::unprotected(dir.path().join("backups"));
         state.set_library(library, false, db.schema().db_version, 0, location.clone());
         let id = rbl_db::fixture::track_id(0);
         let source_path: String = db.connection().query_row("SELECT FolderPath FROM djmdContent WHERE ID=?1", [&id], |r| r.get(0)).unwrap();
@@ -433,7 +582,7 @@ mod tests {
         let location = rbl_db::fixture::build(dir.path(), rbl_db::fixture::Shape::default()).unwrap();
         let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
         let (library, _) = rbl_index::load(&db).unwrap();
-        let state = AppState::with_backups(dir.path().join("backups"));
+        let state = AppState::unprotected(dir.path().join("backups"));
         state.set_library(library, false, db.schema().db_version, 0, location.clone());
         let id = rbl_db::fixture::track_id(0);
         let source_path: String = db.connection().query_row("SELECT FolderPath FROM djmdContent WHERE ID=?1", [&id], |r| r.get(0)).unwrap();
@@ -562,7 +711,7 @@ mod tests {
         let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
         let (library, _) = rbl_index::load(&db).unwrap();
         let db_id = rbl_db::export_info::db_id(db.connection()).unwrap();
-        let state = AppState::with_backups(dir.path().join("backups"));
+        let state = AppState::unprotected(dir.path().join("backups"));
         state.set_library(library, false, db.schema().db_version, 0, location.clone());
         drop(db);
         let live = rbl_db::fixture::track_id(0);
@@ -634,7 +783,7 @@ mod tests {
         let (library, _) = rbl_index::load(&db).unwrap();
         let db_id = rbl_db::export_info::db_id(db.connection()).unwrap();
         let tracks = library.len();
-        let state = AppState::with_backups(dir.join("backups"));
+        let state = AppState::unprotected(dir.join("backups"));
         state.set_library(library, false, db.schema().db_version, 0, location.clone());
         drop(db);
         let usb = dir.join("usb");
@@ -691,6 +840,58 @@ mod tests {
         assert_eq!(std::fs::read(&usb_db).unwrap(), before_usb_db);
         let repeat = import(&state, &editor, &usb, true, false, false, false).unwrap();
         assert_eq!((repeat.tracks, repeat.unchanged, repeat.skipped), (0, 1, tracks - 1));
+    }
+
+    /// wbx-45.5: a writer that leaves a journal, or takes the lock and
+    /// rewrites a database, after Round-trip has read the Stick and before
+    /// anything is applied: the import is refused and the Library (its
+    /// analysis files and cue rows) is exactly as it was. The same import
+    /// afterwards does change it, so the refusal is what kept it.
+    #[test]
+    fn a_publication_during_round_trip_leaves_the_library_unchanged() {
+        for writer in ["journal", "lock and rewritten database"] {
+            let dir = tempfile::tempdir().unwrap();
+            let (state, location, usb, _tracks) = library_and_stick(dir.path());
+            let mut local = Vec::new();
+            for index in 0..2 {
+                let id = rbl_db::fixture::track_id(index);
+                let relative = state.write(|w| w.analysis_data_path_for(&id)).unwrap();
+                state.write(|w| w.register_analysis(&id, &rbl_db::write::AnalysisRegistration {
+                    bpm_x100: 12000, key: None, analysis_data_path: &relative,
+                })).unwrap();
+                let target = rbl_anlz::resolve(&location.share_root, &relative);
+                std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+                let mut original = rbl_anlz::write::AnlzBuilder::new();
+                original.path("/original.mp3").beat_grid(&[rbl_anlz::Beat { beat_number: 1, tempo_x100: 12000, time_ms: 0 }]).cue_lists(true);
+                std::fs::write(&target, original.finish()).unwrap();
+                local.push(target);
+            }
+            let cue_rows = || state.read_db(|db| Ok(db.connection().query_row("SELECT COUNT(*) FROM djmdCue", [], |r| r.get::<_, i64>(0))?)).unwrap();
+            let before = (local.iter().map(|p| std::fs::read(p).unwrap()).collect::<Vec<_>>(), cue_rows());
+            let usb_db = usb.join("PIONEER/rekordbox/exportLibrary.db");
+            let original_db = std::fs::read(&usb_db).unwrap();
+            let editor = crate::grid::GridEditor::at(state.backup_dir());
+
+            let refused = import_with(&state, &editor, &usb, true, true, false, true, || {
+                if writer == "journal" {
+                    std::fs::create_dir_all(usb.join(".rbxport-publication")).unwrap();
+                    std::fs::write(usb.join(".rbxport-publication/publication.json"), b"[]").unwrap();
+                } else {
+                    std::fs::write(usb.join(".rbxport-write.lock"), b"").unwrap();
+                    std::fs::write(&usb_db, b"another generation").unwrap();
+                }
+            })
+            .unwrap_err();
+
+            assert!(matches!(refused.kind, ErrorKind::UnfinishedWrite | ErrorKind::Conflict), "{writer}: {refused:?}");
+            assert_eq!((local.iter().map(|p| std::fs::read(p).unwrap()).collect::<Vec<_>>(), cue_rows()), before, "{writer}: the Library changed");
+            // The Stick put back as it was: the same import changes the Library.
+            let _ = std::fs::remove_dir_all(usb.join(".rbxport-publication"));
+            let _ = std::fs::remove_file(usb.join(".rbxport-write.lock"));
+            std::fs::write(&usb_db, &original_db).unwrap();
+            let report = import(&state, &editor, &usb, true, false, false, false).unwrap();
+            assert!(report.tracks > 0, "{writer}: {report:?}");
+        }
     }
 
     /// Importing cues reads two things from the library for each track on
@@ -782,7 +983,7 @@ mod tests {
         let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
         let (library, _) = rbl_index::load(&db).unwrap();
         drop(db);
-        let state = AppState::with_backups(dir.path().join("state/backups"));
+        let state = AppState::unprotected(dir.path().join("state/backups"));
         state.set_library(library, false, None, 0, location);
         let usb = dir.path().join("usb");
         std::fs::create_dir_all(usb.join("PIONEER")).unwrap();
@@ -820,7 +1021,7 @@ mod tests {
     }
 
     #[test]
-    fn import_explains_an_interrupted_export_that_cannot_be_recovered() {
+    fn import_refuses_an_interrupted_export_and_names_the_settle_action() {
         let dir = tempfile::tempdir().unwrap();
         let usb = dir.path().join("usb");
         let journal = usb.join(".rbxport-publication");
@@ -830,11 +1031,16 @@ mod tests {
             br#"[{"path":"missing-track.wav","present":true}]"#,
         )
         .unwrap();
-        let state = AppState::with_backups(dir.path().join("backups"));
+        let state = AppState::unprotected(dir.path().join("backups"));
         let editor = crate::grid::GridEditor::at(state.backup_dir());
 
+        let before = std::fs::read(journal.join("publication.json")).unwrap();
+
+        // wbx-45.5: importing never settles the Stick; it says how to.
         let error = import(&state, &editor, &usb, false, true, false, false).unwrap_err();
-        assert!(error.message.contains("Could not recover an interrupted export"));
-        assert!(error.message.contains("missing-track.wav"));
+        assert_eq!(error.kind, ErrorKind::UnfinishedWrite);
+        assert!(error.message.contains("Finish or roll back the unfinished write on usb"), "{}", error.message);
+        assert_eq!(std::fs::read(journal.join("publication.json")).unwrap(), before);
+        assert!(!usb.join(".rbxport-write.lock").exists(), "no lock file made");
     }
 }

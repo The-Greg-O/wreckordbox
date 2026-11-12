@@ -32,14 +32,25 @@ Read from the active theme's `colors.toml`; the window re-reads it when the them
 | Secondary text, labels | `dark_foreground` | `#565f89` |
 | Emphasised text | `bright_foreground` | `#c0caf5` |
 | Accent (focus, active filter, deck marker) | `accent` | `#7aa2f7` |
+| Text and glyphs on an accent fill | derived: whichever of `darker_background` and `bright_foreground` stands out more from the accent, or black or white where neither reaches 4.5:1 | `#0e0e14` |
 
 The active view tab carries a two-colour line (`bright_magenta` to `bright_yellow`); the Stick load display uses the same pair. These are the only gradients.
+
+The active theme's file is `~/.local/state/omarchy/current/theme/colors.toml`. In CSS each role is a `--role-*` custom property (`src/styles/tokens.css`, set by `src/lib/themeRoles.ts`).
+
+### Fallbacks
+
+- **No theme** (no Omarchy, macOS, Windows, the browser mock, or a file without both `background` and `foreground`): every role keeps upstream's colour, so the window looks as upstream's does.
+- **A partial file:** a missing role is derived from the file's own `background` and `foreground` (darker grounds towards black; hairline, selection and borders a step towards the foreground; secondary text a step towards the background), never taken from upstream, so two palettes are not mixed. A selection colour too close to the text colour to read is replaced the same way.
+- **A light theme:** the roles are the theme's, for the new views. Upstream's layout, until it is removed (wbx-77), keeps its dark grounds and text and takes only the accent and the font, because its icons are drawn for a dark ground; it stays readable, it does not turn light.
+- **Lit controls in upstream's layout:** every lit state of the chrome (the AU, Q and MASTER buttons, the active player tab, the open side-rail box, Preferences' selections, the Track Filter's picked rows, tick boxes) is the accent under a theme, with the on-accent colour written on it. Under the pointer a lit control is the accent moved 15% away from its on-accent colour (`--role-accent-hover`, derived in `themeRoles.ts`), so its label stays readable; a greyed ticked box is the accent half over the box's grey; the running metronome's bars are the accent. Without a theme they keep upstream's measured blues.
+- **Font:** where fontconfig cannot name a monospace family, upstream's face.
 
 ## Fixed colours (meaning, not theme)
 
 - **Prep colour:** rekordbox's own label colours, shown as a 3 px stripe at the row's left edge.
-- **Energy:** five pips coloured by level, cool to hot (1 blue, 2 cyan, 3 green, 4 orange, 5 red).
-- **Key lights:** green fill for a key that mixes with the loaded track, yellow fill for an energy-boost move, no fill otherwise.
+- **Energy:** five pips coloured by level, cool to hot (1 blue, 2 cyan, 3 green, 4 orange, 5 red). Unset pips are a fixed slate (`--c-energy-0`). In upstream's layout, until it is removed, Energy is five stars in the same colours: lit stars in the track's level colour, unlit ones in the unset colour, never the theme's text colour.
+- **Key lights:** green fill (`--c-key-match: #9ece6a`) with `=` for a key that mixes with the loaded track; yellow fill (`--c-key-boost: #e0af68`) with `↑` for an energy-boost move; no fill otherwise. Lit text and marks use `--c-key-text: #0e0e14`. These fixed component tokens do not follow theme roles. Each lit badge names the key and relationship for assistive technology.
 - **Tag dimensions:** one hue per dimension for set tags; an unset tag is outlined in the hairline colour; a suggested tag has a dashed yellow outline.
 - **Mutant:** magenta badge and banner. Magenta is used for nothing else in a list.
 - **Waveform themes:** 3Band (upstream's measured colours, the default), RGB, Blue, and Theme (drawn from the Omarchy theme's blue, magenta and bright foreground). Cue, playhead and phrase colours do not change with the waveform theme.

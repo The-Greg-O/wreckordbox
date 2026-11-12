@@ -291,6 +291,14 @@ pub fn read(mount_point: &Path) -> DeviceSettings {
     read_files(mount_point)
 }
 
+/// What [`read`] reads, without settling an unfinished export first: only
+/// opens files for reading. The caller decides what a pending publication
+/// means (wbx-45.5).
+#[must_use]
+pub fn read_without_recovery(mount_point: &Path) -> DeviceSettings {
+    read_files(mount_point)
+}
+
 fn read_files(mount_point: &Path) -> DeviceSettings {
     let root = export_root(mount_point);
     let dev = std::fs::read(root.join("DEVSETTING.DAT"))

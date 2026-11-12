@@ -209,7 +209,7 @@ export const SimplePlayer = memo(function SimplePlayer({
         <div className={styles.field}>
           <span className={styles.stars} data-testid="simple-player-stars" aria-label={`${track?.rating ?? 0} of 5`}>
             {[1, 2, 3, 4, 5].map((star) => (
-              <span key={star}><RatingStar lit={(track?.rating ?? 0) >= star} className={styles.starIcon} /></span>
+              <span key={star}><RatingStar star={star} rating={track?.rating ?? 0} className={styles.starIcon} /></span>
             ))}
           </span>
           <span className={styles.fieldRow} aria-hidden />

@@ -11,23 +11,26 @@
  */
 import { TRACK_SEARCH_OPTIONS, type TrackSearchField } from "@/lib/search";
 import theme from "@/styles/theme";
+import { mockServiceActivity } from "./mock-service-activity";
 import { rowMemoryCueColours } from "@/lib/memoryCueColours";
 import { shiftByGridBeats } from "@/lib/player";
 
 import type {
   AppErrorDto, Backend, Backup, BackupProgress, BackupSizes, Cue, DeckEvent, Device, DeviceSettings, Edits, ExplorerRoot, ExportReport,
-  DatabaseDrive, EditHistoryState, FilterValues, GridState, LibraryProblem, LibrarySummary, Limiter, LinkPeerSeen, LinkStatus, RelatedCriterion, RowDto, SortKey,
+  DatabaseDrive, EditHistoryState, FilterValues, GridState, LibraryProblem, LibrarySummary, Limiter, LinkPeerSeen, LinkStatus, RelatedCriterion, RowDto, RowMyTag, SortKey,
   SelectionDetails, SmartRule, StickDefaults, SyncPlaylist, SyncProgress, Tick, TrackDetails, TrackField,
   PreferencesRequest, RelocateSearch, ExportProgress,
-  DeckId, TrackFilter, TreeNode, ViewHandle, ViewSpec, WaveformKind, LogLine, LogLevel,
+  DeckId, LibraryProtection, StickOutline, TrackFilter, TreeNode, ViewHandle, ViewSpec, WaveformKind, LogLine, LogLevel,
 } from "./types";
 import { TREE_ROOT } from "./types";
 import { applyEditFrom, validateEdit, isDynamicFrom, tempoX100, type EditableBeat } from "@/lib/gridEdit";
-import { toCamelot } from "@/lib/camelot";
+import { fromCamelot, toCamelot } from "@/lib/camelot";
 import { COLOR_NAMES, wholeBpm } from "@/lib/trackFilter";
 import { MY_TAG_LIMIT, newMyTagName } from "@/lib/myTags";
 import { referenceDeviceSettings } from "./mock-device-settings";
 import { createMockDeviceLibraries, type MockImportEntry } from "./mock-device-library";
+import { createMockIntake } from "./mock-intake";
+import { keyLightRows } from "./mock-key-lights";
 
 const ARTISTS = [
   "MORTEN", "ARTBAT", "Meduza", "Vintage Culture", "Tujamo", "UMEK", "Kryder", "Joel Corry",
@@ -356,6 +359,16 @@ function extraText(row: RowDto, field: string): string {
   return typeof value === "string" ? value : "";
 }
 
+// Same displayed Classic labels and blank-last rule as rbl-index/key.rs.
+function compareKeyNames(a: string, b: string): number {
+  const left = (fromCamelot(toCamelot(a)) || a).toLowerCase();
+  const right = (fromCamelot(toCamelot(b)) || b).toLowerCase();
+  if (left === right) return 0;
+  if (!left) return 1;
+  if (!right) return -1;
+  return left < right ? -1 : 1;
+}
+
 function compare(a: RowDto, b: RowDto, col: SortKey): number {
   switch (col) {
     case "keyCamelot": {
@@ -365,7 +378,7 @@ function compare(a: RowDto, b: RowDto, col: SortKey): number {
         if (code === "") return Number.MAX_SAFE_INTEGER;
         return Number(code.slice(0, -1)) * 2 + (code.endsWith("B") ? 1 : 0);
       };
-      return rank(a.key) - rank(b.key) || collator.compare(a.key, b.key);
+      return rank(a.key) - rank(b.key) || compareKeyNames(a.key, b.key);
     }
     case "trackNo": return a.trackNo - b.trackNo;
     case "bpm": return a.bpmX100 - b.bpmX100;
@@ -386,7 +399,7 @@ function compare(a: RowDto, b: RowDto, col: SortKey): number {
     case "genre": return collator.compare(a.genre, b.genre);
     case "label": return collator.compare(a.label, b.label);
     case "comment": return collator.compare(a.comment, b.comment);
-    case "key": return collator.compare(a.key, b.key);
+    case "key": return compareKeyNames(a.key, b.key);
     case "dateAdded": return collator.compare(a.dateAdded, b.dateAdded);
     case "releaseDate": return collator.compare(a.releaseDate, b.releaseDate);
   }
@@ -429,8 +442,23 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     mockLog.push({ seq: mockLogNext++, timeMs: Date.now(), level, target, message });
   };
   mockLogLine("debug", "rbxport_lib::logging", "logging to the browser preview");
+  /** Library Protection as the mock's backend records it; none yet. */
+  let protection: LibraryProtection | null = null;
+  const protectionListeners = new Set<(now: LibraryProtection) => void>();
+  const recordProtection = (protectLibrary: boolean): LibraryProtection => {
+    protection = { protectLibrary, revision: (protection?.revision ?? 0) + 1 };
+    const now = protection;
+    protectionListeners.forEach((listener) => listener(now));
+    return now;
+  };
+  if (typeof window !== "undefined") {
+    // Library Protection turned from outside the window, as
+    // `wreckordbox protection on|off` turns it.
+    (window as unknown as { __turnLibraryProtection: (on: boolean) => void }).__turnLibraryProtection =
+      (on) => { recordProtection(on); };
+  }
   const playlistFixture = options.playlistFixture ?? readPlaylistFixtureFromUrl();
-  const all = makeRows(trackCount);
+  const all = readFlagFromUrl("keyLights") ? keyLightRows(makeRows(12)) : makeRows(trackCount);
   // A disposable browser fixture for external file drops. It is opt-in and
   // survives a page reload so the collection view can verify the import.
   const dropFixture = readFlagFromUrl("dropFixture");
@@ -623,6 +651,25 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     return candidates;
   };
   const tree = makeTree(playlistFixture);
+  // For the shell tree's tests (ticket #52), before Histories: folders nested
+  // far deeper than the tree is wide (`?deepFolders`), and a Library of tens
+  // of thousands of playlists (`?bigTree`).
+  {
+    const extra: TreeNode[] = [];
+    if (readFlagFromUrl("deepFolders")) {
+      for (let level = 1; level <= 16; level += 1) extra.push({ id: `deep-${level}`, name: `Level ${level}`, kind: "folder", depth: level });
+      extra.push({ id: "deep-end", name: "The Deep End", kind: "playlist", depth: 17, childCount: mockPlaylistSize("deep-end") });
+    }
+    if (readFlagFromUrl("bigTree")) {
+      extra.push({ id: "archive", name: "ARCHIVE", kind: "folder", depth: 1 });
+      for (let i = 1; i <= 20_000; i += 1) extra.push({ id: `archive-${i}`, name: `Archive ${i}`, kind: "playlist", depth: 2, childCount: 1 });
+    }
+    if (extra.length > 0) {
+      const after = tree.splice(tree.findIndex((node) => node.kind === "histories"));
+      for (const node of extra) tree.push(node);
+      for (const node of after) tree.push(node);
+    }
+  }
   type MockEdit = {
     label: string; undo: () => void; redo: () => void;
     /** An Add Tracks to Playlist still open to its next slice (#499). */
@@ -739,6 +786,17 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     editRedo.length = 0;
     return announceHistory();
   };
+
+  /**
+   * Every rating write asked of the mock, refused or not, and a track's
+   * rating as the mock holds it: what a test checks an edit really landed on.
+   */
+  const ratingWrites: { ids: string[]; stars: number; refused: boolean }[] = [];
+  if (typeof window !== "undefined") {
+    const hooks = window as unknown as { __ratingWrites: typeof ratingWrites; __ratingOf: (id: string) => number };
+    hooks.__ratingWrites = ratingWrites;
+    hooks.__ratingOf = (id) => all.find((row) => row.id === id)?.rating ?? -1;
+  }
 
   /**
    * One edit over several tracks, recorded as one step of history the way
@@ -925,6 +983,85 @@ export function createMockBackend(options: MockOptions = {}): Backend {
   // What each stick's own libraries hold, for the Devices tree.
   const stickLibraries = createMockDeviceLibraries();
 
+  // The shell's tree reads sticks with `stickOutline`. For its tests: a
+  // stick pulled out, or put back with other contents, behind the window's
+  // back (the next `listDevices` reports it so); how many outline reads each
+  // stick has had; and the next read of a stick held unanswered until
+  // released.
+  const outlineReads = new Map<string, number>();
+  const heldOutlines = new Map<string, Array<() => void>>();
+  const holdingOutlines = new Set<string>();
+  const outlineOverrides = new Map<string, StickOutline>();
+  const unmounted = new Map<string, Device>();
+  // Sticks whose last write did not finish (wbx-45.5): every read rejects
+  // with `unfinishedWrite` until `settleStick`, the DJ's explicit action.
+  const unfinishedWrites = new Set<string>();
+  // `deviceLibraries` reads held unanswered until released, for the old
+  // tree's stale-answer test; what the Stick held when asked is answered.
+  const holdingLibraries = new Set<string>();
+  const heldLibraries = new Map<string, Array<() => void>>();
+  const settles = new Map<string, number>();
+  const unfinished = (path: string): Promise<never> | null =>
+    unfinishedWrites.has(path)
+      ? Promise.reject(Object.assign(new Error("A write to this Stick did not finish. Nothing on it has been changed; settle it from the Stick's panel to use it again."), { kind: "unfinishedWrite" }))
+      : null;
+  if (typeof window !== "undefined") {
+    const hooks = window as unknown as {
+      __unmountDevice: (path: string) => void;
+      __remountDevice: (path: string, outline?: StickOutline) => void;
+      __stickOutlineReads: (path: string) => number;
+      __holdStickOutline: (path: string) => void;
+      __releaseStickOutline: (path: string) => void;
+      __interruptStickWrite: (path: string) => void;
+      __stickSettles: (path: string) => number;
+    };
+    hooks.__interruptStickWrite = (path) => { unfinishedWrites.add(path); };
+    const held = hooks as unknown as Record<string, (path: string) => number | void>;
+    held.__holdDeviceLibraries = (path) => { holdingLibraries.add(path); };
+    held.__releaseDeviceLibraries = (path) => {
+      for (const release of heldLibraries.get(path) ?? []) release();
+      heldLibraries.delete(path);
+    };
+    held.__deviceLibrariesHeld = (path) => heldLibraries.get(path)?.length ?? 0;
+    // Set before the page loads, so the first read already finds them.
+    for (const path of (window as unknown as { __initialUnfinishedWrites?: string[] }).__initialUnfinishedWrites ?? []) {
+      unfinishedWrites.add(path);
+    }
+    hooks.__stickSettles = (path) => settles.get(path) ?? 0;
+    hooks.__unmountDevice = (path) => {
+      const index = devices.findIndex((device) => device.path === path);
+      if (index < 0) return;
+      unmounted.set(path, devices[index] as Device);
+      devices.splice(index, 1);
+    };
+    hooks.__remountDevice = (path, outline) => {
+      const device = unmounted.get(path);
+      if (!device) return;
+      unmounted.delete(path);
+      devices.push(device);
+      if (outline) outlineOverrides.set(path, outline);
+    };
+    hooks.__stickOutlineReads = (path) => outlineReads.get(path) ?? 0;
+    hooks.__holdStickOutline = (path) => { holdingOutlines.add(path); };
+    hooks.__releaseStickOutline = (path) => {
+      for (const release of heldOutlines.get(path) ?? []) release();
+      heldOutlines.delete(path);
+    };
+  }
+  const stickOutline = async (path: string): Promise<StickOutline> => {
+    outlineReads.set(path, (outlineReads.get(path) ?? 0) + 1);
+    // What the stick holds when it is asked, not when the answer comes.
+    const answer: StickOutline = unfinishedWrites.has(path) ? { pending: true, libraries: [] } : outlineOverrides.get(path) ?? {
+      pending: false,
+      libraries: stickLibraries.libraries(path).map(({ format, nodes }) => ({ format, nodes })),
+    };
+    // A hold is for the next read only.
+    if (holdingOutlines.delete(path)) {
+      await new Promise<void>((resolve) => { heldOutlines.set(path, [...(heldOutlines.get(path) ?? []), resolve]); });
+    }
+    return wait(answer);
+  };
+
   // What each stick's tabs hold. DJ STICK starts empty and gains a library
   // when something is exported to it; TEST carries the rows read off the
   // real stick.
@@ -939,8 +1076,29 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     sorts: s.sorts.map((slot) => ({ ...slot })),
     colors: s.colors.map((c) => ({ ...c })),
   });
+  // Writes of a Stick's settings, per Stick: opening its panel makes none
+  // (wbx-45.5). A Stick listed in `__initialNoDevSetting` before the page
+  // loads holds an export but no DEVSETTING.DAT.
+  const settingsWrites = new Map<string, number>();
+  const noDevSetting = new Set<string>(typeof window === "undefined" ? [] : (window as unknown as { __initialNoDevSetting?: string[] }).__initialNoDevSetting ?? []);
+  if (typeof window !== "undefined") {
+    (window as unknown as { __stickSettingsWrites: (path: string) => number }).__stickSettingsWrites = (path) => settingsWrites.get(path) ?? 0;
+  }
   const settingsOf = (path: string): DeviceSettings => {
     const known = deviceSettings.get(path);
+    if (known && noDevSetting.delete(path)) {
+      const rekordboxDefaults = referenceDeviceSettings("", false);
+      const without: DeviceSettings = {
+        ...known,
+        hasDevSetting: false,
+        waveformColor: rekordboxDefaults.waveformColor,
+        waveformPosition: rekordboxDefaults.waveformPosition,
+        overviewWaveform: rekordboxDefaults.overviewWaveform,
+        keyDisplay: rekordboxDefaults.keyDisplay,
+      };
+      deviceSettings.set(path, without);
+      return without;
+    }
     if (known) return known;
     const device = devices.find((d) => d.path === path);
     const fresh = referenceDeviceSettings(device?.name ?? "", device?.export !== null);
@@ -1352,6 +1510,11 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     },
     setTrackRating: (tracks, stars) => {
       const after = Math.max(0, Math.min(5, stars));
+      // `?refuseRatingWrite=1`: the Library refuses the write, as a real one
+      // can (rekordbox took the database, the disk is full).
+      const refused = readFlagFromUrl("refuseRatingWrite");
+      ratingWrites.push({ ids: [...tracks], stars: after, refused });
+      if (refused) return refuse("That could not be saved.");
       return recordTrackEdits(tracks, (track) => {
         const row = all.find((r) => r.id === track);
         const before = row?.rating ?? 0;
@@ -1704,11 +1867,18 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     if (held) return held;
     const row = all[Number.parseInt(trackId, 10) - 100000];
     if (!row || row.analysed === 0 || row.bpmX100 === 0) return null;
+    // `?grids=101325:none,100004:double`, by track id: an analysed row with
+    // a BPM but no grid, or a grid whose second half runs at twice the tempo
+    // (a tempo change).
+    const fixture = GRID_FIXTURES.get(trackId);
+    if (fixture === "none") return null;
     const beatMs = (60 / (row.bpmX100 / 100)) * 1000;
-    const count = Math.min(Math.floor((row.durationSec * 1000) / beatMs) + 1, 65536);
+    const totalMs = row.durationSec * 1000;
     const beats: EditableBeat[] = [];
-    for (let n = 0; n < count; n++) {
-      beats.push({ number: (n % 4) + 1, tempoX100: row.bpmX100, timeMs: Math.round(n * beatMs) });
+    for (let n = 0, at = 0; at <= totalMs && n < 65536; n++) {
+      const fast = fixture === "double" && at >= totalMs / 2;
+      beats.push({ number: (n % 4) + 1, tempoX100: fast ? row.bpmX100 * 2 : row.bpmX100, timeMs: Math.round(at) });
+      at += fast ? beatMs / 2 : beatMs;
     }
     const made = { beats, undo: [], redo: [], locked: false };
     gridStore.set(trackId, made);
@@ -2105,7 +2275,23 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     return path;
   };
 
+  // The Intake view's queues (wbx-62): `mock-intake.ts`.
+  const intake = createMockIntake({
+    all, colors, tagsOf: (row) => detailsOf(row).myTags, categories: myTagCategories,
+    gridLocked: (id) => gridStore.get(id)?.locked ?? false, wait, ready: () => ready,
+  });
+  if (typeof window !== "undefined") {
+    // `__setPrepColour(id, colourId)` (0 for none): an edit as the Library list makes it.
+    (window as unknown as { __setPrepColour: (id: string, colour: number) => Promise<unknown> }).__setPrepColour =
+      (id, colour) => edits.setTrackColor([id], colour === 0 ? null : String(colour));
+    // `__emitLibraryChanged(n)`: n changes announced at once, as a burst of an agent's edits.
+    (window as unknown as { __emitLibraryChanged: (times: number) => void }).__emitLibraryChanged =
+      (times) => { for (let i = 0; i < times; i += 1) void bump(false); };
+  }
+
   return {
+    intakeQueue: intake.intakeQueue,
+    intakeCounts: intake.intakeCounts,
     rekordboxBrowseSettings: () => Promise.resolve(null),
     librarySummary: () =>
       ready
@@ -2130,6 +2316,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       // summary was still failing would not be standing in for anything.
       if (!ready) return notReady();
       if (spec.source.kind === "device") {
+        const refused = unfinished(spec.source.path);
+        if (refused) return refused;
         const q = fold(spec.query.trim());
         let rows: RowDto[];
         try {
@@ -2222,6 +2410,12 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     },
 
     fetchRows: (viewId, offset, len, extraColumns = []) => {
+      // `myTags`: each of the track's MyTags with its id and category, from
+      // the same record the My Tag panel edits.
+      const myTagsOf = (row: RowDto): RowMyTag[] => (row.id.startsWith("file:") ? [] : detailsOf(row).myTags)
+        .flatMap((id) => myTagCategories.flatMap((category) => category.tags
+          .filter((tag) => tag.id === id)
+          .map((tag) => ({ id: tag.id, name: tag.name, category: category.name }))));
       const project = (row: RowDto): RowDto => {
         const { extra, ...base } = row;
         if (extraColumns.length === 0) return base;
@@ -2229,6 +2423,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
           ...base,
           extra: Object.fromEntries(extraColumns.flatMap((key) =>
             extra?.[key] === undefined ? [] : [[key, extra[key]]])),
+          ...(extraColumns.includes("myTags") ? { myTags: myTagsOf(row) } : {}),
         };
       };
       const folder = folderViews.get(viewId);
@@ -2920,9 +3115,16 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       return () => problemListeners.delete(listener);
     },
     libraryProblem: () => wait<LibraryProblem | null>(problem),
-    // The mock has no Library service to lose.
-    onServiceStopped: () => () => {},
-    serviceProblem: () => wait<string | null>(null),
+    ...mockServiceActivity(),
+    // The switch the backend owns, kept for this page's life: nothing is
+    // recorded before the window's first start, so its preference is taken up.
+    libraryProtection: () => wait(protection ?? { protectLibrary: true, revision: 0 }),
+    adoptLibraryProtection: (windowPreference) => wait(protection ?? recordProtection(windowPreference)),
+    setLibraryProtection: (protectLibrary) => wait(recordProtection(protectLibrary)),
+    onLibraryProtectionChanged: (listener) => {
+      protectionListeners.add(listener);
+      return Promise.resolve(() => { protectionListeners.delete(listener); });
+    },
     createLibrary: async () => {
       await wait(undefined);
       libraryFound();
@@ -2966,6 +3168,39 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     setMenuEnabled: (items) => {
       const w = window as unknown as { __menuEnabled?: Record<string, boolean> };
       w.__menuEnabled = { ...w.__menuEnabled, ...items };
+      return wait(undefined);
+    },
+    // A browser cannot go full screen or quit on its own say: kept where a
+    // test can read what the shell was asked for.
+    runMenuItem: (id) => {
+      const w = window as unknown as { __shellItems?: string[] };
+      w.__shellItems = [...(w.__shellItems ?? []), id];
+      return wait(undefined);
+    },
+    // The webview's editing actions, against a clipboard of the mock's own
+    // (`window.__clipboard`): what WebKitGTK's editing commands do to the
+    // field with the keyboard, so a test can see text really move.
+    runEditCommand: (edit) => {
+      const w = window as unknown as { __clipboard?: string; __editCommands?: string[] };
+      w.__editCommands = [...(w.__editCommands ?? []), edit];
+      const field = document.activeElement;
+      if (!(field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)) {
+        if (edit === "copy") w.__clipboard = window.getSelection()?.toString() ?? "";
+        return wait(undefined);
+      }
+      const start = field.selectionStart ?? field.value.length;
+      const end = field.selectionEnd ?? start;
+      const changed = () => field.dispatchEvent(new Event("input", { bubbles: true }));
+      if (edit === "selectAll") field.select();
+      if (edit === "copy" || edit === "cut") w.__clipboard = field.value.slice(start, end);
+      if (edit === "cut") {
+        field.setRangeText("", start, end, "end");
+        changed();
+      }
+      if (edit === "paste") {
+        field.setRangeText(w.__clipboard ?? "", start, end, "end");
+        changed();
+      }
       return wait(undefined);
     },
 
@@ -3454,8 +3689,9 @@ export function createMockBackend(options: MockOptions = {}): Backend {
 
     // The device tabs. Held per stick so a change survives switching tabs
     // and devices, the way a written file would.
-    deviceSettings: (path) => wait(copySettings(settingsOf(path))),
+    deviceSettings: (path) => unfinished(path) ?? wait(copySettings(settingsOf(path))),
     ensureDeviceLibrary: (path, defaults) => {
+      settingsWrites.set(path, (settingsWrites.get(path) ?? 0) + 1);
       const current = settingsOf(path);
       if (current.hasDeviceLibrary) return wait(copySettings(current));
       // The empty database a blank stick gets: the reference rows, the
@@ -3482,8 +3718,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     },
     // The mock's sticks carry their settings from the start, so there is
     // nothing to give; what the stick holds comes back.
-    writeDeviceDefaults: (path) => wait(copySettings(settingsOf(path))),
     saveDeviceSettings: (path, settings) => {
+      settingsWrites.set(path, (settingsWrites.get(path) ?? 0) + 1);
       const current = settingsOf(path);
       // A stick without a library keeps its reference rows: nothing to
       // write them into, as the real backend also refuses.
@@ -3560,9 +3796,23 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       return () => progressListeners.delete(listener);
     },
     // The fake disk above. Copies, as with the tree: the map is the mock's.
-    deviceLibraries: (path) => wait(stickLibraries.libraries(path)),
+    deviceLibraries: async (path) => {
+      const refused = unfinished(path);
+      if (refused) return refused;
+      const answer = stickLibraries.libraries(path);
+      if (holdingLibraries.delete(path)) {
+        await new Promise<void>((resolve) => { heldLibraries.set(path, [...(heldLibraries.get(path) ?? []), resolve]); });
+      }
+      return wait(answer);
+    },
+    stickOutline,
+    settleStick: (path) => {
+      settles.set(path, (settles.get(path) ?? 0) + 1);
+      unfinishedWrites.delete(path);
+      return wait(undefined);
+    },
     devicePlaylistCollectionTracks: (path, format, tracks) =>
-      wait(stickLibraries.collectionTracks(path, format, tracks, [...(looseTracks.get(path) ?? [])])),
+      unfinished(path) ?? wait(stickLibraries.collectionTracks(path, format, tracks, [...(looseTracks.get(path) ?? [])])),
     devicePlaylistEdit: (path, format, edit) => {
       try {
         return wait(stickLibraries.edit(path, format, edit));
@@ -3578,6 +3828,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       }
     },
     devicePlaylistDuplicates: (path, format, playlist, tracks) => {
+      const refused = unfinished(path);
+      if (refused) return refused;
       try {
         return wait(stickLibraries.duplicates(path, format, playlist, tracks));
       } catch (error) {
@@ -3637,6 +3889,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       }));
     },
     devicePlaylistImportPlan: (path, format, id, destination) => {
+      const refused = unfinished(path);
+      if (refused) return refused;
       let source: { name: string; entries: MockImportEntry[] };
       try {
         source = stickLibraries.playlist(path, format, id);
@@ -3753,6 +4007,18 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     },
   };
 }
+
+/** `?grids=101325:none,100004:double`, by track id: see `gridOf`. */
+const GRID_FIXTURES: ReadonlyMap<string, "none" | "double"> = (() => {
+  if (typeof location === "undefined") return new Map();
+  const raw = new URLSearchParams(location.search).get("grids") ?? "";
+  const out = new Map<string, "none" | "double">();
+  for (const part of raw.split(",")) {
+    const [id, kind] = part.split(":");
+    if (id && /^\d+$/.test(id) && (kind === "none" || kind === "double")) out.set(id, kind);
+  }
+  return out;
+})();
 
 /** A bare `?name` flag in the URL. */
 function readFlagFromUrl(name: string): boolean {

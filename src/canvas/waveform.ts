@@ -677,7 +677,7 @@ export const PREVIEW_BADGE = 7; // --s-preview-cue-badge
 const PREVIEW_BADGE_FONT = 6; // --f-size-preview-cue
 const CUE_HOT = theme.color.cueHot.value;
 const CUE_HOT_TEXT = theme.color.cueHotText.value;
-const UI_FONT = 'Arial, "Helvetica Neue", Helvetica, sans-serif'; // --f-ui
+const UI_FONT = 'Arial, "Helvetica Neue", Helvetica, sans-serif'; // --role-font's fallback
 
 /**
  * Draws a row's hot cue badges over its preview.

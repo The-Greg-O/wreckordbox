@@ -211,27 +211,32 @@ export function ViewPane({ tab, onResetColumns, onResetLayout }: ViewPaneProps) 
           onChange={(vuMeter) => set({ vuMeter })} />
       </Section>
       <Section title="Key display format">
-        <Radios
-          label="Key display format"
-          value={view.keyDisplay}
-          choices={[
-            { value: "classic", label: "Classic" },
-            { value: "alphanumeric", label: "Alphanumeric" },
-          ]}
-          onChange={(keyDisplay) => set({ keyDisplay })}
-        />
+        <div data-own-activation="">
+          <Radios
+            label="Key display format"
+            value={view.keyDisplay}
+            choices={[
+              { value: "classic", label: "Classic" },
+              { value: "alphanumeric", label: "Camelot" },
+            ]}
+            onChange={(keyDisplay) => set({ keyDisplay })}
+          />
+        </div>
         <Separator />
         <Sub>Sort keys</Sub>
+        <div data-own-activation="">
         <Radios
           label="Sort keys"
           nested
           value={view.keySort}
           choices={[
+            { value: "auto", label: "Follow displayed notation" },
             { value: "alphabetical", label: "Alphabetically — A, Ab, B, …" },
             { value: "musical", label: "Musically — Abm, B, Ebm, F#, Bbm, …" },
           ]}
           onChange={(keySort) => set({ keySort })}
         />
+        </div>
       </Section>
       <Section title="Waveform">
         <Sub>Full/Preview Waveform</Sub>
@@ -268,7 +273,7 @@ export function ViewPane({ tab, onResetColumns, onResetLayout }: ViewPaneProps) 
           onChange={(waveformClick) => set({ waveformClick })}
         />
       </Section>
-      <Section title="Traffic Light">
+      {!view.viewShell ? <Section title="Traffic Light">
         {/* rekordbox's own reaches, from its tooltip: for a track in 2A,
             Same Key lights 2A; Related Key 1 adds 2B; 2 adds 1A and 3A; 3
             adds 1B and 3B. */}
@@ -283,7 +288,7 @@ export function ViewPane({ tab, onResetColumns, onResetLayout }: ViewPaneProps) 
           ]}
           onChange={(trafficLight) => set({ trafficLight })}
         />
-      </Section>
+      </Section> : null}
     </>
   );
 }

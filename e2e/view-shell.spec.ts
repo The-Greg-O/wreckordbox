@@ -16,6 +16,9 @@ const tabs = (page: Page) => page.getByRole("tablist", { name: "Views" });
 const tab = (page: Page, name: string) => tabs(page).getByRole("tab", { name });
 const working = (page: Page) => page.getByRole("tabpanel");
 const titles = (page: Page) => page.locator('[role="gridcell"][data-col="title"]');
+/** A playlist in the tree's Playlists group (a Stick can hold one of the same name). */
+const shellPlaylist = (page: Page, name: string) =>
+  page.getByTestId("shell-tree").getByRole("group", { name: "Playlists" }).getByRole("treeitem", { name });
 
 async function open(page: Page) {
   await page.goto("/");
@@ -51,7 +54,7 @@ test("with the switch on the window shows the frame: view tabs, tree, player, wo
   expect(await working(page).locator('[role="gridcell"][data-col="title"]').count()).toBeGreaterThan(5);
 });
 
-test("clicking a tab switches the working area, and the other three views are labelled empty states", async ({ page }) => {
+test("clicking a tab switches the working area: Intake shows its queue, Review and Stick are labelled empty states", async ({ page }) => {
   await enableViewShell(page);
   await open(page);
 
@@ -60,7 +63,9 @@ test("clicking a tab switches the working area, and the other three views are la
     await expect(tab(page, name)).toHaveAttribute("aria-selected", "true");
     await expect(tab(page, "Library")).toHaveAttribute("aria-selected", "false");
     await expect(working(page).getByRole("heading", { name })).toBeVisible();
-    await expect(working(page)).toContainText("Nothing is here yet");
+    // Intake is built (wbx-62): its queue; the other two are not yet.
+    if (name === "Intake") await expect(working(page).getByRole("listbox", { name: "Intake queue" })).toBeVisible();
+    else await expect(working(page)).toContainText("Nothing is here yet");
     // Only the working area changed: no track list in it now.
     await expect(working(page).getByRole("grid")).toHaveCount(0);
     // The rest of the frame is still there.
@@ -94,13 +99,13 @@ test("keys 1 to 4 switch views", async ({ page }) => {
 });
 
 const player = (page: Page) => page.getByRole("region", { name: "Preview player" });
-// The shell's player area holds the old player at its smallest for now.
-const deckTitle = (page: Page) => player(page).getByTestId("simple-player-title");
+// The shell's player area holds the compact player (#51).
+const deckTitle = (page: Page) => player(page).getByTestId("compact-player-title");
 /** A loop lit on the deck's waveform. */
 const activeLoop = (page: Page) => page.locator('[class*="loopBand"][data-active]');
 /** Where the playhead is across the overview, in pixels: it moves while the deck runs. */
 async function playhead(page: Page): Promise<number> {
-  return (await player(page).getByTestId("simple-player-head").boundingBox())?.x ?? Number.NaN;
+  return (await player(page).getByTestId("compact-player-head").boundingBox())?.x ?? Number.NaN;
 }
 
 test("switching views does not stop playback, change the loaded track or lose the tree selection", async ({ page }) => {
@@ -108,7 +113,7 @@ test("switching views does not stop playback, change the loaded track or lose th
   await open(page);
 
   // A playlist selected in the tree, one of its tracks loaded and playing.
-  const playlist = page.getByRole("treeitem", { name: "Melodic Vox" });
+  const playlist = shellPlaylist(page, "Melodic Vox");
   await playlist.click();
   await expect(page.getByTestId("browser-title")).toContainText("Melodic Vox");
   const loaded = await titles(page).nth(1).innerText();
@@ -228,17 +233,17 @@ test("what Analyze targets is what the list shows as selected, before and after 
 });
 
 test("a view key pressed in a confirmation prompt leaves the view alone", async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem("rbl.preferences", JSON.stringify({
-    advanced: { protectLibrary: false, deviceImportMissing: "ask" },
-    view: { viewShell: true },
-  })));
+  await enableViewShell(page);
   await page.goto("/?writable=1");
   await expect(page.getByTestId("browser-title")).toContainText("Tracks)");
-  await page.getByRole("tablist", { name: "Library sources" }).getByRole("tab", { name: "Devices" }).click();
-  await page.getByRole("button", { name: "Expand TEST" }).dispatchEvent("mousedown");
-  await page.locator('[role="treeitem"][data-kind="devicePlaylist"]').filter({ hasText: /^\s*NP3-TEST-MP3/ }).nth(1).click({ button: "right" });
-  await page.getByRole("menu", { name: "Playlist" }).getByRole("menuitem", { name: "Import Playlist" }).click();
-  const question = page.getByRole("alertdialog", { name: "Import Playlist from Device" });
+  // A track added to the playlist that already holds it: the window asks
+  // whether to add it again.
+  await shellPlaylist(page, "Melodic Vox").click();
+  await expect(page.getByTestId("browser-title")).toContainText("Melodic Vox");
+  await titles(page).first().click({ button: "right" });
+  await page.getByRole("menu", { name: "Track" }).getByRole("menuitem", { name: "Add To Playlist" }).hover();
+  await page.getByRole("menuitem", { name: "Melodic Vox" }).first().click();
+  const question = page.getByRole("alertdialog", { name: "Duplicate tracks" });
   await expect(question).toBeVisible();
 
   // The prompt has the keyboard: one of its buttons is focused.
@@ -284,7 +289,7 @@ test("the layout follows the window's own width: the tree gives way at 800 and b
   expect((await box("shell-working")).x).toBeGreaterThan((await box("shell-tree")).x);
 
   // A playlist chosen in the tree, to see that it survives the tree giving way.
-  const playlist = page.getByRole("treeitem", { name: "Melodic Vox" });
+  const playlist = shellPlaylist(page, "Melodic Vox");
   await playlist.click();
   await expect(page.getByTestId("browser-title")).toContainText("Melodic Vox");
 

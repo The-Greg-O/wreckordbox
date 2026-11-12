@@ -8,6 +8,10 @@ A personal, Linux-first fork of rbxport for preparing DJ music on an Omarchy lap
 The one collection of tracks, playlists, cues and beat grids that is edited on this laptop, stored in rekordbox's own format. There is exactly one writer: wreckordbox.
 _Avoid_: Collection, database, master db
 
+**Library Protection**:
+The DJ's switch, on until turned off, that refuses every change to the Library, whether it comes from the window, a script or the command line. Reading is never refused, and writing Facts to the Sidecar is not a change to the Library.
+_Avoid_: Read-only mode, write lock
+
 **Fallback library**:
 The rekordbox library left on macOS after the one-way migration, frozen and opened only in an emergency.
 _Avoid_: Backup, old library

@@ -32,6 +32,11 @@ pub enum AudioError {
     NoTrack,
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    /// The file ended before the audio its container declares. Only reported
+    /// by [`MonoStream::try_next_frames`], and only for a container whose
+    /// declared length is exact.
+    #[error("the audio ends after {decoded} of the {expected} frames the file declares")]
+    Truncated { expected: u64, decoded: u64 },
 }
 
 pub type Result<T> = std::result::Result<T, AudioError>;
@@ -85,6 +90,9 @@ pub fn decode_mono(path: &Path, max_secs: Option<f64>) -> Result<Audio> {
     Ok(Audio { samples, sample_rate: stream.sample_rate(), source_channels: stream.source_channels() })
 }
 
+/// One packet's frames: downmixed, and the same frames as 16-bit stereo.
+pub type Frames<'a> = (&'a [f32], &'a [[i16; 2]]);
+
 /// A file decoded to mono `f32` one packet at a time.
 ///
 /// What [`decode_mono`] collects into one buffer, for a caller that wants
@@ -108,6 +116,16 @@ pub struct MonoStream {
     /// How many frames the container says the file holds, lead included,
     /// when it says.
     expected: Option<u64>,
+    /// When `expected` is a count of what the file must hold, how many
+    /// frames short of it the audio may still end: `Some(0)` for PCM and
+    /// FLAC, a frame for an MP3 whose tag counts its frames. `None` when it
+    /// is an estimate (an MP3's from its size).
+    slack: Option<u64>,
+    /// Frames handed out so far, lead included.
+    handed: u64,
+    /// The most frames the file's sound holds, when the decoder may read
+    /// past it: an AIFF's `COMM` count (see `aifc::declared_frames`).
+    limit: Option<u64>,
 }
 
 /// Source-rate frames rekordbox's timeline for a file runs ahead of what
@@ -126,10 +144,21 @@ impl MonoStream {
     /// Opens a file and its first audio track.
     pub fn open(path: &Path) -> Result<Self> {
         let (source, aifc) = aifc::open(path)?;
+        Self::over(source, aifc, path.extension().and_then(|e| e.to_str()), Some(path))
+    }
+
+    /// [`MonoStream::open`] over bytes from anywhere. `path` is the file the
+    /// bytes are from, when there is one: an MP3's lead is read from it.
+    fn over(
+        source: Box<dyn symphonia::core::io::MediaSource>,
+        aifc: aifc::Aifc,
+        extension: Option<&str>,
+        path: Option<&Path>,
+    ) -> Result<Self> {
         let stream = MediaSourceStream::new(source, symphonia::core::io::MediaSourceStreamOptions::default());
 
         let mut hint = Hint::new();
-        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        if let Some(ext) = extension {
             hint.with_extension(ext);
         }
 
@@ -152,9 +181,32 @@ impl MonoStream {
             .codec_params
             .channels
             .map_or(2, |c| u16::try_from(c.count()).unwrap_or(2));
-        let lead = rekordbox_lead(path, track.codec_params.codec);
-        let expected = track.codec_params.n_frames.map(|frames| frames.saturating_add_signed(lead));
-        Ok(Self { format, decoder, track_id, sample_rate, source_channels, buffer: None, mono: Vec::new(), stereo: Vec::new(), lead, expected })
+        let lead = path.map_or(0, |path| rekordbox_lead(path, track.codec_params.codec));
+        // An AIFF's own header, where symphonia's count is off (see
+        // `aifc::declared_frames`); the container's count otherwise.
+        let limit = path.and_then(aifc::declared_frames);
+        let expected = limit.or_else(|| {
+            track
+                .codec_params
+                .n_frames
+                .map(|frames| frames.saturating_add_signed(lead))
+        });
+        let slack = slack(&track.codec_params, path);
+        Ok(Self {
+            format,
+            decoder,
+            track_id,
+            sample_rate,
+            source_channels,
+            buffer: None,
+            mono: Vec::new(),
+            stereo: Vec::new(),
+            lead,
+            expected,
+            slack,
+            handed: 0,
+            limit,
+        })
     }
 
     /// How many samples the stream is expected to hand out in all, from the
@@ -162,6 +214,14 @@ impl MonoStream {
     /// one. An estimate: a damaged or truncated file can end sooner.
     pub fn expected_frames(&self) -> Option<u64> {
         self.expected
+    }
+
+    /// Whether [`MonoStream::expected_frames`] is exactly what a whole file
+    /// holds, sample for sample: PCM (WAV, AIFF) and FLAC. Not for lossy
+    /// files, whose count includes encoder delay and padding a decoder may
+    /// or may not hand out, or is only an estimate.
+    pub fn is_exact_length(&self) -> bool {
+        self.expected.is_some() && self.slack == Some(0)
     }
 
     /// The rate of the samples handed out so far, or the one the container
@@ -183,12 +243,55 @@ impl MonoStream {
         Some((&self.mono, &self.stereo))
     }
 
+    /// [`MonoStream::next_frames`] for a caller that must not mistake a
+    /// broken file for a short one: `Ok(None)` only at the true end of the
+    /// audio.
+    ///
+    /// An error where [`MonoStream::next_frames`] quietly ends:
+    ///
+    /// - reading the file failed ([`AudioError::Io`]);
+    /// - the decoder gave up on the stream ([`AudioError::Unsupported`]);
+    /// - the file ran out before the frames its container declares, for a
+    ///   container whose count is exact: PCM (WAV, AIFF) and FLAC
+    ///   ([`AudioError::Truncated`]); and, to within one frame, for an MP3
+    ///   whose Xing, Info or VBRI frame counts its frames. An MP3 with no
+    ///   such frame cut short cannot be told from a shorter one (its length
+    ///   is an estimate from its size) and ends as it would have; and, to
+    ///   within one packet, for AAC or ALAC in MP4, whose sample table
+    ///   counts its packets (a cut file usually does not open; one whose
+    ///   `mdat` runs to the end of the file does, and stops short here).
+    ///
+    /// A damaged packet inside the stream is still its own length of
+    /// silence, as in rekordbox and on a deck: the audio keeps its place.
+    pub fn try_next_frames(&mut self) -> Result<Option<Frames<'_>>> {
+        if self.advance()? {
+            Ok(Some((&self.mono, &self.stereo)))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// The next packet's samples, downmixed; `None` at the end of the file.
     ///
     /// `next_packet` reports the end of the stream as an error, so any error
     /// there ends it. A damaged packet mid-file is skipped rather than
     /// discarding what came before it.
     pub fn next_chunk(&mut self) -> Option<&[f32]> {
+        // Any failure ends the stream here; `try_next_frames` reports it.
+        if self.advance().ok()? {
+            Some(&self.mono)
+        } else {
+            None
+        }
+    }
+
+    /// Fills `mono` and `stereo` with the next packet's samples. `Ok(false)`
+    /// at the end of the audio; an error when it stopped short of it.
+    fn advance(&mut self) -> Result<bool> {
+        use symphonia::core::errors::Error;
+        if self.limit.is_some_and(|limit| self.handed >= limit) {
+            return Ok(false);
+        }
         if self.lead > 0 {
             let lead = usize::try_from(self.lead).unwrap_or(0);
             self.mono.clear();
@@ -196,10 +299,27 @@ impl MonoStream {
             self.stereo.clear();
             self.stereo.resize(lead, [0, 0]);
             self.lead = 0;
-            return Some(&self.mono);
+            self.handed += lead as u64;
+            return Ok(true);
         }
         loop {
-            let packet = self.format.next_packet().ok()?;
+            let packet = match self.format.next_packet() {
+                Ok(packet) => packet,
+                // How symphonia says the stream is over: the bytes ran out.
+                // Whether that is the end of the audio is for the count.
+                Err(Error::IoError(error)) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
+                    return match self.expected {
+                        Some(expected)
+                            if self.slack.is_some_and(|slack| self.handed.saturating_add(slack) < expected) =>
+                        {
+                            Err(AudioError::Truncated { expected, decoded: self.handed })
+                        }
+                        _ => Ok(false),
+                    };
+                }
+                Err(Error::IoError(error)) => return Err(AudioError::Io(error)),
+                Err(error) => return Err(AudioError::Unsupported(error.to_string())),
+            };
             if packet.track_id() != self.track_id {
                 continue;
             }
@@ -215,11 +335,14 @@ impl MonoStream {
                     self.stereo.clear();
                     self.stereo.resize(silence, [0, 0]);
                     if self.drop_lead() {
-                        return Some(&self.mono);
+                        self.hold_to_limit();
+                        self.handed += self.mono.len() as u64;
+                        return Ok(true);
                     }
                     continue;
                 }
-                Err(_) => return None,
+                Err(Error::IoError(error)) => return Err(AudioError::Io(error)),
+                Err(error) => return Err(AudioError::Unsupported(error.to_string())),
             };
 
             let spec = *frames.spec();
@@ -238,8 +361,21 @@ impl MonoStream {
                 interleaved.samples().chunks(channels).map(|frame| [to_i16(frame[0]), to_i16(*frame.get(1).unwrap_or(&frame[0]))]),
             );
             if self.drop_lead() {
-                return Some(&self.mono);
+                self.hold_to_limit();
+                self.handed += self.mono.len() as u64;
+                return Ok(true);
             }
+        }
+    }
+
+    /// Cuts what was just decoded at the end of the file's sound, so bytes
+    /// after it (an AIFF's trailing `ID3 ` chunk: symphonia 0.5.5 reads the
+    /// `SSND` chunk 8 bytes too far) never become audio.
+    fn hold_to_limit(&mut self) {
+        if let Some(limit) = self.limit {
+            let left = usize::try_from(limit.saturating_sub(self.handed)).unwrap_or(usize::MAX);
+            self.mono.truncate(left);
+            self.stereo.truncate(left);
         }
     }
 
@@ -255,6 +391,78 @@ impl MonoStream {
         }
         !self.mono.is_empty()
     }
+}
+
+/// How far short of the container's frame count a whole file may end, or
+/// `None` when the count is only an estimate and a shorter file cannot be
+/// told from a cut one.
+///
+/// Uncompressed PCM's count is the size of its data and FLAC's header
+/// carries it: exact. An MP3's is exact when its Xing, Info or VBRI frame
+/// counts the frames (symphonia then gives that count times the frame's
+/// samples) and an estimate from the file's size otherwise; one frame is
+/// allowed for an encoder that counts its tag frame among them. AAC and
+/// ALAC in MP4 (the only AAC the Library holds) are held to the sample
+/// table's count within a packet: symphonia refuses to open most cut MP4s
+/// (it checks each box against its size), but not one whose `mdat` box is
+/// written as running to the end of the file.
+fn slack(params: &symphonia::core::codecs::CodecParameters, path: Option<&Path>) -> Option<u64> {
+    use symphonia::core::codecs::{CODEC_TYPE_AAC, CODEC_TYPE_ALAC, CODEC_TYPE_MP3};
+    if declares_exact_length(params.codec) {
+        return Some(0);
+    }
+    if [CODEC_TYPE_AAC, CODEC_TYPE_ALAC].contains(&params.codec) && path.is_some_and(is_mp4) {
+        // An MP4's sample table counts every packet, so its length is exact
+        // even when its `mdat` legally runs "to the end of the file" (size
+        // 0) and a cut leaves the table whole: a packet's worth of slack.
+        return params.n_frames.map(|_| 1_024);
+    }
+    if params.codec == CODEC_TYPE_MP3 {
+        let file = std::fs::File::open(path?).ok();
+        return file
+            .is_some_and(|mut file| rbl_core::mpeg::tag_counts_frames(&mut file))
+            .then_some(1_152);
+    }
+    None
+}
+
+/// Whether a file is an ISO media (MP4, M4A) file: its first box is `ftyp`.
+fn is_mp4(path: &Path) -> bool {
+    use std::io::Read;
+    let mut head = [0_u8; 8];
+    std::fs::File::open(path)
+        .and_then(|mut file| file.read_exact(&mut head))
+        .is_ok()
+        && &head[4..8] == b"ftyp"
+}
+
+/// Whether a container's frame count for this codec is what the file must
+/// hold: uncompressed PCM, whose count is the size of its data, and FLAC,
+/// whose header carries it.
+fn declares_exact_length(codec: symphonia::core::codecs::CodecType) -> bool {
+    use symphonia::core::codecs::{
+        CODEC_TYPE_FLAC, CODEC_TYPE_PCM_ALAW, CODEC_TYPE_PCM_F32BE, CODEC_TYPE_PCM_F32LE, CODEC_TYPE_PCM_F64BE,
+        CODEC_TYPE_PCM_F64LE, CODEC_TYPE_PCM_MULAW, CODEC_TYPE_PCM_S16BE, CODEC_TYPE_PCM_S16LE, CODEC_TYPE_PCM_S24BE,
+        CODEC_TYPE_PCM_S24LE, CODEC_TYPE_PCM_S32BE, CODEC_TYPE_PCM_S32LE, CODEC_TYPE_PCM_S8, CODEC_TYPE_PCM_U8,
+    };
+    [
+        CODEC_TYPE_FLAC,
+        CODEC_TYPE_PCM_S8,
+        CODEC_TYPE_PCM_U8,
+        CODEC_TYPE_PCM_S16LE,
+        CODEC_TYPE_PCM_S16BE,
+        CODEC_TYPE_PCM_S24LE,
+        CODEC_TYPE_PCM_S24BE,
+        CODEC_TYPE_PCM_S32LE,
+        CODEC_TYPE_PCM_S32BE,
+        CODEC_TYPE_PCM_F32LE,
+        CODEC_TYPE_PCM_F32BE,
+        CODEC_TYPE_PCM_F64LE,
+        CODEC_TYPE_PCM_F64BE,
+        CODEC_TYPE_PCM_ALAW,
+        CODEC_TYPE_PCM_MULAW,
+    ]
+    .contains(&codec)
 }
 
 /// A decoded sample as a 16-bit decode holds it: symphonia's own conversion,
@@ -403,6 +611,230 @@ mod tests {
             out.extend_from_slice(&((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes());
         }
         std::fs::write(path, out).unwrap();
+    }
+
+    /// Bytes that can be read up to `fails_at` and not past it.
+    struct Flaky {
+        bytes: std::io::Cursor<Vec<u8>>,
+        fails_at: u64,
+    }
+
+    impl std::io::Read for Flaky {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let left = self.fails_at.saturating_sub(self.bytes.position());
+            if left == 0 {
+                return Err(std::io::Error::other("the disk went away"));
+            }
+            let take = buf.len().min(usize::try_from(left).unwrap());
+            self.bytes.read(&mut buf[..take])
+        }
+    }
+
+    impl std::io::Seek for Flaky {
+        fn seek(&mut self, to: std::io::SeekFrom) -> std::io::Result<u64> {
+            self.bytes.seek(to)
+        }
+    }
+
+    impl symphonia::core::io::MediaSource for Flaky {
+        fn is_seekable(&self) -> bool {
+            true
+        }
+        fn byte_len(&self) -> Option<u64> {
+            Some(self.bytes.get_ref().len() as u64)
+        }
+    }
+
+    /// Everything a stream hands out through the fallible reader, or the
+    /// error that stopped it and how many frames came before.
+    fn drain(stream: &mut MonoStream) -> std::result::Result<usize, (AudioError, usize)> {
+        let mut frames = 0;
+        loop {
+            match stream.try_next_frames() {
+                Ok(Some((_, stereo))) => frames += stereo.len(),
+                Ok(None) => return Ok(frames),
+                Err(error) => return Err((error, frames)),
+            }
+        }
+    }
+
+    #[test]
+    fn the_fallible_reader_reads_a_whole_file_to_its_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tone.wav");
+        write_wav(&path, 8_000, 2, &vec![0.25; 2 * 12_000]);
+
+        let mut stream = MonoStream::open(&path).unwrap();
+        assert_eq!(drain(&mut stream).unwrap(), 12_000);
+    }
+
+    #[test]
+    fn a_file_cut_short_is_an_error_to_the_fallible_reader_and_an_end_to_the_other() {
+        // The header declares 12,000 frames; the file was cut after 5,000.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cut.wav");
+        write_wav(&path, 8_000, 2, &vec![0.25; 2 * 12_000]);
+        let whole = std::fs::read(&path).unwrap();
+        std::fs::write(&path, &whole[..44 + 5_000 * 4]).unwrap();
+
+        let mut stream = MonoStream::open(&path).unwrap();
+        let (error, before) = drain(&mut stream).unwrap_err();
+        assert!(
+            matches!(error, AudioError::Truncated { expected: 12_000, decoded } if decoded as usize == before && decoded <= 5_000),
+            "{error:?} after {before} frames"
+        );
+
+        // The reader analysis uses is unchanged: it ends where the audio does.
+        let mut stream = MonoStream::open(&path).unwrap();
+        let mut handed_out = 0;
+        while let Some((_, stereo)) = stream.next_frames() {
+            handed_out += stereo.len();
+        }
+        assert_eq!(handed_out, before);
+    }
+
+    /// A 16-bit stereo AIFF as the format defines it: the `SSND` chunk's size
+    /// counts its offset and block-size fields as well as the samples.
+    fn aiff_bytes(frames: u32) -> Vec<u8> {
+        let data = frames * 4;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"FORM");
+        bytes.extend_from_slice(&(46 + data).to_be_bytes());
+        bytes.extend_from_slice(b"AIFFCOMM");
+        bytes.extend_from_slice(&18_u32.to_be_bytes());
+        bytes.extend_from_slice(&2_u16.to_be_bytes());
+        bytes.extend_from_slice(&frames.to_be_bytes());
+        bytes.extend_from_slice(&16_u16.to_be_bytes());
+        bytes.extend_from_slice(&[0x40, 0x0e, 0xac, 0x44, 0, 0, 0, 0, 0, 0]);
+        bytes.extend_from_slice(b"SSND");
+        bytes.extend_from_slice(&(8 + data).to_be_bytes());
+        bytes.extend_from_slice(&[0; 8]);
+        for i in 0..frames {
+            let sample = ((i % 100) as i16 * 300).to_be_bytes();
+            bytes.extend_from_slice(&sample);
+            bytes.extend_from_slice(&sample);
+        }
+        bytes
+    }
+
+    #[test]
+    fn the_fallible_reader_reads_a_whole_aiff_to_its_end_and_refuses_one_cut_short() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tone.aiff");
+        let whole = aiff_bytes(12_000);
+        std::fs::write(&path, &whole).unwrap();
+        assert_eq!(MonoStream::open(&path).unwrap().expected_frames(), Some(12_000));
+        assert_eq!(drain(&mut MonoStream::open(&path).unwrap()).unwrap(), 12_000);
+
+        std::fs::write(&path, &whole[..54 + 5_000 * 4]).unwrap();
+        let (error, _) = drain(&mut MonoStream::open(&path).unwrap()).unwrap_err();
+        assert!(matches!(error, AudioError::Truncated { expected: 12_000, .. }), "{error:?}");
+    }
+
+    #[test]
+    fn a_chunk_after_an_aiff_s_sound_is_never_read_as_audio() {
+        // An `ID3 ` chunk after `SSND`, whose header bytes are not zero: a
+        // reader that runs past the sound would hand them out as samples.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tagged.aiff");
+        let plain = aiff_bytes(12_000);
+        let mut tagged = plain.clone();
+        let id3 = [
+            b"ID3 ".as_slice(),
+            &16_u32.to_be_bytes(),
+            &[
+                0x49, 0x44, 0x33, 4, 0, 0, 0x7f, 0x7f, 0x7f, 0x7f, 1, 2, 3, 4, 5, 6,
+            ],
+        ]
+        .concat();
+        tagged.extend_from_slice(&id3);
+        let form = u32::try_from(tagged.len() - 8).unwrap();
+        tagged[4..8].copy_from_slice(&form.to_be_bytes());
+        std::fs::write(&path, &tagged).unwrap();
+
+        let reference = dir.path().join("plain.aiff");
+        std::fs::write(&reference, &plain).unwrap();
+        let (_, want) = frames_of(&reference);
+        let (_, got) = frames_of(&path);
+        assert_eq!(want.len(), 12_000);
+        assert_eq!(got.len(), want.len(), "the sound's frames and no more");
+        assert_eq!(
+            got, want,
+            "the samples, and nothing of the chunk after them"
+        );
+        assert_eq!(
+            drain(&mut MonoStream::open(&path).unwrap()).unwrap(),
+            12_000
+        );
+    }
+
+    /// The fixture's fast-start M4A (sample table ahead of the audio) with its
+    /// `mdat` box's size written as 0, which means "to the end of the file".
+    fn faststart_m4a_to_eof() -> Vec<u8> {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tone-faststart.m4a");
+        let mut bytes = std::fs::read(fixture).unwrap();
+        let mdat = bytes.windows(4).position(|w| w == b"mdat").unwrap() - 4;
+        let moov = bytes.windows(4).position(|w| w == b"moov").unwrap();
+        assert!(moov < mdat, "the fixture is fast-start");
+        bytes[mdat..mdat + 4].copy_from_slice(&0_u32.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn a_fast_start_m4a_whose_audio_runs_to_the_end_of_the_file_is_read_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("whole.m4a");
+        std::fs::write(&path, faststart_m4a_to_eof()).unwrap();
+        let expected = MonoStream::open(&path).unwrap().expected_frames().unwrap();
+        let frames = drain(&mut MonoStream::open(&path).unwrap()).unwrap() as u64;
+        assert!(frames >= expected, "{frames} of {expected}");
+    }
+
+    #[test]
+    fn a_fast_start_m4a_cut_inside_audio_that_runs_to_the_end_of_the_file_is_an_error() {
+        // The sample table is whole and the `mdat` is legal as cut (size 0),
+        // so the file opens; its packets then run out early.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cut.m4a");
+        let whole = faststart_m4a_to_eof();
+        std::fs::write(&path, &whole[..whole.len() / 2]).unwrap();
+        let Ok(mut stream) = MonoStream::open(&path) else {
+            return; // refused at the door is as good
+        };
+        let result = drain(&mut stream);
+        assert!(
+            matches!(
+                result,
+                Err((AudioError::Truncated { .. } | AudioError::Io(_), _))
+            ),
+            "{result:?}"
+        );
+        // The reader analysis uses still plays what is there.
+        assert!(MonoStream::open(&path).unwrap().next_frames().is_some());
+    }
+
+    #[test]
+    fn a_read_that_fails_midway_is_an_error_to_the_fallible_reader() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tone.wav");
+        write_wav(&path, 8_000, 2, &vec![0.25; 2 * 12_000]);
+        let bytes = std::fs::read(&path).unwrap();
+        let flaky = || {
+            let source = Flaky { bytes: std::io::Cursor::new(bytes.clone()), fails_at: 44 + 5_000 * 4 };
+            MonoStream::over(Box::new(source), aifc::Aifc::default(), Some("wav"), None).unwrap()
+        };
+
+        let (error, before) = drain(&mut flaky()).unwrap_err();
+        assert!(matches!(error, AudioError::Io(_)), "{error:?}");
+        assert!(before <= 5_000);
+
+        let mut stream = flaky();
+        let mut handed_out = 0;
+        while let Some((_, stereo)) = stream.next_frames() {
+            handed_out += stereo.len();
+        }
+        assert_eq!(handed_out, before, "the other reader ends quietly, as it always has");
     }
 
     #[test]
@@ -626,6 +1058,56 @@ mod tests {
             mono.extend(buffer.samples().chunks(2).map(|f| f.iter().sum::<f32>() / 2.0));
         }
         mono
+    }
+
+    #[test]
+    fn an_mp3_whose_tag_counts_its_frames_is_held_to_that_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = lame_mp3(dir.path());
+        let whole = std::fs::read(&mp3).unwrap();
+        let expected = MonoStream::open(&mp3).unwrap().expected_frames().unwrap();
+        assert_eq!(drain(&mut MonoStream::open(&mp3).unwrap()).unwrap() as u64, expected);
+
+        // Cut after its twentieth frame: the Info frame still says how many
+        // frames there were.
+        std::fs::write(&mp3, &whole[..frame_at(&whole, 20)]).unwrap();
+        let (error, before) = drain(&mut MonoStream::open(&mp3).unwrap()).unwrap_err();
+        assert!(
+            matches!(error, AudioError::Truncated { expected: e, decoded } if e == expected && decoded as usize == before),
+            "{error:?}"
+        );
+        // Analysis's reader still plays what is there.
+        assert!(frames_of(&mp3).1.len() >= before);
+    }
+
+    #[test]
+    fn an_mp3_without_a_counting_tag_cut_short_cannot_be_told_from_a_shorter_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = lame_mp3(dir.path());
+        let whole = std::fs::read(&mp3).unwrap();
+        // The audio frames alone: no Info frame, so the length is only an
+        // estimate from the file's size.
+        let untagged = &whole[frame_at(&whole, 1)..];
+        std::fs::write(&mp3, &untagged[..frame_at(untagged, 20)]).unwrap();
+        let mut stream = MonoStream::open(&mp3).unwrap();
+        assert_eq!(drain(&mut stream).unwrap(), 20 * 1152);
+    }
+
+    #[test]
+    fn an_aac_file_in_mp4_cut_short_is_an_error_not_a_shorter_file() {
+        let m4a = Path::new(env!("CARGO_MANIFEST_DIR")).join("../rbl-db/tests/fixtures/silent.m4a");
+        let expected = MonoStream::open(&m4a).unwrap().expected_frames().unwrap();
+        assert_eq!(drain(&mut MonoStream::open(&m4a).unwrap()).unwrap() as u64, expected);
+
+        // symphonia reads every box of an MP4 to its stated end before it
+        // hands out audio, so a file cut anywhere, before its sample table
+        // or inside its audio, is refused when it is opened.
+        let dir = tempfile::tempdir().unwrap();
+        let cut = dir.path().join("cut.m4a");
+        let whole = std::fs::read(&m4a).unwrap();
+        let audio = whole.windows(4).position(|w| w == b"mdat").unwrap() + 4;
+        std::fs::write(&cut, &whole[..audio + 12]).unwrap();
+        assert!(MonoStream::open(&cut).is_err(), "a cut MP4 does not open");
     }
 
     #[test]

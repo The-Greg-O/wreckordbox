@@ -44,6 +44,7 @@ import {
   type JumpSize,
   jumpSizeById,
   jumpStepSeconds,
+  shiftByGridBeats,
   movedLoopByBeats,
   zoomBy,
   createWheelZoomGate,
@@ -95,11 +96,15 @@ import {
   beatNudgeFor, beatWait, inPhaseAt, MAX_TEMPO, MIN_TEMPO, syncTo, tempoFor, type Deck as SyncDeck,
 } from "@/lib/sync";
 import { detectPlatform, dispatchBinding, FIXED_JUMPS, matchBinding, type Action } from "@/lib/shortcuts";
+import { PALETTE_SURFACE } from "@/lib/palette";
 import { runCommand, type CommandHandler, type CommandHandlers, type CommandInput } from "@/lib/commands";
 import { useCommands } from "@/store/useCommands";
 import { keyMap } from "@/lib/keyPresets";
 import { WaveformDetail } from "./WaveformDetail";
 import { SimplePlayer } from "./SimplePlayer";
+import { CompactPlayer } from "./CompactPlayer";
+import { DetailPhrases, LARGE_PHRASE_H, LargePlayer, largePlayerStyles } from "./LargePlayer";
+import { compactJumpBeats, compactJumpSizeId, type CompactJumpBeats } from "@/lib/compactPlayer";
 import { JumpMenu } from "./JumpMenu";
 import { VocalStrip } from "./VocalStrip";
 import { useTrackCues } from "./useTrackCues";
@@ -132,6 +137,21 @@ export interface PlayerProps {
    * the layout switch changes what is on screen and not what is playing.
    */
   simple?: boolean;
+  /**
+   * The view shell's compact player (#51): CUE, PLAY, the readouts, the
+   * overview with its phrase strip and the beat jump selector, drawn by
+   * `CompactPlayer` from this deck's state. Implies `simple`'s one strip.
+   * The jump size is then the stored `view.shellJumpBeats`, for the
+   * buttons and the keys alike, rather than the deck's own menu.
+   */
+  compact?: boolean;
+  /**
+   * The Intake view's large player (wbx-62): the compact strip with the
+   * phrases and the detail waveform, beat grid and cue markers under it,
+   * drawn by `LargePlayer`. Only with `compact`; the same deck, so playback
+   * and the loaded track survive the view switch that turns it on and off.
+   */
+  large?: boolean;
   /**
    * Take the track out of the deck.
    *
@@ -572,6 +592,9 @@ const PhraseBar = memo(function PhraseBar({
   );
 });
 
+/** The keys the compact player takes only while it has the keyboard. */
+const ARROW_KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"]);
+
 /** Transport buttons, in the order and pairing rekordbox has them. */
 const SKIPS = [
   { id: "previous", label: "Previous track", glyph: "❘◀" },
@@ -879,12 +902,17 @@ export const Player = memo(function Player({
   track, onEject, onError, onAnalyse, onDropTrack, onLoadSelected, onSkipTrack, selectedTrackId = null,
   onExportTrack, devices = [], onExportLoop,
   dragging = false, deck = "a",
-  simple = false, transportSlot, flipped = false, dual = false, publishZoom, onWheelZoom,
+  simple: simpleLayout = false, compact = false, large: largeFace = false, transportSlot, flipped = false, dual = false, publishZoom, onWheelZoom,
   bars: linkedBars, onBars, jumpSize: linkedJump, onJumpSize,
   publishSync, peerSync, isMaster = false, onMaster, synced = false, syncOn = synced, onSyncToggle, onStartPlaying,
   leaderBpmX100 = null, onPlayingBpm, onKeyShift, onGridNudge, publishGridFollow, readOnly = false,
   drawing = false,
 }: PlayerProps) {
+  const simple = simpleLayout || compact;
+  const large = compact && largeFace;
+  // In the large face the deck's element is the large player around the
+  // strip; the strip's own element is then just a part of it.
+  const stripShell = useRef<HTMLElement>(null);
   const playback = usePlayback(track?.id ?? null, deck, false);
   // A waveform to draw: the analysis's, or one an analysis is drawing now.
   const hasWaveform = track !== null && (track.analysed > 0 || drawing);
@@ -1049,7 +1077,8 @@ export const Player = memo(function Player({
   );
   /** How far a jump moves, chosen from the size menu. */
   const [ownJumpSizeId, setOwnJumpSizeId] = useState<string>(JUMP_SIZE_ID);
-  const jumpSizeId = linkedJump ?? ownJumpSizeId;
+  const compactJump = compactJumpBeats(viewPrefs.shellJumpBeats);
+  const jumpSizeId = compact ? compactJumpSizeId(compactJump) : linkedJump ?? ownJumpSizeId;
   const setJumpSizeId = onJumpSize ?? setOwnJumpSizeId;
   /** Where the size menu is open, in client coordinates, or closed. */
   const [jumpMenu, setJumpMenu] = useState<{ x: number; y: number } | null>(null);
@@ -1200,7 +1229,10 @@ export const Player = memo(function Player({
     // and the head would otherwise sit where the last track left it.
     apply(positionRef.current);
     return subscribe(apply);
-  }, [total, bpm, span, overview.width, detail.width, positionRef, subscribe, beatCount, memorySeconds, grid, overviewRef, simple, dual]);
+    // `large`: the large face's band is a new element each time Intake is
+    // shown again, and at the same size nothing else here changes, so its
+    // head and layer would keep no transform (wbx-62 review).
+  }, [total, bpm, span, overview.width, detail.width, positionRef, subscribe, beatCount, memorySeconds, grid, overviewRef, simple, dual, large]);
 
   /*
    * The layer's new anchor, taken only once it is on screen.
@@ -1217,7 +1249,7 @@ export const Player = memo(function Player({
       const dx = snapOffset(scrollOffset(at, anchor, span, detail.width), pixelRatio());
       scroller.current.style.transform = `translateX(${dx}px)`;
     }
-  }, [anchor, span, total, detail.width, positionRef]);
+  }, [anchor, span, total, detail.width, positionRef, large]);
 
   /**
    * The wheel zooms, over the waveform it is pointing at.
@@ -1259,11 +1291,27 @@ export const Player = memo(function Player({
     const elsewhere = (event: PointerEvent) => {
       const box = shell.current;
       if (!box) return;
+      // The command palette is passing through: closing it gives the
+      // keyboard back as it was, armed deck included (#54).
+      if (event.target instanceof Element && event.target.closest(`[${PALETTE_SURFACE}]`)) return;
       setArmed(box.contains(event.target as Node));
     };
     document.addEventListener("pointerdown", elsewhere, true);
     return () => document.removeEventListener("pointerdown", elsewhere, true);
   }, []);
+  // The compact player also gives the keyboard up when the focus moves
+  // elsewhere by key (Tab into the list or the tree), since its arrows are
+  // only its own while it has the keyboard (#51). The old deck is unchanged.
+  useEffect(() => {
+    if (!compact) return;
+    const focusElsewhere = (event: FocusEvent) => {
+      const box = shell.current;
+      if (event.target instanceof Element && event.target.closest(`[${PALETTE_SURFACE}]`)) return;
+      if (box && event.target instanceof Node && !box.contains(event.target)) setArmed(false);
+    };
+    document.addEventListener("focusin", focusElsewhere, true);
+    return () => document.removeEventListener("focusin", focusElsewhere, true);
+  }, [compact]);
 
   // What the other deck reads when its BEAT SYNC is pressed. A ref holding a
   // closure over the current render, registered once: the shell keeps the
@@ -1334,9 +1382,17 @@ export const Player = memo(function Player({
           (moved.headMs - now * 1000) / 1000, Array.from(grid.times), beats);
         return;
       }
+      // The compact player does not jump past the track's end: a jump that
+      // would land there is not made (#51). The old deck is unchanged.
+      if (compact && size.beats > 0 && direction > 0 && total > 0) {
+        const targetMs = grid.times.length >= 2
+          ? shiftByGridBeats(grid, now * 1000, beats)
+          : (now + jumpStepSeconds(size, bpmX100)) * 1000;
+        if (targetMs !== null && targetMs / 1000 > total) return;
+      }
       jumpHead(playback, grid, size, bpmX100, now, direction, phaseLocked, seekInPhase);
     },
-    [bpmX100, playback, seekInPhase, grid, beatLoop, phaseLocked],
+    [bpmX100, playback, seekInPhase, grid, beatLoop, phaseLocked, compact, total],
   );
   const jump = useCallback(
     (direction: number) => jumpBySize(jumpSizeById(jumpSizeId), direction),
@@ -1934,6 +1990,15 @@ export const Player = memo(function Player({
 
   // A beat's length, for phrases whose time the grid did not resolve.
   const beatMs = bpmX100 > 0 ? 6_000_000 / bpmX100 : 0;
+  // The compact player's phrase strip, from the same analysis as the bar.
+  const compactPhrases = useMemo(
+    () => (compact ? phraseSpans(phrases, total * 1000, beatMs) : []),
+    [compact, phrases, total, beatMs],
+  );
+  const setCompactJump = useCallback(
+    (beats: CompactJumpBeats) => updatePreferences("view", { shellJumpBeats: beats }),
+    [updatePreferences],
+  );
 
   useEffect(() => {
     publishZoom?.(zoom);
@@ -2191,6 +2256,9 @@ export const Player = memo(function Player({
   const onDeckKey = useEventCallback((event: KeyboardEvent) => {
     const hit = dispatchBinding(event, platform, event.target as HTMLElement | null, keyOverrides);
     if (hit?.action === undefined || !Object.hasOwn(deckCommands, hit.action)) return;
+    // In the compact player the arrow keys are the deck's only while it has
+    // the keyboard: clicked, and nothing else clicked or focused since (#51).
+    if (compact && !armed && ARROW_KEYS.has(event.key)) return;
     // Player A's keys are Player A's and Player B's, with shift, Player B's:
     // a row for the other deck is not this one's business.
     if (hit.deck !== undefined && hit.deck !== deck) return;
@@ -2239,6 +2307,102 @@ export const Player = memo(function Player({
     event.preventDefault();
     onDropTrack?.();
   };
+
+  // The compact player is the view shell's strip, drawn from the same deck.
+  if (compact) {
+    const strip = (
+      <CompactPlayer
+        track={track}
+        deck={deck}
+        shell={large ? stripShell : shell}
+        region={!large}
+        armed={armed}
+        droppable={takesDrop}
+        onDragOver={dragOver}
+        onDrop={drop}
+        playing={playback.playing}
+        idle={playback.idle}
+        onToggle={togglePlay}
+        onCueDown={holdCue}
+        onCueUp={dropCue}
+        positionSource={playback}
+        total={total}
+        // The grid's tempo under the head, so a track that changes tempo
+        // reads as the part playing; times the deck's own tempo.
+        bpmX100={Math.round(gridBpmX100 * playback.tempo)}
+        keyText={track ? formatKey(track.key, viewPrefs.keyDisplay) : ""}
+        cues={cues}
+        loop={playback.loop}
+        phrases={compactPhrases}
+        overviewRef={overviewRef}
+        overview={overview}
+        overviewHead={overviewHead}
+        onScrubStart={scrubOverview}
+        onScrubMove={dragOverview}
+        onScrubEnd={endDrag}
+        drawn={hasWaveform}
+        jumpBeats={compactJump}
+        onJumpBeats={setCompactJump}
+        onJump={jump}
+      />
+    );
+    if (!large) return strip;
+    return (
+      <LargePlayer shell={shell} armed={armed} empty={!track} strip={strip}>
+        <div
+          ref={detailRef}
+          className={largePlayerStyles.band}
+          data-testid="large-player-detail"
+          data-pcm={bars <= 0.5 || undefined}
+          onWheel={wheelZoom}
+          onPointerDown={startDrag}
+          onPointerMove={dragDetail}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+        >
+          <div ref={scroller} className={styles.scroller}>
+            <DetailPhrases phrases={compactPhrases} window={window} />
+            <div className={largePlayerStyles.wave} data-testid="large-player-wave">
+              {track && hasWaveform && detail.height > LARGE_PHRASE_H ? (
+                <WaveformDetail
+                  // As the full deck's detail: PCM and PWV7 are different
+                  // byte layouts, so crossing the zoom boundary remounts.
+                  key={bars <= 0.5 ? "pcm" : "pwv7"}
+                  trackId={track.id}
+                  progress={anchor}
+                  span={span * OVERDRAW}
+                  durationMs={total * 1000}
+                  firstBeatMs={grid.times[0]}
+                  width={detail.width * OVERDRAW}
+                  height={detail.height - LARGE_PHRASE_H}
+                  detail
+                  pcmWindow={bars <= 0.5 ? {
+                    fromMs: Math.max(0, window.from * total * 1000 - 2000),
+                    toMs: Math.min(total * 1000, window.to * total * 1000 + 2000),
+                    drawFromMs: window.from * total * 1000,
+                    drawToMs: window.to * total * 1000,
+                  } : undefined}
+                  half={false}
+                  inset={waveInsetOf()}
+                />
+              ) : null}
+              <BeatGrid
+                grid={grid}
+                beats={beats}
+                totalMs={total * 1000}
+                window={window}
+                everyBeat={showsEveryBeat(bars)}
+                fromMs={gridEditor.fromMs}
+              />
+              <CueMarkers cues={cues} totalMs={total * 1000} band="detail" window={window} loop={playback.loop} />
+            </div>
+          </div>
+          {track ? null : <span className={largePlayerStyles.blank}>No track loaded</span>}
+          <span ref={detailHead} className={styles.playhead} data-testid="large-player-head" aria-hidden />
+        </div>
+      </LargePlayer>
+    );
+  }
 
   // The simple player is this deck drawn as one strip. Everything above —
   // the engine, the cues, the frame loop, the keys — is still this

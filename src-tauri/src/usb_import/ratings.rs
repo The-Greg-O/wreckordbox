@@ -1,9 +1,11 @@
 //! Only device edits since our export baseline can replace desktop ratings.
-use std::{collections::{BTreeMap, HashMap}, path::Path};
+use std::collections::{BTreeMap, HashMap};
 use rbl_export::{Manifest, snapshot::Snapshot};
 use super::{AppResult, AppState, ImportReport, err, write_error};
 
-pub(super) fn import(state: &AppState, root: &Path, manifest: Option<&Manifest>, matched: &HashMap<u32, String>, db_id: u64, report: &mut ImportReport) -> AppResult<()> {
+/// `current` is the Stick's libraries as Round-trip read them before
+/// applying anything (wbx-45.5), or why they could not be read.
+pub(super) fn import(state: &AppState, current: Result<&Snapshot, &str>, manifest: Option<&Manifest>, matched: &HashMap<u32, String>, db_id: u64, report: &mut ImportReport) -> AppResult<()> {
     // Library Protection is checked by Sync Manager. Even an unchanged or
     // unrecognised stick must also pass the native rekordbox-running guard.
     state.write(|_| Ok(())).map_err(write_error)?;
@@ -11,7 +13,7 @@ pub(super) fn import(state: &AppState, root: &Path, manifest: Option<&Manifest>,
         report.warnings.push("Track ratings were not imported: no export baseline for this library was found. Sync this USB to create one.".into());
         return Ok(());
     };
-    let current = Snapshot::read(root).map_err(err)?;
+    let current = current.map_err(err)?;
     let records: HashMap<_, _> = manifest.tracks.iter().map(|t| (t.export_id, t)).collect();
     let mut changes = BTreeMap::new();
     for (name, before, after) in [

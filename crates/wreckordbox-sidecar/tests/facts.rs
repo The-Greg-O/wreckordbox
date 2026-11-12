@@ -222,3 +222,44 @@ fn a_fact_that_makes_no_sense_is_refused() {
     ));
     assert_eq!(store.sidecar.facts_of_track("10003").unwrap().len(), 1);
 }
+
+#[test]
+fn what_is_known_of_some_audio_is_found_on_every_track_that_has_it() {
+    let store = store();
+    let (one, other) = (store.audio(1), store.audio(2));
+    let run = store.sidecar.begin_run(&agent(), "Measure").unwrap();
+    let record = |track: &str, audio: &Fingerprint, value: i64| {
+        store
+            .sidecar
+            .record(&NewFact {
+                track_id: track,
+                fingerprint: Some(audio),
+                kind: INTENSITY,
+                value: json!(value),
+                source: &agent(),
+                confidence: 1.0,
+                run,
+            })
+            .unwrap()
+            .id
+    };
+    let first = record("10001", &one, 1);
+    record("10002", &other, 2);
+    let twin = record("10003", &one, 3);
+    // The first track's audio changes: its Fact is stale, but still of `one`.
+    store.sidecar.mark_stale("10001", &other).unwrap();
+
+    let found: Vec<i64> = store
+        .sidecar
+        .facts_of_audio(&one, INTENSITY.name)
+        .unwrap()
+        .iter()
+        .map(|fact| fact.id)
+        .collect();
+    assert_eq!(found, [twin, first]);
+    assert!(store
+        .sidecar
+        .facts_of_audio(&one, "genre")
+        .unwrap()
+        .is_empty());
+}

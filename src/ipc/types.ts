@@ -56,6 +56,21 @@ export interface RowDto {
   missing?: boolean;
   /** Extra database fields requested for visible browser columns. */
   extra?: Record<string, string | number | boolean | null>;
+  /**
+   * The track's MyTags, each with its id and category, in the Library's
+   * order: present when the extra field `myTags` was asked for (the view
+   * shell's Library, #55). The backend sends them inside `extra`; the IPC
+   * client lifts them here (`rowMyTags.ts`).
+   */
+  myTags?: RowMyTag[];
+}
+
+/** One of a row's MyTags, as `fetchRows` sends it for the `myTags` field. */
+export interface RowMyTag {
+  id: string;
+  name: string;
+  /** The name of the MyTag column (category) it belongs to. */
+  category: string;
 }
 
 export type TrackSource =
@@ -249,8 +264,12 @@ export interface AppErrorDto {
    * `conflict`: an Undo or Redo was refused because what it would write was
    * changed since by something outside the history; nothing was written and
    * the entry is gone (#506).
+   *
+   * `unfinishedWrite`: a Stick's last write did not finish. Reads of it
+   * report this instead of settling it; `settleStick` is the action that
+   * does (wbx-45.5).
    */
-  kind: "readOnly" | "notFound" | "malformed" | "cancelled" | "conflict" | "internal";
+  kind: "readOnly" | "notFound" | "malformed" | "cancelled" | "conflict" | "unfinishedWrite" | "internal";
   message: string;
   detail?: string;
 }
@@ -269,6 +288,13 @@ export interface AppErrorDto {
  */
 export type WaveformKind = "bands" | "bandsDetail" | "mono" | "monoDetail" | "colour" | "colourDetail";
 
+
+/** Library Protection as the backend holds it. */
+export interface LibraryProtection {
+  protectLibrary: boolean;
+  /** Higher for every later change; a lower one than already seen is stale. */
+  revision: number;
+}
 
 export interface Backend {
   /** The installed rekordbox browseSetting.xml, when present. Read-only. */
@@ -373,6 +399,27 @@ export interface Backend {
   onServiceStopped(listener: (message: string) => void): () => void;
   /** What `onServiceStopped` said, for a window that was not listening yet. */
   serviceProblem(): Promise<string | null>;
+  /** Current connection and unfinished Runs, including work started by another client. */
+  serviceActivity(): Promise<import("./serviceActivity").ServiceActivity>;
+  /**
+   * Library Protection as the backend holds it. The backend owns the
+   * switch (it refuses every change to the Library while it is on); the
+   * window's preference only shows it.
+   */
+  libraryProtection(): Promise<LibraryProtection>;
+  /**
+   * The window's stored preference, taken up only on the first start,
+   * while the backend has never recorded the switch; answers what stands.
+   */
+  adoptLibraryProtection(windowPreference: boolean): Promise<LibraryProtection>;
+  /** Turns Library Protection on or off; resolves once it is recorded. */
+  setLibraryProtection(protectLibrary: boolean): Promise<LibraryProtection>;
+  /**
+   * Library Protection was turned, by whoever; in order of `revision`.
+   * Resolves, with the unsubscribe, once the listener is in place: a turn
+   * made before that is not heard, so ask for the state only after it.
+   */
+  onLibraryProtectionChanged(listener: (now: LibraryProtection) => void): Promise<() => void>;
 
   /**
    * Makes a new, empty library where rekordbox keeps one and loads it;
@@ -649,6 +696,22 @@ export interface Backend {
 
   /** Greys or enables native menu items by id (the Track and Playlist menus). */
   setMenuEnabled(items: Readonly<Record<string, boolean>>): Promise<void>;
+
+  /**
+   * Runs a native menu item the shell does itself (Full screen, Close
+   * Window, Quit) for the command palette, which is the only way to them
+   * where there is no menu row (Linux, #54).
+   */
+  runMenuItem(id: "fullscreen" | "close-window" | "quit"): Promise<void>;
+
+  /**
+   * Runs one of the webview's own editing actions (Cut, Copy, Paste, Select
+   * All) on what has the keyboard, the way the native Edit menu did. On
+   * Linux it is WebKitGTK's `execute_editing_command`, the privileged path
+   * the native menu used, so Paste reads the system clipboard where
+   * JavaScript may not (#54). Rejects where the platform has no such path.
+   */
+  runEditCommand(edit: "cut" | "copy" | "paste" | "selectAll"): Promise<void>;
 
   /**
    * AppleScript's requests to the window: each is run with `handle` and its
@@ -1028,12 +1091,6 @@ export interface Backend {
    * flags clear.
    */
   deviceSettings(path: string): Promise<DeviceSettings>;
-  /**
-   * Gives a stick that holds an export but no DEVSETTING.DAT the DJ System
-   * defaults, as rekordbox does when its device panel opens; a stick that
-   * has one keeps it. Resolves to what the stick now holds.
-   */
-  writeDeviceDefaults(path: string, defaults: StickDefaults): Promise<DeviceSettings>;
   /** Writes them back and resolves to what the stick now holds. */
   saveDeviceSettings(path: string, settings: DeviceSettings): Promise<DeviceSettings>;
   /**
@@ -1059,6 +1116,28 @@ export interface Backend {
    * tree. A stick with neither answers with none.
    */
   deviceLibraries(path: string): Promise<DeviceLibrary[]>;
+  /**
+   * A stick's playlist trees, for showing them, read without writing to the
+   * stick: unlike `deviceLibraries` it never finishes an interrupted export
+   * first, and reports one as `pending` with no playlists instead.
+   */
+  stickOutline(path: string): Promise<StickOutline>;
+  /**
+   * Settles a Stick's unfinished write: finishes the interrupted export if
+   * it can, otherwise puts back the files the Stick held before it; files
+   * another program wrote since are kept. This writes to the Stick: only for
+   * the action the DJ chose. Every read of such a Stick rejects with
+   * `unfinishedWrite` instead.
+   */
+  settleStick(path: string): Promise<void>;
+  /**
+   * A page of the Intake or Problems queue (wbx-62), from the Library
+   * service the window hosts: each track with what it still needs, and the
+   * row a deck loads for it.
+   */
+  intakeQueue(queue: import("@/lib/intakeQueue").IntakeQueueName, offset: number, limit: number): Promise<import("@/lib/intakeQueue").IntakeQueuePage>;
+  /** How many tracks wait in Intake and in Problems (the Intake tab). */
+  intakeCounts(): Promise<import("@/lib/intakeQueue").IntakeCounts>;
   /** Maps collection track ids to rows already in one of a stick's libraries. */
   devicePlaylistCollectionTracks(path: string, format: DeviceFormat, tracks: string[]): Promise<(string | null)[]>;
   /**
@@ -1327,6 +1406,13 @@ export interface DeviceLibrary {
   tracks: number;
   /** Playlists and folders in tree order. */
   nodes: DeviceLibraryNode[];
+}
+
+/** A stick's playlist trees, read without writing to it (`stickOutline`). */
+export interface StickOutline {
+  /** An earlier write to the stick did not finish; nothing is listed until it is. */
+  pending: boolean;
+  libraries: { format: DeviceFormat; nodes: DeviceLibraryNode[] }[];
 }
 
 export interface DeviceLibraryNode {

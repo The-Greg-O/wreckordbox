@@ -14,6 +14,7 @@ import { ANALYSIS_SLOTS, SLOTS } from "./queue";
 import { KEY_PRESETS, type KeyPreset } from "./keyPresets";
 import type { KeyChord } from "./shortcuts";
 import { fromCamelot, toCamelot, type TrafficLightReach } from "./camelot";
+import { COMPACT_JUMP_DEFAULT, compactJumpBeats, type CompactJumpBeats } from "./compactPlayer";
 import type {
   KeyDisplay, MenuSlot, OverviewWaveform, WaveformColor, WaveformPosition,
 } from "@/ipc/types";
@@ -163,10 +164,12 @@ export interface ViewPreferences {
    * this switch with it. No Preferences pane offers it.
    */
   viewShell: boolean;
+  /** The view shell's compact player: the beat jump size on its selector (#51). */
+  shellJumpBeats: CompactJumpBeats;
   /** Key display format: `Ebm` or `2A`. */
   keyDisplay: KeyDisplay;
   /** How the browser's Key column is ordered. */
-  keySort: "alphabetical" | "musical";
+  keySort: "auto" | "alphabetical" | "musical";
   /** Full/Preview Waveform: the deck's overview, single-sided or mirrored. */
   overviewWaveform: OverviewWaveform;
   /** Media Browser › Explorer: the folders on disk in the tree. */
@@ -257,6 +260,8 @@ export interface AnalysisPreferences {
    * default, as it is in rekordbox.
    */
   writeKeyTag: boolean;
+  /** Notation written by analysis to the Library and, if enabled, file tags. Independent of display. */
+  keyNotation?: KeyDisplay;
   /**
    * Key Analysis > "Analyze key": off keeps the keys a track already has, such
    * as ones from Mixed In Key, for automatic analysis and as the default of
@@ -417,8 +422,9 @@ export const DEFAULT_PREFERENCES: Preferences = {
     browseLineSpace: BROWSE_SCALE_DEFAULT,
     uiScale: UI_SCALE_DEFAULT,
     viewShell: false,
-    keyDisplay: "classic",
-    keySort: "alphabetical",
+    shellJumpBeats: COMPACT_JUMP_DEFAULT,
+    keyDisplay: "alphanumeric",
+    keySort: "auto",
     overviewWaveform: "half",
     explorer: true,
     previewCueMarkers: true,
@@ -450,6 +456,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
     firstBeatCue: false,
     bpmRange: "70-180",
     writeKeyTag: false,
+    keyNotation: "classic",
     detectKey: true,
   },
   djSystem: {
@@ -493,7 +500,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
 /** Show either notation regardless of how the library stored the key. */
 export function formatKey(key: string, display: KeyDisplay): string {
   if (key === "") return key;
-  if (display === "classic") return fromCamelot(key) || key;
+  if (display === "classic") return fromCamelot(toCamelot(key)) || key;
   // A key the wheel does not know — a blank, "Unknown", a typo — is shown as
   // it is rather than hidden.
   return toCamelot(key) || key;
@@ -601,11 +608,12 @@ export function sanitisePreferences(value: unknown): Preferences {
       // a build with a different set of stops is not a size anyone chose.
       uiScale: isUiScaleStop(view.uiScale) ? view.uiScale : d.view.uiScale,
       viewShell: bool(view.viewShell, d.view.viewShell),
+      shellJumpBeats: compactJumpBeats(view.shellJumpBeats),
       keyDisplay: oneOf(view.keyDisplay, KEY_DISPLAYS, d.view.keyDisplay),
       keySort: oneOf(
         view.keySort,
-        ["alphabetical", "musical"] as const,
-        view.keyDisplay === "alphanumeric" ? "musical" : d.view.keySort,
+        ["auto", "alphabetical", "musical"] as const,
+        d.view.keySort,
       ),
       overviewWaveform: oneOf(view.overviewWaveform, OVERVIEWS, d.view.overviewWaveform),
       explorer: bool(view.explorer, d.view.explorer),
@@ -636,6 +644,10 @@ export function sanitisePreferences(value: unknown): Preferences {
       firstBeatCue: bool(analysis.firstBeatCue, d.analysis.firstBeatCue),
       bpmRange: oneOf(analysis.bpmRange, BPM_RANGES, d.analysis.bpmRange),
       writeKeyTag: bool(analysis.writeKeyTag, d.analysis.writeKeyTag),
+      // Old full profiles used display for writing too. Preserve that choice
+      // once; newly saved profiles always carry the independent field.
+      keyNotation: oneOf(analysis.keyNotation, KEY_DISPLAYS,
+        oneOf(view.keyDisplay, KEY_DISPLAYS, "classic")),
       detectKey: bool(analysis.detectKey, d.analysis.detectKey),
     },
     djSystem: {

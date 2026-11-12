@@ -23,16 +23,26 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
+use std::time::Duration;
 
 use rbl_db::LibraryLocation;
 use rbl_library::Host;
+use rbl_library::protection::ProtectionState;
+use tauri::Manager as _;
 use wreckordbox_service::{codes, events, ChangeKind, Config, LibraryChanged, Service, ServiceError};
+
+use crate::error::AppResult;
 
 use crate::state::AppState;
 
 /// The interface's event for a window that can no longer write: the
 /// message to show.
 pub const SERVICE_STOPPED: &str = "service:stopped";
+
+/// The interface's event for every turn of Library Protection, by
+/// whoever: a [`ProtectionDto`]. Sent in order; one with a lower revision
+/// than one already applied is stale.
+pub const PROTECTION_CHANGED: &str = "library-protection:changed";
 
 /// What the DJ is told when the window's service stops under it.
 pub const STOPPED_MESSAGE: &str =
@@ -137,11 +147,10 @@ impl AppState {
             let front = Arc::clone(&front);
             std::thread::spawn(move || {
                 for event in changes {
-                    if event.event != events::LIBRARY_CHANGED {
-                        continue;
-                    }
-                    if let Ok(change) = serde_json::from_value::<LibraryChanged>(event.data) {
-                        front.library_changed(change);
+                    if event.event == events::LIBRARY_CHANGED {
+                        if let Ok(change) = serde_json::from_value::<LibraryChanged>(event.data) {
+                            front.library_changed(change);
+                        }
                     }
                 }
             });
@@ -216,22 +225,82 @@ impl<R: tauri::Runtime> FrontEnd for Interface<R> {
     }
 }
 
-/// Hosts the service for the Library the app is about to read. A Library
-/// that is not there yet has nothing to host; the next load tries again.
-pub(crate) fn host<R: tauri::Runtime>(app: &tauri::AppHandle<R>, location: &LibraryLocation) {
-    use tauri::Manager as _;
-    if !location.master_db.is_file() {
-        return;
-    }
+/// How long a window that starts while a backup is being restored waits
+/// for the restore to finish before it gives up.
+pub const RESTORE_WAIT: Duration = Duration::from_secs(30 * 60);
+
+/// What a window may do with the Library it is about to read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Ownership {
+    /// It hosts the service: it owns the Library, any interrupted restore
+    /// has been recovered under its lock, and it may write.
+    Owner,
+    /// Another window or service owns the Library and nothing is left to
+    /// recover: it may read, and cannot write.
+    Reader,
+    /// It must not read the Library: a restore is running, or one stopped
+    /// midway and this window does not own the Library to recover it.
+    Refused(String),
+}
+
+/// Hosts the service for the Library the app is about to read, using the
+/// environment's configuration. See [`own_library`].
+pub(crate) fn host<R: tauri::Runtime>(app: &tauri::AppHandle<R>, location: &LibraryLocation) -> Ownership {
     match Config::from_env() {
-        Ok(config) => {
-            let _ = host_with(app, location, &config);
-        }
+        Ok(config) => own_library(app, location, &config, RESTORE_WAIT),
         Err(error) => {
             let message = cannot_host(&error);
             tracing::error!(error = %error.message, "the window is not hosting the Library service");
             app.state::<Arc<AppState>>().core().refuse_writes(Some(message.clone()));
             Interface(app.clone()).cannot_write(&message);
+            if rbl_backup::journal::pending(app.state::<Arc<AppState>>().backup_dir()) {
+                Ownership::Refused(UNFINISHED.to_owned())
+            } else {
+                Ownership::Reader
+            }
+        }
+    }
+}
+
+const UNFINISHED: &str = "A restore of the Library is unfinished, and another program owns the Library. Quit it, then open wreckordbox again.";
+const RESTORING: &str = "A backup is being restored into the Library. Open wreckordbox again when the restore has finished.";
+
+/// Makes the window the Library's owner before anything reads it: hosts
+/// the service, which recovers an interrupted restore under the Library's
+/// lock. Never recovers anything without that lock.
+///
+/// While a restore owns the Library the window waits, up to `wait`, then
+/// hosts; past it, it is refused. When another window or service owns the
+/// Library it may only read, and only if no restore is left to recover.
+/// A Library whose `master.db` is missing with no restore to recover has
+/// nothing to host; the next load tries again.
+pub fn own_library<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    location: &LibraryLocation,
+    config: &Config,
+    wait: Duration,
+) -> Ownership {
+    let deadline = std::time::Instant::now() + wait;
+    loop {
+        if wreckordbox_service::backup::restoring(location) {
+            if std::time::Instant::now() >= deadline {
+                return Ownership::Refused(RESTORING.to_owned());
+            }
+            std::thread::sleep(Duration::from_millis(200));
+            continue;
+        }
+        let pending = rbl_backup::journal::pending(&config.recovery_dir);
+        if !location.master_db.is_file() && !pending {
+            return Ownership::Reader;
+        }
+        match host_with(app, location, config) {
+            Ok(()) => return Ownership::Owner,
+            // A restore took the Library between the look and the try.
+            Err(_) if wreckordbox_service::backup::restoring(location) => {}
+            Err(_) if rbl_backup::journal::pending(&config.recovery_dir) => {
+                return Ownership::Refused(UNFINISHED.to_owned());
+            }
+            Err(_) => return Ownership::Reader,
         }
     }
 }
@@ -244,7 +313,6 @@ pub fn host_with<R: tauri::Runtime>(
     location: &LibraryLocation,
     config: &Config,
 ) -> Result<(), ServiceError> {
-    use tauri::Manager as _;
     let state = Arc::clone(app.state::<Arc<AppState>>().inner());
     // The window's service lasts as long as the window, clients or not.
     let config = Config { idle_exit: None, ..config.clone() };
@@ -257,4 +325,119 @@ pub fn host_with<R: tauri::Runtime>(
 #[allow(clippy::needless_pass_by_value, reason = "a command is handed its state by value")]
 pub fn service_problem(state: tauri::State<'_, Arc<AppState>>) -> Option<String> {
     state.service_problem()
+}
+
+/// Library Protection as the window is told it. The Library core owns the
+/// switch (`rbl_library::protection`); the window's preference only shows
+/// it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtectionDto {
+    pub protect_library: bool,
+    /// Higher for every later change.
+    pub revision: u64,
+}
+
+impl From<ProtectionState> for ProtectionDto {
+    fn from(state: ProtectionState) -> Self {
+        Self { protect_library: state.protect_library, revision: state.revision }
+    }
+}
+
+/// Tells the interface of every turn of Library Protection, whoever made
+/// it (Preferences, the command line, a script), in order, as
+/// [`PROTECTION_CHANGED`]. Call once, when the app starts.
+pub fn announce_protection<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    let (send, turns) = std::sync::mpsc::channel::<ProtectionState>();
+    // The core calls this under its edit gate: only queue.
+    app.state::<Arc<AppState>>().core().watch_protection(move |state| send.send(state).is_ok());
+    let app = app.clone();
+    std::thread::spawn(move || {
+        for state in turns {
+            let _ = tauri::Emitter::emit(&app, PROTECTION_CHANGED, ProtectionDto::from(state));
+        }
+    });
+}
+
+/// Library Protection as it stands.
+#[tauri::command]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "a command is handed its state by value"
+)]
+pub fn library_protection(state: tauri::State<'_, Arc<AppState>>) -> ProtectionDto {
+    state.core().protection().into()
+}
+
+/// The window's stored preference, taken up as Library Protection only the
+/// first time, while nothing has ever been recorded; answers what stands.
+#[tauri::command]
+pub async fn adopt_library_protection(
+    state: tauri::State<'_, Arc<AppState>>,
+    window_preference: bool,
+) -> AppResult<ProtectionDto> {
+    let state = Arc::clone(&state);
+    crate::commands::blocking("adopt_library_protection", move || {
+        state.as_protection_writer(|core| core.adopt_protection(window_preference)).map_or_else(
+            // Not the writer: what stands, taken up from nobody.
+            |_| Ok(state.core().protection().into()),
+            |adopted| adopted.map(ProtectionDto::from).map_err(|error| not_recorded(&error)),
+        )
+    })
+    .await
+}
+
+/// Turns Library Protection on or off, as the DJ does in Preferences.
+/// Answers once it is recorded; an error when it could not be.
+#[tauri::command]
+pub async fn set_library_protection(
+    state: tauri::State<'_, Arc<AppState>>,
+    protect_library: bool,
+) -> AppResult<ProtectionDto> {
+    let state = Arc::clone(&state);
+    crate::commands::blocking("set_library_protection", move || {
+        state
+            .as_protection_writer(|core| core.set_protection(protect_library))
+            .map_err(|reason| not_the_writer(&reason))?
+            .map(|turned| turned.now.into())
+            .map_err(|error| not_recorded(&error))
+    })
+    .await
+}
+
+impl AppState {
+    /// Runs `turn` on this window's core only while this window may be the
+    /// Library's writer: holding the hosting slot, so hosting is not part-way
+    /// through or changing meanwhile. A window that has found it is not the
+    /// writer (another window or service has the Library) gets `Err` with
+    /// why, and `turn` is not run: a turn through its own core would not take
+    /// the writer's edit gate, and the writer's interface would not hear it.
+    fn as_protection_writer<T>(&self, turn: impl FnOnce(&rbl_library::LibraryCore) -> T) -> Result<T, String> {
+        let _hosting = self.service.lock();
+        if let Some(reason) = self.core().write_refusal() {
+            return Err(reason);
+        }
+        Ok(turn(self.core()))
+    }
+}
+
+/// What a window that is not the Library's writer is told when the DJ turns
+/// Library Protection in it.
+fn not_the_writer(reason: &str) -> crate::error::AppError {
+    crate::error::AppError::new(
+        crate::error::ErrorKind::ReadOnly,
+        "This window cannot turn Library Protection: it is not the window changing this Library. \
+         Turn it in that window, or with `wreckordbox protection on` or `wreckordbox protection off`.",
+    )
+    .with_detail(reason.to_owned())
+}
+
+/// What the DJ is told when the switch could not be saved: said plainly,
+/// since the interface shows it beside the switch.
+fn not_recorded(error: &std::io::Error) -> crate::error::AppError {
+    tracing::error!(%error, "Library Protection could not be saved");
+    crate::error::AppError::new(
+        crate::error::ErrorKind::ReadOnly,
+        format!("Library Protection could not be saved: {error}"),
+    )
 }

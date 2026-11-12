@@ -234,6 +234,32 @@ fn query(
     index: &Arc<rbl_index::Library>,
     selection: &TrackSelection,
 ) -> Result<TrackPage, ServiceError> {
+    let rows = matching(index, selection)?;
+    let limit = selection.limit.unwrap_or(DEFAULT_PAGE_LIMIT);
+    let total = rows.len();
+    let offset = selection.offset.min(total);
+    let end = offset.saturating_add(limit).min(total);
+    let tracks: Vec<TrackRecord> = rows
+        .get(offset..end)
+        .unwrap_or(&[])
+        .iter()
+        .map(|&row| record(index, row))
+        .collect();
+    Ok(TrackPage {
+        tracks,
+        total,
+        offset,
+        limit,
+        next_offset: (end < total && end > offset).then_some(end),
+    })
+}
+
+/// Every track a selection matches, in the collection's own order or the
+/// playlist's when one was named; its `limit` and `offset` are not applied.
+pub(crate) fn matching(
+    index: &Arc<rbl_index::Library>,
+    selection: &TrackSelection,
+) -> Result<Vec<Row>, ServiceError> {
     let source = match &selection.playlist {
         Some(wanted) => playlist_source(index, wanted)?,
         None => TrackSource::Collection,
@@ -276,24 +302,7 @@ fn query(
     if let Some(wanted) = selection.analysed {
         rows.retain(|&row| analysed(index, row) == wanted);
     }
-
-    let limit = selection.limit.unwrap_or(DEFAULT_PAGE_LIMIT);
-    let total = rows.len();
-    let offset = selection.offset.min(total);
-    let end = offset.saturating_add(limit).min(total);
-    let tracks: Vec<TrackRecord> = rows
-        .get(offset..end)
-        .unwrap_or(&[])
-        .iter()
-        .map(|&row| record(index, row))
-        .collect();
-    Ok(TrackPage {
-        tracks,
-        total,
-        offset,
-        limit,
-        next_offset: (end < total && end > offset).then_some(end),
-    })
+    Ok(rows)
 }
 
 /// The playlist as the window opens it from the tree.

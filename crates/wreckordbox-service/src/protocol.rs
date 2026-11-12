@@ -46,6 +46,10 @@ pub mod events {
 pub mod codes {
     /// No Library where one is configured.
     pub const LIBRARY_MISSING: &str = "library_missing";
+    /// Library Protection is on, so nothing that changes the Library is
+    /// done; the message is the window's own. See
+    /// [`protection`](crate::protection).
+    pub const LIBRARY_PROTECTED: &str = "library_protected";
     /// The Library's database is locked by another program.
     pub const LIBRARY_LOCKED: &str = "library_locked";
     /// The Library is there and cannot be read as one.
@@ -75,6 +79,21 @@ pub mod codes {
     pub const LIBRARY_LOADING: &str = "library_loading";
     /// The service is hosted by the window, which stops it by closing.
     pub const STOP_REFUSED: &str = "stop_refused";
+    /// A restore that stopped midway could not be finished or rolled back,
+    /// so neither the Library nor the Sidecar is opened. The message says
+    /// why.
+    pub const RESTORE_UNFINISHED: &str = "restore_unfinished";
+    /// A restore was refused before anything was changed: the backup is
+    /// damaged or another Library's, the Library is in use, rekordbox is
+    /// running. The message says which.
+    pub const RESTORE_REFUSED: &str = "restore_refused";
+    /// A restore failed while it ran; it put back what it had changed,
+    /// unless the message says otherwise.
+    pub const RESTORE_FAILED: &str = "restore_failed";
+    /// A restore's files are in place, and the Ledger entry recording it
+    /// could not be written. Its journal stays, the Library is not opened
+    /// for edits, and the next owner tries again.
+    pub const RESTORE_UNRECORDED: &str = "restore_unrecorded";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,6 +102,10 @@ pub struct Request {
     pub command: String,
     #[serde(default)]
     pub args: Value,
+    /// For a command that edits the Library: the Run its changes belong
+    /// to, or who they are by. See [`crate::ledger::RunArg`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<crate::ledger::RunArg>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,6 +113,10 @@ pub struct Response {
     pub id: u64,
     #[serde(flatten)]
     pub outcome: Outcome,
+    /// The Run the command's changes are in, when it edited the Library
+    /// or joined a Run: a `Run` as `runs.start` answers it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<Value>,
 }
 
 /// `"result": …` or `"error": {"code": …, "message": …}`.

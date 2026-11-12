@@ -55,7 +55,7 @@ test("View › Key display format offers and saves the browser key sort", async 
   const dialog = await prefs(page);
   const section = dialog.getByRole("region", { name: "Key display format" });
   const sort = section.getByRole("radiogroup", { name: "Sort keys" });
-  await expect(sort.getByRole("radio", { name: "Alphabetically — A, Ab, B, …" })).toBeChecked();
+  await expect(sort.getByRole("radio", { name: "Follow displayed notation" })).toBeChecked();
   await sort.getByRole("radio", { name: "Musically — Abm, B, Ebm, F#, Bbm, …" }).click();
 
   await page.reload();
@@ -401,7 +401,7 @@ test("About shows the version, the credit and the licence, and nothing to press"
   await open(page);
   const dialog = await prefs(page);
   await dialog.getByRole("tab", { name: "About" }).click();
-  await expect(dialog.getByRole("heading", { name: "wreckordbox", exact: true })).toBeVisible();
+  await expect(dialog.getByRole("region", { name: "About" }).getByRole("heading", { name: "wreckordbox", exact: true })).toBeVisible();
   await expect(dialog.getByTestId("about-version")).toHaveText("v0.4.0");
   const about = dialog.getByRole("region", { name: "About", exact: true });
   await expect(about.getByText("wreckordbox is based on rbxport.")).toBeVisible();
@@ -568,7 +568,7 @@ test("Analysis BPM Range offers rekordbox's ranges and sets the Analysis Setting
   await page.reload();
   const rows = page.getByRole("row").filter({ has: page.getByRole("gridcell") });
   await rows.nth(2).click();
-  await page.keyboard.press("Shift+Meta+A");
+  await page.keyboard.press("Shift+ControlOrMeta+A");
   const analysis = page.getByRole("dialog", { name: "Analysis Setting" });
   const batchRange = analysis.getByRole("combobox", { name: "BPM Range" });
   await expect(batchRange).toHaveValue("108-215");

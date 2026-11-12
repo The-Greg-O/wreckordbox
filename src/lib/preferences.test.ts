@@ -108,9 +108,9 @@ describe("sanitisePreferences", () => {
 
   it("keeps the browser key-sort choice and preserves the old display-based ordering", () => {
     expect(sanitisePreferences({view: {keySort: "musical"}}).view.keySort).toBe("musical");
-    expect(sanitisePreferences({view: {keySort: "invalid"}}).view.keySort).toBe("alphabetical");
-    expect(sanitisePreferences({view: {keyDisplay: "classic"}}).view.keySort).toBe("alphabetical");
-    expect(sanitisePreferences({view: {keyDisplay: "alphanumeric"}}).view.keySort).toBe("musical");
+    expect(sanitisePreferences({view: {keySort: "invalid"}}).view.keySort).toBe("auto");
+    expect(sanitisePreferences({view: {keyDisplay: "classic"}}).view.keySort).toBe("auto");
+    expect(sanitisePreferences({view: {keyDisplay: "alphanumeric"}}).view.keySort).toBe("auto");
   });
   it("gives the defaults for nothing, garbage, and a wrong shape", () => {
     expect(sanitisePreferences(undefined)).toEqual(DEFAULT_PREFERENCES);
@@ -361,6 +361,21 @@ describe("the view shell switch", () => {
     expect(sanitisePreferences({ view: { viewShell: true } }).view.viewShell).toBe(true);
     for (const stored of ["true", 1, null]) {
       expect(sanitisePreferences({ view: { viewShell: stored } }).view.viewShell, String(stored)).toBe(false);
+    }
+  });
+});
+
+describe("the compact player's beat jump size", () => {
+  it("starts on 16 beats and keeps a stored 4, 8, 16 or 32", () => {
+    expect(DEFAULT_PREFERENCES.view.shellJumpBeats).toBe(16);
+    for (const beats of [4, 8, 16, 32]) {
+      expect(sanitisePreferences({ view: { shellJumpBeats: beats } }).view.shellJumpBeats).toBe(beats);
+    }
+  });
+
+  it("reads any other stored value as the default", () => {
+    for (const stored of [64, 0, "8", null]) {
+      expect(sanitisePreferences({ view: { shellJumpBeats: stored } }).view.shellJumpBeats, String(stored)).toBe(16);
     }
   });
 });

@@ -6,6 +6,7 @@
  * tokens. Rows are virtualized and keyed by row id so a re-sort moves DOM nodes
  * instead of rewriting every cell.
  */
+import { useFontScales } from "@/lib/themeRoles";
 import { dragTracksToDesktop, getBackend, nativeTrackDragging } from "@/ipc/client";
 import { SearchField } from "@/components/SearchField";
 import { reportStartupPaint } from "@/lib/startup";
@@ -48,6 +49,7 @@ import { usePreferences, useTooltip } from "@/store/usePreferences";
 import { usePlayedTracks } from "@/store/usePlayedTracks";
 import type { KeyDisplay } from "@/ipc/types";
 import { ColumnMenu } from "./ColumnMenu";
+import type { ListLook } from "./listLook";
 import { createDragAutoscroll } from "@/lib/dragAutoscroll";
 import { setRowDragImage } from "./dragGhost";
 import { keyMap } from "@/lib/keyPresets";
@@ -95,6 +97,17 @@ export type Column = ColumnSpec;
  * columns. Below that sum the row's `min-width` takes over and the scroller
  * does its job.
  */
+/**
+ * The columns as drawn: each stored width times how much larger the theme
+ * file makes that column's text. Artwork is sized from the row already.
+ */
+function scaledColumns(columns: readonly ColumnSpec[], scale: (key: ColumnKey) => number): readonly ColumnSpec[] {
+  return columns.map((column) => {
+    const by = column.key === "artwork" ? 1 : scale(column.key);
+    return by === 1 ? column : { ...column, width: Math.round(column.width * by) };
+  });
+}
+
 function gridOf(columns: readonly ColumnSpec[]): string {
   return `${columns.map((c) => `${c.width}px`).join(" ")} 1fr`;
 }
@@ -203,7 +216,7 @@ const Stars = memo(function Stars({
               onRate(rating === star ? 0 : star);
             }}
           >
-            <RatingStar lit={star <= rating} className={styles.starIcon} />
+            <RatingStar star={star} rating={rating} className={styles.starIcon} />
           </button>
         ))}
       </span>
@@ -211,7 +224,7 @@ const Stars = memo(function Stars({
   }
   return (
     <span className={styles.stars} role="img" aria-label={`${rating} of 5`}>
-      {[1, 2, 3, 4, 5].map((star) => <RatingStar key={star} lit={star <= rating} className={styles.starIcon} />)}
+      {[1, 2, 3, 4, 5].map((star) => <RatingStar key={star} star={star} rating={rating} className={styles.starIcon} />)}
     </span>
   );
 });
@@ -348,6 +361,7 @@ const EditableCell = memo(function EditableCell({
       >
         <select
           className={styles.editor}
+          data-own-activation=""
           value={value}
           aria-label={label}
           autoFocus
@@ -419,9 +433,11 @@ const EditableCell = memo(function EditableCell({
 const TrackRow = memo(function TrackRow({
   row, top, selected, played, onSelect, onOpen, onDragStart, onDragEnd, index, columns, onRate,
   onComment, onEditField, onEditColor, onEditBlocked, onMenu, keyDisplay, keyChoices, onOpenKeys, previewCues, clickToEdit, tooltips, trafficKey, trafficReach,
-  reorderable, isLocalDrag, dropEdge, onReorderOver, onReorderDrop, startupCache, previewHeight,
+  reorderable, isLocalDrag, dropEdge, onReorderOver, onReorderDrop, startupCache, previewHeight, look,
 }: {
   row: RowDto | undefined;
+  /** A view's own look for the row (`listLook.ts`); undefined is upstream's. */
+  look: ListLook | undefined;
   top: number;
   /**
    * The strip the row's waveform and its cue badges share, from
@@ -619,7 +635,16 @@ const TrackRow = memo(function TrackRow({
       role="row"
       aria-selected={selected}
     >
+      {look?.edge?.(row)}
       {columns.map((col) => {
+        const custom = look?.cell?.(
+          col.key, row, onRate && ((stars: number) => (onEditBlocked ? onEditBlocked() : onRate(row.id, stars))),
+        );
+        if (custom !== undefined) {
+          return (
+            <div key={col.key} className={styles.cell} data-col={col.key} role="gridcell">{custom}</div>
+          );
+        }
         if (col.key === "attr") {
           return (
             <div key={col.key} className={styles.attr} data-col={col.key} role="gridcell">
@@ -705,8 +730,8 @@ const TrackRow = memo(function TrackRow({
                 {...(isKey ? {
                   choices: keyChoices,
                   choiceLabel: (k: string) => formatKey(k, keyDisplay),
-                  display: formatKey(row.key, keyDisplay),
-                  lit: trafficKey !== null && trafficLightLit(row.key, trafficKey, trafficReach),
+                  display: look?.keyCell?.(row.key, trafficKey, formatKey(row.key, keyDisplay)) ?? formatKey(row.key, keyDisplay),
+                  lit: !look?.keyCell && trafficKey !== null && trafficLightLit(row.key, trafficKey, trafficReach),
                   onOpen: onOpenKeys,
                 } : {})}
                 onEditBlocked={onEditBlocked}
@@ -783,7 +808,7 @@ const TrackRow = memo(function TrackRow({
         }
         if (col.key === "key") {
           // The Traffic Light: a key that goes with the loaded track's is lit.
-          const lit = trafficKey !== null && trafficLightLit(row.key, trafficKey, trafficReach);
+          const lit = !look?.keyCell && trafficKey !== null && trafficLightLit(row.key, trafficKey, trafficReach);
           return (
             <div
               key={col.key}
@@ -792,7 +817,7 @@ const TrackRow = memo(function TrackRow({
               data-lit={lit || undefined}
               role="gridcell"
             >
-              {formatKey(row.key, keyDisplay)}
+              {look?.keyCell?.(row.key, trafficKey, formatKey(row.key, keyDisplay)) ?? formatKey(row.key, keyDisplay)}
             </div>
           );
         }
@@ -1021,6 +1046,8 @@ export interface TrackTableProps {
    */
   artworkMode?: ArtworkMode;
   onArtworkMode?: (mode: ArtworkMode) => void;
+  /** A view's own look for rows, headings and the headings' menu (`listLook.ts`). */
+  look?: ListLook | undefined;
 }
 
 /**
@@ -1125,22 +1152,35 @@ export const TrackTable = memo(function TrackTable({
   onImportToCollection, onAnalysisLock, onAddToPlaylist, onAddToTagList, onRemoveFromTagList, onExportTrack, onReloadTag,
   playlists = [], devices = [], deviceMenu,
   players = 0, onLoadTrack, onSelectedRow, filterOpen = false, onToggleFilter, filterBar,
-  trafficLight, onTrafficLight, trafficKey = null, artworkMode = "partial", onArtworkMode,
+  trafficLight, onTrafficLight, trafficKey = null, artworkMode = "partial", onArtworkMode, look,
 }: TrackTableProps) {
   // Browse › FontSize and Line Space scale the measured tokens; the
   // virtualizer has to be told the same height the CSS draws. The whole
   // artwork doubles it.
   const preferences = usePreferences();
+  // The theme file's text sizes (wbx-45.6): rows, headings and columns grow
+  // with them so a value still fits. 1 without a file.
+  const scales = useFontScales();
+  const numberColumns = look?.numberColumns;
+  const rowScale = numberColumns ? Math.max(scales.text, scales.numbers) : scales.text;
   const rowH = rowHeightForArtworkMode(
-    Math.round(ROW_H * browseScale(preferences.view.browseLineSpace)),
+    Math.round((look?.rowHeight ?? ROW_H) * browseScale(preferences.view.browseLineSpace) * rowScale),
     artworkMode,
   );
+  const columnScale = useCallback(
+    (key: ColumnKey) => (numberColumns?.includes(key) ? scales.numbers : scales.text),
+    [numberColumns, scales],
+  );
   const columns = useMemo(
-    () => columnsForArtworkMode(layoutColumns, artworkMode, rowH),
-    [layoutColumns, artworkMode, rowH],
+    () => scaledColumns(columnsForArtworkMode(layoutColumns, artworkMode, rowH), columnScale),
+    [layoutColumns, artworkMode, rowH, columnScale],
   );
   const band = previewBand(rowH);
-  const extraColumns = useMemo(() => EXTRA_COLUMNS.filter((key) => columns.some((column) => column.key === key)), [columns]);
+  const extraColumns = useMemo(() => {
+    const shown = columns.map((column) => column.key);
+    return look ? look.fetch(shown) : EXTRA_COLUMNS.filter((key) => shown.includes(key));
+  }, [columns, look]);
+  const headH = Math.round((look?.headingHeight ?? COL_HEADER_H) * scales.text);
   const view = useTrackView(spec, libraryGeneration, pendingEdits, seed, extraColumns);
   const played = usePlayedTracks();
   const { keyDisplay, previewCueMarkers, tooltips } = preferences.view;
@@ -1208,7 +1248,8 @@ export const TrackTable = memo(function TrackTable({
   const [menu, setMenu] = useState<{ x: number; y: number; target: ColumnKey } | null>(null);
   // Live during a header-edge drag. A ref, not state: this updates per
   // mousemove and re-rendering the table on each would be a frame's work.
-  const resizing = useRef<{ key: ColumnKey; x: number; width: number } | null>(null);
+  /** A heading being resized: its key, where the drag began, its drawn width and how much larger than stored it is drawn. */
+  const resizing = useRef<{ key: ColumnKey; x: number; width: number; scale: number } | null>(null);
   // A heading drag in progress, and whether it passed the threshold. `grab`
   // is where in the heading it was taken, so the floating copy stays under
   // the pointer at the same place.
@@ -1228,7 +1269,7 @@ export const TrackTable = memo(function TrackTable({
     const onMove = (e: MouseEvent) => {
       const drag = resizing.current;
       if (drag) {
-        onColumnResize(drag.key, drag.width + (e.clientX - drag.x));
+        onColumnResize(drag.key, Math.round((drag.width + (e.clientX - drag.x)) / drag.scale));
         return;
       }
       const move = reorder.current;
@@ -1358,7 +1399,7 @@ export const TrackTable = memo(function TrackTable({
     // The sticky column header is in the scroller's flow, so the list starts
     // this far down it. Without this the virtualizer's idea of which rows are
     // visible is a header's worth out.
-    scrollMargin: COL_HEADER_H,
+    scrollMargin: headH,
   });
 
   // A new row height throws away what the virtualizer measured at the old one.
@@ -1443,13 +1484,13 @@ export const TrackTable = memo(function TrackTable({
       const index = (await view.idsInRange(0, view.count)).indexOf(id);
       if (index < 0) return false;
       const el = scrollRef.current;
-      if (el && needsCentering(COL_HEADER_H + index * rowH, rowH, el.scrollTop, el.clientHeight, COL_HEADER_H)) {
+      if (el && needsCentering(headH + index * rowH, rowH, el.scrollTop, el.clientHeight, headH)) {
         virtualizer.scrollToIndex(index, { align: "center" });
       }
       setSelection({ ids: new Set([id]), anchorIndex: index });
       return true;
     },
-    [view, virtualizer, rowH],
+    [view, virtualizer, rowH, headH],
   );
   // A new artwork mode, then rekordbox's `movePositionToSelectedRow`: with a
   // selection, the first selected row goes to the top of the list and the
@@ -2222,7 +2263,7 @@ export const TrackTable = memo(function TrackTable({
             onMouseDown={(e) => {
               e.stopPropagation();
               e.preventDefault();
-              resizing.current = { key: col.key, x: e.clientX, width: col.width };
+              resizing.current = { key: col.key, x: e.clientX, width: col.width, scale: col.key === "artwork" ? 1 : columnScale(col.key) };
             }}
             onClick={(e) => e.stopPropagation()}
             role="separator"
@@ -2231,7 +2272,7 @@ export const TrackTable = memo(function TrackTable({
           />}
         </div>
       )),
-    [columns, spec.sort, onSortChange, sortIndicator, dragKey],
+    [columns, spec.sort, onSortChange, sortIndicator, dragKey, columnScale],
   );
 
   return (
@@ -2240,7 +2281,7 @@ export const TrackTable = memo(function TrackTable({
       data-browser-pane="list"
       data-artwork={artworkMode === "full" && fullArtworkWidth(rowH) === rowH ? "full" : undefined}
       data-browser-side={listScope}
-      className={styles.browser}
+      className={look ? `${styles.browser} ${look.className}` : styles.browser}
       style={{
         ["--cols" as string]: gridOf(columns),
         ["--table-w" as string]: `${totalWidthOf(columns)}px`,
@@ -2249,6 +2290,7 @@ export const TrackTable = memo(function TrackTable({
         // of them.
         ...browseListVars(preferences.view, ROW_H),
         ["--s-row-height" as string]: `${rowH}px`,
+        ...(look || scales.text !== 1 ? { ["--s-col-header-h" as string]: `${headH}px` } : {}),
         ["--s-preview-band-top" as string]: `${band.top}px`,
       }}
       data-file-over={fileOver || undefined}
@@ -2318,7 +2360,7 @@ export const TrackTable = memo(function TrackTable({
           */}
           {view.loading ? title : `${title} (${view.count} Tracks)`}
         </span>
-        {trafficLight && onTrafficLight ? (
+        {!look?.keyCell && trafficLight && onTrafficLight ? (
           <div ref={trafficBox} className={styles.trafficBox}>
             <button
               type="button"
@@ -2450,6 +2492,7 @@ export const TrackTable = memo(function TrackTable({
               <TrackRow
                 key={item.index === dragSource && dragSourceKey !== null ? dragSourceKey : rowKey(row, item.key, keyed)}
                 row={row}
+                look={look}
                 index={item.index}
                 columns={columns}
                 onDragStart={startDraggingTracks}
@@ -2467,7 +2510,7 @@ export const TrackTable = memo(function TrackTable({
                 tooltips={tooltips}
                 trafficKey={trafficKey}
                 trafficReach={preferences.view.trafficLight}
-                top={item.start - COL_HEADER_H}
+                top={item.start - headH}
                 selected={row ? selection.ids.has(row.id) : false}
                 played={row ? played.has(row.id) : false}
                 onSelect={handleSelect}
@@ -2603,6 +2646,7 @@ export const TrackTable = memo(function TrackTable({
           onAutoSizeAll={onColumnAutoSizeAll}
           renumber={onRenumber && spec.sort !== "trackNo" ? { disabled: query !== "", onRenumber: renumber } : undefined}
           artworkMode={artworkMode}
+          {...(look ? { offered: look.menu.columns, required: look.menu.required } : {})}
           onClose={() => setMenu(null)}
         />
       ) : null}

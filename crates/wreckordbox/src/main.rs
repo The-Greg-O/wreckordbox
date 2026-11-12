@@ -4,11 +4,19 @@
 //! when none is running. Results go to standard output, as text or with
 //! `--json` as JSON; errors go to standard error with a non-zero status.
 
+mod backup;
+mod decisions;
 mod facts;
 mod intake;
+mod intensity;
+mod ledger;
+mod mutants;
 mod mytag_edits;
+mod protection;
 mod reading;
+mod schema;
 mod stems;
+mod stems_write;
 mod tracks;
 
 use std::fmt::Write as _;
@@ -27,6 +35,11 @@ use wreckordbox_service::{
 /// One background Library service owns the Library; this command and the
 /// window are both clients of it. A service is started when none is running
 /// and stops by itself when nothing is using it.
+///
+/// A window that has only just opened is still reading the Library: a
+/// command waits for it, asking again for up to 15 seconds, before it
+/// fails with `library_loading`. Set `WRECKORDBOX_LOADING_WAIT_SECS` to wait
+/// another number of seconds; 0 does not wait.
 #[derive(Parser)]
 #[command(name = "wreckordbox", version, propagate_version = true)]
 struct Cli {
@@ -46,12 +59,16 @@ enum Commands {
     Status,
     /// Find tracks in the Library.
     Tracks {
+        #[command(flatten)]
+        run: ledger::RunOptions,
         #[command(subcommand)]
         command: TrackCommands,
     },
     /// Read and edit the My Tag categories and tags, and which tracks carry
     /// them.
     Mytags {
+        #[command(flatten)]
+        run: ledger::RunOptions,
         #[command(subcommand)]
         command: reading::MyTagCommands,
     },
@@ -65,7 +82,21 @@ enum Commands {
         #[command(subcommand)]
         command: reading::HistoryCommands,
     },
-    /// Separate a track into Stems, kept in the Sidecar beside the Library.
+    /// Say whether Library Protection is on, or turn it on or off.
+    ///
+    /// While it is on, every command that changes the Library is refused,
+    /// here and in the window; reading is not affected. It is the window's
+    /// Preferences switch, and is on until someone turns it off.
+    ///
+    /// It also counts as on while nothing has been recorded, as on a
+    /// machine where the window has never run, or while what was recorded
+    /// cannot be read. `wreckordbox protection off` turns it off.
+    Protection {
+        #[command(subcommand)]
+        command: Option<protection::ProtectionCommands>,
+    },
+    /// Separate a track into Stems, kept in the Sidecar beside the Library,
+    /// and write them to a Spare stick as Native stems.
     Stems {
         #[command(subcommand)]
         command: stems::StemCommands,
@@ -81,12 +112,51 @@ enum Commands {
         #[command(subcommand)]
         command: facts::RunCommands,
     },
+    /// Ask, list and answer Decisions: recorded judgements between fixed
+    /// candidates, kept in the Sidecar. Never changes the Library.
+    Decisions {
+        #[command(subcommand)]
+        command: decisions::DecisionCommands,
+    },
+    /// Mutants: a playlist's own edited version of a track, kept for one
+    /// playlist entry and never written into the Library.
+    Mutants {
+        #[command(subcommand)]
+        command: mutants::MutantCommands,
+    },
     /// The Intake and Problems queues: tracks with no Prep colour, tracks
     /// marked Problem, and what each still needs.
     Intake {
+        #[command(flatten)]
+        run: ledger::RunOptions,
         #[command(subcommand)]
         command: intake::IntakeCommands,
     },
+    /// Measure Intensity: how hard a track hits and how that changes over
+    /// its length, from its audio. Kept in the Sidecar; never changes the
+    /// Library.
+    Intensity {
+        #[command(subcommand)]
+        command: intensity::IntensityCommands,
+    },
+    /// Check the Tag schema, or write a first one from the Library's
+    /// MyTags.
+    #[allow(
+        clippy::doc_markdown,
+        reason = "this is the command's help, where MyTag is a word, not code"
+    )]
+    Schema {
+        #[command(subcommand)]
+        command: schema::SchemaCommands,
+    },
+    /// Restore and list backups of the Library and its Sidecar.
+    Backup {
+        #[command(subcommand)]
+        command: backup::BackupCommands,
+    },
+    /// Stop the Library service running by itself, if one is. The window's
+    /// service stops only when the window closes.
+    Stop,
     /// Run the Library service in the foreground until interrupted.
     ///
     /// Not needed in ordinary use: the other subcommands start a service on
@@ -117,7 +187,8 @@ enum TrackCommands {
     ///
     /// The window and every other client of the Library service see the
     /// change at once. Nothing is changed when the track is not in the
-    /// Library, or while rekordbox is running.
+    /// Library, while rekordbox is running, or while Library Protection is
+    /// on (see `wreckordbox protection`).
     Rate {
         /// The track's identifier: the ID column of `tracks list`.
         #[arg(value_name = "ID")]
@@ -151,7 +222,9 @@ fn main() -> ExitCode {
             let _ = if cli.json {
                 writeln!(stderr, "{}", json!({ "error": error }))
             } else {
-                writeln!(stderr, "wreckordbox: {error}")
+                writeln!(stderr, "wreckordbox: {error}").and_then(|()| {
+                    protection::hint(&error).map_or(Ok(()), |hint| writeln!(stderr, "{hint}"))
+                })
             };
             ExitCode::FAILURE
         }
@@ -160,6 +233,13 @@ fn main() -> ExitCode {
 
 fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
     let config = Config::from_env()?;
+    // The Run a command that edits the Library was given, sent with it.
+    if let Commands::Tracks { run, .. }
+    | Commands::Mytags { run, .. }
+    | Commands::Intake { run, .. } = &cli.command
+    {
+        ledger::begin(run, cli.json);
+    }
     match &cli.command {
         Commands::Status => {
             let status = connect(&config)?.status()?;
@@ -171,6 +251,7 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
         }
         Commands::Tracks {
             command: TrackCommands::List { filter, limit },
+            ..
         } => {
             let list = connect(&config)?.tracks(&TrackQuery {
                 filter: filter.clone(),
@@ -184,6 +265,7 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
         }
         Commands::Tracks {
             command: TrackCommands::Rate { id, stars },
+            ..
         } => {
             let rated = connect(&config)?.rate_track(id, *stars)?;
             if cli.json {
@@ -192,7 +274,7 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
                 print(&rated_text(&rated));
             }
         }
-        Commands::Mytags { command } => {
+        Commands::Mytags { command, .. } => {
             print(&reading::my_tags(
                 &mut connect(&config)?,
                 cli.json,
@@ -215,10 +297,19 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
         }
         Commands::Tracks {
             command: TrackCommands::Show(args),
+            ..
         } => print(&tracks::show(&mut connect(&config)?, args, cli.json)?),
         Commands::Tracks {
             command: TrackCommands::Query(args),
+            ..
         } => print(&tracks::query(&mut connect(&config)?, args, cli.json)?),
+        Commands::Protection { command } => {
+            print(&protection::protection(
+                &mut connect(&config)?,
+                cli.json,
+                command.as_ref(),
+            )?);
+        }
         Commands::Stems { command } => {
             print(&stems::run(&mut connect(&config)?, cli.json, command)?);
         }
@@ -228,8 +319,40 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
         Commands::Runs { command } => {
             print(&facts::runs(&mut connect(&config)?, cli.json, command)?);
         }
-        Commands::Intake { command } => {
+        Commands::Decisions { command } => {
+            print(&decisions::run(&mut connect(&config)?, cli.json, command)?);
+        }
+        Commands::Mutants { command } => {
+            print(&mutants::run(&mut connect(&config)?, cli.json, command)?);
+        }
+        Commands::Intake { command, .. } => {
             print(&intake::run(&mut connect(&config)?, cli.json, command)?);
+        }
+        Commands::Intensity { command } => {
+            print(&intensity::run(&mut connect(&config)?, cli.json, command)?);
+        }
+        Commands::Schema { command } => {
+            let (text, ok) = schema::run(&mut connect(&config)?, cli.json, command)?;
+            print(&text);
+            if !ok {
+                return Ok(ExitCode::FAILURE);
+            }
+        }
+        Commands::Backup { command } => print(&backup::run(&config, cli.json, command)?),
+        Commands::Stop => {
+            let library = wreckordbox_service::locate_library()?;
+            let socket = config.socket_path(&library);
+            Client::connect(&socket)?.stop()?;
+            // Answered before it stops: wait until it no longer answers.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while Client::connect(&socket).is_ok() && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            print(if cli.json {
+                "{}"
+            } else {
+                "Stopped the Library service."
+            });
         }
         Commands::Serve { spawned: true } => {
             return Ok(if wreckordbox_service::serve_spawned(config) {
@@ -266,7 +389,12 @@ fn connect(config: &Config) -> Result<Client, ServiceError> {
         program,
         args: vec!["serve".into(), "--spawned".into()],
     };
-    Client::connect_or_start(config, &library, &launcher)
+    let mut client = Client::connect_or_start(config, &library, &launcher)?;
+    // A window that has only just opened is still reading the Library:
+    // wait for it, for a bounded time, instead of failing at once.
+    client.wait_while_loading(wreckordbox_service::loading_wait_from_env());
+    ledger::attribute(&mut client);
+    Ok(client)
 }
 
 fn status_text(status: &Status) -> String {
@@ -365,6 +493,6 @@ fn or_dash(text: &str) -> String {
 
 fn print(text: &str) {
     let mut stdout = std::io::stdout();
-    let _ = writeln!(stdout, "{text}");
+    let _ = writeln!(stdout, "{}", ledger::with_run(text));
     let _ = stdout.flush();
 }

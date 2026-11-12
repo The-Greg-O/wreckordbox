@@ -125,6 +125,20 @@ fn separating_a_track_keeps_four_stems_in_the_sidecar_each_as_long_as_their_pare
     assert_eq!(sandbox.engine_runs(), 1);
 }
 
+#[test]
+fn stems_are_kept_while_library_protection_is_on_for_the_sidecar_is_not_the_library() {
+    let sandbox = Sandbox::new();
+    let track = import(&sandbox, "Protected.wav", 800);
+    sandbox.protect(true);
+
+    let stems = separate(&sandbox, &track);
+
+    assert_eq!(roles(&stems["stems"]).len(), 4);
+    // The Library itself is still closed to change.
+    let rate = sandbox.cli(&["--json", "tracks", "rate", &track, "3"]);
+    assert_eq!(rate.error_json()["error"]["code"], "library_protected");
+}
+
 fn show(sandbox: &Sandbox, track: &str) -> serde_json::Value {
     let run = sandbox.cli(&["--json", "stems", "show", track]);
     assert!(run.status.success(), "{}", run.stderr);
@@ -257,6 +271,24 @@ fn separating_an_unchanged_track_again_reuses_its_stems_without_running_the_engi
         text.stdout
     );
     assert_eq!(text.stderr, "");
+}
+
+/// After a backup that left Stem audio out is restored, the Sidecar still
+/// records the separation but the files are not there.
+#[test]
+fn stems_recorded_without_their_audio_files_read_as_needing_separation() {
+    let sandbox = Sandbox::new();
+    let track = import(&sandbox, "Night Bus.wav", 4_410);
+    separate(&sandbox, &track);
+    std::fs::remove_dir_all(sandbox.sidecar_dir().join("stems")).unwrap();
+
+    let shown = show(&sandbox, &track);
+    assert_eq!(shown["stems"], serde_json::Value::Null);
+
+    let again = separate(&sandbox, &track);
+    assert_eq!(again["reused"], false);
+    assert_eq!(sandbox.engine_runs(), 2);
+    assert_eq!(stem_files(&sandbox).len(), 4);
 }
 
 #[test]
@@ -457,7 +489,8 @@ fn library_shape(sandbox: &Sandbox) -> Vec<(String, String, i64)> {
 }
 
 #[test]
-fn stems_and_facts_add_no_table_column_or_row_to_the_library_and_live_in_a_folder_beside_it() {
+fn stems_facts_and_mutants_add_no_table_column_or_row_to_the_library_and_live_in_a_folder_beside_it(
+) {
     let sandbox = Sandbox::new();
     let track = import(&sandbox, "Night Bus.wav", 4_410);
     let before = library_shape(&sandbox);
@@ -497,7 +530,7 @@ fn stems_and_facts_add_no_table_column_or_row_to_the_library_and_live_in_a_folde
         "0.8",
     ]);
     assert!(fact.status.success(), "{}", fact.stderr);
-    let listed = sandbox.cli(&["--json", "facts", "show", &track]);
+    let listed = sandbox.cli(&["--json", "facts", "show", &track, "--check-audio"]);
     assert!(listed.status.success(), "{}", listed.stderr);
     let kinds: Vec<String> = listed.json()["facts"]
         .as_array()
@@ -506,6 +539,32 @@ fn stems_and_facts_add_no_table_column_or_row_to_the_library_and_live_in_a_folde
         .map(|fact| fact["kind"].as_str().unwrap().to_owned())
         .collect();
     assert_eq!(kinds, ["genre", "stems"]);
+
+    // So does a Mutant: the playlist entry it is made for stays, in the
+    // Library, the track it was.
+    let entries = |sandbox: &Sandbox| {
+        let run = sandbox.cli(&["--json", "playlists", "tracks", "900000"]);
+        assert!(run.status.success(), "{}", run.stderr);
+        run.json()["tracks"].clone()
+    };
+    let entries_before = entries(&sandbox);
+    let mutant = sandbox.cli(&[
+        "--json",
+        "mutants",
+        "create",
+        "--playlist",
+        "900000",
+        "--position",
+        "1",
+        "--source",
+        "agent:preparer",
+    ]);
+    assert!(mutant.status.success(), "{}", mutant.stderr);
+    assert_eq!(
+        mutant.json()["mutant"]["parent"]["id"],
+        entries_before[0]["id"]
+    );
+    assert_eq!(entries(&sandbox), entries_before);
 
     assert!(!sandbox.sidecar_dir().exists());
     assert_eq!(library_shape(&sandbox), before);

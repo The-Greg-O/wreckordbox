@@ -15,6 +15,20 @@ clap = { version = "4", features = ["derive"] }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+# `backup` tests: archives laid out as a backup is, and a restore stopped
+# between two replacements.
+rbl-backup = { path = "../rbl-backup", features = ["testing"] }
 rbl-db = { path = "../rbl-db" }
+# Only to give a test track a beat grid.
+rbl-anlz = { path = "../rbl-anlz" }
+# `stems write` tests: a fixture Sidecar holding synthetic Stems, a
+# temporary folder exported to as a Stick, and the independent reader of
+# Native stems (its Vorbis decoder).
+wreckordbox-sidecar = { path = "../wreckordbox-sidecar" }
+rbl-export = { path = "../rbl-export" }
+rbl-onelibrary = { path = "../rbl-onelibrary" }
+lewton = "0.10"
+# The same build of SQLite the service uses, to reach into a test's Sidecar.
+rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
 serde_json = { workspace = true }
 tempfile = "3"

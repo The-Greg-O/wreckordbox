@@ -10,13 +10,26 @@
 //! This crate has no dependency on the desktop framework and needs no
 //! display.
 
+mod attachments;
+pub mod backup;
 mod client;
+pub mod decider;
+pub mod decisions;
+mod entries;
 pub mod facts;
 pub mod intake;
+pub mod intensity;
+pub mod ledger;
 mod library;
+pub mod mutants;
 pub mod mytag_edits;
+pub mod native_stems;
+pub mod protection;
 pub mod protocol;
 pub mod reading;
+pub mod render_stems;
+pub mod run_status;
+pub mod schema;
 mod separation;
 mod server;
 pub mod stems;
@@ -27,7 +40,7 @@ use std::time::Duration;
 
 use rbl_db::LibraryLocation;
 
-pub use client::{Client, Launcher};
+pub use client::{Client, Launcher, DEFAULT_LOADING_WAIT, LOADING_RETRY};
 pub use protocol::{
     codes, events, ChangeKind, Event, LibraryChanged, RateTrack, RatedTrack, ServiceError, Status,
     Track, TrackList, TrackQuery, DEFAULT_TRACK_LIMIT,
@@ -39,6 +52,21 @@ pub use server::{serve_spawned, Service, Stopped};
 pub const RUNTIME_DIR_ENV: &str = "WRECKORDBOX_RUNTIME_DIR";
 /// Seconds a service stays up with no client connected. `0` means forever.
 pub const IDLE_EXIT_ENV: &str = "WRECKORDBOX_IDLE_EXIT_SECS";
+
+/// Seconds a `wreckordbox` command waits for a window that is still reading
+/// the Library, instead of [`DEFAULT_LOADING_WAIT`]. `0` does not wait.
+pub const LOADING_WAIT_ENV: &str = "WRECKORDBOX_LOADING_WAIT_SECS";
+
+/// How long a command waits while the Library is being read:
+/// [`LOADING_WAIT_ENV`] when it is set to a number of seconds, else
+/// [`DEFAULT_LOADING_WAIT`].
+#[must_use]
+pub fn loading_wait_from_env() -> Duration {
+    std::env::var(LOADING_WAIT_ENV)
+        .ok()
+        .and_then(|secs| secs.trim().parse::<u64>().ok())
+        .map_or(DEFAULT_LOADING_WAIT, Duration::from_secs)
+}
 
 /// Where a service listens and how long it outlives its clients.
 #[derive(Debug, Clone)]
@@ -101,7 +129,59 @@ impl Config {
 /// The Library this machine is set to use, found the way the window finds
 /// it (`rbl_db::locate`, which a test steers with `RBXPORT_OPTIONS`).
 pub fn locate_library() -> Result<LibraryLocation, ServiceError> {
-    rbl_db::detect().map_err(|e| server::open_error(&e))
+    locate_library_with(&rbl_backup::state_dir())
+}
+
+/// [`locate_library`], with the folder a restore's journal is kept in.
+///
+/// A restore that stopped between setting `master.db` aside and putting
+/// the backup's in its place leaves no `master.db`. Detection alone would
+/// find no Library there, and so nothing would ever start that could
+/// recover it: when a pending journal in `recovery_dir` names the
+/// configured `master.db`, that Library is answered all the same, for its
+/// owner to recover before it checks the database is there.
+pub fn locate_library_with(recovery_dir: &Path) -> Result<LibraryLocation, ServiceError> {
+    use rbl_db::locate::{locate, Located, Sources};
+    let located = locate().map_err(|e| server::open_error(&e))?;
+    let master_db = match &located {
+        Located::Unavailable { master_db, .. } | Located::Absent { master_db } => master_db.clone(),
+        _ => return located.into_location().map_err(|e| server::open_error(&e)),
+    };
+    let named = std::fs::read(rbl_backup::journal::path(recovery_dir))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<rbl_backup::journal::Journal>(&bytes).ok())
+        .is_some_and(|journal| journal.library == master_db);
+    if !named {
+        return located.into_location().map_err(|e| server::open_error(&e));
+    }
+    let sources = Sources::installed().map_err(|e| server::open_error(&e))?;
+    let mut location = match (sources.overridden, sources.agent_options.as_deref()) {
+        (true, Some(options)) => rbl_db::detect_from(options),
+        _ => sources.location_of(&master_db),
+    }
+    .map_err(|e| server::open_error(&e))?;
+    // rbl-db's own rule for a test's temporary fixture (a debug build, test
+    // mode, the fixture's key, `master.db` at the root of the folder
+    // `RBXPORT_TEST_FIXTURE` names, under the temporary folder), read from
+    // the folder since the database is the one thing not there.
+    if cfg!(debug_assertions)
+        && sources.overridden
+        && rbl_db::test_mode()
+        && location.passphrase == rbl_db::fixture::FIXTURE_PASSPHRASE
+    {
+        let root = std::env::var_os("RBXPORT_TEST_FIXTURE").map(PathBuf::from);
+        let canonical = |path: &Path| path.canonicalize().ok();
+        if let (Some(root), Some(temporary), Some(folder)) = (
+            root.as_deref().and_then(canonical),
+            canonical(&std::env::temp_dir()),
+            location.master_db.parent().and_then(canonical),
+        ) {
+            if root != temporary && root.starts_with(&temporary) && folder == root {
+                location.is_real_install = false;
+            }
+        }
+    }
+    Ok(location)
 }
 
 /// A hash that is the same in every build, unlike the standard library's:

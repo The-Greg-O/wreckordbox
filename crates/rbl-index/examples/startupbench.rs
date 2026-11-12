@@ -1,14 +1,25 @@
 //! Read-only startup phases against the installed library; no app cache changes.
 //! cargo run --release -p rbl-index --example startupbench
-#![allow(clippy::pedantic, clippy::print_stdout, clippy::unwrap_used, clippy::expect_used)]
-use std::time::Instant;
+#![allow(
+    clippy::pedantic,
+    clippy::print_stdout,
+    clippy::unwrap_used,
+    clippy::expect_used
+)]
 use rbl_db::{Library, OpenMode};
 use rbl_index::cache::{self, Fingerprint};
+use std::time::Instant;
 
 fn fingerprint(db: &Library) -> Fingerprint {
-    Fingerprint::of(&db.location().master_db,
-        db.schema().db_version.and_then(|v| u32::try_from(v).ok()).unwrap_or(0),
-        rbl_index::content_version(db).unwrap()).unwrap()
+    Fingerprint::of(
+        &db.location().master_db,
+        db.schema()
+            .db_version
+            .and_then(|v| u32::try_from(v).ok())
+            .unwrap_or(0),
+        rbl_index::content_version(db).unwrap(),
+    )
+    .unwrap()
 }
 
 fn main() {
@@ -33,13 +44,21 @@ fn main() {
         cache::save(&path, &library, fp).unwrap();
         let t = Instant::now();
         let restored = cache::load(&path, fp).unwrap();
-        println!("  snapshot={}ms size={}bytes", t.elapsed().as_millis(), std::fs::metadata(&path).unwrap().len());
+        println!(
+            "  snapshot={}ms size={}bytes",
+            t.elapsed().as_millis(),
+            std::fs::metadata(&path).unwrap().len()
+        );
         assert_eq!(cache::encode(&restored, fp), cache::encode(&library, fp));
         let t = Instant::now();
         std::thread::scope(|scope| {
             let pending = scope.spawn(|| cache::prepare(&path).unwrap());
             let live = Library::open_installed_read_only().unwrap();
-            let restored = pending.join().unwrap().validated(fingerprint(&live)).unwrap();
+            let restored = pending
+                .join()
+                .unwrap()
+                .validated(fingerprint(&live))
+                .unwrap();
             assert_eq!(restored.ids, library.ids);
         });
         println!("  overlapped warm backend={}ms", t.elapsed().as_millis());

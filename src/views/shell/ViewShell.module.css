@@ -26,9 +26,7 @@
 .frame {
   display: grid;
   height: 100%;
-  /* The tree's width, plus the icon rail the old tree carries down its left
-     side; the rail's share goes when ticket #52 builds the shell's tree. */
-  grid-template-columns: calc(var(--s-shell-tree-w) + var(--s-tree-rail-w)) minmax(0, 1fr);
+  grid-template-columns: var(--s-shell-tree-w) minmax(0, 1fr);
   grid-template-rows:
     var(--s-shell-top-bar-h)
     minmax(var(--s-shell-player-h), auto)
@@ -79,8 +77,14 @@
 .tab[aria-selected="true"] {
   background: var(--c-panel);
   border-top-color: var(--c-accent);
+  /* The one gradient in the window: the theme's two-colour line (docs/design/tokens.md).
+     Without a theme both ends are the accent and it is a plain line. */
+  border-image: linear-gradient(90deg, var(--role-tab-from), var(--role-tab-to)) 1;
   color: var(--c-text);
 }
+
+/* The number waiting on a view's tab (Intake 23), in the theme's second line colour. */
+.count { color: var(--role-tab-to); font-variant-numeric: tabular-nums; }
 
 /* The key a tab is on, drawn as a key cap. */
 .key {

@@ -31,7 +31,7 @@
   font-size: var(--f-size-device-tab);
   cursor: default;
 }
-.tab[data-on] { background: var(--c-device-tab-on); }
+.tab[data-on] { background: var(--c-device-tab-on); color: var(--c-on-accent, var(--c-icon-on)); }
 
 .body {
   flex: 1;
@@ -386,3 +386,21 @@
 /* ---- My Settings ---- */
 .mySettings { padding-top: 20px; }
 .mySettingsNote { margin: 0; color: var(--c-icon-on); }
+
+/* ---- A stick whose last write did not finish (wbx-45.5) ---- */
+.unfinished {
+  max-width: 46em;
+  line-height: 1.45;
+}
+.unfinished p { margin: 0 0 10px; }
+.unfinishedTitle { color: var(--c-text); font-weight: 600; }
+.unfinishedAction {
+  min-height: var(--s-device-field-h);
+  padding: 0 12px;
+  border: 1px solid var(--c-accent);
+  border-radius: 0;
+  background: var(--c-raised);
+  color: var(--c-text);
+  font: inherit;
+}
+.unfinishedAction:disabled { opacity: 0.5; }
