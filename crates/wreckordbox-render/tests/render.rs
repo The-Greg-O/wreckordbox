@@ -23,8 +23,14 @@ use wreckordbox_render::{
 
 const RATE: u32 = 44_100;
 
-/// The player's stretcher tests' gate.
-const CENTS: f64 = 3.0;
+/// The player's stretcher tests' gate for Rubber Band. A build without it
+/// stretches through WSOLA, which the player's own tests hold to 12 Hz at
+/// 440 Hz (47 cents); the same is asked of it here.
+const CENTS: f64 = if cfg!(feature = "rubberband") {
+    3.0
+} else {
+    47.0
+};
 
 /// Interleaved stereo: a sine on both channels.
 fn tone(hz: f64, secs: f64, amplitude: f64) -> Vec<f32> {
@@ -227,7 +233,16 @@ fn a_key_shift_lands_on_the_interval_and_keeps_the_length() {
 fn a_tempo_change_gives_the_expected_length_at_the_same_pitch() {
     let bench = Bench::new();
     let source = bench.source(&tone(440.0, 2.0, 0.5));
-    for ratio in [0.84, 0.94, 1.06, 1.16] {
+    // WSOLA cannot hold a steady tone near the file's own speed (its search
+    // has no room there: see `rbl-deck/src/stretch.rs`; at 0.94x this tone
+    // came back 107 cents flat), so a build without Rubber Band is measured
+    // at the ratios the player's own WSOLA tests use.
+    let ratios: &[f64] = if cfg!(feature = "rubberband") {
+        &[0.84, 0.94, 1.06, 1.16]
+    } else {
+        &[0.75, 1.5]
+    };
+    for &ratio in ratios {
         let (frames, _) = bench.render(&source, tempo(ratio));
 
         // Six percent fast is six percent more of the source per second, so
@@ -276,7 +291,62 @@ fn key_and_tempo_combine() {
 /// How far a rendered event may sit from where it belongs. Measured at under
 /// 2 ms on every case below, against a 1.5 ms measuring window; the latency
 /// this guards against is 20 to 50 ms.
-const ALIGNMENT_SECS: f64 = 0.005;
+///
+/// WSOLA reports no latency and places a segment by ear, up to a search
+/// window (5.8 ms) either way; it measured 5.4 ms out and is given a segment
+/// (23 ms).
+const ALIGNMENT_SECS: f64 = if cfg!(feature = "rubberband") {
+    0.005
+} else {
+    0.023
+};
+
+/// The level of the `secs` at one end of a signal, as a root mean square.
+fn level(signal: &[f64], secs: f64, at_end: bool) -> f64 {
+    let frames = (secs * f64::from(RATE)) as usize;
+    let part = if at_end {
+        &signal[signal.len() - frames..]
+    } else {
+        &signal[..frames]
+    };
+    (part.iter().map(|x| x * x).sum::<f64>() / part.len() as f64).sqrt()
+}
+
+#[test]
+fn audio_that_runs_to_the_ends_of_the_source_runs_to_the_ends_of_the_render() {
+    // A tone from the first frame to the last. Whatever is still inside the
+    // stretcher when the source runs out has to come out, and the stretcher's
+    // warm-up must not eat the first moments: the first and last 20 ms of the
+    // render are tone, not silence. Not at the tone's full level: the
+    // stretcher's window sees silence outside the file, so the outermost
+    // 20 ms come up short of it: measured at 0.68 to 0.70 of the level for a
+    // tempo change and 0.42 with a key shift three semitones down, against
+    // nothing at all when the tail is not flushed. Gated at a quarter.
+    let bench = Bench::new();
+    let source = bench.source(&tone(440.0, 2.0, 0.5));
+    let nominal = 0.5 / 2.0_f64.sqrt();
+
+    let mut cases = vec![tempo(1.1), tempo(0.9)];
+    if cfg!(feature = "rubberband") {
+        cases.extend([
+            key(2),
+            Edits {
+                key_shift: -3,
+                tempo: 1.2,
+            },
+        ]);
+    }
+    for edits in cases {
+        let (frames, _) = bench.render(&source, edits);
+        let signal = left(&frames);
+        let (start, end) = (level(&signal, 0.02, false), level(&signal, 0.02, true));
+        assert!(
+            start > nominal * 0.25 && end > nominal * 0.25,
+            "{edits:?}: the first 20 ms are at {start:.3} and the last at {end:.3}, \
+             against {nominal:.3} for the tone",
+        );
+    }
+}
 
 #[test]
 fn an_edited_render_starts_and_ends_where_it_should() {
