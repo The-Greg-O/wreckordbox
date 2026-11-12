@@ -490,6 +490,7 @@ impl Shared {
                     self.with_library(|library| crate::stems::parent(library, id))?
                 })
             }
+            crate::run_status::RUNS_ACTIVE => crate::run_status::active(&self.stems),
             runs if crate::ledger::answers(runs) => {
                 crate::ledger::answer(&self.ledger, &self.stems, request)
             }

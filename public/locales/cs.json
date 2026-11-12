@@ -1699,7 +1699,14 @@
   "Set plans": "Set plans",
   "Tracks marked Problem will queue here to be fixed. Nothing is here yet.": "Tracks marked Problem will queue here to be fixed. Nothing is here yet.",
   "A write to this Stick did not finish": "A write to this Stick did not finish",
-  "Dismiss": "Dismiss",
-  "Theme file": "Theme file",
-  "line {line}": "line {line}"
+  "{count} Runs in progress": "Probíhá {count} běhů",
+  "Library service": "Služba knihovny",
+  "Service status unavailable": "Stav služby není dostupný",
+  "Service connected": "Služba připojena",
+  "Service not connected": "Služba není připojena",
+  "Connecting to service…": "Připojování ke službě…",
+  "Runs unavailable": "Běhy nejsou dostupné",
+  "{count} Stick loads in progress": "Probíhá {count} nahrávání na USB",
+  "Analyzing {done}/{total} tracks": "Analyzuje se {done}/{total} skladeb",
+  "{count} failed": "{count} selhalo"
 }

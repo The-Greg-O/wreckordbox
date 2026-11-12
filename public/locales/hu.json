@@ -1698,7 +1698,14 @@
   "Set plans": "Set plans",
   "Tracks marked Problem will queue here to be fixed. Nothing is here yet.": "Tracks marked Problem will queue here to be fixed. Nothing is here yet.",
   "A write to this Stick did not finish": "A write to this Stick did not finish",
-  "Dismiss": "Dismiss",
-  "Theme file": "Theme file",
-  "line {line}": "line {line}"
+  "{count} Runs in progress": "{count} futás folyamatban",
+  "Library service": "Könyvtárszolgáltatás",
+  "Service status unavailable": "A szolgáltatás állapota nem érhető el",
+  "Service connected": "Szolgáltatás csatlakoztatva",
+  "Service not connected": "A szolgáltatás nincs csatlakoztatva",
+  "Connecting to service…": "Csatlakozás a szolgáltatáshoz…",
+  "Runs unavailable": "A futások nem érhetők el",
+  "{count} Stick loads in progress": "{count} USB-másolás folyamatban",
+  "Analyzing {done}/{total} tracks": "{done}/{total} szám elemzése",
+  "{count} failed": "{count} sikertelen"
 }

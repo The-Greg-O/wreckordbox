@@ -1694,7 +1694,14 @@
   "Set plans": "Set plans",
   "Tracks marked Problem will queue here to be fixed. Nothing is here yet.": "Tracks marked Problem will queue here to be fixed. Nothing is here yet.",
   "A write to this Stick did not finish": "A write to this Stick did not finish",
-  "Dismiss": "Dismiss",
-  "Theme file": "Theme file",
-  "line {line}": "line {line}"
+  "{count} Runs in progress": "{count} kørsler i gang",
+  "Library service": "Bibliotekstjeneste",
+  "Service status unavailable": "Tjenestestatus utilgængelig",
+  "Service connected": "Tjeneste tilsluttet",
+  "Service not connected": "Tjeneste ikke tilsluttet",
+  "Connecting to service…": "Forbinder til tjenesten…",
+  "Runs unavailable": "Kørsler utilgængelige",
+  "{count} Stick loads in progress": "{count} USB-overførsler i gang",
+  "Analyzing {done}/{total} tracks": "Analyserer {done}/{total} numre",
+  "{count} failed": "{count} mislykkedes"
 }

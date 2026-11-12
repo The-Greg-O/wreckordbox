@@ -1703,7 +1703,14 @@
   "Set plans": "Set plans",
   "Tracks marked Problem will queue here to be fixed. Nothing is here yet.": "Tracks marked Problem will queue here to be fixed. Nothing is here yet.",
   "A write to this Stick did not finish": "A write to this Stick did not finish",
-  "Dismiss": "Dismiss",
-  "Theme file": "Theme file",
-  "line {line}": "line {line}"
+  "{count} Runs in progress": "{count} 個執行作業進行中",
+  "Library service": "曲庫服務",
+  "Service status unavailable": "服務狀態無法取得",
+  "Service connected": "服務已連線",
+  "Service not connected": "服務未連線",
+  "Connecting to service…": "正在連線至服務…",
+  "Runs unavailable": "執行資訊無法取得",
+  "{count} Stick loads in progress": "{count} 個 USB 寫入作業進行中",
+  "Analyzing {done}/{total} tracks": "正在分析 {done}/{total} 首曲目",
+  "{count} failed": "{count} 個失敗"
 }

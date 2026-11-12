@@ -235,6 +235,7 @@ pub(crate) fn answer(
 /// that may be running.
 pub(crate) struct Stems {
     sidecar_dir: PathBuf,
+    pub(crate) run_status: Mutex<crate::run_status::RunStatus>,
     command: Vec<OsString>,
     sidecar: Mutex<Option<Arc<Sidecar>>>,
     /// The separation in progress, if any.
@@ -266,6 +267,7 @@ impl Stems {
             .filter(|command| !command.trim().is_empty())
             .map_or_else(default_command, |command| parse_command(&command));
         Arc::new(Self {
+            run_status: Mutex::new(crate::run_status::RunStatus::new(&sidecar_dir)),
             sidecar_dir,
             command,
             sidecar: Mutex::new(None),
@@ -281,6 +283,18 @@ impl Stems {
         if let Some(job) = lock(&self.running).as_ref() {
             job.cancel.cancel();
         }
+    }
+
+    /// Inspect an existing writer without opening it; retain the guard so a
+    /// status snapshot cannot race an opening writer. Busy means unknown.
+    pub(crate) fn with_current_sidecar<T>(
+        &self,
+        read: impl FnOnce(Option<&Sidecar>) -> T,
+    ) -> Option<T> {
+        self.sidecar
+            .try_lock()
+            .ok()
+            .map(|open| read(open.as_deref()))
     }
 
     pub(crate) fn sidecar_dir(&self) -> &Path {

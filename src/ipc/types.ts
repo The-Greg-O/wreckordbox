@@ -395,6 +395,8 @@ export interface Backend {
   onServiceStopped(listener: (message: string) => void): () => void;
   /** What `onServiceStopped` said, for a window that was not listening yet. */
   serviceProblem(): Promise<string | null>;
+  /** Current connection and unfinished Runs, including work started by another client. */
+  serviceActivity(): Promise<import("./serviceActivity").ServiceActivity>;
   /**
    * Library Protection as the backend holds it. The backend owns the
    * switch (it refuses every change to the Library while it is on); the

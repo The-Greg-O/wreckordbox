@@ -29,6 +29,11 @@ The Library service owns it and is its only writer.
 
 ## Stale Measurements and re-attachment
 
+```sh
+cargo test -p wreckordbox-sidecar
+```
+
+- Current Run status uses the schema version 6 partial `run_unfinished` index and cached statements. A status read never creates, migrates, or tidies a Sidecar: absent means no Runs; an unreadable, older, newer, or journaled unopened store means unknown.
 [`src/attachments.rs`](src/attachments.rs) keeps the latest observed audio identity and the history of Fact attachments. Schema version 5 adds this after Mutants (2), Decisions (3) and the Ledger (4). The original Fact rows, identifiers, sources, confidence and Runs stay intact; reads resolve their current track through indexed `fact_track` ownership. Attachment history remains separate and records the supplied Run, or a finished housekeeping Run. Attachments and stale/current changes are recorded in the Ledger in the same transaction as their state changes. Matching audio clears stale marks, including after re-attachment; supersession is unchanged.
 
 `Sidecar::observe_audio` takes identifying fields, the current fingerprint when available, and a callback over a captured Library snapshot. It re-attaches only from a removed track, only to a track without Facts, and only on one unambiguous fingerprint match. Several fingerprint matches are held for review. Without an exact match, title, artist, mix name and duration can suggest review, never automatic attachment. Title and mix qualifiers are preserved. A still-present track never supplies Facts. After that source is removed, a duplicate can inherit its Facts. An occupied target is held as `target_has_facts`, never silently skipped.

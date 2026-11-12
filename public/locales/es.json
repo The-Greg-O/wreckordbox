@@ -1702,7 +1702,14 @@
   "Set plans": "Set plans",
   "Tracks marked Problem will queue here to be fixed. Nothing is here yet.": "Tracks marked Problem will queue here to be fixed. Nothing is here yet.",
   "A write to this Stick did not finish": "A write to this Stick did not finish",
-  "Dismiss": "Dismiss",
-  "Theme file": "Theme file",
-  "line {line}": "line {line}"
+  "{count} Runs in progress": "{count} ejecuciones en curso",
+  "Library service": "Servicio de biblioteca",
+  "Service status unavailable": "Estado del servicio no disponible",
+  "Service connected": "Servicio conectado",
+  "Service not connected": "Servicio no conectado",
+  "Connecting to service…": "Conectando al servicio…",
+  "Runs unavailable": "Ejecuciones no disponibles",
+  "{count} Stick loads in progress": "{count} cargas a USB en curso",
+  "Analyzing {done}/{total} tracks": "Analizando {done}/{total} pistas",
+  "{count} failed": "{count} fallidas"
 }

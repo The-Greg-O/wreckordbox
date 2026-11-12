@@ -1635,5 +1635,15 @@
   "日本語",
   "简体中文",
   "繁體中文",
-  "한국어"
+  "한국어",
+  "{count} Runs in progress",
+  "Library service",
+  "Service status unavailable",
+  "Service connected",
+  "Service not connected",
+  "Connecting to service…",
+  "Runs unavailable",
+  "{count} Stick loads in progress",
+  "Analyzing {done}/{total} tracks",
+  "{count} failed"
 ]

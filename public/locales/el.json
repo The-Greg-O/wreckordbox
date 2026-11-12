@@ -1700,7 +1700,14 @@
   "Set plans": "Set plans",
   "Tracks marked Problem will queue here to be fixed. Nothing is here yet.": "Tracks marked Problem will queue here to be fixed. Nothing is here yet.",
   "A write to this Stick did not finish": "A write to this Stick did not finish",
-  "Dismiss": "Dismiss",
-  "Theme file": "Theme file",
-  "line {line}": "line {line}"
+  "{count} Runs in progress": "{count} εκτελέσεις σε εξέλιξη",
+  "Library service": "Υπηρεσία βιβλιοθήκης",
+  "Service status unavailable": "Μη διαθέσιμη κατάσταση υπηρεσίας",
+  "Service connected": "Η υπηρεσία συνδέθηκε",
+  "Service not connected": "Η υπηρεσία δεν είναι συνδεδεμένη",
+  "Connecting to service…": "Σύνδεση στην υπηρεσία…",
+  "Runs unavailable": "Μη διαθέσιμες εκτελέσεις",
+  "{count} Stick loads in progress": "{count} μεταφορές σε USB σε εξέλιξη",
+  "Analyzing {done}/{total} tracks": "Ανάλυση {done}/{total} κομματιών",
+  "{count} failed": "{count} απέτυχαν"
 }
