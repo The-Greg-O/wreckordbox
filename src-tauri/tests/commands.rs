@@ -3324,6 +3324,7 @@ fn export_track_puts_a_track_on_a_stick_by_itself_and_a_sync_keeps_it_there() {
         stick.path().display().to_string(),
         None,
         None,
+        approve(&s, stick.path(), serde_json::json!({ "kind": "exportTracks", "tracks": [second] })),
     ))
     .unwrap();
     assert_eq!((written.tracks, written.playlists), (1, 0));
@@ -3343,6 +3344,7 @@ fn export_track_puts_a_track_on_a_stick_by_itself_and_a_sync_keeps_it_there() {
         None,
         None,
         None,
+        approvals(&s, &[stick.path()], serde_json::json!({ "kind": "sync", "playlists": [playlist_id(1)] })),
     ))
     .unwrap();
     let synced = reports[0].report.as_ref().expect("written");
@@ -3357,10 +3359,11 @@ fn export_track_puts_a_track_on_a_stick_by_itself_and_a_sync_keeps_it_there() {
     let again = run(commands::export_tracks_to_device(
         s.handle(),
         s.state(),
-        vec![first],
+        vec![first.clone()],
         stick.path().display().to_string(),
         None,
         None,
+        approve(&s, stick.path(), serde_json::json!({ "kind": "exportTracks", "tracks": [first] })),
     ))
     .unwrap();
     assert_eq!((again.tracks, again.playlists, again.removed), (2, 1, 0));
@@ -3375,6 +3378,7 @@ fn export_track_puts_a_track_on_a_stick_by_itself_and_a_sync_keeps_it_there() {
     for single_playlist in [false, true] {
         run(commands::export_tracks_to_device(
             s.handle(), s.state(), vec![second.clone()], stick.path().display().to_string(), None, None,
+            approve(&s, stick.path(), serde_json::json!({ "kind": "exportTracks", "tracks": [second] })),
         )).unwrap();
         let before = rbl_export::Manifest::load(stick.path()).unwrap();
         let loose = before.tracks.iter().find(|t| t.library_id.to_string() == second).unwrap();
@@ -3384,11 +3388,13 @@ fn export_track_puts_a_track_on_a_stick_by_itself_and_a_sync_keeps_it_there() {
         let cleaned = if single_playlist {
             run(commands::export_playlist(
                 s.handle(), s.state(), playlist_id(1), stick.path().display().to_string(), None, Some(true), None,
+                approve(&s, stick.path(), serde_json::json!({ "kind": "exportPlaylist", "playlist": playlist_id(1), "deleteUnlistedMusic": true })),
             )).unwrap()
         } else {
             run(commands::sync_devices(
                 s.handle(), s.state(), vec![playlist_id(1)], vec![stick.path().display().to_string()],
                 None, None, None, Some(true), None, None,
+                approvals(&s, &[stick.path()], serde_json::json!({ "kind": "sync", "playlists": [playlist_id(1)], "deleteUnlistedMusic": true })),
             )).unwrap().remove(0).report.unwrap()
         };
         assert_eq!((cleaned.tracks, cleaned.playlists, cleaned.removed), (1, 1, 1));
@@ -3423,6 +3429,7 @@ fn a_stick_pulled_during_a_sync_is_reported_as_disconnected() {
     });
     let reports = run(commands::sync_devices(
         s.handle(), s.state(), vec![playlist_id(1)], vec![mount.display().to_string()], None, None, None, None, None, None,
+        approvals(&s, &[mount.as_path()], serde_json::json!({ "kind": "sync", "playlists": [playlist_id(1)] })),
     ))
     .unwrap();
     let error = reports[0].error.as_deref().expect("the sync failed");
@@ -3481,6 +3488,7 @@ fn a_sync_writes_the_same_playlists_to_every_stick_and_each_stick_remembers_them
         None,
         None,
         None,
+        approvals(&s, &[stick_a.path(), gone.as_path(), stick_b.path()], serde_json::json!({ "kind": "sync", "playlists": [playlist_id(1)], "automatic": true })),
     ))
     .unwrap();
     assert_eq!(reports.len(), 3);
@@ -3557,6 +3565,7 @@ fn exporting_a_folder_writes_the_folder_with_its_playlists_inside() {
     let stick = tempfile::tempdir().unwrap();
     let written = run(commands::export_playlist(
         s.handle(), s.state(), set.id.clone(), stick.path().display().to_string(), None, None, None,
+        approve(&s, stick.path(), serde_json::json!({ "kind": "exportPlaylist", "playlist": set.id })),
     ))
     .unwrap();
     assert_eq!(written.tracks, 1, "one track, however many playlists hold it");
@@ -4255,4 +4264,16 @@ fn a_cue_edit_after_an_undo_ends_the_redo_branch() {
     assert!(undo(&s).can_redo);
     run(cues::add_cue(s.handle(), s.state(), track, CueKind::Memory, 1_000)).unwrap();
     assert!(!commands::current_history(&s.state()).can_redo);
+}
+
+/// The approval the window's staged write gets from the plan, for one
+/// write to one Stick (wbx-45.4): every Stick-writing command needs one.
+fn approve(s: &Shell, stick: &Path, operation: serde_json::Value) -> Option<String> {
+    let request = serde_json::from_value(serde_json::json!({ "destination": stick.to_string_lossy(), "operation": operation })).unwrap();
+    rbxport_lib::stick_write_plan::plan(s.state().inner(), &request).ok().and_then(|plan| plan.approval)
+}
+
+/// A sync's approvals, one per Stick that is there to plan.
+fn approvals(s: &Shell, sticks: &[&Path], operation: serde_json::Value) -> Option<std::collections::HashMap<String, String>> {
+    Some(sticks.iter().filter_map(|stick| approve(s, stick, operation.clone()).map(|t| (stick.display().to_string(), t))).collect())
 }

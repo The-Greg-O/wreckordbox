@@ -282,9 +282,21 @@ pub fn dev_defaults(dto: &StickDefaultsDto) -> AppResult<DevSetting> {
 /// when the device panel opens on it — which is when rekordbox writes one
 /// too. A stick that has one keeps it; a stick with no export gets nothing.
 #[tauri::command]
-pub async fn write_device_defaults(path: String, defaults: StickDefaultsDto) -> AppResult<DeviceSettingsDto> {
+pub async fn write_device_defaults(
+    path: String,
+    defaults: StickDefaultsDto,
+    // The DJ's approval of this exact write (`stick_write_plan`, wbx-45.4).
+    approval: Option<String>,
+) -> AppResult<DeviceSettingsDto> {
     crate::commands::blocking("write_device_defaults", move || {
         let mount = Path::new(&path);
+        let _lock = crate::stick_approval::lock(mount);
+        let _approved = crate::stick_approval::consume(
+            approval.as_deref(),
+            &crate::stick_approval::StickOperation::WriteDefaults,
+            mount,
+            0,
+        )?;
         if !mount.is_dir() {
             return Err(AppError::new(ErrorKind::NotFound, "That device is no longer connected."));
         }
@@ -341,10 +353,19 @@ pub async fn ensure_device_library(
     state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
     path: String,
     defaults: Option<StickDefaultsDto>,
+    // The DJ's approval of this exact write (`stick_write_plan`, wbx-45.4).
+    approval: Option<String>,
 ) -> AppResult<DeviceSettingsDto> {
     let state = std::sync::Arc::clone(&state);
     crate::commands::blocking("ensure_device_library", move || {
         let mount = Path::new(&path);
+        let _lock = crate::stick_approval::lock(mount);
+        let _approved = crate::stick_approval::consume(
+            approval.as_deref(),
+            &crate::stick_approval::StickOperation::EnsureLibrary,
+            mount,
+            0,
+        )?;
         if !mount.is_dir() {
             return Err(AppError::new(
                 ErrorKind::NotFound,
@@ -392,9 +413,20 @@ pub async fn device_settings(path: String) -> AppResult<DeviceSettingsDto> {
 pub async fn save_device_settings(
     path: String,
     settings: DeviceSettingsDto,
+    // The DJ's approval of this exact write (`stick_write_plan`, wbx-45.4).
+    approval: Option<String>,
 ) -> AppResult<DeviceSettingsDto> {
     crate::commands::blocking("save_device_settings", move || {
         let mount = Path::new(&path);
+        let _lock = crate::stick_approval::lock(mount);
+        let _approved = crate::stick_approval::consume(
+            approval.as_deref(),
+            &crate::stick_approval::StickOperation::SaveSettings {
+                settings: serde_json::to_value(&settings).map_err(|e| AppError::new(ErrorKind::Internal, e.to_string()))?,
+            },
+            mount,
+            0,
+        )?;
         if !mount.is_dir() {
             return Err(AppError::new(ErrorKind::NotFound, "That device is no longer connected."));
         }

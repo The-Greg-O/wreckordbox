@@ -1019,6 +1019,8 @@ pub async fn export_playlist<R: tauri::Runtime>(
     defaults: Option<crate::device_settings::StickDefaultsDto>,
     delete_unlisted_music: Option<bool>,
     compatibility_format: Option<rbl_export::CompatibilityFormat>,
+    // The DJ's approval of this exact write (`stick_write_plan`, wbx-45.4).
+    approval: Option<String>,
 ) -> AppResult<ExportReportDto> {
     let library = state.library()?;
     let share = state.share_root();
@@ -1026,6 +1028,13 @@ pub async fn export_playlist<R: tauri::Runtime>(
     let progress_app = app.clone();
     let report = blocking("export_playlist", move || {
         let destination = std::path::Path::new(&destination);
+        let _lock = crate::stick_approval::lock(destination);
+        let _approved = crate::stick_approval::consume(
+            approval.as_deref(),
+            &crate::stick_approval::StickOperation::ExportPlaylist { playlist: playlist.clone(), delete_unlisted_music: delete_unlisted_music.unwrap_or(false) },
+            destination,
+            u64::from(state.summary().3),
+        )?;
         let reservation = reserve_export(&progress_app, destination)?;
         let selection = playlist_export_selection(&state, &library, &share, destination, &playlist, delete_unlisted_music.unwrap_or(false))?;
         write_export_registered(&progress_app, destination, &selection, defaults.as_ref(), compatibility_format, &reservation)
@@ -1116,11 +1125,45 @@ pub async fn sync_devices<R: tauri::Runtime>(
     delete_unlisted_music: Option<bool>,
     compatibility_format: Option<rbl_export::CompatibilityFormat>,
     verify_all: Option<bool>,
+    // The DJ's approval of each Stick's sync, by mount path (`stick_write_plan`, wbx-45.4).
+    approvals: Option<std::collections::HashMap<String, String>>,
 ) -> AppResult<Vec<SyncDeviceReportDto>> {
     let library = state.library()?;
     let share = state.share_root();
     let state = Arc::clone(&state);
     blocking("sync_devices", move || {
+        // Each Stick's lock is taken and its token used up before anything
+        // touches it; a Stick without a valid token is left alone and
+        // reported, and the others go on.
+        let approvals = approvals.unwrap_or_default();
+        let generation = u64::from(state.summary().3);
+        let operation = crate::stick_approval::StickOperation::Sync {
+            playlists: playlists.clone(),
+            delete_unlisted_music: delete_unlisted_music.unwrap_or(false),
+            automatic: automatic.unwrap_or(false),
+        };
+        let mut _locks = Vec::new();
+        let mut refused = Vec::new();
+        let mut destinations_approved = Vec::new();
+        let order = destinations.clone();
+        for destination in destinations {
+            let stick = std::path::Path::new(&destination);
+            let lock = crate::stick_approval::lock(stick);
+            match crate::stick_approval::consume(approvals.get(&destination).map(String::as_str), &operation, stick, generation) {
+                Ok(_approved) => {
+                    _locks.push(lock);
+                    destinations_approved.push(destination);
+                }
+                Err(error) => refused.push(SyncDeviceReportDto {
+                    path: destination, report: None, error: Some(error.full_message()), ejected: false, eject_error: None,
+                }),
+            }
+        }
+        let destinations = destinations_approved;
+        if destinations.is_empty() {
+            return Ok(refused);
+        }
+        let approved_paths: std::collections::HashSet<String> = destinations.iter().cloned().collect();
         let mut unique: Vec<&str> = Vec::new();
         for destination in &destinations {
             if unique.iter().any(|prior| rbl_core::durable::same_root(std::path::Path::new(prior), std::path::Path::new(destination)).unwrap_or(false)) {
@@ -1159,11 +1202,20 @@ pub async fn sync_devices<R: tauri::Runtime>(
                     ),
                 })
             }).collect();
-            Ok(workers.into_iter().map(|worker| worker.join().unwrap_or_else(|_| SyncDeviceReportDto {
+            let reports: Vec<SyncDeviceReportDto> = workers.into_iter().map(|worker| worker.join().unwrap_or_else(|_| SyncDeviceReportDto {
                 path: "Unknown device".to_owned(), report: None,
                 error: Some("The sync worker stopped unexpectedly.".to_owned()),
                 ejected: false, eject_error: None,
-            })).collect())
+            })).collect();
+            // In the order the Sticks were asked for, refused ones included.
+            let mut refused = refused.into_iter();
+            let mut written = reports.into_iter();
+            Ok(order
+                .iter()
+                .filter_map(|path| {
+                    if approved_paths.contains(path) { written.next() } else { refused.next() }
+                })
+                .collect())
         })
     })
     .await
@@ -1351,6 +1403,8 @@ pub async fn export_tracks_to_device<R: tauri::Runtime>(
     destination: String,
     defaults: Option<crate::device_settings::StickDefaultsDto>,
     compatibility_format: Option<rbl_export::CompatibilityFormat>,
+    // The DJ's approval of this exact write (`stick_write_plan`, wbx-45.4).
+    approval: Option<String>,
 ) -> AppResult<ExportReportDto> {
     let library = state.library()?;
     let share = state.share_root();
@@ -1358,9 +1412,20 @@ pub async fn export_tracks_to_device<R: tauri::Runtime>(
     let progress_app = app.clone();
     let report = blocking("export_tracks_to_device", move || {
         let stick = std::path::Path::new(&destination);
+        let _lock = crate::stick_approval::lock(stick);
+        let approved = crate::stick_approval::consume(
+            approval.as_deref(),
+            &crate::stick_approval::StickOperation::ExportTracks { tracks: tracks.clone() },
+            stick,
+            u64::from(state.summary().3),
+        )?;
         let reservation = reserve_export(&progress_app, stick)?;
         let selection = track_export_selection(&state, &library, &share, stick, &tracks)?;
-        write_export_registered(&progress_app, stick, &selection, defaults.as_ref(), compatibility_format, &reservation)
+        let report = write_export_registered(&progress_app, stick, &selection, defaults.as_ref(), compatibility_format, &reservation)?;
+        // A two-step approval (tracks put on the Stick, then into one of its
+        // playlists) goes on to its next step, bound to the Stick as it is now.
+        approved.finish(stick);
+        Ok(report)
     })
     .await?;
     let _ = tauri::Emitter::emit(&app, "export:done", &report);
@@ -1991,8 +2056,23 @@ pub enum FormatLayout {
 
 /// Erases every partition on the stick at `path` and formats it, keeping its name.
 #[tauri::command]
-pub async fn format_device(path: String, layout: FormatLayout) -> AppResult<()> {
+pub async fn format_device(
+    path: String,
+    layout: FormatLayout,
+    // The DJ's approval of this exact write (`stick_write_plan`, wbx-45.4).
+    approval: Option<String>,
+) -> AppResult<()> {
     blocking("format_device", move || {
+        let stick = std::path::Path::new(&path);
+        let _lock = crate::stick_approval::lock(stick);
+        let _approved = crate::stick_approval::consume(
+            approval.as_deref(),
+            &crate::stick_approval::StickOperation::Format {
+                layout: match layout { FormatLayout::Fat32 => "fat32", FormatLayout::HfsPlus => "hfsPlus" }.to_owned(),
+            },
+            stick,
+            0,
+        )?;
         // Keep new exports from starting until the stick has been formatted.
         let jobs = EXPORT_CANCEL.lock().map_err(|e| AppError::internal(e.to_string()))?;
         if jobs.keys().any(|active| active == &path || rbl_core::durable::same_root(std::path::Path::new(active), std::path::Path::new(&path)).unwrap_or(false)) {
@@ -5153,51 +5233,91 @@ mod tests {
         out
     }
 
-    /// wbx-45.4 review, finding 5: the shell stages an Export Playlist with
-    /// the export's own plan, worked out without writing to the stick.
+    fn plan_for(state: &crate::state::AppState, stick: &std::path::Path, operation: serde_json::Value) -> crate::stick_write_plan::StickWritePlan {
+        let request = serde_json::from_value(serde_json::json!({ "destination": stick.to_string_lossy(), "operation": operation })).unwrap();
+        crate::stick_write_plan::plan(state, &request).unwrap()
+    }
+
+    /// Changes the fixture Library after the rig is built, as an edit does.
+    fn edit_library(dir: &std::path::Path, state: &crate::state::AppState, location: &rbl_db::LibraryLocation, change: impl FnOnce(&mut rbl_db::write::Writer)) {
+        let mut writer = rbl_db::write::Writer::open(location.clone(), dir.join("backups")).unwrap();
+        writer.disable_automatic_backups();
+        change(&mut writer);
+        drop(writer);
+        reload(state, location);
+    }
+
+    /// wbx-45.4: an Export Playlist is planned with the export's own plan,
+    /// without writing to the stick, and the plan carries the token the
+    /// write needs, bound to this export of this playlist.
     #[test]
     fn a_stick_write_plan_says_what_export_playlist_would_add_and_writes_nothing() {
-        use crate::stick_write_plan::{plan, PlaylistChange, StickWriteRequest};
+        use crate::stick_write_plan::PlaylistChange;
         let dir = tempfile::tempdir().unwrap();
         let (state, _location, stick_dir) = export_rig(dir.path(), |_| {});
         let stick = stick_dir.path().to_path_buf();
         let a = rbl_db::fixture::playlist_id(0);
         let before = stick_bytes(&stick);
-        let request = StickWriteRequest::Playlist { playlist: a, destination: stick.to_string_lossy().into_owned(), delete_unlisted_music: None, compatibility_format: None };
-        let found = plan(&state, &request).unwrap();
+        let found = plan_for(&state, &stick, serde_json::json!({ "kind": "exportPlaylist", "playlist": a }));
         assert_eq!(stick_bytes(&stick), before, "the dry run wrote nothing");
         assert!(!found.pending && !found.spare, "an unmarked stick is a Gig stick");
-        assert_eq!(found.tracks_new, rbl_db::fixture::Shape::default().tracks_per_playlist);
+        let per = rbl_db::fixture::Shape::default().tracks_per_playlist;
+        assert_eq!(found.tracks_new, per);
+        assert_eq!(found.audio_reused, 0);
         assert_eq!(found.playlists.len(), 1);
         assert_eq!(found.playlists[0].change, PlaylistChange::Created);
+        assert_eq!((found.playlists[0].added, found.playlists[0].removed), (Some(per), Some(0)));
+        let token = found.approval.unwrap();
+        let generation = u64::from(state.summary().3);
+        let other = crate::stick_approval::StickOperation::ExportPlaylist { playlist: rbl_db::fixture::playlist_id(1), delete_unlisted_music: false };
+        assert!(crate::stick_approval::consume(Some(&token), &other, &stick, generation).is_err(), "not for another playlist");
     }
 
-    /// Export Track re-synchronises every playlist the stick holds from this
-    /// Library: the plan says so, so the DJ sees more than the dropped track.
+    /// Export Track re-writes every playlist the stick holds from this
+    /// Library and every track's data: the plan says which audio is reused,
+    /// which tracks' data changes and in which fields, and what each
+    /// playlist written again gains and loses (second review, finding 6).
     #[test]
-    fn a_track_export_plan_names_the_playlists_it_would_resynchronise() {
-        use crate::stick_write_plan::{plan, PlaylistChange, StickWriteRequest};
+    fn a_track_export_plan_tells_reused_audio_from_changed_track_data_and_playlist_entries() {
+        use crate::stick_write_plan::PlaylistChange;
         let dir = tempfile::tempdir().unwrap();
         let (state, location, stick_dir) = export_rig(dir.path(), |_| {});
         let stick = stick_dir.path().to_path_buf();
         let a = rbl_db::fixture::playlist_id(0);
         export_playlist_to(&state, &location, &stick, &a);
         std::fs::write(stick.join(".rbxport-disposable"), b"").unwrap();
-        let before = stick_bytes(&stick);
-        let track = rbl_db::fixture::track_id(rbl_db::fixture::Shape::default().tracks - 1);
-        let request = StickWriteRequest::Tracks { tracks: vec![track], destination: stick.to_string_lossy().into_owned(), compatibility_format: None };
-        let found = plan(&state, &request).unwrap();
-        assert_eq!(stick_bytes(&stick), before, "the dry run wrote nothing");
+        let last = rbl_db::fixture::Shape::default().tracks - 1;
+        let per = rbl_db::fixture::Shape::default().tracks_per_playlist;
+        let lone = serde_json::json!({ "kind": "exportTracks", "tracks": [rbl_db::fixture::track_id(last)] });
+
+        // Nothing changed in the Library: only the new track's audio is copied.
+        let found = plan_for(&state, &stick, lone.clone());
         assert!(found.spare, "the Spare stick marker is read");
-        assert_eq!(found.tracks_new, 1);
-        assert_eq!(found.playlists.iter().map(|p| p.change).collect::<Vec<_>>(), [PlaylistChange::Resynchronised]);
+        assert_eq!((found.tracks_new, found.audio_reused), (1, per));
+        assert_eq!(found.track_changes, Vec::new(), "the exported data matches the Library's");
+        assert_eq!(found.playlists.iter().map(|p| (p.change, p.added, p.removed)).collect::<Vec<_>>(), [(PlaylistChange::Resynchronised, Some(0), Some(0))]);
+
+        // One exported track's Energy changed, and the playlist gained a track.
+        let library = state.library().unwrap();
+        let selection = super::ExportSelection::from_playlists(&state, &library, &location.share_root, &[a.clone()], false).unwrap();
+        let first = selection.tracks[0].clone();
+        let before = stick_bytes(&stick);
+        edit_library(dir.path(), &state, &location, |w| {
+            w.set_rating(&first.id.to_string(), if first.rating == 5 { 1 } else { 5 }).unwrap();
+            w.add_tracks(&a, &[rbl_db::fixture::track_id(last - 1)]).unwrap();
+        });
+        let found = plan_for(&state, &stick, lone);
+        assert_eq!(stick_bytes(&stick), before, "the dry run wrote nothing");
+        assert_eq!(found.audio_reused, per, "the audio on the Stick is reused");
+        let changed: Vec<_> = found.track_changes.iter().map(|c| (c.title.as_str(), c.fields.clone())).collect();
+        assert_eq!(changed, [(first.title.as_str(), vec!["Energy".to_owned()])], "and its data is still rewritten");
+        assert_eq!(found.playlists.iter().map(|p| (p.change, p.added, p.removed)).collect::<Vec<_>>(), [(PlaylistChange::Resynchronised, Some(1), Some(0))]);
     }
 
     /// A stick with an unfinished write is planned as pending, settled by
-    /// nothing: the journal is still there and not a byte changed.
+    /// nothing, with no token: the journal is still there and not a byte changed.
     #[test]
-    fn a_stick_write_plan_does_not_settle_an_unfinished_write() {
-        use crate::stick_write_plan::{plan, StickWriteRequest};
+    fn a_stick_write_plan_does_not_settle_an_unfinished_write_and_gives_no_token() {
         let dir = tempfile::tempdir().unwrap();
         let (state, location, stick_dir) = export_rig(dir.path(), |_| {});
         let stick = stick_dir.path().to_path_buf();
@@ -5205,9 +5325,9 @@ mod tests {
         // The journal an interrupted publication leaves (`rbl_export::recovery_pending`).
         std::fs::write(stick.join(".rbxport-publication"), b"{}").unwrap();
         let before = stick_bytes(&stick);
-        let request = StickWriteRequest::Playlist { playlist: rbl_db::fixture::playlist_id(1), destination: stick.to_string_lossy().into_owned(), delete_unlisted_music: None, compatibility_format: None };
-        let found = plan(&state, &request).unwrap();
+        let found = plan_for(&state, &stick, serde_json::json!({ "kind": "exportPlaylist", "playlist": rbl_db::fixture::playlist_id(1) }));
         assert!(found.pending);
+        assert_eq!(found.approval, None, "nothing may be written");
         assert_eq!(found.playlists, Vec::new(), "nothing planned");
         assert_eq!(stick_bytes(&stick), before);
         assert!(rbl_export::recovery_pending(&stick));

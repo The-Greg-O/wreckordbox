@@ -54,7 +54,7 @@ pub struct DeviceNodeDto {
 
 /// An edit to a stick's playlists, as the interface sends it. Tracks are
 /// the rows' own ids: `file:` and the track's path on the stick.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum DeviceEditDto {
     #[serde(rename = "create")]
@@ -280,8 +280,30 @@ fn library_dto(library: &device::Library) -> DeviceLibraryDto {
 
 /// Applies one edit to one library on the stick at `path`.
 #[tauri::command]
-pub async fn device_playlist_edit(path: String, format: String, edit: DeviceEditDto) -> AppResult<DeviceEditResultDto> {
-    blocking("device_playlist_edit", move || apply_edit(&path, &format, edit, rbl_db::is_rekordbox_app_running())).await
+pub async fn device_playlist_edit(
+    path: String,
+    format: String,
+    edit: DeviceEditDto,
+    // The DJ's approval of this exact write (`stick_write_plan`, wbx-45.4).
+    approval: Option<String>,
+) -> AppResult<DeviceEditResultDto> {
+    blocking("device_playlist_edit", move || {
+        let stick = Path::new(&path);
+        let _lock = crate::stick_approval::lock(stick);
+        let approved = crate::stick_approval::consume(
+            approval.as_deref(),
+            &crate::stick_approval::StickOperation::PlaylistEdit {
+                format: format.clone(),
+                edit: serde_json::to_value(&edit).map_err(|e| AppError::internal(e.to_string()))?,
+            },
+            stick,
+            0,
+        )?;
+        let result = apply_edit(&path, &format, edit, rbl_db::is_rekordbox_app_running())?;
+        approved.finish(stick);
+        Ok(result)
+    })
+    .await
 }
 
 /// Analyse loose audio already on this stick and add it to its playlist.
@@ -292,8 +314,22 @@ pub async fn device_playlist_add_files(
     format: String,
     playlist: String,
     tracks: Vec<String>,
+    // The DJ's approval of this exact write (`stick_write_plan`, wbx-45.4).
+    approval: Option<String>,
 ) -> AppResult<DeviceEditResultDto> {
     blocking("device_playlist_add_files", move || {
+        let stick = Path::new(&path);
+        let _lock = crate::stick_approval::lock(stick);
+        let _approved = crate::stick_approval::consume(
+            approval.as_deref(),
+            &crate::stick_approval::StickOperation::PlaylistAddFiles {
+                format: format.clone(),
+                playlist: playlist.clone(),
+                files: tracks.clone(),
+            },
+            stick,
+            0,
+        )?;
         if let Some(refused) = edit_refusal(rbl_db::is_rekordbox_app_running()) {
             return Err(refused);
         }
@@ -1383,7 +1419,12 @@ mod tests {
         let path = root.to_str().unwrap().to_owned();
         let id = playlist.id.to_string();
         let row = rbl_index::folder::loose_id(&wav);
-        let add = || tauri::async_runtime::block_on(device_playlist_add_files(path.clone(), "deviceLibrary".into(), id.clone(), vec![row.clone()]));
+        // Each add approved as the window's staged write approves it (wbx-45.4).
+        let add = || {
+            let op = crate::stick_approval::StickOperation::PlaylistAddFiles { format: "deviceLibrary".into(), playlist: id.clone(), files: vec![row.clone()] };
+            let token = crate::stick_approval::issue(Path::new(&path), vec![crate::stick_approval::Grant::Exact(op)], None).ok();
+            tauri::async_runtime::block_on(device_playlist_add_files(path.clone(), "deviceLibrary".into(), id.clone(), vec![row.clone()], token))
+        };
         assert_eq!(add().unwrap().changed, 1);
         let legacy = device::read(root, Format::DeviceLibrary).unwrap();
         let one = device::read(root, Format::OneLibrary).unwrap();
