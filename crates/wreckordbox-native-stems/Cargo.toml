@@ -16,8 +16,9 @@ rbl-export = { path = "../rbl-export" }
 thiserror = { workspace = true }
 # Only to read the `source.json` of a folder already on the Stick.
 serde_json = { workspace = true }
-# Reads the Sidecar's Stem audio (WAV today). The build the other crates use.
-symphonia = { version = "0.5", default-features = false, features = ["wav", "aiff", "flac", "pcm"] }
+# Reads the Sidecar's Stem audio (WAV today), and how long a parent track
+# is by its container, whatever its format. The build the other crates use.
+symphonia = { version = "0.5", default-features = false, features = ["mp3", "aac", "alac", "isomp4", "flac", "wav", "aiff", "pcm", "adpcm"] }
 # libvorbis (the aoTuV tuning) built from vendored source, BSD-3-Clause: the
 # deck reads Ogg Vorbis and nothing else.
 vorbis_rs = "0.5"

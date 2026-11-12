@@ -312,6 +312,52 @@ pub fn decode(path: &Path) -> Option<Decoded> {
     })
 }
 
+/// One page of an Ogg file, read from the container alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OggPage {
+    /// The position, in sample frames, of the end of the last packet that
+    /// finishes on this page; `None` when no packet does (-1 in the file).
+    pub granule: Option<u64>,
+    /// Whether the page says it is the stream's last.
+    pub last: bool,
+}
+
+/// The pages of an Ogg file, by walking the container: no codec involved,
+/// so what it says of a stream's length is what the file says, whatever a
+/// decoder makes of it. `None` when the bytes are not whole Ogg pages.
+pub fn ogg_pages(path: &Path) -> Option<Vec<OggPage>> {
+    let bytes = std::fs::read(path).ok()?;
+    let mut pages = Vec::new();
+    let mut at = 0;
+    while at < bytes.len() {
+        let header = bytes.get(at..at + 27)?;
+        if &header[..4] != b"OggS" || header[4] != 0 {
+            return None;
+        }
+        let granule = i64::from_le_bytes(header[6..14].try_into().ok()?);
+        let segments = usize::from(header[26]);
+        let table = bytes.get(at + 27..at + 27 + segments)?;
+        let body: usize = table.iter().map(|&length| usize::from(length)).sum();
+        pages.push(OggPage {
+            granule: u64::try_from(granule).ok(),
+            last: header[5] & 0x04 != 0,
+        });
+        at += 27 + segments + body;
+    }
+    (at == bytes.len()).then_some(pages)
+}
+
+/// The length a Vorbis file states for its stream, in sample frames: the
+/// granule position of its last page, which the page must mark as last.
+pub fn stated_frames(path: &Path) -> Option<u64> {
+    let pages = ogg_pages(path)?;
+    let last = pages.last()?;
+    if !last.last {
+        return None;
+    }
+    last.granule
+}
+
 /// The stems in a folder: directory order, the first file of each role,
 /// roles whose file fails to decode left out.
 fn pads(folder: &Path) -> BTreeMap<u8, Decoded> {

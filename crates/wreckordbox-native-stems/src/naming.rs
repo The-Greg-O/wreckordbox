@@ -24,6 +24,13 @@ pub enum Unnameable {
     /// work out another key.
     #[error("its file name is longer than the 255 bytes the deck keeps of one")]
     TooLong,
+    /// The folder its Native stems would go in (the key, with the `_` or
+    /// the `-XXXXXXXX` the layout adds) has a name longer than a Stick
+    /// can store.
+    #[error(
+        "the stems folder it needs would have a name longer than the 255 bytes a Stick can store"
+    )]
+    FolderTooLong,
 }
 
 fn shown(character: char) -> String {
@@ -78,6 +85,15 @@ pub fn folder_name(key: &str) -> Result<String, Unnameable> {
 pub fn check_file_name(name: &str) -> Result<(), Unnameable> {
     if name.len() > NAME_BYTES {
         return Err(Unnameable::TooLong);
+    }
+    Ok(())
+}
+
+/// Whether a Stick can store a stems folder of this name: FAT, exFAT and
+/// the deck's own buffer all stop at 255.
+pub fn check_folder_name(folder: &str) -> Result<(), Unnameable> {
+    if folder.len() > NAME_BYTES {
+        return Err(Unnameable::FolderTooLong);
     }
     Ok(())
 }

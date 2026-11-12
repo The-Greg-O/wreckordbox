@@ -520,3 +520,110 @@ fn a_stick_named_relative_to_where_the_command_is_run_is_found() {
     assert!(run.status.success(), "{}", run.stderr);
     assert!(rig.stick().join("STEMS/Night Bus/vocals.ogg").is_file());
 }
+
+#[test]
+fn an_export_of_other_audio_than_the_stems_were_made_from_is_refused() {
+    // The Stick holds an export of the track as it was. Since then the
+    // track got other audio and Stems made from that. Writing them would
+    // put Stems of one recording beside the other, with a record on the
+    // Stick saying they belong together.
+    for frames in [FRAMES, FRAMES - 4_410] {
+        let rig = Rig::new();
+        let track = rig.import("Night Bus.wav");
+        rig.export(&track, "Night Bus.wav");
+        rig.mark_spare();
+        write_audio(&rig.audio("Night Bus.wav"), frames, 330.0);
+        rig.record_stems(&track, "Night Bus.wav", frames);
+        let before = deck::snapshot(rig.stick());
+
+        let run = rig.write(&track, true);
+
+        assert!(!run.status.success(), "{frames}");
+        assert_eq!(run.stdout, "");
+        let error = run.error_json();
+        assert_eq!(error["error"]["code"], "export_stale", "{frames}");
+        let message = error["error"]["message"].as_str().unwrap();
+        assert!(message.contains("Export it again"), "{message}");
+        assert_eq!(deck::snapshot(rig.stick()), before);
+    }
+}
+
+#[test]
+fn stems_far_from_their_parents_length_are_refused_and_a_codecs_padding_is_not() {
+    // The Sidecar says how long the engine found the parent; the file
+    // says how long it is. A decoder may drop a codec's padding (some
+    // thousand frames at most), never a second.
+    let short = |by: u32| {
+        let rig = Rig::new();
+        let track = rig.import("Night Bus.wav");
+        rig.record_stems(&track, "Night Bus.wav", FRAMES - by);
+        rig.export(&track, "Night Bus.wav");
+        rig.mark_spare();
+        let run = rig.write(&track, true);
+        (rig, run)
+    };
+
+    let (rig, far) = short(22_050);
+    assert!(!far.status.success());
+    let error = far.error_json();
+    assert_eq!(error["error"]["code"], "stem_length_mismatch");
+    let message = error["error"]["message"].as_str().unwrap();
+    assert!(message.contains("22050"), "{message}");
+    assert!(!rig.stick().join("STEMS").exists());
+
+    let (_rig, near) = short(1_105);
+    assert!(near.status.success(), "{}", near.stderr);
+    assert_eq!(near.json()["samples"], FRAMES - 1_105);
+}
+
+#[test]
+fn another_client_is_told_when_the_command_finds_the_stems_stale() {
+    let rig = Rig::new();
+    let track = rig.import("Night Bus.wav");
+    rig.record_stems(&track, "Night Bus.wav", FRAMES);
+    rig.export(&track, "Night Bus.wav");
+    rig.mark_spare();
+    write_audio(&rig.audio("Night Bus.wav"), FRAMES - 1, 330.0);
+    rig.sandbox.status();
+    let mut watcher = rig.sandbox.client();
+    watcher.subscribe().unwrap();
+
+    let run = rig.write(&track, true);
+
+    assert_eq!(run.error_json()["error"]["code"], "no_current_stems");
+    let mut events = Vec::new();
+    while let Some(event) = watcher
+        .next_event(std::time::Duration::from_millis(500))
+        .unwrap()
+    {
+        events.push(event);
+    }
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0].event, "sidecar_changed");
+    assert_eq!(events[0].data["track_id"], track.as_str());
+    assert_eq!(events[0].data["kind"], "stems");
+    assert_eq!(events[0].data["fact_id"], serde_json::Value::Null);
+    assert_eq!(events[0].data["stale"].as_array().unwrap().len(), 1);
+
+    // Found out once: asking again tells nobody anything new.
+    rig.write(&track, true);
+    assert!(watcher
+        .next_event(std::time::Duration::from_millis(300))
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn a_stems_folder_that_leads_off_the_stick_is_refused_with_its_own_code() {
+    let (rig, track) = Rig::ready("Night Bus.wav");
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::fs::write(elsewhere.path().join("keep.txt"), b"elsewhere").unwrap();
+    std::os::unix::fs::symlink(elsewhere.path(), rig.stick().join("STEMS")).unwrap();
+    let before = deck::snapshot(elsewhere.path());
+
+    let run = rig.write(&track, true);
+
+    assert!(!run.status.success());
+    assert_eq!(run.error_json()["error"]["code"], "stick_unsafe");
+    assert_eq!(deck::snapshot(elsewhere.path()), before);
+}

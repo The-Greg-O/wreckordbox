@@ -8,7 +8,9 @@
 //! 1. the track must be in the Library;
 //! 2. the Stick must be there and carry the Spare stick marker;
 //! 3. the track must have current Stems: made from the audio it has now;
-//! 4. the Stick's exported library must hold an export of the track.
+//! 4. the Stems must be about as long as the track's own audio;
+//! 5. the Stick's exported library must hold an export of the track, on
+//!    the Stick, of the very audio the Stems were made from.
 //!
 //! Each of those is refused with its own code before anything is written
 //! to the Stick. A track whose file name the layout cannot represent is not
@@ -54,6 +56,17 @@ pub mod codes {
     /// The Sidecar holds no Stems made from the audio the track has now:
     /// none at all, or only stale ones. Nothing was written.
     pub const NO_CURRENT_STEMS: &str = "no_current_stems";
+    /// The Stick's export of the track is not the audio the Stems were
+    /// made from: the track's audio changed since it was exported. Nothing
+    /// was written. Exporting the track again puts it right.
+    pub const EXPORT_STALE: &str = "export_stale";
+    /// Something on the way is a symbolic link or leads off the Stick: the
+    /// stems folder, the track's own folder in it, or the path the Stick's
+    /// library holds for the track. Nothing was written.
+    pub const STICK_UNSAFE: &str = "stick_unsafe";
+    /// The only folder the track's Native stems can go in holds a set that
+    /// is not this track's. Nothing was written.
+    pub const STEMS_FOLDER_TAKEN: &str = "stems_folder_taken";
     /// The Stems could not be encoded or written, or the Stick's exported
     /// library could not be read. No set appeared on the Stick.
     pub const NATIVE_STEMS_FAILED: &str = "native_stems_failed";
@@ -103,7 +116,8 @@ pub struct NativeStems {
 pub struct SkippedName {
     /// The track's file name on the Stick, as its library holds it.
     pub file_name: String,
-    /// `empty`, `starts_with_dot`, `unstorable_character` or `too_long`.
+    /// `empty`, `starts_with_dot`, `unstorable_character`, `too_long` or
+    /// `folder_too_long`.
     pub code: String,
     /// The same in words.
     pub reason: String,
@@ -198,12 +212,17 @@ pub(crate) fn answer(
         bass: file(Role::Bass)?,
         drums: file(Role::Drums)?,
     };
+    let track_id = track.id.parse().unwrap_or(0);
+    let warnings: Vec<String> = length_checked(&track, found.path(), &set)?
+        .into_iter()
+        .collect();
+    export_checked(&track, stick, library_id, track_id, &set)?;
     let outcome = {
         let _one_at_a_time = WRITING.lock().unwrap_or_else(PoisonError::into_inner);
         wreckordbox_native_stems::write(&wreckordbox_native_stems::Request {
             stick,
             library_id,
-            track_id: track.id.parse().unwrap_or(0),
+            track_id,
             stems: files,
             frames: Some(set.samples),
         })
@@ -221,7 +240,7 @@ pub(crate) fn answer(
             samples: Some(written.frames),
             sample_rate: Some(SAMPLE_RATE),
             replaced: written.replaced,
-            warnings: written.warnings,
+            warnings: warnings.into_iter().chain(written.warnings).collect(),
             skipped: None,
         },
         Outcome::Skipped(skipped) => NativeStems {
@@ -243,6 +262,7 @@ pub(crate) fn answer(
                     Unnameable::StartsWithDot => "starts_with_dot",
                     Unnameable::Character(_) => "unstorable_character",
                     Unnameable::TooLong => "too_long",
+                    Unnameable::FolderTooLong => "folder_too_long",
                 }
                 .to_owned(),
                 reason: skipped.reason.to_string(),
@@ -251,6 +271,93 @@ pub(crate) fn answer(
     };
     serde_json::to_value(answer)
         .map_err(|e| ServiceError::new(service_codes::SERVICE_FAILED, e.to_string()))
+}
+
+/// Refuses Stems that are not about as long as the track's own audio.
+/// Answers a warning when the track's length cannot be read.
+fn length_checked(
+    track: &Parent,
+    audio: &Path,
+    set: &StemSet,
+) -> Result<Option<String>, ServiceError> {
+    match parent_length(audio) {
+        Some(parent) if parent.abs_diff(set.samples) > LENGTH_TOLERANCE => {
+            Err(ServiceError::new(
+                stems::codes::STEM_LENGTH_MISMATCH,
+                format!(
+                    "the Stems of track {} \"{}\" are {} sample frames long and the track is {parent} \
+                     (at {SAMPLE_RATE} Hz): {} apart, where a decoder accounts for {LENGTH_TOLERANCE} at \
+                     most. They would not play in time with the track, so nothing was written.",
+                    track.id,
+                    track.title,
+                    set.samples,
+                    parent.abs_diff(set.samples)
+                ),
+            ))
+        }
+        Some(_) => Ok(None),
+        None => Ok(Some(
+            "the track's own length could not be read, so the Stems' length was not checked against it"
+                .to_owned(),
+        )),
+    }
+}
+
+/// Refuses a Stick whose export of the track is not on the Stick, or is
+/// not the audio the Stems were made from.
+fn export_checked(
+    track: &Parent,
+    stick: &Path,
+    library_id: u64,
+    track_id: u64,
+    set: &StemSet,
+) -> Result<(), ServiceError> {
+    // The export on the Stick must be the audio the Stems were made from:
+    // the record written beside them says they are.
+    let exported = wreckordbox_native_stems::exported(stick, library_id, track_id)
+        .map_err(|error| refused(track, stick, &error))?;
+    if exported.file.is_file() {
+        let on_stick = wreckordbox_sidecar::fingerprint_file(&exported.file).map_err(|e| {
+            ServiceError::new(
+                codes::NATIVE_STEMS_FAILED,
+                format!(
+                    "no Native stems were written for track {} \"{}\": {e}",
+                    track.id, track.title
+                ),
+            )
+        })?;
+        if on_stick != set.fingerprint {
+            return Err(ServiceError::new(
+                codes::EXPORT_STALE,
+                format!(
+                    "the export of track {} \"{}\" on the Stick at {} is not the audio its Stems \
+                     were made from: the track's audio changed after it was exported. Export it \
+                     again, then write its Native stems. Nothing was written.",
+                    track.id,
+                    track.title,
+                    stick.display()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// How far a set of Stems may be from its parent's length by the
+/// container and still be written, in sample frames at 44100 Hz: a
+/// quarter of a second. A decoder may or may not hand back a lossy
+/// codec's padding (an MP3's encoder delay and its last frame's fill, an
+/// AAC stream's priming: some three thousand frames at the very most), so
+/// the two counts need not agree; further apart than this, the Stems were
+/// not made from this audio's timeline. This does not show that Stems
+/// inside the tolerance are aligned: only a deck can.
+const LENGTH_TOLERANCE: u64 = 11_025;
+
+/// The parent's length by its container, in sample frames at 44100 Hz.
+fn parent_length(audio: &Path) -> Option<u64> {
+    let (frames, rate) = wreckordbox_native_stems::container_frames(audio)?;
+    let scaled = u128::from(frames) * u128::from(SAMPLE_RATE) / u128::from(rate);
+    u64::try_from(scaled).ok()
 }
 
 /// The track's Stems made from the audio it has now, with all four files
@@ -327,6 +434,20 @@ fn refused(track: &Parent, stick: &Path, error: &NativeStemsError) -> ServiceErr
                 ),
             )
         }
+        NativeStemsError::OffStick { .. } => ServiceError::new(
+            codes::STICK_UNSAFE,
+            format!(
+                "no Native stems were written for track {} \"{}\": {error}",
+                track.id, track.title
+            ),
+        ),
+        NativeStemsError::FolderTaken { .. } => ServiceError::new(
+            codes::STEMS_FOLDER_TAKEN,
+            format!(
+                "no Native stems were written for track {} \"{}\": {error}",
+                track.id, track.title
+            ),
+        ),
         other => ServiceError::new(
             codes::NATIVE_STEMS_FAILED,
             format!(

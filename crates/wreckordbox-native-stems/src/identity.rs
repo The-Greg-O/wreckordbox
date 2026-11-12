@@ -114,9 +114,12 @@ impl Origin {
 /// as its record says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Held {
-    /// The same file, or nothing to say otherwise: the deck would load the
-    /// folder for this track.
+    /// The same file: the deck would take the folder as proven for this
+    /// track.
     ThisTrack,
+    /// Nothing says: the deck would load the folder for whatever track
+    /// its name matches.
+    Unknown,
     /// Another file: another song with the same file name.
     AnotherTrack,
 }
@@ -125,7 +128,7 @@ pub(crate) enum Held {
 /// path and size together, then the fingerprint, then either alone.
 pub(crate) fn held(folder: &Path, origin: &Origin) -> Held {
     let Some(record) = read(folder) else {
-        return Held::ThisTrack;
+        return Held::Unknown;
     };
     let file = record.get("file").and_then(serde_json::Value::as_str);
     let size = record.get("size").and_then(serde_json::Value::as_u64);
@@ -148,11 +151,16 @@ pub(crate) fn held(folder: &Path, origin: &Origin) -> Held {
     if file.is_some() || size.is_some() {
         return Held::AnotherTrack;
     }
-    Held::ThisTrack
+    Held::Unknown
 }
 
 fn read(folder: &Path) -> Option<serde_json::Map<String, serde_json::Value>> {
-    let mut bytes = std::fs::read(folder.join(FILE_NAME)).ok()?;
+    let record = folder.join(FILE_NAME);
+    // The record itself, not something a link of its name leads to.
+    if !std::fs::symlink_metadata(&record).is_ok_and(|metadata| metadata.is_file()) {
+        return None;
+    }
+    let mut bytes = std::fs::read(record).ok()?;
     bytes.truncate(RECORD_BYTES);
     match serde_json::from_slice(&bytes).ok()? {
         serde_json::Value::Object(record) => Some(record),

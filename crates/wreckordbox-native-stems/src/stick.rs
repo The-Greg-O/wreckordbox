@@ -22,13 +22,15 @@ pub fn is_spare_stick(stick: &Path) -> bool {
 }
 
 /// A track as the Stick's exported library holds it.
-pub(crate) struct Exported {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Exported {
     /// The path the library holds, relative to the Stick's root, with
     /// forward slashes and no leading one. Spelled as the library spells
     /// it, which a directory listing may not.
-    pub(crate) path: String,
-    /// The track's file on this machine.
-    pub(crate) file: PathBuf,
+    pub path: String,
+    /// The track's file on this machine: on the Stick, if it is there at
+    /// all (see [`exported`]).
+    pub file: PathBuf,
 }
 
 /// The export of the Library's track `track_id` on the Stick.
@@ -40,11 +42,25 @@ pub(crate) struct Exported {
 /// first (it is the one an XDJ-AZ reads), then the older one, whose rows
 /// often name no Library: such a row is not taken when the other database
 /// says the same file came from another Library.
-pub(crate) fn exported(
+///
+/// The path that library holds is not trusted to stay on the Stick: one
+/// that climbs out with `..`, or that reaches its file through a symbolic
+/// link (or names one), is refused as [`NativeStemsError::OffStick`]. A
+/// file that is there is a regular file under the Stick's root; one that
+/// is not there is for the caller to find missing.
+///
+/// Like [`write`](crate::write), this reads nothing of a Stick that does
+/// not carry the Spare stick marker.
+pub fn exported(
     stick: &Path,
     library_id: u64,
     track_id: u64,
 ) -> Result<Exported, NativeStemsError> {
+    if !is_spare_stick(stick) {
+        return Err(NativeStemsError::NotSpareStick {
+            stick: stick.to_path_buf(),
+        });
+    }
     let formats = device_library::formats(stick);
     if formats.is_empty() {
         return Err(NativeStemsError::NoLibrary {
@@ -82,7 +98,7 @@ pub(crate) fn exported(
             // name here, never a separator (the layout's `file` and CRC
             // are over forward slashes, which is what the library holds).
             let path = track.path.trim_start_matches('/').to_owned();
-            let file = StickFiles::new(stick).locate(&path);
+            let file = on_stick(stick, &path)?;
             return Ok(Exported { path, file });
         }
     }
@@ -93,4 +109,42 @@ pub(crate) fn exported(
         }),
         None => Err(NativeStemsError::TrackNotOnStick { track_id }),
     }
+}
+
+/// The file the library's `path` names, which must be on the Stick.
+fn on_stick(stick: &Path, path: &str) -> Result<PathBuf, NativeStemsError> {
+    let off = |at: &Path, why: &str| NativeStemsError::OffStick {
+        path: at.to_path_buf(),
+        why: why.to_owned(),
+    };
+    // Either slash: the export crates' resolver takes both as separators.
+    if path.split(['/', '\\']).any(|part| part == "..") {
+        return Err(off(
+            &stick.join(path),
+            "is where the Stick's library says the track is, which climbs out of the Stick",
+        ));
+    }
+    let file = StickFiles::new(stick).locate(path);
+    let Ok(metadata) = std::fs::symlink_metadata(&file) else {
+        // Not there: the caller says so.
+        return Ok(file);
+    };
+    if !metadata.is_file() {
+        return Err(off(
+            &file,
+            "is where the Stick's library says the track is, and is not a regular file",
+        ));
+    }
+    // With every link on the way followed, still under the Stick's root.
+    let inside = match (stick.canonicalize(), file.canonicalize()) {
+        (Ok(root), Ok(real)) => real.starts_with(root),
+        _ => false,
+    };
+    if !inside {
+        return Err(off(
+            &file,
+            "is reached through a symbolic link that leads off the Stick",
+        ));
+    }
+    Ok(file)
 }

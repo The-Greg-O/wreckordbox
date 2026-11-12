@@ -49,10 +49,11 @@ mod encode;
 mod identity;
 pub mod naming;
 mod stick;
+mod work;
 
-pub use encode::{SAMPLE_RATE, VORBIS_QUALITY};
+pub use encode::{container_frames, SAMPLE_RATE, VORBIS_QUALITY};
 pub use naming::Unnameable;
-pub use stick::{is_spare_stick, SPARE_STICK_MARKER};
+pub use stick::{exported, is_spare_stick, Exported, SPARE_STICK_MARKER};
 
 /// The folder at a Stick's root that holds every track's Native stems.
 pub const STEMS_FOLDER: &str = "STEMS";
@@ -176,6 +177,30 @@ pub enum NativeStemsError {
         frames: u64,
         expected: u64,
     },
+    /// Something on the way is a link, or leads off the Stick: following
+    /// it would read or write somewhere the Spare stick marker does not
+    /// speak for. Nothing was written.
+    #[error("{} {why}, so nothing was written", path.display())]
+    OffStick { path: PathBuf, why: String },
+    /// The folder a second song of the same file name goes in already
+    /// holds a set that is not this track's. Nothing was written.
+    #[error(
+        "the stems folder {folder} already holds a set that is not this track's, and it is the only folder this track's Native stems can go in; it was left as it is"
+    )]
+    FolderTaken { folder: String },
+    /// A replacement failed half-way and the earlier set could not be put
+    /// back. It is whole, under a working name, and the next write puts
+    /// it back.
+    #[error(
+        "{}: {source}; the earlier set could not be put back and is kept at {}, from where the next write restores it",
+        dir.display(),
+        backup.display()
+    )]
+    Rollback {
+        dir: PathBuf,
+        backup: PathBuf,
+        source: std::io::Error,
+    },
     #[error("cannot encode {}: {message}", file.display())]
     Encode { file: PathBuf, message: String },
     #[error("{}: {source}", path.display())]
@@ -215,15 +240,16 @@ pub fn write(request: &Request<'_>) -> Result<Outcome, NativeStemsError> {
     let file_name = naming::file_name(&exported.path);
     let key = naming::track_key(&exported.path);
     let named = naming::check_file_name(file_name).and_then(|()| naming::folder_name(key));
+    let skipped = |reason| {
+        Ok(Outcome::Skipped(Skipped {
+            file_name: file_name.to_owned(),
+            track_path: exported.path.clone(),
+            reason,
+        }))
+    };
     let base = match named {
         Ok(base) => base,
-        Err(reason) => {
-            return Ok(Outcome::Skipped(Skipped {
-                file_name: file_name.to_owned(),
-                track_path: exported.path,
-                reason,
-            }))
-        }
+        Err(reason) => return skipped(reason),
     };
     let origin = identity::Origin::of(&exported.path, &exported.file).map_err(|_| {
         NativeStemsError::TrackFileMissing {
@@ -232,27 +258,52 @@ pub fn write(request: &Request<'_>) -> Result<Outcome, NativeStemsError> {
         }
     })?;
 
-    let stems_dir = stems_dir(stick)?;
-    clear_leftovers(&stems_dir);
-    // A folder of this name that holds another song's set stays; this
-    // track's goes beside it under the layout's hashed name.
+    // Where the set goes is settled, and found to be on the Stick, before
+    // anything is made there. A folder of the track's name that holds
+    // another song's set stays; this track's goes beside it under the
+    // layout's hashed name, unless that one is somebody else's too.
+    let found_dir = work::stems_dir(stick)?;
+    if let Some(stems_dir) = &found_dir {
+        // First, what an interrupted write left: it may put back the very
+        // folder this track's name leads to.
+        work::recover(stems_dir);
+    }
     let mut folder = base;
-    let mut existing = entry_named(&stems_dir, &folder);
+    let mut existing = match &found_dir {
+        Some(stems_dir) => work::entry_named(stems_dir, &folder)?,
+        None => None,
+    };
     if existing
         .as_ref()
         .is_some_and(|held| identity::held(held, &origin) == identity::Held::AnotherTrack)
     {
         folder = naming::suffixed_folder_name(key, &exported.path);
-        existing = entry_named(&stems_dir, &folder);
+        existing = match &found_dir {
+            Some(stems_dir) => work::entry_named(stems_dir, &folder)?,
+            None => None,
+        };
+        if existing
+            .as_ref()
+            .is_some_and(|held| identity::held(held, &origin) != identity::Held::ThisTrack)
+        {
+            return Err(NativeStemsError::FolderTaken { folder });
+        }
+    }
+    if let Err(reason) = naming::check_folder_name(&folder) {
+        return skipped(reason);
     }
 
-    let staging = stems_dir.join(format!(".{folder}.part"));
-    let frames = stage(&staging, request, &origin).inspect_err(|_| {
-        let _ = std::fs::remove_dir_all(&staging);
+    let stems_dir = match found_dir {
+        Some(stems_dir) => stems_dir,
+        None => work::make_stems_dir(stick)?,
+    };
+    let working = work::Names::of(&stems_dir, &folder);
+    let frames = stage(&working.staging, request, &origin).inspect_err(|_| {
+        let _ = std::fs::remove_dir_all(&working.staging);
     })?;
     let dir = stems_dir.join(&folder);
-    publish(&stems_dir, &staging, &dir, existing.as_deref(), &folder).inspect_err(|_| {
-        let _ = std::fs::remove_dir_all(&staging);
+    work::publish(&stems_dir, &working, &dir, existing.as_deref()).inspect_err(|_| {
+        let _ = std::fs::remove_dir_all(&working.staging);
     })?;
 
     let mut warnings = Vec::new();
@@ -273,48 +324,6 @@ pub fn write(request: &Request<'_>) -> Result<Outcome, NativeStemsError> {
     }))
 }
 
-/// The Stick's stems folder: the one at its root whose name is `STEMS` in
-/// any ASCII case, as the deck finds it, or a new `STEMS`.
-fn stems_dir(stick: &Path) -> Result<PathBuf, NativeStemsError> {
-    if let Some(found) = entry_named(stick, STEMS_FOLDER) {
-        return Ok(found);
-    }
-    let dir = stick.join(STEMS_FOLDER);
-    std::fs::create_dir(&dir).map_err(|e| NativeStemsError::io(&dir, e))?;
-    Ok(dir)
-}
-
-/// The directory in `parent` whose name is `name`, ignoring ASCII case and
-/// nothing else: the deck's comparison.
-fn entry_named(parent: &Path, name: &str) -> Option<PathBuf> {
-    std::fs::read_dir(parent)
-        .ok()?
-        .filter_map(Result::ok)
-        .find(|entry| {
-            entry
-                .file_name()
-                .to_str()
-                .is_some_and(|found| found.eq_ignore_ascii_case(name))
-                && entry.path().is_dir()
-        })
-        .map(|entry| entry.path())
-}
-
-/// Removes what an interrupted write left behind: the dot-named staging
-/// and set-aside folders this writer makes.
-fn clear_leftovers(stems_dir: &Path) {
-    let Ok(entries) = std::fs::read_dir(stems_dir) else {
-        return;
-    };
-    for entry in entries.filter_map(Result::ok) {
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if name.starts_with('.') && (name.ends_with(".part") || name.ends_with(".old")) {
-            let _ = std::fs::remove_dir_all(entry.path());
-        }
-    }
-}
-
 /// Writes the whole set into `staging` and flushes it to the Stick.
 /// Answers the Stems' length in sample frames.
 fn stage(
@@ -322,7 +331,7 @@ fn stage(
     request: &Request<'_>,
     origin: &identity::Origin,
 ) -> Result<u64, NativeStemsError> {
-    let _ = std::fs::remove_dir_all(staging);
+    work::remove(staging);
     std::fs::create_dir(staging).map_err(|e| NativeStemsError::io(staging, e))?;
     let mut length = request.frames;
     for (source, name) in request.stems.in_order().into_iter().zip(FILE_NAMES) {
@@ -337,51 +346,7 @@ fn stage(
         }
     }
     let record = staging.join(identity::FILE_NAME);
-    write_flushed(&record, origin.record().as_bytes())?;
-    flush_dir(staging);
+    work::write_new(&record, origin.record().as_bytes())?;
+    work::flush_dir(staging);
     Ok(length.unwrap_or(0))
-}
-
-/// Makes the staged set appear as `dir`: one rename, or for a set that is
-/// being made again, the old one set aside, the new one renamed in, the
-/// old one removed.
-fn publish(
-    stems_dir: &Path,
-    staging: &Path,
-    dir: &Path,
-    existing: Option<&Path>,
-    folder: &str,
-) -> Result<(), NativeStemsError> {
-    let Some(existing) = existing else {
-        std::fs::rename(staging, dir).map_err(|e| NativeStemsError::io(dir, e))?;
-        flush_dir(stems_dir);
-        return Ok(());
-    };
-    let old = stems_dir.join(format!(".{folder}.old"));
-    let _ = std::fs::remove_dir_all(&old);
-    std::fs::rename(existing, &old).map_err(|e| NativeStemsError::io(existing, e))?;
-    if let Err(error) = std::fs::rename(staging, dir) {
-        // Put the earlier set back rather than leave the track with none.
-        let _ = std::fs::rename(&old, existing);
-        return Err(NativeStemsError::io(dir, error));
-    }
-    let _ = std::fs::remove_dir_all(&old);
-    flush_dir(stems_dir);
-    Ok(())
-}
-
-fn write_flushed(path: &Path, bytes: &[u8]) -> Result<(), NativeStemsError> {
-    use std::io::Write as _;
-    let mut file = std::fs::File::create(path).map_err(|e| NativeStemsError::io(path, e))?;
-    file.write_all(bytes)
-        .and_then(|()| file.sync_all())
-        .map_err(|e| NativeStemsError::io(path, e))
-}
-
-/// Asks for a folder's entries to reach the Stick. Not every file system
-/// can; the files themselves are already flushed.
-fn flush_dir(dir: &Path) {
-    if let Ok(dir) = std::fs::File::open(dir) {
-        let _ = dir.sync_all();
-    }
 }

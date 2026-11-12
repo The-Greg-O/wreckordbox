@@ -134,3 +134,37 @@ pub(crate) fn encode(source: &Path, to: &Path) -> Result<u64, NativeStemsError> 
     out.sync_all().map_err(|e| NativeStemsError::io(to, e))?;
     Ok(frames)
 }
+
+/// How long the audio file at `path` is by its container: the sample
+/// frames of every packet of its audio stream, added up without decoding
+/// any, and its sample rate. For a lossy file that counts the codec's own
+/// padding, which a decoder may or may not hand back. `None` when the
+/// file cannot be read as audio or does not say.
+#[must_use]
+pub fn container_frames(path: &Path) -> Option<(u64, u32)> {
+    let file = File::open(path).ok()?;
+    let stream = MediaSourceStream::new(Box::new(file), MediaSourceStreamOptions::default());
+    let mut format = symphonia::default::get_probe()
+        .format(
+            &Hint::new(),
+            stream,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
+        .ok()?
+        .format;
+    let track = format.default_track()?;
+    let (track_id, rate) = (track.id, track.codec_params.sample_rate?);
+    let mut frames = 0_u64;
+    loop {
+        match format.next_packet() {
+            Ok(packet) if packet.track_id() == track_id => frames += packet.dur(),
+            Ok(_) => {}
+            Err(SymphoniaError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                break
+            }
+            Err(_) => return None,
+        }
+    }
+    (frames > 0 && rate > 0).then_some((frames, rate))
+}

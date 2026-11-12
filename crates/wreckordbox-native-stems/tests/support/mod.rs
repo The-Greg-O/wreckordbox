@@ -20,9 +20,11 @@ pub const ONSET: u64 = 9_000;
 
 /// A 16-bit 44.1 kHz WAV of `frames` sample frames on `channels` channels:
 /// silent up to [`ONSET`], then a tone of `hertz` with noise over it. The
-/// noise is there so the encoded Stem has the size of real music: a bare
-/// tone packs into a single Ogg page, which no real Stem does and which
-/// decoders (the deck's included) do not trim to the stream's length.
+/// noise is there so the encoded Stem has the size of real music and its
+/// audio spans several Ogg pages. A bare short tone packs into one, and
+/// the test reader's decoder does not cut such a stream to its stated
+/// length; `lengths.rs` covers silent, tonal and short Stems and says
+/// which side that is on.
 pub fn write_tone(path: &Path, frames: u64, channels: u16, hertz: f64) {
     write_tone_at(path, frames, channels, hertz, 44_100);
 }
@@ -55,6 +57,32 @@ pub fn write_tone_at(path: &Path, frames: u64, channels: u16, hertz: f64, rate: 
         for _ in 0..channels {
             out.extend_from_slice(&sample.to_le_bytes());
         }
+    }
+    std::fs::write(path, out).unwrap();
+}
+
+/// A 16-bit stereo 44.1 kHz WAV of `frames` sample frames, each side of
+/// frame `n` holding `sample(n)`: nothing added, nothing silent unless the
+/// closure says so.
+pub fn write_samples(path: &Path, frames: u64, sample: impl Fn(u64) -> i16) {
+    let data_len = u32::try_from(frames).unwrap() * 4;
+    let mut out = Vec::new();
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data_len).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16_u32.to_le_bytes());
+    out.extend_from_slice(&1_u16.to_le_bytes());
+    out.extend_from_slice(&2_u16.to_le_bytes());
+    out.extend_from_slice(&44_100_u32.to_le_bytes());
+    out.extend_from_slice(&(44_100_u32 * 4).to_le_bytes());
+    out.extend_from_slice(&4_u16.to_le_bytes());
+    out.extend_from_slice(&16_u16.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data_len.to_le_bytes());
+    for frame in 0..frames {
+        let value = sample(frame).to_le_bytes();
+        out.extend_from_slice(&value);
+        out.extend_from_slice(&value);
     }
     std::fs::write(path, out).unwrap();
 }
@@ -188,6 +216,24 @@ impl Rig {
             other: file("other", 660.0),
             bass: file("bass", 110.0),
             drums: file("drums", 220.0),
+        }
+    }
+
+    /// Four Stems of `frames` sample frames, every one holding
+    /// `sample(n)` at frame `n`.
+    pub fn stems_of(&self, name: &str, frames: u64, sample: impl Fn(u64) -> i16) -> Stems {
+        let dir = self.source.path().join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = |role: &str| {
+            let path = dir.join(format!("{role}.wav"));
+            write_samples(&path, frames, &sample);
+            path
+        };
+        Stems {
+            vocals: file("vocals"),
+            other: file("other"),
+            bass: file("bass"),
+            drums: file("drums"),
         }
     }
 

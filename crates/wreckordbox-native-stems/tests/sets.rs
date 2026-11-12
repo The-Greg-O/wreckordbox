@@ -23,9 +23,9 @@ fn written(rig: &Rig, track: u64, frames: u64) -> wreckordbox_native_stems::Writ
     }
 }
 
-// Sets whose length is read back are 40,000 frames or more: a shorter one
-// fits a single Ogg page, which decoders do not trim to the stream's
-// length (see `support::write_tone`).
+// Sets whose decoded length is read back here are 40,000 frames or more:
+// the test reader's decoder does not cut a stream that fits one Ogg page
+// to its stated length. `lengths.rs` reads what short files state.
 
 fn names_in(dir: &std::path::Path) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(dir)
@@ -207,18 +207,22 @@ fn making_a_set_again_swaps_the_whole_folder_and_the_decks_cache_goes_with_it() 
 }
 
 #[test]
-fn what_an_interrupted_write_left_is_cleared_and_other_dot_folders_are_left_alone() {
+fn an_unfinished_set_an_interrupted_write_left_is_cleared_and_other_dot_folders_are_left_alone() {
+    // Recovery of a set that was set aside is in `boundaries.rs`.
     let rig = Rig::spare(&[("Artist - Song.wav", 7)]);
     let stems_dir = rig.root().join("STEMS");
-    for leftover in [".Other Song.part", ".Other Song.old", ".azmods-1234"] {
+    for leftover in [".wbx-0badc0de.part", ".Other Song.part", ".azmods-1234"] {
         std::fs::create_dir_all(stems_dir.join(leftover)).unwrap();
         std::fs::write(stems_dir.join(leftover).join("vocals.ogg"), b"half").unwrap();
     }
 
     written(&rig, 7, 20_000);
 
-    // The AZ-MODS app's own working folder is its to clear.
-    assert_eq!(names_in(&stems_dir), [".azmods-1234", "Artist - Song"]);
+    // Another writer's working folders are its own to clear.
+    assert_eq!(
+        names_in(&stems_dir),
+        [".Other Song.part", ".azmods-1234", "Artist - Song"]
+    );
 }
 
 #[test]
