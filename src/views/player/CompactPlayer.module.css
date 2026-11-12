@@ -155,15 +155,35 @@
 .strip[data-armed] .playhead { background: var(--c-playhead-armed); }
 .strip[data-empty] .playhead { display: none; }
 
-/* At half width and below the title column narrows and the gaps close; the
-   title and the line under it ellipsize rather than wrap. */
+/* At half width and below the strip reflows into two rows, so the readouts
+   are never squeezed by the overview: CUE, PLAY, the title and readouts and
+   the beat jump on the first, the overview and phrases across the second.
+   At the narrow size the beat jump moves down beside the overview, leaving
+   the first row to the title and readouts. The title ellipsizes; the
+   artist shrinks before any readout does; the readouts never shrink. */
 @container shell (max-width: 800px) {
-  .strip { --cp-meta-w: 180px; gap: var(--s-shell-space-3); }
+  .strip {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "transport meta jump"
+      "band band band";
+    column-gap: var(--s-shell-space-3);
+    row-gap: var(--s-shell-space-2);
+    align-items: center;
+  }
+  .transport { grid-area: transport; }
+  .meta { grid-area: meta; }
+  .jump { grid-area: jump; }
+  .band { grid-area: band; min-width: 0; }
 }
 @container shell (max-width: 520px) {
-  .strip { --cp-meta-w: 120px; padding-inline: var(--s-shell-space-2); }
+  .strip {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "transport meta meta"
+      "band band jump";
+    padding-inline: var(--s-shell-space-2);
+  }
   .button, .size { min-width: 22px; padding: 0 var(--s-shell-space-1); }
-  /* The artist gives way first, so tempo, key and position stay readable. */
-  .artist, .artist + .dot { display: none; }
-  .meta { flex-basis: 150px; }
 }

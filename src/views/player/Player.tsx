@@ -44,6 +44,7 @@ import {
   type JumpSize,
   jumpSizeById,
   jumpStepSeconds,
+  shiftByGridBeats,
   movedLoopByBeats,
   zoomBy,
   createWheelZoomGate,
@@ -581,6 +582,9 @@ const PhraseBar = memo(function PhraseBar({
     </div>
   );
 });
+
+/** The keys the compact player takes only while it has the keyboard. */
+const ARROW_KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"]);
 
 /** Transport buttons, in the order and pairing rekordbox has them. */
 const SKIPS = [
@@ -1275,6 +1279,18 @@ export const Player = memo(function Player({
     document.addEventListener("pointerdown", elsewhere, true);
     return () => document.removeEventListener("pointerdown", elsewhere, true);
   }, []);
+  // The compact player also gives the keyboard up when the focus moves
+  // elsewhere by key (Tab into the list or the tree), since its arrows are
+  // only its own while it has the keyboard (#51). The old deck is unchanged.
+  useEffect(() => {
+    if (!compact) return;
+    const focusElsewhere = (event: FocusEvent) => {
+      const box = shell.current;
+      if (box && event.target instanceof Node && !box.contains(event.target)) setArmed(false);
+    };
+    document.addEventListener("focusin", focusElsewhere, true);
+    return () => document.removeEventListener("focusin", focusElsewhere, true);
+  }, [compact]);
 
   // What the other deck reads when its BEAT SYNC is pressed. A ref holding a
   // closure over the current render, registered once: the shell keeps the
@@ -1345,9 +1361,17 @@ export const Player = memo(function Player({
           (moved.headMs - now * 1000) / 1000, Array.from(grid.times), beats);
         return;
       }
+      // The compact player does not jump past the track's end: a jump that
+      // would land there is not made (#51). The old deck is unchanged.
+      if (compact && size.beats > 0 && direction > 0 && total > 0) {
+        const targetMs = grid.times.length >= 2
+          ? shiftByGridBeats(grid, now * 1000, beats)
+          : (now + jumpStepSeconds(size, bpmX100)) * 1000;
+        if (targetMs !== null && targetMs / 1000 > total) return;
+      }
       jumpHead(playback, grid, size, bpmX100, now, direction, phaseLocked, seekInPhase);
     },
-    [bpmX100, playback, seekInPhase, grid, beatLoop, phaseLocked],
+    [bpmX100, playback, seekInPhase, grid, beatLoop, phaseLocked, compact, total],
   );
   const jump = useCallback(
     (direction: number) => jumpBySize(jumpSizeById(jumpSizeId), direction),
@@ -2211,6 +2235,9 @@ export const Player = memo(function Player({
   const onDeckKey = useEventCallback((event: KeyboardEvent) => {
     const hit = dispatchBinding(event, platform, event.target as HTMLElement | null, keyOverrides);
     if (hit?.action === undefined || !Object.hasOwn(deckCommands, hit.action)) return;
+    // In the compact player the arrow keys are the deck's only while it has
+    // the keyboard: clicked, and nothing else clicked or focused since (#51).
+    if (compact && !armed && ARROW_KEYS.has(event.key)) return;
     // Player A's keys are Player A's and Player B's, with shift, Player B's:
     // a row for the other deck is not this one's business.
     if (hit.deck !== undefined && hit.deck !== deck) return;
@@ -2278,7 +2305,9 @@ export const Player = memo(function Player({
         onCueUp={dropCue}
         positionSource={playback}
         total={total}
-        bpmX100={Math.round(bpmX100 * playback.tempo)}
+        // The grid's tempo under the head, so a track that changes tempo
+        // reads as the part playing; times the deck's own tempo.
+        bpmX100={Math.round(gridBpmX100 * playback.tempo)}
         keyText={track ? formatKey(track.key, viewPrefs.keyDisplay) : ""}
         cues={cues}
         loop={playback.loop}

@@ -39,10 +39,17 @@ function minutesAndSeconds(whole: number): string {
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
 }
 
-/** Elapsed time as the readout shows it: `1:23.4`. */
+/**
+ * Elapsed time as the readout shows it: `1:23.4`, and `-0:01.9` in the
+ * pre-roll a jump back from the start lands in (the engine plays silence
+ * there until the head reaches zero), so the readout never says the start
+ * while the deck is somewhere else.
+ */
 export function compactPosition(seconds: number): string {
-  const tenths = Math.floor(wholeSeconds(seconds) * 10 + 1e-6);
-  return `${minutesAndSeconds(Math.floor(tenths / 10))}.${tenths % 10}`;
+  if (!Number.isFinite(seconds)) return "0:00.0";
+  const tenths = Math.floor(Math.abs(seconds) * 10 + 1e-6);
+  const sign = seconds < 0 && tenths > 0 ? "-" : "";
+  return `${sign}${minutesAndSeconds(Math.floor(tenths / 10))}.${tenths % 10}`;
 }
 
 /** The track's length as the readout shows it: `5:48`. */

@@ -68,9 +68,12 @@ export interface CompactPlayerProps {
   onJump: (direction: -1 | 1) => void;
 }
 
+/** The keys that press a focused button. */
+const isActivation = (key: string) => key === " " || key === "Enter";
+
 /** Only the readout subscribes to the head's tenths, not the strip around it. */
 const Position = memo(function Position({ source, total }: { source: PositionSource; total: number }) {
-  const snapshot = useCallback(() => Math.floor(source.positionRef.current * 10), [source.positionRef]);
+  const snapshot = useCallback(() => Math.trunc(source.positionRef.current * 10), [source.positionRef]);
   const tenths = useSyncExternalStore(source.subscribe, snapshot);
   return (
     <span className={styles.position} data-testid="compact-player-position">
@@ -111,6 +114,9 @@ export const CompactPlayer = memo(function CompactPlayer({
       data-armed={armed ? "" : undefined}
       data-empty={track ? undefined : ""}
       data-droppable={droppable || undefined}
+      // Space and Enter on a control here press that control (or hold CUE),
+      // not the deck's Play/Pause and Load: see OWN_ACTIVATION.
+      data-own-activation=""
       onDragOver={onDragOver}
       onDrop={onDrop}
     >
@@ -123,6 +129,17 @@ export const CompactPlayer = memo(function CompactPlayer({
           onPointerUp={onCueUp}
           onPointerCancel={onCueUp}
           onPointerLeave={onCueUp}
+          onKeyDown={(event) => {
+            if (!isActivation(event.key)) return;
+            event.preventDefault();
+            if (!event.repeat) onCueDown();
+          }}
+          onKeyUp={(event) => {
+            if (!isActivation(event.key)) return;
+            event.preventDefault();
+            onCueUp();
+          }}
+          onBlur={onCueUp}
           disabled={idle}
         >
           CUE

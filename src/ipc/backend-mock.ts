@@ -1704,11 +1704,18 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     if (held) return held;
     const row = all[Number.parseInt(trackId, 10) - 100000];
     if (!row || row.analysed === 0 || row.bpmX100 === 0) return null;
+    // `?grids=101325:none,100004:double`, by track id: an analysed row with
+    // a BPM but no grid, or a grid whose second half runs at twice the tempo
+    // (a tempo change).
+    const fixture = GRID_FIXTURES.get(trackId);
+    if (fixture === "none") return null;
     const beatMs = (60 / (row.bpmX100 / 100)) * 1000;
-    const count = Math.min(Math.floor((row.durationSec * 1000) / beatMs) + 1, 65536);
+    const totalMs = row.durationSec * 1000;
     const beats: EditableBeat[] = [];
-    for (let n = 0; n < count; n++) {
-      beats.push({ number: (n % 4) + 1, tempoX100: row.bpmX100, timeMs: Math.round(n * beatMs) });
+    for (let n = 0, at = 0; at <= totalMs && n < 65536; n++) {
+      const fast = fixture === "double" && at >= totalMs / 2;
+      beats.push({ number: (n % 4) + 1, tempoX100: fast ? row.bpmX100 * 2 : row.bpmX100, timeMs: Math.round(at) });
+      at += fast ? beatMs / 2 : beatMs;
     }
     const made = { beats, undo: [], redo: [], locked: false };
     gridStore.set(trackId, made);
@@ -3753,6 +3760,18 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     },
   };
 }
+
+/** `?grids=101325:none,100004:double`, by track id: see `gridOf`. */
+const GRID_FIXTURES: ReadonlyMap<string, "none" | "double"> = (() => {
+  if (typeof location === "undefined") return new Map();
+  const raw = new URLSearchParams(location.search).get("grids") ?? "";
+  const out = new Map<string, "none" | "double">();
+  for (const part of raw.split(",")) {
+    const [id, kind] = part.split(":");
+    if (id && /^\d+$/.test(id) && (kind === "none" || kind === "double")) out.set(id, kind);
+  }
+  return out;
+})();
 
 /** A bare `?name` flag in the URL. */
 function readFlagFromUrl(name: string): boolean {

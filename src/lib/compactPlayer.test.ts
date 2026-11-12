@@ -47,9 +47,18 @@ describe("the compact player's position readout", () => {
     expect(compactLength(0)).toBe("0:00");
   });
 
-  it("never shows a negative or unreadable time", () => {
-    expect(compactPosition(-1)).toBe("0:00.0");
+  it("shows the pre-roll before the start with its sign, as the engine has it", () => {
+    expect(compactPosition(-1)).toBe("-0:01.0");
+    expect(compactPosition(-4.25)).toBe("-0:04.2");
+    expect(compactPosition(-0.5)).toBe("-0:00.5");
+    // Less than a tenth before the start reads as the start, unsigned.
+    expect(compactPosition(-0.04)).toBe("0:00.0");
+  });
+
+  it("never shows an unreadable time, and the length is never negative", () => {
     expect(compactPosition(Number.NaN)).toBe("0:00.0");
+    expect(compactPosition(Number.NEGATIVE_INFINITY)).toBe("0:00.0");
     expect(compactLength(Number.POSITIVE_INFINITY)).toBe("0:00");
+    expect(compactLength(-3)).toBe("0:00");
   });
 });
