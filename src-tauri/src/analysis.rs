@@ -198,18 +198,51 @@ pub async fn analyse_track<R: tauri::Runtime>(
             .filter(|&secs| secs > 0)
             .map(f64::from);
         let hook = Drawing { publish: &progress, length_secs };
-        let recording = crate::bulk_writes::Recording::get(&state, operation.as_deref(), rbl_library::bulk::Kind::Analysis)?;
-        let result = recording.operation.run(serde_json::json!({"track":track_id}), || {
-        let result = analyse_and_save_notated(&state, &library, &share, &track_id, preset, &settings, &editor, drawing.then_some(&hook), notation)?;
-        // After the library has the key, as rekordbox writes the tag after
-        // `modTrackKeyInfo` stores it. Only with the preference on, which is
-        // what `key_tag` being sent says.
-        if let (Some(notation), Some(key)) = (key_tag, result.detected_key.as_ref()) {
-            let path = library.row_of(&track_id).map_or("", |row| library.folder_path.get(row as usize));
-            crate::key_tag::write_logged(state.backup_dir(), &track_id, path, key.name_for(notation));
-        }
-        Ok::<_, AppError>(result)
-        }, |result| vec![serde_json::json!({"track":result.track_id,"after":{"bpm_x100":result.bpm_x100,"key":result.key,"analysis_path":result.analysis_path,"first_beat_cue_added":result.added_first_beat_cue}})]);
+        let recording = crate::bulk_writes::Recording::get(
+            &state,
+            operation.as_deref(),
+            rbl_library::bulk::Kind::Analysis,
+        )?;
+        let result = recording.operation.run(
+            serde_json::json!({"track":track_id}),
+            || {
+                let result = analyse_and_save_notated(
+                    &state,
+                    &library,
+                    &share,
+                    &track_id,
+                    preset,
+                    &settings,
+                    &editor,
+                    drawing.then_some(&hook),
+                    notation,
+                )?;
+                // After the Library has the key, and only with the preference on.
+                if let (Some(notation), Some(key)) = (key_tag, result.detected_key.as_ref()) {
+                    let path = library
+                        .row_of(&track_id)
+                        .map_or("", |row| library.folder_path.get(row as usize));
+                    crate::key_tag::write_logged(
+                        state.backup_dir(),
+                        &track_id,
+                        path,
+                        key.name_for(notation),
+                    );
+                }
+                Ok::<_, AppError>(result)
+            },
+            |result| {
+                vec![serde_json::json!({
+                    "track": result.track_id,
+                    "after": {
+                        "bpm_x100": result.bpm_x100,
+                        "key": result.key,
+                        "analysis_path": result.analysis_path,
+                        "first_beat_cue_added": result.added_first_beat_cue,
+                    },
+                })]
+            },
+        );
         let (mut result, warning) = recording.finish(result)?;
         result.recording_warning = warning;
         Ok(result)

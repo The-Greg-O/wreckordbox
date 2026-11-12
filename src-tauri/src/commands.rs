@@ -3499,40 +3499,60 @@ async fn import_files_then<R: tauri::Runtime>(
     let writing = Arc::clone(&state);
     let report = blocking("import_files", move || {
         let files = expand_import_paths(&paths);
-        let recording=crate::bulk_writes::Recording::get(&writing,operation.as_deref(),rbl_library::bulk::Kind::Import)?;
-        let result=recording.operation.run(serde_json::json!({"files":files.len()}), || {
-        let _gate = writing.edit_gate().lock();
-        writing
-            .write(|writer| {
-                let mut imported = 0_u32;
-                let mut skipped = Vec::new();
-                let mut tracks = Vec::new();
-                let mut existing = Vec::new();
-                // One transaction for the whole batch; a file already in the
-                // library is not a failure, because a drop onto a playlist
-                // still wants that track in the playlist.
-                for (file, outcome) in files.iter().zip(writer.import_files(&files)?) {
-                    let title = file
-                        .file_name()
-                        .map(|name| name.to_string_lossy().into_owned())
-                        .unwrap_or_default();
-                    match outcome {
-                        rbl_db::write::ImportOutcome::Existing(id) => {
-                            existing.push(crate::dto::ImportedTrackDto { id, title });
+        let recording = crate::bulk_writes::Recording::get(
+            &writing,
+            operation.as_deref(),
+            rbl_library::bulk::Kind::Import,
+        )?;
+        let result = recording.operation.run(
+            serde_json::json!({"files":files.len()}),
+            || {
+                let _gate = writing.edit_gate().lock();
+                writing
+                    .write(|writer| {
+                        let mut imported = 0_u32;
+                        let mut skipped = Vec::new();
+                        let mut tracks = Vec::new();
+                        let mut existing = Vec::new();
+                        // One transaction for the whole batch; a file already in the
+                        // library is not a failure, because a drop onto a playlist
+                        // still wants that track in the playlist.
+                        for (file, outcome) in files.iter().zip(writer.import_files(&files)?) {
+                            let title = file
+                                .file_name()
+                                .map(|name| name.to_string_lossy().into_owned())
+                                .unwrap_or_default();
+                            match outcome {
+                                rbl_db::write::ImportOutcome::Existing(id) => {
+                                    existing.push(crate::dto::ImportedTrackDto { id, title });
+                                }
+                                rbl_db::write::ImportOutcome::Added(id) => {
+                                    imported += 1;
+                                    tracks.push(crate::dto::ImportedTrackDto { id, title });
+                                }
+                                rbl_db::write::ImportOutcome::Refused(reason) => {
+                                    skipped.push(rbl_db::write::skipped_file(file, &reason));
+                                }
+                            }
                         }
-                        rbl_db::write::ImportOutcome::Added(id) => {
-                            imported += 1;
-                            tracks.push(crate::dto::ImportedTrackDto { id, title });
-                        }
-                        rbl_db::write::ImportOutcome::Refused(reason) => {
-                            skipped.push(rbl_db::write::skipped_file(file, &reason));
-                        }
-                    }
-                }
-                Ok(ImportReportDto { recording_warning: None, imported, skipped, tracks, existing })
-            })
-            .map_err(write_error)
-        }, |report| report.tracks.iter().map(|track|serde_json::json!({"track":track.id,"title":track.title})).collect());
+                        Ok(ImportReportDto {
+                            recording_warning: None,
+                            imported,
+                            skipped,
+                            tracks,
+                            existing,
+                        })
+                    })
+                    .map_err(write_error)
+            },
+            |report| {
+                report
+                    .tracks
+                    .iter()
+                    .map(|track| serde_json::json!({"track":track.id,"title":track.title}))
+                    .collect()
+            },
+        );
         let (mut report, warning) = recording.finish(result)?;
         report.recording_warning = warning;
         if report.imported > 0 {
