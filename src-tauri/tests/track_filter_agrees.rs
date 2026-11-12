@@ -105,13 +105,19 @@ fn hosting_window() -> Window {
     }
     for index in 0..TRACKS {
         let id = track_id(index);
-        writer.set_bpm_x100(&id, 12_000 + 25 * index as u32).unwrap();
-        writer.set_field(&id, TrackField::Key, key_of(index)).unwrap();
+        writer
+            .set_bpm_x100(&id, 12_000 + 25 * index as u32)
+            .unwrap();
+        writer
+            .set_field(&id, TrackField::Key, key_of(index))
+            .unwrap();
         writer.set_rating(&id, (index / 2 % 6) as u8).unwrap();
         let colour = (index % 9 != 0).then(|| (index % 9).to_string());
         writer.set_color(&id, colour.as_deref()).unwrap();
         if index % 3 == 1 {
-            writer.set_field(&id, TrackField::Genre, "Deep House").unwrap();
+            writer
+                .set_field(&id, TrackField::Genre, "Deep House")
+                .unwrap();
         }
         let tags: Vec<String> = [
             (index % 2 == 0, &peak),
@@ -196,10 +202,8 @@ impl Window {
 #[test]
 fn every_case_lists_exactly_the_expected_tracks_in_the_window_and_the_service() {
     let window = hosting_window();
-    let file: Value = serde_json::from_str(include_str!(
-        "../../src/lib/shellTrackFilter.cases.json"
-    ))
-    .unwrap();
+    let file: Value =
+        serde_json::from_str(include_str!("../../src/lib/shellTrackFilter.cases.json")).unwrap();
 
     let everything = window.listed(json!({
         "source": { "kind": "collection" }, "sort": "trackNo", "descending": false, "query": ""

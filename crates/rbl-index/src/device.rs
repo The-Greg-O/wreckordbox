@@ -277,7 +277,7 @@ mod tests {
 
 /// The view shell's Track Filter over a Stick's rows (wbx-57): the fields a
 /// Stick's library carries. Every column given must agree; `None` is no
-/// constraint. MyTags are not here: the Stick's library as read carries none.
+/// constraint. Its `MyTags` are not here: the Stick's library as read carries none.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DeviceFilter {
     /// Key identities, as [`crate::Library::key_ids_identified`] reads them.
@@ -326,7 +326,7 @@ impl DeviceFilter {
 }
 
 /// What a Stick list offers the bar: its keys as stored, in wheel order, and
-/// its whole BPMs, from its own rows. No MyTag categories: the Stick's
+/// its whole BPMs, from its own rows. No `MyTag` categories: the Stick's
 /// library as read carries none.
 #[must_use]
 pub fn device_filter_values(rows: &[DeviceRow]) -> crate::FilterValues {

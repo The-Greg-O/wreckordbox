@@ -132,12 +132,11 @@ fn energy_range(text: &str) -> Result<(u8, u8), ServiceError> {
             .filter(|n| *n <= 5)
             .ok_or_else(refuse)
     };
-    match text.trim().split_once("..") {
-        Some((low, high)) => Ok((end(low, 1)?, end(high, 5)?)),
-        None => {
-            let one = end(text, 0)?;
-            Ok((one, one))
-        }
+    if let Some((low, high)) = text.trim().split_once("..") {
+        Ok((end(low, 1)?, end(high, 5)?))
+    } else {
+        let one = end(text, 0)?;
+        Ok((one, one))
     }
 }
 

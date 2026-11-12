@@ -244,7 +244,7 @@ fn a_category_and_tag_with_colons_in_their_names_round_trip() {
     let dark = sandbox.create_my_tag_in(&mood, "Dark: very");
     sandbox.edit(|writer| {
         writer
-            .set_my_tags(&fixture::track_id(7), &[dark.clone()])
+            .set_my_tags(&fixture::track_id(7), std::slice::from_ref(&dark))
             .unwrap();
     });
 

@@ -1137,7 +1137,7 @@ pub async fn open_view(state: &State<'_, Arc<AppState>>, path: String, format: S
 }
 
 /// The Track Filter as a Stick's rows can answer it (wbx-57): key, Energy,
-/// Prep colour and BPM. A Stick's library as read carries no MyTags, so tag
+/// Prep colour and BPM. A Stick's library as read carries no tags of the DJ's, so tag
 /// picks are not applied here; the bar says so on a Stick playlist.
 fn device_filter(dto: &crate::dto::TrackFilterDto) -> rbl_index::device::DeviceFilter {
     let keys = match (&dto.keys, &dto.key_identities) {
