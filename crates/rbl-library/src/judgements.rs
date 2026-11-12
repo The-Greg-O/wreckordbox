@@ -31,7 +31,9 @@ impl Judgements {
     /// Nothing would change.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.changes.iter().all(|change| change.before == change.after)
+        self.changes
+            .iter()
+            .all(|change| change.before == change.after)
     }
 
     /// The tracks it names, each once.

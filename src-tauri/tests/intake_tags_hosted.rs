@@ -41,14 +41,6 @@ impl Window {
         tauri::async_runtime::block_on(service_host::set_library_protection(state, on)).unwrap();
     }
 
-    fn sidecar_dir(&self) -> std::path::PathBuf {
-        self.location
-            .master_db
-            .parent()
-            .unwrap()
-            .join("wreckordbox-sidecar")
-    }
-
     /// The window's own My Tag tick, as the panel sends it.
     fn put(&self, track: &str, tag: &str, on: bool) -> Result<(), String> {
         tauri::async_runtime::block_on(details::put_my_tag(
@@ -127,7 +119,9 @@ fn a_deck_tag_toggled_from_the_panel_is_one_undoable_mytag_edit_refused_under_pr
 
     // Library Protection on: refused, and the track carries nothing.
     window.protect(true);
-    let (refused, _) = window.click(&track, &situation, &[MY_TAG_PEAK]).unwrap_err();
+    let (refused, _) = window
+        .click(&track, &situation, &[MY_TAG_PEAK])
+        .unwrap_err();
     assert!(refused.contains("Library Protection"), "{refused}");
     assert_eq!(window.set(&track)[&situation], json!([]));
     window.protect(false);
@@ -135,7 +129,9 @@ fn a_deck_tag_toggled_from_the_panel_is_one_undoable_mytag_edit_refused_under_pr
     window.click(&track, &situation, &[MY_TAG_PEAK]).unwrap();
     assert_eq!(window.set(&track)[&situation], json!([MY_TAG_PEAK]));
     // The window's own MyTag edit still works beside it.
-    window.put(&track, rbl_db::fixture::MY_TAG_WARM_UP, true).unwrap();
+    window
+        .put(&track, rbl_db::fixture::MY_TAG_WARM_UP, true)
+        .unwrap();
 
     // Undo, Undo: the window's tick, then the panel's.
     window.undo();
@@ -169,12 +165,28 @@ categories = [{ dimension = "situation", label = "Situation" }]
 
 impl Window {
     /// The panel's click: `dimension` set to `terms` from the panel as shown.
-    fn click(&self, track: &str, dimension: &str, terms: &[&str]) -> Result<Value, (String, String)> {
+    fn click(
+        &self,
+        track: &str,
+        dimension: &str,
+        terms: &[&str],
+    ) -> Result<Value, (String, String)> {
         let panel = intake_tags::tag_panel(&self.state(), Some(track)).unwrap();
-        let version = panel["track"]["versions"][dimension].as_str().unwrap().to_owned();
+        let version = panel["track"]["versions"][dimension]
+            .as_str()
+            .unwrap()
+            .to_owned();
         let terms: Vec<String> = terms.iter().map(|t| (*t).to_owned()).collect();
-        intake_tags::set_tags(&self.state(), track, dimension, &terms, &version, &[], false)
-            .map_err(|e| (e.message, e.detail.unwrap_or_default()))
+        intake_tags::set_tags(
+            &self.state(),
+            track,
+            dimension,
+            &terms,
+            &version,
+            &[],
+            false,
+        )
+        .map_err(|e| (e.message, e.detail.unwrap_or_default()))
     }
 
     fn redo(&self) {
@@ -239,11 +251,17 @@ fn undo_takes_back_the_djs_last_action_whichever_store_it_touched() {
     assert_eq!(window.energy(&track), json!(4), "rated");
     window.click(&track, "genre", &["house-deep"]).unwrap();
     assert_eq!(window.energy(&track), json!(4), "after the click");
-    assert_eq!(window.djs(&track, "genre").unwrap()["value"], json!(["house-deep"]));
+    assert_eq!(
+        window.djs(&track, "genre").unwrap()["value"],
+        json!(["house-deep"])
+    );
 
     // Undo: the tag click, not the Energy.
     window.undo();
-    assert!(window.djs(&track, "genre").is_none(), "the Fact is withdrawn");
+    assert!(
+        window.djs(&track, "genre").is_none(),
+        "the Fact is withdrawn"
+    );
     assert_eq!(window.set(&track)["genre"], json!([]));
     assert_eq!(window.energy(&track), json!(4));
 
@@ -297,24 +315,42 @@ fn a_click_is_refused_under_library_protection_and_from_a_stale_panel() {
     assert!(window.djs(&track, "genre").is_none());
 
     let panel = intake_tags::tag_panel(&window.state(), Some(&track)).unwrap();
-    let old = panel["track"]["versions"]["genre"].as_str().unwrap().to_owned();
+    let old = panel["track"]["versions"]["genre"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     window.click(&track, "genre", &["techno"]).unwrap();
-    let error = intake_tags::set_tags(&window.state(), &track, "genre", &["house".to_owned()], &old, &[], false)
-        .unwrap_err();
+    let error = intake_tags::set_tags(
+        &window.state(),
+        &track,
+        "genre",
+        &["house".to_owned()],
+        &old,
+        &[],
+        false,
+    )
+    .unwrap_err();
     assert_eq!(error.detail.as_deref(), Some("tag_panel_stale"));
-    assert_eq!(window.djs(&track, "genre").unwrap()["value"], json!(["techno"]));
+    assert_eq!(
+        window.djs(&track, "genre").unwrap()["value"],
+        json!(["techno"])
+    );
 }
 
 #[test]
 fn a_tag_click_tells_every_client_of_the_service() {
     let window = hosting_window(Some(SCHEMA));
-    let events = window.state().with_service(|service| service.events()).unwrap();
+    let events = window
+        .state()
+        .with_service(|service| service.events())
+        .unwrap();
 
     window.click(&track_id(0), "genre", &["techno"]).unwrap();
 
-    let heard: Vec<String> = std::iter::from_fn(|| events.recv_timeout(std::time::Duration::from_secs(2)).ok())
-        .map(|event| event.event)
-        .take(2)
-        .collect();
+    let heard: Vec<String> =
+        std::iter::from_fn(|| events.recv_timeout(std::time::Duration::from_secs(2)).ok())
+            .map(|event| event.event)
+            .take(2)
+            .collect();
     assert!(heard.contains(&"sidecar_changed".to_owned()), "{heard:?}");
 }

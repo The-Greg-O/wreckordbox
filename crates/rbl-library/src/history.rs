@@ -193,9 +193,9 @@ impl LibraryEdit {
             | Self::MyTagOrder(_)
             // Every playlist of a replacement is checked in the one transaction
             // that writes them.
-            | Self::ReplacePlaylistContents(_) => Ok(()),
+            | Self::ReplacePlaylistContents(_)
             // Nothing of the Library's to find changed.
-            Self::Judgements(_) => Ok(()),
+            | Self::Judgements(_) => Ok(()),
             // One transaction, but the pad check reads rows the entry does not
             // name, so it is done here as well as in the writer (#504).
             Self::Cues(revision) => match writer.cue_revision_conflict(revision, undo)? {

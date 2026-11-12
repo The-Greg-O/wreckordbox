@@ -466,7 +466,10 @@ fn a_deck_tree_with_tag_parents_writes_the_parents_mytags_and_narrows_on_the_par
     assert_eq!(hosted.djs("10000", "genre"), json!(["house"]));
     // A tag and its own ancestor is the tag alone.
     hosted.set("10000", "genre", &["house", "house-acid"]);
-    assert_eq!(hosted.panel("10000")["track"]["set"]["genre"], json!(["house-acid"]));
+    assert_eq!(
+        hosted.panel("10000")["track"]["set"]["genre"],
+        json!(["house-acid"])
+    );
 }
 
 #[test]
@@ -479,7 +482,10 @@ fn a_deck_tree_without_tag_parents_writes_only_the_childs_mytag() {
 
     hosted.set("10000", "genre", &["house-deep"]);
     assert_eq!(hosted.my_tags("10000"), ["800002"]);
-    assert_eq!(hosted.panel("10000")["track"]["set"]["genre"], json!(["house-deep"]));
+    assert_eq!(
+        hosted.panel("10000")["track"]["set"]["genre"],
+        json!(["house-deep"])
+    );
     assert_eq!(hosted.djs("10000", "genre"), json!(["house-deep"]));
 
     hosted.set("10000", "genre", &["house"]);
@@ -537,20 +543,30 @@ fn a_click_from_a_stale_panel_or_an_unknown_tag_is_refused_and_changes_nothing()
         ),
     )
     .unwrap();
-    let stale = hosted.try_set(json!({ "id": "10000", "dimension": "mood", "terms": ["dark"], "version": old }));
+    let stale = hosted
+        .try_set(json!({ "id": "10000", "dimension": "mood", "terms": ["dark"], "version": old }));
     assert_eq!(stale.code, "tag_panel_stale");
     assert_eq!(hosted.djs("10000", "mood"), Value::Null);
     let panel = hosted.panel("10000");
-    let mood = panel["dimensions"].as_array().unwrap().iter().find(|d| d["id"] == "mood").unwrap();
+    let mood = panel["dimensions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["id"] == "mood")
+        .unwrap();
     assert_eq!(mood["edit"], "my_tag");
 
     // A tag the dimension does not have.
     let version = hosted.panel("10000")["track"]["versions"]["genre"].clone();
-    let unknown = hosted.try_set(json!({ "id": "10000", "dimension": "genre", "terms": ["polka"], "version": version }));
+    let unknown = hosted.try_set(
+        json!({ "id": "10000", "dimension": "genre", "terms": ["polka"], "version": version }),
+    );
     assert_eq!(unknown.code, "tag_not_in_dimension");
     // A deck tag with no MyTag in the Library yet (Mood is not projected).
     let version = hosted.panel("10000")["track"]["versions"]["mood"].clone();
-    let not_on_deck = hosted.try_set(json!({ "id": "10000", "dimension": "mood", "terms": ["dark"], "version": version }));
+    let not_on_deck = hosted.try_set(
+        json!({ "id": "10000", "dimension": "mood", "terms": ["dark"], "version": version }),
+    );
     assert_eq!(not_on_deck.code, "tag_not_settable");
     assert_eq!(hosted.my_tags("10000"), Vec::<String>::new());
 }
@@ -576,8 +592,14 @@ fn values_no_tag_stands_for_are_shown_and_kept_unless_dropped() {
     std::fs::write(hosted.sidecar.join("tag-schema.toml"), schema).unwrap();
 
     let panel = hosted.panel("10000");
-    assert_eq!(panel["track"]["unmapped"]["genre"], json!([{ "id": "800005", "name": "Breaks" }]));
-    assert_eq!(panel["track"]["unmapped"]["mood"], json!([{ "id": "dark", "name": "dark" }]));
+    assert_eq!(
+        panel["track"]["unmapped"]["genre"],
+        json!([{ "id": "800005", "name": "Breaks" }])
+    );
+    assert_eq!(
+        panel["track"]["unmapped"]["mood"],
+        json!([{ "id": "dark", "name": "dark" }])
+    );
 
     // A replacement keeps them.
     hosted.set("10000", "genre", &["techno"]);
@@ -633,7 +655,10 @@ fn the_queue_asks_for_tags_in_the_dimensions_the_panel_offers_as_deck_facing() {
     ));
     fixture.edit(|writer| {
         writer
-            .set_my_tags(&fixture::track_id(0), &[fixture::MY_TAG_PEAK.to_owned(), "800004".to_owned()])
+            .set_my_tags(
+                &fixture::track_id(0),
+                &[fixture::MY_TAG_PEAK.to_owned(), "800004".to_owned()],
+            )
             .unwrap();
     });
     let hosted = start_with(fixture);
@@ -697,7 +722,9 @@ fn reading_the_djs_facts_from_a_cold_sidecar_changes_no_byte_of_it() {
     // the read must not.
     let before = bytes(&sidecar);
 
-    let panel = second.call("intake.tag_panel", json!({ "id": "10000" })).unwrap();
+    let panel = second
+        .call("intake.tag_panel", json!({ "id": "10000" }))
+        .unwrap();
 
     assert_eq!(panel["track"]["set"]["genre"], json!(["techno"]));
     assert_eq!(panel["track"]["facts_unavailable"], Value::Null);

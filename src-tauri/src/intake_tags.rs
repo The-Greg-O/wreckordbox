@@ -4,7 +4,7 @@
 //! service's (`intake.tag_panel`, `intake.set_tags`): the service checks a
 //! click against the Tag schema as it is now and makes it ONE entry of the
 //! edit history this window shares with it, whether it changed the track's
-//! MyTags or only the DJ's Fact of a dimension that does not reach the
+//! `MyTags` or only the DJ's Fact of a dimension that does not reach the
 //! deck. So the window's Undo takes back the DJ's last action whichever
 //! store it touched, and Library Protection refuses every click.
 

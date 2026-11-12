@@ -209,10 +209,8 @@ pub fn run(
             } else {
                 let mut text = tags_text(&set["panel"]);
                 for reason in set["facts_not_recorded"].as_array().into_iter().flatten() {
-                    text.push_str(&format!(
-                        "\nNot recorded as the DJ's Fact: {}",
-                        reason.as_str().unwrap_or_default()
-                    ));
+                    text.push_str("\nNot recorded as the DJ's Fact: ");
+                    text.push_str(reason.as_str().unwrap_or_default());
                 }
                 text
             })
@@ -284,7 +282,11 @@ fn tags_text(panel: &Value) -> String {
             .collect();
         let mut line = format!(
             "{}{}: {}",
-            if dimension["deck"] == true { "◆ " } else { "  " },
+            if dimension["deck"] == true {
+                "◆ "
+            } else {
+                "  "
+            },
             dimension["label"].as_str().unwrap_or_default(),
             shown.join(", ")
         );
@@ -295,7 +297,8 @@ fn tags_text(panel: &Value) -> String {
             .filter_map(|value| value["name"].as_str())
             .collect();
         if !unmapped.is_empty() {
-            line.push_str(&format!("  unmapped: {}", unmapped.join(", ")));
+            line.push_str("  unmapped: ");
+            line.push_str(&unmapped.join(", "));
         }
         lines.push(line);
     }

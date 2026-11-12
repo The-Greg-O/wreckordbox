@@ -74,7 +74,18 @@ fn intake_tags_shows_the_panel_and_intake_tag_sets_a_deck_dimension_heard_by_ano
     let track = track_id(0);
     let mut watcher = watcher(&sandbox);
 
-    let set = ok(&sandbox, &["intake", "tag", &track, "situation", "peak", "--source", "dj"]);
+    let set = ok(
+        &sandbox,
+        &[
+            "intake",
+            "tag",
+            &track,
+            "situation",
+            "peak",
+            "--source",
+            "dj",
+        ],
+    );
 
     assert_eq!(set["changed"], true);
     assert_eq!(set["panel"]["track"]["set"]["situation"], json!(["peak"]));
@@ -92,7 +103,11 @@ fn intake_tags_shows_the_panel_and_intake_tag_sets_a_deck_dimension_heard_by_ano
     // The MyTag is on the track as `mytags` reads it.
     let text = sandbox.cli(&["intake", "tags", &track]);
     assert!(text.status.success(), "{}", text.stderr);
-    assert!(text.stdout.contains("◆ Situation: [Peak], Warm-up"), "{}", text.stdout);
+    assert!(
+        text.stdout.contains("◆ Situation: [Peak], Warm-up"),
+        "{}",
+        text.stdout
+    );
 }
 
 #[test]
@@ -100,7 +115,18 @@ fn intake_tag_sets_a_vocabulary_dimension_as_the_djs_fact_and_shows_implied_pare
     let sandbox = with_schema();
     let track = track_id(1);
 
-    ok(&sandbox, &["intake", "tag", &track, "genre", "house-deep", "--source", "dj"]);
+    ok(
+        &sandbox,
+        &[
+            "intake",
+            "tag",
+            &track,
+            "genre",
+            "house-deep",
+            "--source",
+            "dj",
+        ],
+    );
 
     let facts = ok(&sandbox, &["facts", "show", &track]);
     let genre: Vec<&Value> = facts["facts"]
@@ -122,14 +148,19 @@ fn intake_tag_is_refused_under_library_protection_and_for_a_tag_the_dimension_la
     let track = track_id(2);
 
     sandbox.protect(true);
-    let refused = sandbox.cli(&["--json", "intake", "tag", &track, "genre", "techno", "--source", "dj"]);
+    let refused = sandbox.cli(&[
+        "--json", "intake", "tag", &track, "genre", "techno", "--source", "dj",
+    ]);
     assert!(!refused.status.success());
     assert_eq!(refused.error_json()["error"]["code"], "library_protected");
     sandbox.protect(false);
 
     let unknown = sandbox.cli(&["--json", "intake", "tag", &track, "genre", "polka"]);
     assert!(!unknown.status.success());
-    assert_eq!(unknown.error_json()["error"]["code"], "tag_not_in_dimension");
+    assert_eq!(
+        unknown.error_json()["error"]["code"],
+        "tag_not_in_dimension"
+    );
     let panel = ok(&sandbox, &["intake", "tags", &track]);
     assert_eq!(panel["track"]["set"]["genre"], json!([]));
 }

@@ -114,6 +114,10 @@ pub struct TagPanel {
 
 /// One dimension of the panel.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "the wire's own description: each is a separate fact about the dimension"
+)]
 pub struct PanelDimension {
     /// The dimension's name in the Tag schema (the kind of its Facts), or
     /// the MyTag category's identifier.
@@ -250,7 +254,10 @@ pub(crate) fn answer(
             )
         })?
     };
-    Ok((to_value(&tag_panel(library, stems, of.id.as_deref())?)?, None))
+    Ok((
+        to_value(&tag_panel(library, stems, of.id.as_deref())?)?,
+        None,
+    ))
 }
 
 fn to_value<T: Serialize>(value: &T) -> Result<Value, ServiceError> {
@@ -443,11 +450,7 @@ fn track_tags(
                 .collect();
             let mut raw: Vec<&str> = in_category.iter().map(|row| row.id.as_str()).collect();
             raw.sort_unstable();
-            (
-                most_specific(dimension, &mapped),
-                unmapped,
-                raw.join(","),
-            )
+            (most_specific(dimension, &mapped), unmapped, raw.join(","))
         } else {
             let held = facts.get(&dimension.id);
             let values = held.map(|(_, value)| term_ids(value)).unwrap_or_default();
@@ -769,7 +772,9 @@ fn set_tags(
         .as_ref()
         .is_some_and(|version| now.versions.get(&dimension.id) != Some(version))
     {
-        return Err(stale("the Tag schema or the track's tags are not what the panel showed"));
+        return Err(stale(
+            "the Tag schema or the track's tags are not what the panel showed",
+        ));
     }
     if dimension.edit == EDIT_FACT {
         if let Some(why) = &now.facts_unavailable {
@@ -825,49 +830,23 @@ fn set_tags(
         ));
     }
     let changed = if dimension.edit == EDIT_MY_TAG {
-        set_my_tags(library, dimension, &set.id, &selection, &set.drop_unmapped, set.comments)?
+        set_my_tags(
+            library,
+            dimension,
+            &set.id,
+            &selection,
+            &set.drop_unmapped,
+            set.comments,
+        )?
     } else {
-        // A single value no tag stands for would be replaced: only when
-        // the DJ said so.
-        if dimension.single && !kept_unmapped.is_empty() && !selection.is_empty() {
-            return Err(refused(
-                tag_codes::TAG_NOT_SETTABLE,
-                format!(
-                    "{} holds {}, which no tag stands for; take it off first",
-                    dimension.label,
-                    kept_unmapped.join(", ")
-                ),
-            ));
-        }
-        let before = djs_facts(stems, &set.id, &[dimension.id.as_str()])
-            .map_err(|why| refused(codes::SERVICE_FAILED, why))?
-            .remove(&dimension.id)
-            .map_or(Value::Null, |(_, value)| value);
-        let after = if dimension.single {
-            match (selection.first(), kept_unmapped.first()) {
-                (Some(term), _) => json!(term),
-                (None, Some(kept)) => json!(kept),
-                (None, None) => Value::Null,
-            }
-        } else {
-            let mut terms = selection.clone();
-            terms.extend(kept_unmapped.iter().cloned());
-            json!(terms)
-        };
-        let judgements = Judgements {
-            changes: vec![JudgementChange {
-                track: set.id.clone(),
-                kind: dimension.id.clone(),
-                before: before.to_string(),
-                after: after.to_string(),
-            }],
-        };
-        let ((), changed) = library.recorded_edit(
-            Touched::Metadata(Vec::new()),
-            TRACK_EDIT,
-            move |_writer| Ok(((), LibraryEdit::Judgements(judgements))),
-        )?;
-        changed
+        set_fact(
+            library,
+            stems,
+            dimension,
+            &set.id,
+            &selection,
+            &kept_unmapped,
+        )?
     };
     // What the Ledger could not record, said; then the panel as it is now.
     let facts_not_recorded = not_recorded(library, stems, &set.id, &dimension.id);
@@ -914,6 +893,58 @@ fn set_tags(
         },
         Some(changed),
     ))
+}
+
+/// Writes a dimension that does not reach the deck as the DJ's Fact: one
+/// [`LibraryEdit::Judgements`] step, whose Fact the Ledger records.
+fn set_fact(
+    library: &OpenLibrary,
+    stems: &Stems,
+    dimension: &PanelDimension,
+    track: &str,
+    selection: &[String],
+    kept_unmapped: &[String],
+) -> Result<LibraryChanged, ServiceError> {
+    // A single value no tag stands for would be replaced: only when
+    // the DJ said so.
+    if dimension.single && !kept_unmapped.is_empty() && !selection.is_empty() {
+        return Err(refused(
+            tag_codes::TAG_NOT_SETTABLE,
+            format!(
+                "{} holds {}, which no tag stands for; take it off first",
+                dimension.label,
+                kept_unmapped.join(", ")
+            ),
+        ));
+    }
+    let before = djs_facts(stems, track, &[dimension.id.as_str()])
+        .map_err(|why| refused(codes::SERVICE_FAILED, why))?
+        .remove(&dimension.id)
+        .map_or(Value::Null, |(_, value)| value);
+    let after = if dimension.single {
+        match (selection.first(), kept_unmapped.first()) {
+            (Some(term), _) => json!(term),
+            (None, Some(kept)) => json!(kept),
+            (None, None) => Value::Null,
+        }
+    } else {
+        let mut terms = selection.to_vec();
+        terms.extend(kept_unmapped.iter().cloned());
+        json!(terms)
+    };
+    let judgements = Judgements {
+        changes: vec![JudgementChange {
+            track: track.to_owned(),
+            kind: dimension.id.clone(),
+            before: before.to_string(),
+            after: after.to_string(),
+        }],
+    };
+    let ((), changed) =
+        library.recorded_edit(Touched::Metadata(Vec::new()), TRACK_EDIT, move |_writer| {
+            Ok(((), LibraryEdit::Judgements(judgements)))
+        })?;
+    Ok(changed)
 }
 
 /// Writes a deck-facing dimension's selection as the track's MyTags: the
@@ -1012,9 +1043,15 @@ fn not_recorded(library: &OpenLibrary, stems: &Stems, track: &str, kind: &str) -
                 .filter(|omission| {
                     let on = omission["track"].as_str().unwrap_or_default();
                     let of = omission["kind"].as_str().unwrap_or_default();
-                    (on.is_empty() || on == track) && (of == kind || of == "mytags" || of.is_empty())
+                    (on.is_empty() || on == track)
+                        && (of == kind || of == "mytags" || of.is_empty())
                 })
-                .map(|omission| omission["reason"].as_str().unwrap_or("not recorded").to_owned())
+                .map(|omission| {
+                    omission["reason"]
+                        .as_str()
+                        .unwrap_or("not recorded")
+                        .to_owned()
+                })
                 .collect()
         })
         .unwrap_or_default()
