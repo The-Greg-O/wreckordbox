@@ -70,14 +70,17 @@ pub fn read_error(mount: &Path, error: ReadError) -> AppError {
 /// the DJ chose in the Stick's panel.
 #[tauri::command]
 pub async fn stick_settle(
+    state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
     path: String,
     // The DJ's approval of this exact write (`stick_write_plan`, wbx-45.4).
     approval: Option<String>,
 ) -> AppResult<()> {
+    let state = std::sync::Arc::clone(&state);
     blocking("stick_settle", move || {
         let mount = PathBuf::from(path);
-        let _lock = crate::stick_approval::lock(&mount);
-        let _approved = crate::stick_approval::consume(
+        // Settling writes to the Stick: Stick Protection first (wbx-45.11).
+        let _access = crate::stick_guard::enter_stick(state.backup_dir(), &mount)?;
+        crate::stick_approval::consume(
             approval.as_deref(),
             &crate::stick_approval::StickOperation::Settle,
             &mount,
@@ -388,13 +391,11 @@ mod tests {
             }
 
             // The DJ's approval, as the staged write gets it from the plan (wbx-45.4).
-            let approval = crate::stick_approval::issue(
-                mount,
-                vec![crate::stick_approval::Grant::Exact(crate::stick_approval::StickOperation::Settle)],
-                None,
-            )
-            .ok();
-            run(stick_settle(mount.to_string_lossy().into_owned(), approval)).unwrap();
+            let state = crate::state::AppState::unprotected(dest.path().with_extension("state"));
+            crate::stick_guard::testing::unlock(&state, mount);
+            let app = crate::stick_guard::testing::app(state);
+            let approval = crate::stick_guard::testing::token(mount, crate::stick_approval::StickOperation::Settle);
+            run(stick_settle(tauri::Manager::state(&app), mount.to_string_lossy().into_owned(), approval)).unwrap();
 
             assert_eq!(std::fs::read(mount.join(PDB)).unwrap(), next.pdb);
             assert_eq!(std::fs::read(mount.join(ONE)).unwrap(), next.one);

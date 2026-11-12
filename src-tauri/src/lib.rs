@@ -22,7 +22,7 @@ pub mod cues;
 pub mod details;
 mod row_my_tags;
 pub mod grid;
-mod key_tag;
+pub mod key_tag;
 mod durable;
 mod backups;
 mod backup_copy;
@@ -37,12 +37,14 @@ pub mod device_library;
 mod stick_outline;
 pub mod stick_write_plan;
 pub mod stick_approval;
+pub mod stick_add_tracks;
+pub mod stick_guard;
 pub mod stick_recovery;
 mod link;
 mod rx3_link;
 mod network_labels;
 pub mod logging;
-mod log_window;
+pub mod log_window;
 pub mod menu;
 pub mod player;
 pub mod preview;
@@ -759,6 +761,12 @@ pub fn run() {
             device_library::device_libraries,
             stick_outline::stick_outline,
             stick_write_plan::stick_write_plan,
+            stick_write_plan::stick_write_approve,
+            stick_write_plan::stick_write_revoke,
+            stick_add_tracks::device_playlist_add_library_tracks,
+            stick_guard::stick_protection,
+            stick_guard::stick_unlock,
+            stick_guard::stick_lock,
             stick_recovery::stick_settle,
             device_library::device_playlist_edit,
             device_library::device_playlist_add_files,

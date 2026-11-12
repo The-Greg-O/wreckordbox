@@ -311,6 +311,13 @@ impl LibraryCore {
         (inner.read_only, inner.db_version, inner.load_ms, inner.generation)
     }
 
+    /// The loaded index and its generation, read together: what a write
+    /// that takes its contents from the Library checks and uses as one.
+    pub fn library_at_generation(&self) -> Result<(Arc<Library>, u32), NotLoaded> {
+        let inner = self.inner.read();
+        Ok((inner.library.clone().ok_or(NotLoaded)?, inner.generation))
+    }
+
     /// The generation the index is at.
     pub fn generation(&self) -> u32 {
         self.inner.read().generation

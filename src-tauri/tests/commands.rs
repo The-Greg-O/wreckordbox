@@ -4270,7 +4270,16 @@ fn a_cue_edit_after_an_undo_ends_the_redo_branch() {
 /// write to one Stick (wbx-45.4): every Stick-writing command needs one.
 fn approve(s: &Shell, stick: &Path, operation: serde_json::Value) -> Option<String> {
     let request = serde_json::from_value(serde_json::json!({ "destination": stick.to_string_lossy(), "operation": operation })).unwrap();
-    rbxport_lib::stick_write_plan::plan(s.state().inner(), &request).ok().and_then(|plan| plan.approval)
+    // A temporary folder standing in for a Stick, unlocked as the DJ would (wbx-45.11).
+    if stick.is_dir() {
+        std::fs::write(stick.join(wreckordbox_stick_protection::STAND_IN_MARKER), b"").unwrap();
+        let name = wreckordbox_stick_protection::name_of(&stick.canonicalize().unwrap());
+        wreckordbox_stick_protection::unlock(s.state().backup_dir(), stick, Some(&name)).unwrap();
+    }
+    rbxport_lib::stick_write_plan::plan(s.state().inner(), &request)
+        .ok()
+        .and_then(|plan| plan.plan)
+        .map(|plan| rbxport_lib::stick_approval::approve(&plan).unwrap())
 }
 
 /// A sync's approvals, one per Stick that is there to plan.

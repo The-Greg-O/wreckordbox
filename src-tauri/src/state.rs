@@ -504,6 +504,13 @@ impl AppState {
         self.core.library().map_err(not_loaded)
     }
 
+    /// The loaded index with its generation, read under one gate
+    /// (wbx-45.4): a Stick write checks its approval against exactly the
+    /// snapshot it writes from.
+    pub fn library_at_generation(&self) -> AppResult<(Arc<Library>, u64)> {
+        self.core.library_at_generation().map(|(l, g)| (l, u64::from(g))).map_err(not_loaded)
+    }
+
     /// Where analysis files live for the loaded library, or nowhere useful
     /// before it has loaded.
     pub fn share_root(&self) -> std::path::PathBuf {

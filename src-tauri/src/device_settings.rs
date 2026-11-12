@@ -329,12 +329,15 @@ pub async fn ensure_device_library(
     let state = std::sync::Arc::clone(&state);
     crate::commands::blocking("ensure_device_library", move || {
         let mount = Path::new(&path);
-        let _lock = crate::stick_approval::lock(mount);
-        let _approved = crate::stick_approval::consume(
+        let _access = crate::stick_guard::enter_stick(state.backup_dir(), mount)?;
+        let (_, generation) = state.library_at_generation()?;
+        crate::stick_approval::consume(
             approval.as_deref(),
-            &crate::stick_approval::StickOperation::EnsureLibrary,
+            &crate::stick_approval::StickOperation::EnsureLibrary {
+                defaults: crate::stick_approval::bound(defaults.as_ref()),
+            },
             mount,
-            0,
+            generation,
         )?;
         if !mount.is_dir() {
             return Err(AppError::new(
@@ -393,15 +396,17 @@ pub async fn device_settings(path: String) -> AppResult<DeviceSettingsDto> {
 /// Writes a stick's settings back, and returns what the stick now holds.
 #[tauri::command]
 pub async fn save_device_settings(
+    state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
     path: String,
     settings: DeviceSettingsDto,
     // The DJ's approval of this exact write (`stick_write_plan`, wbx-45.4).
     approval: Option<String>,
 ) -> AppResult<DeviceSettingsDto> {
+    let state = std::sync::Arc::clone(&state);
     crate::commands::blocking("save_device_settings", move || {
         let mount = Path::new(&path);
-        let _lock = crate::stick_approval::lock(mount);
-        let _approved = crate::stick_approval::consume(
+        let _access = crate::stick_guard::enter_stick(state.backup_dir(), mount)?;
+        crate::stick_approval::consume(
             approval.as_deref(),
             &crate::stick_approval::StickOperation::SaveSettings {
                 settings: serde_json::to_value(&settings).map_err(|e| AppError::new(ErrorKind::Internal, e.to_string()))?,

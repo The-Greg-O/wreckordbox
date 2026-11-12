@@ -4210,6 +4210,7 @@ dependencies = [
  "windows-sys 0.61.2",
  "wreckordbox-service",
  "wreckordbox-stick-outline",
+ "wreckordbox-stick-protection",
  "zip",
 ]
 
