@@ -28,19 +28,16 @@ use tauri::test::MockRuntime;
 use tauri::{Listener, Manager, State};
 use wreckordbox_service::{Client, Config};
 
-/// The `wreckordbox` binary of this build, built once if it is not there.
+/// The prebuilt CLI. Build it through the heavy queue before the shell tests.
 fn wreckordbox() -> &'static PathBuf {
     static BINARY: OnceLock<PathBuf> = OnceLock::new();
     BINARY.get_or_init(|| {
-        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        let built = Command::new(cargo)
-            .args(["build", "-p", "wreckordbox"])
-            .status()
-            .expect("run cargo");
-        assert!(built.success(), "could not build the wreckordbox command");
         let deps = std::env::current_exe().unwrap();
         let binary = deps.parent().unwrap().parent().unwrap().join("wreckordbox");
-        assert!(binary.is_file(), "no {}", binary.display());
+        assert!(
+            binary.is_file(),
+            "build the CLI first with the heavy queue: cargo build -p wreckordbox"
+        );
         binary
     })
 }
@@ -380,7 +377,10 @@ fn the_views_title_artist_energy_and_prep_colour_edits_are_the_djs_facts_and_und
 
     // Undo of Mark Clean withdraws its Fact and only that one.
     window.undo();
-    assert!(standing("prep_colour").is_null(), "the colour's Fact is withdrawn");
+    assert!(
+        standing("prep_colour").is_null(),
+        "the colour's Fact is withdrawn"
+    );
     assert_eq!(standing("energy")["value"], 4);
     assert_eq!(standing("title")["value"], "Fixed Title");
 }

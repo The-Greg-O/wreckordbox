@@ -49,7 +49,8 @@ export interface MockIntakeSource {
 /**
  * The mock's colour labels as a DJ names them (wbx-63): Clean is Green
  * and Problem is Red, as above; Pink, Orange and Blue are renamed too, the
- * rest keep their colour's name. `?noProblemColour` leaves Red as "Red".
+ * rest keep their colour's name. `?noProblemColour` leaves Red as "Red";
+ * `?noCleanColour` leaves Green as "Green", so there is no Clean to mark.
  */
 const COLOUR_NAMES = ["Pink", "Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple"] as const;
 const DJ_LABELS: Partial<Record<number, string>> = { 1: "Sample", 2: "Problem", 3: "Buy", 5: "Clean", 7: "Delete" };
@@ -90,6 +91,7 @@ export function createMockIntake(source: MockIntakeSource) {
   };
   const url = readUrl();
   const problemNamed = !url.has("noProblemColour");
+  const cleanNamed = !url.has("noCleanColour");
   if (url.get("intake") === "empty") {
     source.colors.forEach((colour, at) => { if (colour === 0) source.colors[at] = MOCK_CLEAN_COLOUR; });
   }
@@ -147,12 +149,12 @@ export function createMockIntake(source: MockIntakeSource) {
 
   const labels: PrepColour[] = COLOUR_NAMES.map((colour, at) => {
     const id = at + 1;
-    const named = id === MOCK_PROBLEM_COLOUR && !problemNamed ? undefined : DJ_LABELS[id];
+    const named = (id === MOCK_PROBLEM_COLOUR && !problemNamed) || (id === MOCK_CLEAN_COLOUR && !cleanNamed) ? undefined : DJ_LABELS[id];
     return { id, colour, label: named ?? colour };
   });
   const intakeColours = (): Promise<IntakeColours> => source.wait({
     labels: labels.map((label) => ({ ...label })),
-    clean: { ...labels[MOCK_CLEAN_COLOUR - 1]! },
+    clean: cleanNamed ? { ...labels[MOCK_CLEAN_COLOUR - 1]! } : null,
     problem: problemNamed ? { ...labels[MOCK_PROBLEM_COLOUR - 1]! } : null,
   });
   /** Every Prep colour edit asked of the "service", in order: what a test checks really landed. */

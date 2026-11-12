@@ -300,7 +300,8 @@ export function ShellTree({
         {row.protection === undefined ? null : (
           <span className={styles.protection} data-stick-protection={row.protection}
             title={row.protection === "protected" ? t("Protected: nothing is written to it until it is unlocked") : t("Unlocked until it is ejected or removed")}>
-            {row.protection === "protected" ? t("Protected") : t("Unlocked")}
+            <StickLock open={row.protection !== "protected"} />
+            <span className={styles.protectionWord}>{row.protection === "protected" ? t("Protected") : t("Unlocked")}</span>
           </span>
         )}
         {act.end(row)}
@@ -364,5 +365,18 @@ export function ShellTree({
       </div>
       {act.menu}
     </div>
+  );
+}
+
+/**
+ * A padlock, shut or open, beside a Stick's protection word: what is left
+ * of it when a long Stick name needs the room the word took (wbx-45.15).
+ */
+function StickLock({ open }: { open: boolean }) {
+  return (
+    <svg className={styles.lock} viewBox="0 0 12 12" aria-hidden="true" focusable="false">
+      <rect x="2" y="5.5" width="8" height="5.5" rx="1" fill="currentColor" />
+      <path d={open ? "M4 5.5V3.5a2 2 0 0 1 4 0" : "M4 5.5V3.5a2 2 0 0 1 4 0v2"} fill="none" stroke="currentColor" strokeWidth="1.3" />
+    </svg>
   );
 }

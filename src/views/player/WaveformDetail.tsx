@@ -61,7 +61,9 @@ async function load(trackId: string, kind: WaveformKind): Promise<Uint8Array> {
     try {
       const backend = await getBackend();
       const data = await backend.trackWaveform(trackId, kind);
-      if (current()) bytesByTrack.set(key, data);
+      // Nothing yet is not kept: a track with no analysis is asked again
+      // when it is next shown, rather than staying blank until a reload.
+      if (current() && data.length > 0) bytesByTrack.set(key, data);
       return data;
     } catch {
       // A track without analysis simply stays blank.
@@ -121,6 +123,17 @@ function forget(trackId: string): void {
     }
   }
 }
+
+// A track's bytes go stale whenever its analysis is rewritten or drawn
+// further, whether or not a deck is showing it at that moment: a track that
+// left the deck mid-analysis would otherwise come back as far as it had got.
+// One subscription for the module; a mounted deck also refetches (below).
+void getBackend().then((backend) => {
+  backend.onAnalysisChanged(forget);
+  backend.onAnalysisProgress(forget);
+}).catch(() => {
+  // No backend, no analysis events: nothing is ever cached stale.
+});
 
 export const WaveformDetail = memo(function WaveformDetail({
   trackId, progress, span = 0.08, width, height, half = false, detail = false,
