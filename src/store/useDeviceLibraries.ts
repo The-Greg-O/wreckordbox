@@ -26,6 +26,8 @@ export interface DeviceLibraries {
   refresh: (path: string) => Promise<void>;
   /** Bumped after every edit, so a view of a stick's library opens again. */
   revision: number;
+  /** The paths of the sticks whose libraries have been read, whatever they held. */
+  readPaths: ReadonlySet<string>;
 }
 
 export function useDeviceLibraries(devices: readonly Device[]): DeviceLibraries {
@@ -95,5 +97,7 @@ export function useDeviceLibraries(devices: readonly Device[]): DeviceLibraries 
 
   const nodes = useMemo(() => withDeviceLibraries(deviceNodes(devices), loaded), [devices, loaded]);
 
-  return useMemo(() => ({ nodes, expand, edit, refresh, revision }), [nodes, expand, edit, refresh, revision]);
+  const readPaths = useMemo(() => new Set(loaded.keys()), [loaded]);
+
+  return useMemo(() => ({ nodes, expand, edit, refresh, revision, readPaths }), [nodes, expand, edit, refresh, revision, readPaths]);
 }

@@ -107,6 +107,12 @@ describe("the shell's tree", () => {
       "stick 0 GIGSTICK",
       "empty 0 No playlists",
     ]);
+    // A Stick read and found to hold no library at all (never written) says the same.
+    const blank = shellTreeRows({ nodes: [STICK_NODES[0] as TreeNode], readSticks: new Set([STICK]) });
+    expect(blank.slice(blank.findIndex((row) => row.kind === "stick")).map(line)).toEqual([
+      "stick 0 GIGSTICK",
+      "empty 0 No playlists",
+    ]);
   });
 
   it("sends Intake and Problems to the Intake view, a Stick to the Stick view and the rest to the Library view", () => {

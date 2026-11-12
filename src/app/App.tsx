@@ -67,6 +67,7 @@ import { MasterOutputProvider, MasterOutputConnection, useMasterControls, useMas
 import { asLayout, deckCount, isFullDeck, type PlayerLayout } from "@/lib/layout";
 import { DEFAULT_SHELL_VIEW, type ShellView } from "@/lib/shellViews";
 import { SHELL_PLAYER_LAYOUT, ViewShell } from "@/views/shell/ViewShell";
+import { useShellTree } from "@/views/shell/useShellTree";
 import { FIELD_LABEL } from "@/views/info/fieldLabel";
 import { SubBrowser } from "@/views/subbrowser/SubBrowser";
 import { RightRail } from "@/views/browser/RightRail";
@@ -3381,6 +3382,10 @@ function AppBody() {
           onDeviceImport={importFromDevice}
         />
   );
+  const shellTree = useShellTree({
+    library: tree, sticks: deviceLibraries.nodes, readSticks: deviceLibraries.readPaths, selectedNode, onSelectNode: setSelectedNode,
+    view: shellView, onViewChange: changeShellView, onReadStick: deviceLibraries.expand,
+  });
   const library = (
         selectedDevice ? (
           <Suspense fallback={null}><DevicePanel
@@ -3648,7 +3653,9 @@ function AppBody() {
           platform={platform}
           keyOverrides={keyOverrides}
           player={deckA}
-          tree={treeView}
+          tree={shellTree.tree}
+          intakeQueue={shellTree.intakeQueue}
+          stick={selectedDevice ? library : undefined}
           library={library}
           status={<>{linkStrip}{statusBar}</>}
         />

@@ -13,6 +13,7 @@
  * so the shape is tested without a backend. `ShellTree.tsx` draws the rows.
  */
 import type { TreeNode } from "@/ipc/types";
+import { devicePath } from "./devices";
 import type { ShellView } from "./shellViews";
 
 /** The two queues the Intake view shows: no Prep colour, and Prep colour Problem. */
@@ -109,12 +110,18 @@ function nested(
  * anything else in it (Histories, the Explorer, Related Tracks, the Tag
  * List) is not part of this tree and is passed over. Folders are open unless
  * their id is in `collapsed`: the open and closed state the Library's nodes
- * carry is the old tree's and is not read.
+ * carry is the old tree's and is not read. A Stick not yet read has no line
+ * under it; one read with no playlists says so.
  */
-export function shellTreeRows({ nodes, setPlans = [], collapsed = new Set() }: {
+export function shellTreeRows({ nodes, setPlans = [], collapsed = new Set(), readSticks = new Set() }: {
   nodes: readonly TreeNode[];
   setPlans?: readonly ShellSetPlan[];
   collapsed?: ReadonlySet<string>;
+  /**
+   * The paths of the Sticks whose libraries have been read, so one that
+   * holds none (never written) can be told from one not read yet.
+   */
+  readSticks?: ReadonlySet<string>;
 }): ShellTreeRow[] {
   const out: ShellTreeRow[] = [heading("library", "Library")];
 
@@ -163,7 +170,8 @@ export function shellTreeRows({ nodes, setPlans = [], collapsed = new Set() }: {
       if (libraries > 1) break;
       if (node.kind === "deviceFolder" || node.kind === "devicePlaylist") under.push(node);
     }
-    if (libraries === 0) continue;
+    const path = devicePath(device.id);
+    if (libraries === 0 && (path === null || !readSticks.has(path))) continue;
     if (under.length === 0) {
       out.push(empty(device.id, "No playlists"));
       continue;

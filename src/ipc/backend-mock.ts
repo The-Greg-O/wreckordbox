@@ -922,6 +922,15 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     },
   ];
 
+  // A stick pulled out behind the window's back, for a test: the next
+  // `listDevices` no longer reports it.
+  if (typeof window !== "undefined") {
+    (window as unknown as { __unmountDevice: (path: string) => void }).__unmountDevice = (path) => {
+      const index = devices.findIndex((device) => device.path === path);
+      if (index >= 0) devices.splice(index, 1);
+    };
+  }
+
   // What each stick's own libraries hold, for the Devices tree.
   const stickLibraries = createMockDeviceLibraries();
 
