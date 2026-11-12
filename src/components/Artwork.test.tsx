@@ -57,6 +57,25 @@ describe("Artwork", () => {
     expect(image()?.getAttribute("alt")).toBe("");
   });
 
+  it("asks with CORS where the Linux webview refuses a plain image", () => {
+    // #44: under `pnpm dev` the page is `http://localhost:1420`, and WebKitGTK
+    // 2.54.0 and 2.54.1 refuse a plain `<img>` from `rbl://` to it without
+    // ever asking the app. jsdom's page is `http:` as well.
+    const agent = vi.spyOn(window.navigator, "userAgent", "get");
+    try {
+      agent.mockReturnValue("Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/60.5 Safari/605.1.15");
+      mount("file:/run/media/dj/STICK/Contents/A B/x y.aiff");
+      expect(image()?.getAttribute("src")).toBe("rbl://localhost/artwork/file%3A%2Frun%2Fmedia%2Fdj%2FSTICK%2FContents%2FA%20B%2Fx%20y.aiff");
+      expect(image()?.getAttribute("crossorigin")).toBe("anonymous");
+
+      agent.mockReturnValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)");
+      mount("8");
+      expect(image()?.hasAttribute("crossorigin")).toBe(false);
+    } finally {
+      agent.mockRestore();
+    }
+  });
+
   it("shows it once it loads", () => {
     mount();
     act(() => {
