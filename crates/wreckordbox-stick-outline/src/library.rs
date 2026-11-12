@@ -296,7 +296,7 @@ fn onelibrary_stars(raw: i64) -> u8 {
 }
 
 fn read_one(path: &Path) -> Result<(Vec<Node>, Vec<Track>), ReadError> {
-    let db = rbl_onelibrary::ExportLibrary::open_read_only(path).map_err(unreadable)?;
+    let db = crate::one_library::OneLibraryRead::open(path).map_err(unreadable)?;
     let (rows, mut contents) =
         rbl_onelibrary::playlists::read(db.connection()).map_err(unreadable)?;
     let id = |v: i64| u32::try_from(v).unwrap_or(0);

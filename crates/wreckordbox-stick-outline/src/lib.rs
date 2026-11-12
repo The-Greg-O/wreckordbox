@@ -20,6 +20,7 @@
 //! ones the existing Stick view opens.
 
 mod library;
+pub mod one_library;
 #[cfg(feature = "testing")]
 pub mod testing;
 
@@ -191,7 +192,7 @@ fn read_pdb(path: &Path) -> Result<Vec<Raw>, String> {
 }
 
 fn read_one(path: &Path) -> Result<Vec<Raw>, String> {
-    let db = rbl_onelibrary::ExportLibrary::open_read_only(path).map_err(|e| e.to_string())?;
+    let db = crate::one_library::OneLibraryRead::open(path)?;
     let conn = db.connection();
     let mut counts: BTreeMap<i64, usize> = BTreeMap::new();
     let mut statement = conn

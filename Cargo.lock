@@ -7211,6 +7211,7 @@ dependencies = [
  "rbl-export",
  "rbl-onelibrary",
  "rbl-pdb",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",

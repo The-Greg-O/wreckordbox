@@ -147,3 +147,74 @@ pub fn snapshot(root: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
     }
     out
 }
+
+/// The name "Warm Up" takes in a WAL-mode fixture's committed write.
+pub const WAL_RENAMED: &str = "Warm Up (WAL)";
+
+/// Opens a copy of the Stick's `exportLibrary.db` for writing, keyed, in WAL
+/// mode with automatic checkpoints off, and renames "Warm Up" to
+/// [`WAL_RENAMED`] in a committed transaction. Returns the open connection
+/// and the folder it is in.
+fn wal_writer(root: &Path) -> (rusqlite::Connection, tempfile::TempDir, PathBuf) {
+    let work = tempfile::tempdir().unwrap();
+    let db = work.path().join("exportLibrary.db");
+    std::fs::copy(root.join(ONE), &db).unwrap();
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    crate::one_library::keyed(&conn).unwrap();
+    let mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0)).unwrap();
+    assert_eq!(mode, "wal");
+    conn.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
+    let changed = conn.execute("UPDATE playlist SET name = ?1 WHERE name = 'Warm Up'", [WAL_RENAMED]).unwrap();
+    assert_eq!(changed, 1);
+    (conn, work, db)
+}
+
+/// Leaves the Stick's `exportLibrary.db` in WAL mode with a committed write
+/// held only in its `-wal`, and no `-shm`: a Stick pulled out while rekordbox
+/// had it open. A correct read sees [`WAL_RENAMED`].
+pub fn wal_pending(root: &Path) {
+    let (conn, _work, db) = wal_writer(root);
+    let wal = PathBuf::from(format!("{}-wal", db.display()));
+    assert!(std::fs::metadata(&wal).unwrap().len() > 0, "the write is in the -wal");
+    std::fs::copy(&db, root.join(ONE)).unwrap();
+    std::fs::copy(&wal, root.join(format!("{ONE}-wal"))).unwrap();
+    drop(conn);
+}
+
+/// Leaves the Stick's `exportLibrary.db` in WAL mode, checkpointed and
+/// closed: the WAL flag in its header, no companion beside it. A correct
+/// read sees [`WAL_RENAMED`].
+pub fn wal_checkpointed(root: &Path) {
+    let (conn, _work, db) = wal_writer(root);
+    conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(())).unwrap();
+    drop(conn);
+    for suffix in ["-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{suffix}", db.display()));
+    }
+    std::fs::copy(&db, root.join(ONE)).unwrap();
+}
+
+/// What differs between two [`snapshot`]s: each path added, removed or
+/// changed, for an assertion message that names them.
+#[must_use]
+pub fn changes(before: &BTreeMap<PathBuf, Option<Vec<u8>>>, after: &BTreeMap<PathBuf, Option<Vec<u8>>>) -> Vec<String> {
+    let mut out = Vec::new();
+    for (path, bytes) in after {
+        match before.get(path) {
+            None => out.push(format!("added {}", path.display())),
+            Some(old) if old != bytes => out.push(format!("changed {}", path.display())),
+            Some(_) => {}
+        }
+    }
+    for path in before.keys().filter(|p| !after.contains_key(*p)) {
+        out.push(format!("removed {}", path.display()));
+    }
+    out
+}
+
+/// Asserts that the Stick at `root` is byte for byte as `before`, naming
+/// what changed otherwise.
+pub fn assert_unchanged(root: &Path, before: &BTreeMap<PathBuf, Option<Vec<u8>>>, what: &str) {
+    let found = changes(before, &snapshot(root));
+    assert!(found.is_empty(), "{what} changed the Stick: {found:?}");
+}
