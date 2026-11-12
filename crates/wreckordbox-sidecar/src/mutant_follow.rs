@@ -249,7 +249,9 @@ fn held(row: &rusqlite::Row) -> rusqlite::Result<(Held, String)> {
             entry: row.get(2)?,
             track: row.get(3)?,
             fingerprint: row.get(4)?,
-            edits: row.get::<_, Option<String>>(5)?.unwrap_or_else(|| "{}".to_owned()),
+            edits: row
+                .get::<_, Option<String>>(5)?
+                .unwrap_or_else(|| "{}".to_owned()),
         },
         row.get::<_, Option<String>>(6)?.unwrap_or_default(),
     ))
@@ -269,8 +271,9 @@ fn live_of(tx: &Transaction, entry: &str) -> Result<Option<Held>> {
 
 /// A playlist's Mutants, newest first, with each one's newest action.
 fn in_playlist(tx: &Transaction, playlist: &str) -> Result<Vec<(Held, String)>> {
-    let mut statement =
-        tx.prepare(&format!("{HELD} WHERE playlist_id = ?1 ORDER BY mutant.id DESC"))?;
+    let mut statement = tx.prepare(&format!(
+        "{HELD} WHERE playlist_id = ?1 ORDER BY mutant.id DESC"
+    ))?;
     let rows = statement
         .query_map([playlist], held)?
         .collect::<rusqlite::Result<Vec<_>>>()?;

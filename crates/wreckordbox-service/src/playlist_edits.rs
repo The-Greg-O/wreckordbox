@@ -186,7 +186,10 @@ struct Edits<'a> {
 }
 
 impl Edits<'_> {
-    fn remove(&self, remove: &RemoveTracks) -> Result<(Value, Option<LibraryChanged>), ServiceError> {
+    fn remove(
+        &self,
+        remove: &RemoveTracks,
+    ) -> Result<(Value, Option<LibraryChanged>), ServiceError> {
         let entries = self.plain(&remove.playlist)?;
         if let Some(missing) = remove
             .tracks
@@ -217,7 +220,10 @@ impl Edits<'_> {
         self.edited(&remove.playlist, rows > 0, changed, &before)
     }
 
-    fn delete(&self, delete: &DeletePlaylist) -> Result<(Value, Option<LibraryChanged>), ServiceError> {
+    fn delete(
+        &self,
+        delete: &DeletePlaylist,
+    ) -> Result<(Value, Option<LibraryChanged>), ServiceError> {
         let index = self.library.index()?;
         if entries::playlist_name(&index, &delete.playlist).is_none() {
             return Err(not_found(&delete.playlist));
@@ -243,7 +249,10 @@ impl Edits<'_> {
         self.edited(&delete.playlist, rows > 0, changed, &gone)
     }
 
-    fn reorder(&self, reorder: &ReorderEntries) -> Result<(Value, Option<LibraryChanged>), ServiceError> {
+    fn reorder(
+        &self,
+        reorder: &ReorderEntries,
+    ) -> Result<(Value, Option<LibraryChanged>), ServiceError> {
         let entries = self.plain(&reorder.playlist)?;
         let mut have: Vec<&str> = entries.iter().map(|entry| entry.id.as_str()).collect();
         let mut wanted: Vec<&str> = reorder.entries.iter().map(String::as_str).collect();
@@ -265,9 +274,8 @@ impl Edits<'_> {
         let (moved, changed) =
             self.library
                 .recorded_edit(Touched::Playlists, "Reorder Playlist", move |writer| {
-                    rbl_library::entry_order::reorder(writer, &playlist, &order).map(|edit| {
-                        (!edit.is_empty(), LibraryEdit::ReorderEntries(edit))
-                    })
+                    rbl_library::entry_order::reorder(writer, &playlist, &order)
+                        .map(|edit| (!edit.is_empty(), LibraryEdit::ReorderEntries(edit)))
                 })?;
         self.edited(&reorder.playlist, moved, changed, &before)
     }
@@ -283,22 +291,24 @@ impl Edits<'_> {
             .clone()
             .unwrap_or_else(|| format!("{source_name} copy"));
         let (source, wanted) = (copy.playlist.clone(), name.clone());
-        let (made, mut changed) =
-            self.library
-                .recorded_edit(Touched::Playlists, "Create Playlist", move |writer| {
-                    let parent: String = writer
-                        .library()
-                        .connection()
-                        .query_row(
-                            "SELECT ParentID FROM djmdPlaylist WHERE ID = ?1 AND rb_local_deleted = 0",
-                            [&source],
-                            |row| row.get(0),
-                        )
-                        .map_err(rbl_db::DbError::from)?;
-                    writer
-                        .create_with_undo(&wanted, &parent, rbl_db::write::ATTRIBUTE_PLAYLIST, None)
-                        .map(|(id, edit)| (id, LibraryEdit::CreatePlaylist(edit)))
-                })?;
+        let (made, mut changed) = self.library.recorded_edit(
+            Touched::Playlists,
+            "Create Playlist",
+            move |writer| {
+                let parent: String = writer
+                    .library()
+                    .connection()
+                    .query_row(
+                        "SELECT ParentID FROM djmdPlaylist WHERE ID = ?1 AND rb_local_deleted = 0",
+                        [&source],
+                        |row| row.get(0),
+                    )
+                    .map_err(rbl_db::DbError::from)?;
+                writer
+                    .create_with_undo(&wanted, &parent, rbl_db::write::ATTRIBUTE_PLAYLIST, None)
+                    .map(|(id, edit)| (id, LibraryEdit::CreatePlaylist(edit)))
+            },
+        )?;
         // The entries, read again under the gate of the write that copies
         // them; their Mutants are copied with the addition's Ledger entry.
         let (source, target) = (copy.playlist.clone(), made.clone());
@@ -372,7 +382,12 @@ impl Edits<'_> {
                     format!("there is no track {track} in the Library"),
                 ));
             };
-            tracks.push(index.ids.get(row as usize).map_or_else(|| track.clone(), u64::to_string));
+            tracks.push(
+                index
+                    .ids
+                    .get(row as usize)
+                    .map_or_else(|| track.clone(), u64::to_string),
+            );
         }
         // Reported first: the Mutants that go with the tracks.
         let mut affected = Vec::new();
@@ -390,9 +405,11 @@ impl Edits<'_> {
         }
         let ids: Vec<i64> = affected.iter().filter_map(|m| m["id"].as_i64()).collect();
         let doomed = tracks.clone();
-        let ((), changed) = self.library.permanent_edit(Touched::Tracks, move |writer| {
-            writer.delete_tracks(&doomed).map(drop)
-        })?;
+        let ((), changed) = self
+            .library
+            .permanent_edit(Touched::Tracks, move |writer| {
+                writer.delete_tracks(&doomed).map(drop)
+            })?;
         let mut mutants = Vec::new();
         for id in ids {
             if let Some(mutant) = self.mutant(id)? {
@@ -457,9 +474,8 @@ impl Edits<'_> {
         let Some(sidecar) = self.stems.sidecar_if_made()? else {
             return Ok(T::default());
         };
-        read(&sidecar).map_err(|e| {
-            ServiceError::new(crate::stems::codes::SIDECAR_FAILED, e.to_string())
-        })
+        read(&sidecar)
+            .map_err(|e| ServiceError::new(crate::stems::codes::SIDECAR_FAILED, e.to_string()))
     }
 
     /// A Mutant as `mutants.get` answers it.
@@ -525,7 +541,10 @@ fn to_value<T: Serialize>(value: &T) -> Result<Value, ServiceError> {
         .map_err(|e| ServiceError::new(shared_codes::SERVICE_FAILED, e.to_string()))
 }
 
-fn arguments<T: serde::de::DeserializeOwned>(command: &str, args: &Value) -> Result<T, ServiceError> {
+fn arguments<T: serde::de::DeserializeOwned>(
+    command: &str,
+    args: &Value,
+) -> Result<T, ServiceError> {
     serde_json::from_value(args.clone()).map_err(|e| {
         ServiceError::new(
             shared_codes::BAD_REQUEST,

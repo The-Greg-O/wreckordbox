@@ -107,9 +107,7 @@ pub(crate) fn of_edit(
                 let (old, new) = (owned(&parts.moved), owned(&parts.around));
                 match step {
                     Step::Edit => {
-                        if let Some(carry) =
-                            carry(location, sidecar, parts.playlist, &old, &new)
-                        {
+                        if let Some(carry) = carry(location, sidecar, parts.playlist, &old, &new) {
                             follow.carried.push(carry);
                         }
                         follow.left.extend(old);
@@ -169,7 +167,11 @@ fn carry(
         from: old.to_vec(),
         to: new
             .iter()
-            .filter_map(|entry| tracks.get(entry).map(|track| (entry.clone(), track.clone())))
+            .filter_map(|entry| {
+                tracks
+                    .get(entry)
+                    .map(|track| (entry.clone(), track.clone()))
+            })
             .collect(),
     })
 }
@@ -179,18 +181,15 @@ fn tracks_of(
     location: &LibraryLocation,
     entries: &[String],
 ) -> Result<HashMap<String, String>, String> {
-    let db = rbl_db::Library::open(location.clone(), OpenMode::ReadOnly).map_err(|e| e.to_string())?;
+    let db =
+        rbl_db::Library::open(location.clone(), OpenMode::ReadOnly).map_err(|e| e.to_string())?;
     let mut found = HashMap::new();
     let mut statement = db
         .connection()
-        .prepare(
-            "SELECT ContentID FROM djmdSongPlaylist WHERE ID = ?1 AND rb_local_deleted = 0",
-        )
+        .prepare("SELECT ContentID FROM djmdSongPlaylist WHERE ID = ?1 AND rb_local_deleted = 0")
         .map_err(|e| e.to_string())?;
     for entry in entries {
-        let track: Option<String> = statement
-            .query_row([entry], |row| row.get(0))
-            .ok();
+        let track: Option<String> = statement.query_row([entry], |row| row.get(0)).ok();
         if let Some(track) = track {
             found.insert(entry.clone(), track);
         }

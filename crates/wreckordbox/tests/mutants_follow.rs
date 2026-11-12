@@ -107,7 +107,14 @@ fn removing_a_mutated_entry_removes_its_mutant_and_reports_it() {
 
     let answer = ok(
         &sandbox,
-        &["playlists", "remove", &playlist, "10002", "--source", "agent:tidier"],
+        &[
+            "playlists",
+            "remove",
+            &playlist,
+            "10002",
+            "--source",
+            "agent:tidier",
+        ],
     );
     assert_eq!(answer["changed"], true);
     assert_eq!(answer["mutants"][0]["id"], removed);
@@ -128,7 +135,10 @@ fn removing_a_mutated_entry_removes_its_mutant_and_reports_it() {
     while let Some(event) = watcher.next_event(Duration::from_millis(500)).unwrap() {
         heard.push((event.event.clone(), event.data["action"].clone()));
     }
-    assert!(heard.contains(&("library_changed".to_owned(), Value::Null)), "{heard:?}");
+    assert!(
+        heard.contains(&("library_changed".to_owned(), Value::Null)),
+        "{heard:?}"
+    );
     assert!(
         heard.contains(&("sidecar_changed".to_owned(), Value::from("detached"))),
         "{heard:?}"
@@ -161,7 +171,10 @@ fn deleting_a_playlist_removes_its_mutants() {
     let third = mutate(&sandbox, &entries[2]);
     let elsewhere = mutate(&sandbox, &entries_of(&sandbox, &other)[0]);
 
-    let answer = ok(&sandbox, &["playlists", "delete", &playlist, "--source", "dj"]);
+    let answer = ok(
+        &sandbox,
+        &["playlists", "delete", &playlist, "--source", "dj"],
+    );
     let mut gone: Vec<i64> = answer["mutants"]
         .as_array()
         .unwrap()
@@ -191,7 +204,11 @@ fn reordering_a_playlist_leaves_every_mutant_on_the_same_entry() {
     let first = mutate(&sandbox, &entries[0]);
     let second = mutate(&sandbox, &entries[1]);
 
-    let order = [entries[2].as_str(), entries[0].as_str(), entries[1].as_str()];
+    let order = [
+        entries[2].as_str(),
+        entries[0].as_str(),
+        entries[1].as_str(),
+    ];
     let mut args = vec!["playlists", "reorder", &playlist];
     args.extend_from_slice(&order);
     let answer = ok(&sandbox, &args);
@@ -204,11 +221,17 @@ fn reordering_a_playlist_leaves_every_mutant_on_the_same_entry() {
     let first_now = mutant(&sandbox, first);
     let second_now = mutant(&sandbox, second);
     assert_eq!(
-        (first_now["entry_id"].as_str().unwrap(), &first_now["position"]),
+        (
+            first_now["entry_id"].as_str().unwrap(),
+            &first_now["position"]
+        ),
         (entries[0].as_str(), &Value::from(2))
     );
     assert_eq!(
-        (second_now["entry_id"].as_str().unwrap(), &second_now["position"]),
+        (
+            second_now["entry_id"].as_str().unwrap(),
+            &second_now["position"]
+        ),
         (entries[1].as_str(), &Value::from(3))
     );
     assert_eq!(first_now["removed"], false);
@@ -235,7 +258,10 @@ fn copying_a_playlist_copies_its_mutants_to_the_copy() {
     let second = mutate(&sandbox, &entries[1]);
     let again = mutate(&sandbox, &entries[2]);
 
-    let copied = ok(&sandbox, &["playlists", "copy", &playlist, "--name", "Friday 2"]);
+    let copied = ok(
+        &sandbox,
+        &["playlists", "copy", &playlist, "--name", "Friday 2"],
+    );
     let copy = copied["playlist"].as_str().unwrap().to_owned();
     assert_eq!(copied["name"], "Friday 2");
     assert_eq!(copied["tracks"], 3);
@@ -244,7 +270,10 @@ fn copying_a_playlist_copies_its_mutants_to_the_copy() {
     assert_eq!(copy_entries.len(), 3);
     let in_copy = live(&sandbox, Some(&copy));
     assert_eq!(
-        in_copy.iter().map(|(_, entry)| entry.clone()).collect::<Vec<_>>(),
+        in_copy
+            .iter()
+            .map(|(_, entry)| entry.clone())
+            .collect::<Vec<_>>(),
         vec![copy_entries[1].clone(), copy_entries[2].clone()]
     );
     // New Mutants, of the same parents, at the same positions; the source's
@@ -274,7 +303,10 @@ fn a_mutant_is_never_a_track_in_all_tracks_or_a_search() {
     let entries = entries(&sandbox, &playlist);
     mutate(&sandbox, &entries[1]);
 
-    assert_eq!(track_ids(&sandbox, &["tracks", "list", "--limit", "1000"]), before_all);
+    assert_eq!(
+        track_ids(&sandbox, &["tracks", "list", "--limit", "1000"]),
+        before_all
+    );
     assert_eq!(
         track_ids(&sandbox, &["tracks", "query", "--title", "Track 002"]),
         before_found
@@ -319,18 +351,26 @@ fn removing_a_track_from_the_collection_reports_its_mutants_first() {
         .collect();
     assert_eq!(reported, vec![on_friday, on_saturday]);
     assert_eq!(live(&sandbox, None).len(), 3);
-    assert!(track_ids(&sandbox, &["tracks", "list", "--limit", "1000"]).contains(&"10002".to_owned()));
+    assert!(
+        track_ids(&sandbox, &["tracks", "list", "--limit", "1000"]).contains(&"10002".to_owned())
+    );
     let text = sandbox.cli(&["tracks", "remove", "10002"]);
     assert!(text.status.success());
     assert!(
-        text.stdout.contains("Mutants that would be removed with them:")
-            && text.stdout.contains(&format!("Mutant {on_friday} (entry 2 of playlist {friday} \"Friday\""))
+        text.stdout
+            .contains("Mutants that would be removed with them:")
+            && text.stdout.contains(&format!(
+                "Mutant {on_friday} (entry 2 of playlist {friday} \"Friday\""
+            ))
             && text.stdout.contains("Nothing was removed."),
         "{}",
         text.stdout
     );
 
-    let removed = ok(&sandbox, &["tracks", "remove", "10002", "--confirm", "--source", "dj"]);
+    let removed = ok(
+        &sandbox,
+        &["tracks", "remove", "10002", "--confirm", "--source", "dj"],
+    );
     assert_eq!(removed["removed"], true);
     assert_eq!(removed["mutants"][0]["removed"], true);
     assert_eq!(
@@ -340,7 +380,9 @@ fn removing_a_track_from_the_collection_reports_its_mutants_first() {
             .collect::<Vec<_>>(),
         vec![unrelated]
     );
-    assert!(!track_ids(&sandbox, &["tracks", "list", "--limit", "1000"]).contains(&"10002".to_owned()));
+    assert!(
+        !track_ids(&sandbox, &["tracks", "list", "--limit", "1000"]).contains(&"10002".to_owned())
+    );
 }
 
 #[test]
@@ -361,9 +403,15 @@ fn library_protection_refuses_a_playlist_edit_and_keeps_every_mutant() {
     }
     assert_eq!(live(&sandbox, None), vec![(id, entries[1].clone())]);
     assert_eq!(self::entries(&sandbox, &playlist), entries);
-    assert_eq!(ok(&sandbox, &["playlists", "tracks", &playlist])["total"], 2);
+    assert_eq!(
+        ok(&sandbox, &["playlists", "tracks", &playlist])["total"],
+        2
+    );
     // Reading never writes: a report changes nothing either.
-    assert_eq!(ok(&sandbox, &["tracks", "remove", "10002"])["removed"], false);
+    assert_eq!(
+        ok(&sandbox, &["tracks", "remove", "10002"])["removed"],
+        false
+    );
 }
 
 const FAULTS: &str = "WRECKORDBOX_LEDGER_FAULTS";
@@ -406,14 +454,21 @@ fn a_service_killed_between_a_removal_and_its_entry_still_removes_the_mutant_whe
 
     // The service dies the moment the entry is out of the Library, before
     // the Ledger records the change or its Mutant's consequence.
-    let killed = with_faults(&sandbox, "abort_after_write", &["playlists", "remove", &playlist, "10002"]);
+    let killed = with_faults(
+        &sandbox,
+        "abort_after_write",
+        &["playlists", "remove", &playlist, "10002"],
+    );
     assert!(!killed.status.success());
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while wreckordbox_service::Client::connect(&sandbox.config().socket_path(sandbox.location()))
         .and_then(|mut client| client.status())
         .is_ok()
     {
-        assert!(std::time::Instant::now() < deadline, "the service did not die");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the service did not die"
+        );
         std::thread::sleep(Duration::from_millis(20));
     }
 
@@ -435,7 +490,11 @@ fn a_removal_whose_entry_had_to_wait_removes_its_mutant_when_the_entry_is_writte
     stop_service(&sandbox);
 
     // The Sidecar refuses the entry: it is kept, with its consequence.
-    let run = with_faults(&sandbox, "fail_append=1", &["playlists", "remove", &playlist, "10002"]);
+    let run = with_faults(
+        &sandbox,
+        "fail_append=1",
+        &["playlists", "remove", &playlist, "10002"],
+    );
     assert!(run.status.success(), "{}", run.stderr);
     assert!(sandbox.sidecar_dir().join("ledger-spill.jsonl").is_file());
     stop_service(&sandbox);

@@ -77,8 +77,13 @@ impl Sidecar {
         facts: &NativeFacts,
         reconciled: bool,
     ) -> Result<i64> {
-        self.append_in_one(entry, facts, reconciled, &crate::mutant_follow::Follow::default())
-            .map(|(id, _)| id)
+        self.append_in_one(
+            entry,
+            facts,
+            reconciled,
+            &crate::mutant_follow::Follow::default(),
+        )
+        .map(|(id, _)| id)
     }
 
     /// [`Self::append_with_dj_facts`] with the Mutant consequences of the

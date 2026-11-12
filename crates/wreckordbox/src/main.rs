@@ -328,7 +328,11 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
         Commands::Tracks {
             command: TrackCommands::Remove(args),
             ..
-        } => print(&playlist_edits::remove(&mut connect(&config)?, cli.json, args)?),
+        } => print(&playlist_edits::remove(
+            &mut connect(&config)?,
+            cli.json,
+            args,
+        )?),
         Commands::Stick { command } => {
             print(&stick::stick(&config.recovery_dir, cli.json, command)?);
         }

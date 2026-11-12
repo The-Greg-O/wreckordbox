@@ -138,7 +138,11 @@ pub fn run(
 }
 
 /// Runs `tracks remove` and answers what to print.
-pub fn remove(client: &mut Client, as_json: bool, args: &RemoveArgs) -> Result<String, ServiceError> {
+pub fn remove(
+    client: &mut Client,
+    as_json: bool,
+    args: &RemoveArgs,
+) -> Result<String, ServiceError> {
     let removal: CollectionRemoval = client.call(
         commands::TRACKS_REMOVE_FROM_COLLECTION,
         json!(RemoveFromCollection {
@@ -151,9 +155,15 @@ pub fn remove(client: &mut Client, as_json: bool, args: &RemoveArgs) -> Result<S
     }
     let tracks = removal.tracks.join(", ");
     let mut lines = vec![if removal.removed {
-        format!("Removed {} from the collection and every playlist: {tracks}.", count(removal.tracks.len(), "track"))
+        format!(
+            "Removed {} from the collection and every playlist: {tracks}.",
+            count(removal.tracks.len(), "track")
+        )
     } else {
-        format!("Would remove {} from the collection and every playlist: {tracks}.", count(removal.tracks.len(), "track"))
+        format!(
+            "Would remove {} from the collection and every playlist: {tracks}.",
+            count(removal.tracks.len(), "track")
+        )
     }];
     if removal.mutants.is_empty() {
         lines.push("No Mutant is affected.".to_owned());

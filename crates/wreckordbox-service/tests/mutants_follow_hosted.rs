@@ -235,7 +235,10 @@ fn removing_a_mutated_entry_in_the_window_removes_its_mutant_and_undo_brings_it_
 
     let gone = hosted.mutant(mutant);
     assert_eq!(gone["mutant"]["removed"], true, "{gone}");
-    assert_eq!(hosted.live(), vec![(entries[2].clone(), hosted.tracks[2].clone())]);
+    assert_eq!(
+        hosted.live(),
+        vec![(entries[2].clone(), hosted.tracks[2].clone())]
+    );
     assert_eq!(hosted.mutant(other)["mutant"]["removed"], false);
     assert_eq!(hosted.drain(), vec![(mutant, "detached".to_owned())]);
     // The Mutant's change is in the Run of the Library change that caused
@@ -270,7 +273,13 @@ fn removing_a_mutated_entry_in_the_window_removes_its_mutant_and_undo_brings_it_
     assert_eq!(hosted.mutant(mutant)["mutant"]["removed"], false);
     assert_eq!(
         hosted.history(mutant),
-        ["created", "detached", "reattached", "detached", "reattached"]
+        [
+            "created",
+            "detached",
+            "reattached",
+            "detached",
+            "reattached"
+        ]
     );
     assert_eq!(hosted.live().len(), 2);
     let _ = hosted.location.clone();
@@ -295,7 +304,10 @@ fn deleting_a_playlist_in_the_window_removes_its_mutants_and_undo_brings_them_ba
     heard.sort();
     assert_eq!(
         heard,
-        vec![(first, "detached".to_owned()), (third, "detached".to_owned())]
+        vec![
+            (first, "detached".to_owned()),
+            (third, "detached".to_owned())
+        ]
     );
 
     hosted.undo();
@@ -311,7 +323,10 @@ fn deleting_a_playlist_in_the_window_removes_its_mutants_and_undo_brings_them_ba
 
     hosted.redo();
     assert!(hosted.live().is_empty());
-    assert_eq!(hosted.history(first), ["created", "detached", "reattached", "detached"]);
+    assert_eq!(
+        hosted.history(first),
+        ["created", "detached", "reattached", "detached"]
+    );
 }
 
 #[test]
@@ -358,7 +373,9 @@ fn a_replacement_import_carries_each_mutant_to_its_tracks_new_entry_and_undo_and
     ];
     hosted.window("Import", move |writer| {
         let (_, replaced) = writer.set_tracks_with_undo(&playlist, &contents)?;
-        Ok(LibraryEdit::ReplacePlaylistContents(vec![replaced.unwrap()]))
+        Ok(LibraryEdit::ReplacePlaylistContents(
+            vec![replaced.unwrap()],
+        ))
     });
     let new_entries = hosted.entries(&hosted.playlist);
     assert!(new_entries.iter().all(|entry| !entries.contains(entry)));
@@ -366,7 +383,10 @@ fn a_replacement_import_carries_each_mutant_to_its_tracks_new_entry_and_undo_and
     // Track 1's Mutant is now on track 1's new entry, at position 2; track
     // 2 left the playlist and so did its Mutant.
     let live = hosted.live();
-    assert_eq!(live, vec![(new_entries[1].clone(), hosted.tracks[0].clone())]);
+    assert_eq!(
+        live,
+        vec![(new_entries[1].clone(), hosted.tracks[0].clone())]
+    );
     let carried = hosted
         .service
         .call(commands::MUTANTS_GET, json!({ "entry": new_entries[1] }))
