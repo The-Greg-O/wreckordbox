@@ -438,7 +438,7 @@ mod tests {
                 let app = app(dir.path());
                 let state = app.state::<Arc<AppState>>();
                 let check = |what: &str| {
-                    assert_unchanged(mount, &before, &format!("{case}, lock {lock}: {what}"))
+                    assert_unchanged(mount, &before, &format!("{case}, lock {lock}: {what}"));
                 };
 
                 let libraries = run(crate::device_library::device_libraries(path.clone())).unwrap();
