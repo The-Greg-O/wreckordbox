@@ -349,7 +349,9 @@ fn the_fact_a_recorded_fact_replaced_is_found_by_an_index_not_a_scan() {
             wreckordbox_sidecar::ledger::PAGE_QUERY
         ))
         .unwrap()
-        .query_map(rusqlite::params![run.0, 50, 0], |row| row.get::<_, String>(3))
+        .query_map(rusqlite::params![run.0, 50, 0], |row| {
+            row.get::<_, String>(3)
+        })
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();

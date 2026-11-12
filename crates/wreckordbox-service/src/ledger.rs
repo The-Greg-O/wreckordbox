@@ -35,14 +35,44 @@
 //! Every other kind of edit is named (its `kind` and `label`), with no
 //! payload.
 //!
-//! # When the Sidecar cannot be written
+//! # When something fails
 //!
-//! Before any write to the Library the core asks [`Keeper::ready`]: the
-//! Sidecar must open and take a write, or the Library write is refused
-//! and nothing changes. An entry is appended after the Library write it
-//! records (they are two databases). If that append fails, the entry is
-//! kept in memory and in [`SPILL_FILE`] in the Sidecar's folder, and is
-//! written to the Ledger before the next Library write is let through.
+//! The Library and the Sidecar have no transaction in common, so the
+//! Ledger is written around the Library write, never inside it:
+//!
+//! 1. Before any write to the Library the core calls [`Keeper::begin`]: it
+//!    settles what an earlier service left (below), writes any entry still
+//!    waiting, and commits an *intent* to the Sidecar that reserves the
+//!    entry's identifier. If any of that fails, the Library write is
+//!    refused and nothing changes.
+//! 2. The Library write commits. The core then says whether any row
+//!    changed ([`Keeper::written`]), before it re-reads anything.
+//! 3. The history records the edit, also when the re-read failed; the
+//!    entry is appended under its reserved identifier and settles its
+//!    intent in the same transaction.
+//! 4. If that append fails, the entry, with its identifier, is kept in
+//!    memory and in [`SPILL_FILE`] (fsynced), and is written before the
+//!    next Library write is let through. Appending it again under the same
+//!    identifier changes nothing, so a replay cut short is safe.
+//! 5. A write that changed rows and was never recorded (a caller whose
+//!    refresh failed before it recorded) gets an entry of kind
+//!    [`UNCONFIRMED`] under its identifier when the next write begins or
+//!    the service stops.
+//!
+//! On start, and before `runs.list` or `runs.show` answers, the Keeper
+//! settles what an earlier service left: its kept entries are written,
+//! each intent no entry settled becomes an [`UNCONFIRMED`] entry saying
+//! the change was begun and not confirmed (whether the Library committed
+//! it is not known), and the Runs it owned (the window's, a command's
+//! own) and never ended are ended. A spill file that cannot be read whole
+//! is left exactly as it is, and every write and every read of the Ledger
+//! is refused, naming it, until the DJ moves it aside.
+//!
+//! A Run named on a request is admitted for the length of the command:
+//! `runs.finish` waits for the commands in it and admits no other
+//! meanwhile. When the service stops, no write is begun, the Library's
+//! edit gate is taken so the window's edit in progress is over and
+//! recorded, and only then is the Ledger taken off the core.
 //!
 //! # Locks
 //!
@@ -542,7 +572,11 @@ pub(crate) fn answers(command: &str) -> bool {
 
 /// Answers `runs.list` and `runs.show`. Reading never makes a Sidecar:
 /// with none there are no Runs.
-pub(crate) fn answer(keeper: &Keeper, stems: &Stems, request: &Request) -> Result<Value, ServiceError> {
+pub(crate) fn answer(
+    keeper: &Keeper,
+    stems: &Stems,
+    request: &Request,
+) -> Result<Value, ServiceError> {
     let bad = |e: serde_json::Error| {
         ServiceError::new(
             service_codes::BAD_REQUEST,
@@ -842,8 +876,7 @@ impl Faults {
 pub const UNCONFIRMED: &str = "unconfirmed";
 const BEGUN_NOT_CONFIRMED: &str =
     "A change to the Library was begun and not confirmed: wreckordbox stopped before recording it";
-const MADE_NOT_RECORDED: &str =
-    "A change to the Library was made and its entry was not recorded";
+const MADE_NOT_RECORDED: &str = "A change to the Library was made and its entry was not recorded";
 
 /// Keeps the Ledger for one service: the `Ledger` its Library core tells.
 pub(crate) struct Keeper {
@@ -1388,9 +1421,11 @@ impl rbl_library::ledger::Ledger for Keeper {
                 Some(Target::Joined { run, source }) => {
                     (false, Some(*run), source.clone(), String::new(), command)
                 }
-                Some(Target::Own { source, description, made }) => {
-                    (false, *made, source.clone(), description.clone(), command)
-                }
+                Some(Target::Own {
+                    source,
+                    description,
+                    made,
+                }) => (false, *made, source.clone(), description.clone(), command),
                 Some(Target::Window) | None => (
                     true,
                     state.window.as_ref().map(|window| window.run),
@@ -1401,21 +1436,24 @@ impl rbl_library::ledger::Ledger for Keeper {
             }
         });
         let done = std::mem::take(&mut state.done);
-        let id = sidecar
-            .begin_intent(
-                &Intent {
-                    source: &source,
-                    run,
-                    description: &description,
-                    command: command.as_ref(),
-                    at: now(),
-                },
-                &done,
-            )
-            .map_err(|e| {
-                state.done = done.clone();
-                e.to_string()
-            })?;
+        let id = sidecar.begin_intent(
+            &Intent {
+                source: &source,
+                run,
+                description: &description,
+                command: command.as_ref(),
+                at: now(),
+            },
+            &done,
+        );
+        let id = match id {
+            Ok(id) => id,
+            Err(error) => {
+                // Still to be removed with the next intent.
+                state.done = done;
+                return Err(error.to_string());
+            }
+        };
         state.op = Some(Op {
             id,
             wrote: None,

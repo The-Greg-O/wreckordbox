@@ -499,14 +499,20 @@ fn assigning_puts_a_tag_on_many_tracks_and_unassigning_takes_it_off() {
     // One track, by hand; its other tags stay.
     let run = sandbox.cli(&["mytags", "unassign", MY_TAG_PEAK, &track_id(2)]);
     assert!(run.status.success(), "{}", run.stderr);
-    assert_eq!(common::without_run(&run.stdout), "Took MyTag \"Peak\" off 1 of 1 track.\n");
+    assert_eq!(
+        common::without_run(&run.stdout),
+        "Took MyTag \"Peak\" off 1 of 1 track.\n"
+    );
     told_of_one_change(&mut watcher);
     assert_eq!(tags_of(sandbox, 2), ["Warm-up", "Acid"]);
     assert_eq!(tags_of(sandbox, 1), ["Peak", "Dark"]);
 
     let run = sandbox.cli(&["mytags", "assign", &made.acid, &track_id(2), &track_id(6)]);
     assert!(run.status.success(), "{}", run.stderr);
-    assert_eq!(common::without_run(&run.stdout), "Put MyTag \"Acid\" on 1 of 2 tracks.\n");
+    assert_eq!(
+        common::without_run(&run.stdout),
+        "Put MyTag \"Acid\" on 1 of 2 tracks.\n"
+    );
 }
 
 #[test]

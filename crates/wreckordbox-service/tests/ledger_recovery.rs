@@ -42,8 +42,8 @@ fn rating_of(core: &LibraryCore, track: &str) -> u8 {
 }
 
 #[test]
-fn undo_and_redo_name_the_change_they_step_across_a_kept_entry_and_a_stop_waits_for_the_windows_edit()
-{
+fn undo_and_redo_name_the_change_they_step_across_a_kept_entry_and_a_stop_waits_for_the_windows_edit(
+) {
     let dir = tempfile::tempdir().unwrap();
     let library = dir.path().join("library");
     std::fs::create_dir_all(&library).unwrap();
@@ -68,13 +68,23 @@ fn undo_and_redo_name_the_change_they_step_across_a_kept_entry_and_a_stop_waits_
     let core = Arc::new(LibraryCore::new(config.recovery_dir.clone()));
     let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
     let (index, _) = rbl_index::load(&db).unwrap();
-    core.set_library(&NoHost, index, false, db.schema().db_version, 0, location.clone());
+    core.set_library(
+        &NoHost,
+        index,
+        false,
+        db.schema().db_version,
+        0,
+        location.clone(),
+    );
     let host: Arc<dyn rbl_library::Host + Send + Sync> = Arc::new(NoHost);
     let track = fixture::track_id(1);
 
     let service = Service::host(&location, &config, &core, &host).unwrap();
     rate(&core, &track, 4);
-    assert!(sidecar_dir.join("ledger-spill.jsonl").is_file(), "the entry was kept");
+    assert!(
+        sidecar_dir.join("ledger-spill.jsonl").is_file(),
+        "the entry was kept"
+    );
     core.step_history(&NoHost, true).unwrap();
     core.step_history(&NoHost, false).unwrap();
     assert_eq!(rating_of(&core, &track), 4);
@@ -89,12 +99,24 @@ fn undo_and_redo_name_the_change_they_step_across_a_kept_entry_and_a_stop_waits_
         .clone();
     let steps: Vec<(&str, Option<i64>)> = entries
         .iter()
-        .map(|entry| (entry["action"].as_str().unwrap(), entry["reverses"].as_i64()))
+        .map(|entry| {
+            (
+                entry["action"].as_str().unwrap(),
+                entry["reverses"].as_i64(),
+            )
+        })
         .collect();
-    let ids: Vec<i64> = entries.iter().map(|entry| entry["id"].as_i64().unwrap()).collect();
+    let ids: Vec<i64> = entries
+        .iter()
+        .map(|entry| entry["id"].as_i64().unwrap())
+        .collect();
     assert_eq!(
         steps,
-        vec![("edit", None), ("undo", Some(ids[0])), ("redo", Some(ids[1]))],
+        vec![
+            ("edit", None),
+            ("undo", Some(ids[0])),
+            ("redo", Some(ids[1]))
+        ],
         "{entries:#?}"
     );
     assert_eq!(entries[0]["values"][0]["after"], 4);
@@ -112,7 +134,11 @@ fn undo_and_redo_name_the_change_they_step_across_a_kept_entry_and_a_stop_waits_
                 .write_then(
                     &NoHost,
                     History::Caller,
-                    |writer| writer.set_rating_with_undo(&track, 2).map(|(_, recorded)| recorded),
+                    |writer| {
+                        writer
+                            .set_rating_with_undo(&track, 2)
+                            .map(|(_, recorded)| recorded)
+                    },
                     |_, recorded| Ok(recorded),
                 )
                 .unwrap();

@@ -62,10 +62,15 @@ the code or observed, `[ASSUME]` is inferred, `[UNKNOWN]` is open.
   Redo as a new entry naming the entry it steps. An edit the history does
   not keep is named to it: `EditHistory::unrecorded` (what `edit` and an
   outside write call in place of `clear_redo`) and `EditHistory::permanent`
-  (in place of `clear`). Before any write the core asks the Ledger whether
-  it can record (`Ledger::ready`); when it cannot, the write is refused and
-  nothing changes. Undo and Redo themselves are unchanged: the Ledger is
-  only told. What it keeps, and which writes it does not yet see, is in
+  (in place of `clear`). Before any write the core tells the Ledger one is
+  begun (`Ledger::begin`), which records an intent durably; when it cannot,
+  the write is refused and nothing changes. After the write, and before the
+  refresh, it says whether any row changed (`Ledger::written`), and a
+  recorded edit or step whose refresh then fails is still recorded. Each
+  entry keeps the identifier its intent reserved, so an Undo or Redo names
+  exactly the entry it steps (`Link::reverses`), and a later slice of an
+  add names its first (`Link::part_of`). Undo and Redo themselves are
+  unchanged: the Ledger is only told. What it keeps, and which writes it does not yet see, is in
   `crates/wreckordbox-service/src/ledger.rs`.
 - **A client's edit.** The service records through
   `LibraryCore::recorded_edit` (gate, guarded write, refresh, `record`),

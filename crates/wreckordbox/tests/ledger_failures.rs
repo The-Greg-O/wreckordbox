@@ -114,7 +114,11 @@ fn a_service_killed_after_a_library_change_and_before_its_entry_leaves_an_entry_
     sandbox.describe_track(3, "Midnight Drive", "Ada Lovelace", "8A", 2);
 
     // The service dies the moment the rating is in the Library.
-    let killed = with_faults(&sandbox, "abort_after_write", &["tracks", "rate", "10003", "5"]);
+    let killed = with_faults(
+        &sandbox,
+        "abort_after_write",
+        &["tracks", "rate", "10003", "5"],
+    );
     assert!(!killed.status.success());
     wait_for_no_service(&sandbox);
 
@@ -223,7 +227,11 @@ fn a_damaged_file_of_kept_entries_is_kept_as_it_is_and_edits_stay_refused_until_
             .unwrap()
             .to_owned();
         assert!(message.contains(SPILL), "{message}");
-        assert_eq!(std::fs::read_to_string(&spill).unwrap(), text, "kept as it was");
+        assert_eq!(
+            std::fs::read_to_string(&spill).unwrap(),
+            text,
+            "kept as it was"
+        );
     }
     assert_eq!(ok(&sandbox, &["tracks", "show", "10002"])["rating"], 0);
 
@@ -242,7 +250,14 @@ fn a_run_ended_while_an_edit_in_it_is_being_made_ends_after_that_edit_is_recorde
     let started = with_faults(
         &sandbox,
         "delay_after_begin_ms=1500",
-        &["runs", "start", "--source", "agent:tagger", "--description", "Rate"],
+        &[
+            "runs",
+            "start",
+            "--source",
+            "agent:tagger",
+            "--description",
+            "Rate",
+        ],
     );
     assert!(started.status.success(), "{}", started.stderr);
     let run = started.json()["id"].as_i64().unwrap().to_string();

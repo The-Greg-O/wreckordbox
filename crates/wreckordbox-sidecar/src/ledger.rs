@@ -440,13 +440,10 @@ impl Sidecar {
                 )?);
             } else {
                 let fact = db.query_row(&select("WHERE fact.id = ?1"), [id], read_fact)?;
-                let replaced = match replaced {
-                    Some(replaced) => Some(db.query_row(
-                        &select("WHERE fact.id = ?1"),
-                        [replaced],
-                        read_fact,
-                    )?),
-                    None => None,
+                let replaced = if let Some(replaced) = replaced {
+                    Some(db.query_row(&select("WHERE fact.id = ?1"), [replaced], read_fact)?)
+                } else {
+                    None
                 };
                 entries.push(Entry {
                     store: Store::Sidecar,
@@ -538,29 +535,23 @@ fn store_from(text: &str) -> Store {
 }
 
 pub(crate) fn append_in(tx: &rusqlite::Transaction, entry: &NewEntry) -> Result<i64> {
-    let id = match entry.id {
-        Some(id) => {
-            let there: bool = tx.query_row(
-                "SELECT EXISTS (SELECT 1 FROM ledger WHERE id = ?1)",
-                [id],
-                |row| row.get(0),
-            )?;
-            if there {
-                settle_in(tx, &[id])?;
-                return Ok(id);
-            }
-            // Reserved by an intent, or by one in a store this one was
-            // copied from: make sure its place exists.
-            tx.execute(
-                "INSERT OR IGNORE INTO ledger_order (seq) VALUES (?1)",
-                [id],
-            )?;
-            id
+    let id = if let Some(id) = entry.id {
+        let there: bool = tx.query_row(
+            "SELECT EXISTS (SELECT 1 FROM ledger WHERE id = ?1)",
+            [id],
+            |row| row.get(0),
+        )?;
+        if there {
+            settle_in(tx, &[id])?;
+            return Ok(id);
         }
-        None => {
-            tx.execute("INSERT INTO ledger_order DEFAULT VALUES", [])?;
-            tx.last_insert_rowid()
-        }
+        // Reserved by an intent, or by one in a store this one was
+        // copied from: make sure its place exists.
+        tx.execute("INSERT OR IGNORE INTO ledger_order (seq) VALUES (?1)", [id])?;
+        id
+    } else {
+        tx.execute("INSERT INTO ledger_order DEFAULT VALUES", [])?;
+        tx.last_insert_rowid()
     };
     tx.execute(
         "INSERT INTO ledger (id, run_id, at, source_kind, source_name, action, kind, label, command,
