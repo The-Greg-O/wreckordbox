@@ -14,7 +14,7 @@ import type {
   DatabaseDrive, EditHistoryState, ItunesLibrary, LibraryProblem, LibrarySummary, LinkPeerSeen, Meters,
   LinkStatus, MissingExportFile, MissingTrack, MissingTracks, PreviewState, UnanalysedTracks, ReferenceStickSettings, RelocateReport, RowDto, ScriptRequest, Tick,
   TreeNode, ViewHandle,
-  SelectionDetails, TrackDetails, TrackLookups, RelatedPlaylist,
+  SelectionDetails, TrackDetails, TrackLookups, RelatedPlaylist, StickOutline,
 } from "./types";
 import { tauriInvoke } from "./invoke";
 import { liftMyTags } from "./rowMyTags";
@@ -607,6 +607,7 @@ async function realBackend(): Promise<Backend> {
     explorerRoots: () => invoke<ExplorerRoot[]>("explorer_roots"),
     explorerChildren: (path) => invoke<ExplorerChildren>("explorer_children", { path }),
     deviceLibraries: (path) => invoke<DeviceLibrary[]>("device_libraries", { path }),
+    stickOutline: (path) => invoke<StickOutline>("stick_outline", { path }),
     devicePlaylistCollectionTracks: (path, format, tracks) =>
       invoke<(string | null)[]>("device_playlist_collection_tracks", { path, format, tracks }),
     devicePlaylistEdit: (path, format, edit) =>

@@ -19,7 +19,7 @@ import type {
   DatabaseDrive, EditHistoryState, FilterValues, GridState, LibraryProblem, LibrarySummary, Limiter, LinkPeerSeen, LinkStatus, RelatedCriterion, RowDto, RowMyTag, SortKey,
   SelectionDetails, SmartRule, StickDefaults, SyncPlaylist, SyncProgress, Tick, TrackDetails, TrackField,
   PreferencesRequest, RelocateSearch, ExportProgress,
-  DeckId, TrackFilter, TreeNode, ViewHandle, ViewSpec, WaveformKind, LogLine, LogLevel,
+  DeckId, StickOutline, TrackFilter, TreeNode, ViewHandle, ViewSpec, WaveformKind, LogLine, LogLevel,
 } from "./types";
 import { TREE_ROOT } from "./types";
 import { applyEditFrom, validateEdit, isDynamicFrom, tempoX100, type EditableBeat } from "@/lib/gridEdit";
@@ -623,6 +623,25 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     return candidates;
   };
   const tree = makeTree(playlistFixture);
+  // For the shell tree's tests (ticket #52), before Histories: folders nested
+  // far deeper than the tree is wide (`?deepFolders`), and a Library of tens
+  // of thousands of playlists (`?bigTree`).
+  {
+    const extra: TreeNode[] = [];
+    if (readFlagFromUrl("deepFolders")) {
+      for (let level = 1; level <= 16; level += 1) extra.push({ id: `deep-${level}`, name: `Level ${level}`, kind: "folder", depth: level });
+      extra.push({ id: "deep-end", name: "The Deep End", kind: "playlist", depth: 17, childCount: mockPlaylistSize("deep-end") });
+    }
+    if (readFlagFromUrl("bigTree")) {
+      extra.push({ id: "archive", name: "ARCHIVE", kind: "folder", depth: 1 });
+      for (let i = 1; i <= 20_000; i += 1) extra.push({ id: `archive-${i}`, name: `Archive ${i}`, kind: "playlist", depth: 2, childCount: 1 });
+    }
+    if (extra.length > 0) {
+      const after = tree.splice(tree.findIndex((node) => node.kind === "histories"));
+      for (const node of extra) tree.push(node);
+      for (const node of after) tree.push(node);
+    }
+  }
   type MockEdit = {
     label: string; undo: () => void; redo: () => void;
     /** An Add Tracks to Playlist still open to its next slice (#499). */
@@ -935,6 +954,58 @@ export function createMockBackend(options: MockOptions = {}): Backend {
 
   // What each stick's own libraries hold, for the Devices tree.
   const stickLibraries = createMockDeviceLibraries();
+
+  // The shell's tree reads sticks with `stickOutline`. For its tests: a
+  // stick pulled out, or put back with other contents, behind the window's
+  // back (the next `listDevices` reports it so); how many outline reads each
+  // stick has had; and the next read of a stick held unanswered until
+  // released.
+  const outlineReads = new Map<string, number>();
+  const heldOutlines = new Map<string, Array<() => void>>();
+  const holdingOutlines = new Set<string>();
+  const outlineOverrides = new Map<string, StickOutline>();
+  const unmounted = new Map<string, Device>();
+  if (typeof window !== "undefined") {
+    const hooks = window as unknown as {
+      __unmountDevice: (path: string) => void;
+      __remountDevice: (path: string, outline?: StickOutline) => void;
+      __stickOutlineReads: (path: string) => number;
+      __holdStickOutline: (path: string) => void;
+      __releaseStickOutline: (path: string) => void;
+    };
+    hooks.__unmountDevice = (path) => {
+      const index = devices.findIndex((device) => device.path === path);
+      if (index < 0) return;
+      unmounted.set(path, devices[index] as Device);
+      devices.splice(index, 1);
+    };
+    hooks.__remountDevice = (path, outline) => {
+      const device = unmounted.get(path);
+      if (!device) return;
+      unmounted.delete(path);
+      devices.push(device);
+      if (outline) outlineOverrides.set(path, outline);
+    };
+    hooks.__stickOutlineReads = (path) => outlineReads.get(path) ?? 0;
+    hooks.__holdStickOutline = (path) => { holdingOutlines.add(path); };
+    hooks.__releaseStickOutline = (path) => {
+      for (const release of heldOutlines.get(path) ?? []) release();
+      heldOutlines.delete(path);
+    };
+  }
+  const stickOutline = async (path: string): Promise<StickOutline> => {
+    outlineReads.set(path, (outlineReads.get(path) ?? 0) + 1);
+    // What the stick holds when it is asked, not when the answer comes.
+    const answer: StickOutline = outlineOverrides.get(path) ?? {
+      pending: false,
+      libraries: stickLibraries.libraries(path).map(({ format, nodes }) => ({ format, nodes })),
+    };
+    // A hold is for the next read only.
+    if (holdingOutlines.delete(path)) {
+      await new Promise<void>((resolve) => { heldOutlines.set(path, [...(heldOutlines.get(path) ?? []), resolve]); });
+    }
+    return wait(answer);
+  };
 
   // What each stick's tabs hold. DJ STICK starts empty and gains a library
   // when something is exported to it; TEST carries the rows read off the
@@ -1720,11 +1791,18 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     if (held) return held;
     const row = all[Number.parseInt(trackId, 10) - 100000];
     if (!row || row.analysed === 0 || row.bpmX100 === 0) return null;
+    // `?grids=101325:none,100004:double`, by track id: an analysed row with
+    // a BPM but no grid, or a grid whose second half runs at twice the tempo
+    // (a tempo change).
+    const fixture = GRID_FIXTURES.get(trackId);
+    if (fixture === "none") return null;
     const beatMs = (60 / (row.bpmX100 / 100)) * 1000;
-    const count = Math.min(Math.floor((row.durationSec * 1000) / beatMs) + 1, 65536);
+    const totalMs = row.durationSec * 1000;
     const beats: EditableBeat[] = [];
-    for (let n = 0; n < count; n++) {
-      beats.push({ number: (n % 4) + 1, tempoX100: row.bpmX100, timeMs: Math.round(n * beatMs) });
+    for (let n = 0, at = 0; at <= totalMs && n < 65536; n++) {
+      const fast = fixture === "double" && at >= totalMs / 2;
+      beats.push({ number: (n % 4) + 1, tempoX100: fast ? row.bpmX100 * 2 : row.bpmX100, timeMs: Math.round(at) });
+      at += fast ? beatMs / 2 : beatMs;
     }
     const made = { beats, undo: [], redo: [], locked: false };
     gridStore.set(trackId, made);
@@ -3584,6 +3662,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     },
     // The fake disk above. Copies, as with the tree: the map is the mock's.
     deviceLibraries: (path) => wait(stickLibraries.libraries(path)),
+    stickOutline,
     devicePlaylistCollectionTracks: (path, format, tracks) =>
       wait(stickLibraries.collectionTracks(path, format, tracks, [...(looseTracks.get(path) ?? [])])),
     devicePlaylistEdit: (path, format, edit) => {
@@ -3776,6 +3855,18 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     },
   };
 }
+
+/** `?grids=101325:none,100004:double`, by track id: see `gridOf`. */
+const GRID_FIXTURES: ReadonlyMap<string, "none" | "double"> = (() => {
+  if (typeof location === "undefined") return new Map();
+  const raw = new URLSearchParams(location.search).get("grids") ?? "";
+  const out = new Map<string, "none" | "double">();
+  for (const part of raw.split(",")) {
+    const [id, kind] = part.split(":");
+    if (id && /^\d+$/.test(id) && (kind === "none" || kind === "double")) out.set(id, kind);
+  }
+  return out;
+})();
 
 /** A bare `?name` flag in the URL. */
 function readFlagFromUrl(name: string): boolean {

@@ -68,6 +68,8 @@ import { asLayout, deckCount, isFullDeck, type PlayerLayout } from "@/lib/layout
 import { DEFAULT_SHELL_VIEW, type ShellView } from "@/lib/shellViews";
 import { useLibraryColumns } from "@/store/useLibraryColumns";
 import { SHELL_PLAYER_LAYOUT, ViewShell } from "@/views/shell/ViewShell";
+import { useShellTree } from "@/views/shell/useShellTree";
+import { useStickOutlines } from "@/store/useStickOutlines";
 import { FIELD_LABEL } from "@/views/info/fieldLabel";
 import { SubBrowser } from "@/views/subbrowser/SubBrowser";
 import { RightRail } from "@/views/browser/RightRail";
@@ -121,6 +123,8 @@ const FolderClashDialog = lazy(() => import("@/components/FolderClashDialog").th
 const DeviceImportCopyDialog = lazy(() => import("@/components/DeviceImportCopyDialog").then(m => ({ default: m.DeviceImportCopyDialog })));
 const AnalysisDialog = lazy(() => import("@/views/analysis/AnalysisDialog").then(m => ({ default: m.AnalysisDialog })));
 const NewLibraryDialog = lazy(() => import("@/views/library/NewLibraryDialog").then(m => ({ default: m.NewLibraryDialog })));
+/** No Sticks: what the shell's tree reads while the shell is off. */
+const NO_DEVICES: readonly Device[] = [];
 const DevicePanel = lazy(() => import("@/views/devices/DevicePanel").then(m => ({ default: m.DevicePanel })));
 const InfoPanel = lazy(() => import("@/views/info/InfoPanel").then(m => ({ default: m.InfoPanel })));
 const LogView = lazy(() => import("@/views/log/LogView").then(m => ({ default: m.LogView })));
@@ -564,6 +568,9 @@ function AppBody() {
    * the layout menu last chose; the choice itself is kept for the old layout.
    */
   const shellOn = prefs.preferences.view.viewShell;
+  // The shell's tree reads each Stick's playlists without writing to it
+  // (ticket #52); only drawn, so only read, with the shell on.
+  const shellSticks = useStickOutlines(shellOn ? devices : NO_DEVICES, deviceLibraries.revision);
   const layout: PlayerLayout = shellOn ? SHELL_PLAYER_LAYOUT : chosenLayout;
   /** The view in the shell's working area. Here, so it outlives nothing it should not. */
   const [shellView, setShellView] = useState<ShellView>(DEFAULT_SHELL_VIEW);
@@ -3337,6 +3344,7 @@ function AppBody() {
             devices={menuDevices}
             onExportLoop={exportLoop}
             simple={!isFullDeck(layout)}
+            compact={shellOn}
             dragging={draggedTracks !== null}
             onDropTrack={loadDroppedInto.a}
             onLoadSelected={loadSelectedInto.a}
@@ -3416,6 +3424,10 @@ function AppBody() {
     onColumnAutoSize: cols.autoSize, onColumnAutoSizeAll: cols.autoSizeEvery,
     artworkMode, onArtworkMode: setArtworkMode,
   };
+  const shellTree = useShellTree({
+    library: tree, sticks: shellSticks, selectedNode, onSelectNode: setSelectedNode,
+    view: shellView, onViewChange: changeShellView,
+  });
   const library = (
         selectedDevice ? (
           <Suspense fallback={null}><DevicePanel
@@ -3676,7 +3688,9 @@ function AppBody() {
           platform={platform}
           keyOverrides={keyOverrides}
           player={deckA}
-          tree={treeView}
+          tree={shellTree.tree}
+          intakeQueue={shellTree.intakeQueue}
+          stick={selectedDevice ? library : undefined}
           library={library}
           status={<>{linkStrip}{statusBar}</>}
         />

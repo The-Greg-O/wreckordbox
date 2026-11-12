@@ -131,7 +131,7 @@ pub enum RunCommands {
 }
 
 /// `dj`, `agent:NAME`, `tool:NAME`, `web:ADDRESS`.
-fn parse_source(text: &str) -> Result<SourceArg, String> {
+pub(crate) fn parse_source(text: &str) -> Result<SourceArg, String> {
     let (kind, name) = text.split_once(':').unwrap_or((text, ""));
     let kind = match kind {
         "dj" => SourceKind::Dj,
@@ -341,11 +341,11 @@ fn facts_in(text: &str) -> Result<Vec<Value>, ServiceError> {
         .collect()
 }
 
-fn bad(message: String) -> ServiceError {
+pub(crate) fn bad(message: String) -> ServiceError {
     ServiceError::new(wreckordbox_service::codes::BAD_REQUEST, message)
 }
 
-fn source_text(source: &Source) -> String {
+pub(crate) fn source_text(source: &Source) -> String {
     let kind = match source.kind {
         SourceKind::Dj => return "dj".to_owned(),
         SourceKind::Agent => "agent",
@@ -474,7 +474,7 @@ fn kinds_text(kinds: &DeclaredKinds) -> String {
 
 /// Rows as a table: columns two spaces apart, as wide as their longest
 /// cell.
-fn table<const N: usize>(rows: &[[String; N]]) -> String {
+pub(crate) fn table<const N: usize>(rows: &[[String; N]]) -> String {
     let widths: [usize; N] = std::array::from_fn(|column| {
         rows.iter()
             .map(|row| row[column].chars().count())
@@ -495,7 +495,7 @@ fn table<const N: usize>(rows: &[[String; N]]) -> String {
 }
 
 /// Milliseconds since the Unix epoch as `2026-11-11 14:03:22Z`.
-fn time_text(millis: i64) -> String {
+pub(crate) fn time_text(millis: i64) -> String {
     let seconds = millis.div_euclid(1000);
     let (days, of_day) = (seconds.div_euclid(86_400), seconds.rem_euclid(86_400));
     // Days to a civil date, in the proleptic Gregorian calendar.
