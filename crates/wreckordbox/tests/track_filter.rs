@@ -26,6 +26,15 @@ fn page(sandbox: &Sandbox, args: &[&str]) -> Value {
     run.json()
 }
 
+fn ids_of(page: &Value) -> Vec<String> {
+    page["tracks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|track| track["id"].as_str().unwrap().to_owned())
+        .collect()
+}
+
 /// The identifiers `tracks query <args>` matches.
 fn ids(sandbox: &Sandbox, args: &[&str]) -> Vec<String> {
     page(sandbox, args)["tracks"]
@@ -89,13 +98,15 @@ fn mytags_picked_in_a_category_need_every_one_unless_the_category_is_any() {
     let Catalogue { sandbox, .. } = catalogue();
     let peak_and_warm_up = [
         "--mytag-in",
-        "Situation:Peak",
+        "Situation",
+        "Peak",
         "--mytag-in",
-        "Situation:Warm-up",
+        "Situation",
+        "Warm-up",
     ];
 
     assert_eq!(
-        ids(&sandbox, &["--mytag-in", "Situation:Peak"]),
+        ids(&sandbox, &["--mytag-in", "Situation", "Peak"]),
         ["10003", "10012"]
     );
     assert_eq!(ids(&sandbox, &peak_and_warm_up), Vec::<String>::new());
@@ -111,9 +122,11 @@ fn mytags_picked_in_a_category_need_every_one_unless_the_category_is_any() {
             &sandbox,
             &[
                 "--mytag-in",
-                "Situation:Peak",
+                "Situation",
+                "Peak",
                 "--mytag-in",
-                "Situation:Vocal"
+                "Situation",
+                "Vocal"
             ]
         ),
         ["10012"]
@@ -136,19 +149,21 @@ fn a_mytag_picked_in_one_category_does_not_match_the_same_name_in_another() {
     });
 
     assert_eq!(
-        ids(&sandbox, &["--mytag-in", "Situation:Peak"]),
+        ids(&sandbox, &["--mytag-in", "Situation", "Peak"]),
         ["10003", "10012"]
     );
-    assert_eq!(ids(&sandbox, &["--mytag-in", "Sound:Peak"]), ["10007"]);
+    assert_eq!(ids(&sandbox, &["--mytag-in", "Sound", "Peak"]), ["10007"]);
     // Two categories must both agree.
     assert_eq!(
         ids(
             &sandbox,
             &[
                 "--mytag-in",
-                "Situation:Warm-up",
+                "Situation",
+                "Warm-up",
                 "--mytag-in",
-                "Sound:Peak"
+                "Sound",
+                "Peak"
             ]
         ),
         ["10007"]
@@ -156,22 +171,153 @@ fn a_mytag_picked_in_one_category_does_not_match_the_same_name_in_another() {
 }
 
 #[test]
-fn a_category_or_tag_the_library_does_not_hold_is_refused() {
+fn a_category_or_tag_the_library_no_longer_holds_is_left_out_with_a_note() {
     let Catalogue { sandbox, .. } = catalogue();
 
-    assert_eq!(
-        refusal(&sandbox, &["--mytag-in", "Weather:Peak"]),
-        "mytag_not_found"
+    // "Sunset" is not a Situation: the pick keeps Peak and says so.
+    let found = page(
+        &sandbox,
+        &[
+            "--mytag-in",
+            "Situation",
+            "Peak",
+            "--mytag-in",
+            "Situation",
+            "Sunset",
+            "--mytag-any",
+            "Situation",
+        ],
     );
-    assert_eq!(
-        refusal(&sandbox, &["--mytag-in", "Situation:Sunset"]),
-        "mytag_not_found"
+    assert_eq!(ids_of(&found), ["10003", "10012"]);
+    assert_eq!(found["dropped"], json!(["Situation: Sunset"]));
+
+    // A category that is gone takes its picks with it: no constraint is left.
+    let found = page(&sandbox, &["--mytag-in", "Weather", "Rain", "--key", "11B"]);
+    assert_eq!(ids_of(&found), ["10007"]);
+    assert_eq!(found["dropped"], json!(["Weather"]));
+
+    // Said in the text output too.
+    let run = sandbox.cli(&[
+        "tracks",
+        "query",
+        "--mytag-in",
+        "Weather",
+        "Rain",
+        "--key",
+        "11B",
+    ]);
+    assert!(run.status.success(), "{}", run.stderr);
+    assert!(
+        run.stdout
+            .contains("Left out of the filter, no longer in the Library: Weather"),
+        "{}",
+        run.stdout
     );
-    assert_eq!(refusal(&sandbox, &["--mytag-in", "Peak"]), "bad_request");
+
+    // Nothing dropped, nothing said.
+    assert_eq!(page(&sandbox, &["--key", "11B"]).get("dropped"), None);
+}
+
+#[test]
+fn a_mode_with_no_tags_is_refused() {
+    let Catalogue { sandbox, .. } = catalogue();
     assert_eq!(
         refusal(&sandbox, &["--mytag-any", "Situation"]),
         "bad_request"
     );
+}
+
+#[test]
+fn a_category_and_tag_with_colons_in_their_names_round_trip() {
+    let Catalogue { sandbox, .. } = catalogue();
+    let [_, mood, _, _] = sandbox.four_categories();
+    sandbox.edit(|writer| {
+        writer
+            .library()
+            .connection()
+            .execute(
+                "UPDATE djmdMyTag SET Name = 'Mood:Type' WHERE ID = ?1",
+                [&mood],
+            )
+            .unwrap();
+    });
+    let dark = sandbox.create_my_tag_in(&mood, "Dark: very");
+    sandbox.edit(|writer| {
+        writer
+            .set_my_tags(&fixture::track_id(7), &[dark.clone()])
+            .unwrap();
+    });
+
+    let found = page(&sandbox, &["--mytag-in", "Mood:Type", "Dark: very"]);
+    assert_eq!(ids_of(&found), ["10007"]);
+    assert_eq!(found.get("dropped"), None);
+}
+
+#[test]
+fn a_key_is_every_spelling_of_it_and_a_name_off_the_wheel_is_exact() {
+    let Catalogue { sandbox, .. } = catalogue();
+    sandbox.describe_track(20, "Spelled", "x", "Am", 0);
+    sandbox.describe_track(21, "Open Key", "x", "1m", 0);
+    sandbox.describe_track(22, "Odd", "x", "Mystery", 0);
+
+    let eight_a = ["10003", "10012", "10020", "10021"];
+    assert_eq!(ids(&sandbox, &["--key", "8A"]), eight_a);
+    assert_eq!(ids(&sandbox, &["--key", "Am"]), eight_a);
+    assert_eq!(ids(&sandbox, &["--key", "Mystery"]), ["10022"]);
+    assert_eq!(ids(&sandbox, &["--key", "mystery"]), Vec::<String>::new());
+}
+
+#[test]
+fn energy_values_and_ranges_add_up_and_zero_is_no_energy() {
+    let Catalogue { sandbox, .. } = catalogue();
+
+    // 1 to 5 is every track with an Energy, not every track.
+    assert_eq!(ids(&sandbox, &["--energy", "1..5"]), ["10003", "10012"]);
+    assert_eq!(
+        ids(
+            &sandbox,
+            &["--artist", "lovelace", "--energy", "0", "--energy", "5"]
+        ),
+        ["10007"]
+    );
+    assert_eq!(
+        ids(
+            &sandbox,
+            &["--artist", "lovelace", "--energy", "0", "--energy", "4"]
+        ),
+        ["10003", "10007"]
+    );
+}
+
+#[test]
+fn bpm_ranges_in_hundredths_add_up() {
+    let Catalogue { sandbox, .. } = catalogue();
+
+    assert_eq!(
+        ids(
+            &sandbox,
+            &[
+                "--bpm-range",
+                "128.10..128.12",
+                "--bpm-range",
+                "128.58..128.59"
+            ]
+        ),
+        ["10010", "10011", "10012", "10058", "10059"]
+    );
+    // The window's whole-BPM bucket 129: 128.50 to 129.49.
+    assert_eq!(
+        ids(&sandbox, &["--bpm-range", "128.50..129.49"]),
+        (10_050..10_060)
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>()
+    );
+    // An empty range admits nothing.
+    assert_eq!(
+        ids(&sandbox, &["--bpm-range", "0.02..0.01"]),
+        Vec::<String>::new()
+    );
+    assert_eq!(refusal(&sandbox, &["--bpm-range", "fast"]), "bad_request");
 }
 
 #[test]
@@ -188,8 +334,8 @@ fn the_wire_takes_the_same_fields_the_window_sends() {
                 "keys": ["8A", "11B"],
                 "prep_colours": ["Green", "Red"],
                 "my_tag_picks": [{ "category": "Situation", "tags": ["Peak", "Warm-up"], "any": true }],
-                "energy": "4..5",
-                "bpm": "127.50..128.49",
+                "energies": ["4..5"],
+                "bpm_ranges": ["127.50..128.49"],
             }),
         )
         .unwrap();

@@ -66,8 +66,13 @@ pub struct QueryArgs {
     key: Vec<String>,
     /// Only tracks with this Energy (the star rating), 1 to 5, or a range;
     /// 0 is a track with none.
+    /// Give it more than once for tracks with any of them.
     #[arg(long, visible_alias = "rating", value_name = "ENERGY")]
-    energy: Option<String>,
+    energy: Vec<String>,
+    /// Only tracks whose tempo is in this range, to the hundredth
+    /// (`123.50..128.49`). Give it more than once for tracks in any of them.
+    #[arg(long, value_name = "LOW..HIGH")]
+    bpm_range: Vec<String>,
     /// Only tracks with this Prep colour (the colour label): Pink, Red,
     /// Orange, Yellow, Green, Aqua, Blue or Purple, or `none`. Give it more
     /// than once for tracks with any of them.
@@ -96,10 +101,12 @@ pub struct QueryArgs {
     #[arg(long, value_name = "TAG")]
     mytag: Vec<String>,
     /// Only tracks carrying this MyTag of this category, as the Track
-    /// Filter picks one: `CATEGORY:TAG`, e.g. `Situation:Peak time`. Tags
-    /// picked in one category must all be carried, unless the category is
-    /// named by --mytag-any; every category picked must agree.
-    #[arg(long, value_name = "CATEGORY:TAG")]
+    /// Filter picks one: the category, then the tag, as two arguments
+    /// (`--mytag-in Situation "Peak time"`), so either may hold a colon.
+    /// Tags picked in one category must all be carried, unless the category
+    /// is named by --mytag-any; every category picked must agree. A tag or
+    /// category the Library no longer holds is left out, and said so.
+    #[arg(long, num_args = 2, value_names = ["CATEGORY", "TAG"])]
     mytag_in: Vec<String>,
     /// Tracks carrying any of the tags picked by --mytag-in in this
     /// category pass, not only those carrying every one.
@@ -124,27 +131,27 @@ enum YesNo {
     No,
 }
 
-/// `--mytag-in CATEGORY:TAG` and `--mytag-any CATEGORY` as one pick per
+/// `--mytag-in CATEGORY TAG` and `--mytag-any CATEGORY` as one pick per
 /// category, in the order the categories were first named.
 fn my_tag_picks(picked: &[String], any: &[String]) -> Result<Vec<MyTagPick>, ServiceError> {
     let mut picks: Vec<MyTagPick> = Vec::new();
-    for text in picked {
-        let (category, tag) = text.split_once(':').ok_or_else(|| {
-            ServiceError::new(
+    for pair in picked.chunks(2) {
+        let [category, tag] = pair else {
+            return Err(ServiceError::new(
                 codes::BAD_REQUEST,
-                format!("{text:?} names no category: give --mytag-in CATEGORY:TAG"),
-            )
-        })?;
-        let at = picks.iter().position(|p| p.category == category);
+                "--mytag-in takes a category and a tag".to_owned(),
+            ));
+        };
+        let at = picks.iter().position(|p| &p.category == category);
         let at = at.unwrap_or_else(|| {
             picks.push(MyTagPick {
-                category: category.to_owned(),
+                category: category.clone(),
                 ..MyTagPick::default()
             });
             picks.len() - 1
         });
         if let Some(pick) = picks.get_mut(at) {
-            pick.tags.push(tag.to_owned());
+            pick.tags.push(tag.clone());
         }
     }
     for category in any {
@@ -192,7 +199,9 @@ pub fn query(client: &mut Client, args: &QueryArgs, as_json: bool) -> Result<Str
         keys: args.key.clone(),
         year: args.year.clone(),
         bpm: args.bpm.clone(),
-        energy: args.energy.clone(),
+        energy: None,
+        energies: args.energy.clone(),
+        bpm_ranges: args.bpm_range.clone(),
         prep_colour: None,
         prep_colours: args.prep_colour.clone(),
         my_tag_picks: my_tag_picks(&args.mytag_in, &args.mytag_any)?,
@@ -209,7 +218,15 @@ pub fn query(client: &mut Client, args: &QueryArgs, as_json: bool) -> Result<Str
     Ok(if as_json {
         json!(page).to_string()
     } else {
-        page_text(&page)
+        let mut text = page_text(&page);
+        if !page.dropped.is_empty() {
+            let _ = write!(
+                text,
+                "\nLeft out of the filter, no longer in the Library: {}",
+                page.dropped.join(", ")
+            );
+        }
+        text
     })
 }
 

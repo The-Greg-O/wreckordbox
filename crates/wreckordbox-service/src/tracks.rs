@@ -183,6 +183,13 @@ pub struct TrackSelection {
     /// MyTags picked within a category, one entry per category.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub my_tag_picks: Vec<crate::track_filter::MyTagPick>,
+    /// Energy values or ranges (`0` is none), a track with any of them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub energies: Vec<String>,
+    /// Tempo ranges in BPM to the hundredth (`123.50..128.49`), a track in
+    /// any of them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub bpm_ranges: Vec<String>,
     /// A playlist, by identifier or by name: only its tracks, in its order.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub playlist: Option<String>,
@@ -207,6 +214,10 @@ pub struct TrackPage {
     pub limit: usize,
     /// The `offset` that fetches the next page; `null` on the last one.
     pub next_offset: Option<usize>,
+    /// Picks in `my_tag_picks` the Library no longer holds, left out of the
+    /// filter: `"Category: Tag"`, or `"Category"` for a whole category.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dropped: Vec<String>,
 }
 
 /// Answers `tracks.get` and `tracks.query`.
@@ -261,6 +272,7 @@ fn query(
         offset,
         limit,
         next_offset: (end < total && end > offset).then_some(end),
+        dropped: crate::track_filter::dropped(index, selection),
     })
 }
 
