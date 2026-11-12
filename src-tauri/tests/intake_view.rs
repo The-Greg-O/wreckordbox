@@ -4,7 +4,12 @@
 //!
 //! A fixture Library in a temporary folder and a mock app in place of the
 //! window; nothing here can reach the installed Library.
-#![allow(clippy::pedantic, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::pedantic,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
 
 use std::sync::Arc;
 
@@ -29,7 +34,11 @@ impl Window {
     }
 
     fn config(&self) -> Config {
-        Config { runtime_dir: self.dir.path().join("run"), idle_exit: None, recovery_dir: self.dir.path().join("backups") }
+        Config {
+            runtime_dir: self.dir.path().join("run"),
+            idle_exit: None,
+            recovery_dir: self.dir.path().join("backups"),
+        }
     }
 }
 
@@ -39,7 +48,14 @@ fn hosting_window() -> Window {
     let dir = tempfile::tempdir().unwrap();
     let library = dir.path().join("library");
     std::fs::create_dir_all(&library).unwrap();
-    let location = fixture::build(&library, Shape { tracks: 5, ..Shape::default() }).unwrap();
+    let location = fixture::build(
+        &library,
+        Shape {
+            tracks: 5,
+            ..Shape::default()
+        },
+    )
+    .unwrap();
     let state = AppState::with_backups(dir.path().join("backups"));
     let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
     let (index, _) = rbl_index::load(&db).unwrap();
@@ -79,7 +95,10 @@ fn the_counts_follow_an_edit_made_through_the_service() {
 
     let set = state
         .with_service(|service| {
-            service.call("tracks.set_prep_colour", json!({ "id": track_id(1), "prep_colour": "Green" }))
+            service.call(
+                "tracks.set_prep_colour",
+                json!({ "id": track_id(1), "prep_colour": "Green" }),
+            )
         })
         .unwrap()
         .unwrap();
@@ -87,7 +106,10 @@ fn the_counts_follow_an_edit_made_through_the_service() {
 
     assert_eq!(intake_view::counts(&state).unwrap()["intake"], 4);
     let page = intake_view::queue_page(&state, IntakeQueueName::Intake, 0, 50).unwrap();
-    assert!(page.rows.iter().all(|row| row.id != track_id(1)), "a coloured track left the queue");
+    assert!(
+        page.rows.iter().all(|row| row.id != track_id(1)),
+        "a coloured track left the queue"
+    );
 }
 
 #[test]
@@ -110,6 +132,10 @@ fn a_window_that_hosts_no_service_says_so() {
     let state = Arc::new(AppState::with_backups(dir.path().join("backups")));
 
     let error = intake_view::queue_page(&state, IntakeQueueName::Intake, 0, 50).unwrap_err();
-    assert!(error.message.contains("Library service"), "{}", error.message);
+    assert!(
+        error.message.contains("Library service"),
+        "{}",
+        error.message
+    );
     assert!(intake_view::counts(&state).is_err());
 }

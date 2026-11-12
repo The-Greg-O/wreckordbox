@@ -61,15 +61,30 @@ fn ask(state: &AppState, command: &str, args: Value) -> AppResult<Result<Value, 
 /// One page of a queue, with each track's row. A queue the service cannot
 /// list for a reason the DJ can fix (no colour label named Problem) is an
 /// answer with `unavailable`, not an error; anything else is an error.
-pub fn queue_page(state: &Arc<AppState>, queue: IntakeQueueName, offset: usize, limit: usize) -> AppResult<IntakePage> {
+pub fn queue_page(
+    state: &Arc<AppState>,
+    queue: IntakeQueueName,
+    offset: usize,
+    limit: usize,
+) -> AppResult<IntakePage> {
     let command = match queue {
         IntakeQueueName::Intake => intake::commands::INTAKE_LIST,
         IntakeQueueName::Problems => intake::commands::INTAKE_PROBLEMS,
     };
     let answer = match ask(state, command, json!({ "offset": offset, "limit": limit }))? {
         Ok(answer) => answer,
-        Err(error) if error.code == intake::codes::PROBLEM_COLOUR_NOT_FOUND || error.code == intake::codes::PROBLEM_COLOUR_AMBIGUOUS => {
-            return Ok(IntakePage { queue: None, rows: Vec::new(), unavailable: Some(Unavailable { code: error.code, message: error.message }) });
+        Err(error)
+            if error.code == intake::codes::PROBLEM_COLOUR_NOT_FOUND
+                || error.code == intake::codes::PROBLEM_COLOUR_AMBIGUOUS =>
+        {
+            return Ok(IntakePage {
+                queue: None,
+                rows: Vec::new(),
+                unavailable: Some(Unavailable {
+                    code: error.code,
+                    message: error.message,
+                }),
+            });
         }
         Err(error) => return Err(failed(&error)),
     };
@@ -81,7 +96,10 @@ pub fn queue_page(state: &Arc<AppState>, queue: IntakeQueueName, offset: usize, 
     let mut kept_rows = Vec::new();
     if let Some(tracks) = answer.get_mut("tracks").and_then(Value::as_array_mut) {
         tracks.retain(|track| {
-            let row = track.get("id").and_then(Value::as_str).and_then(|id| library.row_of(id));
+            let row = track
+                .get("id")
+                .and_then(Value::as_str)
+                .and_then(|id| library.row_of(id));
             if let Some(row) = row {
                 kept_rows.push(row);
             }
@@ -92,7 +110,11 @@ pub fn queue_page(state: &Arc<AppState>, queue: IntakeQueueName, offset: usize, 
     for (position, row) in rows.iter_mut().enumerate() {
         row.track_no = u32::try_from(offset + position + 1).unwrap_or(u32::MAX);
     }
-    Ok(IntakePage { queue: Some(answer), rows, unavailable: None })
+    Ok(IntakePage {
+        queue: Some(answer),
+        rows,
+        unavailable: None,
+    })
 }
 
 /// How many tracks wait in each queue, for the view's tab and the tree:
@@ -102,12 +124,19 @@ pub fn counts(state: &Arc<AppState>) -> AppResult<Value> {
 }
 
 fn failed(error: &ServiceError) -> AppError {
-    AppError::new(ErrorKind::Internal, format!("The Intake queue could not be read: {}", error.message)).with_detail(error.code.clone())
+    AppError::new(
+        ErrorKind::Internal,
+        format!("The Intake queue could not be read: {}", error.message),
+    )
+    .with_detail(error.code.clone())
 }
 
 /// A page of the Intake or Problems queue (`IntakeView`).
 #[tauri::command]
-#[allow(clippy::needless_pass_by_value, reason = "a command is handed its state by value")]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "a command is handed its state by value"
+)]
 pub async fn intake_queue(
     state: tauri::State<'_, Arc<AppState>>,
     queue: IntakeQueueName,
@@ -115,12 +144,18 @@ pub async fn intake_queue(
     limit: usize,
 ) -> AppResult<IntakePage> {
     let state = Arc::clone(&state);
-    blocking("intake_queue", move || queue_page(&state, queue, offset, limit)).await
+    blocking("intake_queue", move || {
+        queue_page(&state, queue, offset, limit)
+    })
+    .await
 }
 
 /// The Intake and Problems counts (the Intake tab, the tree).
 #[tauri::command]
-#[allow(clippy::needless_pass_by_value, reason = "a command is handed its state by value")]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "a command is handed its state by value"
+)]
 pub async fn intake_counts(state: tauri::State<'_, Arc<AppState>>) -> AppResult<Value> {
     let state = Arc::clone(&state);
     blocking("intake_counts", move || counts(&state)).await
