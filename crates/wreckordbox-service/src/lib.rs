@@ -11,6 +11,8 @@
 //! display.
 
 mod client;
+pub mod decider;
+pub mod decisions;
 mod entries;
 pub mod facts;
 pub mod intake;
