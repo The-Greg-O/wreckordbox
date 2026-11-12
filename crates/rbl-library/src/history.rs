@@ -40,8 +40,9 @@ pub trait OutsideSteps: Send + Sync {
     fn revert(&self, undo: bool) -> (usize, usize);
 }
 
-/// One reversible library operation. Grid edits keep their own history because
-/// they also rewrite analysis files; text fields keep `WebKit`'s native history.
+/// One reversible library operation. The window's grid edits are entries too
+/// (`Grid`), stepped by its grid editor because they also rewrite analysis
+/// files; text fields keep `WebKit`'s native history.
 #[derive(Clone)]
 pub enum LibraryEdit {
     DeletePlaylist(rbl_db::write::PlaylistDeletion),
@@ -110,6 +111,11 @@ pub enum LibraryEdit {
     /// row is written, Undo and Redo write none; the Ledger records,
     /// withdraws and records again the Facts (`crate::judgements`).
     Judgements(crate::judgements::Judgements),
+    /// A beat grid edit made in the window, or a run of them (a tap run, a
+    /// held nudge) (wbx-64): the beats either side. Stepped by the window's
+    /// grid editor, never by [`crate::LibraryCore::step_history`]; see
+    /// `crate::grid_step`.
+    Grid(crate::grid_step::GridStep),
 }
 
 impl LibraryEdit {
@@ -137,6 +143,7 @@ impl LibraryEdit {
             Self::Relocate(edit) => edit.is_empty(),
             Self::ListRemoval(edit) => edit.is_empty(),
             Self::Judgements(judgements) => judgements.is_empty(),
+            Self::Grid(step) => step.is_empty(),
         }
     }
 
@@ -163,6 +170,8 @@ impl LibraryEdit {
             // No row changes: the cheapest refresh, which still tells the
             // clients (and the window) that something changed.
             Self::Judgements(_) => Touched::Metadata(Vec::new()),
+            // The track's BPM row; the window re-reads its grid itself.
+            Self::Grid(step) => Touched::Metadata(vec![step.track.clone()]),
         }
     }
 
@@ -213,6 +222,9 @@ impl LibraryEdit {
                 Some(reason) => Err(DbError::Conflict(reason)),
                 None => Ok(()),
             },
+            // Its files are the window's grid editor's to write: refused
+            // before anything is written, and the entry stays.
+            Self::Grid(_) => Err(DbError::WriteRefused(crate::grid_step::GridStep::NOT_HERE.to_owned())),
         }
     }
 
@@ -271,6 +283,7 @@ impl LibraryEdit {
             Self::Relocate(value) => if undo { writer.undo_relocation(value) } else { writer.redo_relocation(value) }.map(|_| ()),
             Self::ListRemoval(value) => if undo { writer.undo_list_removal(value) } else { writer.redo_list_removal(value) }.map(|_| ()),
             Self::Judgements(_) => Ok(()),
+            Self::Grid(_) => Err(DbError::WriteRefused(crate::grid_step::GridStep::NOT_HERE.to_owned())),
         }
     }
 }
@@ -389,6 +402,39 @@ impl EditHistory {
             self.undo.remove(0);
         }
         self.redo.clear();
+    }
+
+    /// Records a window grid edit (wbx-64). An edit of the run on top of
+    /// Undo (the same track and `transaction`: a tap run, a held nudge)
+    /// joins it, so the run is one Undo back to the grid before its first
+    /// edit; the Ledger records each write, the later ones as part of the
+    /// first, as the slices of one Add Tracks to Playlist are.
+    pub fn record_grid(&mut self, step: crate::grid_step::GridStep, label: &'static str) {
+        if step.is_empty() {
+            return;
+        }
+        if let Some(HistoryEntry { edit: LibraryEdit::Grid(open), ledger: first, .. }) = self.undo.last_mut() {
+            if open.joins(&step) {
+                open.after = std::sync::Arc::clone(&step.after);
+                self.redo.clear();
+                if let Some(ledger) = &self.ledger {
+                    ledger.record(Step::Edit, &LibraryEdit::Grid(step), label, Link { reverses: None, part_of: *first });
+                }
+                return;
+            }
+        }
+        self.record(LibraryEdit::Grid(step), label);
+    }
+
+    /// Moves the next Undo (`undo`) or Redo entry across once something
+    /// other than the core has made its step: the window's grid editor, for
+    /// a [`LibraryEdit::Grid`] entry. The Ledger is told, as for any step.
+    /// Call it under the edit gate, after the step was written; answers the
+    /// entry, or `None` when there was none.
+    pub fn stepped_elsewhere(&mut self, undo: bool) -> Option<&HistoryEntry> {
+        let entry = self.drop_next(undo)?;
+        self.stepped(entry, undo);
+        self.next(!undo)
     }
 
     /// Records one slice of an Add Tracks to Playlist (#499). A slice of the
@@ -614,6 +660,12 @@ impl crate::LibraryCore {
     pub fn step_history(&self, host: &(impl crate::Host + ?Sized), undo: bool) -> Result<Stepped, StepError> {
         let _gate = self.edit_gate().lock();
         let entry = self.history.lock().next(undo).cloned().ok_or(StepError::Nothing)?;
+        // The window's grid editor steps a grid entry (its files are not the
+        // core's to write): refused before any write or Ledger intent, and
+        // the entry stays.
+        if matches!(entry.edit, LibraryEdit::Grid(_)) {
+            return Err(StepError::Write(DbError::WriteRefused(crate::grid_step::GridStep::NOT_HERE.to_owned())));
+        }
         let touched = entry.edit.touched();
         let mut preparation = crate::ledger::Preparation::edit(&entry.edit);
         if undo { preparation.undo_of = entry.ledger; } else { preparation.redo_of = entry.ledger; }

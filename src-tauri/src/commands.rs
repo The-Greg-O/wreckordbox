@@ -3937,8 +3937,13 @@ async fn run_history<R: tauri::Runtime>(
     undo: bool,
 ) -> AppResult<EditHistoryDto> {
     let worker = Arc::clone(&state);
+    // Every window manages one; an app built without it steps no grid entry.
+    let editor = tauri::Manager::try_state::<Arc<crate::grid::GridEditor>>(&app).map(|editor| Arc::clone(&*editor));
     let name = if undo { "undo_edit" } else { "redo_edit" };
-    let result = blocking(name, move || step_history(&worker, undo)).await;
+    let result = blocking(name, move || match &editor {
+        Some(editor) => step_history(&worker, editor, undo),
+        None => step_history_without_grid(&worker, undo),
+    }).await;
     match &result {
         Ok((dto, stepped)) => {
             // A cue entry names its track, as the cue edit itself does,
@@ -3948,6 +3953,15 @@ async fn run_history<R: tauri::Runtime>(
                 Stepped::Cues(track) => tauri::Emitter::emit(&app, "cues:changed", track),
                 Stepped::TagList => tauri::Emitter::emit(&app, Touched::TagList.event(), dto.generation),
                 Stepped::Library => tauri::Emitter::emit(&app, "library:changed", dto.generation),
+                // A grid step (wbx-64): every deck showing the track re-reads
+                // its grid, and a changed tempo is a changed BPM column.
+                Stepped::Grid { track, bpm_changed } => {
+                    let told = tauri::Emitter::emit(&app, "grid:changed", track);
+                    if *bpm_changed {
+                        let _ = reload(app.clone(), Arc::clone(&state)).await;
+                    }
+                    told
+                }
             };
             let _ = tauri::Emitter::emit(&app, "edit-history:changed", dto.clone());
         }
@@ -3964,6 +3978,8 @@ pub(crate) enum Stepped {
     TagList,
     /// One track's cues (#504).
     Cues(String),
+    /// One track's beat grid, and whether its tempo changed (wbx-64).
+    Grid { track: String, bpm_changed: bool },
 }
 
 /// Runs the next Undo (`undo`) or Redo entry of the library history.
@@ -3979,10 +3995,34 @@ pub(crate) enum Stepped {
 /// Also answers what the window is to be told changed: the track a cue
 /// entry changed (`cues:changed`), the Tag List (`tag-list:changed`), or
 /// the library (`library:changed`).
-pub(crate) fn step_history(state: &AppState, undo: bool) -> AppResult<(EditHistoryDto, Stepped)> {
+pub(crate) fn step_history(state: &AppState, editor: &crate::grid::GridEditor, undo: bool) -> AppResult<(EditHistoryDto, Stepped)> {
+    step_history_with(state, Some(editor), undo)
+}
+
+/// [`step_history`] in an app with no grid editor: a grid entry on top is
+/// refused by the core, and stays.
+fn step_history_without_grid(state: &AppState, undo: bool) -> AppResult<(EditHistoryDto, Stepped)> {
+    step_history_with(state, None, undo)
+}
+
+fn step_history_with(state: &AppState, editor: Option<&crate::grid::GridEditor>, undo: bool) -> AppResult<(EditHistoryDto, Stepped)> {
     use rbl_library::history::StepError;
     // Held past the step, so what is reported is what this step left.
     let _gate = state.edit_gate().lock();
+    // A grid entry is stepped by the grid editor, which writes its files
+    // under the file-edit guard and moves the entry once they are written
+    // (wbx-64); everything else by the core.
+    let grid = state.edit_history().lock().next(undo).and_then(|entry| match &entry.edit {
+        LibraryEdit::Grid(step) => Some(step.track.clone()),
+        _ => None,
+    });
+    if let (Some(track), Some(editor)) = (grid, editor) {
+        let action = if undo { crate::grid::GridAction::Undo } else { crate::grid::GridAction::Redo };
+        let outcome = crate::grid::guarded(state, editor, &*state.library()?, &state.location()?, &track, action,
+            &crate::grid::GridOptions::default())?;
+        let generation = state.core().generation();
+        return Ok((history_dto(generation, &state.edit_history().lock()), Stepped::Grid { track, bpm_changed: outcome.bpm_changed }));
+    }
     match state.core().step_history(state, undo) {
         Ok(step) => {
             let stepped = match step.touched {

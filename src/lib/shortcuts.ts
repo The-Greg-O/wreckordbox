@@ -177,6 +177,9 @@ export type Action =
   | "shiftGridLeft"
   | "shiftGridRight"
   | "shiftGridToCenter"
+  // The grid's TAP (wbx-64): this app's own row, unbound, so the palette
+  // lists it as it lists every other action.
+  | "tapTempo"
   // The mixer's kill buttons, one per band and deck. rekordbox's Export preset
   // binds nothing to them [OBS: no EQ command in keymap.ts], so these rows are
   // this app's own and start unbound; the Keyboard pane assigns them.
@@ -691,6 +694,9 @@ export const BINDINGS: readonly Binding[] = [
       deck,
       pane: deck === "a" ? "Player A" : "Player B",
     }))),
+  // TAP (wbx-64): this app's own, unbound until the person picks a key.
+  // Player A's alone, as `Adjust BPM/BeatGrid`: the view shell has one deck.
+  { id: "a.tapTempo", group: "Player A", label: "Tap Tempo", chord: { key: "" }, action: "tapTempo", deck: "a", pane: "Player A" },
   // Hot cue pads D to H, and Player B's clears: unbound, since the Export
   // preset binds nothing to them, but rekordbox's own commands [OBS static:
   // `djplay::UiPlayer::getAllCommands` lists them in EXPORT mode, rekordbox
