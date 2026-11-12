@@ -369,11 +369,17 @@ fn playlists_tracks_gives_a_playlists_tracks_in_its_order() {
         ids(&result["tracks"]),
         [track_id(5), track_id(2), track_id(9)]
     );
+    // Each is an entry of the playlist, with an identifier of its own that
+    // is neither its position nor its track's.
+    let entry = result["tracks"][1]["entry_id"].as_str().unwrap().to_owned();
+    assert!(!entry.is_empty());
+    assert_ne!(entry, track_id(2));
+    assert_ne!(result["tracks"][0]["entry_id"], entry.as_str());
     assert_eq!(
         result["tracks"][1],
         json!({
-            "position": 2, "id": track_id(2), "title": "Track 002", "artist": "Ada Lovelace",
-            "bpm": 128.02, "key": "", "rating": 0,
+            "position": 2, "entry_id": entry, "id": track_id(2), "title": "Track 002",
+            "artist": "Ada Lovelace", "bpm": 128.02, "key": "", "rating": 0,
         })
     );
 

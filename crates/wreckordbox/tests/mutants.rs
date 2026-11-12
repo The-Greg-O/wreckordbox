@@ -630,7 +630,9 @@ fn a_mutant_records_the_fingerprint_of_its_parents_audio() {
     let track = sandbox.import_track("Night Bus.wav", 1);
     let playlist = sandbox.create_playlist("Friday", &[2]);
     sandbox.edit(|writer| {
-        writer.add_tracks(&playlist, &[track.clone()]).unwrap();
+        writer
+            .add_tracks(&playlist, std::slice::from_ref(&track))
+            .unwrap();
     });
 
     // A fixture track has no audio file: it is mutated all the same, with
@@ -655,7 +657,9 @@ fn creating_and_removing_a_mutant_changes_nothing_in_the_library() {
     let track = sandbox.import_track("Night Bus.wav", 1);
     let playlist = sandbox.create_playlist("Friday", &[2, 3]);
     sandbox.edit(|writer| {
-        writer.add_tracks(&playlist, &[track.clone()]).unwrap();
+        writer
+            .add_tracks(&playlist, std::slice::from_ref(&track))
+            .unwrap();
     });
     let shape = library_shape(&sandbox);
     let rows = entry_rows(&sandbox);
