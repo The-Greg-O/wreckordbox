@@ -19,6 +19,10 @@
 //! node ordering repeats `device_library`'s so a row's id and position are the
 //! ones the existing Stick view opens.
 
+mod library;
+
+pub use library::{library, settle, unfinished_write, ReadError};
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 

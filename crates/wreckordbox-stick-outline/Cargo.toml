@@ -15,6 +15,7 @@ rbl-export = { path = "../rbl-export" }
 rbl-onelibrary = { path = "../rbl-onelibrary" }
 rbl-pdb = { path = "../rbl-pdb" }
 serde = { workspace = true }
+thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
