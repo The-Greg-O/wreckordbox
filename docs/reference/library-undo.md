@@ -34,11 +34,31 @@ the code or observed, `[ASSUME]` is inferred, `[UNKNOWN]` is open.
 
 ## How library history works
 
-- **One stack per session.** `AppState::edit_history` (`src-tauri/src/state.rs`)
-  holds up to 50 `LibraryEdit` entries for Undo and a Redo stack. It is not
+- **One stack per session, in the Library core.** `LibraryCore::history()`
+  (`crates/rbl-library/src/history.rs`; the app shell reaches it as
+  `AppState::edit_history()`) holds up to 50 `LibraryEdit` entries for Undo
+  and a Redo stack. It sits beside the edit path so that an edit made by a
+  client of the Library service (the `wreckordbox` command, an agent) and
+  an edit made in the window are entries of the same history: Edit › Undo
+  in the window takes back a rating set from the command line, and the
+  command's next read shows the restored value (wreckordbox #11). It is not
   saved; quitting, switching the Master Database (the app restarts) or a
-  restore (run outside the app by the backup's scripts) leaves no history
-  [OBS code].
+  restore (run outside the app by the backup's scripts) leaves no history.
+  A service running by itself (no window open) records into its own core's
+  history, which nothing reads and which ends with it [OBS code;
+  `src-tauri/tests/service_host.rs`].
+- **One recording point.** Every edit that enters the history passes
+  through `EditHistory::record` in `crates/rbl-library/src/history.rs`
+  (the stacks are private to that file). A later slice of one Add Tracks to
+  Playlist joins the entry its first slice recorded there
+  (`EditHistory::record_addition`). Undo and Redo move an entry between the
+  stacks (`LibraryCore::step_history`); they do not record.
+- **A client's edit.** The service records through
+  `LibraryCore::recorded_edit` (gate, guarded write, refresh, `record`),
+  then tells its host the history changed (`Host::history_changed`). The
+  hosting window answers with `edit-history:changed`, which is what sets
+  the Edit menu's Undo and Redo items. An edit that changed nothing (the
+  rating the track already has) records nothing.
 - **Three ways to write.** In `src-tauri/src/commands.rs`:
   - `recorded_edit` writes and pushes one entry, clearing Redo.
   - `edit` writes without recording and clears Redo: "a non-recorded edit
@@ -50,9 +70,10 @@ the code or observed, `[ASSUME]` is inferred, `[UNKNOWN]` is open.
   analysis, grid saves, LINK, deck plays) record nothing. Relocate by
   location and Auto Relocate record their own entry under the edit gate
   (`relocate::record_relocation`, #502).
-  Since #506 `write_then` itself ends the Redo branch whenever the write
+  Since #506 `write_then` itself (now `LibraryCore::write_then` with
+  `History::Outside`) ends the Redo branch whenever the write
   changed a row (SQLite `total_changes` on the writer's connection), and
-  tells the window through the listener `lib.rs` sets
+  tells the window (`Host::history_changed`) through the listener `lib.rs` sets
   (`AppState::on_history_changed` sends `edit-history:changed`). A write
   that changed nothing (a probe for a path) leaves Redo. The code that keeps
   the history itself (`recorded_edit`, `edit`, `permanent_edit`, Undo,
@@ -65,7 +86,10 @@ the code or observed, `[ASSUME]` is inferred, `[UNKNOWN]` is open.
   `ListReplacement`, `PlaylistTrackRemoval`, `PlaylistTrackAddition`, `PlaylistReorder`,
   `PlaylistCreation`, `PlaylistEdit`, `MembershipReplacement`, `TrackEdit`,
   `TrackTagEdit`, `MyTagOrder`, `CueRevision`, `TrackRelocation`, `ListRemoval` in
-  `crates/rbl-db/src/write.rs`; `KeyTagWrite` in `src-tauri/src/key_tag.rs`). A multi-track edit is one entry with one
+  `crates/rbl-db/src/write.rs`; `KeyTagWrite` in `src-tauri/src/key_tag.rs`,
+  which a `KeyEdit` entry holds as `Arc<dyn OutsideSteps>`: the core checks,
+  steps and reverts the files through that trait without knowing what they
+  are). A multi-track edit is one entry with one
   step per track, undone last first [OBS code].
 - **Conflict check (#506).** Before Undo or Redo writes, the rows it would
   write must still hold what the entry expects: the edit's result for Undo,
@@ -88,7 +112,7 @@ the code or observed, `[ASSUME]` is inferred, `[UNKNOWN]` is open.
   `undo_keeps_a_rating_a_player_set_over_link_and_the_rest_of_the_history`
   in `link.rs`, `redo_refuses_a_rating_changed_by_another_program_and_keeps_the_rest`
   in `tests/commands.rs`].
-  A cue entry (#504) is checked in `check_history` through
+  A cue entry (#504) is checked in `LibraryEdit::check` through
   `Writer::cue_revision_conflict`, and again in the transaction that
   writes: every row it names must hold what the entry left there, and a hot
   cue pad (or the Active Loop) it would fill must not be held by another

@@ -656,7 +656,7 @@ where
         let _gate = state.edit_gate().lock();
         let generation = state.write_history_then(action, |db, ()| refresh_after_edit(&state, db, touched)).map_err(write_error)?;
         // Any non-recorded edit after an undo starts a new branch.
-        let mut history = state.edit_history.lock();
+        let mut history = state.edit_history().lock();
         history.clear_redo();
         Ok((generation, history_dto(generation, &history)))
     }).await?;
@@ -683,7 +683,7 @@ where
         let _gate = state.edit_gate().lock();
         let generation = state.write_history_then(action, |db, ()| refresh_after_edit(&state, db, touched))
             .map_err(write_error)?;
-        let mut history = state.edit_history.lock();
+        let mut history = state.edit_history().lock();
         history.clear();
         Ok((generation, history_dto(generation, &history)))
     }).await?;
@@ -702,7 +702,7 @@ where
 /// Call it while holding the edit gate taken around the write, so no Undo
 /// can run between the write and this; then [`announce_history`].
 pub(crate) fn wrote_outside_history(state: &AppState, permanent: bool) {
-    let mut history = state.edit_history.lock();
+    let mut history = state.edit_history().lock();
     if permanent {
         history.clear();
     } else {
@@ -718,16 +718,16 @@ pub(crate) fn announce_history<R: tauri::Runtime>(app: &tauri::AppHandle<R>, sta
 
 /// What Undo and Redo offer now, as `edit-history:changed` reports it.
 pub fn current_history(state: &AppState) -> EditHistoryDto {
-    history_dto(state.summary().3, &state.edit_history.lock())
+    history_dto(state.summary().3, &state.edit_history().lock())
 }
 
-fn history_dto(generation: u32, history: &EditHistory) -> EditHistoryDto {
+pub(crate) fn history_dto(generation: u32, history: &EditHistory) -> EditHistoryDto {
     EditHistoryDto {
         generation,
-        can_undo: !history.undo.is_empty(),
-        can_redo: !history.redo.is_empty(),
-        undo_label: history.undo.last().map(|entry| entry.label.to_owned()),
-        redo_label: history.redo.last().map(|entry| entry.label.to_owned()),
+        can_undo: history.undo_label().is_some(),
+        can_redo: history.redo_label().is_some(),
+        undo_label: history.undo_label().map(str::to_owned),
+        redo_label: history.redo_label().map(str::to_owned),
     }
 }
 
@@ -773,7 +773,7 @@ where
             action,
             |db, reversible| refresh_after_edit(&state, db, touched).map(|generation| (generation, reversible)),
         ).map_err(write_error)?;
-        let mut history = state.edit_history.lock();
+        let mut history = state.edit_history().lock();
         record(&mut history, reversible);
         Ok(history_dto(generation, &history))
     }).await?;
@@ -782,210 +782,8 @@ where
     Ok(dto)
 }
 
-fn touched_by(edit: &LibraryEdit) -> Touched {
-    match edit {
-        LibraryEdit::DeletePlaylist(_) | LibraryEdit::RenamePlaylist(_) |
-        LibraryEdit::MovePlaylist(_) | LibraryEdit::SortPlaylists(_) | LibraryEdit::RemovePlaylistTracks(_) |
-        LibraryEdit::CreatePlaylist(_) | LibraryEdit::PlaylistEdit(_) |
-        LibraryEdit::AddPlaylistTracks { .. } | LibraryEdit::ReorderPlaylist(_) |
-        // The tracks a replacement imported stay in the collection.
-        LibraryEdit::ReplacePlaylist(_) | LibraryEdit::ReplacePlaylistContents(_) => Touched::Playlists,
-        // Tokens keep their database row ids private; a full reload after an
-        // undo is uncommon and guarantees every view and sort follows it.
-        // The index's My Tag list (filters, panel) is read in a full load.
-        LibraryEdit::Track(_) | LibraryEdit::KeyEdit { .. } | LibraryEdit::TrackTags { .. } | LibraryEdit::Relocate(_)
-        | LibraryEdit::MyTagOrder(_) => Touched::Tracks,
-        LibraryEdit::Cues(revision) => Touched::Cues(revision.content().to_owned()),
-        LibraryEdit::ListRemoval(removal) => match removal.list() {
-            rbl_db::write::RemovalList::TagList => Touched::TagList,
-            rbl_db::write::RemovalList::History(_) => Touched::Histories(Vec::new()),
-        },
-    }
-}
-
-/// Refuses, with [`rbl_db::DbError::Conflict`] and before anything is
-/// written, an entry of several steps any one of which no longer finds the
-/// value it expects. An entry of one step, or one written in a single
-/// transaction, is checked by the writer as it runs.
-fn check_history(writer: &rbl_db::write::Writer, edit: &LibraryEdit, undo: bool) -> Result<(), rbl_db::DbError> {
-    match edit {
-        LibraryEdit::Track(values) => values.iter().try_for_each(|value| writer.check_track_edit(value, undo)),
-        // The library's rows and every file the edit wrote, before either is
-        // written (#507).
-        LibraryEdit::KeyEdit { tracks, files } => {
-            tracks.iter().try_for_each(|value| writer.check_track_edit(value, undo))?;
-            crate::key_tag::check_restore(files, undo, TRACK_EDIT)
-        }
-        LibraryEdit::TrackTags { tags, comments } => {
-            tags.iter().try_for_each(|value| writer.check_tag_edit(value, undo))?;
-            comments.iter().try_for_each(|value| writer.check_track_edit(value, undo))
-        }
-        LibraryEdit::DeletePlaylist(_) | LibraryEdit::RenamePlaylist(_) | LibraryEdit::MovePlaylist(_)
-        | LibraryEdit::ReplacePlaylist(_) | LibraryEdit::SortPlaylists(_) | LibraryEdit::RemovePlaylistTracks(_)
-        | LibraryEdit::AddPlaylistTracks { .. } | LibraryEdit::ReorderPlaylist(_)
-        // Checked in the one transaction that writes it (#508).
-        | LibraryEdit::ListRemoval(_)
-        // Checked in the transaction that writes it.
-        | LibraryEdit::MyTagOrder(_)
-        // Every playlist of a replacement is checked in the one transaction
-        // that writes them.
-        | LibraryEdit::ReplacePlaylistContents(_) => Ok(()),
-        // One transaction, but the pad check reads rows the entry does not
-        // name, so it is done here as well as in the writer (#504).
-        LibraryEdit::Cues(revision) => match writer.cue_revision_conflict(revision, undo)? {
-            Some(reason) => Err(rbl_db::DbError::Conflict(reason)),
-            None => Ok(()),
-        },
-        // Checked again in the writer's transaction (#500).
-        LibraryEdit::CreatePlaylist(creation) => match writer.creation_conflict(creation, undo)? {
-            Some(reason) => Err(rbl_db::DbError::Conflict(reason)),
-            None => Ok(()),
-        },
-        LibraryEdit::PlaylistEdit(value) => writer.check_playlist_edit(value, undo),
-        // Checked again in the writer's transaction (#502).
-        LibraryEdit::Relocate(relocation) => match writer.relocation_conflict(relocation, undo)? {
-            Some(reason) => Err(rbl_db::DbError::Conflict(reason)),
-            None => Ok(()),
-        },
-    }
-}
-
-fn apply_history(writer: &mut rbl_db::write::Writer, edit: &LibraryEdit, undo: bool) -> Result<(), rbl_db::DbError> {
-    match edit {
-        LibraryEdit::DeletePlaylist(value) => if undo { writer.restore_playlist(value) } else { writer.redo_playlist_deletion(value) }.map(|_| ()),
-        LibraryEdit::RenamePlaylist(value) => if undo { writer.undo_rename(value) } else { writer.redo_rename(value) }.map(|_| ()),
-        LibraryEdit::MovePlaylist(value) => if undo { writer.undo_move(value) } else { writer.redo_move(value) }.map(|_| ()),
-        LibraryEdit::ReplacePlaylist(value) => if undo { writer.undo_replacement(value) } else { writer.redo_replacement(value) }.map(|_| ()),
-        LibraryEdit::ReplacePlaylistContents(values) => if undo {
-            writer.undo_membership_replacements(values)
-        } else {
-            writer.redo_membership_replacements(values)
-        }.map(|_| ()),
-        LibraryEdit::SortPlaylists(value) => if undo { writer.undo_sort(value) } else { writer.redo_sort(value) }.map(|_| ()),
-        LibraryEdit::RemovePlaylistTracks(value) => if undo { writer.undo_track_removal(value) } else { writer.redo_track_removal(value) }.map(|_| ()),
-        LibraryEdit::AddPlaylistTracks { addition, .. } => if undo { writer.undo_track_addition(addition) } else { writer.redo_track_addition(addition) }.map(|_| ()),
-        LibraryEdit::ReorderPlaylist(value) => if undo { writer.undo_reorder(value) } else { writer.redo_reorder(value) }.map(|_| ()),
-        LibraryEdit::Track(values) => {
-            let ordered: Box<dyn Iterator<Item = _>> = if undo {
-                Box::new(values.iter().rev())
-            } else {
-                Box::new(values.iter())
-            };
-            for value in ordered {
-                if undo { writer.undo_track_edit(value)?; } else { writer.redo_track_edit(value)?; }
-            }
-            Ok(())
-        }
-        // The files first: they are what can still fail after the check (a
-        // file made read-only since). A failure there has put back the files
-        // it wrote and leaves the library as it was; a failure in the library
-        // puts the files and the tracks already written back (#507).
-        LibraryEdit::KeyEdit { tracks, files } => {
-            crate::key_tag::restore(files, undo, TRACK_EDIT)?;
-            let error = match step_track_edits(writer, tracks, undo) {
-                Ok(()) => return Ok(()),
-                Err(error) => error,
-            };
-            let written: Vec<_> = if undo { files.iter().rev().collect() } else { files.iter().collect() };
-            let stranded = crate::key_tag::revert(&written, undo);
-            if stranded == 0 {
-                return Err(error);
-            }
-            Err(rbl_db::DbError::Io(std::io::Error::other(format!(
-                "{error}; {stranded} of {} files could not be changed back",
-                files.len()
-            ))))
-        }
-        LibraryEdit::TrackTags { tags, comments } => step_track_tags(writer, tags, comments, undo),
-        LibraryEdit::MyTagOrder(value) => if undo { writer.undo_my_tag_order(value) } else { writer.redo_my_tag_order(value) }.map(|_| ()),
-        LibraryEdit::Cues(value) => if undo { writer.undo_cue_revision(value) } else { writer.redo_cue_revision(value) }.map(|_| ()),
-        LibraryEdit::CreatePlaylist(value) => if undo { writer.undo_creation(value) } else { writer.redo_creation(value) }.map(|_| ()),
-        LibraryEdit::PlaylistEdit(value) => if undo { writer.undo_playlist_edit(value) } else { writer.redo_playlist_edit(value) }.map(|_| ()),
-        LibraryEdit::Relocate(value) => if undo { writer.undo_relocation(value) } else { writer.redo_relocation(value) }.map(|_| ()),
-        LibraryEdit::ListRemoval(value) => if undo { writer.undo_list_removal(value) } else { writer.redo_list_removal(value) }.map(|_| ()),
-    }
-}
-
 /// The history label of an Info panel, rating, colour or comment edit.
-pub(crate) const TRACK_EDIT: &str = "Track Edit";
-
-/// Undoes or redoes a My Tag entry: the tags, and the comments Add "My
-/// Tag" to the "Comments" rewrote with them (#605), the comments in one
-/// transaction. Undo puts the comments back before the tags, Redo writes
-/// them after, so a refused comment step leaves the tags as they were; a
-/// tag step that fails after the comments has them stepped back again.
-fn step_track_tags(
-    writer: &mut rbl_db::write::Writer,
-    tags: &[rbl_db::write::TrackTagEdit],
-    comments: &[rbl_db::write::TrackEdit],
-    undo: bool,
-) -> Result<(), rbl_db::DbError> {
-    let step_tags = |writer: &mut rbl_db::write::Writer| -> Result<(), rbl_db::DbError> {
-        let ordered: Box<dyn Iterator<Item = _>> = if undo { Box::new(tags.iter().rev()) } else { Box::new(tags.iter()) };
-        for value in ordered {
-            if undo { writer.undo_tag_edit(value)?; } else { writer.redo_tag_edit(value)?; }
-        }
-        Ok(())
-    };
-    if !undo {
-        step_tags(writer)?;
-        if comments.is_empty() {
-            return Ok(());
-        }
-        if let Err(error) = writer.step_track_edits_at_once(comments, false) {
-            for value in tags.iter().rev() {
-                if let Err(back) = writer.undo_tag_edit(value) {
-                    tracing::error!(%back, "a My Tag edit could not be put back after a failed Redo");
-                }
-            }
-            return Err(error);
-        }
-        return Ok(());
-    }
-    if !comments.is_empty() {
-        writer.step_track_edits_at_once(comments, true)?;
-    }
-    if let Err(error) = step_tags(writer) {
-        if !comments.is_empty() {
-            if let Err(back) = writer.step_track_edits_at_once(comments, false) {
-                tracing::error!(%back, "the My Tag comments could not be written again after a failed Undo");
-            }
-        }
-        return Err(error);
-    }
-    Ok(())
-}
-
-/// Undoes (`undo`, last first) or redoes the steps of a track edit, all or
-/// none: a step that fails has the ones before it put back.
-fn step_track_edits(
-    writer: &mut rbl_db::write::Writer,
-    values: &[rbl_db::write::TrackEdit],
-    undo: bool,
-) -> Result<(), rbl_db::DbError> {
-    let ordered: Vec<&rbl_db::write::TrackEdit> = if undo { values.iter().rev().collect() } else { values.iter().collect() };
-    for (at, value) in ordered.iter().enumerate() {
-        let step = if undo { writer.undo_track_edit(value) } else { writer.redo_track_edit(value) };
-        if let Err(error) = step {
-            let mut stranded = 0usize;
-            for done in ordered.get(..at).unwrap_or_default().iter().rev() {
-                let back = if undo { writer.redo_track_edit(done) } else { writer.undo_track_edit(done) };
-                if let Err(back) = back {
-                    tracing::error!(error = %back, "could not put a track back after a failed Undo or Redo");
-                    stranded += 1;
-                }
-            }
-            if stranded == 0 {
-                return Err(error);
-            }
-            return Err(rbl_db::DbError::Io(std::io::Error::other(format!(
-                "{error}; {stranded} of {} already-changed tracks could not be changed back",
-                ordered.len()
-            ))));
-        }
-    }
-    Ok(())
-}
+pub(crate) use rbl_library::history::TRACK_EDIT;
 
 /// Shared by desktop and CDJ edits; the writer holds the edit gate until
 /// both persistence and the new index are visible. The work is the Library
@@ -3649,10 +3447,10 @@ pub async fn import_folder_playlist<R: tauri::Runtime>(
             // Replace existing is one step of history (#426): Undo takes the
             // new playlist away and puts the replaced list back. The tracks
             // it imported stay in the collection.
-            writing.edit_history.lock().record(LibraryEdit::ReplacePlaylist(replacement), "Replace Playlist");
+            writing.edit_history().lock().record(LibraryEdit::ReplacePlaylist(replacement), "Replace Playlist");
         } else if report.playlist.is_some() {
             // An edit outside the undo history starts a new branch.
-            writing.edit_history.lock().clear_redo();
+            writing.edit_history().lock().clear_redo();
         }
         Ok(report)
     })
@@ -3661,7 +3459,7 @@ pub async fn import_folder_playlist<R: tauri::Runtime>(
     // Both the tree and, usually, the collection changed.
     if report.playlist.is_some() {
         let generation = reload(app.clone(), Arc::clone(&state)).await?;
-        let history = history_dto(generation, &state.edit_history.lock());
+        let history = history_dto(generation, &state.edit_history().lock());
         let _ = tauri::Emitter::emit(&app, "edit-history:changed", history);
     }
     Ok(report)
@@ -3961,46 +3759,28 @@ pub(crate) enum Stepped {
 /// entry changed (`cues:changed`), the Tag List (`tag-list:changed`), or
 /// the library (`library:changed`).
 pub(crate) fn step_history(state: &AppState, undo: bool) -> AppResult<(EditHistoryDto, Stepped)> {
+    use rbl_library::history::StepError;
+    // Held past the step, so what is reported is what this step left.
     let _gate = state.edit_gate().lock();
-    let entry = {
-        let history = state.edit_history.lock();
-        if undo { history.undo.last().cloned() } else { history.redo.last().cloned() }
-    }
-    .ok_or_else(|| AppError::new(ErrorKind::NotFound, if undo {
-        "There is no library edit to undo."
-    } else {
-        "There is no library edit to redo."
-    }))?;
-    let touched = touched_by(&entry.edit);
-    let result = state.write_history_then(
-        |w| {
-            check_history(w, &entry.edit, undo)?;
-            apply_history(w, &entry.edit, undo)
-        },
-        |db, ()| refresh_after_edit(state, db, touched),
-    );
-    let mut history = state.edit_history.lock();
-    match result {
-        Ok(generation) => {
-            history.drop_next(undo);
-            let stepped = match &entry.edit {
-                LibraryEdit::Cues(revision) => Stepped::Cues(revision.content().to_owned()),
-                LibraryEdit::ListRemoval(removal) if matches!(removal.list(), rbl_db::write::RemovalList::TagList) => Stepped::TagList,
+    match state.core().step_history(state, undo) {
+        Ok(step) => {
+            let stepped = match step.touched {
+                Touched::Cues(track) => Stepped::Cues(track),
+                Touched::TagList => Stepped::TagList,
                 _ => Stepped::Library,
             };
-            if undo { history.redo.push(entry); } else { history.undo.push(entry); }
-            Ok((history_dto(generation, &history), stepped))
+            Ok((history_dto(step.generation, &state.edit_history().lock()), stepped))
         }
-        Err(rbl_db::DbError::Conflict(reason)) => {
-            history.drop_next(undo);
-            tracing::info!(label = entry.label, undo, %reason, "library history entry refused: changed since");
-            Err(AppError::new(ErrorKind::Conflict, format!(
-                "Can't {} {}: {reason}. The newer change was kept.",
-                if undo { "undo" } else { "redo" },
-                entry.label,
-            )))
-        }
-        Err(error) => Err(write_error(error)),
+        Err(StepError::Nothing) => Err(AppError::new(ErrorKind::NotFound, if undo {
+            "There is no library edit to undo."
+        } else {
+            "There is no library edit to redo."
+        })),
+        Err(StepError::Conflict { label, reason }) => Err(AppError::new(ErrorKind::Conflict, format!(
+            "Can't {} {label}: {reason}. The newer change was kept.",
+            if undo { "undo" } else { "redo" },
+        ))),
+        Err(StepError::Write(error)) => Err(write_error(error)),
     }
 }
 
@@ -4413,7 +4193,7 @@ async fn import_collection<R: tauri::Runtime>(
             // The tracks and lists the import added stay. Recording it also
             // ends the redo branch; older entries stay, each checking its
             // own rows when it runs (#506).
-            writing.edit_history.lock().record(
+            writing.edit_history().lock().record(
                 LibraryEdit::ReplacePlaylistContents(replacements),
                 REPLACE_PLAYLIST_CONTENTS,
             );
@@ -5246,7 +5026,7 @@ mod tests {
         }
         assert_eq!(genre(&state, &untouched), "");
 
-        state.write_then(|w| super::apply_history(w, &edit, true), |_, ()| Ok(())).unwrap();
+        state.write_then(|w| edit.apply(w, true), |_, ()| Ok(())).unwrap();
         for track in &tracks {
             assert_eq!(genre(&state, track), "", "undone on {track}");
         }

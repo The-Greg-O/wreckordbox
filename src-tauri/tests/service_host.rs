@@ -44,6 +44,9 @@ struct Window {
     changes: Arc<Mutex<Vec<u32>>>,
     /// Every `service:stopped` message the interface would have shown.
     stopped: Arc<Mutex<Vec<String>>>,
+    /// Every `edit-history:changed` the interface would have seen: what the
+    /// Edit menu's Undo and Redo items are set from.
+    history: Heard<serde_json::Value>,
 }
 
 struct Run {
@@ -69,7 +72,18 @@ fn window() -> Window {
     fixture::write_options_json(&dir.path().join("options.json"), location.master_db.to_str().unwrap(), &location.passphrase).unwrap();
     std::fs::create_dir_all(dir.path().join("home")).unwrap();
     let (app, changes, stopped) = app_on(&dir, &location);
-    Window { dir, app, location, changes, stopped }
+    let history: Heard<serde_json::Value> = Arc::default();
+    let seen = Arc::clone(&history);
+    app.listen("edit-history:changed", move |event| {
+        seen.lock().unwrap().push(serde_json::from_str(event.payload()).unwrap());
+    });
+    // As the app does at start: a change to the history that no command of
+    // the window's made is announced to the interface.
+    let handle = app.handle().clone();
+    app.state::<Arc<AppState>>().on_history_changed(move || {
+        let _ = tauri::Emitter::emit(&handle, "edit-history:changed", commands::current_history(handle.state::<Arc<AppState>>().inner()));
+    });
+    Window { dir, app, location, changes, stopped, history }
 }
 
 fn app_on(
@@ -290,6 +304,82 @@ fn closing_the_window_lets_go_of_the_library_without_alarm() {
     let status = window.cli(&["--json", "status"]).json();
     assert_ne!(status["pid"], std::process::id());
     let _ = Command::new("kill").arg(status["pid"].to_string()).status();
+}
+
+#[test]
+fn a_rating_set_from_the_command_is_undone_and_redone_from_the_window() {
+    let window = window();
+    window.host().unwrap();
+    let id = track_id(1);
+
+    window.cli(&["tracks", "rate", &id, "4"]).succeeded();
+
+    // The Edit menu offers to undo it, as it would the DJ's own rating.
+    eventually("edit-history:changed", || !window.history.lock().unwrap().is_empty());
+    let offered = window.history.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(offered["canUndo"], true, "{offered}");
+    assert_eq!(offered["undoLabel"], "Track Edit");
+    assert_eq!(offered["canRedo"], false);
+    assert_eq!(offered["generation"], window.generation());
+
+    let undone = run(commands::undo_edit(window.app.handle().clone(), window.state())).unwrap();
+
+    assert_eq!(window.rating(&id), 0, "the rating the track had before the command");
+    assert_eq!(window.listed_rating(&id), 0, "and the command's next read agrees");
+    assert!(!undone.can_undo && undone.can_redo);
+    assert_eq!(undone.redo_label.as_deref(), Some("Track Edit"));
+
+    let redone = run(commands::redo_edit(window.app.handle().clone(), window.state())).unwrap();
+
+    assert_eq!(window.rating(&id), 4);
+    assert_eq!(window.listed_rating(&id), 4);
+    assert!(redone.can_undo && !redone.can_redo);
+    // The interface heard of each step: the edit, the undo, the redo.
+    let heard = window.history.lock().unwrap().clone();
+    let offers: Vec<_> = heard.iter().map(|h| (h["canUndo"].as_bool().unwrap(), h["canRedo"].as_bool().unwrap())).collect();
+    assert_eq!(offers, [(true, false), (false, true), (true, false)]);
+}
+
+#[test]
+fn the_commands_edits_and_the_djs_are_steps_of_one_history() {
+    let window = window();
+    window.host().unwrap();
+    let (djs, agents) = (track_id(1), track_id(2));
+    let app = || window.app.handle().clone();
+
+    run(commands::set_track_rating(app(), window.state(), vec![djs.clone()], 3)).unwrap();
+    window.cli(&["tracks", "rate", &agents, "5"]).succeeded();
+
+    // Undo takes back the latest edit first, whoever made it.
+    run(commands::undo_edit(app(), window.state())).unwrap();
+    assert_eq!((window.rating(&djs), window.rating(&agents)), (3, 0));
+    let undone = run(commands::undo_edit(app(), window.state())).unwrap();
+    assert_eq!((window.rating(&djs), window.rating(&agents)), (0, 0));
+    assert!(!undone.can_undo && undone.can_redo);
+
+    // A new edit from the command starts a new branch, as the DJ's would:
+    // there is nothing left to redo, and the Edit menu is told.
+    window.history.lock().unwrap().clear();
+    window.cli(&["tracks", "rate", &agents, "2"]).succeeded();
+    eventually("edit-history:changed", || !window.history.lock().unwrap().is_empty());
+    let offered = window.history.lock().unwrap().last().cloned().unwrap();
+    assert_eq!((offered["canUndo"].clone(), offered["canRedo"].clone()), (true.into(), false.into()));
+    let refused = run(commands::redo_edit(app(), window.state())).unwrap_err();
+    assert_eq!(refused.kind, ErrorKind::NotFound);
+    assert_eq!((window.rating(&djs), window.rating(&agents)), (0, 2));
+}
+
+#[test]
+fn a_rating_the_track_already_has_leaves_nothing_to_undo() {
+    let window = window();
+    window.host().unwrap();
+    let id = track_id(1);
+
+    window.cli(&["tracks", "rate", &id, "0"]).succeeded();
+
+    let nothing = run(commands::undo_edit(window.app.handle().clone(), window.state())).unwrap_err();
+    assert_eq!(nothing.kind, ErrorKind::NotFound);
+    assert!(window.history.lock().unwrap().is_empty(), "the Edit menu was not told of an edit that changed nothing");
 }
 
 impl Run {

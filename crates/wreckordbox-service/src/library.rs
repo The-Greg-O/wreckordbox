@@ -13,7 +13,8 @@ use std::sync::Arc;
 
 use rbl_db::{DbError, LibraryLocation, OpenMode};
 use rbl_index::{SortColumn, TrackFilter, TrackSource, ViewSpec};
-use rbl_library::{History, Host, LibraryCore, NoHost, Touched};
+use rbl_library::history::{LibraryEdit, TRACK_EDIT};
+use rbl_library::{Host, LibraryCore, NoHost, Touched};
 
 use crate::protocol::{
     codes, ChangeKind, LibraryChanged, RateTrack, RatedTrack, ServiceError, Track, TrackList,
@@ -134,9 +135,8 @@ impl OpenLibrary {
     /// answers what to tell the caller and what to tell every client.
     ///
     /// The write is the one the window's rating command makes
-    /// (`set_rating_with_undo`), so the edit history can take the entry it
-    /// yields once the history lives in the service; until then the edit is
-    /// outside the history.
+    /// (`set_rating_with_undo`) and is recorded in the core's edit history
+    /// as the window's is, so Undo in the window takes it back.
     pub(crate) fn rate(
         &self,
         edit: &RateTrack,
@@ -160,13 +160,16 @@ impl OpenLibrary {
         let previous = track(&before, row);
         let id = previous.id.clone();
         let stars = edit.rating;
-        let (_recorded, change) = self
+        let ((), change) = self
             .core
-            .edit(
+            .recorded_edit(
                 &*self.host,
-                History::Outside,
                 Touched::Metadata(vec![id.clone()]),
-                |writer| writer.set_rating_with_undo(&id, stars),
+                TRACK_EDIT,
+                |writer| {
+                    let (_, recorded) = writer.set_rating_with_undo(&id, stars)?;
+                    Ok(((), LibraryEdit::Track(vec![recorded])))
+                },
             )
             .map_err(|e| edit_error(&e))?;
         // Read back from the index the edit refreshed, not assumed.
