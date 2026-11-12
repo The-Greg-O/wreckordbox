@@ -185,7 +185,10 @@ impl Policy {
         let invalid = |why: String| {
             ServiceError::new(
                 codes::POLICY_INVALID,
-                format!("{} cannot be used, so nothing was projected: {why}", path.display()),
+                format!(
+                    "{} cannot be used, so nothing was projected: {why}",
+                    path.display()
+                ),
             )
         };
         let file: PolicyFile = match std::fs::read_to_string(&path) {
@@ -380,7 +383,11 @@ fn refuse_the_djs(stems: &Stems, request: &Request) -> Result<(), ServiceError> 
     let Some(run) = &request.run else {
         return Ok(());
     };
-    if run.source.as_ref().is_some_and(|s| s.kind == SourceKind::Dj) {
+    if run
+        .source
+        .as_ref()
+        .is_some_and(|s| s.kind == SourceKind::Dj)
+    {
         return Err(refused());
     }
     if let (Some(id), None) = (run.id, &run.source) {
@@ -397,10 +404,13 @@ fn refuse_the_djs(stems: &Stems, request: &Request) -> Result<(), ServiceError> 
 
 /// The Facts of each field's kind, and what earlier Projections wrote,
 /// read without creating, migrating or tidying a Sidecar.
+/// The Facts of each field's kind.
+type FactsByField = Vec<(Field, Vec<Fact>)>;
+
 fn read_sidecar(
     stems: &Stems,
     kinds: &[(Field, String)],
-) -> Result<(Vec<(Field, Vec<Fact>)>, Projected), ServiceError> {
+) -> Result<(FactsByField, Projected), ServiceError> {
     let failed = |why: String| ServiceError::new(crate::stems::codes::SIDECAR_FAILED, why);
     stems
         .with_sidecar_wait(|open| -> Result<_, String> {
@@ -408,37 +418,52 @@ fn read_sidecar(
                 Some(sidecar) => {
                     let mut facts = Vec::new();
                     for (field, kind) in kinds {
-                        facts.push((*field, sidecar.facts_of_kind(kind).map_err(|e| e.to_string())?));
+                        facts.push((
+                            *field,
+                            sidecar.facts_of_kind(kind).map_err(|e| e.to_string())?,
+                        ));
                     }
                     let projected = sidecar
                         .projected_by(commands::PROJECTION_APPLY)
                         .map_err(|e| e.to_string())?;
                     Ok((facts, projected))
                 }
-                None => match FactsSnapshot::open(stems.sidecar_dir()).map_err(|e| e.to_string())? {
-                    FactsSnapshot::Absent => Ok((
-                        kinds.iter().map(|(field, _)| (*field, Vec::new())).collect(),
-                        Projected::new(),
-                    )),
-                    FactsSnapshot::Unknown(why) => Err(why),
-                    FactsSnapshot::Open(reader) => {
-                        let mut facts = Vec::new();
-                        for (field, kind) in kinds {
-                            facts.push((*field, reader.facts_of_kind(kind).map_err(|e| e.to_string())?));
+                None => {
+                    match FactsSnapshot::open(stems.sidecar_dir()).map_err(|e| e.to_string())? {
+                        FactsSnapshot::Absent => Ok((
+                            kinds
+                                .iter()
+                                .map(|(field, _)| (*field, Vec::new()))
+                                .collect(),
+                            Projected::new(),
+                        )),
+                        FactsSnapshot::Unknown(why) => Err(why),
+                        FactsSnapshot::Open(reader) => {
+                            let mut facts = Vec::new();
+                            for (field, kind) in kinds {
+                                facts.push((
+                                    *field,
+                                    reader.facts_of_kind(kind).map_err(|e| e.to_string())?,
+                                ));
+                            }
+                            let projected = reader
+                                .projected_by(commands::PROJECTION_APPLY)
+                                .map_err(|e| e.to_string())?;
+                            Ok((facts, projected))
                         }
-                        let projected = reader
-                            .projected_by(commands::PROJECTION_APPLY)
-                            .map_err(|e| e.to_string())?;
-                        Ok((facts, projected))
                     }
-                },
+                }
             }
         })?
         .map_err(failed)
 }
 
 /// The kind each field projects from, checked against the declared kinds.
-fn source_kinds(policy: &Policy, kinds: &Kinds, dir: &Path) -> Result<Vec<(Field, String)>, ServiceError> {
+fn source_kinds(
+    policy: &Policy,
+    kinds: &Kinds,
+    dir: &Path,
+) -> Result<Vec<(Field, String)>, ServiceError> {
     let mut chosen = Vec::new();
     for field in Field::ALL {
         let name = policy
@@ -485,8 +510,8 @@ fn plan(
     let dir = stems.sidecar_dir();
     let policy = Policy::load(dir)?;
     let kinds = Kinds::load(dir).map_err(|e| crate::facts::sidecar_error(&e))?;
-    let rules = Rules::load(dir)
-        .map_err(|why| ServiceError::new(crate::standing::RULES_INVALID, why))?;
+    let rules =
+        Rules::load(dir).map_err(|why| ServiceError::new(crate::standing::RULES_INVALID, why))?;
     let chosen = source_kinds(&policy, &kinds, dir)?;
     let labels = crate::intake::labels(library)?;
     let index = library.index()?;
@@ -500,7 +525,7 @@ fn plan(
     }
     let (read, projected) = read_sidecar(stems, &chosen)?;
     // Facts by track, then field; tracks in the Library's order.
-    let mut by_track: BTreeMap<u32, (String, Vec<(Field, Vec<Fact>)>)> = BTreeMap::new();
+    let mut by_track: BTreeMap<u32, (String, FactsByField)> = BTreeMap::new();
     for (field, facts) in read {
         let mut grouped: HashMap<String, Vec<Fact>> = HashMap::new();
         for fact in facts {
@@ -562,7 +587,8 @@ fn plan(
                     }
                     match current {
                         Ok(print) => {
-                            fact.stale_at = (fact.fingerprint.as_ref() != Some(&*print)).then_some(0);
+                            fact.stale_at =
+                                (fact.fingerprint.as_ref() != Some(&*print)).then_some(0);
                         }
                         Err(why) => {
                             report.invalid.push(unusable(
@@ -582,109 +608,155 @@ fn plan(
                     "a Measurement of other audio than the track's: never projected".into(),
                 ));
             }
-            let native = native(&index, row, field, &labels);
-            let (winner, _) = rules.standing(&facts);
-            let Some(winner) = winner else { continue };
-            let target = match target(field, &winner.value, &labels) {
-                Ok(target) => target,
-                Err(why) => {
-                    report.invalid.push(unusable(winner, why));
-                    continue;
-                }
-            };
-            if winner.source.kind == SourceKind::Dj {
-                if target != native {
-                    report.held.push(Held {
-                        track: track.clone(),
-                        title: title.clone(),
-                        field,
-                        before: native,
-                        after: target,
-                        fact: winner.id,
-                        source: winner.source.clone(),
-                        confidence: winner.confidence,
-                        reason: "dj_fact".into(),
-                        threshold: None,
-                    });
-                    continue;
-                }
-                report.unchanged += 1;
-                // The DJ's value stands; say so where another source disagrees.
-                let others: Vec<Fact> = facts
-                    .iter()
-                    .filter(|f| f.source.kind != SourceKind::Dj)
-                    .cloned()
-                    .collect();
-                if let (Some(other), _) = rules.standing(&others) {
-                    if let Ok(value) = crate::projection::target(field, &other.value, &labels) {
-                        if value != native {
-                            report.kept.push(Kept {
-                                track: track.clone(),
-                                title: title.clone(),
-                                field,
-                                value: native.clone(),
-                                fact_value: value,
-                                fact: other.id,
-                                source: other.source.clone(),
-                                confidence: other.confidence,
-                                reason: "dj_fact".into(),
-                            });
-                        }
-                    }
-                }
-                continue;
-            }
-            if target == native {
-                report.unchanged += 1;
-                continue;
-            }
-            let stored = projected.get(&(track.clone(), field.column().to_owned()));
-            if !native.is_null() && stored.map(stored_number) != Some(native_number(&native)) {
-                report.kept.push(Kept {
-                    track: track.clone(),
-                    title: title.clone(),
-                    field,
-                    value: native,
-                    fact_value: target,
-                    fact: winner.id,
-                    source: winner.source.clone(),
-                    confidence: winner.confidence,
-                    reason: "set_by_dj".into(),
-                });
-                continue;
-            }
-            let held = |reason: &str, threshold| Held {
-                track: track.clone(),
-                title: title.clone(),
+            let one = One {
+                track: &track,
+                title: &title,
                 field,
-                before: native.clone(),
-                after: target.clone(),
-                fact: winner.id,
-                source: winner.source.clone(),
-                confidence: winner.confidence,
-                reason: reason.into(),
-                threshold,
+                native: native(&index, row, field, &labels),
             };
-            match policy.rule(field).apply {
-                Apply::Wait(_) => report.held.push(held("waits_for_dj", None)),
-                Apply::AtOrAbove(at) if winner.confidence < at => {
-                    report.held.push(held("below_confidence", Some(at)));
-                }
-                Apply::AtOrAbove(_) => report.changes.push(Change {
-                    track: track.clone(),
-                    title: title.clone(),
-                    field,
-                    before: native,
-                    after: target,
-                    fact: winner.id,
-                    source: winner.source.clone(),
-                    confidence: winner.confidence,
-                }),
-            }
+            decide(
+                &mut report,
+                &one,
+                &facts,
+                &rules,
+                &policy,
+                &projected,
+                &labels,
+            );
         }
     }
     report.plan = digest(&report.changes);
     Ok(report)
+}
+
+/// One track and field being decided.
+struct One<'a> {
+    track: &'a str,
+    title: &'a str,
+    field: Field,
+    /// What the Library holds now, in the report's form.
+    native: Value,
+}
+
+/// Decides one track and field from its Facts: a change, held, kept,
+/// unusable, or nothing to do.
+fn decide(
+    report: &mut Report,
+    one: &One<'_>,
+    facts: &[Fact],
+    rules: &Rules,
+    policy: &Policy,
+    projected: &Projected,
+    labels: &[PrepColour],
+) {
+    let field = one.field;
+    let native = one.native.clone();
+    let unusable = |fact: &Fact, why: String| Unusable {
+        track: one.track.to_owned(),
+        title: one.title.to_owned(),
+        field,
+        fact: fact.id,
+        value: fact.value.clone(),
+        why,
+    };
+    let (winner, _) = rules.standing(facts);
+    let Some(winner) = winner else { return };
+    let target = match target(field, &winner.value, labels) {
+        Ok(target) => target,
+        Err(why) => {
+            report.invalid.push(unusable(winner, why));
+            return;
+        }
+    };
+    if winner.source.kind == SourceKind::Dj {
+        if target != native {
+            report.held.push(Held {
+                track: one.track.to_owned(),
+                title: one.title.to_owned(),
+                field,
+                before: native,
+                after: target,
+                fact: winner.id,
+                source: winner.source.clone(),
+                confidence: winner.confidence,
+                reason: "dj_fact".into(),
+                threshold: None,
+            });
+            return;
+        }
+        report.unchanged += 1;
+        // The DJ's value stands; say so where another source disagrees.
+        let others: Vec<Fact> = facts
+            .iter()
+            .filter(|f| f.source.kind != SourceKind::Dj)
+            .cloned()
+            .collect();
+        if let (Some(other), _) = rules.standing(&others) {
+            if let Ok(value) = crate::projection::target(field, &other.value, labels) {
+                if value != native {
+                    report.kept.push(Kept {
+                        track: one.track.to_owned(),
+                        title: one.title.to_owned(),
+                        field,
+                        value: native.clone(),
+                        fact_value: value,
+                        fact: other.id,
+                        source: other.source.clone(),
+                        confidence: other.confidence,
+                        reason: "dj_fact".into(),
+                    });
+                }
+            }
+        }
+        return;
+    }
+    if target == native {
+        report.unchanged += 1;
+        return;
+    }
+    let stored = projected.get(&(one.track.to_owned(), field.column().to_owned()));
+    if !native.is_null() && stored.map(stored_number) != Some(native_number(&native)) {
+        report.kept.push(Kept {
+            track: one.track.to_owned(),
+            title: one.title.to_owned(),
+            field,
+            value: native,
+            fact_value: target,
+            fact: winner.id,
+            source: winner.source.clone(),
+            confidence: winner.confidence,
+            reason: "set_by_dj".into(),
+        });
+        return;
+    }
+    let held = |reason: &str, threshold| Held {
+        track: one.track.to_owned(),
+        title: one.title.to_owned(),
+        field,
+        before: native.clone(),
+        after: target.clone(),
+        fact: winner.id,
+        source: winner.source.clone(),
+        confidence: winner.confidence,
+        reason: reason.into(),
+        threshold,
+    };
+    match policy.rule(field).apply {
+        Apply::Wait(_) => report.held.push(held("waits_for_dj", None)),
+        Apply::AtOrAbove(at) if winner.confidence < at => {
+            report.held.push(held("below_confidence", Some(at)));
+        }
+        Apply::AtOrAbove(_) => report.changes.push(Change {
+            track: one.track.to_owned(),
+            title: one.title.to_owned(),
+            field,
+            before: native,
+            after: target,
+            fact: winner.id,
+            source: winner.source.clone(),
+            confidence: winner.confidence,
+        }),
+    }
 }
 
 /// What the Library holds now for `field`, in the report's form.
@@ -711,7 +783,12 @@ pub(crate) fn target(field: Field, value: &Value, labels: &[PrepColour]) -> Resu
         Field::Energy => value
             .as_f64()
             .filter(|n| n.fract() == 0.0 && (1.0..=5.0).contains(n))
-            .map(|n| json!(n as u8))
+            // Checked above: a whole number from 1 to 5.
+            .map(|n| {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let stars = n as u8;
+                json!(stars)
+            })
             .ok_or_else(|| format!("Energy is a whole number from 1 to 5, not {value}")),
         Field::PrepColour => {
             let text = value
@@ -728,10 +805,7 @@ pub(crate) fn target(field: Field, value: &Value, labels: &[PrepColour]) -> Resu
 
 /// The number a report value stands for: stars, or a colour label's id.
 fn native_number(value: &Value) -> i64 {
-    value
-        .as_i64()
-        .or_else(|| value["id"].as_i64())
-        .unwrap_or(0)
+    value.as_i64().or_else(|| value["id"].as_i64()).unwrap_or(0)
 }
 
 /// The number a Ledger value stands for (`Rating` is stored as a number,
@@ -810,8 +884,8 @@ fn write(library: &OpenLibrary, changes: &[Change]) -> Result<LibraryChanged, Fa
         Ok((failure, LibraryEdit::Track(done)))
     });
     match result {
-        Ok((None, changed)) => Ok(changed),
-        Ok((Some(failure), changed)) => Err((Some(changed), ServiceError::new(
+        Ok((None, made)) => Ok(made),
+        Ok((Some(failure), made)) => Err((Some(made), ServiceError::new(
             service_codes::WRITE_REFUSED,
             format!("the projection stopped part-way; what it wrote is recorded in its Run and can be undone: {failure}"),
         ))),

@@ -39,7 +39,14 @@ fn policy(s: &Sandbox, text: &str) {
     std::fs::write(s.sidecar_dir().join("projection.toml"), text).unwrap();
 }
 
-fn fact(s: &Sandbox, track: &str, kind: &str, value: &str, source: &str, confidence: &str) -> Value {
+fn fact(
+    s: &Sandbox,
+    track: &str,
+    kind: &str,
+    value: &str,
+    source: &str,
+    confidence: &str,
+) -> Value {
     ok(
         s,
         &[
@@ -92,10 +99,7 @@ fn drain(watcher: &mut wreckordbox_service::Client) {
 fn a_dry_run_lists_exactly_what_applying_then_does_as_one_run_and_twice_changes_nothing() {
     let s = Sandbox::new();
     s.dj_prep_colours();
-    policy(
-        &s,
-        "[energy]\napply = 0.8\n\n[prep_colour]\napply = 0.5\n",
-    );
+    policy(&s, "[energy]\napply = 0.8\n\n[prep_colour]\napply = 0.5\n");
     ok(&s, &["status"]);
     let energy = fact(&s, "10001", "energy", "4", "agent:tagger", "0.9");
     fact(&s, "10002", "energy", "2", "tool:meter", "0.8");
@@ -174,7 +178,10 @@ fn a_dry_run_lists_exactly_what_applying_then_does_as_one_run_and_twice_changes_
     let runs_after = ok(&s, &["runs", "list"]);
     let again = ok(&s, &["project"]);
     assert_eq!(again["changes"], json!([]));
-    assert!(again.get("run").is_none() || again["run"].is_null(), "{again}");
+    assert!(
+        again.get("run").is_none() || again["run"].is_null(),
+        "{again}"
+    );
     assert_eq!(ok(&s, &["runs", "list"]), runs_after);
     assert!(watcher
         .next_event(Duration::from_millis(300))
@@ -221,7 +228,10 @@ fn a_kind_set_to_wait_is_held_and_a_threshold_applies_only_facts_at_or_above_it(
     assert_eq!(track(&s, "10001")["rating"], 0);
     assert_eq!(track(&s, "10003")["colour_id"], 0);
 
-    policy(&s, "[energy]\napply = 0.7\n\n[prep_colour]\napply = \"wait\"\n");
+    policy(
+        &s,
+        "[energy]\napply = 0.7\n\n[prep_colour]\napply = \"wait\"\n",
+    );
     let applied = ok(&s, &["project"]);
     assert_eq!(
         changes(&applied, "changes"),
@@ -405,7 +415,11 @@ fn protection_a_changed_plan_and_the_djs_name_are_refused_with_nothing_written()
     assert_eq!(applied["run"]["source"]["name"], "energy-pass");
     assert_eq!(track(&s, "10002")["rating"], 2);
 
-    std::fs::write(s.sidecar_dir().join("projection.toml"), "[energy]\napply = 2\n").unwrap();
+    std::fs::write(
+        s.sidecar_dir().join("projection.toml"),
+        "[energy]\napply = 2\n",
+    )
+    .unwrap();
     assert_eq!(
         refused(&s, &["project", "--dry-run"])["code"],
         "projection_policy_invalid"
@@ -436,7 +450,14 @@ fn projecting_two_thousand_tracks_stays_cheap() {
     std::fs::write(&file, lines).unwrap();
     ok(
         &s,
-        &["facts", "record-many", "--file", file.to_str().unwrap(), "--source", "agent:bulk"],
+        &[
+            "facts",
+            "record-many",
+            "--file",
+            file.to_str().unwrap(),
+            "--source",
+            "agent:bulk",
+        ],
     );
     let time = |args: &[&str]| {
         let started = std::time::Instant::now();

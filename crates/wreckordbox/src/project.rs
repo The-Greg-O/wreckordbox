@@ -67,14 +67,27 @@ fn shown(value: &Value) -> String {
 }
 
 fn text(report: &Report) -> String {
-    let field = |f| serde_json::to_value(f).ok().and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default();
+    let field = |f| {
+        serde_json::to_value(f)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .unwrap_or_default()
+    };
     let mut out = String::new();
     let _ = writeln!(
         out,
         "{} {} {} (plan {}).",
-        if report.dry_run { "Would change" } else { "Changed" },
+        if report.dry_run {
+            "Would change"
+        } else {
+            "Changed"
+        },
         report.changes.len(),
-        if report.changes.len() == 1 { "field" } else { "fields" },
+        if report.changes.len() == 1 {
+            "field"
+        } else {
+            "fields"
+        },
         report.plan
     );
     for c in &report.changes {
@@ -125,11 +138,22 @@ fn text(report: &Report) -> String {
             );
         }
     }
-    for (name, list) in [("Not usable", &report.invalid), ("Stale, never projected", &report.stale)] {
+    for (name, list) in [
+        ("Not usable", &report.invalid),
+        ("Stale, never projected", &report.stale),
+    ] {
         if !list.is_empty() {
             let _ = writeln!(out, "{name}: {}.", list.len());
             for u in list {
-                let _ = writeln!(out, "  {} {:?} {}: Fact {}: {}", u.track, u.title, field(u.field), u.fact, u.why);
+                let _ = writeln!(
+                    out,
+                    "  {} {:?} {}: Fact {}: {}",
+                    u.track,
+                    u.title,
+                    field(u.field),
+                    u.fact,
+                    u.why
+                );
             }
         }
     }
