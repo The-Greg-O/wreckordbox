@@ -4,7 +4,7 @@
 use rusqlite::{params, Transaction};
 use serde::{Deserialize, Serialize};
 
-use crate::{store::now, Fingerprint, Result, RunId, Sidecar};
+use crate::{store::now, Fingerprint, Result, RunId, Sidecar, SidecarError};
 
 pub(crate) const SCHEMA: &str = "
 CREATE TABLE track_identity (
@@ -96,6 +96,7 @@ pub struct Attachment {
     pub from_track: String,
     pub to_track: String,
     pub fact_ids: Vec<i64>,
+    pub run: RunId,
 }
 
 /// A possible attachment, deliberately not applied.
@@ -286,8 +287,19 @@ fn attach(
     let fact_ids = statement
         .query_map([from], |row| row.get(0))?
         .collect::<rusqlite::Result<Vec<i64>>>()?;
+    let at = now();
+    let run = if let Some(run) = run {
+        run
+    } else {
+        tx.execute("INSERT INTO run (source_kind, source_name, description, started_at, finished_at, outcome) VALUES ('tool', ?1, ?2, ?3, ?3, 'reattached Facts')",
+            params![crate::ledger::HOUSEKEEPING, format!("Reattach track {from} to {to}"), at])?;
+        RunId(tx.last_insert_rowid())
+    };
+    let source = crate::store::run_in(tx, run)?
+        .map(|run| run.source)
+        .ok_or_else(|| SidecarError::Invalid(format!("there is no Run {}", run.0)))?;
     tx.execute("INSERT INTO attachment_change (from_track, to_track, fingerprint, attached_at, run_id) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![from, to, fingerprint.map(Fingerprint::as_str), now(), run.map(|run| run.0)])?;
+        params![from, to, fingerprint.map(Fingerprint::as_str), at, run.0])?;
     let change = tx.last_insert_rowid();
     for id in &fact_ids {
         tx.execute(
@@ -299,9 +311,31 @@ fn attach(
         "UPDATE fact_track SET track_id = ?2 WHERE track_id = ?1",
         params![from, to],
     )?;
+    let payload = serde_json::json!({"from_track":from,"to_track":to,"fact_ids":fact_ids,
+        "fingerprint":fingerprint.map(Fingerprint::as_str),"change_id":change});
+    crate::ledger::append_in(
+        tx,
+        &crate::ledger::NewEntry {
+            run,
+            store: crate::ledger::Store::Sidecar,
+            source: &source,
+            at: Some(at),
+            action: crate::ledger::Action::Edit,
+            kind: "attachment",
+            label: "Reattach Facts",
+            command: None,
+            id: None,
+            reverses: None,
+            part_of: None,
+            reversible: true,
+            format: 1,
+            payload: Some(&payload),
+        },
+    )?;
     Ok(Attachment {
         from_track: from.to_owned(),
         to_track: to.to_owned(),
         fact_ids,
+        run,
     })
 }

@@ -128,6 +128,28 @@ pub enum RunCommands {
         #[arg(long, value_name = "TEXT")]
         outcome: Option<String>,
     },
+    /// List Runs, newest first: who made each, when, and how many changes
+    /// of each kind it made to the Library and to the Sidecar.
+    List {
+        /// How many Runs to list.
+        #[arg(long, value_name = "ROWS")]
+        limit: Option<usize>,
+        /// How many of the newest Runs to skip.
+        #[arg(long, value_name = "ROWS")]
+        offset: Option<usize>,
+    },
+    /// Show one Run and everything it changed, in the order it changed
+    /// it, with the value before and after.
+    Show {
+        #[arg(value_name = "RUN_ID")]
+        id: i64,
+        /// How many entries to show.
+        #[arg(long, value_name = "ROWS")]
+        limit: Option<usize>,
+        /// How many of the Run's first entries to skip.
+        #[arg(long, value_name = "ROWS")]
+        offset: Option<usize>,
+    },
 }
 
 /// `dj`, `agent:NAME`, `tool:NAME`, `web:ADDRESS`.
@@ -247,6 +269,12 @@ pub fn runs(
             )?,
             "Finished",
         ),
+        RunCommands::List { limit, offset } => {
+            return crate::ledger::list(client, as_json, *limit, *offset)
+        }
+        RunCommands::Show { id, limit, offset } => {
+            return crate::ledger::show(client, as_json, *id, *limit, *offset)
+        }
     };
     Ok(if as_json {
         json!(run).to_string()

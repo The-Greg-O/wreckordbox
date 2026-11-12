@@ -25,7 +25,7 @@ use crate::{io, Fingerprint, Result, SidecarError};
 /// The version of the stored shape this crate reads and writes. A store from
 /// a newer wreckordbox is refused rather than guessed at; an older one is
 /// brought up to date by [`MIGRATIONS`] when it is opened.
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// What each version after the first adds, in order: the version a store is
 /// at once the statements have run, and the statements. A new store is made
@@ -35,7 +35,8 @@ pub const SCHEMA_VERSION: u32 = 4;
 const MIGRATIONS: &[(u32, &str)] = &[
     (2, crate::mutants::SCHEMA),
     (3, crate::decisions::SCHEMA),
-    (4, crate::attachments::SCHEMA),
+    (4, crate::ledger::SCHEMA),
+    (5, crate::attachments::SCHEMA),
 ];
 
 // A migration added without raising `SCHEMA_VERSION`, or the reverse,
@@ -481,25 +482,31 @@ impl Sidecar {
     pub fn mark_stale(&self, track_id: &str, current: &Fingerprint) -> Result<Vec<i64>> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        tx.execute(
-            "UPDATE fact SET stale_at = NULL
-             WHERE id IN (SELECT fact_id FROM fact_track WHERE track_id = ?1)
-             AND stale_at IS NOT NULL AND fingerprint = ?2
-             AND kind IN (SELECT name FROM kind WHERE nature = 'measurement')",
-            params![track_id, current.as_str()],
-        )?;
-        let mut statement = tx.prepare(
-            "UPDATE fact SET stale_at = ?1
-             WHERE id IN (SELECT id FROM attached_fact WHERE effective_track_id = ?2) AND stale_at IS NULL
-               AND fingerprint IS NOT NULL AND fingerprint <> ?3
-               AND kind IN (SELECT name FROM kind WHERE nature = 'measurement')
-             RETURNING id",
-        )?;
-        let mut ids = statement
-            .query_map(params![now(), track_id, current.as_str()], |row| row.get(0))?
-            .collect::<rusqlite::Result<Vec<i64>>>()?;
+        let mut restored = {
+            let mut query = tx.prepare(
+                "UPDATE fact SET stale_at = NULL
+                 WHERE id IN (SELECT fact_id FROM fact_track WHERE track_id = ?1)
+                 AND stale_at IS NOT NULL AND fingerprint = ?2
+                 AND kind IN (SELECT name FROM kind WHERE nature = 'measurement') RETURNING id",
+            )?;
+            let rows = query.query_map(params![track_id, current.as_str()], |row| row.get(0))?;
+            rows.collect::<rusqlite::Result<Vec<i64>>>()?
+        };
+        restored.sort_unstable();
+        let mut ids = {
+            let mut statement = tx.prepare(
+                "UPDATE fact SET stale_at = ?1
+                 WHERE id IN (SELECT fact_id FROM fact_track WHERE track_id = ?2) AND stale_at IS NULL
+                   AND fingerprint IS NOT NULL AND fingerprint <> ?3
+                   AND kind IN (SELECT name FROM kind WHERE nature = 'measurement')
+                 RETURNING id",
+            )?;
+            let marked = statement
+                .query_map(params![now(), track_id, current.as_str()], |row| row.get(0))?;
+            marked.collect::<rusqlite::Result<Vec<i64>>>()?
+        };
         ids.sort_unstable();
-        drop(statement);
+        record_audio_changes(&tx, track_id, current, &ids, &restored)?;
         tx.commit()?;
         Ok(ids)
     }
@@ -509,6 +516,67 @@ impl Sidecar {
         // statement or one transaction.
         self.db.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// Keep stale and restored state changes in the same transaction as their audit.
+fn record_audio_changes(
+    tx: &rusqlite::Transaction<'_>,
+    track: &str,
+    current: &Fingerprint,
+    stale: &[i64],
+    restored: &[i64],
+) -> Result<()> {
+    if stale.is_empty() && restored.is_empty() {
+        return Ok(());
+    }
+    let source = Source::new(SourceKind::Tool, crate::ledger::HOUSEKEEPING);
+    let at = now();
+    tx.execute(
+        "INSERT INTO run (source_kind, source_name, description, started_at, finished_at, outcome)
+         VALUES (?1, ?2, ?3, ?4, ?4, ?5)",
+        params![
+            source.kind.as_str(),
+            source.name,
+            format!("The audio of track {track} changed"),
+            at,
+            format!("marked {} stale, restored {}", stale.len(), restored.len())
+        ],
+    )?;
+    let run = RunId(tx.last_insert_rowid());
+    for (ids, kind, label) in [
+        (stale, crate::ledger::STALE, "Mark Measurements stale"),
+        (
+            restored,
+            "measurement_current",
+            "Restore matching Measurements",
+        ),
+    ] {
+        if ids.is_empty() {
+            continue;
+        }
+        let payload =
+            serde_json::json!({"track":track, "fingerprint":current.as_str(), "facts":ids});
+        crate::ledger::append_in(
+            tx,
+            &crate::ledger::NewEntry {
+                run,
+                store: crate::ledger::Store::Sidecar,
+                source: &source,
+                at: Some(at),
+                action: crate::ledger::Action::Edit,
+                kind,
+                label,
+                command: None,
+                id: None,
+                reverses: None,
+                part_of: None,
+                reversible: true,
+                format: 1,
+                payload: Some(&payload),
+            },
+        )?;
+    }
+    Ok(())
 }
 
 /// One Fact, inside a transaction: declares the kind, writes the Fact and
@@ -588,7 +656,7 @@ pub(crate) fn record_in(tx: &rusqlite::Transaction, new: &NewFact) -> Result<Fac
     Ok(fact)
 }
 
-fn select(rest: &str) -> String {
+pub(crate) fn select(rest: &str) -> String {
     format!(
         "SELECT fact.id, fact.effective_track_id, fact.fingerprint, fact.kind, kind.nature, fact.value,
                 fact.source_kind, fact.source_name, fact.confidence, fact.run_id, fact.recorded_at,
@@ -597,7 +665,7 @@ fn select(rest: &str) -> String {
     )
 }
 
-fn read_fact(row: &Row) -> rusqlite::Result<Fact> {
+pub(crate) fn read_fact(row: &Row) -> rusqlite::Result<Fact> {
     let value: String = row.get(5)?;
     Ok(Fact {
         id: row.get(0)?,

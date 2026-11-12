@@ -1,19 +1,8 @@
 //! One audio observation path for Fact and Stems clients.
 
-use serde::Serialize;
 use serde_json::json;
 
-/// Attachment notifications are distinct from Fact-kind changes.
-#[derive(Serialize)]
-struct AttachmentChanged<'a> {
-    #[serde(flatten)]
-    attachment: &'a Attachment,
-    run: Option<RunId>,
-}
-use wreckordbox_sidecar::{
-    attachments::{Attachment, Attachments},
-    Fingerprint, RunId,
-};
+use wreckordbox_sidecar::{attachments::Attachments, Fingerprint, RunId};
 
 use crate::{
     stems::{events, ParentAudio, SidecarChanged, Stems},
@@ -49,13 +38,7 @@ impl Stems {
             )
             .map_err(|e| super::stems::sidecar_error(&e))?;
         for attached in &attachments.reattached {
-            self.publish(
-                "facts_reattached",
-                json!(AttachmentChanged {
-                    attachment: attached,
-                    run
-                }),
-            );
+            self.publish("facts_reattached", json!(attached));
         }
         let stale = fingerprint
             .map(|fingerprint| self.mark_stale(track, fingerprint))

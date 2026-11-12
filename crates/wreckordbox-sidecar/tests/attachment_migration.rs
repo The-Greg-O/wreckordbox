@@ -11,7 +11,7 @@ use wreckordbox_sidecar::{attachments::IdentifyingFields, fingerprint_file, Side
 
 #[test]
 fn old_facts_can_reattach_after_migration_but_known_stale_audio_is_not_an_identity() {
-    for (version, stale) in [1, 2, 3]
+    for (version, stale) in [1, 2, 3, 4]
         .into_iter()
         .flat_map(|version| [false, true].map(|stale| (version, stale)))
     {
@@ -30,6 +30,10 @@ fn old_facts_can_reattach_after_migration_but_known_stale_audio_is_not_an_identi
         }
         if version >= 3 {
             db.execute_batch(include_str!("fixtures/sidecar-v3.sql"))
+                .unwrap();
+        }
+        if version >= 4 {
+            db.execute_batch(include_str!("fixtures/sidecar-v4.sql"))
                 .unwrap();
         }
         // Add multiple Facts using only the historical schema, never today's writer.
@@ -85,6 +89,8 @@ fn failed_attachment_migration_keeps_the_frozen_store_retryable() {
         .unwrap();
     db.execute_batch(include_str!("fixtures/sidecar-v3.sql"))
         .unwrap();
+    db.execute_batch(include_str!("fixtures/sidecar-v4.sql"))
+        .unwrap();
     db.execute_batch("CREATE TABLE attachment_review (obstruction TEXT);")
         .unwrap();
     assert!(Sidecar::open(dir.path()).is_err());
@@ -95,7 +101,7 @@ fn failed_attachment_migration_keeps_the_frozen_store_retryable() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(version, "3");
+    assert_eq!(version, "4");
     let partial: i64 = db.query_row("SELECT count(*) FROM sqlite_master WHERE name IN ('track_identity','fact_track','fact_initial_track')", [], |r| r.get(0)).unwrap();
     assert_eq!(partial, 0);
     db.execute_batch("DROP TABLE attachment_review;").unwrap();

@@ -854,6 +854,8 @@ fn a_measurement_is_tied_to_the_audio_it_was_made_from_and_a_judgement_is_not() 
     // about it, a Measurement cannot.
     let no_audio = refused(&sandbox, &run(&measure("10003", r#"{"summary": 0.4}"#)));
     assert_eq!(no_audio["code"], "track_file_missing");
+    let mut watcher = sandbox.client();
+    watcher.subscribe().unwrap();
     let judged = ok(
         &sandbox,
         &[
@@ -894,8 +896,12 @@ fn a_measurement_is_tied_to_the_audio_it_was_made_from_and_a_judgement_is_not() 
     assert_eq!(genre["marked_stale"], json!([]));
 
     // Explicit checking marks stale and leaves Judgements standing.
-    let mut watcher = sandbox.client();
-    watcher.subscribe().unwrap();
+    // Subscribe before any recording, and consume each known recording
+    // event before asking for the stale transition (delivery is asynchronous).
+    for recorded in [&judged, &measured, &genre] {
+        let event = watcher.next_event(Duration::from_secs(2)).unwrap().unwrap();
+        assert_eq!(event.data["fact_id"], recorded["facts"][0]["id"]);
+    }
     change_audio(&audio);
     let checked = ok(&sandbox, &["facts", "show", &track, "--check-audio"]);
     let by_kind = |facts: &Value, kind: &str| {

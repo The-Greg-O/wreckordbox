@@ -384,6 +384,15 @@ fn attachments_follow_repeated_readds_and_restore_matching_measurements() {
     let shown = ok(&s, &["facts", "show", &last]);
     assert_eq!(shown["facts"].as_array().unwrap().len(), 2);
     assert_eq!(shown["stale"], json!([]));
+    let db = rusqlite::Connection::open(s.sidecar_dir().join("sidecar.db")).unwrap();
+    let restored: i64 = db
+        .query_row(
+            "SELECT count(*) FROM ledger WHERE kind='measurement_current'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(restored, 1);
 }
 
 #[test]
@@ -581,6 +590,17 @@ fn attachment_belongs_to_the_supplied_run() {
         )
         .unwrap();
     assert_eq!(json!(attached_run), run["id"]);
+    let entries = ok(&s, &["runs", "show", &run["id"].to_string()]);
+    assert_eq!(entries["entries"][0]["kind"], "attachment", "{entries}");
+    assert_eq!(entries["entries"][1]["kind"], "mood", "{entries}");
+    let order: Vec<i64> = db
+        .prepare("SELECT seq FROM ledger_order ORDER BY seq")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert!(order.windows(2).all(|pair| pair[0] < pair[1]));
 }
 
 #[test]
