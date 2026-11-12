@@ -7,6 +7,7 @@
 mod mytag_edits;
 mod protection;
 mod reading;
+mod stems;
 mod tracks;
 
 use std::fmt::Write as _;
@@ -71,6 +72,11 @@ enum Commands {
     Protection {
         #[command(subcommand)]
         command: Option<protection::ProtectionCommands>,
+    },
+    /// Separate a track into Stems, kept in the Sidecar beside the Library.
+    Stems {
+        #[command(subcommand)]
+        command: stems::StemCommands,
     },
     /// Run the Library service in the foreground until interrupted.
     ///
@@ -213,6 +219,9 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
                 cli.json,
                 command.as_ref(),
             )?);
+        }
+        Commands::Stems { command } => {
+            print(&stems::run(&mut connect(&config)?, cli.json, command)?);
         }
         Commands::Serve { spawned: true } => {
             return Ok(if wreckordbox_service::serve_spawned(config) {

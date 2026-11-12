@@ -82,8 +82,6 @@ jobs:
           azure_tenant_id: ${{ secrets.AZURE_TENANT_ID }}
           azure_client_id: ${{ secrets.AZURE_CLIENT_ID }}
           azure_client_secret: ${{ secrets.AZURE_CLIENT_SECRET }}
-          tauri_signing_private_key: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          tauri_signing_private_key_password: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Verify installer
         uses: ./.github/actions/verify-installer

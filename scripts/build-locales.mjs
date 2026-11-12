@@ -156,7 +156,7 @@ async function rustErrorStrings() {
         if (contents.includes(literal)) found.add(text);
       }
       for (const line of contents.split(/\r?\n/)) {
-        if (!/(?:AppError|Conflict|Err\(|error\(|updater_error)/.test(line)) continue;
+        if (!/(?:AppError|Conflict|Err\(|error\()/.test(line)) continue;
         for (const match of line.matchAll(/"((?:\\.|[^"\\])*)"/g)) {
           const text = unescapeLang(match[1]);
           if (/^[A-Z][^/]*[ .!?]$/.test(text) || lowercaseRustStrings.has(text)) found.add(text);

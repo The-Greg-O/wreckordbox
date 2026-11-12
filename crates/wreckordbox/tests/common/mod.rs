@@ -53,6 +53,11 @@ pub struct Sandbox {
     location: LibraryLocation,
     /// Seconds a service started here stays up with no client connected.
     pub idle_exit_secs: u32,
+    /// Options for the fake separation engine a service started here runs
+    /// (`separation-engine/tests/fake_worker.py`): `--short ROLE`,
+    /// `--delay SECONDS`, `--fail CATEGORY`. Set them before the first
+    /// command, which is what starts the service.
+    pub engine_options: Vec<String>,
     /// Services to stop when the test ends.
     pids: Mutex<Vec<u32>>,
 }
@@ -126,6 +131,7 @@ impl Sandbox {
             dir,
             location,
             idle_exit_secs: 5,
+            engine_options: Vec::new(),
             pids: Mutex::new(Vec::new()),
         }
     }
@@ -311,6 +317,36 @@ impl Sandbox {
         self.dir.path().join("run")
     }
 
+    /// The Sidecar of this sandbox's Library: a folder of its own under the
+    /// temporary folder, named to the service by `WRECKORDBOX_SIDECAR_DIR`.
+    pub fn sidecar_dir(&self) -> PathBuf {
+        self.dir.path().join("sidecar")
+    }
+
+    /// How many separations the fake engine has been asked for.
+    pub fn engine_runs(&self) -> usize {
+        std::fs::read_to_string(self.engine_log()).map_or(0, |log| log.lines().count())
+    }
+
+    fn engine_log(&self) -> PathBuf {
+        self.dir.path().join("engine.log")
+    }
+
+    /// The command a service here runs as the separation engine: the
+    /// engine's real worker protocol over its fake backend. Never a model.
+    fn separation_command(&self) -> String {
+        let fake = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../separation-engine/tests/fake_worker.py");
+        let mut command = vec![
+            "python3".to_owned(),
+            fake.to_str().unwrap().to_owned(),
+            "--log".to_owned(),
+            self.engine_log().to_str().unwrap().to_owned(),
+        ];
+        command.extend(self.engine_options.iter().cloned());
+        serde_json::to_string(&command).unwrap()
+    }
+
     /// What a second client in this sandbox connects with.
     pub fn config(&self) -> Config {
         Config {
@@ -338,6 +374,8 @@ impl Sandbox {
             .env("RBXPORT_OPTIONS", self.dir.path().join("options.json"))
             .env("RBXPORT_TEST_FIXTURE", self.dir.path().join("library"))
             .env("WRECKORDBOX_RUNTIME_DIR", self.runtime_dir())
+            .env("WRECKORDBOX_SIDECAR_DIR", self.sidecar_dir())
+            .env("WRECKORDBOX_SEPARATION_COMMAND", self.separation_command())
             .env(
                 "WRECKORDBOX_IDLE_EXIT_SECS",
                 self.idle_exit_secs.to_string(),

@@ -2,7 +2,6 @@ export function nativeMenuLabels(t: (source: string) => string): Record<string, 
   return {
     "About wreckordbox": t("About wreckordbox"),
     "Settings…": t("Settings…"),
-    "Check for Updates…": t("Check for Updates…"),
     "Hide wreckordbox": t("Hide wreckordbox"),
     "Hide Others": t("Hide Others"),
     "Quit wreckordbox": t("Quit wreckordbox"),
@@ -54,7 +53,5 @@ export function nativeMenuLabels(t: (source: string) => string): Record<string, 
     "2 Players": t("2 Players"),
     "Simple Player": t("Simple Player"),
     "Full Browser": t("Full Browser"),
-    Help: t("Help"),
-    "Report bug…": t("Report bug…"),
   };
 }

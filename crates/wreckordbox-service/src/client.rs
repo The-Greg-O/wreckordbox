@@ -148,18 +148,37 @@ impl Client {
 
     /// Sends one command and waits for its answer. Events that arrive
     /// meanwhile are kept for [`next_event`](Self::next_event).
-    #[allow(
-        clippy::needless_pass_by_value,
-        reason = "callers build the arguments for the call and hand them over"
-    )]
     pub fn call<T: DeserializeOwned>(
         &mut self,
         command: &str,
         args: Value,
     ) -> Result<T, ServiceError> {
+        let mut kept = Vec::new();
+        let answer = self.call_watching(command, args, |event| kept.push(event));
+        self.events.extend(kept);
+        answer
+    }
+
+    /// Sends one command and waits for its answer, handing each event that
+    /// arrives meanwhile to `on_event` as it arrives: how a client follows
+    /// a long command's progress. [`subscribe`](Self::subscribe) first.
+    ///
+    /// While the answer is [`codes::LIBRARY_LOADING`] the command is asked
+    /// again, for as long as [`wait_while_loading`](Self::wait_while_loading)
+    /// allows.
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "callers build the arguments for the call and hand them over"
+    )]
+    pub fn call_watching<T: DeserializeOwned>(
+        &mut self,
+        command: &str,
+        args: Value,
+        mut on_event: impl FnMut(Event),
+    ) -> Result<T, ServiceError> {
         let deadline = Instant::now() + self.loading_wait;
         loop {
-            match self.call_once(command, &args) {
+            match self.call_once(command, &args, &mut on_event) {
                 Err(error) if error.code == codes::LIBRARY_LOADING => {
                     let left = deadline.saturating_duration_since(Instant::now());
                     if left.is_zero() {
@@ -176,6 +195,7 @@ impl Client {
         &mut self,
         command: &str,
         args: &Value,
+        on_event: &mut dyn FnMut(Event),
     ) -> Result<T, ServiceError> {
         let id = self.next_id;
         self.next_id += 1;
@@ -203,7 +223,7 @@ impl Client {
                     };
                 }
                 Some(Message::Response(_)) | None => {}
-                Some(Message::Event(event)) => self.events.push_back(event),
+                Some(Message::Event(event)) => on_event(event),
             }
         }
     }

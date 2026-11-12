@@ -106,8 +106,8 @@ The interface scale commands move `view.uiScale` one stop along
 `UI_SCALES` in `src/lib/preferences.ts` (0.6 to 1.5, 1 by default) and store
 it. Every window applies the stored stop as the webview's zoom when it opens
 and whenever it changes (`src/lib/uiScale.ts`), so the keys are pressed in
-the main window and the Preferences, Sync Manager, Report bug and Log
-windows follow. They work while a field has the focus. Command + 0 is Full
+the main window and the Preferences, Sync Manager and Log windows
+follow. They work while a field has the focus. Command + 0 is Full
 Browser and shift + command + 0 is a pad's clear in the Performance 2
 preset, which is why the reset carries option. The webview's built-in zoom
 hotkeys stay off (`src-tauri/tests/window_config.rs`).

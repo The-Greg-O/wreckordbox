@@ -9,8 +9,7 @@ import { confirmHandler } from "./confirmHost";
 import type {
   AnalysisStageDescriptor, AnalysisResult, AudioDevices, Backend, Backup, BackupProgress, BackupSizes, ConfirmReplace, Cue, SyncEstimate, DeckEvent, Device, DeviceLibrary,
   DevicePlaylistEditResult, DevicePlaylistImportPlan, DevicePlaylistImportResult, DeviceSettings, DeviceSyncState,
-  Diagnostics, Duplicates, LogPage, GridState, Limiter, PreferencesRequest, SmartRule, SyncDeviceReport, SyncProgress, UpdateCheck,
-  UpdateProgress, UpdateReady, XmlImportReport,
+  Diagnostics, Duplicates, LogPage, GridState, Limiter, PreferencesRequest, SmartRule, SyncDeviceReport, SyncProgress, XmlImportReport,
   ExportProgress, ExportReport, ExplorerChildren, ExplorerRoot, FilterValues, FolderPlaylistReport, Phrase, ImportReport,
   DatabaseDrive, EditHistoryState, ItunesLibrary, LibraryProblem, LibrarySummary, LinkPeerSeen, Meters,
   LinkStatus, MissingExportFile, MissingTrack, MissingTracks, PreviewState, UnanalysedTracks, ReferenceStickSettings, RelocateReport, RowDto, ScriptRequest, Tick,
@@ -360,7 +359,6 @@ async function realBackend(): Promise<Backend> {
     startBackup: () => invoke<void>("start_backup"),
     cancelBackup: () => invoke<void>("cancel_backup"),
     backupProgress: () => invoke<BackupProgress>("backup_progress"),
-    openUrl: (url) => invoke<void>("open_url", { url }),
     backUpLibrary: () => invoke<string>("back_up_library"),
     setBackupDirectory: (directory) => invoke<string>("set_backup_directory", { directory }),
     deleteBackup: (path) => invoke<void>("delete_backup", { path }),
@@ -400,11 +398,6 @@ async function realBackend(): Promise<Backend> {
     setMasterLevel: (level) => invoke<void>("set_master_level", { level }),
     audioDevices: () => invoke<AudioDevices>("audio_devices"),
     setAudioDevice: (device) => invoke<void>("set_audio_device", { device }),
-    checkForUpdate: () => invoke<UpdateCheck>("check_for_update"),
-    readyUpdate: () => invoke<UpdateReady | null>("ready_update"),
-    downloadUpdate: () => invoke<UpdateReady>("download_update"),
-    restartToUpdate: () => invoke<void>("restart_to_update"),
-    onUpdateProgress: (listener) => subscribe<UpdateProgress>("update:progress", listener),
     masterLimiter: () => invoke<Limiter>("master_limiter"),
     setMasterLimiter: (limiter) => invoke<Limiter>("set_master_limiter", { limiter }),
     deckTempo: (deck, tempo) => invoke<void>("deck_tempo", { deck, tempo }),
@@ -577,9 +570,6 @@ async function realBackend(): Promise<Backend> {
       const { getCurrentWindow } = await import("@tauri-apps/api/window");
       await getCurrentWindow().close();
     },
-    openReportWindow: async () => { await invoke("open_report_window"); return true; },
-    reportAttachment: () => invoke<string>("report_attachment"),
-    openReportAttachment: (attachment) => invoke<void>("open_report_attachment", { attachment }),
     openSyncWindow: async () => {
       await invoke<void>("open_sync_window");
       return true;

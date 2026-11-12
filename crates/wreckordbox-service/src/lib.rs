@@ -16,7 +16,9 @@ pub mod mytag_edits;
 pub mod protection;
 pub mod protocol;
 pub mod reading;
+mod separation;
 mod server;
+pub mod stems;
 pub mod tracks;
 
 use std::path::{Path, PathBuf};

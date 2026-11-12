@@ -301,33 +301,20 @@ test("Keyboard lists rekordbox's ten groups, with the unbuilt rows greyed", asyn
   await expect(dialog.getByText("Nothing is bound here in the Export preset.")).toBeVisible();
 });
 
-test("About groups version and update controls", async ({ page }) => {
+test("About shows the version, the credit and the licence, and nothing to press", async ({ page }) => {
   await open(page);
   const dialog = await prefs(page);
   await dialog.getByRole("tab", { name: "About" }).click();
-  await expect(dialog.getByRole("heading", { name: "About" })).toHaveCount(0);
-  await expect(dialog.getByText("Made by TRIODE with")).toBeVisible();
-  await expect(dialog.getByText("in California", { exact: true })).toBeVisible();
-  await expect(dialog.getByRole("heading", { name: "Support rbxport" })).toBeVisible();
-  await expect(dialog.getByText("rbxport is free to use and independently developed by TRIODE.")).toBeVisible();
   await expect(dialog.getByRole("heading", { name: "wreckordbox", exact: true })).toBeVisible();
-  await expect(dialog.getByRole("group", { name: "Author links" })).toBeVisible();
-  const updates = dialog.getByRole("region", { name: "About", exact: true });
   await expect(dialog.getByTestId("about-version")).toHaveText("v0.4.0");
-  await expect(updates.getByRole("button", { name: "Check for updates" })).toBeVisible();
-  const auto = dialog.getByRole("switch", { name: "Download updates" });
-  await expect(auto).toBeChecked();
-  await expect(dialog.getByRole("combobox", { name: "Update frequency" })).toHaveValue("start");
-  await auto.click();
-  await expect(auto).not.toBeChecked();
-  await expect(dialog.getByRole("combobox", { name: "Update frequency" })).toBeDisabled();
-  await expect(dialog.getByRole("button", { name: "Check for updates" })).toBeEnabled();
+  const about = dialog.getByRole("region", { name: "About", exact: true });
+  await expect(about.getByText("wreckordbox is based on rbxport.")).toBeVisible();
+  await expect(about.getByRole("button")).toHaveCount(0);
+  await expect(dialog.getByText("Licence", { exact: true })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Report bug" })).toHaveCount(0);
 
   const advancedItem = dialog.locator("li").filter({ has: page.getByRole("tab", { name: "Advanced", exact: true }) });
   await expect(advancedItem.locator("+ li").getByRole("tab")).toHaveAccessibleName("Rekordbox");
-  await dialog.getByRole("tab", { name: "Advanced", exact: true }).click();
-  await dialog.getByRole("tab", { name: "Others" }).click();
-  await expect(dialog.getByRole("switch", { name: "Download updates" })).toHaveCount(0);
 });
 
 test("the player's ≡ opens rekordbox's own menu, and its choices are the View preferences", async ({ page }) => {

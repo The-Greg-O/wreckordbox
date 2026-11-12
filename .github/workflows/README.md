@@ -22,8 +22,6 @@ workspace test gates before deployment.
 - `release.yml` resolves and records a version, validates it, promotes `main`,
   builds installers, publishes them, and requests Store submission.
 - `label-issue-platform.yml` labels incoming issues independently of delivery.
-- `support-sync.yml` projects verified issue work state to linked Discord
-  support threads on GitHub events, with an hourly recovery pass.
 
 ## Reusable validation workflows
 
