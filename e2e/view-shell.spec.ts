@@ -94,13 +94,13 @@ test("keys 1 to 4 switch views", async ({ page }) => {
 });
 
 const player = (page: Page) => page.getByRole("region", { name: "Preview player" });
-// The shell's player area holds the old player at its smallest for now.
-const deckTitle = (page: Page) => player(page).getByTestId("simple-player-title");
+// The shell's player area holds the compact player (#51).
+const deckTitle = (page: Page) => player(page).getByTestId("compact-player-title");
 /** A loop lit on the deck's waveform. */
 const activeLoop = (page: Page) => page.locator('[class*="loopBand"][data-active]');
 /** Where the playhead is across the overview, in pixels: it moves while the deck runs. */
 async function playhead(page: Page): Promise<number> {
-  return (await player(page).getByTestId("simple-player-head").boundingBox())?.x ?? Number.NaN;
+  return (await player(page).getByTestId("compact-player-head").boundingBox())?.x ?? Number.NaN;
 }
 
 test("switching views does not stop playback, change the loaded track or lose the tree selection", async ({ page }) => {

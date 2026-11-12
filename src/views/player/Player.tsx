@@ -2281,6 +2281,7 @@ export const Player = memo(function Player({
         bpmX100={Math.round(bpmX100 * playback.tempo)}
         keyText={track ? formatKey(track.key, viewPrefs.keyDisplay) : ""}
         cues={cues}
+        loop={playback.loop}
         phrases={compactPhrases}
         overviewRef={overviewRef}
         overview={overview}

@@ -20,6 +20,7 @@ import type { Cue, DeckId, RowDto } from "@/ipc/types";
 import { COMPACT_JUMP_BEATS, compactLength, compactPosition, type CompactJumpBeats } from "@/lib/compactPlayer";
 import { formatBpm } from "@/lib/format";
 import type { PhraseSpan } from "@/lib/player";
+import type { DeckLoop } from "@/store/usePlayback";
 import { CueMarkers } from "./Player";
 import type { PositionSource } from "./TimeReadouts";
 import { WaveformDetail } from "./WaveformDetail";
@@ -48,6 +49,8 @@ export interface CompactPlayerProps {
   /** The key as the DJ chose to read keys (classic or Camelot). */
   keyText: string;
   cues: readonly Cue[];
+  /** The deck's own loop, drawn as a band over the overview; lit while it plays. */
+  loop: DeckLoop | null;
   /** The phrase strip's blocks, empty when the track has no phrase analysis. */
   phrases: readonly PhraseSpan[];
   overviewRef: React.Ref<HTMLDivElement>;
@@ -81,7 +84,7 @@ const Position = memo(function Position({ source, total }: { source: PositionSou
 export const CompactPlayer = memo(function CompactPlayer({
   track, deck, shell, armed, droppable, onDragOver, onDrop,
   playing, idle, onToggle, onCueDown, onCueUp, positionSource, total, bpmX100, keyText,
-  cues, phrases, overviewRef, overview, overviewHead, onScrubStart, onScrubMove, onScrubEnd, drawn,
+  cues, loop, phrases, overviewRef, overview, overviewHead, onScrubStart, onScrubMove, onScrubEnd, drawn,
   jumpBeats, onJumpBeats, onJump,
 }: CompactPlayerProps) {
   // The selector is a radio group: the arrows inside it move the choice and
@@ -180,7 +183,7 @@ export const CompactPlayer = memo(function CompactPlayer({
               half
             />
           ) : null}
-          <CueMarkers cues={cues} totalMs={total * 1000} />
+          <CueMarkers cues={cues} totalMs={total * 1000} loop={loop} />
         </div>
         {track && phrases.length > 0 ? (
           <div className={styles.phrases} data-testid="compact-player-phrases" aria-label="Phrases">
