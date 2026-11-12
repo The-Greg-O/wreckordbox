@@ -127,6 +127,7 @@ fn main() {
                     values: vec![128],
                     tolerance_pct: 0,
                     master_bpm_x100: None,
+                    ranges_x100: Vec::new(),
                 }),
                 ..Default::default()
             },
@@ -139,6 +140,7 @@ fn main() {
                     values: vec![],
                     tolerance_pct: 2,
                     master_bpm_x100: Some(12800),
+                    ranges_x100: Vec::new(),
                 }),
                 ..Default::default()
             },
@@ -175,6 +177,7 @@ fn main() {
                     values: vec![126, 128, 130],
                     tolerance_pct: 1,
                     master_bpm_x100: None,
+                    ranges_x100: Vec::new(),
                 }),
                 keys: Some(keys),
                 ratings: Some(vec![0, 1, 2, 3, 4, 5]),

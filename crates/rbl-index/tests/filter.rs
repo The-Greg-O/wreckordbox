@@ -63,6 +63,7 @@ fn bpm(values: &[u32], pct: u8, master: Option<u32>) -> TrackFilter {
             values: values.to_vec(),
             tolerance_pct: pct,
             master_bpm_x100: master,
+            ranges_x100: Vec::new(),
         }),
         ..TrackFilter::default()
     }
@@ -165,6 +166,7 @@ fn ticked_columns_combine_with_and() {
             values: vec![128, 130],
             tolerance_pct: 0,
             master_bpm_x100: None,
+            ranges_x100: Vec::new(),
         }),
         keys: Some(lib.key_ids_named(&["A".to_owned()])),
         ratings: Some(vec![3]),

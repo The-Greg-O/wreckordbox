@@ -1038,6 +1038,13 @@ export interface TrackTableProps {
   /** The bar itself, drawn between the header and the column header. */
   filterBar?: React.ReactNode;
   /**
+   * The view shell's Track Filter (wbx-57), opt-in: whenever the list's rows
+   * change (a filter, a search, an edit), selected tracks it no longer shows
+   * are deselected, so nothing acts on a track the DJ cannot see; this is
+   * told how many.
+   */
+  onHiddenSelectionDropped?: (count: number) => void;
+  /**
    * The Traffic Light: which deck the browser reads, the MASTER menu above
    * the list, and the key of the track on it. The main browser passes these;
    * the sub-browser has no menu and lights nothing.
@@ -1157,7 +1164,7 @@ export const TrackTable = memo(function TrackTable({
   onRemoveFromCollection, onAutoRelocate, onRelocate, onConvertMemoryCues, readOnly = false,
   onImportToCollection, onAnalysisLock, onAddToPlaylist, onAddToTagList, onRemoveFromTagList, onExportTrack, onReloadTag,
   playlists = [], devices = [], deviceMenu,
-  players = 0, onLoadTrack, onSelectedRow, filterOpen = false, onToggleFilter, filterBar,
+  players = 0, onLoadTrack, onSelectedRow, filterOpen = false, onToggleFilter, filterBar, onHiddenSelectionDropped,
   trafficLight, onTrafficLight, trafficKey = null, artworkMode = "partial", onArtworkMode, look,
 }: TrackTableProps) {
   // Browse › FontSize and Line Space scale the measured tokens; the
@@ -1254,6 +1261,8 @@ export const TrackTable = memo(function TrackTable({
   const scrollRef = useRef<HTMLDivElement>(null);
   const rowsRef = useRef<HTMLDivElement>(null);
   const [selection, setSelection] = useState<SelectionState>(emptySelection);
+  const selectionNow = useRef(selection);
+  selectionNow.current = selection;
   const [dragKey, setDragKey] = useState<ColumnKey | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; target: ColumnKey } | null>(null);
   // Live during a header-edge drag. A ref, not state: this updates per
@@ -1941,6 +1950,29 @@ export const TrackTable = memo(function TrackTable({
   // The rows behind the selection, resolved from what is cached. A selection
   // spanning unfetched rows contributes only what is on hand, which is what
   // the user can see anyway.
+  // The view shell's Track Filter (wbx-57): a selection is never wider than
+  // the rows shown. Re-checked whenever the view is opened again.
+  const hiddenSelectionDropped = useRef(onHiddenSelectionDropped);
+  hiddenSelectionDropped.current = onHiddenSelectionDropped;
+  const { token: viewToken, loading: viewLoading, count: viewCount, idsInRange: viewIdsInRange } = view;
+  useEffect(() => {
+    if (!hiddenSelectionDropped.current || viewLoading || selectionNow.current.ids.size === 0) return;
+    let live = true;
+    void (async () => {
+      const shown = new Set(viewCount > 0 ? await viewIdsInRange(0, viewCount - 1) : []);
+      if (!live) return;
+      const now = selectionNow.current;
+      const kept = [...now.ids].filter((id) => shown.has(id));
+      const dropped = now.ids.size - kept.length;
+      if (dropped === 0) return;
+      setSelection((current) => ({ ids: new Set([...current.ids].filter((id) => shown.has(id))), anchorIndex: null }));
+      hiddenSelectionDropped.current?.(dropped);
+    })().catch(() => {
+      // The view was replaced meanwhile; the next one checks again.
+    });
+    return () => { live = false; };
+  }, [viewToken, viewLoading, viewCount, viewIdsInRange]);
+
   /** The track menu: where it is, and which row it was opened on. */
   const [trackMenu, setTrackMenu] = useState<
     { x: number; y: number; row: RowDto } | null
