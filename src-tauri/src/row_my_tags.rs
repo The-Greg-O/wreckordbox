@@ -1,5 +1,5 @@
-//! A row's MyTags for the view shell's Library (#55): each tag as itself,
-//! with its id and the name of its MyTag column (category), so the window
+//! A row's My Tags for the view shell's Library (#55): each tag as itself,
+//! with its id and the name of its My Tag column (category), so the window
 //! never rebuilds tags from the joined display names, which break on a tag
 //! whose name holds a comma.
 //!
@@ -9,7 +9,7 @@
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
-/// The track's MyTags in the Library's order, as `{ id, name, category }`.
+/// The track's My Tags in the Library's order, as `{ id, name, category }`.
 /// A read that fails gives no tags, as the joined-name column does.
 pub(crate) fn row_my_tags(conn: &Connection, id: &str) -> Value {
     let Ok(mut stmt) = conn.prepare_cached(

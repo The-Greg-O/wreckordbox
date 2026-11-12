@@ -301,7 +301,7 @@ fn enrich_rows(state: &AppState, rows: &mut [RowDto], columns: &[String]) -> App
     Ok(())
 }
 
-/// Each row's MyTags with their ids and categories, for the view shell's
+/// Each row's My Tags with their ids and categories, for the view shell's
 /// Library (#55); see `row_my_tags`.
 fn enrich_my_tags(state: &AppState, rows: &mut [RowDto]) -> AppResult<()> {
     state.read_db(|db| {
