@@ -1686,7 +1686,7 @@ test("analysing a selection reports progress and can be stopped", async ({ page 
   const rows = page.getByRole("row").filter({ has: page.getByRole("gridcell") });
   await rows.nth(2).click();
   await rows.nth(9).click({ modifiers: ["Shift"] });
-  await page.keyboard.press("Shift+Meta+A");
+  await page.keyboard.press("Shift+ControlOrMeta+A");
   await page.getByRole("dialog", { name: "Analysis Setting" }).getByRole("button", { name: "OK", exact: true }).click();
 
   const status = page.getByRole("contentinfo");
@@ -1705,7 +1705,7 @@ test("a track that cannot be analysed does not stop the run", async ({ page }) =
   const rows = page.getByRole("row").filter({ has: page.getByRole("gridcell") });
   await rows.nth(0).click();
   await rows.nth(14).click({ modifiers: ["Shift"] });
-  await page.keyboard.press("Shift+Meta+A");
+  await page.keyboard.press("Shift+ControlOrMeta+A");
   await page.getByRole("dialog", { name: "Analysis Setting" }).getByRole("button", { name: "OK", exact: true }).click();
 
   const status = page.getByRole("contentinfo");
@@ -2957,10 +2957,12 @@ test("the layout switch draws one deck, two, a short one, or none", async ({ pag
   await expect(decks).toHaveCount(0);
   // The browser takes everything under the top bar down to the status bar:
   // no deck, no gutter, and no strip left over where the deck row was.
-  const top = await page.evaluate(() => {
-    const style = getComputedStyle(document.documentElement);
-    return parseFloat(style.getPropertyValue("--s-title-bar-h")) + parseFloat(style.getPropertyValue("--s-top-bar-h"));
-  });
+  // Under the top bar as drawn: the title bar strip above it is ours on macOS
+  // and Windows, and none on Linux, whose window manager draws its own (the
+  // row collapses to 0 there), so it is measured rather than summed from tokens.
+  const topBar = await page.getByRole("banner").boundingBox();
+  const top = (topBar?.y ?? 0) + (topBar?.height ?? 0);
+  expect(topBar?.height).toBe(await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--s-top-bar-h"))));
   const body = await page.getByTestId("body").boundingBox();
   const status = await page.locator("footer").boundingBox();
   const viewport = page.viewportSize();

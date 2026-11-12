@@ -55,6 +55,8 @@ pub enum PlaylistCommands {
         #[arg(long, value_name = "ROWS", default_value_t = DEFAULT_TRACK_LIMIT)]
         limit: usize,
     },
+    #[command(flatten)]
+    Edit(crate::playlist_edits::PlaylistEditCommands),
 }
 
 #[derive(Subcommand)]
@@ -115,6 +117,7 @@ pub fn playlists(
                 client.call(commands::PLAYLISTS_TRACKS, query(id, *limit))?;
             Ok(shown(as_json, &json!(found), playlist_tracks_text(&found)))
         }
+        PlaylistCommands::Edit(command) => crate::playlist_edits::run(client, as_json, command),
     }
 }
 

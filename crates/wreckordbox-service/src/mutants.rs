@@ -312,6 +312,42 @@ pub(crate) fn answer(
     answer.map_err(|e| ServiceError::new(service_codes::SERVICE_FAILED, e.to_string()))
 }
 
+/// These Mutants, removed ones too, as `mutants.get` describes each, read
+/// and described in one pass (wbx-80): a playlist's entries are read once
+/// however many of its Mutants are named. Ids the Sidecar does not have are
+/// left out.
+pub(crate) fn describe(
+    stems: &Arc<Stems>,
+    library: WithLibrary,
+    ids: &[i64],
+) -> Result<Vec<Value>, ServiceError> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let stored = inspect(stems, |store| {
+        let mut found = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(mutant) = store.mutant(*id)? {
+                found.push(mutant);
+            }
+        }
+        Ok(found)
+    })?;
+    let mutants = Mutants {
+        sidecar: None,
+        stems,
+        library,
+    };
+    mutants
+        .described(stored, false)?
+        .iter()
+        .map(|mutant| {
+            serde_json::to_value(mutant)
+                .map_err(|e| ServiceError::new(service_codes::SERVICE_FAILED, e.to_string()))
+        })
+        .collect()
+}
+
 fn arguments<T: serde::de::DeserializeOwned>(request: &Request) -> Result<T, ServiceError> {
     serde_json::from_value(request.args.clone()).map_err(|e| {
         ServiceError::new(
@@ -607,35 +643,45 @@ impl Mutants<'_> {
         let mut described: Vec<Mutant> = self.read(|library| {
             library.steady(|| {
                 let index = library.index()?;
-                let mut playlists: HashMap<String, Vec<Entry>> = HashMap::new();
+                // Each playlist's entries read once and looked up by id, so
+                // describing many Mutants of one playlist stays linear (wbx-80).
+                let mut playlists: HashMap<String, HashMap<String, usize>> = HashMap::new();
+                // Every parent's details through one connection.
                 let mut parents = HashMap::new();
+                library.with_db(|db| {
+                    for mutant in &stored {
+                        if !parents.contains_key(&mutant.track_id) {
+                            parents.insert(
+                                mutant.track_id.clone(),
+                                editing::metadata_in(db, &index, &mutant.track_id)?,
+                            );
+                        }
+                    }
+                    Ok(())
+                })?;
                 stored
                     .into_iter()
                     .map(|mutant| {
                         if !playlists.contains_key(&mutant.playlist_id) {
                             playlists.insert(
                                 mutant.playlist_id.clone(),
-                                entries::of_playlist(library, &index, &mutant.playlist_id)?,
+                                entries::of_playlist(library, &index, &mutant.playlist_id)?
+                                    .into_iter()
+                                    .map(|entry: Entry| (entry.id, entry.position))
+                                    .collect(),
                             );
                         }
                         let name = entries::playlist_name(&index, &mutant.playlist_id);
                         // A playlist that is gone has no entries to be at.
                         let position = name.as_ref().and_then(|_| {
                             playlists[&mutant.playlist_id]
-                                .iter()
-                                .find(|entry| entry.id == mutant.entry_id)
-                                .map(|entry| entry.position)
+                                .get(&mutant.entry_id)
+                                .copied()
                         });
                         let title = index
                             .row_of(&mutant.track_id)
                             .map(|row| index.title.get(row as usize).to_owned())
                             .unwrap_or_default();
-                        if !parents.contains_key(&mutant.track_id) {
-                            parents.insert(
-                                mutant.track_id.clone(),
-                                editing::metadata(library, &mutant.track_id)?,
-                            );
-                        }
                         let (inherited, cues) = parents[&mutant.track_id].clone();
                         let parsed = editing::parse_edits(mutant.edits.clone()).and_then(|edits| {
                             edits.validate_cues(inherited.as_ref(), &cues)?;

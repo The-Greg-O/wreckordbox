@@ -69,6 +69,11 @@ pub struct Preparation {
     pub fields: Vec<(String, String)>,
     pub undo_of: Option<i64>,
     pub redo_of: Option<i64>,
+    /// The write may replace playlists' entries with new rows (an import's
+    /// or a folder drop's Replace existing): a Ledger that keeps something
+    /// for each entry (a Mutant, wbx-80) saves what it needs to carry it to
+    /// the new rows should the write never be confirmed.
+    pub replaces_entries: bool,
 }
 impl Preparation {
     pub fn touched(touched: &crate::Touched) -> Self {

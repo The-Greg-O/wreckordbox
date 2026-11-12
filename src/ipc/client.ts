@@ -714,6 +714,8 @@ async function realBackend(): Promise<Backend> {
       recordPlay: (track) => invoke<number>("record_play", { track }),
       removeFromHistory: (history, tracks) => invoke<number>("remove_from_history", { history, tracks }),
       removeFromCollection: (tracks) => invoke<number>("remove_from_collection", { tracks }),
+      collectionRemovalMutants: (tracks) =>
+        invoke<import("@/lib/collectionRemoval").RemovalMutant[]>("collection_removal_mutants", { tracks }),
       reorderPlaylist: (playlist, tracks) =>
         invoke<number>("reorder_playlist", { playlist, tracks }),
       reorderPlaylistEntries: (playlist, entries) =>

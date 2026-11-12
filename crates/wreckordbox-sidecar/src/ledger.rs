@@ -274,6 +274,9 @@ pub struct OpenIntent {
     pub command: Option<Value>,
     /// Native values before a DJ write, for recovery only.
     pub dj_snapshot: Option<Value>,
+    /// What a write that replaces or copies playlist entries planned for
+    /// their Mutants (wbx-80), for recovery only.
+    pub mutant_plan: Option<Value>,
 }
 
 impl Sidecar {
@@ -333,7 +336,8 @@ impl Sidecar {
     pub fn open_intents(&self) -> Result<Vec<OpenIntent>> {
         let db = self.db();
         let mut statement = db.prepare(
-            "SELECT id, run_id, at, source_kind, source_name, description, command, (SELECT snapshot FROM dj_intent WHERE dj_intent.id = ledger_intent.id)
+            "SELECT id, run_id, at, source_kind, source_name, description, command, (SELECT snapshot FROM dj_intent WHERE dj_intent.id = ledger_intent.id),
+                    (SELECT plan FROM mutant_intent WHERE mutant_intent.id = ledger_intent.id)
              FROM ledger_intent ORDER BY id",
         )?;
         let open = statement
@@ -362,6 +366,18 @@ impl Sidecar {
                     command: row
                         .get::<_, Option<String>>(6)?
                         .and_then(|text| serde_json::from_str(&text).ok()),
+                    mutant_plan: row
+                        .get::<_, Option<String>>(8)?
+                        .map(|text| {
+                            serde_json::from_str(&text).map_err(|e| {
+                                rusqlite::Error::FromSqlConversionFailure(
+                                    8,
+                                    rusqlite::types::Type::Text,
+                                    Box::new(e),
+                                )
+                            })
+                        })
+                        .transpose()?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;

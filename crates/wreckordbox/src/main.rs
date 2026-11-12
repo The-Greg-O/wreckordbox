@@ -12,6 +12,8 @@ mod intensity;
 mod ledger;
 mod mutants;
 mod mytag_edits;
+mod playlist_edits;
+use playlist_edits as edits;
 mod protection;
 mod reading;
 mod schema;
@@ -74,8 +76,11 @@ enum Commands {
         #[command(subcommand)]
         command: reading::MyTagCommands,
     },
-    /// Read the playlist tree and what is in a playlist.
+    /// Read the playlist tree and what is in a playlist, and edit
+    /// playlists.
     Playlists {
+        #[command(flatten)]
+        run: ledger::RunOptions,
         #[command(subcommand)]
         command: reading::PlaylistCommands,
     },
@@ -222,6 +227,10 @@ enum TrackCommands {
         reason = "this is the command's help, where MyTag is a word, not code"
     )]
     Query(Box<tracks::QueryArgs>),
+    /// Remove tracks from the collection and every playlist, saying first
+    /// which Mutants go with them. Nothing is removed without `--confirm`.
+    /// The audio files stay where they are.
+    Remove(playlist_edits::RemoveArgs),
 }
 
 fn main() -> ExitCode {
@@ -249,7 +258,8 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
     // The Run a command that edits the Library was given, sent with it.
     if let Commands::Tracks { run, .. }
     | Commands::Mytags { run, .. }
-    | Commands::Intake { run, .. } = &cli.command
+    | Commands::Intake { run, .. }
+    | Commands::Playlists { run, .. } = &cli.command
     {
         ledger::begin(run, cli.json);
     }
@@ -294,7 +304,7 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
                 command,
             )?);
         }
-        Commands::Playlists { command } => {
+        Commands::Playlists { command, .. } => {
             print(&reading::playlists(
                 &mut connect(&config)?,
                 cli.json,
@@ -316,6 +326,10 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
             command: TrackCommands::Query(args),
             ..
         } => print(&tracks::query(&mut connect(&config)?, args, cli.json)?),
+        Commands::Tracks {
+            command: TrackCommands::Remove(args),
+            ..
+        } => print(&edits::remove(&mut connect(&config)?, cli.json, args)?),
         Commands::Stick { command } => {
             print(&stick::stick(&config.recovery_dir, cli.json, command)?);
         }
@@ -355,21 +369,7 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
             }
         }
         Commands::Backup { command } => print(&backup::run(&config, cli.json, command)?),
-        Commands::Stop => {
-            let library = wreckordbox_service::locate_library()?;
-            let socket = config.socket_path(&library);
-            Client::connect(&socket)?.stop()?;
-            // Answered before it stops: wait until it no longer answers.
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-            while Client::connect(&socket).is_ok() && std::time::Instant::now() < deadline {
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            print(if cli.json {
-                "{}"
-            } else {
-                "Stopped the Library service."
-            });
-        }
+        Commands::Stop => stop(&config, cli.json)?,
         Commands::Serve { spawned: true } => {
             return Ok(if wreckordbox_service::serve_spawned(config) {
                 ExitCode::SUCCESS
@@ -393,6 +393,32 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
 
 /// A client of the service for this machine's Library, started if need be
 /// by running this same program as `wreckordbox serve`.
+/// `wreckordbox stop`: asks the service to stop, then waits until it no
+/// longer answers and has let go of the Library.
+fn stop(config: &Config, as_json: bool) -> Result<(), ServiceError> {
+    let library = wreckordbox_service::locate_library()?;
+    let socket = config.socket_path(&library);
+    Client::connect(&socket)?.stop()?;
+    // Answered before it stops: wait until it no longer answers.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while Client::connect(&socket).is_ok() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    // And until it has let go of the Library: it stops answering
+    // before it does, and a restore right after would be refused.
+    while !wreckordbox_service::library_released(&library.master_db)
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    print(if as_json {
+        "{}"
+    } else {
+        "Stopped the Library service."
+    });
+    Ok(())
+}
+
 fn connect(config: &Config) -> Result<Client, ServiceError> {
     let library = wreckordbox_service::locate_library()?;
     let program = std::env::current_exe().map_err(|e| {
