@@ -933,7 +933,7 @@ impl Worker {
 /// and the GPL build; the WSOLA backend written for this crate otherwise, and
 /// also if Rubber Band will not allocate, because a deck that plays with the
 /// pitch drifting is better than a deck that does not play.
-fn key_lock(device_rate: u32) -> Box<dyn Stretcher> {
+pub(crate) fn key_lock(device_rate: u32) -> Box<dyn Stretcher> {
     #[cfg(feature = "rubberband")]
     if let Some(stretcher) = crate::rubberband::RubberBand::new(device_rate) {
         return Box::new(stretcher);
