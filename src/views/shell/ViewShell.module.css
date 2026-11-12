@@ -180,10 +180,11 @@
   .tree { display: none; }
 }
 
-/* Narrow (about 436, wbx-69): the tabs drop their key caps so the four tabs
-   and the palette's opener share the bar without running off its end. The
-   keys still work; the palette lists them. */
-@container shell (max-width: 520px) {
+/* Narrow (about 436, wbx-69; 600 since wbx-60, where the four tabs with
+   their caps and the opener stop fitting): the tabs drop their key caps so
+   they and the palette's opener share the bar without running off its end.
+   The keys still work; the palette lists them. */
+@container shell (max-width: 600px) {
   .tab { padding: 0 var(--s-shell-space-4); }
   .tab .key { display: none; }
 }

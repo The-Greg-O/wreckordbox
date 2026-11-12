@@ -46,4 +46,18 @@ export interface ListLook {
   columnFloor?: (key: ColumnKey) => number | undefined;
   /** Drawn first in every row, over its left edge. */
   edge?: (row: RowDto) => ReactNode;
+  /**
+   * Which of the drawn columns (the chosen ones at their drawn widths) to
+   * draw in a list `available` px wide, and the column that gives room
+   * (wbx-60). The stored choice is not changed. Without it every chosen
+   * column is drawn and the list scrolls sideways when they do not fit.
+   */
+  fit?: (drawn: readonly ColumnSpec[], available: number) => { columns: readonly ColumnSpec[]; fill?: ColumnFill };
+}
+
+/** The column that gives room: never under `min` px; with `grow` it also takes what the row has left. */
+export interface ColumnFill {
+  key: ColumnKey;
+  min: number;
+  grow: boolean;
 }

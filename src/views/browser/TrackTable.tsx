@@ -49,7 +49,8 @@ import { usePreferences, useTooltip } from "@/store/usePreferences";
 import { usePlayedTracks } from "@/store/usePlayedTracks";
 import type { KeyDisplay } from "@/ipc/types";
 import { ColumnMenu } from "./ColumnMenu";
-import type { ListLook } from "./listLook";
+import type { ColumnFill, ListLook } from "./listLook";
+import { layoutIndexFor } from "@/lib/libraryFit";
 import { createDragAutoscroll } from "@/lib/dragAutoscroll";
 import { setRowDragImage } from "./dragGhost";
 import { keyMap } from "@/lib/keyPresets";
@@ -114,12 +115,23 @@ function scaledColumns(
   });
 }
 
-function gridOf(columns: readonly ColumnSpec[]): string {
-  return `${columns.map((c) => `${c.width}px`).join(" ")} 1fr`;
+/**
+ * The grid's tracks: each column at its width and an empty track taking the
+ * rest. A look's `fill` column (wbx-60) gives room instead: no narrower
+ * than its `min`, at most its width, or with `grow` taking the rest itself.
+ */
+function gridOf(columns: readonly ColumnSpec[], fill?: ColumnFill): string {
+  const tracks = columns.map((c) => {
+    if (c.key !== fill?.key) return `${c.width}px`;
+    const min = Math.min(fill.min, c.width);
+    return fill.grow ? `minmax(${min}px, 1fr)` : `minmax(${min}px, ${c.width}px)`;
+  });
+  return fill?.grow && columns.some((c) => c.key === fill.key) ? tracks.join(" ") : `${tracks.join(" ")} 1fr`;
 }
 
-function totalWidthOf(columns: readonly ColumnSpec[]): number {
-  return columns.reduce((a, c) => a + c.width, 0);
+/** What a row needs at least: past this the list scrolls sideways. */
+function totalWidthOf(columns: readonly ColumnSpec[], fill?: ColumnFill): number {
+  return columns.reduce((a, c) => a + (c.key === fill?.key ? Math.min(fill.min, c.width) : c.width), 0);
 }
 
 /** The header row's headings, leaving out the floating copy of a dragged one. */
@@ -1187,10 +1199,17 @@ export const TrackTable = memo(function TrackTable({
   // A look's column floors are measured in the faces the theme shows.
   const theme = useSyncExternalStore(subscribeShownTheme, shownTheme);
   const columnFloor = look?.columnFloor;
-  const columns = useMemo(
+  const chosenColumns = useMemo(
     () => scaledColumns(columnsForArtworkMode(layoutColumns, artworkMode, rowH), columnScale, columnFloor),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `theme` changes what the floor measures
     [layoutColumns, artworkMode, rowH, columnScale, columnFloor, theme],
+  );
+  // The list's own width, for a look that fits its columns to it (wbx-60).
+  const [available, setAvailable] = useState(0);
+  const fit = look?.fit;
+  const { columns, fill } = useMemo(
+    () => (fit && available > 0 ? fit(chosenColumns, available) : { columns: chosenColumns, fill: undefined }),
+    [fit, available, chosenColumns],
   );
   const band = previewBand(rowH);
   const extraColumns = useMemo(() => {
@@ -1259,6 +1278,15 @@ export const TrackTable = memo(function TrackTable({
     onFirstRows(rows, view.count);
   }, [onFirstRows, view]);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Followed only for a look that fits its columns: the old list never reads it.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!fit || !el || typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(() => { setAvailable(Math.floor(el.clientWidth)); });
+    observer.observe(el);
+    setAvailable(Math.floor(el.clientWidth));
+    return () => observer.disconnect();
+  }, [fit]);
   const rowsRef = useRef<HTMLDivElement>(null);
   const [selection, setSelection] = useState<SelectionState>(emptySelection);
   const selectionNow = useRef(selection);
@@ -1283,6 +1311,8 @@ export const TrackTable = memo(function TrackTable({
   const ghostLeft = useRef(0);
   const columnsRef = useRef(columns);
   columnsRef.current = columns;
+  const layoutColumnsRef = useRef(layoutColumns);
+  layoutColumnsRef.current = layoutColumns;
 
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
@@ -1316,7 +1346,9 @@ export const TrackTable = memo(function TrackTable({
       });
       const first = current.filter((col) => col.fixed).length;
       const to = reorderTarget(spans, at, left, left + width, first);
-      if (to !== at) onColumnMove(move.key, to);
+      // A place among the drawn columns, as a place among the chosen ones
+      // (the same unless a look leaves some out at this width).
+      if (to !== at) onColumnMove(move.key, layoutIndexFor(current.map((col) => col.key), layoutColumnsRef.current.map((col) => col.key), to));
     };
     const onUp = () => {
       resizing.current = null;
@@ -2325,8 +2357,8 @@ export const TrackTable = memo(function TrackTable({
       data-browser-side={listScope}
       className={look ? `${styles.browser} ${look.className}` : styles.browser}
       style={{
-        ["--cols" as string]: gridOf(columns),
-        ["--table-w" as string]: `${totalWidthOf(columns)}px`,
+        ["--cols" as string]: gridOf(columns, fill),
+        ["--table-w" as string]: `${totalWidthOf(columns, fill)}px`,
         // Browse › FontSize, Bold and Line Space, scoped to the list: the
         // tokens are the measured sizes, and these are the slider's multiples
         // of them.
