@@ -76,6 +76,37 @@ impl FileRecord<'_> {
         )
     }
 
+    /// [`Self::write_row`] for a file operation that is a step of the shared
+    /// history (a window grid edit, wbx-64): the row is written as the
+    /// history's own write, so it does not end the Redo branch the step is
+    /// about to move an entry onto. The caller records or steps the entry.
+    pub fn write_history_row<T>(
+        &self,
+        host: &(impl crate::Host + ?Sized),
+        edit: impl FnOnce(&mut rbl_db::write::Writer) -> Result<T, rbl_db::DbError>,
+    ) -> Result<T, rbl_db::DbError> {
+        self.core.write_then_recording(
+            host,
+            crate::History::Caller,
+            &crate::ledger::Preparation::default(),
+            edit,
+            |_, value| Ok(value),
+            false,
+        )
+    }
+
+    /// The file was published and the caller now records it as a history
+    /// entry, or a step of one ([`crate::history::EditHistory::record_grid`],
+    /// [`crate::history::EditHistory::stepped_elsewhere`]): the Ledger's
+    /// entry is that record, made with this intent's values, so it is not
+    /// also named as a file-only change.
+    pub fn written_in_history(mut self) {
+        self.finished = true;
+        if let Some(ledger) = &self.ledger {
+            ledger.written(true);
+        }
+    }
+
     /// The file was published. An append failure keeps the entry for replay;
     /// it cannot turn the successful file write into an error.
     pub fn written(mut self) {
