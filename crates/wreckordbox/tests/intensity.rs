@@ -212,7 +212,7 @@ fn measuring_a_track_stores_a_summary_and_a_curve_that_rises_where_the_audio_doe
 
     let value = &stored["value"];
     assert_eq!(value["method"]["name"], "wreckordbox-intensity");
-    assert_eq!(value["method"]["version"], 1);
+    assert_eq!(value["method"]["version"], 2);
     assert_eq!(
         value["method"]["features"],
         json!([
@@ -366,12 +366,31 @@ fn unchanged_audio_is_not_measured_again_and_the_same_audio_measures_the_same() 
     assert!(text.status.success(), "{}", text.stderr);
     assert!(text.stdout.contains("already measured"), "{}", text.stdout);
 
-    // The twin decodes and comes out identical, value for value.
+    // The twin has the same audio, so it is not decoded either: what was
+    // measured of that audio is recorded for it, value for value.
     let other = measure(&sandbox, &[&twin]);
-    assert_eq!(other["decoded"], 1);
+    assert_eq!(other["decoded"], 0, "{other}");
+    assert_eq!(other["tracks"][0]["status"], "reused");
     assert_eq!(
-        show(&sandbox, &twin)["intensity"]["value"],
+        other["tracks"][0]["reused_from"],
+        first["tracks"][0]["fact_id"]
+    );
+    let twin_shown = show(&sandbox, &twin);
+    assert_eq!(twin_shown["intensity"]["track_id"], twin.as_str());
+    assert_eq!(
+        twin_shown["intensity"]["fingerprint"],
+        stored["intensity"]["fingerprint"]
+    );
+    assert_eq!(
+        twin_shown["intensity"]["value"],
         stored["intensity"]["value"]
+    );
+    // And from then on it is the twin's own.
+    let twin_again = measure(&sandbox, &[&twin]);
+    assert_eq!(twin_again["tracks"][0]["reused_from"], Value::Null);
+    assert_eq!(
+        twin_again["tracks"][0]["fact_id"],
+        other["tracks"][0]["fact_id"]
     );
 
     // Asked to, it measures again, to the same values.
@@ -725,4 +744,247 @@ fn a_service_killed_part_way_leaves_a_sidecar_that_still_works() {
             12
         );
     }
+}
+
+/// Records `value` as an Intensity of `track` from this tool, as if an
+/// earlier build had measured it.
+fn seed(sandbox: &Sandbox, track: &str, value: &Value) -> Value {
+    ok(
+        sandbox,
+        &[
+            "--json",
+            "facts",
+            "record",
+            track,
+            "intensity",
+            &value.to_string(),
+            "--source",
+            "tool:wreckordbox-intensity",
+            "--confidence",
+            "1",
+        ],
+    )
+}
+
+#[test]
+fn a_stored_value_of_an_older_method_or_not_a_valid_one_is_measured_again() {
+    let sandbox = Sandbox::new();
+    let measured = import(&sandbox, "Measured.wav", &loud_busy(4.0));
+    let older = import(&sandbox, "Older.wav", &quiet_sparse(4.0));
+    let broken = import(&sandbox, "Broken.wav", &loud_busy_at(4.0, 100.0, 0.5));
+    let unfinished = import(&sandbox, "Unfinished.wav", &quiet_sparse(5.0));
+    measure(&sandbox, &[&measured]);
+    let good = show(&sandbox, &measured)["intensity"]["value"].clone();
+
+    // A whole value, but by version 1 of the method.
+    let mut old = good.clone();
+    old["method"]["version"] = json!(1);
+    seed(&sandbox, &older, &old);
+    // An object, but not an Intensity.
+    seed(&sandbox, &broken, &json!({"method": {"version": 2}}));
+    // An Intensity whose number did not survive: NaN is stored as null.
+    let mut nan = good.clone();
+    nan["summary"]["intensity"] = Value::Null;
+    seed(&sandbox, &unfinished, &nan);
+
+    let again = measure(&sandbox, &[&older, &broken, &unfinished]);
+    assert_eq!(again["decoded"], 3, "{again}");
+    assert_eq!(again["measured"], 3, "{again}");
+    for track in [&older, &broken, &unfinished] {
+        let shown = show(&sandbox, track);
+        assert_eq!(shown["intensity"]["value"]["method"]["version"], 2);
+        assert!(shown["intensity"]["value"]["summary"]["intensity"].is_number());
+    }
+}
+
+/// Every analysis file under the fixture's share root, with its bytes.
+fn analysis_files(sandbox: &Sandbox) -> Vec<(PathBuf, Vec<u8>)> {
+    fn walk(dir: &Path, out: &mut Vec<(PathBuf, Vec<u8>)>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.map(Result::unwrap) {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.to_string_lossy().contains("ANLZ") {
+                out.push((path.clone(), std::fs::read(&path).unwrap()));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(&sandbox.location().share_root, &mut out);
+    out.sort();
+    out
+}
+
+#[test]
+fn measuring_an_analysed_track_leaves_its_analysis_tempo_and_key_as_they_were() {
+    let sandbox = Sandbox::new();
+    let track = import(&sandbox, "Analysed.wav", &loud_busy_at(9.0, 120.0, 1.0));
+    give_beat_grid(&sandbox, &track, 120.0, 0.5, 9.0);
+    sandbox.edit(|writer| {
+        let changed = writer
+            .library()
+            .connection()
+            .execute(
+                "UPDATE djmdContent SET BPM = 12000, KeyID = '1' WHERE ID = ?1",
+                [track.as_str()],
+            )
+            .unwrap();
+        assert_eq!(changed, 1);
+    });
+    let tempo_and_key = |sandbox: &Sandbox| {
+        let mut found = (0_i64, String::new());
+        sandbox.edit(|writer| {
+            found = writer
+                .library()
+                .connection()
+                .query_row(
+                    "SELECT BPM, coalesce(KeyID, '') FROM djmdContent WHERE ID = ?1",
+                    [track.as_str()],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+        });
+        found
+    };
+    let analysis = analysis_files(&sandbox);
+    assert!(!analysis.is_empty(), "the track has an analysis file");
+    let before = (library_state(&sandbox), tempo_and_key(&sandbox));
+    assert_eq!(before.1, (12000, "1".to_owned()));
+
+    let measured = measure(&sandbox, &[&track]);
+    assert_eq!(measured["measured"], 1);
+    assert_eq!(measured["tracks"][0]["bars"], 5);
+    show(&sandbox, &track);
+    stop_service(&sandbox);
+
+    assert!(
+        analysis == analysis_files(&sandbox),
+        "measuring changed an analysis file"
+    );
+    assert!(
+        before == (library_state(&sandbox), tempo_and_key(&sandbox)),
+        "measuring changed the Library"
+    );
+}
+
+#[test]
+fn the_bars_follow_a_beat_grid_added_or_corrected_after_measuring_without_decoding() {
+    let sandbox = Sandbox::new();
+    // 120 BPM: a bar is two seconds.
+    let audio = joined(&[quiet_sparse(6.5), loud_busy_at(6.5, 120.0, 1.0)]);
+    let track = import(&sandbox, "Later.wav", &audio);
+    let first = measure(&sandbox, &[&track]);
+    assert_eq!(first["tracks"][0]["bars"], Value::Null);
+    let curve = show(&sandbox, &track)["intensity"]["value"]["curve"].clone();
+
+    // rekordbox analyses it: a grid with its first bar half a second in.
+    stop_service(&sandbox);
+    give_beat_grid(&sandbox, &track, 120.0, 0.5, 13.0);
+    let added = measure(&sandbox, &[&track]);
+    let outcome = &added["tracks"][0];
+    assert_eq!(outcome["status"], "reused", "{added}");
+    assert_eq!(added["decoded"], 0);
+    assert_eq!(outcome["bars"], 7);
+    assert_eq!(outcome["reused_from"], first["tracks"][0]["fact_id"]);
+    let value = show(&sandbox, &track)["intensity"]["value"].clone();
+    assert_eq!(value["curve"], curve);
+    assert_eq!(
+        numbers(&value["bars"]["starts_seconds"]),
+        [0.5, 2.5, 4.5, 6.5, 8.5, 10.5, 12.5]
+    );
+    let per_bar = numbers(&value["bars"]["intensity"]);
+    assert!(per_bar[3] - per_bar[2] > 0.3, "{per_bar:?}");
+
+    // The DJ moves the downbeat: the next reading has the new bars, made
+    // from the stored value.
+    stop_service(&sandbox);
+    give_beat_grid(&sandbox, &track, 120.0, 1.5, 13.0);
+    let shown = show(&sandbox, &track);
+    let bars = &shown["intensity"]["value"]["bars"];
+    assert_eq!(
+        numbers(&bars["starts_seconds"]),
+        [1.5, 3.5, 5.5, 7.5, 9.5, 11.5]
+    );
+    assert_ne!(shown["intensity"]["fact_id"], outcome["fact_id"]);
+    assert_eq!(shown["intensity"]["value"]["curve"], curve);
+    // Measuring now has nothing to do.
+    let settled = measure(&sandbox, &[&track]);
+    assert_eq!(settled["decoded"], 0);
+    assert_eq!(settled["run"], Value::Null);
+    assert_eq!(settled["tracks"][0]["fact_id"], shown["intensity"]["fact_id"]);
+
+    // And once more through measuring: tempo corrected to 128 BPM.
+    stop_service(&sandbox);
+    give_beat_grid(&sandbox, &track, 128.0, 0.5, 13.0);
+    let corrected = measure(&sandbox, &[&track]);
+    assert_eq!(corrected["decoded"], 0);
+    assert_eq!(corrected["tracks"][0]["status"], "reused");
+    let bars = &show(&sandbox, &track)["intensity"]["value"]["bars"];
+    assert_eq!(numbers(&bars["starts_seconds"])[1], 2.375);
+}
+
+#[test]
+fn audio_replaced_while_it_is_measured_is_measured_as_it_is_now() {
+    let sandbox = Sandbox::new();
+    let track = import(&sandbox, "Moving.wav", &quiet_sparse(5.0));
+    let pause = sandbox.path().join("pause");
+    std::fs::create_dir_all(&pause).unwrap();
+    let marker = pause.join(format!("{track}.decode"));
+    std::fs::write(&marker, b"").unwrap();
+    let started = sandbox.run(
+        sandbox
+            .command()
+            .env("WRECKORDBOX_INTENSITY_TEST_PAUSE", &pause)
+            .args(["--json", "status"]),
+    );
+    assert!(started.status.success(), "{}", started.stderr);
+    let child = sandbox
+        .command()
+        .args(["--json", "intensity", "measure", &track])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+
+    // Fingerprinted as the quiet file; replaced by a loud one before it is
+    // decoded.
+    let reached = pause.join(format!("{track}.decode.reached"));
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !reached.exists() {
+        assert!(Instant::now() < deadline, "the measuring never paused");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    write_audio(&audio_path(&sandbox, "Moving.wav"), &loud_busy(5.0));
+    std::fs::remove_file(&marker).unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    let measured: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let outcome = &measured["tracks"][0];
+    assert_eq!(outcome["status"], "measured", "{measured}");
+    // What was recorded is the loud audio, under the loud audio's name.
+    let shown = show(&sandbox, &track);
+    assert_eq!(shown["intensity"]["fingerprint"], outcome["fingerprint"]);
+    assert_eq!(shown["intensity"]["stale"], false);
+    let loud_only = import_elsewhere_fingerprint(&sandbox, &loud_busy(5.0));
+    assert_eq!(outcome["fingerprint"], loud_only);
+    assert!(
+        outcome["summary"]["intensity"].as_f64().unwrap() > 0.5,
+        "{outcome}"
+    );
+}
+
+/// The fingerprint a track with this audio gets, read through the service
+/// from a track that holds nothing else.
+fn import_elsewhere_fingerprint(sandbox: &Sandbox, samples: &[f32]) -> Value {
+    stop_service(sandbox);
+    let other = import(sandbox, "Reference.wav", samples);
+    let measured = ok(
+        sandbox,
+        &["--json", "intensity", "measure", &other, "--force"],
+    );
+    measured["tracks"][0]["fingerprint"].clone()
 }
