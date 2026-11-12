@@ -320,9 +320,7 @@ pub mod stored {
             return None;
         }
         match kind {
-            "track" => Some(LibraryEdit::Track(track_edits_from(
-                payload.get("edits")?,
-            )?)),
+            "track" => Some(LibraryEdit::Track(track_edits_from(payload.get("edits")?)?)),
             "track_tags" => {
                 let tags = payload
                     .get("tags")?
@@ -863,16 +861,15 @@ impl Keeper {
         if !from_client && request.run.is_none() {
             return Ok(Some(Target::Window));
         }
-        let description = match named.description.as_deref().map(str::trim) {
-            Some("") => {
-                return Err(ServiceError::new(
+        let description =
+            match named.description.as_deref().map(str::trim) {
+                Some("") => return Err(ServiceError::new(
                     service_codes::BAD_REQUEST,
                     "a Run's description cannot be empty: say what the work is, or leave it out",
-                ))
-            }
-            Some(description) => description.to_owned(),
-            None => described(request),
-        };
+                )),
+                Some(description) => description.to_owned(),
+                None => described(request),
+            };
         Ok(Some(Target::Own {
             source: source.unwrap_or_else(|| Source::new(SourceKind::Tool, UNNAMED_SOURCE)),
             description,
@@ -907,8 +904,9 @@ impl Keeper {
             let text = std::fs::read_to_string(&file)
                 .map_err(|e| format!("{} could not be read: {e}", file.display()))?;
             for line in text.lines().filter(|line| !line.trim().is_empty()) {
-                let spilled: Spilled = serde_json::from_str(line)
-                    .map_err(|e| format!("{} holds a line that is not an entry: {e}", file.display()))?;
+                let spilled: Spilled = serde_json::from_str(line).map_err(|e| {
+                    format!("{} holds a line that is not an entry: {e}", file.display())
+                })?;
                 state.unwritten.push(spilled);
             }
         }
@@ -1083,7 +1081,7 @@ impl Keeper {
                     tracing::error!(
                         %error,
                         kept_on_disk = on_disk.is_ok(),
-                        kind = spilled.kind,
+                        kind = %spilled.kind,
                         "a change to the Library could not be written to the Ledger; it is kept and no further change is made until it is"
                     );
                     state.unwritten.push(spilled);
@@ -1130,7 +1128,8 @@ impl rbl_library::ledger::Ledger for Keeper {
         // Named by the caller, else by the command being answered. A write
         // with neither is not an edit (analysis, an import, a player): not
         // recorded here.
-        let command = CURRENT.with(|current| current.borrow().as_ref().map(|scope| scope.name.clone()));
+        let command =
+            CURRENT.with(|current| current.borrow().as_ref().map(|scope| scope.name.clone()));
         let Some(label) = name.map(str::to_owned).or(command) else {
             return;
         };

@@ -204,7 +204,10 @@ impl Client {
 
     /// Puts the Run of every command that answers with one into `heard`,
     /// for a caller that has let the client go by the time it reports.
-    pub fn tell_runs(&mut self, heard: std::sync::Arc<std::sync::Mutex<Option<crate::facts::Run>>>) {
+    pub fn tell_runs(
+        &mut self,
+        heard: std::sync::Arc<std::sync::Mutex<Option<crate::facts::Run>>>,
+    ) {
         self.run_heard = Some(heard);
     }
 

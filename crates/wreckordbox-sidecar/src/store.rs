@@ -500,10 +500,9 @@ impl Sidecar {
                    AND kind IN (SELECT name FROM kind WHERE nature = 'measurement')
                  RETURNING id",
             )?;
-            let ids = statement
-                .query_map(params![now(), track_id, current.as_str()], |row| row.get(0))?
-                .collect::<rusqlite::Result<Vec<i64>>>()?;
-            ids
+            let marked = statement
+                .query_map(params![now(), track_id, current.as_str()], |row| row.get(0))?;
+            marked.collect::<rusqlite::Result<Vec<i64>>>()?
         };
         ids.sort_unstable();
         if !ids.is_empty() {

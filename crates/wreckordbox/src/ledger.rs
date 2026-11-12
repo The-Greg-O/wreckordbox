@@ -132,8 +132,15 @@ pub fn list(
     if list.total == 0 {
         return Ok("No Runs.".to_owned());
     }
-    let mut rows =
-        vec![["RUN", "SOURCE", "STARTED", "ENDED", "CHANGES", "DESCRIPTION"].map(str::to_owned)];
+    let mut rows = vec![[
+        "RUN",
+        "SOURCE",
+        "STARTED",
+        "ENDED",
+        "CHANGES",
+        "DESCRIPTION",
+    ]
+    .map(str::to_owned)];
     rows.extend(list.runs.iter().map(|run| {
         [
             run.run.id.0.to_string(),
@@ -276,7 +283,12 @@ fn footer(
     if shown == total {
         return;
     }
-    let _ = write!(text, "\n{what} {} to {} of {total}", offset + 1, offset + shown);
+    let _ = write!(
+        text,
+        "\n{what} {} to {} of {total}",
+        offset + 1,
+        offset + shown
+    );
     match next {
         Some(next) => {
             let _ = write!(text, "; next page: --offset {next}");

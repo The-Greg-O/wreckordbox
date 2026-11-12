@@ -380,11 +380,9 @@ impl Shared {
         connection: Option<&Connection>,
         request: &Request,
     ) -> (Result<Value, ServiceError>, Option<Value>) {
-        let (result, run) = self
-            .ledger
-            .attributed(connection.is_some(), request, || {
-                self.dispatch(connection, request)
-            });
+        let (result, run) = self.ledger.attributed(connection.is_some(), request, || {
+            self.dispatch(connection, request)
+        });
         (result, run.and_then(|run| serde_json::to_value(run).ok()))
     }
 

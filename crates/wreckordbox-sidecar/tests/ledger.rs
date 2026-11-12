@@ -250,7 +250,10 @@ fn marking_measurements_stale_is_an_entry_in_a_run_of_its_own() {
     assert_eq!(total, runs_before + 1);
     let made = &runs[0];
     assert!(made.run.is_finished());
-    assert_eq!(made.run.source, Source::new(SourceKind::Tool, "wreckordbox"));
+    assert_eq!(
+        made.run.source,
+        Source::new(SourceKind::Tool, "wreckordbox")
+    );
     assert_eq!(
         made.counts,
         vec![Count {

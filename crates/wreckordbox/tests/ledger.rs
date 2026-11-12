@@ -40,7 +40,10 @@ fn restart_service(sandbox: &Sandbox) {
     sandbox.client().stop().unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while common::alive(pid) {
-        assert!(std::time::Instant::now() < deadline, "the service did not stop");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the service did not stop"
+        );
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
 }
@@ -65,9 +68,14 @@ fn a_rating_set_from_the_command_is_a_ledger_entry_with_its_source_run_and_befor
     );
 
     // The command reports the Run it made.
-    let run = rated["run"]["id"].as_i64().expect("the command names its Run");
+    let run = rated["run"]["id"]
+        .as_i64()
+        .expect("the command names its Run");
     assert_eq!(rated["run"]["description"], "Rate the warm-up tracks");
-    assert_eq!(rated["run"]["source"], json!({"kind": "agent", "name": "tagger"}));
+    assert_eq!(
+        rated["run"]["source"],
+        json!({"kind": "agent", "name": "tagger"})
+    );
 
     let shown = ok(&sandbox, &["runs", "show", &run.to_string()]);
     assert_eq!(shown["run"]["id"], run);
@@ -119,7 +127,10 @@ fn an_edit_whose_caller_names_no_source_is_the_tools_and_never_the_djs() {
     );
 
     // The DJ at the command line says so.
-    let djs = ok(&sandbox, &["tracks", "rate", "10001", "4", "--source", "dj"]);
+    let djs = ok(
+        &sandbox,
+        &["tracks", "rate", "10001", "4", "--source", "dj"],
+    );
     assert_eq!(djs["run"]["source"], json!({"kind": "dj", "name": "dj"}));
 }
 
@@ -162,7 +173,15 @@ fn edits_and_facts_made_in_one_run_are_listed_and_shown_together_also_after_a_re
     );
     ok(
         &sandbox,
-        &["facts", "record", "10003", "genre", "Tech House", "--run", &id],
+        &[
+            "facts",
+            "record",
+            "10003",
+            "genre",
+            "Tech House",
+            "--run",
+            &id,
+        ],
     );
     ok(&sandbox, &["runs", "finish", &id, "--outcome", "done"]);
 
@@ -170,7 +189,10 @@ fn edits_and_facts_made_in_one_run_are_listed_and_shown_together_also_after_a_re
         let listed = runs(sandbox);
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0]["id"], run);
-        assert_eq!(listed[0]["source"], json!({"kind": "agent", "name": "tagger"}));
+        assert_eq!(
+            listed[0]["source"],
+            json!({"kind": "agent", "name": "tagger"})
+        );
         assert_eq!(listed[0]["description"], "Tag the warm-up");
         assert_eq!(listed[0]["outcome"], "done");
         assert!(listed[0]["started_at"].as_i64().unwrap() > 1_600_000_000_000);
@@ -225,8 +247,9 @@ fn edits_and_facts_made_in_one_run_are_listed_and_shown_together_also_after_a_re
             json!([{"subject": "track 10003", "field": "genre", "before": "House", "after": "Tech House"}])
         );
         assert_eq!(shown[4]["replaced"]["id"], shown[3]["fact"]["id"]);
-        assert!(shown.iter().all(|entry| entry["source"]
-            == json!({"kind": "agent", "name": "tagger"})));
+        assert!(shown
+            .iter()
+            .all(|entry| entry["source"] == json!({"kind": "agent", "name": "tagger"})));
     };
     check(&sandbox);
 
@@ -269,7 +292,10 @@ fn an_edit_the_undo_history_does_not_keep_is_still_an_entry_naming_it() {
     assert_eq!(made[0]["payload"], Value::Null);
 
     let tag = created["my_tag"]["id"].as_str().unwrap();
-    let deleted = ok(&sandbox, &["mytags", "delete", tag, "--source", "agent:tagger"]);
+    let deleted = ok(
+        &sandbox,
+        &["mytags", "delete", tag, "--source", "agent:tagger"],
+    );
     let gone = entries(&sandbox, deleted["run"]["id"].as_i64().unwrap());
     assert_eq!(gone.len(), 1);
     assert_eq!(gone[0]["kind"], "permanent");
@@ -320,7 +346,14 @@ fn runs_and_a_runs_entries_are_paged_and_read_as_tables() {
     }
     let started = ok(
         &sandbox,
-        &["runs", "start", "--source", "dj", "--description", "By hand"],
+        &[
+            "runs",
+            "start",
+            "--source",
+            "dj",
+            "--description",
+            "By hand",
+        ],
     );
     let run = started["id"].as_i64().unwrap().to_string();
     for stars in ["4", "5", "1"] {
@@ -336,7 +369,10 @@ fn runs_and_a_runs_entries_are_paged_and_read_as_tables() {
     assert_eq!(rest["runs"].as_array().unwrap().len(), 1);
     assert_eq!(rest["next_offset"], Value::Null);
 
-    let page = ok(&sandbox, &["runs", "show", &run, "--limit", "2", "--offset", "1"]);
+    let page = ok(
+        &sandbox,
+        &["runs", "show", &run, "--limit", "2", "--offset", "1"],
+    );
     assert_eq!(page["total"], 3);
     assert_eq!(page["next_offset"], Value::Null);
     let stars: Vec<&Value> = page["entries"]
@@ -351,20 +387,36 @@ fn runs_and_a_runs_entries_are_paged_and_read_as_tables() {
     assert!(table.status.success(), "{}", table.stderr);
     let lines: Vec<&str> = table.stdout.lines().collect();
     assert!(lines[0].starts_with("RUN  SOURCE"), "{}", table.stdout);
-    assert!(lines[1].contains("dj") && lines[1].contains("open") && lines[1].contains("3 library track"));
+    assert!(
+        lines[1].contains("dj")
+            && lines[1].contains("open")
+            && lines[1].contains("3 library track")
+    );
     assert!(lines[2].contains("agent:tagger") && lines[2].ends_with("Rate one"));
     assert_eq!(lines[3], "Runs 1 to 2 of 4; next page: --offset 2");
 
     let shown = sandbox.cli(&["runs", "show", &run]);
     assert!(shown.status.success(), "{}", shown.stderr);
-    assert!(shown.stdout.starts_with(&format!("Run {run}: By hand (dj)\n")), "{}", shown.stdout);
+    assert!(
+        shown
+            .stdout
+            .starts_with(&format!("Run {run}: By hand (dj)\n")),
+        "{}",
+        shown.stdout
+    );
     assert!(shown.stdout.contains("still open"));
-    assert!(shown.stdout.contains("track 10004 Rating: 0 -> 4"), "{}", shown.stdout);
+    assert!(
+        shown.stdout.contains("track 10004 Rating: 0 -> 4"),
+        "{}",
+        shown.stdout
+    );
 
     // In text, an edit says which Run it is in.
     let rated = sandbox.cli(&["tracks", "rate", "10005", "2", "--run", &run]);
     assert!(
-        rated.stdout.ends_with(&format!("\nRun {run}: By hand (dj).\n")),
+        rated
+            .stdout
+            .ends_with(&format!("\nRun {run}: By hand (dj).\n")),
         "{}",
         rated.stdout
     );
@@ -418,7 +470,10 @@ fn nothing_is_changed_while_the_ledger_cannot_be_written() {
     let error = refused.error_json();
     assert_eq!(error["error"]["code"], "write_refused");
     assert!(
-        error["error"]["message"].as_str().unwrap().contains("Ledger"),
+        error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Ledger"),
         "{error}"
     );
     assert_eq!(ok(&sandbox, &["tracks", "show", "10003"])["rating"], 2);
