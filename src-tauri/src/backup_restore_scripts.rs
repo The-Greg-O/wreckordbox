@@ -396,8 +396,15 @@ mod tests {
     /// Runs the shell script from an extracted backup holding a Sidecar,
     /// answering "yes", with `PATH` limited to what `bash` needs.
     #[cfg(unix)]
-    fn run_on_sidecar_backup(stub: Option<&str>, with_zip: bool) -> (std::process::Output, tempfile::TempDir) {
-        use std::{fs, io::Write, process::{Command, Stdio}};
+    fn run_on_sidecar_backup(
+        stub: Option<&str>,
+        with_zip: bool,
+    ) -> (std::process::Output, tempfile::TempDir) {
+        use std::{
+            fs,
+            io::Write,
+            process::{Command, Stdio},
+        };
         let dir = tempfile::tempdir().unwrap();
         let extracted = dir.path().join("rbexport-20261111-1200");
         let live = dir.path().join("live");
@@ -406,26 +413,52 @@ mod tests {
         fs::create_dir_all(extracted.join("sidecar")).unwrap();
         fs::create_dir_all(&live).unwrap();
         fs::write(extracted.join("master.db"), b"saved database").unwrap();
-        fs::write(extracted.join("sidecar.json"), br#"{"version":1,"bytes":1,"stems":false}"#).unwrap();
+        fs::write(
+            extracted.join("sidecar.json"),
+            br#"{"version":1,"bytes":1,"stems":false}"#,
+        )
+        .unwrap();
         fs::write(live.join("master.db"), b"current database").unwrap();
         if with_zip {
-            fs::write(dir.path().join("rbexport-20261111-1200.zip"), b"the archive").unwrap();
+            fs::write(
+                dir.path().join("rbexport-20261111-1200.zip"),
+                b"the archive",
+            )
+            .unwrap();
         }
         let script = extracted.join(SHELL_NAME);
         fs::write(&script, shell(&live.join("master.db"))).unwrap();
         let mut command = Command::new("/bin/bash");
-        command.arg(&script).env_clear().env("PATH", "/usr/bin:/bin").env("HOME", dir.path());
+        command
+            .arg(&script)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", dir.path());
         if let Some(stub) = stub {
             let path = dir.path().join("wreckordbox-stub");
             fs::write(&path, stub).unwrap();
-            fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-            command.env("WRECKORDBOX_BIN", &path).env("CALLS", dir.path().join("calls"));
+            fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+                .unwrap();
+            command
+                .env("WRECKORDBOX_BIN", &path)
+                .env("CALLS", dir.path().join("calls"));
         }
-        let mut child = command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
         child.stdin.take().unwrap().write_all(b"yes\n").unwrap();
         let output = child.wait_with_output().unwrap();
-        assert_eq!(fs::read(live.join("master.db")).unwrap(), b"current database");
-        let leftovers: Vec<_> = fs::read_dir(&live).unwrap().map(|entry| entry.unwrap().file_name()).collect();
+        assert_eq!(
+            fs::read(live.join("master.db")).unwrap(),
+            b"current database"
+        );
+        let leftovers: Vec<_> = fs::read_dir(&live)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
         assert_eq!(leftovers.len(), 1, "{leftovers:?}");
         (output, dir)
     }
@@ -439,7 +472,8 @@ mod tests {
         assert!(stderr.contains("Nothing was changed"), "{stderr}");
         assert!(stderr.contains("wreckordbox backup restore"), "{stderr}");
         // And with wreckordbox but no archive to hand it.
-        let (output, _dir) = run_on_sidecar_backup(Some("#!/bin/sh\necho \"$@\" > \"$CALLS\"\n"), false);
+        let (output, _dir) =
+            run_on_sidecar_backup(Some("#!/bin/sh\necho \"$@\" > \"$CALLS\"\n"), false);
         assert!(!output.status.success());
         assert!(String::from_utf8_lossy(&output.stderr).contains("was not found"));
     }
@@ -447,12 +481,25 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn the_shell_script_hands_a_sidecar_backup_to_wreckordbox_backup_restore() {
-        let (output, dir) = run_on_sidecar_backup(Some("#!/bin/sh\necho \"$@\" > \"$CALLS\"\necho restored-by-wreckordbox\n"), true);
-        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let (output, dir) = run_on_sidecar_backup(
+            Some("#!/bin/sh\necho \"$@\" > \"$CALLS\"\necho restored-by-wreckordbox\n"),
+            true,
+        );
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         assert!(String::from_utf8_lossy(&output.stdout).contains("restored-by-wreckordbox"));
         let calls = std::fs::read_to_string(dir.path().join("calls")).unwrap();
         let archive = dir.path().join("rbexport-20261111-1200.zip");
-        assert_eq!(calls.trim(), format!("backup restore {} --yes", archive.canonicalize().unwrap().display()));
+        assert_eq!(
+            calls.trim(),
+            format!(
+                "backup restore {} --yes",
+                archive.canonicalize().unwrap().display()
+            )
+        );
     }
 
     #[test]

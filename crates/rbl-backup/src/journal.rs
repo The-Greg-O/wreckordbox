@@ -148,9 +148,15 @@ pub fn recover(root: &Path, location: &rbl_db::LibraryLocation) -> Result<()> {
 /// before its journal was saved, when nothing had been replaced yet. Does
 /// nothing while a journal is pending: its files are recovery's to handle.
 ///
-/// `sidecar` is the Sidecar's checked folder, where its entries are staged;
-/// without one, only the Library's folders are cleaned.
-pub fn remove_orphans(root: &Path, location: &rbl_db::LibraryLocation, sidecar: Option<&crate::sidecar_part::Destination>) -> Result<()> {
+/// The Sidecar's folder is cleaned too when it passes
+/// [`crate::sidecar_part::Destination::of`]; see [`remove_orphans_in`].
+pub fn remove_orphans(root: &Path, location: &rbl_db::LibraryLocation) -> Result<()> {
+    remove_orphans_in(root, location, crate::sidecar_part::Destination::of(location).ok().as_ref())
+}
+
+/// [`remove_orphans`], with the Sidecar's checked folder given: where its
+/// entries are staged. Without one, only the Library's folders are cleaned.
+pub fn remove_orphans_in(root: &Path, location: &rbl_db::LibraryLocation, sidecar: Option<&crate::sidecar_part::Destination>) -> Result<()> {
     if pending(root) {
         return Ok(());
     }
@@ -236,10 +242,10 @@ mod tests {
         let unrelated = parent.join(".rbxport-before-restore-keep");
         fs::create_dir_all(&unrelated).unwrap();
         save(&root, &Journal { library: location.master_db.clone(), committed: true, swaps: Vec::new(), sidecar: None }).unwrap();
-        remove_orphans(&root, &location, None).unwrap();
+        remove_orphans_in(&root, &location, None).unwrap();
         assert!(db_orphan.exists());
         recover(&root, &location).unwrap();
-        remove_orphans(&root, &location, None).unwrap();
+        remove_orphans_in(&root, &location, None).unwrap();
         assert!(!db_orphan.exists());
         assert!(!parent.join(".rbxport-restore-abc-new").exists());
         assert!(unrelated.exists());

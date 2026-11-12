@@ -348,7 +348,11 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
             while Client::connect(&socket).is_ok() && std::time::Instant::now() < deadline {
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
-            print(if cli.json { "{}" } else { "Stopped the Library service." });
+            print(if cli.json {
+                "{}"
+            } else {
+                "Stopped the Library service."
+            });
         }
         Commands::Serve { spawned: true } => {
             return Ok(if wreckordbox_service::serve_spawned(config) {

@@ -91,7 +91,7 @@ pub fn restore(request: &Request<'_>, guard: &dyn Fn() -> Result<()>, progress: 
         return Err(refused("Wreckordbox has an analysis edit it has not finished. Open wreckordbox once so it can finish it, quit it, then restore."));
     }
     journal::recover(state_dir, location)?;
-    journal::remove_orphans(state_dir, location, crate::sidecar_part::Destination::of(location).ok().as_ref())?;
+    journal::remove_orphans(state_dir, location)?;
     let manifest = Manifest::read(request.archive)?;
     if !manifest.belongs_to(location) {
         return Err(refused("This backup belongs to another rekordbox library."));

@@ -101,7 +101,8 @@ pub fn restore(
                 error
             }
         })?;
-    let contents = rbl_backup::sidecar_part::Contents::read(archive).map_err(|e| from_backup(&e))?;
+    let contents =
+        rbl_backup::sidecar_part::Contents::read(archive).map_err(|e| from_backup(&e))?;
     let manifest = rbl_backup::manifest::Manifest::read(archive).map_err(|e| from_backup(&e))?;
     rbl_backup::restore::restore(
         &Request {
@@ -153,13 +154,25 @@ pub fn restore(
 /// conflict check of Undo and Unwind refuses to take back what is not
 /// there. Nothing is written when there is no Sidecar; a failure is logged
 /// and leaves the restore as it is.
-fn note_restore(library: &LibraryLocation, archive: &Path, created_at: u64, with_sidecar: bool) -> Option<i64> {
+fn note_restore(
+    library: &LibraryLocation,
+    archive: &Path,
+    created_at: u64,
+    with_sidecar: bool,
+) -> Option<i64> {
     use wreckordbox_sidecar::ledger::{Action, NewEntry, Store};
-    let folder = rbl_backup::sidecar_part::Destination::of(library).ok()?.path;
-    if !folder.join(rbl_backup::sidecar_part::DATABASE_FILE).is_file() {
+    let folder = rbl_backup::sidecar_part::Destination::of(library)
+        .ok()?
+        .path;
+    if !folder
+        .join(rbl_backup::sidecar_part::DATABASE_FILE)
+        .is_file()
+    {
         return None;
     }
-    let name = archive.file_name().map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+    let name = archive
+        .file_name()
+        .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
     let label = if with_sidecar {
         format!("The Library and the Sidecar were restored from the backup {name}.")
     } else {
@@ -167,7 +180,8 @@ fn note_restore(library: &LibraryLocation, archive: &Path, created_at: u64, with
             "The Library was restored from the backup {name}, which holds no Sidecar. Entries before this one may describe changes the restored Library does not have."
         )
     };
-    let payload = serde_json::json!({ "backup": name, "created_at": created_at, "sidecar": with_sidecar });
+    let payload =
+        serde_json::json!({ "backup": name, "created_at": created_at, "sidecar": with_sidecar });
     let command = serde_json::json!({ "name": "backup.restore", "args": { "backup": name } });
     let written = (|| -> wreckordbox_sidecar::Result<i64> {
         let sidecar = wreckordbox_sidecar::Sidecar::open(&folder)?;
@@ -228,16 +242,22 @@ pub fn list(library: &LibraryLocation, config: &Config) -> Result<Vec<Backup>, S
         if !manifest.belongs_to(library) {
             continue;
         }
-        let contents = rbl_backup::sidecar_part::Contents::read(&path).ok().flatten();
+        let contents = rbl_backup::sidecar_part::Contents::read(&path)
+            .ok()
+            .flatten();
         backups.push(Backup {
-            bytes: entry.metadata().map(|meta| meta.len()).unwrap_or(0),
+            bytes: entry.metadata().map_or(0, |meta| meta.len()),
             path,
             created_at: manifest.created_at,
             sidecar: contents.is_some(),
             stems: contents.is_some_and(|contents| contents.stems),
         });
     }
-    backups.sort_by(|a, b| b.created_at.cmp(&a.created_at).then_with(|| b.path.cmp(&a.path)));
+    backups.sort_by(|a, b| {
+        b.created_at
+            .cmp(&a.created_at)
+            .then_with(|| b.path.cmp(&a.path))
+    });
     Ok(backups)
 }
 
@@ -252,8 +272,12 @@ fn phase_name(phase: Phase) -> &'static str {
 
 fn from_backup(error: &rbl_backup::Error) -> ServiceError {
     match error {
-        rbl_backup::Error::Refused(message) => ServiceError::new(codes::RESTORE_REFUSED, message.clone()),
-        rbl_backup::Error::Cancelled => ServiceError::new(codes::RESTORE_REFUSED, error.to_string()),
+        rbl_backup::Error::Refused(message) => {
+            ServiceError::new(codes::RESTORE_REFUSED, message.clone())
+        }
+        rbl_backup::Error::Cancelled => {
+            ServiceError::new(codes::RESTORE_REFUSED, error.to_string())
+        }
         other => ServiceError::new(codes::RESTORE_FAILED, other.to_string()),
     }
 }

@@ -61,11 +61,19 @@ pub fn run(config: &Config, json: bool, command: &BackupCommands) -> Result<Stri
                     phase.clone_into(&mut last);
                 }
             })?;
-            Ok(if json { json!(restored).to_string() } else { restored_text(&restored) })
+            Ok(if json {
+                json!(restored).to_string()
+            } else {
+                restored_text(&restored)
+            })
         }
         BackupCommands::List => {
             let backups = backup::list(&library, config)?;
-            Ok(if json { json!({ "backups": backups }).to_string() } else { list_text(&backups) })
+            Ok(if json {
+                json!({ "backups": backups }).to_string()
+            } else {
+                list_text(&backups)
+            })
         }
     }
 }
@@ -80,10 +88,18 @@ fn phase_text(phase: &str) -> &'static str {
 }
 
 fn restored_text(restored: &backup::Restored) -> String {
-    let mut text = format!("Restored {} as the Library at {}.", restored.archive.display(), restored.library.display());
+    let mut text = format!(
+        "Restored {} as the Library at {}.",
+        restored.archive.display(),
+        restored.library.display()
+    );
     match &restored.sidecar {
         Some(sidecar) => {
-            let _ = write!(text, "\nThe Sidecar at {} was restored with it.", sidecar.display());
+            let _ = write!(
+                text,
+                "\nThe Sidecar at {} was restored with it.",
+                sidecar.display()
+            );
             if !restored.stems {
                 text.push_str(" Stem audio was not in the backup: a track whose Stem audio is not on this machine needs separating again.");
             }
@@ -105,7 +121,10 @@ fn list_text(backups: &[backup::Backup]) -> String {
                 (true, false) => "Library and Sidecar",
                 _ => "Library only",
             };
-            #[allow(clippy::cast_precision_loss, reason = "a size shown to one decimal place")]
+            #[allow(
+                clippy::cast_precision_loss,
+                reason = "a size shown to one decimal place"
+            )]
             let megabytes = backup.bytes as f64 / 1_048_576.0;
             format!("{}  {megabytes:.1} MB  {holds}", backup.path.display())
         })

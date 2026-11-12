@@ -79,12 +79,19 @@ fn backed_up() -> (Sandbox, PathBuf, Vec<Fact>) {
 fn restore(sandbox: &Sandbox, archive: &Path) -> Run {
     cli(
         sandbox,
-        &["--json", "backup", "restore", archive.to_str().unwrap(), "--yes"],
+        &[
+            "--json",
+            "backup",
+            "restore",
+            archive.to_str().unwrap(),
+            "--yes",
+        ],
     )
 }
 
 #[test]
-fn a_backup_restored_from_the_command_line_brings_back_the_library_with_its_sidecar_and_the_ledger_says_so() {
+fn a_backup_restored_from_the_command_line_brings_back_the_library_with_its_sidecar_and_the_ledger_says_so(
+) {
     let (sandbox, archive, before) = backed_up();
     let changed = facts(&sandbox);
 
@@ -106,7 +113,14 @@ fn a_backup_restored_from_the_command_line_brings_back_the_library_with_its_side
     let restored = restore(&sandbox, &archive);
     assert!(restored.status.success(), "{}", restored.stderr);
     let answer = restored.json();
-    assert_eq!(answer["sidecar"], sidecar_dir(&sandbox).canonicalize().unwrap().to_str().unwrap());
+    assert_eq!(
+        answer["sidecar"],
+        sidecar_dir(&sandbox)
+            .canonicalize()
+            .unwrap()
+            .to_str()
+            .unwrap()
+    );
     assert_eq!(testing::rating(sandbox.location()), 4);
     assert_eq!(facts(&sandbox), before);
 
@@ -115,12 +129,22 @@ fn a_backup_restored_from_the_command_line_brings_back_the_library_with_its_side
         .ledger_entry(answer["ledger_entry"].as_i64().unwrap())
         .unwrap()
         .unwrap();
-    assert_eq!((entry.action, entry.kind.as_str()), (Action::Write, "restore"));
-    assert!(entry.label.contains("Library and the Sidecar were restored"), "{}", entry.label);
+    assert_eq!(
+        (entry.action, entry.kind.as_str()),
+        (Action::Write, "restore")
+    );
+    assert!(
+        entry
+            .label
+            .contains("Library and the Sidecar were restored"),
+        "{}",
+        entry.label
+    );
 }
 
 #[test]
-fn a_backup_made_before_backups_carried_the_sidecar_restores_the_library_and_the_ledger_warns_of_entries_it_lacks() {
+fn a_backup_made_before_backups_carried_the_sidecar_restores_the_library_and_the_ledger_warns_of_entries_it_lacks(
+) {
     let sandbox = Sandbox::new();
     testing::set_rating(sandbox.location(), 4);
     let archive = sandbox.state_dir().join("rbexport-20261112-1100.zip");
@@ -154,7 +178,10 @@ fn a_restore_is_refused_while_a_service_has_the_library_and_goes_ahead_once_it_i
     assert!(!refused.status.success());
     let error = refused.error_json()["error"].clone();
     assert_eq!(error["code"], "restore_refused", "{error}");
-    assert!(error["message"].as_str().unwrap().contains("in use"), "{error}");
+    assert!(
+        error["message"].as_str().unwrap().contains("in use"),
+        "{error}"
+    );
     assert_eq!(testing::rating(sandbox.location()), 1);
     assert_eq!(facts(&sandbox), changed);
     assert!(!rbl_backup::journal::pending(&sandbox.state_dir()));
@@ -168,7 +195,8 @@ fn a_restore_is_refused_while_a_service_has_the_library_and_goes_ahead_once_it_i
 }
 
 #[test]
-fn a_restore_that_stopped_between_the_library_and_the_sidecar_is_put_right_by_the_next_service_before_it_reads_either() {
+fn a_restore_that_stopped_between_the_library_and_the_sidecar_is_put_right_by_the_next_service_before_it_reads_either(
+) {
     let (sandbox, archive, _) = backed_up();
     let changed = facts(&sandbox);
     // Dies once the Library's database, WAL and SHM are replaced and before
@@ -196,7 +224,7 @@ fn a_restore_that_stopped_between_the_library_and_the_sidecar_is_put_right_by_th
     assert!(!rbl_backup::journal::pending(&sandbox.state_dir()));
     assert_eq!(testing::rating(sandbox.location()), 1);
     assert_eq!(facts(&sandbox), changed);
-    let leftovers: Vec<_> = std::fs::read_dir(&sidecar_dir(&sandbox))
+    let leftovers: Vec<_> = std::fs::read_dir(sidecar_dir(&sandbox))
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
         .filter(|name| name.starts_with(rbl_backup::journal::PREFIX))

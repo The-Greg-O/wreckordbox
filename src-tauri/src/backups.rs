@@ -1087,7 +1087,7 @@ mod tests {
         let facts = |value: Option<&str>| {
             let db = rusqlite::Connection::open(sidecar.join("sidecar.db")).unwrap();
             if let Some(value) = value {
-                db.execute_batch(&format!("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS fact (value TEXT); DELETE FROM fact; INSERT INTO fact VALUES ('{value}');")).unwrap();
+                db.execute_batch(&format!("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT); INSERT OR REPLACE INTO meta VALUES ('schema_version', '5'); CREATE TABLE IF NOT EXISTS fact (value TEXT); DELETE FROM fact; INSERT INTO fact VALUES ('{value}');")).unwrap();
             }
             db.query_row("SELECT value FROM fact", [], |row| row.get::<_, String>(0)).unwrap()
         };
