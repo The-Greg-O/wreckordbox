@@ -9,6 +9,7 @@
  * controls are drawn in.
  */
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { enableViewShell } from "./helpers";
 import { BROWSER_THEME_EVENT, type Theme, type ThemeRoles } from "../src/lib/themeRoles";
 
 const TOKYO_NIGHT: ThemeRoles = {
@@ -181,4 +182,19 @@ test("under a light theme upstream's layout stays dark and readable, and takes t
   const grounds = await resolved(page, ["--c-black", "--c-top", "--c-panel", "--c-select"]);
   for (const ground of Object.values(grounds)) expect(contrast(ground, text)).toBeGreaterThanOrEqual(4.5);
   expect((await resolved(page, ["--c-accent"]))["--c-accent"]).toBe(rgb(LATTE.accent));
+});
+
+test("the view shell's active tab carries the theme's two-colour line", async ({ page }) => {
+  await enableViewShell(page);
+  await page.goto("/");
+  const tab = page.getByRole("tablist", { name: "Views" }).getByRole("tab", { selected: true });
+  await expect(tab).toBeVisible();
+  // Without a theme both ends are upstream's accent: a plain line.
+  expect(await drawn(tab, "border-image-source")).toBe(`linear-gradient(90deg, ${rgb("#1373EB")}, ${rgb("#1373EB")})`);
+  await announce(page, { roles: TOKYO_NIGHT, font: FACE });
+  expect(await drawn(tab, "border-image-source")).toBe(
+    `linear-gradient(90deg, ${rgb(TOKYO_NIGHT.tabFrom)}, ${rgb(TOKYO_NIGHT.tabTo)})`,
+  );
+  expect(await drawn(tab, "color")).toBe(rgb(TOKYO_NIGHT.text));
+  expect(await drawn(page.getByTestId("shell-top-bar"), "font-family")).toContain(FACE);
 });
