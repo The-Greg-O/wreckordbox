@@ -69,6 +69,9 @@ import { MasterOutputProvider, MasterOutputConnection, useMasterControls, useMas
 import { asLayout, deckCount, isFullDeck, type PlayerLayout } from "@/lib/layout";
 import { DEFAULT_SHELL_VIEW, type ShellView } from "@/lib/shellViews";
 import { useLibraryColumns } from "@/store/useLibraryColumns";
+import { useShellWidth } from "@/store/useShellWidth";
+import { libraryWidthOf } from "@/lib/libraryFit";
+import { libraryLookFor } from "@/views/shell/libraryFitLook";
 import { SHELL_PLAYER_LAYOUT, ViewShell } from "@/views/shell/ViewShell";
 import { useShellTree } from "@/views/shell/useShellTree";
 import { useTargetList } from "@/views/shell/useTargetList";
@@ -3717,6 +3720,9 @@ function AppBody() {
     dragged: draggedTracks, endDrag: () => setDraggedTracks(null),
     keyDisplay: viewPrefs.keyDisplay, loadedKey: trafficKey || null,
   });
+  // The Library's columns at the shell's width, and beside the second list (wbx-60).
+  const shellWidth = useShellWidth();
+  const libraryLook = libraryLookFor(libraryWidthOf(shellWidth), targetList.shown);
   const shellTree = useShellTree({
     library: tree, sticks: shellSticksShown, selectedNode, onSelectNode: setSelectedNode,
     view: shellView, onViewChange: changeShellView, queueCounts: intakeCounts, targetId: targetList.targetId,
@@ -3773,6 +3779,7 @@ function AppBody() {
           onTrafficLight={setTrafficLight}
           trafficKey={trafficKey}
           {...listColumns}
+          {...(shellOn ? { look: libraryLook } : {})}
           onFocusedRow={(row, from) => { void openInDeckA(row, from); }}
           onSelectedRow={setSelectedRow}
           onDragTracks={setDraggedTracks}

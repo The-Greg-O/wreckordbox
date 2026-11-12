@@ -119,6 +119,6 @@
 .opener:hover { border-color: var(--c-accent); color: var(--c-text); }
 .opener .key { margin-left: 0; }
 /* Narrow (wbx-69): the opener keeps its word; the key is in its tooltip's place, the palette. */
-@container shell (max-width: 520px) {
+@container shell (max-width: 600px) {
   .opener .key { display: none; }
 }

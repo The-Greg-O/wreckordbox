@@ -162,12 +162,118 @@ pub(crate) fn answer(
             format!("bad arguments to {}: {e}", request.command),
         )
     })?;
+    let (answer, _) = write_one(
+        stems,
+        state_dir,
+        lookup(&args.id)?,
+        &args.stick,
+        None,
+        &|| {},
+    )?;
+    serde_json::to_value(answer)
+        .map_err(|e| ServiceError::new(service_codes::SERVICE_FAILED, e.to_string()))
+}
+
+impl Found {
+    /// The track.
+    pub(crate) fn track(&self) -> &Parent {
+        self.audio.parent()
+    }
+}
+
+/// The track's complete set of current Stems, as a Stick load plans and
+/// binds it (wbx-70): made from the audio the track has now, every role
+/// there. Read without opening the Sidecar's writer: the writer's own
+/// connection when it is already open, otherwise an immutable read-only
+/// snapshot (`mutant_reads::inspect`), so nothing is created, migrated,
+/// tidied or marked stale. `None` when there is none, or the Sidecar cannot
+/// be read safely now.
+pub(crate) fn current_stems_read_only(stems: &Stems, found: &Found) -> Option<CurrentStems> {
+    let track = found.audio.parent();
+    let fingerprint = stems::fingerprint(track, found.audio.path()).ok()?;
+    let dir = stems.sidecar_dir().to_path_buf();
+    let facts = crate::mutant_reads::inspect(stems, |store| store.stem_facts(&track.id)).ok()?;
+    let set = facts
+        .into_iter()
+        .filter_map(|fact| StemSet::from_fact(&dir, fact))
+        .find(|set| set.is_current() && set.fingerprint == fingerprint && set.audio_present())?;
+    if !Role::ALL.iter().all(|role| {
+        set.stems
+            .iter()
+            .any(|s| s.role == *role && s.path.is_file())
+    }) {
+        return None;
+    }
+    let files: Vec<String> = set
+        .stems
+        .iter()
+        .map(|stem| {
+            let stamp = std::fs::metadata(&stem.path).map_or_else(
+                |_| "missing".to_owned(),
+                |m| format!("{} bytes, {}", m.len(), modified(&m)),
+            );
+            format!("{} {stamp}", stem.role.name())
+        })
+        .collect();
+    Some(CurrentStems {
+        set: set.clone(),
+        identity: format!(
+            "Stems Fact {}, {} frames, made from {:?}: {}",
+            set.fact_id,
+            set.samples,
+            set.fingerprint,
+            files.join(", ")
+        ),
+        samples: set.samples,
+    })
+}
+
+/// A file's modification time, to the nanosecond, for an identity.
+fn modified(metadata: &std::fs::Metadata) -> String {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or_else(
+            || "unknown time".to_owned(),
+            |d| format!("{}ns", d.as_nanos()),
+        )
+}
+
+/// A track's current Stems, as a Stick load plans them.
+pub(crate) struct CurrentStems {
+    /// The set itself, as read.
+    pub(crate) set: StemSet,
+    /// Which set, and each Stem file's size and modification time: another
+    /// separation, or a Stem file changed, is another identity.
+    pub(crate) identity: String,
+    /// The set's length in sample frames.
+    pub(crate) samples: u64,
+}
+
+/// Writes the Native stems of the track `found` to the Stick at `stick`,
+/// with every check `stems.write` makes, Stick Protection first: what
+/// `stems.write` does, and a Stick load does for each of its tracks.
+///
+/// `approved` is the exact Stem set to write (a Stick load's, as its plan
+/// approved it); `None` writes the track's current Stems (`stems.write`).
+/// Either way the set's files are checked again once staged, before the
+/// set is published: a file changed or gone in between publishes nothing.
+/// `staged` runs at that moment first (a test seam). Answers what was
+/// written and the Stems Fact it was written from.
+pub(crate) fn write_one(
+    stems: &Stems,
+    state_dir: &Path,
+    found: Found,
+    stick: &Path,
+    approved: Option<&StemSet>,
+    staged: &dyn Fn(),
+) -> Result<(NativeStems, i64), ServiceError> {
     let Found {
         audio: found,
         library_id,
-    } = lookup(&args.id)?;
+    } = found;
     let track = found.parent().clone();
-    let stick = args.stick.as_path();
     if !stick.is_absolute() {
         return Err(ServiceError::new(
             service_codes::BAD_REQUEST,
@@ -188,13 +294,16 @@ pub(crate) fn answer(
     // Stick), its execution lock taken (shared with the window, the CLI, a
     // lock and an eject) and held to the end of the write, and refused
     // unless the DJ unlocked this very mount.
-    let authorized = wreckordbox_stick_protection::authorize(state_dir, stick).map_err(|refused| {
-        let code = match refused {
-            wreckordbox_stick_protection::Refused::Protected { .. } => service_codes::STICK_PROTECTED,
-            _ => codes::STICK_NOT_FOUND,
-        };
-        ServiceError::new(code, refused.to_string())
-    })?;
+    let authorized =
+        wreckordbox_stick_protection::authorize(state_dir, stick).map_err(|refused| {
+            let code = match refused {
+                wreckordbox_stick_protection::Refused::Protected { .. } => {
+                    service_codes::STICK_PROTECTED
+                }
+                _ => codes::STICK_NOT_FOUND,
+            };
+            ServiceError::new(code, refused.to_string())
+        })?;
     if !wreckordbox_native_stems::is_spare_stick(stick) {
         return Err(refused(
             &track,
@@ -204,7 +313,13 @@ pub(crate) fn answer(
             },
         ));
     }
-    let set = current_stems(stems, &found)?;
+    // The exact set approved, when there is one: never the current Stems
+    // selected again, which a separation finishing meanwhile can replace.
+    let set = match approved {
+        Some(approved) => approved.clone(),
+        None => current_stems(stems, &found)?,
+    };
+    let stamps = stem_stamps(&set);
     let file = |role: Role| -> Result<&Path, ServiceError> {
         set.stems
             .iter()
@@ -236,14 +351,26 @@ pub(crate) fn answer(
     let outcome = {
         let _one_at_a_time = WRITING.lock().unwrap_or_else(PoisonError::into_inner);
         // Still this mount, still unlocked, as the write starts.
-        authorized.recheck().map_err(|refused| ServiceError::new(service_codes::STICK_PROTECTED, refused.to_string()))?;
-        wreckordbox_native_stems::write(&wreckordbox_native_stems::Request {
-            stick,
-            library_id,
-            track_id,
-            stems: files,
-            frames: Some(set.samples),
-        })
+        authorized.recheck().map_err(|refused| {
+            ServiceError::new(service_codes::STICK_PROTECTED, refused.to_string())
+        })?;
+        wreckordbox_native_stems::write_checked(
+            &wreckordbox_native_stems::Request {
+                stick,
+                library_id,
+                track_id,
+                stems: files,
+                frames: Some(set.samples),
+            },
+            &|| {
+                staged();
+                if stem_stamps(&set) == stamps {
+                    Ok(())
+                } else {
+                    Err("a Stem file changed or went missing".to_owned())
+                }
+            },
+        )
         .map_err(|error| refused(&track, stick, &error))?
     };
     let answer = match outcome {
@@ -287,8 +414,20 @@ pub(crate) fn answer(
             }),
         },
     };
-    serde_json::to_value(answer)
-        .map_err(|e| ServiceError::new(service_codes::SERVICE_FAILED, e.to_string()))
+    Ok((answer, set.fact_id))
+}
+
+/// Each Stem file's size and modification time, or that it is gone.
+fn stem_stamps(set: &StemSet) -> Vec<String> {
+    set.stems
+        .iter()
+        .map(|stem| {
+            std::fs::metadata(&stem.path).map_or_else(
+                |_| format!("{} missing", stem.path.display()),
+                |m| format!("{} {} {}", stem.path.display(), m.len(), modified(&m)),
+            )
+        })
+        .collect()
 }
 
 /// Refuses Stems that are not about as long as the track's own audio.

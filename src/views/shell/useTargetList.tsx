@@ -32,6 +32,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import type { KeyDisplay, TreeNode, ViewSpec } from "@/ipc/types";
 import { browserFocus } from "@/lib/browserFocus";
 import { SHELL_NARROW_MAX_PX } from "@/lib/shellViews";
+import { useShellWidth } from "@/store/useShellWidth";
 import type { Action, KeyOverrides, Platform } from "@/lib/shortcuts";
 import {
   moveInOrder, sourceOwnsKeyboard, swapLists, targetCandidates, targetKeyAction,
@@ -76,8 +77,18 @@ export interface TargetListInput {
 
 const NARROW = `(max-width: ${SHELL_NARROW_MAX_PX}px)`;
 
-/** Whether the window is too narrow for the second list (`docs/design/tokens.md`, Breakpoints). */
+/**
+ * Whether the window is too narrow for the second list (`docs/design/tokens.md`,
+ * Breakpoints): the shell's own width once it is measured (so the interface
+ * scale counts wherever it is applied, wbx-60), the window's before.
+ */
 function useNarrow(): boolean {
+  const shell = useShellWidth();
+  const media = useMediaNarrow();
+  return shell === null ? media : shell <= SHELL_NARROW_MAX_PX;
+}
+
+function useMediaNarrow(): boolean {
   const [narrow, setNarrow] = useState(() => typeof matchMedia === "function" && matchMedia(NARROW).matches);
   useEffect(() => {
     if (typeof matchMedia !== "function") return undefined;
@@ -93,7 +104,7 @@ function useNarrow(): boolean {
 /** Tracks a list shows from a Stick's own database: their ids are not the Library's. */
 const fromStick = (kind: ViewSpec["source"]["kind"]) => kind === "device";
 
-export function useTargetList(input: TargetListInput): { pane: ReactNode; targetId: string | null } {
+export function useTargetList(input: TargetListInput): { pane: ReactNode; targetId: string | null; shown: boolean } {
   const {
     active, platform, keyOverrides, tree, source, sourceKind, onOpen, selection, locked, explainLock, refuse, add,
     reorderEntries, dragged, endDrag,
@@ -307,5 +318,6 @@ export function useTargetList(input: TargetListInput): { pane: ReactNode; target
       keyOverrides={keyOverrides}
     />
   ) : null;
-  return { pane, targetId: visible ? targetId : null };
+  // `shown`: the second list is on screen beside the main one (wbx-60: the main list then narrows its columns).
+  return { pane, targetId: visible ? targetId : null, shown: visible };
 }

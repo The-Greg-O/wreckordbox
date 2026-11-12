@@ -4215,6 +4215,7 @@ dependencies = [
  "wreckordbox-sidecar",
  "wreckordbox-stick-outline",
  "wreckordbox-stick-protection",
+ "wreckordbox-stick-write",
  "zip",
 ]
 
@@ -7132,6 +7133,7 @@ dependencies = [
  "wreckordbox-render",
  "wreckordbox-service",
  "wreckordbox-sidecar",
+ "wreckordbox-stick-outline",
  "wreckordbox-stick-protection",
 ]
 
@@ -7180,9 +7182,13 @@ name = "wreckordbox-service"
 version = "1.10.0"
 dependencies = [
  "dirs 5.0.1",
+ "parking_lot",
  "rbl-anlz",
  "rbl-backup",
+ "rbl-core",
  "rbl-db",
+ "rbl-devices",
+ "rbl-export",
  "rbl-index",
  "rbl-library",
  "rusqlite",
@@ -7194,7 +7200,9 @@ dependencies = [
  "wreckordbox-native-stems",
  "wreckordbox-render",
  "wreckordbox-sidecar",
+ "wreckordbox-stick-outline",
  "wreckordbox-stick-protection",
+ "wreckordbox-stick-write",
 ]
 
 [[package]]
@@ -7237,6 +7245,25 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "wreckordbox-stick-write"
+version = "1.10.0"
+dependencies = [
+ "parking_lot",
+ "rbl-backup",
+ "rbl-core",
+ "rbl-db",
+ "rbl-export",
+ "rbl-index",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "uuid",
+ "wreckordbox-stick-outline",
+ "wreckordbox-stick-protection",
 ]
 
 [[package]]
