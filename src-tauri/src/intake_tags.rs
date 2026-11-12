@@ -18,12 +18,14 @@ use crate::error::{AppError, AppResult, ErrorKind};
 use crate::state::AppState;
 
 fn ask(state: &AppState, command: &str, args: Value) -> AppResult<Result<Value, ServiceError>> {
-    state.with_service(|service| service.call(command, args)).ok_or_else(|| {
-        AppError::new(
-            ErrorKind::NotFound,
-            "The Library service is not running in this window, so the tags cannot be read.",
-        )
-    })
+    state
+        .with_service(|service| service.call(command, args))
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorKind::NotFound,
+                "The Library service is not running in this window, so the tags cannot be read.",
+            )
+        })
 }
 
 /// The panel's description, with `track`'s tags when one is given.
@@ -56,8 +58,11 @@ pub fn set_tag_fact(
         }),
     )?
     .map_err(|error| {
-        AppError::new(ErrorKind::Malformed, format!("Not saved: {}", error.message))
-            .with_detail(error.code.clone())
+        AppError::new(
+            ErrorKind::Malformed,
+            format!("Not saved: {}", error.message),
+        )
+        .with_detail(error.code.clone())
     })
 }
 
@@ -72,7 +77,10 @@ pub async fn intake_tag_panel(
     track: Option<String>,
 ) -> AppResult<Value> {
     let state = Arc::clone(&state);
-    blocking("intake_tag_panel", move || tag_panel(&state, track.as_deref())).await
+    blocking("intake_tag_panel", move || {
+        tag_panel(&state, track.as_deref())
+    })
+    .await
 }
 
 /// Sets a vocabulary dimension's tags on a track from the tag panel.

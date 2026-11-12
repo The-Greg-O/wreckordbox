@@ -192,9 +192,7 @@ fn a_deck_tag_ticked_from_the_panel_is_recorded_as_the_djs_fact() {
     assert_eq!(window.set(&track)["situation"], json!(["peak"]));
     let facts = window
         .state()
-        .with_service(|service| {
-            service.call("facts.of_track", json!({ "id": track }))
-        })
+        .with_service(|service| service.call("facts.of_track", json!({ "id": track })))
         .unwrap()
         .unwrap();
     let situation: Vec<&Value> = facts["facts"]

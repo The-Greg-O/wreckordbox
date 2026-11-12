@@ -213,7 +213,10 @@ fn a_tag_schema_draws_the_panel_with_the_deck_facing_dimensions_first() {
         ]
     );
     let dimensions = panel["dimensions"].as_array().unwrap();
-    let ids: Vec<&str> = dimensions.iter().map(|d| d["id"].as_str().unwrap()).collect();
+    let ids: Vec<&str> = dimensions
+        .iter()
+        .map(|d| d["id"].as_str().unwrap())
+        .collect();
     assert_eq!(ids, ["feel", "situation", "genre", "set_role", "texture"]);
     // The deck's MyTags are edited as MyTags, matched by category and text;
     // a deck category the Library has no MyTag category for cannot be set
@@ -247,7 +250,10 @@ fn a_vocabulary_dimension_is_set_by_the_djs_own_fact_not_an_agents() {
     };
 
     record(json!(["house-deep"]), json!({ "kind": "dj" }));
-    record(json!(["techno"]), json!({ "kind": "agent", "name": "tagger" }));
+    record(
+        json!(["techno"]),
+        json!({ "kind": "agent", "name": "tagger" }),
+    );
     let panel = hosted.call("intake.tag_panel", json!({ "id": "10000" }));
     assert_eq!(panel["track"]["set"]["genre"], json!(["house-deep"]));
 
@@ -259,7 +265,9 @@ fn a_vocabulary_dimension_is_set_by_the_djs_own_fact_not_an_agents() {
 #[test]
 fn a_tag_schema_with_a_mistake_is_said_and_the_panel_falls_back_to_the_mytags() {
     let fixture = Fixture::new(1);
-    fixture.write_schema("version = 1\n[dimensions.mood]\nterms = [{ id = \"Bad Id\", name = \"x\" }]\n");
+    fixture.write_schema(
+        "version = 1\n[dimensions.mood]\nterms = [{ id = \"Bad Id\", name = \"x\" }]\n",
+    );
     let hosted = fixture.start();
 
     let panel = hosted.call("intake.tag_panel", json!({ "id": "10000" }));

@@ -124,7 +124,8 @@ pub(crate) fn answer(
         })?
     };
     let panel = tag_panel(library, stems, &of)?;
-    serde_json::to_value(&panel).map_err(|e| ServiceError::new(codes::SERVICE_FAILED, e.to_string()))
+    serde_json::to_value(&panel)
+        .map_err(|e| ServiceError::new(codes::SERVICE_FAILED, e.to_string()))
 }
 
 fn tag_panel(
@@ -225,10 +226,12 @@ fn describe_problems(
     path: &std::path::Path,
     problems: &[wreckordbox_sidecar::tag_schema::Problem],
 ) -> String {
-    let first = problems.first().map_or_else(String::new, |problem| match problem.line {
-        Some(line) => format!(" (line {line}: {})", problem.message),
-        None => format!(" ({})", problem.message),
-    });
+    let first = problems
+        .first()
+        .map_or_else(String::new, |problem| match problem.line {
+            Some(line) => format!(" (line {line}: {})", problem.message),
+            None => format!(" ({})", problem.message),
+        });
     format!(
         "{} has {} mistake{}{first}; the panel shows the Library's MyTags until it is fixed",
         path.display(),
