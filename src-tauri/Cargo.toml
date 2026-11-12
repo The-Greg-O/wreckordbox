@@ -80,6 +80,8 @@ tempfile = "3"
 rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
 
 [dev-dependencies]
+# A restore stopped midway, for the window started during one.
+rbl-backup = { path = "../crates/rbl-backup", features = ["testing"] }
 # `test` gives a mock app, so the native menu can be built and inspected
 # without opening a window — which cannot be screenshotted on this machine.
 tauri = { version = "2", features = ["test"] }

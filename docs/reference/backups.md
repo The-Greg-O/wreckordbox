@@ -44,6 +44,8 @@ A backup is one standard ZIP file named `rbexport-YYYYMMDD-HHMM.zip` in local
 | `analysis/…` | `PIONEER/USBANLZ` | Beat grids, waveforms, cues, phrases and vocals. |
 | `artwork/…` | `PIONEER/Artwork` | Album art and thumbnails. |
 | `masterPlaylists6.xml`, `automixPlaylist6.xml` | Beside `master.db`, when present | Sync Manager selections and the Automix playlist. These live outside the SQL database. |
+| `sidecar/…` | The Sidecar's folder, `wreckordbox-sidecar` beside `master.db` | What wreckordbox knows beside the Library: a snapshot of `sidecar.db` (Facts, Runs, which tracks have Stems, and whatever later versions keep there, such as Mutants) and the files the DJ edits (the kinds file, the Tag schema, Recipes). See [The Sidecar](#the-sidecar). |
+| `sidecar.json` | Written by wreckordbox, when a Sidecar exists | Says the backup holds a Sidecar, its size, and whether Stem audio is in it. |
 | `manifest.json` | Written by RBXport | The `master.db` path the backup came from, creation time, logical byte count, and which library files it holds. Restore depends on this file. |
 | `summary.json` | Written by RBXport | Track, playlist and cue counts and per-category sizes, so a person can recognize the backup before restoring. |
 | `restore-rekordbox.sh`, `restore-rekordbox.ps1` | Written by RBXport | Standalone restore scripts for macOS and Windows. |
@@ -76,6 +78,51 @@ flowchart LR
 Older backups can differ: manifest version 1 predates artwork and library
 files, some older archives carry `master.db-wal`, and backups made before
 RBXport 0.18.0 have no `summary.json`. RBXport Restore handles all of these.
+Backups made before the Sidecar travelled, and backups taken when no Sidecar
+existed, have neither `sidecar.json` nor `sidecar/…`; they restore the
+Library and leave the Sidecar on disk alone.
+
+### The Sidecar
+
+The Sidecar is the folder `wreckordbox-sidecar` beside `master.db`, or the
+folder `WRECKORDBOX_SIDECAR_DIR` names. What a backup holds of it is decided
+by rule in `rbl_backup::sidecar_part`, not by a list of files, so a file a
+later version adds there travels without a change to the backup code.
+
+| In the Sidecar's folder | In a backup | Why |
+| --- | --- | --- |
+| `sidecar.db`, and any other SQLite database | Yes, as a `VACUUM INTO` snapshot; `-wal`, `-shm` and `-journal` files are not copied | Facts and Runs today; Mutants and the Ledger when they exist. A snapshot is whole even while the Library service is writing. |
+| Every other file and folder (`kinds.toml`, the Tag schema, Recipes, anything new) | Yes | The DJ's own files. |
+| `stems/` | Only when asked | Stem audio: about 215 MB a track, over twenty minutes a track to make again. |
+| `work/` | Never | A tool's output before it is accepted; emptied whenever the Sidecar is opened. |
+| `auditions/` | Never | Reserved for audition files of Stem edits. |
+| `renders/` | Never | Reserved for the cache of rendered Mutants. |
+| `cache/` | Never | Reserved for anything else derived. |
+| Top-level entries whose names start with a dot | Never | Hidden files, and a restore's own staged copies. |
+
+`auditions`, `renders` and `cache` are reserved names: the code that makes
+such data must keep it in those folders, where a backup skips it and a
+restore leaves it alone.
+
+**Stem audio is left out by default.** Four lossless Stems of a five-minute
+track are about 215 MB, so 100 separated tracks are roughly 21 GB, more than
+the rest of a backup many times over, and PCM audio barely compresses. The
+price of leaving it out is over twenty minutes of separation per track after
+a loss. To include it, save `{"stems": true}` as `backup-sidecar.json` in the
+local state folder (`rbl_backup::sidecar_part::OPTIONS_FILE`,
+`Options::saved`); `sidecar.json` then records `"stems": true`. Either way
+`stems_bytes` in `sidecar.json` records how much Stem audio the Sidecar held.
+
+The database always travels, so a backup without Stem audio still records
+which tracks were separated. After such a backup is restored, Stem audio
+that is still on disk is used; a track whose Stem files are not there reads
+as having no Stems and is separated again when asked
+(`Sidecar::current_stems` and `stems.show` answer none; the recorded set
+remains in the history with `StemSet::audio_present()` false).
+
+A symbolic link among what would be backed up, or a Sidecar database that
+cannot be snapshotted or fails `quick_check`, fails the backup rather than
+producing one that silently lacks the Sidecar.
 
 ## Creating a backup
 
@@ -262,8 +309,37 @@ to the current library. After deleting, the folder is flushed.
 
 ## Restoring a backup
 
-Restore lives in the separate RBXport Restore app. Its logic is in
-`rbl_backup::restore`, which RBXport's tests also run. A restore:
+In wreckordbox a backup is restored by `wreckordbox backup restore <zip>
+--yes` (`crates/wreckordbox/src/backup.rs`, `wreckordbox_service::backup`),
+which the embedded scripts hand a backup holding the Sidecar to. It takes
+the Library's ownership lock (the one a Library service, by itself or
+hosted by the window, holds for as long as it has the Library) before it
+reads anything and keeps it until the restore has finished or been put
+back, so it is refused while either runs and neither can start during it.
+Every owner of the Library recovers a pending journal under that lock before
+it opens the Library or the Sidecar (`Service::begin`), and before it
+requires `master.db` to exist: `wreckordbox_service::locate_library` finds
+a Library whose `master.db` a stopped restore set aside when the pending
+journal names it. A window that cannot host the service never recovers: it
+waits while a restore holds the lock (`backup::restoring`, the lock file's
+second line is `restoring a backup`), then hosts, and reads without owning
+only when another window or service owns the Library and nothing is left
+to recover (`service_host::own_library`). The restore checks Library
+Protection (`library-protection.json`; on unless it says off) under the
+lock before staging and again before replacing.
+
+The restore owes a Ledger entry of kind `restore`, written to the Sidecar
+the Library now has. It is saved in the journal (`owed`, through
+`rbl_backup::restore::restore_owing`) before the first file is replaced;
+once the files are committed the journal is kept, with no swaps, until the
+entry is written under an identifier reserved by an intent and saved back
+into the journal (so writing it again changes nothing), then discharged. A
+stop after the files are in place is recorded by the next owner; a failure
+to write it is `restore_unrecorded` and keeps the journal, and while it is
+kept no new restore starts.
+The separate RBXport Restore app does not know about the Sidecar and must
+not be used for a backup holding one. The logic is `rbl_backup::restore`. A
+restore:
 
 ```mermaid
 flowchart TD
@@ -296,14 +372,29 @@ A restore:
 4. Plans which entries to unpack from the parts the person chose: database,
    analysis, artwork, library files. An entry name that could escape its
    folder (`..`, absolute paths) refuses the whole archive. A part the
-   backup does not contain is left unchanged.
+   backup does not contain is left unchanged. When the database is chosen
+   and the backup has a `sidecar.json`, the Sidecar is planned with it: each
+   top-level entry of the Sidecar's folder is a target of its own, an entry
+   of a backed-up kind that is on disk but not in the backup is planned for
+   removal, and entries under the reserved folders (and under `stems/` when
+   the backup does not include Stem audio) are ignored even if an archive
+   holds them. The Sidecar is never restored apart from the database.
 5. Checks free disk space against the summary's sizes plus 64 MiB.
 6. Unpacks each chosen part beside its target under a
    `.rbxport-restore-<uuid>-new` name. Every entry is checked against its ZIP
    checksum, and stored symbolic links are refused. Files and folders are
    flushed.
 7. Opens the unpacked database with the library's key and runs
-   `quick_check`.
+   `quick_check`. The Sidecar's `sidecar.db` must be there, be SQLite
+   whatever its first bytes, pass `quick_check` and hold a Sidecar schema
+   version; every database `sidecar.json` lists (at any depth) must be there
+   and pass `quick_check`; and any other unpacked file that starts as a
+   database must pass it too. A `sidecar.db` whose `meta.schema_version` is
+   newer than this build reads (`sidecar_part::SCHEMA_SUPPORTED`, held to
+   `wreckordbox_sidecar::SCHEMA_VERSION` by a test) is refused, and so is any
+   database's `-wal`, `-shm` or `-journal` in the Sidecar's part, at any
+   depth: databases travel as whole snapshots, and a companion would change
+   one after it was checked.
 8. Checks again that rekordbox and RBXport are not running, then saves the
    restore journal (`backup-restore.json` in the local state folder).
 9. For each target: renames the current file or folder aside to
@@ -317,7 +408,19 @@ Before step 8, stopping or failing leaves the library unchanged. Once the
 journal is saved, the next start of RBXport or RBXport Restore reads it: an
 uncommitted restore is rolled back by renaming the old copies back, and a
 committed one is finished by removing the old copies. While a journal is
-pending, RBXport refuses to edit the library.
+pending, RBXport refuses to edit the library. A journal may only name the
+library's own targets or a top-level entry of the Sidecar's folder that a
+backup can hold; anything else is refused.
+
+The Sidecar's folder is found at restore time (`WRECKORDBOX_SIDECAR_DIR`, or
+beside `master.db`) and checked before a backup reads it or a restore,
+orphan clean-up or recovery writes in it (`sidecar_part::Destination`): it
+must be an absolute plain path, not a symbolic link, and must not hold the
+Library's folder or overlap `share/` or any file a restore replaces. The
+folders above it are resolved and the result pinned; just before the first
+replacement it is checked again. The journal records that folder, and
+recovery acts on it whatever the environment of the program recovering,
+after checking it again.
 
 ```mermaid
 stateDiagram-v2
@@ -333,7 +436,11 @@ stateDiagram-v2
 ### Standalone restore scripts
 
 Every backup contains `restore-rekordbox.sh` and `restore-rekordbox.ps1`.
-After unzipping, either one restores the backup without RBXport or RBXport
+For a backup holding the Sidecar (`sidecar.json` beside the script) they
+change nothing themselves: they run `wreckordbox backup restore <zip> --yes`
+(`WRECKORDBOX_BIN` or `wreckordbox` on the path; `WRECKORDBOX_BACKUP` or the
+extracted folder's name plus `.zip`) or refuse. For any other backup, after
+unzipping, either one restores the backup without RBXport or RBXport
 Restore. The script:
 
 - checks that it is in an extracted backup and that rekordbox is not running;
@@ -516,6 +623,9 @@ temporary backup folder, never the installed library. Run them with:
 RB_LITE_TEST=1 cargo test -p rbxport backups
 RB_LITE_TEST=1 cargo test -p rbl-backup
 ```
+
+The Sidecar's part is tested in `crates/rbl-backup/tests/sidecar.rs`, through
+the crate's public interface and the Sidecar's own store.
 
 The `rbl-backup` crate's `testing` feature exposes `testing::archive`, which
 builds an archive the same way RBXport does, for RBXport Restore's tests.

@@ -37,3 +37,7 @@ testing = []
 
 [dev-dependencies]
 tempfile = "3"
+# The Sidecar's own store, to check that what a backup carries reads back
+# through it; and this crate's fixtures, for the tests in `tests/`.
+wreckordbox-sidecar = { path = "../wreckordbox-sidecar" }
+rbl-backup = { path = ".", features = ["testing"] }
