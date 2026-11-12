@@ -16,6 +16,15 @@ CREATE TABLE track_identity (
     duration INTEGER NOT NULL
 ) STRICT;
 CREATE INDEX identity_audio ON track_identity(fingerprint);
+INSERT INTO track_identity
+    SELECT f.track_id, CASE WHEN NOT EXISTS (
+        SELECT 1 FROM fact old WHERE old.track_id = f.track_id
+        AND old.stale_at >= f.recorded_at
+    ) THEN f.fingerprint ELSE NULL END, '', '', '', 0
+    FROM fact f WHERE f.id = (
+        SELECT max(latest.id) FROM fact latest
+        WHERE latest.track_id = f.track_id AND latest.fingerprint IS NOT NULL
+    );
 CREATE TABLE attachment_change (
     id INTEGER PRIMARY KEY,
     from_track TEXT NOT NULL,

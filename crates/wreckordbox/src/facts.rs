@@ -416,7 +416,7 @@ fn shown_text(shown: &TrackFacts) -> String {
         if !shown.facts.iter().any(|standing| standing.id == fact.id) {
             let mut row = fact_row(fact);
             if !fact.stale {
-                row[7] = "unverified: audio unavailable".to_owned();
+                "unverified: audio unavailable".clone_into(&mut row[7]);
             }
             rows.push(row);
         }
