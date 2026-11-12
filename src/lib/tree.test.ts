@@ -4,7 +4,7 @@ import { TREE_ROOT, type TreeNode } from "@/ipc/types";
 import {
   RELATED_NODES, TAG_LIST_NODE, branchIds, childrenOf, containerOf, emptySources, hasChildren,
   newlyClosed, nodesForSource, parentFor, relatedCriterionOf, sourceOf, subtreeIds, toggle,
-  visibleNodes, withSources, searchTree,
+  visibleNodes, withSources, searchTree, playlistPaths,
 } from "./tree";
 
 /** `"a"` at depth 0, `"  b"` at depth 1, and so on. */
@@ -446,5 +446,56 @@ describe("searchTree", () => {
     expect(searchTree(nodes, "house", "folder").map(n => n.id)).toEqual(["root", "folder"]);
     expect(searchTree(nodes, "", "folder")).toEqual(nodes);
     expect(searchTree(nodes, "missing", "all")).toEqual([]);
+  });
+});
+
+describe("playlistPaths", () => {
+  const node = (id: string, kind: TreeNode["kind"], depth: number): TreeNode => ({ id, name: id, kind, depth });
+  const LIBRARY: TreeNode[] = [
+    node("collection", "collection", 0),
+    node("top", "playlist", 1),
+    node("gigs", "folder", 1),
+    node("friday", "folder", 2),
+    node("warmup", "playlist", 3),
+    node("peak", "playlist", 3),
+    node("solo", "playlist", 2),
+    node("empty", "folder", 1),
+    node("last", "playlist", 1),
+    node("histories", "histories", 0),
+    node("2025", "playlist", 1),
+  ];
+
+  it("names each playlist under its folders, in tree order", () => {
+    expect(playlistPaths(LIBRARY)).toEqual([
+      { id: "top", name: "top" },
+      { id: "warmup", name: "gigs › friday › warmup" },
+      { id: "peak", name: "gigs › friday › peak" },
+      { id: "solo", name: "gigs › solo" },
+      { id: "last", name: "last" },
+      { id: "2025", name: "2025" },
+    ]);
+  });
+
+  it("agrees with containerOf for every playlist", () => {
+    const names = new Map<string, string>();
+    for (const n of LIBRARY) {
+      if (n.kind !== "playlist" && n.kind !== "folder") continue;
+      const above = names.get(containerOf(LIBRARY, n)) ?? "";
+      names.set(n.id, above === "" ? n.name : `${above} › ${n.name}`);
+    }
+    expect(playlistPaths(LIBRARY)).toEqual(
+      LIBRARY.filter((n) => n.kind === "playlist").map((n) => ({ id: n.id, name: names.get(n.id) })),
+    );
+  });
+
+  it("is one pass: twenty thousand playlists in a folder take no time to name", () => {
+    const big = [node("collection", "collection", 0), node("archive", "folder", 1)];
+    for (let i = 1; i <= 20_000; i += 1) big.push(node(`a${i}`, "playlist", 2));
+    const started = performance.now();
+    const paths = playlistPaths(big);
+    // Quadratic (a containerOf per node) took over a second here; linear is
+    // a few milliseconds. 250 ms leaves room for a loaded machine.
+    expect(performance.now() - started).toBeLessThan(250);
+    expect(paths.at(-1)).toEqual({ id: "a20000", name: "archive › a20000" });
   });
 });
