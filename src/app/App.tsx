@@ -100,6 +100,7 @@ import type { QueueItem } from "@/lib/queue";
 import { TrackFilter } from "@/views/browser/TrackFilter";
 import { TrackFilterBar } from "@/views/shell/TrackFilterBar";
 import { useShellTrackFilter } from "@/views/shell/useShellTrackFilter";
+import { hasPicks } from "@/lib/shellTrackFilter";
 import { EMPTY_FILTER, toSpecFilter, type FilterState } from "@/lib/trackFilter";
 import type { AnalysisResult, DeviceFormat, DeviceImportMissing, DevicePlaylistEdit, DevicePlaylistImportPlan, FilterValues, LinkPeerSeen, LinkStatus, ListTotals, RelocateSearch, SmartRule, TrackLookups, UnanalysedTracks } from "@/ipc/types";
 import { statusBarListText } from "@/lib/format";
@@ -952,11 +953,12 @@ function AppBody() {
   // Key match and BPM ±6% follow the track the key lights follow (wbx-57).
   const shellFilterLoaded = useMemo(() => ({ key: trafficKey || null, bpmX100: trafficTrack?.bpmX100 ?? null }), [trafficKey, trafficTrack?.bpmX100]);
   const shellFilter = useShellTrackFilter({ enabled: shellOn, base: shellFilterBase, query, setQuery, generation: libraryGeneration, tagListRevision, loaded: shellFilterLoaded });
-  // Selected tracks the filter hid and the list deselected; cleared by the next filter change.
+  // Selected tracks the filter hid and the list deselected, as last told;
+  // said until the filter is cleared.
   const [filterDeselected, setFilterDeselected] = useState(0);
   const shellFilterChange = shellFilter.onChange;
   const onShellFilterChange = useCallback((next: Parameters<typeof shellFilterChange>[0]) => {
-    setFilterDeselected(0);
+    if (!hasPicks(next) && next.text.trim() === "") setFilterDeselected(0);
     shellFilterChange(next);
   }, [shellFilterChange]);
   const spec: ViewSpec = useMemo(() => {
@@ -3592,7 +3594,7 @@ function AppBody() {
           filterBar={shellOn ? (
             <TrackFilterBar model={shellFilter.model} onChange={onShellFilterChange} values={shellFilter.values}
               valuesError={shellFilter.valuesError} categories={shellFilter.categories} dropped={shellFilter.dropped}
-              deselected={filterDeselected} onStick={shellFilter.onStick} count={shellFilter.count} loaded={shellFilterLoaded}
+              deselected={filterDeselected} onStick={shellFilter.onStick} count={shellFilter.count} filtering={shellFilter.filtering} loaded={shellFilterLoaded}
               keyDisplay={viewPrefs.keyDisplay} keySort={viewPrefs.keySort} />
           ) : filterBar}
         />

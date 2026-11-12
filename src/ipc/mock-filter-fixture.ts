@@ -14,8 +14,8 @@ import type { RowDto } from "./types";
  *   Synth when i mod 4 is 0, Vocal when i mod 7 is 0;
  * - genre "Deep House" when i mod 3 is 1.
  *
- * "Melodic Vox" holds tracks 3 to 20 and the intelligent playlist "Fresh
- * 128s" the Deep House tracks.
+ * "Melodic Vox" holds tracks 3 to 20, the intelligent playlist "Fresh 128s"
+ * the Deep House tracks, and "Eurodance" nothing.
  */
 export const FILTER_FIXTURE_SIZE = 30;
 
@@ -62,5 +62,7 @@ export function filterFixtureMembers(): Map<string, number[]> {
   return new Map([
     ["pl-0-0", Array.from({ length: 18 }, (_, k) => k + 3)],
     ["smart-0", Array.from({ length: FILTER_FIXTURE_SIZE }, (_, i) => i).filter((i) => i % 3 === 1)],
+    // "Eurodance" starts empty: where a test adds the selection.
+    ["pl-1-0", []],
   ]);
 }

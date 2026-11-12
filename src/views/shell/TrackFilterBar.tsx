@@ -3,7 +3,7 @@ import type { FilterValues, KeyDisplay, TagCategory } from "@/ipc/types";
 import { formatKey } from "@/lib/preferences";
 import { OWN_ACTIVATION } from "@/lib/shortcuts";
 import {
-  BPM_MATCH_PCT, EMPTY_SHELL_FILTER, ENERGY_LEVELS, PREP_CHOICES, bpmBand, clearCategory, hasPicks, isFiltering,
+  BPM_MATCH_PCT, EMPTY_SHELL_FILTER, ENERGY_LEVELS, PREP_CHOICES, bpmBand, clearCategory, hasPicks,
   keyChoicePicked, keyChoices, matchedKeys, pickSummaries, setBpmRange, setEnergyRange, setTagsAny, tagsAny,
   toggleKeyChoice, togglePrepColour, toggleTag, type KeyChoice, type LoadedTrack, type ShellFilter,
 } from "@/lib/shellTrackFilter";
@@ -32,6 +32,8 @@ export interface TrackFilterBarProps {
   /** A Stick's list: its MyTags are not read, so MyTag picks do not apply. */
   onStick: boolean;
   count: FilterCount;
+  /** Whether anything narrows the open list now (on a Stick, MyTags do not). */
+  filtering: boolean;
   /** The track Key match and BPM ±6% follow. */
   loaded: LoadedTrack;
   /** How the list writes and sorts keys (wbx-56): `view.keyDisplay`, `view.keySort`. */
@@ -49,14 +51,13 @@ export interface TrackFilterBarProps {
  * the bar owns Space and Enter so they never reach the deck.
  */
 export function TrackFilterBar(props: TrackFilterBarProps) {
-  const { model, onChange, values, valuesError, categories, dropped, deselected, onStick, count, loaded, keyDisplay, keySort } = props;
+  const { model, onChange, values, valuesError, categories, dropped, deselected, onStick, count, filtering, loaded, keyDisplay, keySort } = props;
   const [open, setOpen] = useState<Panel | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const buttons = useRef(new Map<string, HTMLButtonElement>());
   const keyName = (identity: string) => formatKey(identity, keyDisplay);
   const said = pickSummaries(model, loaded, keyName);
   const keys = keyChoices(values?.keys ?? [], model.keys, keyDisplay, keySort);
-  const filtering = isFiltering(model, loaded);
   const matched = matchedKeys(loaded);
   const band = bpmBand(loaded);
 

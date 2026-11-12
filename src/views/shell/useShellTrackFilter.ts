@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { getBackend } from "@/ipc/client";
 import type { FilterValues, TrackFilter, ViewSpec } from "@/ipc/types";
 import {
-  EMPTY_SHELL_FILTER, dropStale, isFiltering, toViewFilter, type LoadedTrack, type ShellFilter,
+  EMPTY_SHELL_FILTER, dropStale, toViewFilter, type LoadedTrack, type ShellFilter,
 } from "@/lib/shellTrackFilter";
 
 /** What the bar's count shows. */
@@ -26,6 +26,8 @@ export interface ShellTrackFilter {
   dropped: string[];
   /** Whether the open list is a Stick's, where MyTags cannot be read. */
   onStick: boolean;
+  /** Whether anything narrows the open list now. */
+  filtering: boolean;
   count: FilterCount;
 }
 
@@ -85,7 +87,8 @@ export function useShellTrackFilter({
     const { tags: _notOnAStick, ...rest } = filter;
     return Object.keys(rest).length > 0 ? rest : undefined;
   }, [picks, categoryNames, loadedKey, loadedBpm, onStick]);
-  const filtering = isFiltering({ ...picks, text: query }, loaded);
+  // What is actually sent: on a Stick, MyTag picks are not.
+  const filtering = query.trim() !== "" || viewFilter !== undefined;
 
   const baseKey = JSON.stringify(base);
   const filterKey = JSON.stringify(viewFilter ?? null);
@@ -192,5 +195,5 @@ export function useShellTrackFilter({
     if (next.text !== query) setQuery(next.text);
   }, [query, setQuery]);
 
-  return { model, onChange, viewFilter, values, valuesError, categories, dropped, onStick, count };
+  return { model, onChange, viewFilter, values, valuesError, categories, dropped, onStick, filtering, count };
 }
