@@ -68,6 +68,8 @@ struct Shared {
     changes: Mutex<Option<Sender<Event>>>,
     /// When the last client left; `None` while one is connected.
     idle_since: Mutex<Option<Instant>>,
+    /// The Sidecar and the separation engine (`stems.*` commands).
+    stems: Arc<crate::stems::Stems>,
 }
 
 struct Owned {
@@ -163,13 +165,14 @@ impl Service {
         let core = open.core();
         let listener = listen(&config.runtime_dir, &socket)?;
         let (queue, queued) = std::sync::mpsc::channel();
+        let (sidecar_events, sidecar_queued) = std::sync::mpsc::channel();
 
         let shared = Arc::new(Shared {
             library: Mutex::new(Some(Owned {
                 library: open,
                 _lock: library_lock,
             })),
-            master_db,
+            master_db: master_db.clone(),
             socket,
             hosted,
             stop_requested: AtomicBool::new(false),
@@ -179,7 +182,21 @@ impl Service {
             listeners: Mutex::new(Vec::new()),
             changes: Mutex::new(Some(queue)),
             idle_since: Mutex::new(Some(Instant::now())),
+            stems: crate::stems::Stems::from_env(&master_db, sidecar_events),
         });
+        // What the Stems commands have to say (progress, a change to the
+        // Sidecar), sent off the thread that said it. Ends with the service.
+        {
+            let shared = Arc::downgrade(&shared);
+            std::thread::spawn(move || {
+                for event in sidecar_queued {
+                    let Some(shared) = shared.upgrade() else {
+                        break;
+                    };
+                    shared.publish(&event);
+                }
+            });
+        }
         // Every change to the Library, whoever made it: a client's command,
         // or the front end this service shares the core with. The core calls
         // this under its own lock, so the change is only queued here.
@@ -402,6 +419,13 @@ impl Shared {
             crate::tracks::TRACKS_GET | crate::tracks::TRACKS_QUERY => {
                 self.with_library(|library| crate::tracks::answer(library, request))?
             }
+            stems if crate::stems::answers(stems) => {
+                // Only the lookup takes the Library; a separation runs
+                // with it free.
+                crate::stems::answer(&self.stems, request, &|id| {
+                    self.with_library(|library| crate::stems::parent(library, id))?
+                })
+            }
             unknown => Err(ServiceError::new(
                 codes::UNKNOWN_COMMAND,
                 format!("unknown command: {unknown}"),
@@ -450,6 +474,8 @@ impl Shared {
         let _ = UnixStream::connect(&self.socket);
         // While the lock is still held, so this can only be our own socket.
         let _ = std::fs::remove_file(&self.socket);
+        // A separation in progress is abandoned; nothing of it is kept.
+        self.stems.cancel();
         // No more changes to send; the sending thread ends.
         drop(lock(&self.changes).take());
         // Waits for a command in progress, then closes the Library before

@@ -1,0 +1,104 @@
+//! The Sidecar (ADR 0001, ADR 0004): wreckordbox's own store beside the
+//! Library, holding what rekordbox has no place for. It is a folder with a
+//! small database of its own and the audio of the Stems; nothing here ever
+//! touches a rekordbox-format file.
+//!
+//! The store is general: it holds [`Fact`]s. A Fact attaches to the
+//! Library's track, with the [`Fingerprint`] of the track's audio recorded
+//! alongside, and has a kind, a value, a [`Source`], a confidence, the Run
+//! that made it and a time. Each [`Kind`] is declared a Judgement (follows
+//! the music) or a Measurement (tied to the exact audio, stale once it
+//! changes). [`stems`] is the first kind, a Measurement.
+//!
+//! - [`Sidecar::open`] opens (or makes) the store in a folder.
+//! - [`Sidecar::begin_run`], [`Sidecar::record`], [`Sidecar::facts`] and
+//!   [`Sidecar::mark_stale`] are the general interface a new kind uses.
+//! - [`Sidecar::record_stems`] and [`Sidecar::stems`] are the Stems kind.
+//! - [`fingerprint_file`] fingerprints a track's audio.
+//!
+//! There is no Ledger, Unwind or Projection here. A Fact is never changed
+//! or deleted once recorded, only marked stale or superseded, and carries
+//! its Run, so those can be added without rewriting what is stored.
+//!
+//! No dependency on the desktop framework, the Library service or any
+//! rekordbox-format crate.
+
+mod audio;
+mod fingerprint;
+pub mod stems;
+mod store;
+
+use std::path::{Path, PathBuf};
+
+pub use audio::{audio_info, AudioInfo};
+pub use fingerprint::{fingerprint_file, Fingerprint};
+pub use store::{Fact, Kind, Nature, NewFact, RunId, Sidecar, Source, SourceKind};
+
+/// The Sidecar's folder when nothing says otherwise: beside the Library's
+/// `master.db`, in the same folder.
+pub const FOLDER_NAME: &str = "wreckordbox-sidecar";
+
+/// Where the Sidecar of the Library at `master_db` lives by default:
+/// [`FOLDER_NAME`] in the folder that holds `master.db`.
+#[must_use]
+pub fn default_dir(master_db: &Path) -> PathBuf {
+    master_db
+        .parent()
+        .map_or_else(|| PathBuf::from(FOLDER_NAME), |dir| dir.join(FOLDER_NAME))
+}
+
+/// Why the Sidecar refused or failed.
+#[derive(Debug, thiserror::Error)]
+pub enum SidecarError {
+    #[error("{what} {}: {source}", path.display())]
+    Io {
+        what: &'static str,
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("the Sidecar's database failed: {0}")]
+    Db(#[from] rusqlite::Error),
+    /// The store was written by a newer wreckordbox.
+    #[error("the Sidecar at {} is version {found}; this wreckordbox reads up to version {supported}", path.display())]
+    Newer {
+        path: PathBuf,
+        found: u32,
+        supported: u32,
+    },
+    /// A kind already declared the other way.
+    #[error("{kind} is already declared a {declared}, so it cannot be recorded as a {asked}")]
+    KindConflict {
+        kind: String,
+        declared: Nature,
+        asked: Nature,
+    },
+    /// A Fact that cannot be recorded as it stands.
+    #[error("{0}")]
+    Invalid(String),
+    /// An audio file whose length or format cannot be read.
+    #[error("cannot read {} as audio: {why}", path.display())]
+    Audio { path: PathBuf, why: String },
+    /// A Stem that is not exactly as long as its parent.
+    #[error("the {role} Stem is {samples} samples long and its parent is {parent}; a Stem must be exactly as long as its parent")]
+    StemLength {
+        role: stems::Role,
+        samples: u64,
+        parent: u64,
+    },
+    /// A set that is not exactly one Stem for each of the four roles.
+    #[error("a Stem set is one Stem each for vocals, other, bass and drums: {0}")]
+    StemSet(String),
+}
+
+pub type Result<T> = std::result::Result<T, SidecarError>;
+
+pub(crate) fn io<'a>(
+    what: &'static str,
+    path: &'a Path,
+) -> impl FnOnce(std::io::Error) -> SidecarError + 'a {
+    move |source| SidecarError::Io {
+        what,
+        path: path.to_path_buf(),
+        source,
+    }
+}

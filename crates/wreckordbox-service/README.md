@@ -17,6 +17,8 @@ Read the crate docs in [`src/lib.rs`](src/lib.rs), then [`src/protocol.rs`](src/
 | [`library.rs`](src/library.rs) | What the service owns of the Library: an `rbl_library::LibraryCore` (index, generation, the single edit path). Queries and edits. |
 | [`server.rs`](src/server.rs) | `Service`: the Library's lock, the open Library, the socket, command dispatch, events. |
 | [`client.rs`](src/client.rs) | `Client`: connect, call, subscribe; starting a service on demand. |
+| [`stems.rs`](src/stems.rs) | The `stems.*` commands: the service's Sidecar, and the one separation that may be running. |
+| [`separation.rs`](src/separation.rs) | The separation engine as a child process, spoken to over its JSON-lines protocol. |
 
 ## Contracts and safety
 
@@ -30,6 +32,8 @@ Read the crate docs in [`src/lib.rs`](src/lib.rs), then [`src/protocol.rs`](src/
 - The window hosts the service while it is open (`Service::host`): the service runs on the window's own `LibraryCore`, so there is one in-memory Library and one generation, and a client's edit borrows the window's `rbl_library::Host`. Until the window has read the Library, commands answer `library_loading`.
 - A window that starts while a service is running by itself asks it to stop (the `stop` command) and takes its place, so the window is the one writer while it is open; its other commands still write in its own process. A service the window hosts answers `stop` with `stop_refused`, and so a second window on the same Library cannot become a writer.
 - The process hosting a service calls it with `Service::call`, through the same dispatch as a socket client's command. `Service::events` gives it the changes clients made, which it has not seen; its own changes are not repeated to it. `Service::stopped` is how it learns the service has gone.
+- The service owns the Sidecar (`wreckordbox-sidecar`) as it owns the Library, by itself or hosted: `wreckordbox-sidecar/` beside `master.db` unless `WRECKORDBOX_SIDECAR_DIR` names another folder. It is opened by the first `stems.*` command. Recording Stems never writes to the Library and sends no `library_changed`; it sends `sidecar_changed`.
+- `stems.separate` runs the separation engine (`WRECKORDBOX_SEPARATION_COMMAND`, else the checkout's `separation-engine/.venv`) on a thread of its own, holding no lock on the Library. The command answers when the separation is done, `stems_progress` events go to subscribed clients meanwhile, a client that leaves stops nothing, a second request for the same track joins the wait, and one for another track answers `separation_busy`. Nothing reaches the Sidecar until the finished Stems are checked and recorded in one step; a service that stops kills the engine and keeps nothing.
 - Add a command in one place: a name in `protocol::commands` and an arm in `Shared::dispatch`.
 
 ## Run focused checks

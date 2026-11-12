@@ -1,0 +1,26 @@
+[package]
+name = "wreckordbox-sidecar"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The Sidecar: wreckordbox's own store of Facts beside the Library, with Stems as its first kind."
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+# The Sidecar's own small database. The same build of SQLite the Library
+# crates use, so the workspace compiles one; the Sidecar's file is plain.
+rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
+# The fingerprint of a track's audio.
+blake3 = "1"
+# Only to find the audio inside a file (for the fingerprint) and to read a
+# Stem's length; nothing is decoded. The formats `rbl-audio` reads.
+symphonia = { version = "0.5", default-features = false, features = ["mp3", "aac", "alac", "isomp4", "flac", "wav", "aiff", "pcm", "adpcm"] }
+
+[dev-dependencies]
+tempfile = "3"

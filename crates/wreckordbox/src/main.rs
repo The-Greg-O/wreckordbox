@@ -6,6 +6,7 @@
 
 mod mytag_edits;
 mod reading;
+mod stems;
 mod tracks;
 
 use std::fmt::Write as _;
@@ -61,6 +62,11 @@ enum Commands {
     History {
         #[command(subcommand)]
         command: reading::HistoryCommands,
+    },
+    /// Separate a track into Stems, kept in the Sidecar beside the Library.
+    Stems {
+        #[command(subcommand)]
+        command: stems::StemCommands,
     },
     /// Run the Library service in the foreground until interrupted.
     ///
@@ -194,6 +200,9 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
         Commands::Tracks {
             command: TrackCommands::Query(args),
         } => print(&tracks::query(&mut connect(&config)?, args, cli.json)?),
+        Commands::Stems { command } => {
+            print(&stems::run(&mut connect(&config)?, cli.json, command)?);
+        }
         Commands::Serve { spawned: true } => {
             return Ok(if wreckordbox_service::serve_spawned(config) {
                 ExitCode::SUCCESS
