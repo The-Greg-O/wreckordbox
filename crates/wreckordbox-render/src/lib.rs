@@ -8,10 +8,12 @@ mod encode;
 #[doc(hidden)]
 pub mod publish;
 mod source;
+mod stems;
 
 use std::path::PathBuf;
 
 pub use source::{MemorySource, Source, TrackSource};
+pub use stems::{Kept, MutantSource, StemSum, Stems};
 
 /// What to do to the audio. The default is nothing.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -97,6 +99,22 @@ pub enum RenderError {
     NoReplaceUnsupported(PathBuf),
     #[error("the source holds no audio")]
     Empty,
+    #[error("a Stem edit needs the track's Stems, and there are none")]
+    StemsMissing,
+    #[error("no Stem is kept, so there is nothing to render")]
+    NothingKept,
+    #[error("the Stem {stem} is {found} frames long, not its parent's {expected}")]
+    StemLength {
+        stem: PathBuf,
+        expected: u64,
+        found: u64,
+    },
+    #[error("the Stem {stem} is at {found} Hz, not {expected} Hz like the others")]
+    StemRate {
+        stem: PathBuf,
+        expected: u32,
+        found: u32,
+    },
     #[error("the stretcher failed: {0}")]
     Stretch(rbl_deck::OfflineError),
     #[error(transparent)]
