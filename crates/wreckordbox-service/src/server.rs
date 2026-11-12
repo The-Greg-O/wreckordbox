@@ -527,6 +527,11 @@ impl Shared {
                     })
                 })
             }
+            crate::standing::FACTS_STANDING => {
+                crate::standing::answer(&self.stems, request, &|id| {
+                    self.with_library(|library| crate::stems::parent(library, id))?
+                })
+            }
             facts if crate::facts::answers(facts) => {
                 // The Sidecar's, not the Library's: the Library is only
                 // read, to find the track.

@@ -945,7 +945,10 @@ impl Keeper {
             Target::Window => None,
             Target::Joined { run, .. } => Some(run),
             Target::Own { made, .. } => {
-                if let (Some(run), Ok(sidecar)) = (made, self.stems.sidecar()) {
+                // Do not open a writer for a refused or unchanged command.
+                if let Some((run, sidecar)) =
+                    made.and_then(|run| self.stems.sidecar().ok().map(|sidecar| (run, sidecar)))
+                {
                     let outcome = match scope.entries {
                         1 => "1 change".to_owned(),
                         count => format!("{count} changes"),

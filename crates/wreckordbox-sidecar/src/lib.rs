@@ -46,6 +46,7 @@ mod fingerprint;
 mod kinds;
 pub mod ledger;
 pub mod mutants;
+pub mod precedence;
 pub mod stems;
 mod store;
 pub mod tag_schema;
