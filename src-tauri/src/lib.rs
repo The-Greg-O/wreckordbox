@@ -564,6 +564,8 @@ pub fn run() {
             commands::disable_read_only,
             new_library::library_problem,
             service_host::service_problem,
+            service_host::library_protection,
+            service_host::record_library_protection,
             new_library::create_library,
             new_library::use_default_library,
             new_library::database_drives,

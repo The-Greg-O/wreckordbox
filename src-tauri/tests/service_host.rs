@@ -69,7 +69,27 @@ fn window() -> Window {
     fixture::write_options_json(&dir.path().join("options.json"), location.master_db.to_str().unwrap(), &location.passphrase).unwrap();
     std::fs::create_dir_all(dir.path().join("home")).unwrap();
     let (app, changes, stopped) = app_on(&dir, &location);
-    Window { dir, app, location, changes, stopped }
+    let window = Window { dir, app, location, changes, stopped };
+    // As on the machine of a DJ who edits: Library Protection is off.
+    window.protect(false);
+    window
+}
+
+/// A window that is hosting the service and has not read the Library yet,
+/// as the app is between starting and showing its tracks.
+fn loading_window() -> Window {
+    let dir = tempfile::tempdir().unwrap();
+    let library = dir.path().join("library");
+    std::fs::create_dir_all(&library).unwrap();
+    let location = fixture::build(&library, Shape { tracks: 5, ..Shape::default() }).unwrap();
+    fixture::write_options_json(&dir.path().join("options.json"), location.master_db.to_str().unwrap(), &location.passphrase).unwrap();
+    std::fs::create_dir_all(dir.path().join("home")).unwrap();
+    let app = tauri::test::mock_app();
+    app.manage(Arc::new(AppState::with_backups(dir.path().join("backups"))));
+    let window = Window { dir, app, location, changes: Arc::default(), stopped: Arc::default() };
+    window.protect(false);
+    window.host().unwrap();
+    window
 }
 
 fn app_on(
@@ -96,6 +116,14 @@ fn app_on(
     (app, changes, stopped)
 }
 
+fn finished(output: std::process::Output) -> Run {
+    Run {
+        ok: output.status.success(),
+        stdout: String::from_utf8(output.stdout).unwrap(),
+        stderr: String::from_utf8(output.stderr).unwrap(),
+    }
+}
+
 fn run<T>(fut: impl std::future::Future<Output = T>) -> T {
     tauri::async_runtime::block_on(fut)
 }
@@ -119,6 +147,21 @@ impl Window {
         service_host::host_with(self.app.handle(), &self.location, &self.config())
     }
 
+    /// Turns Library Protection on or off, as the window records it for
+    /// the service: a file in the folder the two share.
+    fn protect(&self, on: bool) {
+        let state_dir = self.dir.path().join("backups");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        std::fs::write(state_dir.join("library-protection.json"), format!("{{\"protect_library\":{on}}}")).unwrap();
+    }
+
+    /// Reads the Library, as the app does once it is hosting.
+    fn load(&self) {
+        let db = rbl_db::Library::open(self.location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
+        let (index, _) = rbl_index::load(&db).unwrap();
+        self.state().set_library(index, false, db.schema().db_version, 0, self.location.clone());
+    }
+
     fn state(&self) -> State<'_, Arc<AppState>> {
         self.app.state::<Arc<AppState>>()
     }
@@ -139,7 +182,18 @@ impl Window {
     /// The real command, with this window's Library and runtime directory
     /// and nothing else of the machine's.
     fn cli(&self, args: &[&str]) -> Run {
-        let output = Command::new(wreckordbox())
+        self.cli_waiting(None, args)
+    }
+
+    /// The command, told how many seconds to wait for a window that is
+    /// still reading the Library (its own bound when `None`).
+    fn cli_waiting(&self, loading_wait_secs: Option<u32>, args: &[&str]) -> Run {
+        finished(self.command(loading_wait_secs, args).output().unwrap())
+    }
+
+    fn command(&self, loading_wait_secs: Option<u32>, args: &[&str]) -> Command {
+        let mut command = Command::new(wreckordbox());
+        command
             .env_clear()
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("HOME", self.dir.path().join("home"))
@@ -149,14 +203,13 @@ impl Window {
             .env("WRECKORDBOX_RUNTIME_DIR", self.dir.path().join("run"))
             .env("WRECKORDBOX_IDLE_EXIT_SECS", "30")
             .stdin(Stdio::null())
-            .args(args)
-            .output()
-            .unwrap();
-        Run {
-            ok: output.status.success(),
-            stdout: String::from_utf8(output.stdout).unwrap(),
-            stderr: String::from_utf8(output.stderr).unwrap(),
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .args(args);
+        if let Some(secs) = loading_wait_secs {
+            command.env("WRECKORDBOX_LOADING_WAIT_SECS", secs.to_string());
         }
+        command
     }
 
     fn listed_rating(&self, id: &str) -> u64 {
@@ -311,6 +364,124 @@ fn closing_the_window_lets_go_of_the_library_without_alarm() {
     let status = window.cli(&["--json", "status"]).json();
     assert_ne!(status["pid"], std::process::id());
     let _ = Command::new("kill").arg(status["pid"].to_string()).status();
+}
+
+#[test]
+fn a_command_sent_while_the_window_is_still_reading_the_library_waits_and_succeeds() {
+    let window = loading_window();
+    let id = track_id(1);
+
+    let mut command = window.command(None, &["--json", "tracks", "rate", &id, "4"]).spawn().unwrap();
+    // Long enough that the command has been answered "loading" first.
+    std::thread::sleep(Duration::from_millis(700));
+    assert!(command.try_wait().unwrap().is_none(), "the command did not wait for the Library");
+    window.load();
+    let rated = finished(command.wait_with_output().unwrap());
+
+    assert_eq!(rated.json()["rating"], 4);
+    assert_eq!(window.rating(&id), 4);
+}
+
+#[test]
+fn a_command_gives_up_with_library_loading_when_the_window_takes_too_long() {
+    let window = loading_window();
+    wreckordbox();
+    let started = Instant::now();
+
+    let run = window.cli_waiting(Some(1), &["--json", "tracks", "list"]);
+
+    assert!(!run.ok);
+    let error: serde_json::Value = serde_json::from_str(&run.stderr).unwrap();
+    assert_eq!(error["error"]["code"], codes::LIBRARY_LOADING);
+    let waited = started.elapsed();
+    assert!(waited >= Duration::from_secs(1), "gave up after {waited:?}, before its bound");
+    assert!(waited < Duration::from_secs(5), "took {waited:?} to give up on a bound of 1 s");
+}
+
+#[test]
+fn a_change_from_the_command_is_refused_while_the_windows_library_protection_is_on() {
+    let window = window();
+    window.host().unwrap();
+    window.protect(true);
+    let id = track_id(1);
+    let before = window.generation();
+
+    let rate = window.cli(&["--json", "tracks", "rate", &id, "4"]);
+    let assign = window.cli(&["--json", "mytags", "assign", fixture::MY_TAG_PEAK, &id]);
+
+    for run in [&rate, &assign] {
+        assert!(!run.ok);
+        let error: serde_json::Value = serde_json::from_str(&run.stderr).unwrap();
+        assert_eq!(error["error"]["code"], "library_protected");
+        // The window's own words (`refusal(true)` in `src/lib/menu.ts`).
+        assert_eq!(error["error"]["message"], "Editing is locked by Library Protection. Turn it off in Preferences to edit.");
+    }
+    assert_eq!(window.rating(&id), 0);
+    let index = window.state().library().unwrap();
+    assert!(index.my_tag_keys(index.row_of(&id).unwrap() as usize).is_empty());
+    assert_eq!(window.generation(), before);
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(window.changes.lock().unwrap().is_empty(), "the interface was told of a change that was refused");
+    // Reading is untouched.
+    assert_eq!(window.listed_rating(&id), 0);
+    assert!(window.cli(&["mytags", "list"]).ok);
+
+    // Off again, the same commands are done.
+    window.protect(false);
+    window.cli(&["tracks", "rate", &id, "4"]).succeeded();
+    window.cli(&["mytags", "assign", fixture::MY_TAG_PEAK, &id]).succeeded();
+    assert_eq!(window.rating(&id), 4);
+}
+
+#[test]
+fn protection_turned_off_from_the_command_reaches_the_interface_and_edits_go_through() {
+    let window = window();
+    window.host().unwrap();
+    window.protect(true);
+    let heard: Heard<bool> = Arc::default();
+    let told = Arc::clone(&heard);
+    window.app.listen("library-protection:changed", move |event| {
+        told.lock().unwrap().push(serde_json::from_str::<bool>(event.payload()).unwrap());
+    });
+    let id = track_id(1);
+    assert!(!window.cli(&["tracks", "rate", &id, "4"]).ok);
+
+    let off = window.cli(&["--json", "protection", "off"]).json();
+
+    assert_eq!(off, serde_json::json!({ "protect_library": false, "previous": true }));
+    // The interface makes it its own preference, so the status bar and the
+    // window's own edits agree with the command.
+    eventually("library-protection:changed", || !heard.lock().unwrap().is_empty());
+    assert_eq!(*heard.lock().unwrap(), [false]);
+    window.cli(&["tracks", "rate", &id, "4"]).succeeded();
+    assert_eq!(window.rating(&id), 4);
+}
+
+#[test]
+fn the_switch_the_dj_turns_in_preferences_is_the_one_the_command_obeys() {
+    let window = window();
+    window.host().unwrap();
+    let id = track_id(1);
+
+    // What the interface calls when the preference changes.
+    service_host::record_library_protection(window.state(), true).unwrap();
+
+    assert_eq!(service_host::library_protection(window.state()), Some(true));
+    assert_eq!(window.cli(&["--json", "protection"]).json()["protect_library"], true);
+    assert!(!window.cli(&["tracks", "rate", &id, "4"]).ok);
+    assert_eq!(window.rating(&id), 0);
+
+    service_host::record_library_protection(window.state(), false).unwrap();
+    window.cli(&["tracks", "rate", &id, "4"]).succeeded();
+    assert_eq!(window.rating(&id), 4);
+}
+
+#[test]
+fn a_window_on_a_machine_with_nothing_recorded_is_told_so() {
+    let window = window();
+    std::fs::remove_file(window.dir.path().join("backups/library-protection.json")).unwrap();
+
+    assert_eq!(service_host::library_protection(window.state()), None);
 }
 
 impl Run {

@@ -15,6 +15,7 @@ use rbl_db::{DbError, LibraryLocation, OpenMode};
 use rbl_index::{SortColumn, TrackFilter, TrackSource, ViewSpec};
 use rbl_library::{History, Host, LibraryCore, NoHost, Touched};
 
+use crate::protection;
 use crate::protocol::{
     codes, ChangeKind, LibraryChanged, RateTrack, RatedTrack, ServiceError, Track, TrackList,
     TrackQuery, DEFAULT_TRACK_LIMIT,
@@ -130,6 +131,48 @@ impl OpenLibrary {
         })
     }
 
+    /// The service's one way to the Library core's edit path: every command
+    /// that changes the Library comes through here, whatever it changes, so
+    /// this is where Library Protection is enforced. While it is on the
+    /// change is refused before the core is asked, with nothing written and
+    /// no client told. Never call `core.edit` or the core's other writing
+    /// methods from anywhere else in this crate.
+    ///
+    /// Reading does not come this way, and neither does writing to the
+    /// Sidecar, which is not the Library.
+    fn change<T>(
+        &self,
+        touched: Touched,
+        action: impl FnOnce(&mut rbl_db::write::Writer) -> Result<T, DbError>,
+    ) -> Result<(T, rbl_library::Change), ServiceError> {
+        if self.protected() {
+            return Err(protection::refusal());
+        }
+        self.core
+            .edit(&*self.host, History::Outside, touched, action)
+            .map_err(|e| edit_error(&e))
+    }
+
+    /// Whether Library Protection is on: what the window last recorded in
+    /// the folder it shares with the service, and on when it has recorded
+    /// nothing.
+    pub(crate) fn protected(&self) -> bool {
+        protection::is_on(self.core.recovery_dir())
+    }
+
+    /// Turns Library Protection on or off for the service and the window
+    /// alike, and answers what it was.
+    pub(crate) fn protect(&self, on: bool) -> Result<bool, ServiceError> {
+        let previous = self.protected();
+        protection::store(self.core.recovery_dir(), on).map_err(|e| {
+            ServiceError::new(
+                codes::SERVICE_FAILED,
+                format!("could not record Library Protection: {e}"),
+            )
+        })?;
+        Ok(previous)
+    }
+
     /// Makes `action`'s writes through the Library's single edit path (the
     /// write guards, the writes, the re-read of what they `touched`), and
     /// answers its result beside what to tell every client. Outside the edit
@@ -139,17 +182,8 @@ impl OpenLibrary {
         touched: Touched,
         action: impl FnOnce(&mut rbl_db::write::Writer) -> Result<T, DbError>,
     ) -> Result<(T, LibraryChanged), ServiceError> {
-        let (value, change) = self
-            .core
-            .edit(&*self.host, History::Outside, touched, action)
-            .map_err(|e| edit_error(&e))?;
-        let changed = LibraryChanged {
-            kind: match change.kind {
-                rbl_library::ChangeKind::Library => ChangeKind::Library,
-                rbl_library::ChangeKind::TagList => ChangeKind::TagList,
-            },
-            generation: change.generation,
-        };
+        let (value, change) = self.change(touched, action)?;
+        let changed = LibraryChanged::from(change);
         Ok((value, changed))
     }
 
@@ -183,15 +217,9 @@ impl OpenLibrary {
         let previous = track(&before, row);
         let id = previous.id.clone();
         let stars = edit.rating;
-        let (_recorded, change) = self
-            .core
-            .edit(
-                &*self.host,
-                History::Outside,
-                Touched::Metadata(vec![id.clone()]),
-                |writer| writer.set_rating_with_undo(&id, stars),
-            )
-            .map_err(|e| edit_error(&e))?;
+        let (_recorded, change) = self.change(Touched::Metadata(vec![id.clone()]), |writer| {
+            writer.set_rating_with_undo(&id, stars)
+        })?;
         // Read back from the index the edit refreshed, not assumed.
         let after = self.index()?;
         let rating = after

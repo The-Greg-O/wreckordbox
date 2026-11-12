@@ -2999,6 +2999,10 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     // The mock has no Library service to lose.
     onServiceStopped: () => () => {},
     serviceProblem: () => wait<string | null>(null),
+    // Nothing is recorded outside the mock's window.
+    libraryProtection: () => wait<boolean | null>(null),
+    recordLibraryProtection: () => wait(undefined),
+    onLibraryProtectionChanged: () => () => {},
     createLibrary: async () => {
       await wait(undefined);
       libraryFound();
