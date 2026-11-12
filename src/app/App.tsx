@@ -3794,6 +3794,7 @@ function AppBody() {
             <IntakeView
               queue={queue} onQueue={shellTree.showQueue} counts={intakeCounts}
               loadedTrackId={playerTrack?.id ?? null} onLoad={loadFromIntake} onProblem={reportIntakeProblem}
+              onEdit={writeEdit} protectLibrary={advancedPrefs.protectLibrary} platform={platform} keyOverrides={keyOverrides}
             />
           )}
           stick={selectedDevice ? library : undefined}

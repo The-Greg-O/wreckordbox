@@ -368,3 +368,52 @@ fn a_title_an_agent_proposed_shows_as_needed_until_the_dj_records_one() {
     assert_eq!(page["tracks"][0]["needs"][0], "energy");
     assert_eq!(page["tracks"][0]["suggestions"], json!([]));
 }
+
+#[test]
+fn intake_colours_lists_the_djs_labels_and_which_mean_clean_and_problem() {
+    let sandbox = prepared();
+
+    let colours = ok(&sandbox, &["intake", "colours"]);
+    assert_eq!(colours["colours"].as_array().unwrap().len(), 8);
+    assert_eq!(colours["clean"]["label"], "Clean");
+    assert_eq!(colours["problem"]["colour"], "Red");
+
+    assert_eq!(
+        text(&sandbox, &["intake", "colours"]).trim_end(),
+        "ID  COLOUR  LABEL    MEANS\n\
+         1   Pink    Buy\n\
+         2   Red     Problem  Problem\n\
+         3   Orange  Orange\n\
+         4   Yellow  Sample\n\
+         5   Green   Clean    Clean\n\
+         6   Aqua    Aqua\n\
+         7   Blue    Blue\n\
+         8   Purple  Delete"
+    );
+}
+
+#[test]
+fn intake_colour_takes_the_colour_labels_number_when_names_overlap() {
+    let sandbox = Sandbox::with_shape(Shape {
+        tracks: 2,
+        ..Shape::default()
+    });
+    // Red is called "Green" and Green is called "Clean".
+    sandbox.name_colours(&[(2, "Green"), (5, "Clean")]);
+    let id = fixture::track_id(0);
+
+    let ambiguous = sandbox.cli(&["intake", "colour", &id, "Green"]);
+    assert!(!ambiguous.status.success());
+
+    let set = ok(&sandbox, &["intake", "colour", &id, "--colour-id", "5"]);
+    assert_eq!(set["prep_colour"]["label"], "Clean");
+    assert_eq!(set["prep_colour"]["colour"], "Green");
+
+    let both = sandbox.cli(&["intake", "colour", &id, "Clean", "--colour-id", "5"]);
+    assert!(
+        !both.status.success(),
+        "a name and a number together are refused"
+    );
+    let neither = sandbox.cli(&["intake", "colour", &id]);
+    assert!(!neither.status.success(), "one of them is needed");
+}

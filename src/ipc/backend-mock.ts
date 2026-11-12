@@ -1872,6 +1872,34 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     },
   };
 
+  // Field writes (wbx-63): every one asked of the mock, in order
+  // (`__fieldWrites()`), and `__holdFieldWrites()` / `__releaseFieldWrites()`
+  // to keep them waiting, as a slow save.
+  const fieldWrites: { id: string; field: string; value: string }[] = [];
+  let holdingFields = false;
+  let heldFields: (() => void)[] = [];
+  const writeTrackField = edits.setTrackField.bind(edits);
+  edits.setTrackField = async (tracks, field, value, options) => {
+    for (const id of tracks) fieldWrites.push({ id, field, value });
+    if (holdingFields) await new Promise<void>((resolve) => { heldFields.push(resolve); });
+    return writeTrackField(tracks, field, value, options);
+  };
+  if (typeof window !== "undefined") {
+    const hooks = window as unknown as {
+      __fieldWrites: () => typeof fieldWrites;
+      __holdFieldWrites: () => void;
+      __releaseFieldWrites: () => void;
+    };
+    hooks.__fieldWrites = () => fieldWrites.map((write) => ({ ...write }));
+    hooks.__holdFieldWrites = () => { holdingFields = true; };
+    hooks.__releaseFieldWrites = () => {
+      holdingFields = false;
+      const waiting = heldFields;
+      heldFields = [];
+      for (const release of waiting) release();
+    };
+  }
+
   /*
    * Grids, per track: a steady grid at the row's own BPM, made on first ask
    * and held from then on so an edit sticks, with the session's undo and
@@ -2309,12 +2337,18 @@ export function createMockBackend(options: MockOptions = {}): Backend {
   const intake = createMockIntake({
     all, colors, tagsOf: (row) => detailsOf(row).myTags, categories: myTagCategories,
     gridLocked: (id) => gridStore.get(id)?.locked ?? false, wait, ready: () => ready,
+    setColour: (id, colour) => edits.setTrackColor([id], colour === null ? null : String(colour)),
   });
   if (typeof window !== "undefined") {
     // `__setPrepColour(id, colourId)` (0 for none): an edit as the Library list makes it.
     (window as unknown as { __setPrepColour: (id: string, colour: number) => Promise<unknown> }).__setPrepColour =
       (id, colour) => edits.setTrackColor([id], colour === 0 ? null : String(colour));
     // `__emitLibraryChanged(n)`: n changes announced at once, as a burst of an agent's edits.
+    // `__outsideEdit(id, field, value)` (wbx-63): a title, artist or Energy
+    // changed by someone else (the CLI, an agent), announced as any edit is.
+    (window as unknown as { __outsideEdit: (id: string, field: "title" | "artist" | "energy", value: string) => Promise<unknown> }).__outsideEdit =
+      // Not one of the window's own field writes: past `__fieldWrites` and any hold.
+      (id, field, value) => field === "energy" ? edits.setTrackRating([id], Number(value)) : writeTrackField([id], field, value);
     (window as unknown as { __emitLibraryChanged: (times: number) => void }).__emitLibraryChanged =
       (times) => { for (let i = 0; i < times; i += 1) void bump(false); };
   }
@@ -2322,6 +2356,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
   return {
     intakeQueue: intake.intakeQueue,
     intakeCounts: intake.intakeCounts,
+    intakeColours: intake.intakeColours,
+    intakeSetPrepColour: intake.intakeSetPrepColour,
     rekordboxBrowseSettings: () => Promise.resolve(null),
     librarySummary: () =>
       ready
