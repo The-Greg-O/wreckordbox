@@ -56,7 +56,7 @@ use std::path::{Path, PathBuf};
 pub use active_runs::{ActiveRun, ActiveRunsReader};
 pub use audio::{audio_info, AudioInfo};
 pub use facts_snapshot::{FactsReader, FactsSnapshot};
-pub use fingerprint::{fingerprint_file, Fingerprint};
+pub use fingerprint::{fingerprint_cached, fingerprint_file, known_fingerprint, Fingerprint};
 pub use kinds::{Declaration, Kinds, ValueType, KINDS_FILE};
 pub use store::{
     Fact, Kind, Nature, NewFact, Run, RunId, Sidecar, Source, SourceKind, SCHEMA_VERSION,

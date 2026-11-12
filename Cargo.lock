@@ -7124,6 +7124,7 @@ dependencies = [
  "rusqlite",
  "serde_json",
  "tempfile",
+ "wreckordbox-render",
  "wreckordbox-service",
  "wreckordbox-sidecar",
 ]

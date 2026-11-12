@@ -77,3 +77,38 @@ pub(super) fn rank(raw: &str) -> Option<u32> {
     };
     Some((wheel[pitch] - 1) * 2 + u32::from(!minor))
 }
+
+/// Transpose using exactly the same recognition as key sorting and filtering.
+/// Classic and Camelot spellings stay in their family, as does Open Key.
+pub(super) fn transpose(raw: &str, semitones: i64) -> Option<String> {
+    const MINOR_PITCH: [i64; 12] = [8, 3, 10, 5, 0, 7, 2, 9, 4, 11, 6, 1];
+    let rank = rank(raw)?;
+    let major = rank % 2 == 1;
+    let pitch = (MINOR_PITCH[usize::try_from(rank / 2).ok()?]
+        + if major { 3 } else { 0 }
+        + semitones.rem_euclid(12))
+    .rem_euclid(12);
+    let wheel = MINOR_PITCH
+        .iter()
+        .position(|p| (*p + if major { 3 } else { 0 }).rem_euclid(12) == pitch)?;
+    let text = raw.trim();
+    if text.starts_with(|c: char| c.is_ascii_digit()) {
+        let suffix = text
+            .chars()
+            .find(|c| !c.is_ascii_digit())?
+            .to_ascii_lowercase();
+        return Some(if matches!(suffix, 'm' | 'd') {
+            format!("{}{}", (wheel + 5) % 12 + 1, if major { 'd' } else { 'm' })
+        } else {
+            format!("{}{}", wheel + 1, if major { 'B' } else { 'A' })
+        });
+    }
+    Some(
+        if major {
+            super::MAJOR[wheel]
+        } else {
+            super::MINOR[wheel]
+        }
+        .to_owned(),
+    )
+}
