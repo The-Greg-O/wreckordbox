@@ -33,6 +33,15 @@ impl Window {
         Arc::clone(self.app.state::<Arc<AppState>>().inner())
     }
 
+    /// Turns Library Protection on or off through the command the
+    /// Preferences window calls.
+    fn protect(&self, on: bool) {
+        let state = self.app.state::<Arc<AppState>>();
+        let now = tauri::async_runtime::block_on(service_host::set_library_protection(state, on))
+            .unwrap();
+        assert_eq!(now.protect_library, on);
+    }
+
     fn config(&self) -> Config {
         Config {
             runtime_dir: self.dir.path().join("run"),
@@ -92,16 +101,25 @@ fn the_counts_follow_an_edit_made_through_the_service() {
     let window = hosting_window();
     let state = window.state();
     assert_eq!(intake_view::counts(&state).unwrap()["intake"], 5);
+    let colour = || {
+        state
+            .with_service(|service| {
+                service.call(
+                    "tracks.set_prep_colour",
+                    json!({ "id": track_id(1), "prep_colour": "Green" }),
+                )
+            })
+            .unwrap()
+    };
 
-    let set = state
-        .with_service(|service| {
-            service.call(
-                "tracks.set_prep_colour",
-                json!({ "id": track_id(1), "prep_colour": "Green" }),
-            )
-        })
-        .unwrap()
-        .unwrap();
+    // Library Protection on: the edit is refused and the queue is unchanged.
+    window.protect(true);
+    let refused = colour().unwrap_err();
+    assert_eq!(refused.code, "library_protected");
+    assert_eq!(intake_view::counts(&state).unwrap()["intake"], 5);
+
+    window.protect(false);
+    let set = colour().unwrap();
     assert_eq!(set["changed"], true);
 
     assert_eq!(intake_view::counts(&state).unwrap()["intake"], 4);
