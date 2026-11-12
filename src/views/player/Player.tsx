@@ -105,6 +105,7 @@ import { WaveformDetail } from "./WaveformDetail";
 import { SimplePlayer } from "./SimplePlayer";
 import { CompactPlayer } from "./CompactPlayer";
 import { DetailPhrases, LARGE_PHRASE_H, LargePlayer, largePlayerStyles } from "./LargePlayer";
+import { IntakeCueRow } from "./IntakeCueRow";
 import { compactJumpBeats, compactJumpSizeId, type CompactJumpBeats } from "@/lib/compactPlayer";
 import { JumpMenu } from "./JumpMenu";
 import { VocalStrip } from "./VocalStrip";
@@ -1533,11 +1534,19 @@ export const Player = memo(function Player({
   // The Auto Beat Loop's length while it is the loop playing (#411); read at
   // press time, so `beatLoopOn` and `loopBeats`, declared below, are set by then.
   const beatLoopBeats = useEventCallback(() => (beatLoopOn ? loopBeats : null));
+  // The large face shows the last cue or grid write's failure under its pads
+  // (wbx-64) as well as passing it on; a new track starts clean.
+  const [writeFailure, setWriteFailure] = useState<string | null>(null);
+  useEffect(() => setWriteFailure(null), [track?.id]);
+  const reportWrite = useCallback((message: string | null) => {
+    setWriteFailure(message);
+    onError?.(message);
+  }, [onError]);
   const hot = useHotCues({
     trackId: playback.idle ? null : track?.id ?? null,
     cues, positionSeconds, seek, play: playFromCue, playing: deckPlaying, jumpAt, setLoop: playback.setLoop,
     activeLoop: playingLoop, beatLoopBeats, exitLoop: leaveLoop,
-    quantiseTo: quantize ? quantizeGrid : null, readOnly, onError,
+    quantiseTo: quantize ? quantizeGrid : null, readOnly, onError: reportWrite,
   });
   // The hooks own editability, so the disabled state and its explanation
   // must come from that same result. Keeping a second readOnly-only branch
@@ -1581,8 +1590,8 @@ export const Player = memo(function Player({
   // A save that fails leaves the saved grid as it was, so the deck goes back to it.
   const onGridError = useCallback((message: string | null) => {
     if (message !== null) setNudge(null);
-    onError?.(message);
-  }, [onError]);
+    reportWrite(message);
+  }, [reportWrite]);
   const gridEditor = useGridEditor({
     trackId: playback.idle ? null : track?.id ?? null,
     deck, state: gridState, setState: setGridState, positionMs, readOnly, onError: onGridError,
@@ -2402,6 +2411,26 @@ export const Player = memo(function Player({
           {track ? null : <span className={largePlayerStyles.blank}>No track loaded</span>}
           <span ref={detailHead} className={styles.playhead} data-testid="large-player-head" aria-hidden />
         </div>
+        <IntakeCueRow
+          at={hot.at}
+          press={hot.press}
+          clear={hot.clear}
+          canEdit={hot.canEdit}
+          editReason={hotCueEditReason}
+          padStyle={(cue) => cueStyle(undefined, cue, viewPrefs.hotCueColor)}
+          grid={{
+            bpmX100: gridEditor.tapBpmX100 ?? gridEditor.state?.bpmX100 ?? 0,
+            tapping: gridEditor.tapBpmX100 !== null,
+            canEdit: gridEditor.canEdit,
+            reason: !gridEditor.hasGrid ? "This track has no beat grid to edit"
+              : readOnly ? READ_ONLY_REASON
+                : gridEditor.state?.locked ? "The beat grid is locked" : "",
+            earlier: hold((repeat) => gridEditor.shift(-1, repeat)),
+            later: hold((repeat) => gridEditor.shift(1, repeat)),
+            tap: gridEditor.tap,
+          }}
+          failure={writeFailure}
+        />
       </LargePlayer>
     );
   }

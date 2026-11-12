@@ -33,6 +33,7 @@ import { fromServicePanel, fromServiceTagsSet } from "@/lib/tagPanel";
 import { referenceDeviceSettings } from "./mock-device-settings";
 import { createMockDeviceLibraries, type MockImportEntry } from "./mock-device-library";
 import { createMockIntake } from "./mock-intake";
+import { mockCueHooks } from "./mock-cue-pads";
 import { createMockTagPanel } from "./mock-tag-panel";
 import { keyLightRows } from "./mock-key-lights";
 import { FILTER_FIXTURE_SIZE, filterFixtureColors, filterFixtureMembers, filterFixtureRows, filterFixtureTags } from "./mock-filter-fixture";
@@ -1858,11 +1859,13 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       if (kind !== "memory" && !/^[A-P]$/.test(kind.hot)) {
         return refuse(`${JSON.stringify(kind.hot)} is not a hot cue slot rekordbox has`);
       }
+      const failing = cueHooks.refusal();
+      if (failing) return refuse(failing);
       const id = `cue-${nextCueId++}`;
-      cuesOf(track).push({
+      cueHooks.recorded(track, kind === "memory" ? "Set Memory Cue" : "Set Hot Cue", () => cuesOf(track).push({
         id, positionMs, outMs: 0, letter: kind === "memory" ? "" : kind.hot, memory: kind === "memory",
         colour: NO_COLOUR,
-      });
+      }));
       return cuesChanged(track, id);
     },
     addLoop: (track, kind, inMs, outMs) => {
@@ -1950,8 +1953,12 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     deleteCue: (cue) => {
       const found = findCue(cue);
       if (!found) return notFound(`no cue ${cue}`);
-      const list = cuesOf(found.track);
-      list.splice(list.indexOf(found.cue), 1);
+      const failing = cueHooks.refusal();
+      if (failing) return refuse(failing);
+      cueHooks.recorded(found.track, "Delete Cue", () => {
+        const list = cuesOf(found.track);
+        list.splice(list.indexOf(found.cue), 1);
+      });
       return cuesChanged(found.track, undefined);
     },
     gridEdit: (track, edit, options) => {
@@ -2237,6 +2244,24 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     for (const listener of cueListeners) listener(track);
     return wait(value);
   };
+  // wbx-64: a hot cue set or a cue deleted is an entry of the shared Undo
+  // history, as the shell's `edit_cues` records `LibraryEdit::Cues`.
+  const cueHooks = mockCueHooks({
+    cuesOf,
+    announce: (track) => { syncRow(track); for (const listener of cueListeners) listener(track); },
+    record: (label, undo, redo) => {
+      editUndo.push({ label, undo, redo });
+      editRedo.length = 0;
+      announceHistory();
+    },
+    grid: (track) => {
+      const held = gridOf(track);
+      if (!held) return null;
+      // The beat nearest 10 s: a nudge moves it, and none drops it off the start.
+      const near = held.beats.reduce((best, beat) => (Math.abs(beat.timeMs - 10_000) < Math.abs(best - 10_000) ? beat.timeMs : best), Number.POSITIVE_INFINITY);
+      return { beatMs: near, bpmX100: tempoX100(held.beats), locked: held.locked };
+    },
+  });
   // The shape a refused command arrives in: an `Error` whose `kind` is the
   // `AppErrorDto` kind, so a caller can tell a read-only refusal from a bug.
   const failed = (kind: AppErrorDto["kind"], message: string) =>
