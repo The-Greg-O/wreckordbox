@@ -275,3 +275,190 @@ fn removing_a_mutated_entry_in_the_window_removes_its_mutant_and_undo_brings_it_
     assert_eq!(hosted.live().len(), 2);
     let _ = hosted.location.clone();
 }
+
+#[test]
+fn deleting_a_playlist_in_the_window_removes_its_mutants_and_undo_brings_them_back() {
+    let _turn = turn();
+    let hosted = hosted();
+    let entries = hosted.entries(&hosted.playlist);
+    let first = hosted.mutate(&entries[0], json!({}));
+    let third = hosted.mutate(&entries[2], json!({}));
+
+    let playlist = hosted.playlist.clone();
+    hosted.window("Delete Playlist", move |writer| {
+        writer
+            .delete_playlist_with_undo(&playlist)
+            .map(|(_, edit)| LibraryEdit::DeletePlaylist(edit))
+    });
+    assert!(hosted.live().is_empty());
+    let mut heard = hosted.drain();
+    heard.sort();
+    assert_eq!(
+        heard,
+        vec![(first, "detached".to_owned()), (third, "detached".to_owned())]
+    );
+
+    hosted.undo();
+    let mut live = hosted.live();
+    live.sort();
+    let mut expected = vec![
+        (entries[0].clone(), hosted.tracks[0].clone()),
+        (entries[2].clone(), hosted.tracks[2].clone()),
+    ];
+    expected.sort();
+    assert_eq!(live, expected);
+    assert_eq!(hosted.mutant(third)["mutant"]["position"], 3);
+
+    hosted.redo();
+    assert!(hosted.live().is_empty());
+    assert_eq!(hosted.history(first), ["created", "detached", "reattached", "detached"]);
+}
+
+#[test]
+fn a_mutant_removed_on_purpose_does_not_come_back_with_its_entry() {
+    let _turn = turn();
+    let hosted = hosted();
+    let entries = hosted.entries(&hosted.playlist);
+    let mutant = hosted.mutate(&entries[1], json!({}));
+    hosted
+        .service
+        .call(
+            commands::MUTANTS_REMOVE,
+            json!({ "id": mutant, "source": { "kind": "dj" } }),
+        )
+        .unwrap();
+
+    let playlist = hosted.playlist.clone();
+    let track = hosted.tracks[1].clone();
+    hosted.window("Remove Tracks from Playlist", move |writer| {
+        writer
+            .remove_tracks_with_undo(&playlist, &[track])
+            .map(|(_, edit)| LibraryEdit::RemovePlaylistTracks(edit))
+    });
+    hosted.undo();
+    assert!(hosted.live().is_empty());
+    assert_eq!(hosted.history(mutant), ["created", "removed"]);
+}
+
+#[test]
+fn a_replacement_import_carries_each_mutant_to_its_tracks_new_entry_and_undo_and_redo_follow() {
+    let _turn = turn();
+    let hosted = hosted();
+    let entries = hosted.entries(&hosted.playlist);
+    let kept = hosted.mutate(&entries[0], json!({}));
+    let dropped = hosted.mutate(&entries[1], json!({}));
+
+    // An XML import's "Replace existing": the playlist now holds tracks 3,
+    // 1 and 4, every entry written afresh.
+    let playlist = hosted.playlist.clone();
+    let contents = [
+        hosted.tracks[2].clone(),
+        hosted.tracks[0].clone(),
+        fixture::track_id(0),
+    ];
+    hosted.window("Import", move |writer| {
+        let (_, replaced) = writer.set_tracks_with_undo(&playlist, &contents)?;
+        Ok(LibraryEdit::ReplacePlaylistContents(vec![replaced.unwrap()]))
+    });
+    let new_entries = hosted.entries(&hosted.playlist);
+    assert!(new_entries.iter().all(|entry| !entries.contains(entry)));
+
+    // Track 1's Mutant is now on track 1's new entry, at position 2; track
+    // 2 left the playlist and so did its Mutant.
+    let live = hosted.live();
+    assert_eq!(live, vec![(new_entries[1].clone(), hosted.tracks[0].clone())]);
+    let carried = hosted
+        .service
+        .call(commands::MUTANTS_GET, json!({ "entry": new_entries[1] }))
+        .unwrap();
+    assert_eq!(carried["mutant"]["position"], 2);
+    assert_eq!(carried["history"][0]["action"], "carried");
+    let carried = carried["mutant"]["id"].as_i64().unwrap();
+    assert_eq!(hosted.mutant(kept)["mutant"]["removed"], true);
+    assert_eq!(hosted.mutant(dropped)["mutant"]["removed"], true);
+
+    hosted.undo();
+    let mut live = hosted.live();
+    live.sort();
+    let mut expected = vec![
+        (entries[0].clone(), hosted.tracks[0].clone()),
+        (entries[1].clone(), hosted.tracks[1].clone()),
+    ];
+    expected.sort();
+    assert_eq!(live, expected);
+    assert_eq!(hosted.mutant(carried)["mutant"]["removed"], true);
+
+    hosted.redo();
+    assert_eq!(live_ids(&hosted), vec![carried]);
+    hosted.undo();
+    let mut back = live_ids(&hosted);
+    back.sort();
+    assert_eq!(back, vec![kept, dropped]);
+}
+
+#[test]
+fn reordering_by_entry_or_by_track_leaves_every_mutant_on_its_entry() {
+    let _turn = turn();
+    let hosted = hosted();
+    let entries = hosted.entries(&hosted.playlist);
+    let mutant = hosted.mutate(&entries[0], json!({}));
+
+    let playlist = hosted.playlist.clone();
+    let order = vec![entries[2].clone(), entries[1].clone(), entries[0].clone()];
+    hosted.window("Reorder Playlist", move |writer| {
+        rbl_library::entry_order::reorder(writer, &playlist, &order)
+            .map(LibraryEdit::ReorderEntries)
+    });
+    let moved = hosted.mutant(mutant);
+    assert_eq!(moved["mutant"]["entry_id"], entries[0].as_str());
+    assert_eq!(moved["mutant"]["position"], 3);
+    hosted.undo();
+    assert_eq!(hosted.mutant(mutant)["mutant"]["position"], 1);
+    assert_eq!(hosted.history(mutant), ["created"]);
+    assert!(hosted.drain().is_empty());
+}
+
+#[test]
+fn removing_a_track_from_the_collection_in_the_window_removes_its_mutants() {
+    let _turn = turn();
+    let hosted = hosted();
+    let entries = hosted.entries(&hosted.playlist);
+    let mutant = hosted.mutate(&entries[1], json!({}));
+    let other = hosted.mutate(&entries[2], json!({}));
+
+    let track = hosted.tracks[1].clone();
+    // As the window's Remove from Collection: the write, then the history
+    // emptied under the command's name, both under the gate.
+    {
+        let _gate = hosted.core.edit_gate().lock();
+        hosted
+            .core
+            .write_then(
+                &NoHost,
+                rbl_library::History::Caller,
+                |writer| writer.delete_tracks(&[track]).map(drop),
+                |_, ()| Ok(()),
+            )
+            .unwrap();
+        hosted
+            .core
+            .history()
+            .lock()
+            .permanent(Some("remove_from_collection"));
+    }
+
+    assert_eq!(hosted.mutant(mutant)["mutant"]["removed"], true);
+    assert_eq!(hosted.mutant(other)["mutant"]["removed"], false);
+}
+
+fn live_ids(hosted: &Hosted) -> Vec<i64> {
+    hosted
+        .service
+        .call(commands::MUTANTS_LIST, json!({}))
+        .unwrap()["mutants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["id"].as_i64().unwrap())
+        .collect()
+}
