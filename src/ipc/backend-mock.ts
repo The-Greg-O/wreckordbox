@@ -17,7 +17,7 @@ import { shiftByGridBeats } from "@/lib/player";
 
 import type {
   AppErrorDto, Backend, Backup, BackupProgress, BackupSizes, Cue, DeckEvent, Device, DeviceSettings, Edits, ExplorerRoot, ExportReport,
-  DatabaseDrive, EditHistoryState, FilterValues, GridState, LibraryProblem, LibrarySummary, Limiter, LinkPeerSeen, LinkStatus, RelatedCriterion, RowDto, SortKey,
+  DatabaseDrive, EditHistoryState, FilterValues, GridState, LibraryProblem, LibrarySummary, Limiter, LinkPeerSeen, LinkStatus, RelatedCriterion, RowDto, RowMyTag, SortKey,
   SelectionDetails, SmartRule, StickDefaults, SyncPlaylist, SyncProgress, Tick, TrackDetails, TrackField,
   PreferencesRequest, RelocateSearch, ExportProgress,
   DeckId, StickOutline, TrackFilter, TreeNode, ViewHandle, ViewSpec, WaveformKind, LogLine, LogLevel,
@@ -761,6 +761,17 @@ export function createMockBackend(options: MockOptions = {}): Backend {
   };
 
   /**
+   * Every rating write asked of the mock, refused or not, and a track's
+   * rating as the mock holds it: what a test checks an edit really landed on.
+   */
+  const ratingWrites: { ids: string[]; stars: number; refused: boolean }[] = [];
+  if (typeof window !== "undefined") {
+    const hooks = window as unknown as { __ratingWrites: typeof ratingWrites; __ratingOf: (id: string) => number };
+    hooks.__ratingWrites = ratingWrites;
+    hooks.__ratingOf = (id) => all.find((row) => row.id === id)?.rating ?? -1;
+  }
+
+  /**
    * One edit over several tracks, recorded as one step of history the way
    * the real backend records a multiple selection's edit.
    */
@@ -1424,6 +1435,11 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     },
     setTrackRating: (tracks, stars) => {
       const after = Math.max(0, Math.min(5, stars));
+      // `?refuseRatingWrite=1`: the Library refuses the write, as a real one
+      // can (rekordbox took the database, the disk is full).
+      const refused = readFlagFromUrl("refuseRatingWrite");
+      ratingWrites.push({ ids: [...tracks], stars: after, refused });
+      if (refused) return refuse("That could not be saved.");
       return recordTrackEdits(tracks, (track) => {
         const row = all.find((r) => r.id === track);
         const before = row?.rating ?? 0;
@@ -2301,6 +2317,12 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     },
 
     fetchRows: (viewId, offset, len, extraColumns = []) => {
+      // `myTags`: each of the track's MyTags with its id and category, from
+      // the same record the My Tag panel edits.
+      const myTagsOf = (row: RowDto): RowMyTag[] => (row.id.startsWith("file:") ? [] : detailsOf(row).myTags)
+        .flatMap((id) => myTagCategories.flatMap((category) => category.tags
+          .filter((tag) => tag.id === id)
+          .map((tag) => ({ id: tag.id, name: tag.name, category: category.name }))));
       const project = (row: RowDto): RowDto => {
         const { extra, ...base } = row;
         if (extraColumns.length === 0) return base;
@@ -2308,6 +2330,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
           ...base,
           extra: Object.fromEntries(extraColumns.flatMap((key) =>
             extra?.[key] === undefined ? [] : [[key, extra[key]]])),
+          ...(extraColumns.includes("myTags") ? { myTags: myTagsOf(row) } : {}),
         };
       };
       const folder = folderViews.get(viewId);

@@ -17,6 +17,7 @@ import type {
   SelectionDetails, TrackDetails, TrackLookups, RelatedPlaylist, StickOutline,
 } from "./types";
 import { tauriInvoke } from "./invoke";
+import { liftMyTags } from "./rowMyTags";
 
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -187,7 +188,8 @@ async function realBackend(): Promise<Backend> {
     rememberScreenAssets: (ids, waveformKind) => invoke<void>("remember_screen_assets", { ids, waveformKind }),
     playlistTree: () => invoke<TreeNode[]>("playlist_tree"),
     openView: (spec) => invoke<ViewHandle>("open_view", { spec }),
-    fetchRows: (viewId, offset, len, extraColumns) => invoke<RowDto[]>("fetch_rows", { viewId, offset, len, extraColumns }),
+    fetchRows: (viewId, offset, len, extraColumns) =>
+      invoke<RowDto[]>("fetch_rows", { viewId, offset, len, extraColumns }).then(liftMyTags),
     viewIdsInRange: (viewId, from, to) => invoke<string[]>("view_ids_in_range", { viewId, from, to }),
     trackWaveform: async (trackId, kind, window) => {
       // Raw bytes rather than a JSON number array: the three-band detail tag
