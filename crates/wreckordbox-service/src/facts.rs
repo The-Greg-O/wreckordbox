@@ -276,7 +276,81 @@ pub(crate) fn answer(
     answer.map_err(|e| ServiceError::new(service_codes::SERVICE_FAILED, e.to_string()))
 }
 
-fn arguments<T: serde::de::DeserializeOwned>(request: &Request) -> Result<T, ServiceError> {
+/// One Fact that has passed every check `facts.record` makes, for a
+/// command of another module that writes it in a transaction of its own
+/// (a Decision's answer, with [`Sidecar::answer_decision_with_fact`]).
+pub(crate) struct CheckedFact {
+    pub(crate) track_id: String,
+    pub(crate) kind: Declaration,
+    pub(crate) value: Value,
+    /// Of the track's audio now, when its file is there.
+    pub(crate) fingerprint: Option<Fingerprint>,
+}
+
+/// Checks one Fact as `facts.record` would (its kind's declaration, its
+/// value, its track and the audio a Measurement needs), writing nothing.
+pub(crate) fn checked(
+    stems: &Arc<Stems>,
+    fact: FactToRecord,
+    source: &Source,
+    confidence: f64,
+    lookup: &dyn Fn(&str) -> Result<ParentAudio, ServiceError>,
+) -> Result<CheckedFact, ServiceError> {
+    let facts = Facts {
+        sidecar: stems.sidecar()?,
+        stems,
+    };
+    let mut tracks = HashMap::new();
+    let one = check(
+        fact,
+        &facts.kinds()?,
+        Some(source),
+        Some(confidence),
+        &mut tracks,
+        lookup,
+    )?;
+    Ok(CheckedFact {
+        track_id: one.track_id,
+        kind: one.kind,
+        value: one.value,
+        fingerprint: tracks
+            .into_values()
+            .next()
+            .and_then(|(_, fingerprint)| fingerprint),
+    })
+}
+
+/// What `facts.record` does once a Fact is written, for a Fact another
+/// module wrote: tells clients, and marks stale (and says so) the track's
+/// Measurements made from other audio.
+pub(crate) fn recorded(
+    stems: &Arc<Stems>,
+    fact: &Fact,
+    fingerprint: Option<&Fingerprint>,
+) -> Result<(), ServiceError> {
+    let facts = Facts {
+        sidecar: stems.sidecar()?,
+        stems,
+    };
+    facts.changed(&fact.track_id, &fact.kind, Some(fact.id), &[]);
+    if let Some(fingerprint) = fingerprint {
+        facts.mark_stale(&fact.track_id, fingerprint)?;
+    }
+    Ok(())
+}
+
+/// The Run with that identifier, if it can still be recorded in.
+pub(crate) fn open_run(stems: &Arc<Stems>, id: i64) -> Result<Run, ServiceError> {
+    Facts {
+        sidecar: stems.sidecar()?,
+        stems,
+    }
+    .open_run(id)
+}
+
+pub(crate) fn arguments<T: serde::de::DeserializeOwned>(
+    request: &Request,
+) -> Result<T, ServiceError> {
     serde_json::from_value(request.args.clone()).map_err(|e| {
         ServiceError::new(
             service_codes::BAD_REQUEST,
@@ -476,12 +550,24 @@ impl Facts<'_> {
         lookup: &dyn Fn(&str) -> Result<ParentAudio, ServiceError>,
     ) -> Result<TrackFacts, ServiceError> {
         let found = lookup(&wanted.id)?;
+        let kinds = self.kinds();
         if let Some(kind) = &wanted.kind {
-            let kinds = self.kinds()?;
-            if kinds.get(kind).is_none() {
-                return Err(not_declared(kind, &kinds));
+            let kinds = kinds.as_ref().map_err(Clone::clone)?;
+            // While the Tag schema has a mistake its dimensions are not
+            // declared, and their Facts are still to be read.
+            if kinds.get(kind).is_none() && !kinds.schema_is_broken() {
+                return Err(not_declared(kind, kinds));
             }
         }
+        // What is stored is read whatever state the files are in; a value
+        // from when its kind took another shape is given as the kind takes
+        // it now.
+        let as_now = |mut fact: Fact| {
+            if let Some(kind) = kinds.as_ref().ok().and_then(|kinds| kinds.get(&fact.kind)) {
+                fact.value = kind.normalise(std::mem::take(&mut fact.value));
+            }
+            fact
+        };
         let track = found.parent().clone();
         if wanted.check_audio {
             let fingerprint = stems::fingerprint(&track, found.path())?;
@@ -498,6 +584,7 @@ impl Facts<'_> {
                 .into_iter()
                 .filter(|fact| wanted.all || fact.is_live())
                 .map(Fact::from)
+                .map(as_now)
                 .collect(),
         })
     }
@@ -552,9 +639,16 @@ fn check(
     tracks: &mut HashMap<String, (Parent, Option<Fingerprint>)>,
     lookup: &dyn Fn(&str) -> Result<ParentAudio, ServiceError>,
 ) -> Result<Checked, ServiceError> {
+    // A Tag schema with a mistake holds back the kinds it governs, and
+    // only those.
+    if let Some(error) = kinds.refused_by_schema(&fact.kind) {
+        return Err(sidecar_error(&error));
+    }
     let Some(kind) = kinds.get(&fact.kind) else {
         return Err(not_declared(&fact.kind, kinds));
     };
+    let mut fact = fact;
+    fact.value = kind.normalise(std::mem::take(&mut fact.value));
     if kind.reserved {
         return Err(ServiceError::new(
             codes::KIND_RESERVED,
@@ -619,7 +713,7 @@ fn check(
 }
 
 /// A source as given, checked: every source but the DJ has a name.
-fn source(given: &SourceArg) -> Result<Source, ServiceError> {
+pub(crate) fn source(given: &SourceArg) -> Result<Source, ServiceError> {
     let name = given.name.trim();
     if !name.is_empty() {
         return Ok(Source::new(given.kind, name));
@@ -661,10 +755,13 @@ fn default_description(facts: &[Checked]) -> String {
     )
 }
 
-fn sidecar_error(error: &SidecarError) -> ServiceError {
+pub(crate) fn sidecar_error(error: &SidecarError) -> ServiceError {
     match error {
         SidecarError::KindsFile { .. } => {
             ServiceError::new(codes::KINDS_FILE_INVALID, error.to_string())
+        }
+        SidecarError::TagSchema { .. } => {
+            ServiceError::new(crate::schema::codes::TAG_SCHEMA_INVALID, error.to_string())
         }
         _ => ServiceError::new(
             stems::codes::SIDECAR_FAILED,

@@ -52,6 +52,7 @@ rbl-deck = { path = "../crates/rbl-deck" }
 rbl-prolink = { path = "../crates/rbl-prolink" }
 rbl-link = { path = "../crates/rbl-link" }
 rbl-export = { path = "../crates/rbl-export" }
+wreckordbox-stick-outline = { path = "../crates/wreckordbox-stick-outline" }
 rbl-devices = { path = "../crates/rbl-devices" }
 rbl-pdb = { path = "../crates/rbl-pdb" }
 rbl-onelibrary = { path = "../crates/rbl-onelibrary" }
@@ -72,9 +73,11 @@ icu_locale_core = "2"
 time = { version = "0.3", features = ["formatting"] }
 zip = { version = "4.6.1", default-features = false, features = ["deflate"] }
 tempfile = "3"
+# Reads a row's MyTags with their ids and categories (row_my_tags, #55),
+# beside rbl-db rather than in it (ADR 0003); the same build rbl-db uses.
+rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
 
 [dev-dependencies]
-rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
 # `test` gives a mock app, so the native menu can be built and inspected
 # without opening a window — which cannot be screenshotted on this machine.
 tauri = { version = "2", features = ["test"] }
