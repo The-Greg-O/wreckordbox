@@ -71,11 +71,10 @@ pub enum FactCommands {
         /// Only Facts of this kind.
         #[arg(long, value_name = "KIND")]
         kind: Option<String>,
-        /// Also the Facts their own source has since replaced.
+        /// Include stale, unverified and replaced Facts in the full history.
         #[arg(long)]
         all: bool,
-        /// Read the track's audio first and mark stale the Measurements
-        /// made from different audio.
+        /// Retained for compatibility; every read now checks the audio.
         #[arg(long)]
         check_audio: bool,
     },
@@ -394,7 +393,7 @@ fn recorded_text(recorded: &Recorded) -> String {
 
 fn shown_text(shown: &TrackFacts) -> String {
     let track = &shown.track;
-    if shown.facts.is_empty() {
+    if shown.facts.is_empty() && shown.stale.is_empty() && shown.unverified.is_empty() {
         return format!("Track {} \"{}\" has no Facts.", track.id, track.title);
     }
     let mut rows = vec![[
@@ -409,6 +408,15 @@ fn shown_text(shown: &TrackFacts) -> String {
     ]
     .map(str::to_owned)];
     rows.extend(shown.facts.iter().map(fact_row));
+    for fact in shown.stale.iter().chain(&shown.unverified) {
+        if !shown.facts.iter().any(|standing| standing.id == fact.id) {
+            let mut row = fact_row(fact);
+            if !fact.stale {
+                row[7] = "unverified: audio unavailable".to_owned();
+            }
+            rows.push(row);
+        }
+    }
     format!("Track {} \"{}\"\n{}", track.id, track.title, table(&rows))
 }
 

@@ -190,11 +190,10 @@ pub struct FactsOfTrack {
     /// Only Facts of this kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
-    /// Also the Facts their own source has superseded.
+    /// Also stale, unverified and superseded Facts.
     #[serde(default)]
     pub all: bool,
-    /// Fingerprint the track's audio first and mark the Measurements made
-    /// from other audio stale. One read of the audio file.
+    /// Retained for compatibility. Audio is now checked on every read.
     #[serde(default)]
     pub check_audio: bool,
 }
@@ -205,6 +204,10 @@ pub struct TrackFacts {
     pub track: Parent,
     /// Newest first.
     pub facts: Vec<Fact>,
+    /// Measurements from different audio, kept for inspection only.
+    pub stale: Vec<Fact>,
+    /// Measurements whose audio could not be read, excluded from standing Facts.
+    pub unverified: Vec<Fact>,
 }
 
 /// What `facts.kinds` answers.
@@ -483,21 +486,36 @@ impl Facts<'_> {
             }
         }
         let track = found.parent().clone();
-        if wanted.check_audio {
-            let fingerprint = stems::fingerprint(&track, found.path())?;
-            self.mark_stale(&track.id, &fingerprint)?;
+        let fingerprint = stems::fingerprint(&track, found.path()).ok();
+        if let Some(fingerprint) = &fingerprint {
+            self.mark_stale(&track.id, fingerprint)?;
         }
         let facts = match &wanted.kind {
             Some(kind) => self.sidecar.facts(&track.id, kind),
             None => self.sidecar.facts_of_track(&track.id),
         }
         .map_err(|e| sidecar_error(&e))?;
+        let facts: Vec<Fact> = facts.into_iter().map(Fact::from).collect();
+        let stale = facts.iter().filter(|fact| fact.stale).cloned().collect();
+        let unverified = facts
+            .iter()
+            .filter(|fact| {
+                !fact.stale && fact.nature == Nature::Measurement && fingerprint.is_none()
+            })
+            .cloned()
+            .collect();
         Ok(TrackFacts {
             track,
+            stale,
+            unverified,
             facts: facts
                 .into_iter()
-                .filter(|fact| wanted.all || fact.is_live())
-                .map(Fact::from)
+                .filter(|fact| {
+                    wanted.all
+                        || (!fact.superseded
+                            && !fact.stale
+                            && (fact.nature == Nature::Judgement || fingerprint.is_some()))
+                })
                 .collect(),
         })
     }

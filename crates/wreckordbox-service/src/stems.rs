@@ -456,10 +456,10 @@ impl Stems {
         let sidecar = self.sidecar()?;
         // With the audio at hand, Stems made from other audio are found
         // out here too, so nothing reads stale Stems as current.
-        if path.is_file() {
-            let fingerprint = fingerprint(&parent, &path)?;
+        let fingerprint = fingerprint(&parent, &path).ok();
+        if let Some(fingerprint) = &fingerprint {
             let marked_stale = sidecar
-                .mark_stale(&parent.id, &fingerprint)
+                .mark_stale(&parent.id, fingerprint)
                 .map_err(|e| sidecar_error(&e))?;
             if !marked_stale.is_empty() {
                 self.changed(&parent.id, None, &marked_stale);
@@ -469,10 +469,10 @@ impl Stems {
             .stems(&parent.id)
             .map_err(|e| sidecar_error(&e))?
             .into_iter()
-            .partition(StemSet::is_current);
+            .partition(|set| set.is_current() && fingerprint.as_ref() == Some(&set.fingerprint));
         Ok(TrackStems {
             track: parent,
-            stems: current.into_iter().next(),
+            stems: current.into_iter().find(|set| set.stems.iter().all(|stem| stem.path.is_file())),
             previous,
         })
     }

@@ -893,15 +893,10 @@ fn a_measurement_is_tied_to_the_audio_it_was_made_from_and_a_judgement_is_not() 
     assert_eq!(genre["facts"][0]["fingerprint"], fingerprint.as_str());
     assert_eq!(genre["marked_stale"], json!([]));
 
-    // The audio changes. Until something looks, nothing is known of it.
-    change_audio(&audio);
-    assert!(facts_of(&sandbox, &track)
-        .iter()
-        .all(|fact| fact["stale"] == false));
-
-    // Looking marks the Measurement stale and leaves the Judgement alone.
+    // Every read now checks audio, marks stale and leaves Judgements standing.
     let mut watcher = sandbox.client();
     watcher.subscribe().unwrap();
+    change_audio(&audio);
     let checked = ok(&sandbox, &["facts", "show", &track, "--check-audio"]);
     let by_kind = |facts: &Value, kind: &str| {
         facts["facts"]
@@ -912,7 +907,8 @@ fn a_measurement_is_tied_to_the_audio_it_was_made_from_and_a_judgement_is_not() 
             .unwrap()
             .clone()
     };
-    assert_eq!(by_kind(&checked, "intensity")["stale"], true);
+    assert_eq!(checked["stale"][0]["id"], fact["id"]);
+    assert_eq!(checked["stale"][0]["stale"], true);
     assert_eq!(by_kind(&checked, "genre")["stale"], false);
     let event = watcher.next_event(Duration::from_secs(2)).unwrap().unwrap();
     assert_eq!(event.event, "sidecar_changed");
