@@ -430,3 +430,94 @@ fn protecting_a_stick_before_flush_keeps_recovery_off_the_stick() {
     assert_eq!(shown["total"], 129);
     assert_eq!(shown["pending_recording"]["total"], 0);
 }
+
+#[test]
+fn a_busy_stick_does_not_hold_up_the_accepted_write_for_recording() {
+    use std::sync::mpsc::channel;
+    let f = Fixture::new(1);
+    let operation = Operation::new(&f.core, Kind::Analysis);
+    register(&f, &operation, 0);
+    let root = f.dir.path().join("library");
+    let marker = root.join(wreckordbox_stick_protection::STAND_IN_MARKER);
+    std::fs::write(&marker, "").unwrap();
+    let state = f.dir.path().join("recovery");
+    let (held, ready) = channel();
+    let (release, wait) = channel();
+    let holder = std::thread::spawn(move || {
+        let _lock = wreckordbox_stick_protection::exec_lock(&state, &root).unwrap();
+        held.send(()).unwrap();
+        wait.recv().unwrap();
+    });
+    ready.recv().unwrap();
+    let (done, finished) = channel();
+    let recording = std::thread::spawn(move || done.send(operation.finish()).unwrap());
+    let outcome = finished.recv_timeout(std::time::Duration::from_secs(2));
+    // Always release, even on regression, so the test cannot wedge the queue.
+    release.send(()).unwrap();
+    holder.join().unwrap();
+    recording.join().unwrap();
+    assert!(
+        outcome.is_ok(),
+        "recording must spill promptly instead of waiting for a Stick writer"
+    );
+    assert!(outcome.unwrap().is_some());
+    let pending = f.service.call("runs.list", json!({})).unwrap_err();
+    assert!(
+        pending.message.contains(&fixture::track_id(0)),
+        "the reader must name the pending accepted track"
+    );
+    std::fs::remove_file(marker).unwrap();
+    f.service
+        .call("tracks.rate", json!({"id":fixture::track_id(0),"rating":4}))
+        .unwrap();
+    let runs = f.runs();
+    let run = runs["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["source"]["kind"] == "tool" && r["source"]["name"] == "wreckordbox-analysis")
+        .unwrap();
+    let shown = f
+        .service
+        .call("runs.show", json!({"id":run["id"]}))
+        .unwrap();
+    assert_eq!(
+        shown["entries"][0]["payload"]["records"][0]["track"],
+        fixture::track_id(0)
+    );
+}
+
+#[test]
+fn an_unavailable_sidecar_parent_is_not_reported_as_an_empty_ledger() {
+    let f = Fixture::new(1);
+    let sidecar = f.dir.path().join("library/wreckordbox-sidecar");
+    std::fs::write(&sidecar, "fixture obstruction").unwrap();
+    let operation = Operation::new(&f.core, Kind::Analysis);
+    register(&f, &operation, 0);
+    assert!(operation.finish().is_some());
+    let pending = f.service.call("runs.list", json!({})).unwrap_err();
+    assert!(
+        pending.message.contains(&fixture::track_id(0)),
+        "the reader must name accepted results that have no Run yet"
+    );
+    std::fs::remove_file(sidecar).unwrap();
+    f.service
+        .call("tracks.rate", json!({"id":fixture::track_id(0),"rating":4}))
+        .unwrap();
+    let runs = f.runs();
+    assert_eq!(runs["total"], 2);
+    let run = runs["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["source"]["kind"] == "tool" && r["source"]["name"] == "wreckordbox-analysis")
+        .unwrap();
+    let shown = f
+        .service
+        .call("runs.show", json!({"id":run["id"]}))
+        .unwrap();
+    assert_eq!(
+        shown["entries"][0]["payload"]["records"][0]["track"],
+        fixture::track_id(0)
+    );
+}

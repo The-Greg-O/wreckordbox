@@ -16,6 +16,7 @@ use std::{
 };
 use wreckordbox_sidecar::{bulk::OrderLease, ledger::Intent, Sidecar, Source, SourceKind};
 
+static NEXT: AtomicU64 = AtomicU64::new(0);
 const RECORDS: usize = 128;
 const BYTES: usize = 64 * 1024;
 pub(super) const REASON:&str="Previous analysis artifacts and imported native rows were not retained; Unwind cannot reverse this operation";
@@ -231,7 +232,6 @@ pub(super) fn make(keeper: &Keeper, kind: Kind) -> Arc<dyn Recorder> {
             ),
         ),
     };
-    static NEXT: AtomicU64 = AtomicU64::new(0);
     let serial = NEXT.fetch_add(1, Ordering::Relaxed);
     let spill = keeper
         .stems

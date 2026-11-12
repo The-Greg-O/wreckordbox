@@ -160,7 +160,10 @@ pub(super) fn replay(
         let missing = records.iter().filter(|r| r.id.is_none()).count();
         if missing > 0 {
             let ids = sidecar
-                .reserve_bulk_ids(&mut Default::default(), missing)
+                .reserve_bulk_ids(
+                    &mut wreckordbox_sidecar::bulk::OrderLease::default(),
+                    missing,
+                )
                 .map_err(|e| e.to_string())?;
             for (record, id) in records.iter_mut().filter(|r| r.id.is_none()).zip(ids) {
                 record.id = Some(id);
@@ -199,7 +202,12 @@ pub(super) fn replay_all(root: &Path, sidecar: &Sidecar) -> Result<(), String> {
     Ok(())
 }
 /// Named accepted writes waiting on disk. A query never replays or cleans up.
-pub(super) fn pending(root: &Path, run: i64, offset: usize, limit: usize) -> Result<Value, String> {
+pub(super) fn pending(
+    root: &Path,
+    run: Option<i64>,
+    offset: usize,
+    limit: usize,
+) -> Result<Value, String> {
     let mut records = Vec::new();
     let mut total = 0;
     for dir in files(&root.join("ledger-bulk"))? {
@@ -207,7 +215,7 @@ pub(super) fn pending(root: &Path, run: i64, offset: usize, limit: usize) -> Res
             continue;
         }
         let manifest: Manifest = read(&dir.join("manifest.json"))?;
-        if manifest.run.map(|id| id.0) != Some(run) {
+        if manifest.run.map(|id| id.0) != run {
             continue;
         }
         for path in files(&dir)?.into_iter().filter(|p| {

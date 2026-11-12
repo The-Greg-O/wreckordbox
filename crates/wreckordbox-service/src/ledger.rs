@@ -681,8 +681,32 @@ pub(crate) fn answer(
     request: &Request,
 ) -> Result<Value, ServiceError> {
     let recovery_error = keeper.state().recovery_error.clone();
+    if request.command == commands::RUNS_LIST {
+        let index = |name: &str, default| {
+            request.args[name]
+                .as_u64()
+                .and_then(|n| usize::try_from(n).ok())
+                .unwrap_or(default)
+        };
+        let mut pending = bulk_spill::pending(
+            &stems.bulk_recovery_dir(),
+            None,
+            index("offset", 0),
+            index("limit", DEFAULT_PAGE_LIMIT).min(1000),
+        )
+        .map_err(|why| ServiceError::new(crate::stems::codes::SIDECAR_FAILED, why))?;
+        if pending["total"].as_u64().unwrap_or(0) != 0 {
+            if let Some(records) = pending["records"].as_array_mut() {
+                for record in records {
+                    record["result"] = json!({"track":record["result"].get("track"),"target":record["result"].get("target")});
+                }
+            }
+            return Err(ServiceError::new(crate::stems::codes::SIDECAR_FAILED,
+                format!("Accepted writes are waiting for a Ledger Run because recording was unavailable. Pending targets (page with offset/limit): {pending}")));
+        }
+    }
     stems.with_sidecar_wait(|sidecar| {
-        if sidecar.is_none() && stems.sidecar_dir().join("sidecar.db").exists() {
+        if sidecar.is_none() && (stems.sidecar_dir().join("sidecar.db").exists() || bulk_spill::exists(&stems.bulk_recovery_dir())) {
             if let Some(error) = recovery_error { return Err(error); }
             return Err(ServiceError::new(crate::stems::codes::SIDECAR_FAILED,
                 "The Sidecar is not open. Check service startup diagnostics and storage access; a Ledger query cannot open or recover it."));
@@ -690,7 +714,7 @@ pub(crate) fn answer(
         let mut answer = read_ledger(sidecar, request)?;
         if request.command == commands::RUNS_SHOW {
             if let Some(run) = request.args["id"].as_i64() {
-                answer["pending_recording"] = bulk_spill::pending(&stems.bulk_recovery_dir(), run, answer["offset"].as_u64().and_then(|n| usize::try_from(n).ok()).unwrap_or(0), answer["limit"].as_u64().and_then(|n| usize::try_from(n).ok()).unwrap_or(DEFAULT_PAGE_LIMIT))
+                answer["pending_recording"] = bulk_spill::pending(&stems.bulk_recovery_dir(), Some(run), answer["offset"].as_u64().and_then(|n| usize::try_from(n).ok()).unwrap_or(0), answer["limit"].as_u64().and_then(|n| usize::try_from(n).ok()).unwrap_or(DEFAULT_PAGE_LIMIT))
                     .map_err(|why|ServiceError::new(crate::stems::codes::SIDECAR_FAILED,why))?;
             }
         }
