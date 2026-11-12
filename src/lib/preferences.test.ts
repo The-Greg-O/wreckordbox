@@ -108,9 +108,9 @@ describe("sanitisePreferences", () => {
 
   it("keeps the browser key-sort choice and preserves the old display-based ordering", () => {
     expect(sanitisePreferences({view: {keySort: "musical"}}).view.keySort).toBe("musical");
-    expect(sanitisePreferences({view: {keySort: "invalid"}}).view.keySort).toBe("alphabetical");
-    expect(sanitisePreferences({view: {keyDisplay: "classic"}}).view.keySort).toBe("alphabetical");
-    expect(sanitisePreferences({view: {keyDisplay: "alphanumeric"}}).view.keySort).toBe("musical");
+    expect(sanitisePreferences({view: {keySort: "invalid"}}).view.keySort).toBe("auto");
+    expect(sanitisePreferences({view: {keyDisplay: "classic"}}).view.keySort).toBe("auto");
+    expect(sanitisePreferences({view: {keyDisplay: "alphanumeric"}}).view.keySort).toBe("auto");
   });
   it("gives the defaults for nothing, garbage, and a wrong shape", () => {
     expect(sanitisePreferences(undefined)).toEqual(DEFAULT_PREFERENCES);

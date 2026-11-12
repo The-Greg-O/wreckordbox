@@ -162,7 +162,7 @@ export interface ViewPreferences {
   /** Key display format: `Ebm` or `2A`. */
   keyDisplay: KeyDisplay;
   /** How the browser's Key column is ordered. */
-  keySort: "alphabetical" | "musical";
+  keySort: "auto" | "alphabetical" | "musical";
   /** Full/Preview Waveform: the deck's overview, single-sided or mirrored. */
   overviewWaveform: OverviewWaveform;
   /** Media Browser › Explorer: the folders on disk in the tree. */
@@ -253,6 +253,8 @@ export interface AnalysisPreferences {
    * default, as it is in rekordbox.
    */
   writeKeyTag: boolean;
+  /** Notation written by analysis to the Library and, if enabled, file tags. Independent of display. */
+  keyNotation?: KeyDisplay;
   /**
    * Key Analysis > "Analyze key": off keeps the keys a track already has, such
    * as ones from Mixed In Key, for automatic analysis and as the default of
@@ -414,8 +416,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
     uiScale: UI_SCALE_DEFAULT,
     viewShell: false,
     shellJumpBeats: COMPACT_JUMP_DEFAULT,
-    keyDisplay: "classic",
-    keySort: "alphabetical",
+    keyDisplay: "alphanumeric",
+    keySort: "auto",
     overviewWaveform: "half",
     explorer: true,
     previewCueMarkers: true,
@@ -447,6 +449,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
     firstBeatCue: false,
     bpmRange: "70-180",
     writeKeyTag: false,
+    keyNotation: "classic",
     detectKey: true,
   },
   djSystem: {
@@ -490,7 +493,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
 /** Show either notation regardless of how the library stored the key. */
 export function formatKey(key: string, display: KeyDisplay): string {
   if (key === "") return key;
-  if (display === "classic") return fromCamelot(key) || key;
+  if (display === "classic") return fromCamelot(toCamelot(key)) || key;
   // A key the wheel does not know — a blank, "Unknown", a typo — is shown as
   // it is rather than hidden.
   return toCamelot(key) || key;
@@ -601,8 +604,8 @@ export function sanitisePreferences(value: unknown): Preferences {
       keyDisplay: oneOf(view.keyDisplay, KEY_DISPLAYS, d.view.keyDisplay),
       keySort: oneOf(
         view.keySort,
-        ["alphabetical", "musical"] as const,
-        view.keyDisplay === "alphanumeric" ? "musical" : d.view.keySort,
+        ["auto", "alphabetical", "musical"] as const,
+        d.view.keySort,
       ),
       overviewWaveform: oneOf(view.overviewWaveform, OVERVIEWS, d.view.overviewWaveform),
       explorer: bool(view.explorer, d.view.explorer),
@@ -633,6 +636,10 @@ export function sanitisePreferences(value: unknown): Preferences {
       firstBeatCue: bool(analysis.firstBeatCue, d.analysis.firstBeatCue),
       bpmRange: oneOf(analysis.bpmRange, BPM_RANGES, d.analysis.bpmRange),
       writeKeyTag: bool(analysis.writeKeyTag, d.analysis.writeKeyTag),
+      // Old full profiles used display for writing too. Preserve that choice
+      // once; newly saved profiles always carry the independent field.
+      keyNotation: oneOf(analysis.keyNotation, KEY_DISPLAYS,
+        oneOf(view.keyDisplay, KEY_DISPLAYS, "classic")),
       detectKey: bool(analysis.detectKey, d.analysis.detectKey),
     },
     djSystem: {

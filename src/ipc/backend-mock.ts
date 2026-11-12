@@ -24,12 +24,13 @@ import type {
 } from "./types";
 import { TREE_ROOT } from "./types";
 import { applyEditFrom, validateEdit, isDynamicFrom, tempoX100, type EditableBeat } from "@/lib/gridEdit";
-import { toCamelot } from "@/lib/camelot";
+import { fromCamelot, toCamelot } from "@/lib/camelot";
 import { COLOR_NAMES, wholeBpm } from "@/lib/trackFilter";
 import { MY_TAG_LIMIT, newMyTagName } from "@/lib/myTags";
 import { referenceDeviceSettings } from "./mock-device-settings";
 import { createMockDeviceLibraries, type MockImportEntry } from "./mock-device-library";
 import { createMockIntake } from "./mock-intake";
+import { keyLightRows } from "./mock-key-lights";
 
 const ARTISTS = [
   "MORTEN", "ARTBAT", "Meduza", "Vintage Culture", "Tujamo", "UMEK", "Kryder", "Joel Corry",
@@ -358,6 +359,16 @@ function extraText(row: RowDto, field: string): string {
   return typeof value === "string" ? value : "";
 }
 
+// Same displayed Classic labels and blank-last rule as rbl-index/key.rs.
+function compareKeyNames(a: string, b: string): number {
+  const left = (fromCamelot(toCamelot(a)) || a).toLowerCase();
+  const right = (fromCamelot(toCamelot(b)) || b).toLowerCase();
+  if (left === right) return 0;
+  if (!left) return 1;
+  if (!right) return -1;
+  return left < right ? -1 : 1;
+}
+
 function compare(a: RowDto, b: RowDto, col: SortKey): number {
   switch (col) {
     case "keyCamelot": {
@@ -367,7 +378,7 @@ function compare(a: RowDto, b: RowDto, col: SortKey): number {
         if (code === "") return Number.MAX_SAFE_INTEGER;
         return Number(code.slice(0, -1)) * 2 + (code.endsWith("B") ? 1 : 0);
       };
-      return rank(a.key) - rank(b.key) || collator.compare(a.key, b.key);
+      return rank(a.key) - rank(b.key) || compareKeyNames(a.key, b.key);
     }
     case "trackNo": return a.trackNo - b.trackNo;
     case "bpm": return a.bpmX100 - b.bpmX100;
@@ -388,7 +399,7 @@ function compare(a: RowDto, b: RowDto, col: SortKey): number {
     case "genre": return collator.compare(a.genre, b.genre);
     case "label": return collator.compare(a.label, b.label);
     case "comment": return collator.compare(a.comment, b.comment);
-    case "key": return collator.compare(a.key, b.key);
+    case "key": return compareKeyNames(a.key, b.key);
     case "dateAdded": return collator.compare(a.dateAdded, b.dateAdded);
     case "releaseDate": return collator.compare(a.releaseDate, b.releaseDate);
   }
@@ -447,7 +458,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       (on) => { recordProtection(on); };
   }
   const playlistFixture = options.playlistFixture ?? readPlaylistFixtureFromUrl();
-  const all = makeRows(trackCount);
+  const all = readFlagFromUrl("keyLights") ? keyLightRows(makeRows(12)) : makeRows(trackCount);
   // A disposable browser fixture for external file drops. It is opt-in and
   // survives a page reload so the collection view can verify the import.
   const dropFixture = readFlagFromUrl("dropFixture");

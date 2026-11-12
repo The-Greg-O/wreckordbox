@@ -89,14 +89,26 @@ fn schema_key(db_version: Option<i64>) -> u32 {
 pub(crate) fn spawn_library_load(app: tauri::AppHandle) {
     tauri::async_runtime::spawn_blocking(move || {
         let started = std::time::Instant::now();
-        if let Ok(location) = rbl_db::detect() {
-            // Before anything is read or recovered: from here on this window
-            // is the Library's one writer, and a service a command started
-            // by itself has stopped.
-            service_host::host(&app, &location);
-            if let Err(e) = backups::recover(app.state::<Arc<state::AppState>>().backup_dir(), &location) {
-                report_problem(&app, dto::LibraryProblemDto::Failed { message: e.to_string() });
-                return;
+        let backup_dir = app.state::<Arc<state::AppState>>().backup_dir().to_path_buf();
+        // Found even when a restore stopped with `master.db` set aside: its
+        // owner recovers it before anything reads it.
+        if let Ok(location) = wreckordbox_service::locate_library_with(&backup_dir) {
+            // Before anything is read or recovered: the window owns the
+            // Library (hosting recovers an interrupted restore under its
+            // lock), or reads it while another owner has it and nothing is
+            // left to recover, or waits while a restore runs.
+            match service_host::host(&app, &location) {
+                service_host::Ownership::Owner => {
+                    if let Err(e) = backups::recover(&backup_dir, &location) {
+                        report_problem(&app, dto::LibraryProblemDto::Failed { message: e.to_string() });
+                        return;
+                    }
+                }
+                service_host::Ownership::Reader => {}
+                service_host::Ownership::Refused(message) => {
+                    report_problem(&app, dto::LibraryProblemDto::Failed { message });
+                    return;
+                }
             }
         }
         backups::sweep_discarded(&app.state::<Arc<state::AppState>>().backup_destination());

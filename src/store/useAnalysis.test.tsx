@@ -97,17 +97,17 @@ it("asks for the key to be written into the file only with Write the value to th
   await act(async () => { root.render(<Harness preferences={{ mode: "rbxport", concurrentTracks: 2, auto: true, firstBeatCue: false, bpmRange: "70-180", writeKeyTag: false, detectKey: true }} />); await Promise.resolve(); });
   await act(async () => { analysis.add([{ id: "off", title: "Off" }]); await Promise.resolve(); });
   expect(held.analyseTrack).toHaveBeenLastCalledWith("off", "rbxport", expect.anything());
-  // On: in the key display format, which is Classic by default.
+  // On: the independent stored notation stays Classic, despite Camelot display.
   await act(async () => { root.render(<Harness preferences={{ mode: "rbxport", concurrentTracks: 2, auto: true, firstBeatCue: false, bpmRange: "70-180", writeKeyTag: true, detectKey: true }} />); await Promise.resolve(); });
   await act(async () => { analysis.add([{ id: "on", title: "On" }]); await Promise.resolve(); });
   expect(held.analyseTrack).toHaveBeenLastCalledWith("on", "rbxport", expect.anything(), "classic");
 });
 
-it("passes Alphanumeric display to analysis even when tag writing is off (#646)", async () => {
+it("uses explicitly selected stored notation even when display is Classic and tag writing is off", async () => {
   const preferences: AnalysisPreferences = { mode: "rbxport", concurrentTracks: 1, auto: true, firstBeatCue: false, bpmRange: "70-180", writeKeyTag: false, detectKey: true };
   await act(async () => {
     root.render(
-      <PreferencesProvider value={{ preferences: { ...DEFAULT_PREFERENCES, view: { ...DEFAULT_PREFERENCES.view, keyDisplay: "alphanumeric" } }, update: () => {}, reset: () => {} }}>
+      <PreferencesProvider value={{ preferences: { ...DEFAULT_PREFERENCES, analysis: { ...DEFAULT_PREFERENCES.analysis, keyNotation: "alphanumeric" }, view: { ...DEFAULT_PREFERENCES.view, keyDisplay: "classic" } }, update: () => {}, reset: () => {} }}>
         <Harness preferences={preferences} />
       </PreferencesProvider>,
     );

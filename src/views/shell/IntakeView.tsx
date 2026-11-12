@@ -39,9 +39,11 @@ import type { RowDto } from "@/ipc/types";
 import { energyOf, intakeActionForKey, intakeChord, nextQueuedIndex, type IntakeAction, type PrepColour } from "@/lib/intakeEdits";
 import { needsLine, queuePosition, type IntakeCounts, type IntakeQueueName, type IntakeQueuePage, type QueuedTrack } from "@/lib/intakeQueue";
 import { refusal } from "@/lib/menu";
+import { formatKey } from "@/lib/preferences";
 import type { KeyOverrides, Platform } from "@/lib/shortcuts";
 import { useCommands } from "@/store/useCommands";
 import { useEventCallback } from "@/store/useEventCallback";
+import { usePreferences } from "@/store/usePreferences";
 import { IntakeTrackPanel } from "./IntakeTrackPanel";
 import styles from "./IntakeView.module.css";
 import { useIntakeColours } from "./useIntakeColours";
@@ -563,9 +565,10 @@ function optionId(trackId: string): string {
 
 function QueueRow({ track, selected, onChoose }: { track: QueuedTrack; selected: boolean; onChoose: () => void }) {
   const t = useTranslation();
+  const { keyDisplay } = usePreferences().view;
   const facts = useMemo(
-    () => [track.artist, track.bpm !== null ? String(Math.round(track.bpm)) : "", track.key].filter((part) => part !== "").join(" · "),
-    [track],
+    () => [track.artist, track.bpm !== null ? String(Math.round(track.bpm)) : "", formatKey(track.key, keyDisplay)].filter((part) => part !== "").join(" · "),
+    [track, keyDisplay],
   );
   return (
     <div
