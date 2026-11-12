@@ -264,7 +264,7 @@ pub(crate) struct Target {
 /// the Library.
 pub(crate) fn targets(library: &OpenLibrary, wanted: &Measure) -> Result<Vec<Target>, ServiceError> {
     let index = library.index()?;
-    let share_root = library.core().share_root();
+    let share_root = library.share_root();
     let mut rows = Vec::new();
     for id in &wanted.ids {
         let Some(row) = index.row_of(id) else {
