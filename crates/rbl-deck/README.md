@@ -36,6 +36,7 @@ format decoding, or control-thread work into that path.
 | `sink.rs` | Device and caller-supplied sink interfaces. |
 | `mixer.rs`, `limiter.rs`, `meter.rs` | Channel processing, output limiting, and meters. |
 | `stretch.rs`, `rubberband.rs` | Varispeed, WSOLA, and optional Rubber Band processing. |
+| `offline.rs` | The same stretcher driven over a whole file, for rendering: start, end and exact length. |
 | `scrub.rs`, `fade.rs`, `smooth.rs` | Scrub audio and continuous transport/control changes. |
 | `metronome.rs` | Grid-based click generation. |
 

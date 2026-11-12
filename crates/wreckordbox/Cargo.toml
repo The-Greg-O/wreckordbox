@@ -18,5 +18,12 @@ serde_json = { workspace = true }
 rbl-db = { path = "../rbl-db" }
 # Only to give a test track a beat grid.
 rbl-anlz = { path = "../rbl-anlz" }
+# `stems write` tests: a fixture Sidecar holding synthetic Stems, a
+# temporary folder exported to as a Stick, and the independent reader of
+# Native stems (its Vorbis decoder).
+wreckordbox-sidecar = { path = "../wreckordbox-sidecar" }
+rbl-export = { path = "../rbl-export" }
+rbl-onelibrary = { path = "../rbl-onelibrary" }
+lewton = "0.10"
 serde_json = { workspace = true }
 tempfile = "3"

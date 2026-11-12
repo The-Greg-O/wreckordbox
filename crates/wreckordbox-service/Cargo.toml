@@ -24,6 +24,9 @@ wreckordbox-sidecar = { path = "../wreckordbox-sidecar" }
 # Intensity: the measurement itself, and the beat grid it is aligned to.
 wreckordbox-intensity = { path = "../wreckordbox-intensity" }
 rbl-anlz = { path = "../rbl-anlz" }
+# Native stems: the writer of a track's Stems to a Stick, which the service
+# drives because it owns the Sidecar the Stems are in.
+wreckordbox-native-stems = { path = "../wreckordbox-native-stems" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 dirs = "5"
