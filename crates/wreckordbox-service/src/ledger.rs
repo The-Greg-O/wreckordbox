@@ -315,6 +315,9 @@ pub mod stored {
             LibraryEdit::Relocate(_) => "relocate",
             LibraryEdit::ListRemoval(_) => "list_removal",
             LibraryEdit::Judgements(_) => "dj_judgements",
+            // As the file-only grid edits before it (wbx-22): its beats are
+            // in the command the intent recorded; Unwind does not reverse it.
+            LibraryEdit::Grid(_) => "window_grid",
         }
     }
 

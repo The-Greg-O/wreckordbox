@@ -10,7 +10,7 @@
   --lp-wave-h: 180px;
 
   display: grid;
-  grid-template-rows: auto auto;
+  grid-template-rows: auto auto auto;
   min-width: 0;
   background: var(--role-ground, var(--c-black));
 }

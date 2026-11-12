@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __setBackend } from "@/ipc/client";
 import type { Backend, GridState, GridEdit, GridEditOptions } from "@/ipc/types";
 import { SHIFT_MS, HELD_SHIFT_MS, MAX_STRETCH_MS } from "@/lib/gridEdit";
-import { useGridEditor, type GridEditorActions } from "./useGridEditor";
+import { HOLD_SAVE_MS, useGridEditor, type GridEditorActions } from "./useGridEditor";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean;
@@ -125,7 +125,9 @@ describe("recovered grid control behavior", () => {
   it("sends click and held shifts and stretches with the playhead", async () => {
     mount(); playhead = 2500;
     act(() => grid.shift(-1)); await settle();
-    act(() => grid.shift(1, true)); await settle();
+    // A held repeat is part of the hold the press began: it is saved no
+    // sooner than HOLD_SAVE_MS after the hold's last save (wbx-64).
+    act(() => grid.shift(1, true)); tick(HOLD_SAVE_MS); await settle();
     act(() => grid.stretch(1)); await settle();
     expect(edits.gridEdit.mock.calls.map(call => call[1] as GridEdit)).toEqual([
       { kind: "nudge", ms: -SHIFT_MS }, { kind: "nudge", ms: HELD_SHIFT_MS },
@@ -142,7 +144,7 @@ describe("recovered grid control behavior", () => {
     expect(onNudge.mock.calls.map(call => call[0] as number)).toEqual([SHIFT_MS, HELD_SHIFT_MS, HELD_SHIFT_MS, -SHIFT_MS]);
     await settle();
     expect(edits.gridEdit).toHaveBeenCalledTimes(1);
-    act(() => finish(gridState())); await settle();
+    act(() => finish(gridState())); tick(HOLD_SAVE_MS); await settle();
     expect(edits.gridEdit.mock.calls.map(call => call[1] as GridEdit)).toEqual([
       { kind: "nudge", ms: SHIFT_MS }, { kind: "nudge", ms: 2 * HELD_SHIFT_MS - SHIFT_MS },
     ]);
@@ -173,7 +175,7 @@ describe("recovered grid control behavior", () => {
     // Every press counted, against the beat that was under the playhead.
     expect(sent.reduce((sum, edit) => sum + edit.byMs, 0)).toBe(-(SHIFT_MS + repeats * HELD_SHIFT_MS));
     expect(sent[0]).toEqual({ kind: "stretch", byMs: -SHIFT_MS, timeMs: 2500 });
-    // Undo is unchanged: like a held shift, the saves carry no transaction.
+    // A held stretch carries no transaction: each save is its own Undo step.
     expect(edits.gridEdit.mock.calls.every(call => (call[2] as GridEditOptions).transaction === undefined)).toBe(true);
   });
   it("starts a new stretch batch past the most one save moves a beat", async () => {
