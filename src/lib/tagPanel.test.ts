@@ -7,6 +7,8 @@ const genre: PanelDimension = {
   label: "Genre",
   deck: false,
   tree: true,
+  tagParents: false,
+  single: false,
   edit: "fact",
   tags: [
     { id: "house", name: "House", parent: null, depth: 0, myTag: null },
@@ -25,13 +27,15 @@ describe("fromServicePanel", () => {
         { id: "genre", label: "Genre", deck: false, tree: true, edit: "fact", tags: [{ id: "house", name: "House", parent: null, depth: 0, my_tag: null }] },
         { id: "feel", label: "Mood", deck: true, tree: false, edit: "my_tag", tags: [{ id: "dark", name: "Dark", parent: null, depth: 0, my_tag: "70" }] },
       ],
-      track: { id: "1", set: { feel: ["dark"] }, facts_unavailable: "busy" },
+      schema_version: "v1",
+      track: { id: "1", set: { feel: ["dark"] }, unmapped: { feel: [{ id: "old", name: "old" }] }, versions: { feel: "x" }, facts_unavailable: "busy" },
       extra: "ignored",
     });
     expect(panel.source).toBe("tag_schema");
     expect(panel.dimensions.map((d) => d.label)).toEqual(["Mood", "Genre"]);
     expect(panel.dimensions[0]?.tags[0]?.myTag).toBe("70");
-    expect(panel.track).toEqual({ id: "1", set: { feel: ["dark"] }, factsUnavailable: "busy" });
+    expect(panel.track).toEqual({ id: "1", set: { feel: ["dark"] }, unmapped: { feel: [{ id: "old", name: "old" }] }, versions: { feel: "x" }, factsUnavailable: "busy" });
+    expect(panel.schemaVersion).toBe("v1");
   });
 
   it("reads a panel with no track and a schema problem", () => {
@@ -61,9 +65,15 @@ describe("toggledTerms", () => {
     expect(toggledTerms(genre, ["house"], "house-deep")).toEqual(["house-deep"]);
   });
 
-  it("turns off an implied tag by taking off what implies it", () => {
-    expect(toggledTerms(genre, ["house-deep-dub", "techno"], "house")).toEqual(["techno"]);
-    expect(toggledTerms(genre, ["house-deep-dub"], "house-deep")).toEqual([]);
+  it("narrows to an implied tag: what implied it comes off and it is set", () => {
+    expect(toggledTerms(genre, ["house-deep-dub", "techno"], "house")).toEqual(["house", "techno"]);
+    expect(toggledTerms(genre, ["house-deep-dub"], "house-deep")).toEqual(["house-deep"]);
+  });
+
+  it("in a single-tag dimension a click replaces or clears", () => {
+    const one: PanelDimension = { ...genre, tree: false, single: true };
+    expect(toggledTerms(one, ["house"], "techno")).toEqual(["techno"]);
+    expect(toggledTerms(one, ["techno"], "techno")).toEqual([]);
   });
 
   it("works on any dimension without a tree", () => {

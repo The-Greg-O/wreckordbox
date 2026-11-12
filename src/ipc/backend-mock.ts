@@ -29,7 +29,7 @@ import { applyEditFrom, validateEdit, isDynamicFrom, tempoX100, type EditableBea
 import { fromCamelot, toCamelot } from "@/lib/camelot";
 import { COLOR_NAMES, wholeBpm } from "@/lib/trackFilter";
 import { MY_TAG_LIMIT, newMyTagName } from "@/lib/myTags";
-import { fromServicePanel } from "@/lib/tagPanel";
+import { fromServicePanel, fromServiceTagsSet } from "@/lib/tagPanel";
 import { referenceDeviceSettings } from "./mock-device-settings";
 import { createMockDeviceLibraries, type MockImportEntry } from "./mock-device-library";
 import { createMockIntake } from "./mock-intake";
@@ -2462,6 +2462,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
   const tagPanel = createMockTagPanel({
     all, categories: myTagCategories, wait, ready: () => ready,
     tagsOf: (id) => { const row = all.find((r) => r.id === id); return row ? detailsOf(row).myTags : []; },
+    setTags: (id, tags) => { const row = all.find((r) => r.id === id); if (row) detailsOf(row).myTags = [...tags]; },
+    recordEdit: (label, apply, undo) => { apply(); return recordEdit({ label, undo, redo: apply }); },
   });
   if (typeof window !== "undefined") {
     // `__setPrepColour(id, colourId)` (0 for none): an edit as the Library list makes it.
@@ -2483,7 +2485,9 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     intakeColours: intake.intakeColours,
     intakeSetPrepColour: intake.intakeSetPrepColour,
     intakeTagPanel: async (track) => fromServicePanel(await tagPanel.intakeTagPanel(track)),
-    intakeSetTagFact: tagPanel.intakeSetTagFact,
+    intakeSetTags: async (track, dimension, terms, version, dropUnmapped) =>
+      fromServiceTagsSet(await tagPanel.intakeSetTags(track, dimension, terms, version, dropUnmapped)),
+    onSidecarChanged: tagPanel.onSidecarChanged,
     rekordboxBrowseSettings: () => Promise.resolve(null),
     librarySummary: () =>
       ready

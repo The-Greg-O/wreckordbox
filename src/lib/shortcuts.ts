@@ -168,6 +168,7 @@ export type Action =
   | "intakeEnergy3"
   | "intakeEnergy4"
   | "intakeEnergy5"
+  | "intakeTag"
   // The GRID panel: `Adjust BPM/BeatGrid` (`command + G`) opens it, the
   // modified arrows are `Shift Beatgrid left/right`, and `Shift Beatgrid to
   // the center` (`option + command + \`) puts the nearest beat under the

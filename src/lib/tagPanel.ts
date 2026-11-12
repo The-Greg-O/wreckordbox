@@ -28,14 +28,28 @@ export interface PanelDimension {
   /** Reaches the deck as a MyTag category. */
   deck: boolean;
   tree: boolean;
+  /** A deck-facing tree whose children carry their parents' MyTags on the deck. */
+  tagParents: boolean;
+  /** Takes one tag at most: choosing another replaces it. */
+  single: boolean;
   edit: TagEdit;
   tags: PanelTag[];
+}
+
+/** A value a track holds that no tag of the dimension stands for. */
+export interface Unmapped {
+  id: string;
+  name: string;
 }
 
 export interface TrackTags {
   id: string;
   /** By dimension id: the tags set, as tag ids. Ancestors in the tree are implied, not listed. */
   set: Record<string, string[]>;
+  /** By dimension id: values no tag stands for; shown, never dropped unless the DJ says. */
+  unmapped: Record<string, Unmapped[]>;
+  /** By dimension id: what a write must hand back, so a stale click is refused. */
+  versions: Record<string, string>;
   /** Why the DJ's Facts could not be read; the Fact dimensions are then unknown. */
   factsUnavailable: string | null;
 }
@@ -43,6 +57,8 @@ export interface TrackTags {
 export interface TagPanel {
   source: "tag_schema" | "my_tags";
   schemaProblem: string | null;
+  /** Changes whenever the description does. */
+  schemaVersion: string;
   /** Deck-facing first, each group in the service's order. */
   dimensions: PanelDimension[];
   track: TrackTags | null;
@@ -64,6 +80,8 @@ export function fromServicePanel(raw: unknown): TagPanel {
       label: str(d.label),
       deck: d.deck === true,
       tree: d.tree === true,
+      tagParents: d.tag_parents === true,
+      single: d.single === true,
       edit: d.edit === "fact" ? "fact" : "my_tag",
       tags: list(d.tags).map((tagItem): PanelTag => {
         const tag = tagItem as Raw;
@@ -79,15 +97,23 @@ export function fromServicePanel(raw: unknown): TagPanel {
   });
   const deckFirst = [...dimensions.filter((d) => d.deck), ...dimensions.filter((d) => !d.deck)];
   const track = panel.track as Raw | null | undefined;
+  const record = (value: unknown): Raw => (typeof value === "object" && value !== null ? value as Raw : {});
   const set: Record<string, string[]> = {};
-  if (track && typeof track.set === "object" && track.set !== null) {
-    for (const [dimension, tags] of Object.entries(track.set as Raw)) set[dimension] = list(tags).map(str);
+  const unmapped: Record<string, Unmapped[]> = {};
+  const versions: Record<string, string> = {};
+  if (track) {
+    for (const [dimension, tags] of Object.entries(record(track.set))) set[dimension] = list(tags).map(str);
+    for (const [dimension, values] of Object.entries(record(track.unmapped))) {
+      unmapped[dimension] = list(values).map((value) => ({ id: str(record(value).id), name: str(record(value).name) }));
+    }
+    for (const [dimension, version] of Object.entries(record(track.versions))) versions[dimension] = str(version);
   }
   return {
     source: panel.source === "tag_schema" ? "tag_schema" : "my_tags",
     schemaProblem: strOrNull(panel.schema_problem),
+    schemaVersion: str(panel.schema_version),
     dimensions: deckFirst,
-    track: track ? { id: str(track.id), set, factsUnavailable: strOrNull(track.facts_unavailable) } : null,
+    track: track ? { id: str(track.id), set, unmapped, versions, factsUnavailable: strOrNull(track.facts_unavailable) } : null,
   };
 }
 
@@ -113,20 +139,41 @@ export function tagState(dimension: PanelDimension, set: readonly string[], id: 
 }
 
 /**
- * The tags a Fact dimension holds after clicking `id`, in the dimension's
- * order. A set tag comes off; an implied one comes off by taking off
+ * The tags a dimension holds after clicking `id`, in the dimension's order,
+ * whichever way it is stored (a deck-facing tree derives its MyTags from
+ * this selection in the service). A set tag comes off; an implied one comes off by taking off
  * every tag that implies it; an off one goes on, replacing its ancestors
  * (a Fact names the most specific tags only).
  */
 export function toggledTerms(dimension: PanelDimension, set: readonly string[], id: string): string[] {
   const state = tagState(dimension, set, id);
+  // One tag at most: the click is the answer, or clears it.
+  if (dimension.single) return state === "set" ? [] : [id];
   let next: string[];
   if (state === "set") next = set.filter((carried) => carried !== id);
-  else if (state === "implied") next = set.filter((carried) => !ancestors(dimension, carried).includes(id));
+  // Implied by a child: narrows to the parent alone (its descendants off).
+  else if (state === "implied") next = [...set.filter((carried) => !ancestors(dimension, carried).includes(id)), id];
   else {
     const above = dimension.tree ? ancestors(dimension, id) : [];
     next = [...set.filter((carried) => !above.includes(carried)), id];
   }
   const order = dimension.tags.map((tag) => tag.id);
   return [...new Set(next)].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+}
+
+/** The answer of one click (`intake.set_tags`). */
+export interface TagsSet {
+  changed: boolean;
+  panel: TagPanel;
+  /** Why the DJ's Fact was not recorded, each said; empty when it was. */
+  factsNotRecorded: string[];
+}
+
+export function fromServiceTagsSet(raw: unknown): TagsSet {
+  const set = (raw ?? {}) as Raw;
+  return {
+    changed: set.changed === true,
+    panel: fromServicePanel(set.panel),
+    factsNotRecorded: list(set.facts_not_recorded).map(str),
+  };
 }

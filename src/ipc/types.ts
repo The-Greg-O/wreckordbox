@@ -1181,11 +1181,15 @@ export interface Backend {
    */
   intakeTagPanel(track: string | null): Promise<import("@/lib/tagPanel").TagPanel>;
   /**
-   * Sets a dimension that does not reach the deck to exactly `terms` on a
-   * track, as the DJ's Fact (a Sidecar write, not a Library edit). Deck-facing
-   * tags are set with `edits.putMyTag`.
+   * One click of the tag panel (wbx-65; the service's `intake.set_tags`):
+   * `dimension` of `track` set to exactly `terms` from the panel at
+   * `version`. One step of Edit › Undo whichever store it touched; refused
+   * under Library Protection, and with code `tag_panel_stale` (the error's
+   * `detail`) when the panel was not current.
    */
-  intakeSetTagFact(track: string, dimension: string, terms: readonly string[]): Promise<void>;
+  intakeSetTags(track: string, dimension: string, terms: readonly string[], version: string, dropUnmapped: readonly string[], comments: boolean): Promise<import("@/lib/tagPanel").TagsSet>;
+  /** A Fact changed in the Sidecar (any client): `{ trackId, kind }`. */
+  onSidecarChanged(listener: (change: { trackId: string; kind: string }) => void): () => void;
   /** Maps collection track ids to rows already in one of a stick's libraries. */
   devicePlaylistCollectionTracks(path: string, format: DeviceFormat, tracks: string[]): Promise<(string | null)[]>;
   /**
