@@ -30,7 +30,11 @@ fn rating(sandbox: &Sandbox, id: &str) -> serde_json::Value {
 /// Stick (the sandbox runs with `RBXPORT_TEST=1`).
 fn on_a_stick(sandbox: &Sandbox) -> String {
     let library = sandbox.master_db().parent().unwrap().to_path_buf();
-    std::fs::write(library.join(wreckordbox_stick_protection::STAND_IN_MARKER), b"").unwrap();
+    std::fs::write(
+        library.join(wreckordbox_stick_protection::STAND_IN_MARKER),
+        b"",
+    )
+    .unwrap();
     library.to_str().unwrap().to_owned()
 }
 
@@ -44,9 +48,19 @@ fn a_library_on_a_protected_stick_is_not_edited_until_the_stick_is_unlocked() {
     assert!(!refused.status.success(), "{}", refused.stdout);
     let error = refused.error_json();
     assert_eq!(error["error"]["code"], "stick_protected", "{error}");
-    assert!(error["error"]["message"].as_str().unwrap().contains("unlock"), "{error}");
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unlock"),
+        "{error}"
+    );
     assert_eq!(rating(&sandbox, "10003"), 0);
-    assert_eq!(std::fs::read(sandbox.master_db()).unwrap(), before, "not a byte of the Library changed");
+    assert_eq!(
+        std::fs::read(sandbox.master_db()).unwrap(),
+        before,
+        "not a byte of the Library changed"
+    );
 
     let unlocked = sandbox.cli(&["stick", "unlock", &stick, "--name", "library"]);
     assert!(unlocked.status.success(), "{}", unlocked.stderr);
@@ -65,16 +79,39 @@ fn a_sidecar_on_a_protected_stick_is_not_written_until_the_stick_is_unlocked() {
     let sandbox = Sandbox::new();
     let sidecar = sandbox.sidecar_dir();
     std::fs::create_dir_all(&sidecar).unwrap();
-    std::fs::write(sidecar.join(wreckordbox_stick_protection::STAND_IN_MARKER), b"").unwrap();
-    let record = ["--json", "facts", "record", "10003", "mood", "Dark", "--source", "dj"];
+    std::fs::write(
+        sidecar.join(wreckordbox_stick_protection::STAND_IN_MARKER),
+        b"",
+    )
+    .unwrap();
+    let record = [
+        "--json", "facts", "record", "10003", "mood", "Dark", "--source", "dj",
+    ];
 
     let refused = sandbox.cli(&record);
     assert!(!refused.status.success(), "{}", refused.stdout);
-    assert_eq!(refused.error_json()["error"]["code"], "stick_protected", "{}", refused.stdout);
-    assert!(!sidecar.join("sidecar.db").exists(), "the Sidecar was not even made");
+    assert_eq!(
+        refused.error_json()["error"]["code"],
+        "stick_protected",
+        "{}",
+        refused.stdout
+    );
+    assert!(
+        !sidecar.join("sidecar.db").exists(),
+        "the Sidecar was not even made"
+    );
 
     let name = sidecar.file_name().unwrap().to_str().unwrap().to_owned();
-    assert!(sandbox.cli(&["stick", "unlock", sidecar.to_str().unwrap(), "--name", &name]).status.success());
+    assert!(sandbox
+        .cli(&[
+            "stick",
+            "unlock",
+            sidecar.to_str().unwrap(),
+            "--name",
+            &name
+        ])
+        .status
+        .success());
     let recorded = sandbox.cli(&record);
     assert!(recorded.status.success(), "{}", recorded.stderr);
 }

@@ -92,7 +92,11 @@ pub async fn stick_settle(
 }
 
 /// `access`: the capability, Stick Protection's leave (wbx-45.11).
-fn settle(access: &crate::stick_guard::StickAccess, mount: &Path, rekordbox_running: bool) -> AppResult<()> {
+fn settle(
+    access: &crate::stick_guard::StickAccess,
+    mount: &Path,
+    rekordbox_running: bool,
+) -> AppResult<()> {
     access.recheck()?;
     if !mount.is_dir() {
         return Err(AppError::new(
@@ -398,8 +402,17 @@ mod tests {
             crate::stick_guard::testing::unlock(&state, mount);
             let app = crate::stick_guard::testing::app(state);
             let held = tauri::Manager::state::<std::sync::Arc<crate::state::AppState>>(&app);
-            let approval = crate::stick_guard::testing::token(&held, mount, crate::stick_approval::StickOperation::Settle);
-            run(stick_settle(tauri::Manager::state(&app), mount.to_string_lossy().into_owned(), approval)).unwrap();
+            let approval = crate::stick_guard::testing::token(
+                &held,
+                mount,
+                crate::stick_approval::StickOperation::Settle,
+            );
+            run(stick_settle(
+                tauri::Manager::state(&app),
+                mount.to_string_lossy().into_owned(),
+                approval,
+            ))
+            .unwrap();
 
             assert_eq!(std::fs::read(mount.join(PDB)).unwrap(), next.pdb);
             assert_eq!(std::fs::read(mount.join(ONE)).unwrap(), next.one);
@@ -430,7 +443,8 @@ mod tests {
         stick(dest.path());
         interrupt(dest.path());
         let before = snapshot(dest.path());
-        let refused = settle(&crate::stick_guard::testing::ordinary(), dest.path(), true).unwrap_err();
+        let refused =
+            settle(&crate::stick_guard::testing::ordinary(), dest.path(), true).unwrap_err();
         assert_eq!(refused.kind, ErrorKind::ReadOnly);
         assert_eq!(snapshot(dest.path()), before);
     }

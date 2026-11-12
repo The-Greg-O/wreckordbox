@@ -178,7 +178,10 @@ struct Stored {
 /// The Stick's name: its root folder's.
 #[must_use]
 pub fn name_of(root: &Path) -> String {
-    root.file_name().map_or_else(|| root.display().to_string(), |n| n.to_string_lossy().into_owned())
+    root.file_name().map_or_else(
+        || root.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    )
 }
 
 /// Whether the Stick carries the Spare stick marker.
@@ -226,8 +229,13 @@ pub fn classify(path: &Path) -> Volume {
         return Volume::Ordinary;
     };
     if test_mode() {
-        if let Some(root) = resolved.ancestors().find(|dir| dir.join(STAND_IN_MARKER).is_file()) {
-            return Volume::Stick { root: root.to_path_buf() };
+        if let Some(root) = resolved
+            .ancestors()
+            .find(|dir| dir.join(STAND_IN_MARKER).is_file())
+        {
+            return Volume::Stick {
+                root: root.to_path_buf(),
+            };
         }
     }
     match facts_of(&resolved) {
@@ -240,8 +248,15 @@ pub fn classify(path: &Path) -> Volume {
 /// The facts of the volume holding `resolved` (canonical).
 fn facts_of(resolved: &Path) -> Option<VolumeFacts> {
     let mount = containing_mount(resolved)?;
-    let media = ["/run/media", "/media", "/Volumes"].iter().any(|dir| mount.point.starts_with(dir));
-    Some(VolumeFacts { export: player_export(&mount.point), removable: removable(&mount.device), media, root: mount.point })
+    let media = ["/run/media", "/media", "/Volumes"]
+        .iter()
+        .any(|dir| mount.point.starts_with(dir));
+    Some(VolumeFacts {
+        export: player_export(&mount.point),
+        removable: removable(&mount.device),
+        media,
+        root: mount.point,
+    })
 }
 
 fn player_export(root: &Path) -> Option<bool> {
@@ -269,12 +284,19 @@ fn containing_mount(path: &Path) -> Option<Mount> {
     let mut best: Option<Mount> = None;
     for line in table.lines() {
         let fields: Vec<&str> = line.split(' ').collect();
-        let (Some(device), Some(point)) = (fields.get(2), fields.get(4)) else { continue };
+        let (Some(device), Some(point)) = (fields.get(2), fields.get(4)) else {
+            continue;
+        };
         let point = PathBuf::from(unescape(point));
         if path.starts_with(&point)
-            && best.as_ref().is_none_or(|b| point.components().count() >= b.point.components().count())
+            && best
+                .as_ref()
+                .is_none_or(|b| point.components().count() >= b.point.components().count())
         {
-            best = Some(Mount { point, device: (*device).to_owned() });
+            best = Some(Mount {
+                point,
+                device: (*device).to_owned(),
+            });
         }
     }
     best
@@ -286,8 +308,14 @@ fn unescape(text: &str) -> String {
     let mut out = Vec::with_capacity(bytes.len());
     let mut at = 0;
     while at < bytes.len() {
-        if bytes[at] == b'\\' && at + 3 < bytes.len() && bytes[at + 1..at + 4].iter().all(u8::is_ascii_digit) {
-            if let Some(code) = std::str::from_utf8(&bytes[at + 1..at + 4]).ok().and_then(|s| u8::from_str_radix(s, 8).ok()) {
+        if bytes[at] == b'\\'
+            && at + 3 < bytes.len()
+            && bytes[at + 1..at + 4].iter().all(u8::is_ascii_digit)
+        {
+            if let Some(code) = std::str::from_utf8(&bytes[at + 1..at + 4])
+                .ok()
+                .and_then(|s| u8::from_str_radix(s, 8).ok())
+            {
                 out.push(code);
                 at += 4;
                 continue;
@@ -305,9 +333,16 @@ fn removable(device: &str) -> Option<bool> {
         // No block device behind it (tmpfs, a network or virtual filesystem).
         return Some(false);
     }
-    let node = Path::new("/sys/dev/block").join(device).canonicalize().ok()?;
+    let node = Path::new("/sys/dev/block")
+        .join(device)
+        .canonicalize()
+        .ok()?;
     let usb = node.to_string_lossy().contains("/usb");
-    let flag = |dir: &Path| std::fs::read_to_string(dir.join("removable")).ok().map(|text| text.trim() == "1");
+    let flag = |dir: &Path| {
+        std::fs::read_to_string(dir.join("removable"))
+            .ok()
+            .map(|text| text.trim() == "1")
+    };
     // A partition's own folder has no `removable`: its disk's says.
     match flag(&node).or_else(|| node.parent().and_then(flag)) {
         Some(removable) => Some(removable || usb),
@@ -319,7 +354,11 @@ fn removable(device: &str) -> Option<bool> {
 /// `path` made absolute and canonical through its nearest existing
 /// ancestor, the rest appended (with `..` and `.` resolved).
 fn resolve(path: &Path) -> Option<PathBuf> {
-    let absolute = if path.is_absolute() { path.to_path_buf() } else { std::env::current_dir().ok()?.join(path) };
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().ok()?.join(path)
+    };
     let mut rest = Vec::new();
     let mut existing = absolute.as_path();
     loop {
@@ -382,20 +421,31 @@ fn identity_in(root: &Path, boot: Option<String>) -> Option<Identity> {
     use std::os::unix::fs::MetadataExt as _;
     let boot = boot?;
     let root = root.canonicalize().ok()?;
-    let mask = rustix::fs::StatxFlags::from_bits_retain(STATX_MNT_ID_UNIQUE) | rustix::fs::StatxFlags::INO;
-    let found = rustix::fs::statx(rustix::fs::CWD, &root, rustix::fs::AtFlags::empty(), mask).ok()?;
+    let mask =
+        rustix::fs::StatxFlags::from_bits_retain(STATX_MNT_ID_UNIQUE) | rustix::fs::StatxFlags::INO;
+    let found =
+        rustix::fs::statx(rustix::fs::CWD, &root, rustix::fs::AtFlags::empty(), mask).ok()?;
     if found.stx_mask & STATX_MNT_ID_UNIQUE == 0 {
         return None;
     }
     let meta = std::fs::metadata(&root).ok()?;
-    Some(Identity { root, boot, mount: found.stx_mnt_id, dev: meta.dev(), ino: meta.ino() })
+    Some(Identity {
+        root,
+        boot,
+        mount: found.stx_mnt_id,
+        dev: meta.dev(),
+        ino: meta.ino(),
+    })
 }
 
 // ---------------------------------------------------------------------------
 // The record
 
 fn read_stored(state_dir: &Path) -> Stored {
-    std::fs::read(state_dir.join(FILE)).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default()
+    std::fs::read(state_dir.join(FILE))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
 }
 
 /// Whether the Stick holding `path` is protected now. A path on no Stick
@@ -405,7 +455,12 @@ pub fn status(state_dir: &Path, path: &Path) -> Status {
     let stored = read_stored(state_dir);
     let root = device_root(path).unwrap_or_else(|| path.to_path_buf());
     let unlocked = identity(&root).is_some_and(|now| stored.unlocked.contains(&now));
-    Status { protected: !unlocked, spare: is_spare(&root), name: name_of(&root), revision: stored.revision }
+    Status {
+        protected: !unlocked,
+        spare: is_spare(&root),
+        name: name_of(&root),
+        revision: stored.revision,
+    }
 }
 
 /// What the DJ is told when a write is refused because the Stick is protected.
@@ -472,7 +527,9 @@ pub fn root_of(path: &Path) -> PathBuf {
 ///
 /// When the record cannot be written.
 pub fn lock_held(state_dir: &Path, root: &Path, _held: &ExecLock) -> std::io::Result<Status> {
-    change(state_dir, |stored| stored.unlocked.retain(|m| m.root != root))?;
+    change(state_dir, |stored| {
+        stored.unlocked.retain(|m| m.root != root)
+    })?;
     Ok(status(state_dir, root))
 }
 
@@ -488,7 +545,9 @@ fn change(state_dir: &Path, edit: impl FnOnce(&mut Stored)) -> std::io::Result<(
         .open(state_dir.join(LOCK_FILE))?;
     turn.lock()?;
     let mut stored = read_stored(state_dir);
-    stored.unlocked.retain(|m| identity(&m.root).is_some_and(|now| now == *m));
+    stored
+        .unlocked
+        .retain(|m| identity(&m.root).is_some_and(|now| now == *m));
     edit(&mut stored);
     stored.revision += 1;
     let partial = state_dir.join(format!("{FILE}.{}.partial", std::process::id()));
@@ -531,7 +590,10 @@ static HOLDS: std::sync::LazyLock<(std::sync::Mutex<Holds>, std::sync::Condvar)>
     std::sync::LazyLock::new(Default::default);
 
 fn holds() -> std::sync::MutexGuard<'static, Holds> {
-    HOLDS.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    HOLDS
+        .0
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 impl Drop for ExecLock {
@@ -558,7 +620,12 @@ fn exec_path(state_dir: &Path, root: &Path) -> std::io::Result<PathBuf> {
 }
 
 fn open_exec(key: &Path) -> std::io::Result<std::fs::File> {
-    std::fs::OpenOptions::new().create(true).truncate(false).read(true).write(true).open(key)
+    std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(key)
 }
 
 /// The thread's own hold taken again, or `false` when it holds none.
@@ -589,10 +656,20 @@ pub fn exec_lock(state_dir: &Path, root: &Path) -> std::io::Result<ExecLock> {
         if !held.contains_key(&key) {
             break;
         }
-        held = HOLDS.1.wait(held).unwrap_or_else(std::sync::PoisonError::into_inner);
+        held = HOLDS
+            .1
+            .wait(held)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
     }
     let me = std::thread::current().id();
-    held.insert(key.clone(), Hold { thread: me, count: 1, file: None });
+    held.insert(
+        key.clone(),
+        Hold {
+            thread: me,
+            count: 1,
+            file: None,
+        },
+    );
     drop(held);
     // Across processes: waits here, holding nothing but this process's turn.
     let taken = open_exec(&key).and_then(|file| file.lock().map(|()| file));
@@ -631,7 +708,14 @@ pub fn try_exec_lock(state_dir: &Path, root: &Path) -> std::io::Result<Option<Ex
     match file.try_lock() {
         Ok(()) => {
             let me = std::thread::current().id();
-            held.insert(key.clone(), Hold { thread: me, count: 1, file: Some(file) });
+            held.insert(
+                key.clone(),
+                Hold {
+                    thread: me,
+                    count: 1,
+                    file: Some(file),
+                },
+            );
             Ok(Some(ExecLock { key }))
         }
         Err(std::fs::TryLockError::WouldBlock) => Ok(None),
@@ -652,7 +736,9 @@ impl Authorization {
     /// The Stick written to, or `None` for an ordinary folder.
     #[must_use]
     pub fn stick(&self) -> Option<&Path> {
-        self.stick.as_ref().map(|(identity, _)| identity.root.as_path())
+        self.stick
+            .as_ref()
+            .map(|(identity, _)| identity.root.as_path())
     }
 
     /// Ends the unlock of the Stick this holds, as [`lock`] does, without
@@ -663,8 +749,12 @@ impl Authorization {
     ///
     /// When the record cannot be written.
     pub fn relock(&self) -> std::io::Result<()> {
-        let Some((held, _)) = &self.stick else { return Ok(()) };
-        change(&self.state_dir, |stored| stored.unlocked.retain(|m| m.root != held.root))
+        let Some((held, _)) = &self.stick else {
+            return Ok(());
+        };
+        change(&self.state_dir, |stored| {
+            stored.unlocked.retain(|m| m.root != held.root)
+        })
     }
 
     /// Whether the write may go on: the same mount of the Stick is still
@@ -674,12 +764,18 @@ impl Authorization {
     ///
     /// [`Refused::Replaced`] or [`Refused::Protected`].
     pub fn recheck(&self) -> Result<(), Refused> {
-        let Some((held, _)) = &self.stick else { return Ok(()) };
+        let Some((held, _)) = &self.stick else {
+            return Ok(());
+        };
         if identity(&held.root).as_ref() != Some(held) {
-            return Err(Refused::Replaced { root: held.root.clone() });
+            return Err(Refused::Replaced {
+                root: held.root.clone(),
+            });
         }
         if !read_stored(&self.state_dir).unlocked.contains(held) {
-            return Err(Refused::Protected { root: held.root.clone() });
+            return Err(Refused::Protected {
+                root: held.root.clone(),
+            });
         }
         Ok(())
     }
@@ -694,7 +790,10 @@ impl Authorization {
 /// [`Refused`]: nothing may be written.
 pub fn authorize(state_dir: &Path, path: &Path) -> Result<Authorization, Refused> {
     match classify(path) {
-        Volume::Ordinary => Ok(Authorization { stick: None, state_dir: state_dir.to_path_buf() }),
+        Volume::Ordinary => Ok(Authorization {
+            stick: None,
+            state_dir: state_dir.to_path_buf(),
+        }),
         Volume::Stick { root } => authorize_stick(state_dir, &root),
     }
 }
@@ -706,15 +805,22 @@ pub fn authorize(state_dir: &Path, path: &Path) -> Result<Authorization, Refused
 ///
 /// [`Refused`]: nothing may be written.
 pub fn authorize_stick(state_dir: &Path, root: &Path) -> Result<Authorization, Refused> {
-    let root = device_root(root).unwrap_or_else(|| root.canonicalize().unwrap_or_else(|_| root.to_path_buf()));
-    let held = exec_lock(state_dir, &root).map_err(|e| Refused::Io { root: root.clone(), why: e.to_string() })?;
+    let root = device_root(root)
+        .unwrap_or_else(|| root.canonicalize().unwrap_or_else(|_| root.to_path_buf()));
+    let held = exec_lock(state_dir, &root).map_err(|e| Refused::Io {
+        root: root.clone(),
+        why: e.to_string(),
+    })?;
     let Some(now) = identity(&root) else {
         return Err(Refused::Protected { root });
     };
     if !read_stored(state_dir).unlocked.contains(&now) {
         return Err(Refused::Protected { root });
     }
-    Ok(Authorization { stick: Some((now, held)), state_dir: state_dir.to_path_buf() })
+    Ok(Authorization {
+        stick: Some((now, held)),
+        state_dir: state_dir.to_path_buf(),
+    })
 }
 
 #[cfg(test)]
@@ -722,29 +828,58 @@ mod tests {
     use super::*;
 
     fn facts(export: Option<bool>, removable: Option<bool>, media: bool) -> VolumeFacts {
-        VolumeFacts { root: PathBuf::from("/x"), removable, media, export }
+        VolumeFacts {
+            root: PathBuf::from("/x"),
+            removable,
+            media,
+            export,
+        }
     }
 
     #[test]
     fn the_rule_reads_the_volume_and_fails_closed_on_removable_media() {
-        assert!(is_stick(&facts(Some(true), Some(false), false)), "a player export, even on a fixed disk");
-        assert!(!is_stick(&facts(Some(false), Some(true), true)), "an external disk with no player export");
-        assert!(is_stick(&facts(None, Some(true), false)), "unreadable and removable");
-        assert!(is_stick(&facts(None, Some(false), true)), "unreadable and under the media folders");
-        assert!(is_stick(&facts(None, None, false)), "unreadable and may be removable");
-        assert!(!is_stick(&facts(None, Some(false), false)), "unreadable fixed disk outside the media folders");
+        assert!(
+            is_stick(&facts(Some(true), Some(false), false)),
+            "a player export, even on a fixed disk"
+        );
+        assert!(
+            !is_stick(&facts(Some(false), Some(true), true)),
+            "an external disk with no player export"
+        );
+        assert!(
+            is_stick(&facts(None, Some(true), false)),
+            "unreadable and removable"
+        );
+        assert!(
+            is_stick(&facts(None, Some(false), true)),
+            "unreadable and under the media folders"
+        );
+        assert!(
+            is_stick(&facts(None, None, false)),
+            "unreadable and may be removable"
+        );
+        assert!(
+            !is_stick(&facts(None, Some(false), false)),
+            "unreadable fixed disk outside the media folders"
+        );
     }
 
     #[test]
     fn without_a_boot_id_a_mount_has_no_identity() {
         let dir = tempfile::tempdir().unwrap();
         assert!(identity_in(dir.path(), None).is_none());
-        assert!(identity_in(dir.path(), Some("b".into())).is_some(), "statx's unique mount id is available here");
+        assert!(
+            identity_in(dir.path(), Some("b".into())).is_some(),
+            "statx's unique mount id is available here"
+        );
     }
 
     #[test]
     fn mount_points_with_spaces_are_read() {
-        assert_eq!(unescape("/run/media/go/DJ\\040STICK"), "/run/media/go/DJ STICK");
+        assert_eq!(
+            unescape("/run/media/go/DJ\\040STICK"),
+            "/run/media/go/DJ STICK"
+        );
     }
 
     #[test]

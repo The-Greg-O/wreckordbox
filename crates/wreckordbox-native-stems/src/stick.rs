@@ -78,7 +78,9 @@ pub fn exported(
         let library = match wreckordbox_stick_outline::library(stick, format) {
             Ok(library) => library,
             Err(wreckordbox_stick_outline::ReadError::UnfinishedWrite) => {
-                return Err(NativeStemsError::UnfinishedWrite { stick: stick.to_path_buf() });
+                return Err(NativeStemsError::UnfinishedWrite {
+                    stick: stick.to_path_buf(),
+                });
             }
             Err(error) => {
                 unreadable = Some(error.to_string());

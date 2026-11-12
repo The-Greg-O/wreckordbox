@@ -55,7 +55,9 @@ impl StickAccess {
     /// Whether the write may go on: every Stick held is the same mount and
     /// still unlocked. Call before each step of a long write.
     pub fn recheck(&self) -> AppResult<()> {
-        self.held.iter().try_for_each(|held| held.recheck().map_err(|e| refused(&e)))
+        self.held
+            .iter()
+            .try_for_each(|held| held.recheck().map_err(|e| refused(&e)))
     }
 }
 
@@ -82,7 +84,8 @@ fn gone() -> AppError {
 
 /// A write to `destination`, which may be on a Stick: see the module.
 pub fn enter(state_dir: &Path, destination: &Path) -> AppResult<StickAccess> {
-    let held = wreckordbox_stick_protection::authorize(state_dir, destination).map_err(|e| refused(&e))?;
+    let held =
+        wreckordbox_stick_protection::authorize(state_dir, destination).map_err(|e| refused(&e))?;
     Ok(StickAccess { held: vec![held] })
 }
 
@@ -92,55 +95,81 @@ pub fn enter_stick(state_dir: &Path, root: &Path) -> AppResult<StickAccess> {
     if !root.is_dir() {
         return Err(gone());
     }
-    let held = wreckordbox_stick_protection::authorize_stick(state_dir, root).map_err(|e| refused(&e))?;
+    let held =
+        wreckordbox_stick_protection::authorize_stick(state_dir, root).map_err(|e| refused(&e))?;
     Ok(StickAccess { held: vec![held] })
 }
 
 /// Leave to write, or recover, the Library at `location` (wbx-45.11): a
 /// Library kept on a Stick is written only while that Stick is unlocked,
 /// as the Library core's own edits are (`rbl_library::stick`).
-pub fn enter_library(state_dir: &Path, location: &rbl_db::LibraryLocation) -> AppResult<StickAccess> {
-    enter(state_dir, location.master_db.parent().unwrap_or(&location.master_db))
+pub fn enter_library(
+    state_dir: &Path,
+    location: &rbl_db::LibraryLocation,
+) -> AppResult<StickAccess> {
+    enter(
+        state_dir,
+        location.master_db.parent().unwrap_or(&location.master_db),
+    )
 }
 
 /// The destinations of one sync: each resolved and classified, refused when
 /// two are the same place, then every Stick entered in path order, before
 /// any approval is used. Each destination's leave, or why it was refused,
 /// in the order asked.
-pub fn enter_many(state_dir: &Path, destinations: &[String]) -> AppResult<Vec<AppResult<StickAccess>>> {
+pub fn enter_many(
+    state_dir: &Path,
+    destinations: &[String],
+) -> AppResult<Vec<AppResult<StickAccess>>> {
     let places: Vec<Option<PathBuf>> = destinations
         .iter()
         .map(|d| {
             let path = Path::new(d);
-            path.is_dir().then(|| stick_of(path).unwrap_or_else(|| path.canonicalize().unwrap_or_else(|_| path.to_path_buf())))
+            path.is_dir().then(|| {
+                stick_of(path)
+                    .unwrap_or_else(|| path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
+            })
         })
         .collect();
     let mut seen = std::collections::BTreeSet::new();
     for place in places.iter().flatten() {
         if !seen.insert(place.clone()) {
-            return Err(AppError::internal("The same USB device was selected more than once. Select it once and retry."));
+            return Err(AppError::internal(
+                "The same USB device was selected more than once. Select it once and retry.",
+            ));
         }
     }
     // Entered in path order, whatever order the destinations were asked in.
     let mut order: Vec<usize> = (0..places.len()).filter(|i| places[*i].is_some()).collect();
     order.sort_by(|a, b| places[*a].cmp(&places[*b]));
-    let mut entered: Vec<Option<AppResult<StickAccess>>> = (0..places.len()).map(|_| None).collect();
+    let mut entered: Vec<Option<AppResult<StickAccess>>> =
+        (0..places.len()).map(|_| None).collect();
     for i in order {
         if let Some(place) = &places[i] {
             entered[i] = Some(enter(state_dir, place));
         }
     }
-    Ok(entered.into_iter().map(|e| e.unwrap_or_else(|| Err(gone()))).collect())
+    Ok(entered
+        .into_iter()
+        .map(|e| e.unwrap_or_else(|| Err(gone())))
+        .collect())
 }
 
 /// Leave to write the audio files at `paths` (their tags): refused when any
 /// is on a Stick the DJ has not unlocked. Each Stick entered once, in path
 /// order, and held while the leave lives.
-pub fn enter_files<'a>(state_dir: &Path, paths: impl IntoIterator<Item = &'a Path>) -> AppResult<StickAccess> {
-    let roots: std::collections::BTreeSet<PathBuf> = paths.into_iter().filter_map(stick_of).collect();
+pub fn enter_files<'a>(
+    state_dir: &Path,
+    paths: impl IntoIterator<Item = &'a Path>,
+) -> AppResult<StickAccess> {
+    let roots: std::collections::BTreeSet<PathBuf> =
+        paths.into_iter().filter_map(stick_of).collect();
     let mut held = Vec::with_capacity(roots.len());
     for root in &roots {
-        held.push(wreckordbox_stick_protection::authorize_stick(state_dir, root).map_err(|e| refused(&e))?);
+        held.push(
+            wreckordbox_stick_protection::authorize_stick(state_dir, root)
+                .map_err(|e| refused(&e))?,
+        );
     }
     Ok(StickAccess { held })
 }
@@ -172,15 +201,18 @@ pub fn stick_unlock(
     name: Option<String>,
 ) -> AppResult<wreckordbox_stick_protection::Status> {
     use wreckordbox_stick_protection::UnlockError;
-    wreckordbox_stick_protection::unlock(state.backup_dir(), Path::new(&path), name.as_deref()).map_err(|error| {
-        let kind = match error {
-            UnlockError::NotAStick => ErrorKind::NotFound,
-            UnlockError::NameRequired { .. } | UnlockError::NameMismatch { .. } => ErrorKind::Malformed,
-            UnlockError::NoIdentity => ErrorKind::StickProtected,
-            UnlockError::Io(_) => ErrorKind::Internal,
-        };
-        AppError::new(kind, error.to_string())
-    })
+    wreckordbox_stick_protection::unlock(state.backup_dir(), Path::new(&path), name.as_deref())
+        .map_err(|error| {
+            let kind = match error {
+                UnlockError::NotAStick => ErrorKind::NotFound,
+                UnlockError::NameRequired { .. } | UnlockError::NameMismatch { .. } => {
+                    ErrorKind::Malformed
+                }
+                UnlockError::NoIdentity => ErrorKind::StickProtected,
+                UnlockError::Io(_) => ErrorKind::Internal,
+            };
+            AppError::new(kind, error.to_string())
+        })
 }
 
 /// Protects the Stick at `path` again.
@@ -255,7 +287,11 @@ pub(crate) mod testing {
 
     pub(crate) fn unlock(state: &crate::state::AppState, root: &Path) {
         // A temporary folder standing in for a Stick (the tests run with RBXPORT_TEST=1).
-        std::fs::write(root.join(wreckordbox_stick_protection::STAND_IN_MARKER), b"").expect("marked");
+        std::fs::write(
+            root.join(wreckordbox_stick_protection::STAND_IN_MARKER),
+            b"",
+        )
+        .expect("marked");
         let name = wreckordbox_stick_protection::name_of(
             &root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
         );

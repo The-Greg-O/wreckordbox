@@ -200,7 +200,10 @@ pub async fn stick_write_approve(
     plan: String,
 ) -> AppResult<String> {
     let state_dir = state.backup_dir().to_path_buf();
-    blocking("stick_write_approve", move || stick_approval::approve(&state_dir, &plan)).await
+    blocking("stick_write_approve", move || {
+        stick_approval::approve(&state_dir, &plan)
+    })
+    .await
 }
 
 /// The DJ cancelled the plan `plan`: it can no longer be confirmed.

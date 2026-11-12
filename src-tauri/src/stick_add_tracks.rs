@@ -80,7 +80,9 @@ pub async fn device_playlist_add_library_tracks<R: tauri::Runtime>(
             )?;
             let _ = tauri::Emitter::emit(&app, "export:done", &report);
         }
-        crate::device_library::add_library_rows(&access, &state, stick, &format, &playlist, &tracks, duplicates)
+        crate::device_library::add_library_rows(
+            &access, &state, stick, &format, &playlist, &tracks, duplicates,
+        )
     })
     .await
 }

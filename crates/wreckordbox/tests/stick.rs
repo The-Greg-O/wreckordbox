@@ -52,7 +52,11 @@ fn a_gig_stick_unlocks_only_with_its_name_and_a_spare_stick_with_a_confirmation(
 
     let spare = sticks.path().join("SPARE");
     std::fs::create_dir(&spare).unwrap();
-    std::fs::write(spare.join(wreckordbox_stick_protection::STAND_IN_MARKER), b"").unwrap();
+    std::fs::write(
+        spare.join(wreckordbox_stick_protection::STAND_IN_MARKER),
+        b"",
+    )
+    .unwrap();
     std::fs::write(spare.join(".rbxport-disposable"), b"").unwrap();
     let spare = spare.to_str().unwrap();
     let unlocked = sandbox.cli(&["--json", "stick", "unlock", spare]);
@@ -81,10 +85,19 @@ fn a_folder_inside_a_stick_is_never_unlocked_on_its_own() {
     let inside = gig.join("PIONEER/Exports");
     let (gig, inside) = (gig.to_str().unwrap(), inside.to_str().unwrap());
 
-    assert!(sandbox.cli(&["stick", "unlock", inside, "--name", "GIG"]).status.success());
-    assert_eq!(sandbox.cli(&["--json", "stick", "status", gig]).json()["protected"], false);
+    assert!(sandbox
+        .cli(&["stick", "unlock", inside, "--name", "GIG"])
+        .status
+        .success());
+    assert_eq!(
+        sandbox.cli(&["--json", "stick", "status", gig]).json()["protected"],
+        false
+    );
     assert!(sandbox.cli(&["stick", "lock", gig]).status.success());
-    assert_eq!(sandbox.cli(&["--json", "stick", "status", inside]).json()["protected"], true);
+    assert_eq!(
+        sandbox.cli(&["--json", "stick", "status", inside]).json()["protected"],
+        true
+    );
 
     let ordinary = sticks.path().join("Exports");
     std::fs::create_dir(&ordinary).unwrap();

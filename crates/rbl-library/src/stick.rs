@@ -22,7 +22,10 @@ const MARK: &str = "is protected: nothing is written to it until it is unlocked"
 ///
 /// A refusal ([`refused`] says so) when the Library is on a protected
 /// Stick, or one removed or replaced; nothing may be written.
-pub fn leave(state_dir: &Path, location: &rbl_db::LibraryLocation) -> Result<Authorization, rbl_db::DbError> {
+pub fn leave(
+    state_dir: &Path,
+    location: &rbl_db::LibraryLocation,
+) -> Result<Authorization, rbl_db::DbError> {
     let folder = location.master_db.parent().unwrap_or(&location.master_db);
     wreckordbox_stick_protection::authorize(state_dir, folder).map_err(|why| error(&why))
 }

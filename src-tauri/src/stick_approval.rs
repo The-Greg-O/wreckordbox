@@ -160,8 +160,9 @@ pub type StickLock = wreckordbox_stick_protection::ExecLock;
 pub fn lock(state_dir: &Path, stick: &Path) -> AppResult<StickLock> {
     let root = wreckordbox_stick_protection::device_root(stick)
         .unwrap_or_else(|| stick.canonicalize().unwrap_or_else(|_| stick.to_path_buf()));
-    wreckordbox_stick_protection::exec_lock(state_dir, &root)
-        .map_err(|e| AppError::internal("The Stick could not be reserved.").with_detail(e.to_string()))
+    wreckordbox_stick_protection::exec_lock(state_dir, &root).map_err(|e| {
+        AppError::internal("The Stick could not be reserved.").with_detail(e.to_string())
+    })
 }
 
 /// The mounted directory's identity: another volume at the same path differs.
@@ -404,7 +405,11 @@ mod tests {
         }
     }
     fn token(stick: &Path, op: &StickOperation, generation: u64) -> String {
-        approve(&std::env::temp_dir(), &propose(stick, op.clone(), Some(generation)).unwrap()).unwrap()
+        approve(
+            &std::env::temp_dir(),
+            &propose(stick, op.clone(), Some(generation)).unwrap(),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -420,7 +425,10 @@ mod tests {
         );
         let plan = propose(dir.path(), op.clone(), Some(0)).unwrap();
         let token = approve(&std::env::temp_dir(), &plan).unwrap();
-        assert!(approve(&std::env::temp_dir(), &plan).is_err(), "a plan is confirmed once");
+        assert!(
+            approve(&std::env::temp_dir(), &plan).is_err(),
+            "a plan is confirmed once"
+        );
         consume(Some(&token), &op, dir.path(), 0).unwrap();
         let again = consume(Some(&token), &op, dir.path(), 0).err().unwrap();
         assert!(again.to_string().contains("already used"), "{again}");
