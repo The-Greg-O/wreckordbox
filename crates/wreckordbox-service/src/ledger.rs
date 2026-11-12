@@ -244,6 +244,9 @@ pub struct LedgerEntry {
     /// For a recorded Fact: the Fact, and the one it took the place of.
     pub fact: Option<crate::facts::Fact>,
     pub replaced: Option<crate::facts::Fact>,
+    /// Native judgements skipped without losing or refusing the Library edit.
+    #[serde(default)]
+    pub facts_not_recorded: Vec<wreckordbox_sidecar::dj_facts::Omission>,
 }
 
 /// What `runs.show` answers.
@@ -706,6 +709,12 @@ fn entry(entry: wreckordbox_sidecar::ledger::Entry) -> LedgerEntry {
         part_of: entry.part_of,
         reversible: entry.reversible,
         format: entry.format,
+        facts_not_recorded: entry
+            .payload
+            .as_ref()
+            .and_then(|p| p.get("facts_not_recorded"))
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default(),
         payload: entry.payload,
         values,
         fact: entry.fact.map(Into::into),
@@ -777,6 +786,10 @@ struct Spilled {
     reversible: bool,
     format: u32,
     payload: Option<Value>,
+    #[serde(default)]
+    dj_snapshot: Option<Value>,
+    #[serde(default)]
+    dj_facts: Option<wreckordbox_sidecar::dj_facts::NativeFacts>,
 }
 
 struct WindowRun {
@@ -801,6 +814,7 @@ struct Op {
     source: Source,
     description: String,
     command: Option<Value>,
+    dj_snapshot: Option<Value>,
 }
 
 #[derive(Default)]
@@ -903,6 +917,7 @@ const MADE_NOT_RECORDED: &str = "A change to the Library was made and its entry 
 /// Keeps the Ledger for one service: the `Ledger` its Library core tells.
 pub(crate) struct Keeper {
     stems: Arc<Stems>,
+    location: rbl_db::LibraryLocation,
     pause: Duration,
     state: Mutex<State>,
     /// Signalled when a command leaves a Run.
@@ -911,13 +926,14 @@ pub(crate) struct Keeper {
 }
 
 impl Keeper {
-    pub(crate) fn new(stems: Arc<Stems>) -> Arc<Self> {
+    pub(crate) fn new(stems: Arc<Stems>, location: rbl_db::LibraryLocation) -> Arc<Self> {
         let pause = std::env::var(WINDOW_PAUSE_ENV)
             .ok()
             .and_then(|secs| secs.parse::<u64>().ok())
             .map_or(WINDOW_PAUSE, Duration::from_secs);
         Arc::new(Self {
             stems,
+            location,
             pause,
             state: Mutex::new(State::default()),
             left: Condvar::new(),
@@ -967,7 +983,10 @@ impl Keeper {
             Target::Window => None,
             Target::Joined { run, .. } => Some(run),
             Target::Own { made, .. } => {
-                if let (Some(run), Ok(sidecar)) = (made, self.stems.sidecar()) {
+                // Do not open a writer for a refused or unchanged command.
+                if let Some((run, sidecar)) =
+                    made.and_then(|run| self.stems.sidecar().ok().map(|sidecar| (run, sidecar)))
+                {
                     let outcome = match scope.entries {
                         1 => "1 change".to_owned(),
                         count => format!("{count} changes"),
@@ -1170,23 +1189,29 @@ impl Keeper {
                 Some(run) => run,
                 None => late_run(sidecar, &open.source, &open.description)?,
             };
+            let facts =
+                crate::dj_facts::recover(&self.location, &self.stems, open.dj_snapshot.as_ref());
             sidecar
-                .append(&NewEntry {
-                    id: Some(open.id),
-                    run,
-                    store: Store::Library,
-                    source: &open.source,
-                    at: Some(open.at),
-                    action: Action::Write,
-                    kind: UNCONFIRMED,
-                    label: BEGUN_NOT_CONFIRMED,
-                    command: open.command.as_ref(),
-                    reverses: None,
-                    part_of: None,
-                    reversible: false,
-                    format: stored::FORMAT,
-                    payload: None,
-                })
+                .append_with_dj_facts(
+                    &NewEntry {
+                        id: Some(open.id),
+                        run,
+                        store: Store::Library,
+                        source: &open.source,
+                        at: Some(open.at),
+                        action: Action::Write,
+                        kind: UNCONFIRMED,
+                        label: BEGUN_NOT_CONFIRMED,
+                        command: open.command.as_ref(),
+                        reverses: None,
+                        part_of: None,
+                        reversible: false,
+                        format: stored::FORMAT,
+                        payload: None,
+                    },
+                    &facts,
+                    true,
+                )
                 .map_err(|e| e.to_string())?;
         }
         sidecar
@@ -1205,23 +1230,36 @@ impl Keeper {
                 Some(run) => RunId(run),
                 None => late_run(sidecar, &waiting.source, &waiting.description)?,
             };
+            let reconciled = waiting.dj_facts.is_none();
+            let facts = match &waiting.dj_facts {
+                Some(facts) => facts.clone(),
+                None => crate::dj_facts::recover(
+                    &self.location,
+                    &self.stems,
+                    waiting.dj_snapshot.as_ref(),
+                ),
+            };
             sidecar
-                .append(&NewEntry {
-                    id: waiting.id,
-                    run,
-                    store: Store::Library,
-                    source: &waiting.source,
-                    at: Some(waiting.at),
-                    action: waiting.action,
-                    kind: &waiting.kind,
-                    label: &waiting.label,
-                    command: waiting.command.as_ref(),
-                    reverses: waiting.reverses,
-                    part_of: waiting.part_of,
-                    reversible: waiting.reversible,
-                    format: waiting.format,
-                    payload: waiting.payload.as_ref(),
-                })
+                .append_with_dj_facts(
+                    &NewEntry {
+                        id: waiting.id,
+                        run,
+                        store: Store::Library,
+                        source: &waiting.source,
+                        at: Some(waiting.at),
+                        action: waiting.action,
+                        kind: &waiting.kind,
+                        label: &waiting.label,
+                        command: waiting.command.as_ref(),
+                        reverses: waiting.reverses,
+                        part_of: waiting.part_of,
+                        reversible: waiting.reversible,
+                        format: waiting.format,
+                        payload: waiting.payload.as_ref(),
+                    },
+                    &facts,
+                    reconciled,
+                )
                 .map_err(|e| e.to_string())?;
             state.unwritten.remove(0);
             if self.faults.abort_in_replay {
@@ -1260,23 +1298,29 @@ impl Keeper {
                 .map_or_else(|| late_run(sidecar, &op.source, &op.description), Ok)
         };
         let appended = run.and_then(|run| {
+            let facts =
+                crate::dj_facts::recover(&self.location, &self.stems, op.dj_snapshot.as_ref());
             sidecar
-                .append(&NewEntry {
-                    id: Some(op.id),
-                    run,
-                    store: Store::Library,
-                    source: &op.source,
-                    at: None,
-                    action: Action::Write,
-                    kind: UNCONFIRMED,
-                    label: MADE_NOT_RECORDED,
-                    command: op.command.as_ref(),
-                    reverses: None,
-                    part_of: None,
-                    reversible: false,
-                    format: stored::FORMAT,
-                    payload: None,
-                })
+                .append_with_dj_facts(
+                    &NewEntry {
+                        id: Some(op.id),
+                        run,
+                        store: Store::Library,
+                        source: &op.source,
+                        at: None,
+                        action: Action::Write,
+                        kind: UNCONFIRMED,
+                        label: MADE_NOT_RECORDED,
+                        command: op.command.as_ref(),
+                        reverses: None,
+                        part_of: None,
+                        reversible: false,
+                        format: stored::FORMAT,
+                        payload: None,
+                    },
+                    &facts,
+                    true,
+                )
                 .map_err(|e| e.to_string())
         });
         if let Err(error) = appended {
@@ -1354,6 +1398,14 @@ impl Keeper {
                 }
                 _ => None,
             };
+            let dj_snapshot = state.op.as_ref().and_then(|op| op.dj_snapshot.clone());
+            let mut dj_facts = if source.kind == SourceKind::Dj && draft.action != Action::Undo {
+                crate::dj_facts::derive(&self.location, &self.stems, draft.kind, draft.payload.as_ref())
+            } else { wreckordbox_sidecar::dj_facts::NativeFacts::default() };
+            if source.kind == SourceKind::Dj {
+                if draft.action == Action::Undo { dj_facts.undo_of = draft.reverses; }
+                if draft.action == Action::Redo { dj_facts.redo_of = draft.reverses; }
+            }
             let at = now();
             let reversible = draft.payload.is_some();
             let written = match (&sidecar, &run) {
@@ -1361,7 +1413,7 @@ impl Keeper {
                     Err("the Sidecar refused the entry (injected)".to_owned())
                 }
                 (Ok(sidecar), Ok(run)) if state.unwritten.is_empty() => sidecar
-                    .append(&NewEntry {
+                    .append_with_dj_facts(&NewEntry {
                         id,
                         run: *run,
                         store: Store::Library,
@@ -1376,7 +1428,7 @@ impl Keeper {
                         reversible,
                         format: stored::FORMAT,
                         payload: draft.payload.as_ref(),
-                    })
+                    }, &dj_facts, false)
                     .map_err(|e| e.to_string()),
                 (Ok(_), Ok(_)) => Err("earlier entries are still waiting to be written".to_owned()),
                 (Err(error), _) => Err(error.message.clone()),
@@ -1403,6 +1455,8 @@ impl Keeper {
                         reversible,
                         format: stored::FORMAT,
                         payload: draft.payload,
+                        dj_snapshot,
+                        dj_facts: Some(dj_facts),
                     };
                     let on_disk = sidecar
                         .as_ref()
@@ -1458,7 +1512,8 @@ impl rbl_library::ledger::Ledger for Keeper {
             }
         });
         let done = std::mem::take(&mut state.done);
-        let id = sidecar.begin_intent(
+        let dj_snapshot = None;
+        let id = sidecar.begin_intent_with_snapshot(
             &Intent {
                 source: &source,
                 run,
@@ -1467,6 +1522,7 @@ impl rbl_library::ledger::Ledger for Keeper {
                 at: now(),
             },
             &done,
+            dj_snapshot.as_ref(),
         );
         let id = match id {
             Ok(id) => id,
@@ -1486,6 +1542,7 @@ impl rbl_library::ledger::Ledger for Keeper {
             source,
             description,
             command,
+            dj_snapshot,
         });
         drop(state);
         if let Some(delay) = self.faults.delay_after_begin {
@@ -1494,9 +1551,37 @@ impl rbl_library::ledger::Ledger for Keeper {
         Ok(())
     }
 
+    fn prepare(&self, db: &rbl_db::Library, targets: &rbl_library::ledger::Preparation) {
+        let mut state = self.state();
+        let Some(op) = state
+            .op
+            .as_mut()
+            .filter(|op| op.source.kind == SourceKind::Dj)
+        else {
+            return;
+        };
+        let snapshot = crate::dj_facts::snapshot(db, targets, op.command.as_ref());
+        if snapshot.is_null() {
+            return;
+        }
+        op.dj_snapshot = Some(snapshot.clone());
+        if let Ok(sidecar) = self.stems.sidecar() {
+            if let Err(error) = sidecar.capture_dj_intent(op.id, &snapshot) {
+                tracing::warn!(%error, "bounded DJ recovery evidence could not be saved; normal recording continues");
+            }
+        }
+    }
+
     fn written(&self, wrote: bool) {
         if let Some(op) = self.state().op.as_mut() {
             op.wrote = Some(wrote);
+            if !wrote {
+                if let Ok(sidecar) = self.stems.sidecar() {
+                    if let Err(error) = sidecar.settle_intents(&[op.id]) {
+                        tracing::error!(%error, "could not clear a failed Library write's intent");
+                    }
+                }
+            }
         }
         if wrote && self.faults.abort_after_write {
             std::process::abort();
@@ -1527,6 +1612,11 @@ impl rbl_library::ledger::Ledger for Keeper {
         let Some(label) = name.map(str::to_owned).or(command) else {
             if let Some(op) = self.state().op.as_mut() {
                 op.unnamed = true;
+                if let Ok(sidecar) = self.stems.sidecar() {
+                    if let Err(error) = sidecar.settle_intents(&[op.id]) {
+                        tracing::error!(%error, "could not settle unnamed write");
+                    }
+                }
             }
             return;
         };

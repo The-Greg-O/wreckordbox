@@ -25,7 +25,7 @@ use crate::{io, Fingerprint, Result, SidecarError};
 /// The version of the stored shape this crate reads and writes. A store from
 /// a newer wreckordbox is refused rather than guessed at; an older one is
 /// brought up to date by [`MIGRATIONS`] when it is opened.
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 8;
 
 /// What each version after the first adds, in order: the version a store is
 /// at once the statements have run, and the statements. A new store is made
@@ -38,6 +38,8 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (4, crate::ledger::SCHEMA),
     (5, crate::attachments::SCHEMA),
     (6, crate::active_runs::SCHEMA),
+    (7, crate::dj_facts::SCHEMA),
+    (8, crate::dj_facts::EFFECTS_SCHEMA),
 ];
 
 // A migration added without raising `SCHEMA_VERSION`, or the reverse,
@@ -277,6 +279,12 @@ pub struct Fact {
     /// this one's place; `superseded_by` is that Fact.
     pub superseded_at: Option<i64>,
     pub superseded_by: Option<i64>,
+    /// Native edit that produced this Fact, when there is one.
+    #[serde(default)]
+    pub ledger_entry: Option<i64>,
+    /// Recovered from the Library after an interrupted edit.
+    #[serde(default)]
+    pub reconciled: bool,
 }
 
 impl Fact {
@@ -498,31 +506,7 @@ impl Sidecar {
     pub fn mark_stale(&self, track_id: &str, current: &Fingerprint) -> Result<Vec<i64>> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        let mut restored = {
-            let mut query = tx.prepare(
-                "UPDATE fact SET stale_at = NULL
-                 WHERE id IN (SELECT fact_id FROM fact_track WHERE track_id = ?1)
-                 AND stale_at IS NOT NULL AND fingerprint = ?2
-                 AND kind IN (SELECT name FROM kind WHERE nature = 'measurement') RETURNING id",
-            )?;
-            let rows = query.query_map(params![track_id, current.as_str()], |row| row.get(0))?;
-            rows.collect::<rusqlite::Result<Vec<i64>>>()?
-        };
-        restored.sort_unstable();
-        let mut ids = {
-            let mut statement = tx.prepare(
-                "UPDATE fact SET stale_at = ?1
-                 WHERE id IN (SELECT fact_id FROM fact_track WHERE track_id = ?2) AND stale_at IS NULL
-                   AND fingerprint IS NOT NULL AND fingerprint <> ?3
-                   AND kind IN (SELECT name FROM kind WHERE nature = 'measurement')
-                 RETURNING id",
-            )?;
-            let marked = statement
-                .query_map(params![now(), track_id, current.as_str()], |row| row.get(0))?;
-            marked.collect::<rusqlite::Result<Vec<i64>>>()?
-        };
-        ids.sort_unstable();
-        record_audio_changes(&tx, track_id, current, &ids, &restored)?;
+        let ids = mark_stale_in(&tx, track_id, current)?;
         tx.commit()?;
         Ok(ids)
     }
@@ -676,7 +660,9 @@ pub(crate) fn select(rest: &str) -> String {
     format!(
         "SELECT fact.id, fact.effective_track_id, fact.fingerprint, fact.kind, kind.nature, fact.value,
                 fact.source_kind, fact.source_name, fact.confidence, fact.run_id, fact.recorded_at,
-                fact.stale_at, fact.superseded_at, fact.superseded_by
+                fact.stale_at, fact.superseded_at, fact.superseded_by,
+                (SELECT ledger_id FROM dj_fact WHERE fact_id = fact.id),
+                COALESCE((SELECT reconciled FROM dj_fact WHERE fact_id = fact.id), 0)
          FROM attached_fact AS fact JOIN kind ON kind.name = fact.kind {rest}"
     )
 }
@@ -702,6 +688,8 @@ pub(crate) fn read_fact(row: &Row) -> rusqlite::Result<Fact> {
         stale_at: row.get(11)?,
         superseded_at: row.get(12)?,
         superseded_by: row.get(13)?,
+        ledger_entry: row.get(14)?,
+        reconciled: row.get(15)?,
     })
 }
 
@@ -734,4 +722,38 @@ pub(crate) fn now() -> i64 {
         .ok()
         .and_then(|since| i64::try_from(since.as_millis()).ok())
         .unwrap_or(0)
+}
+
+/// Transaction form of the shared Measurement observation path.
+pub(crate) fn mark_stale_in(
+    tx: &rusqlite::Transaction<'_>,
+    track_id: &str,
+    current: &Fingerprint,
+) -> Result<Vec<i64>> {
+    let mut restored = {
+        let mut query = tx.prepare(
+            "UPDATE fact SET stale_at = NULL
+                 WHERE id IN (SELECT fact_id FROM fact_track WHERE track_id = ?1)
+                 AND stale_at IS NOT NULL AND fingerprint = ?2
+                 AND kind IN (SELECT name FROM kind WHERE nature = 'measurement') RETURNING id",
+        )?;
+        let rows = query.query_map(params![track_id, current.as_str()], |row| row.get(0))?;
+        rows.collect::<rusqlite::Result<Vec<i64>>>()?
+    };
+    restored.sort_unstable();
+    let mut ids = {
+        let mut statement = tx.prepare(
+                "UPDATE fact SET stale_at = ?1
+                 WHERE id IN (SELECT fact_id FROM fact_track WHERE track_id = ?2) AND stale_at IS NULL
+                   AND fingerprint IS NOT NULL AND fingerprint <> ?3
+                   AND kind IN (SELECT name FROM kind WHERE nature = 'measurement')
+                 RETURNING id",
+            )?;
+        let marked =
+            statement.query_map(params![now(), track_id, current.as_str()], |row| row.get(0))?;
+        marked.collect::<rusqlite::Result<Vec<i64>>>()?
+    };
+    ids.sort_unstable();
+    record_audio_changes(tx, track_id, current, &ids, &restored)?;
+    Ok(ids)
 }
