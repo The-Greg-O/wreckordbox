@@ -626,11 +626,11 @@ fn window_grid_edit_undo_redo_are_recorded_once_each() {
     }
     let all = entries(&f);
     assert_eq!(all.len(), 3);
-    for (e, (action, before, after)) in
-        all.iter()
-            // A history edit since wbx-64: the window's grid edits are steps
-            // of the shared history.
-            .zip([("edit", 500, 600), ("undo", 600, 500), ("redo", 500, 600)])
+    for (e, (action, before, after)) in all
+        .iter()
+        // A history edit since wbx-64: the window's grid edits are steps
+        // of the shared history.
+        .zip([("edit", 500, 600), ("undo", 600, 500), ("redo", 500, 600)])
     {
         assert_eq!(e["source"], json!({"kind":"dj", "name":"dj"}));
         assert_eq!(e["action"], action);

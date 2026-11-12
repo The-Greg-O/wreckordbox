@@ -51,6 +51,8 @@ impl GridStep {
 
     /// Whether `next`, made just after this step, joins it.
     pub fn joins(&self, next: &Self) -> bool {
-        self.track == next.track && self.transaction.is_some() && self.transaction == next.transaction
+        self.track == next.track
+            && self.transaction.is_some()
+            && self.transaction == next.transaction
     }
 }

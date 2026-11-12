@@ -3914,9 +3914,13 @@ async fn run_history<R: tauri::Runtime>(
     undo: bool,
 ) -> AppResult<EditHistoryDto> {
     let worker = Arc::clone(&state);
-    let editor = Arc::clone(&*tauri::Manager::state::<Arc<crate::grid::GridEditor>>(&app));
+    // Every window manages one; an app built without it steps no grid entry.
+    let editor = tauri::Manager::try_state::<Arc<crate::grid::GridEditor>>(&app).map(|editor| Arc::clone(&*editor));
     let name = if undo { "undo_edit" } else { "redo_edit" };
-    let result = blocking(name, move || step_history(&worker, &editor, undo)).await;
+    let result = blocking(name, move || match &editor {
+        Some(editor) => step_history(&worker, editor, undo),
+        None => step_history_without_grid(&worker, undo),
+    }).await;
     match &result {
         Ok((dto, stepped)) => {
             // A cue entry names its track, as the cue edit itself does,
@@ -3969,6 +3973,16 @@ pub(crate) enum Stepped {
 /// entry changed (`cues:changed`), the Tag List (`tag-list:changed`), or
 /// the library (`library:changed`).
 pub(crate) fn step_history(state: &AppState, editor: &crate::grid::GridEditor, undo: bool) -> AppResult<(EditHistoryDto, Stepped)> {
+    step_history_with(state, Some(editor), undo)
+}
+
+/// [`step_history`] in an app with no grid editor: a grid entry on top is
+/// refused by the core, and stays.
+fn step_history_without_grid(state: &AppState, undo: bool) -> AppResult<(EditHistoryDto, Stepped)> {
+    step_history_with(state, None, undo)
+}
+
+fn step_history_with(state: &AppState, editor: Option<&crate::grid::GridEditor>, undo: bool) -> AppResult<(EditHistoryDto, Stepped)> {
     use rbl_library::history::StepError;
     // Held past the step, so what is reported is what this step left.
     let _gate = state.edit_gate().lock();
@@ -3979,7 +3993,7 @@ pub(crate) fn step_history(state: &AppState, editor: &crate::grid::GridEditor, u
         LibraryEdit::Grid(step) => Some(step.track.clone()),
         _ => None,
     });
-    if let Some(track) = grid {
+    if let (Some(track), Some(editor)) = (grid, editor) {
         let action = if undo { crate::grid::GridAction::Undo } else { crate::grid::GridAction::Redo };
         let outcome = crate::grid::guarded(state, editor, &*state.library()?, &state.location()?, &track, action,
             &crate::grid::GridOptions::default())?;
