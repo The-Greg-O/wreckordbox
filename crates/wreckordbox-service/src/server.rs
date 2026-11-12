@@ -433,6 +433,13 @@ impl Shared {
                     self.with_library(|library| crate::stems::parent(library, id))?
                 })
             }
+            mutants if crate::mutants::answers(mutants) => {
+                // The Sidecar's, not the Library's: the Library is only
+                // read, to find the entry, its playlist and its track.
+                crate::mutants::answer(&self.stems, request, &|read| {
+                    self.with_library(|library| read(library))?
+                })
+            }
             unknown => Err(ServiceError::new(
                 codes::UNKNOWN_COMMAND,
                 format!("unknown command: {unknown}"),

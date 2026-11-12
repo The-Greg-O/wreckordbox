@@ -11,8 +11,10 @@
 //! display.
 
 mod client;
+mod entries;
 pub mod facts;
 mod library;
+pub mod mutants;
 pub mod mytag_edits;
 pub mod protocol;
 pub mod reading;

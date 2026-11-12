@@ -237,6 +237,11 @@ pub struct PlaylistRef {
 pub struct ListedTrack {
     /// Its place in the list, from 1.
     pub position: usize,
+    /// In a playlist: the entry's own identifier, which stays the same when
+    /// the playlist is reordered (a Mutant is made for it). Absent in a
+    /// folder's list, an intelligent playlist's and play history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry_id: Option<String>,
     #[serde(flatten)]
     pub track: Track,
 }
@@ -312,7 +317,16 @@ pub(crate) fn answer(
         commands::MYTAGS_TRACKS => to_value(&reader.tagged(&arguments(command, args)?)?),
         commands::PLAYLISTS_TREE => to_value(&reader.playlist_tree()),
         commands::PLAYLISTS_TRACKS => {
-            to_value(&reader.playlist_tracks(&arguments(command, args)?)?)
+            let mut found = reader.playlist_tracks(&arguments(command, args)?)?;
+            if found.playlist.kind == PlaylistKind::Playlist {
+                crate::entries::attach(
+                    library,
+                    &reader.index,
+                    &found.playlist.id,
+                    &mut found.tracks,
+                )?;
+            }
+            to_value(&found)
         }
         commands::HISTORY_LIST => to_value(&reader.occasions()),
         commands::HISTORY_TRACKS => to_value(&reader.history_tracks(&arguments(command, args)?)?),
@@ -585,6 +599,7 @@ impl Reader {
             .enumerate()
             .map(|(at, &row)| ListedTrack {
                 position: at + 1,
+                entry_id: None,
                 track: track(&self.index, row),
             })
             .collect()
