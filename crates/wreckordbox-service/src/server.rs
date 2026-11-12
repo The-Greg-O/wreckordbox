@@ -439,6 +439,13 @@ impl Shared {
                     self.with_library(|library| crate::stems::parent(library, id))?
                 })
             }
+            decisions if crate::decisions::answers(decisions) => {
+                // The Sidecar's too: the Library is only read, to find a
+                // track a Decision or its Fact is about.
+                crate::decisions::answer(&self.stems, request, &|id| {
+                    self.with_library(|library| crate::stems::parent(library, id))?
+                })
+            }
             mutants if crate::mutants::answers(mutants) => {
                 // The Sidecar's, not the Library's: the Library is only
                 // read, to find the entry, its playlist and its track.

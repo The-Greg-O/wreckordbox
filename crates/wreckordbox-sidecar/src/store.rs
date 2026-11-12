@@ -22,17 +22,21 @@ use serde_json::Value;
 
 use crate::{io, Fingerprint, Result, SidecarError};
 
-/// Raised when a stored shape changes. A store from a newer wreckordbox is
-/// refused rather than guessed at; an older one is brought up to date by
-/// [`MIGRATIONS`] when it is opened.
-pub const SCHEMA_VERSION: u32 = 3;
+/// The version of the stored shape this crate reads and writes. A store from
+/// a newer wreckordbox is refused rather than guessed at; an older one is
+/// brought up to date by [`MIGRATIONS`] when it is opened.
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// What each version after the first adds, in order: the version a store is
 /// at once the statements have run, and the statements. A new store is made
 /// at version 1 by [`SCHEMA`] and then taken through every one of these, so
 /// a new store and an old one brought up to date hold the same tables. Add
 /// a version at the end; never change one that has shipped.
-const MIGRATIONS: &[(u32, &str)] = &[(2, crate::mutants::SCHEMA), (3, crate::attachments::SCHEMA)];
+const MIGRATIONS: &[(u32, &str)] = &[
+    (2, crate::mutants::SCHEMA),
+    (3, crate::decisions::SCHEMA),
+    (4, crate::attachments::SCHEMA),
+];
 
 // A migration added without raising `SCHEMA_VERSION`, or the reverse,
 // does not build.
@@ -499,7 +503,7 @@ impl Sidecar {
 
 /// One Fact, inside a transaction: declares the kind, writes the Fact and
 /// supersedes the same source's earlier ones.
-fn record_in(tx: &rusqlite::Transaction, new: &NewFact) -> Result<Fact> {
+pub(crate) fn record_in(tx: &rusqlite::Transaction, new: &NewFact) -> Result<Fact> {
     if !(0.0..=1.0).contains(&new.confidence) {
         return Err(SidecarError::Invalid(format!(
             "a confidence is from 0 to 1, not {}",

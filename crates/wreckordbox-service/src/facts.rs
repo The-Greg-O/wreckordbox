@@ -281,7 +281,81 @@ pub(crate) fn answer(
     answer.map_err(|e| ServiceError::new(service_codes::SERVICE_FAILED, e.to_string()))
 }
 
-fn arguments<T: serde::de::DeserializeOwned>(request: &Request) -> Result<T, ServiceError> {
+/// One Fact that has passed every check `facts.record` makes, for a
+/// command of another module that writes it in a transaction of its own
+/// (a Decision's answer, with [`Sidecar::answer_decision_with_fact`]).
+pub(crate) struct CheckedFact {
+    pub(crate) track_id: String,
+    pub(crate) kind: Declaration,
+    pub(crate) value: Value,
+    /// Of the track's audio now, when its file is there.
+    pub(crate) fingerprint: Option<Fingerprint>,
+}
+
+/// Checks one Fact as `facts.record` would (its kind's declaration, its
+/// value, its track and the audio a Measurement needs), writing nothing.
+pub(crate) fn checked(
+    stems: &Arc<Stems>,
+    fact: FactToRecord,
+    source: &Source,
+    confidence: f64,
+    lookup: &dyn Fn(&str) -> Result<ParentAudio, ServiceError>,
+) -> Result<CheckedFact, ServiceError> {
+    let facts = Facts {
+        sidecar: stems.sidecar()?,
+        stems,
+    };
+    let mut tracks = HashMap::new();
+    let one = check(
+        fact,
+        &facts.kinds()?,
+        Some(source),
+        Some(confidence),
+        &mut tracks,
+        lookup,
+    )?;
+    Ok(CheckedFact {
+        track_id: one.track_id,
+        kind: one.kind,
+        value: one.value,
+        fingerprint: tracks
+            .into_values()
+            .next()
+            .and_then(|(_, fingerprint)| fingerprint),
+    })
+}
+
+/// What `facts.record` does once a Fact is written, for a Fact another
+/// module wrote: tells clients, and marks stale (and says so) the track's
+/// Measurements made from other audio.
+pub(crate) fn recorded(
+    stems: &Arc<Stems>,
+    fact: &Fact,
+    fingerprint: Option<&Fingerprint>,
+) -> Result<(), ServiceError> {
+    let facts = Facts {
+        sidecar: stems.sidecar()?,
+        stems,
+    };
+    facts.changed(&fact.track_id, &fact.kind, Some(fact.id), &[]);
+    if let Some(fingerprint) = fingerprint {
+        facts.mark_stale(&fact.track_id, fingerprint)?;
+    }
+    Ok(())
+}
+
+/// The Run with that identifier, if it can still be recorded in.
+pub(crate) fn open_run(stems: &Arc<Stems>, id: i64) -> Result<Run, ServiceError> {
+    Facts {
+        sidecar: stems.sidecar()?,
+        stems,
+    }
+    .open_run(id)
+}
+
+pub(crate) fn arguments<T: serde::de::DeserializeOwned>(
+    request: &Request,
+) -> Result<T, ServiceError> {
     serde_json::from_value(request.args.clone()).map_err(|e| {
         ServiceError::new(
             service_codes::BAD_REQUEST,
@@ -674,7 +748,7 @@ fn default_description(facts: &[Checked]) -> String {
     )
 }
 
-fn sidecar_error(error: &SidecarError) -> ServiceError {
+pub(crate) fn sidecar_error(error: &SidecarError) -> ServiceError {
     match error {
         SidecarError::KindsFile { .. } => {
             ServiceError::new(codes::KINDS_FILE_INVALID, error.to_string())

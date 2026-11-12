@@ -14,7 +14,10 @@ use wreckordbox_sidecar::{
 
 #[test]
 fn old_facts_can_reattach_after_migration_but_known_stale_audio_is_not_an_identity() {
-    for stale in [false, true] {
+    for (version, stale) in [1, 2, 3]
+        .into_iter()
+        .flat_map(|version| [false, true].map(|stale| (version, stale)))
+    {
         let dir = tempfile::tempdir().unwrap();
         let audio = dir.path().join("fixture.wav");
         common::write_audio(&audio, 100, 1, None);
@@ -41,15 +44,27 @@ fn old_facts_can_reattach_after_migration_but_known_stale_audio_is_not_an_identi
                 .unwrap();
         }
         drop(sidecar);
-        // The version 1 schema is the four original tables. Downgrade only
-        // this throwaway fixture, then exercise the real open/migration path.
+        // Downgrade only this throwaway fixture, then exercise the real
+        // migration path from each previously shipped schema version.
         let db = rusqlite::Connection::open(folder.join("sidecar.db")).unwrap();
         db.execute_batch(
             "DROP VIEW attached_fact;
             DROP TABLE fact_attachment; DROP TABLE attachment_change;
             DROP TABLE attachment_review; DROP TABLE track_identity;
-            DROP TABLE mutant_change; DROP TABLE mutant;
-            UPDATE meta SET value = '1' WHERE key = 'schema_version';",
+            ",
+        )
+        .unwrap();
+        if version < 3 {
+            db.execute_batch("DROP TABLE decision_answer; DROP TABLE decision;")
+                .unwrap();
+        }
+        if version < 2 {
+            db.execute_batch("DROP TABLE mutant_change; DROP TABLE mutant;")
+                .unwrap();
+        }
+        db.execute(
+            "UPDATE meta SET value = ?1 WHERE key = 'schema_version'",
+            [version.to_string()],
         )
         .unwrap();
         drop(db);

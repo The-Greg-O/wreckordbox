@@ -4,6 +4,7 @@
 //! when none is running. Results go to standard output, as text or with
 //! `--json` as JSON; errors go to standard error with a non-zero status.
 
+mod decisions;
 mod facts;
 mod intake;
 mod mutants;
@@ -84,6 +85,12 @@ enum Commands {
     Runs {
         #[command(subcommand)]
         command: facts::RunCommands,
+    },
+    /// Ask, list and answer Decisions: recorded judgements between fixed
+    /// candidates, kept in the Sidecar. Never changes the Library.
+    Decisions {
+        #[command(subcommand)]
+        command: decisions::DecisionCommands,
     },
     /// Mutants: a playlist's own edited version of a track, kept for one
     /// playlist entry and never written into the Library.
@@ -247,6 +254,9 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
         }
         Commands::Runs { command } => {
             print(&facts::runs(&mut connect(&config)?, cli.json, command)?);
+        }
+        Commands::Decisions { command } => {
+            print(&decisions::run(&mut connect(&config)?, cli.json, command)?);
         }
         Commands::Mutants { command } => {
             print(&mutants::run(&mut connect(&config)?, cli.json, command)?);
