@@ -1,11 +1,22 @@
 //! Mutant edit transactions and live parent/readiness projection.
-use super::*;
+use super::{
+    actions, again, inspect, mutant_edits, place, sidecar_error, stems, Committed, CreateMutant,
+    Edits, Fingerprint, Mutant, MutantChanged, MutantUpdate, Mutants, OpenLibrary, Parent,
+    PlaylistName, RemoveMutant, Renderability, ServiceError, Value,
+};
 use crate::mutant_edits::{codes, ClearMutant, Cue, EditMutant};
 use crate::tracks::TrackRecord;
 
 pub(super) fn parse_edits(value: Value) -> Result<Edits, ServiceError> {
-    serde_json::from_value(value)
-        .map_err(|e| ServiceError::new("bad_request", format!("invalid Mutant edits: {e}")))
+    let failed = |message: String| {
+        ServiceError::new(
+            "sidecar_failed",
+            format!("invalid stored Mutant edits: {message}"),
+        )
+    };
+    let mut edits: Edits = serde_json::from_value(value).map_err(|e| failed(e.to_string()))?;
+    edits.validate().map_err(|e| failed(e.message))?;
+    Ok(edits)
 }
 
 pub(super) fn metadata(
@@ -88,7 +99,7 @@ impl Mutants<'_> {
         let facts = inspect(self.stems, |store| store.stem_facts(&parent.id))?;
         let sets: Vec<_> = facts
             .into_iter()
-            .filter(|f| f.is_live())
+            .filter(wreckordbox_sidecar::Fact::is_live)
             .filter_map(|f| {
                 wreckordbox_sidecar::stems::StemSet::from_fact(self.stems.sidecar_dir(), f)
             })

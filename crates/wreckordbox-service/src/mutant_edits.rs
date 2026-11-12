@@ -266,7 +266,14 @@ fn transpose(name: &str, shift: i64) -> Option<String> {
     if shift == 0 {
         return (!name.is_empty()).then(|| name.to_owned());
     }
-    let mut key = rbl_core::musickey::parse(name)?;
+    // The shared parser tries Camelot first using a byte split at the last
+    // character. Normalize musical accidentals and reject other non-ASCII
+    // spellings before calling it; a major key ending in ♭/♯ must not panic.
+    let normalized = name.replace('♭', "b").replace('♯', "#");
+    if !normalized.is_ascii() {
+        return None;
+    }
+    let mut key = rbl_core::musickey::parse(&normalized)?;
     key.pitch = u8::try_from((i64::from(key.pitch) + shift).rem_euclid(12)).ok()?;
     let text = name.trim();
     if text
@@ -388,12 +395,14 @@ mod tests {
             removed.description,
             "cue B removed, memory cue at 500 ms removed"
         );
-        assert!(removed.cues.is_empty());
+        assert_eq!(removed.cues, []);
     }
     #[test]
     fn keys_wrap_preserve_mode_and_handle_unknown_values() {
         for (key, shift, wanted) in [
             ("Am", 1, "Bbm"),
+            ("B♭", 1, "B"),
+            ("F♯", -1, "F"),
             ("B", 1, "C"),
             ("Cm", -1, "Bm"),
             ("1A", -6, "7A"),

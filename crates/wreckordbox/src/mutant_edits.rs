@@ -7,8 +7,8 @@ use wreckordbox_service::{Client, ServiceError};
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Set supplied edits together. Example: --edits '{"key_shift":1,"tempo":1.04}'.
-    /// Stems are vocals, melody, bass, drums. Cues use kind and position_ms.
+    /// Set supplied edits together. Example: `--edits '{"key_shift":1,"tempo":1.04}'`.
+    /// Stems are vocals, melody, bass, drums. Cues use `kind` and `position_ms`.
     Edit {
         #[arg(required_unless_present = "entry", conflicts_with = "entry")]
         id: Option<i64>,
