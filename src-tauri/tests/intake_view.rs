@@ -1,0 +1,115 @@
+//! The Intake view's reads (wbx-62): the window asks the Library service it
+//! hosts for the Intake and Problems queues, and gets each queued track
+//! back as the row its decks load, beside what the track still needs.
+//!
+//! A fixture Library in a temporary folder and a mock app in place of the
+//! window; nothing here can reach the installed Library.
+#![allow(clippy::pedantic, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+use std::sync::Arc;
+
+use rbl_db::fixture::{self, track_id, Shape};
+use rbxport_lib::intake_view::{self, IntakeQueueName};
+use rbxport_lib::service_host;
+use rbxport_lib::state::AppState;
+use serde_json::json;
+use tauri::test::MockRuntime;
+use tauri::Manager;
+use wreckordbox_service::Config;
+
+struct Window {
+    dir: tempfile::TempDir,
+    app: tauri::App<MockRuntime>,
+    location: rbl_db::LibraryLocation,
+}
+
+impl Window {
+    fn state(&self) -> Arc<AppState> {
+        Arc::clone(self.app.state::<Arc<AppState>>().inner())
+    }
+
+    fn config(&self) -> Config {
+        Config { runtime_dir: self.dir.path().join("run"), idle_exit: None, recovery_dir: self.dir.path().join("backups") }
+    }
+}
+
+/// A fixture Library of five tracks, none with a Prep colour, read by a
+/// mock app's state as the window reads it, and hosted.
+fn hosting_window() -> Window {
+    let dir = tempfile::tempdir().unwrap();
+    let library = dir.path().join("library");
+    std::fs::create_dir_all(&library).unwrap();
+    let location = fixture::build(&library, Shape { tracks: 5, ..Shape::default() }).unwrap();
+    let state = AppState::with_backups(dir.path().join("backups"));
+    let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
+    let (index, _) = rbl_index::load(&db).unwrap();
+    state.set_library(index, false, db.schema().db_version, 0, location.clone());
+    let app = tauri::test::mock_app();
+    app.manage(Arc::new(state));
+    let window = Window { dir, app, location };
+    service_host::host_with(window.app.handle(), &window.location, &window.config()).unwrap();
+    window
+}
+
+#[test]
+fn the_intake_queue_lists_every_uncoloured_track_with_its_row_and_needs() {
+    let window = hosting_window();
+
+    let page = intake_view::queue_page(&window.state(), IntakeQueueName::Intake, 0, 50).unwrap();
+
+    let queue = page.queue.expect("an Intake queue is always available");
+    let tracks = queue["tracks"].as_array().unwrap();
+    assert_eq!(tracks.len(), 5);
+    assert_eq!(queue["total"], 5);
+    // Each queued track comes with the row a deck loads, in the same order.
+    assert_eq!(page.rows.len(), 5);
+    for (track, row) in tracks.iter().zip(&page.rows) {
+        assert_eq!(track["id"].as_str().unwrap(), row.id);
+        assert_eq!(track["title"].as_str().unwrap(), row.title);
+        assert!(track["needs"].is_array(), "what it still needs: {track}");
+    }
+    assert!(page.unavailable.is_none());
+}
+
+#[test]
+fn the_counts_follow_an_edit_made_through_the_service() {
+    let window = hosting_window();
+    let state = window.state();
+    assert_eq!(intake_view::counts(&state).unwrap()["intake"], 5);
+
+    let set = state
+        .with_service(|service| {
+            service.call("tracks.set_prep_colour", json!({ "id": track_id(1), "prep_colour": "Green" }))
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(set["changed"], true);
+
+    assert_eq!(intake_view::counts(&state).unwrap()["intake"], 4);
+    let page = intake_view::queue_page(&state, IntakeQueueName::Intake, 0, 50).unwrap();
+    assert!(page.rows.iter().all(|row| row.id != track_id(1)), "a coloured track left the queue");
+}
+
+#[test]
+fn problems_without_a_problem_colour_is_an_empty_state_not_an_error() {
+    let window = hosting_window();
+
+    let page = intake_view::queue_page(&window.state(), IntakeQueueName::Problems, 0, 50).unwrap();
+
+    assert!(page.queue.is_none());
+    assert!(page.rows.is_empty());
+    let unavailable = page.unavailable.expect("why Problems cannot be listed");
+    assert_eq!(unavailable.code, "problem_colour_not_found");
+    assert!(!unavailable.message.is_empty());
+    assert!(intake_view::counts(&window.state()).unwrap()["problems"].is_null());
+}
+
+#[test]
+fn a_window_that_hosts_no_service_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = Arc::new(AppState::with_backups(dir.path().join("backups")));
+
+    let error = intake_view::queue_page(&state, IntakeQueueName::Intake, 0, 50).unwrap_err();
+    assert!(error.message.contains("Library service"), "{}", error.message);
+    assert!(intake_view::counts(&state).is_err());
+}

@@ -51,6 +51,7 @@ mod relocate;
 mod sync_window;
 mod scripting;
 pub mod service_host;
+pub mod intake_view;
 mod device_settings;
 pub mod dto;
 mod error;
@@ -555,6 +556,8 @@ pub fn run() {
             commands::disable_read_only,
             new_library::library_problem,
             service_host::service_problem,
+            intake_view::intake_queue,
+            intake_view::intake_counts,
             new_library::create_library,
             new_library::use_default_library,
             new_library::database_drives,
