@@ -1,0 +1,120 @@
+/* The Intake view's track panel (wbx-63): docs/design/screens/intake. The
+   colours that carry meaning (Energy, Prep colours) are the fixed meaning
+   tokens; everything else is a theme role. */
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-shell-space-6);
+  min-width: 0;
+  overflow: auto;
+  padding: var(--s-shell-space-6);
+  background: var(--role-working);
+  font-family: var(--f-shell);
+  color: var(--role-text);
+}
+.label {
+  font-size: var(--f-size-shell-label);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--role-text-dim);
+}
+.hint { margin: 0; color: var(--role-text-dim); }
+.source { color: var(--role-text-dim); }
+
+.fields { display: grid; gap: var(--s-shell-space-4); }
+.field {
+  display: grid;
+  grid-template-columns: 7em minmax(0, 1fr);
+  align-items: center;
+  gap: var(--s-shell-space-5);
+}
+.input {
+  min-width: 0;
+  padding: var(--s-shell-space-3) var(--s-shell-space-5);
+  border: var(--s-shell-border) solid var(--role-border);
+  border-radius: var(--s-shell-radius);
+  background: var(--role-ground, var(--role-panel));
+  color: var(--role-text-bright);
+  font: inherit;
+}
+.input:focus { outline: none; border-color: var(--role-accent); }
+.input[data-pending] { color: var(--role-text-dim); }
+.suggestions { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--s-shell-space-2); }
+
+.pickers { display: flex; flex-wrap: wrap; gap: var(--s-shell-space-6) calc(var(--s-shell-space-6) * 2); }
+.picker { display: grid; gap: var(--s-shell-space-3); align-content: start; }
+.energy, .prep { display: flex; flex-wrap: wrap; gap: var(--s-shell-space-3); }
+
+.level, .chip, .small, .markClean {
+  border: var(--s-shell-border) solid var(--role-border);
+  border-radius: var(--s-shell-radius);
+  background: var(--role-control);
+  color: var(--role-text);
+  font: inherit;
+  cursor: pointer;
+}
+.level { width: 2.4em; padding: var(--s-shell-space-3) 0; }
+.level:hover, .chip:hover, .small:hover { border-color: var(--role-accent); }
+.level[aria-checked="true"] { color: var(--role-ground, #000); font-weight: 600; }
+.level[data-level="1"][aria-checked="true"] { background: var(--c-energy-1); border-color: var(--c-energy-1); }
+.level[data-level="2"][aria-checked="true"] { background: var(--c-energy-2); border-color: var(--c-energy-2); }
+.level[data-level="3"][aria-checked="true"] { background: var(--c-energy-3); border-color: var(--c-energy-3); }
+.level[data-level="4"][aria-checked="true"] { background: var(--c-energy-4); border-color: var(--c-energy-4); }
+.level[data-level="5"][aria-checked="true"] { background: var(--c-energy-5); border-color: var(--c-energy-5); }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-shell-space-3);
+  padding: var(--s-shell-space-3) var(--s-shell-space-5);
+}
+.chip[aria-checked="true"] { border-color: var(--role-text-bright); color: var(--role-text-bright); }
+.swatch { width: 0.7em; height: 0.7em; flex: none; }
+.swatch[data-prep="Pink"] { background: var(--c-comment-pink); }
+.swatch[data-prep="Red"] { background: var(--c-comment-red); }
+.swatch[data-prep="Orange"] { background: var(--c-comment-orange); }
+.swatch[data-prep="Yellow"] { background: var(--c-comment-yellow); }
+.swatch[data-prep="Green"] { background: var(--c-comment-green); }
+.swatch[data-prep="Aqua"] { background: var(--c-comment-aqua); }
+.swatch[data-prep="Blue"] { background: var(--c-comment-blue); }
+.swatch[data-prep="Purple"] { background: var(--c-comment-purple); }
+
+.failed, .note { margin: 0; line-height: 1.4; }
+.failed { color: var(--role-tab-to); }
+.note { color: var(--role-text-dim); }
+
+/* The row of actions, at the foot of the panel. */
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-shell-space-4) var(--s-shell-space-5);
+  margin-top: auto;
+  padding-top: var(--s-shell-space-5);
+  border-top: var(--s-shell-border) solid var(--role-hairline);
+}
+.markClean {
+  padding: var(--s-shell-space-4) var(--s-shell-space-6);
+  border-color: var(--c-comment-green);
+  background: color-mix(in srgb, var(--c-comment-green) 70%, var(--role-ground, #000));
+  color: var(--role-ground, #000);
+  font-weight: 600;
+}
+.markClean:disabled, .small:disabled, .chip:disabled { opacity: 0.45; cursor: default; }
+.small { padding: var(--s-shell-space-2) var(--s-shell-space-4); }
+.key {
+  padding: 0 var(--s-shell-space-3);
+  border: var(--s-shell-border) solid var(--role-border);
+  border-radius: var(--s-shell-radius);
+  color: var(--role-text-dim);
+  font: inherit;
+  font-size: var(--f-size-shell-label);
+}
+.open { color: var(--role-tab-to); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.secondary { display: inline-flex; align-items: center; gap: var(--s-shell-space-3); margin-left: auto; }
+
+@container shell (max-width: 800px) {
+  .panel { padding: var(--s-shell-space-5); gap: var(--s-shell-space-5); }
+  .field { grid-template-columns: minmax(0, 1fr); gap: var(--s-shell-space-2); }
+  .secondary { margin-left: 0; }
+}

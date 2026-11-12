@@ -577,6 +577,8 @@ pub fn run() {
             service_host::service_problem,
             intake_view::intake_queue,
             intake_view::intake_counts,
+            intake_view::intake_colours,
+            intake_view::intake_set_prep_colour,
             service_status::service_activity,
             service_host::library_protection,
             service_host::adopt_library_protection,

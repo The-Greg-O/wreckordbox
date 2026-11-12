@@ -10,8 +10,8 @@ use std::fmt::Write as _;
 use clap::{Args, Subcommand};
 use serde_json::json;
 use wreckordbox_service::intake::{
-    commands, Counts, CountsOf, GridState, Page, PrepColour, PrepColourSet, ProblemsPage, Queue,
-    QueuedTrack, SetPrepColour,
+    commands, Colours, Counts, CountsOf, GridState, Page, PrepColour, PrepColourSet, ProblemsPage,
+    Queue, QueuedTrack, SetPrepColour,
 };
 use wreckordbox_service::tracks::DEFAULT_PAGE_LIMIT;
 use wreckordbox_service::{Client, ServiceError};
@@ -39,6 +39,11 @@ pub enum IntakeCommands {
     /// Say how many tracks wait in Intake and in Problems, without listing
     /// them.
     Count(LabelArgs),
+    /// List the Library's eight colour labels with your names for them,
+    /// and which one means Clean (the label named Clean) and which means
+    /// Problem: the Prep colours `colour` takes.
+    #[command(visible_alias = "colors")]
+    Colours,
     /// Set a track's Prep colour and report what it was and what it is
     /// now.
     ///
@@ -52,8 +57,13 @@ pub enum IntakeCommands {
         id: String,
         /// The Prep colour, in any case: your name for a colour label
         /// (`Clean`), the colour itself (`Green`), or `none` to clear it.
-        #[arg(value_name = "PREP_COLOUR")]
-        prep_colour: String,
+        #[arg(value_name = "PREP_COLOUR", required_unless_present = "colour_id")]
+        prep_colour: Option<String>,
+        /// The colour label by its number instead (1 to 8, 0 for none), as
+        /// `intake colours` lists them: for a label that is also another
+        /// colour's name.
+        #[arg(long, value_name = "N", conflicts_with = "prep_colour")]
+        colour_id: Option<u8>,
     },
 }
 
@@ -125,12 +135,25 @@ pub fn run(
                 counts_text(&counts)
             })
         }
-        IntakeCommands::Colour { id, prep_colour } => {
+        IntakeCommands::Colours => {
+            let colours: Colours = client.call(commands::INTAKE_COLOURS, json!({}))?;
+            Ok(if as_json {
+                json!(colours).to_string()
+            } else {
+                colours_text(&colours)
+            })
+        }
+        IntakeCommands::Colour {
+            id,
+            prep_colour,
+            colour_id,
+        } => {
             let set: PrepColourSet = client.call(
                 commands::TRACKS_SET_PREP_COLOUR,
                 json!(SetPrepColour {
                     id: id.clone(),
                     prep_colour: prep_colour.clone(),
+                    colour_id: *colour_id,
                 }),
             )?;
             Ok(if as_json {
@@ -159,6 +182,30 @@ fn counts_text(counts: &Counts) -> String {
         ),
     };
     format!("Intake    {}\nProblems  {problems}", counts.intake)
+}
+
+/// The eight labels as a table; MEANS says which is Clean and which is
+/// Problem.
+fn colours_text(colours: &Colours) -> String {
+    let means = |colour: &PrepColour| {
+        if colours.clean.as_ref() == Some(colour) {
+            "Clean"
+        } else if colours.problem.as_ref() == Some(colour) {
+            "Problem"
+        } else {
+            ""
+        }
+    };
+    let mut rows = vec![["ID", "COLOUR", "LABEL", "MEANS"].map(str::to_owned)];
+    rows.extend(colours.colours.iter().map(|colour| {
+        [
+            colour.id.to_string(),
+            colour.colour.clone(),
+            colour.label.clone(),
+            means(colour).to_owned(),
+        ]
+    }));
+    table(&rows)
 }
 
 /// One line saying what a Prep colour edit did.

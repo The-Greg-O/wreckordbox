@@ -34,12 +34,39 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 import { useTranslation } from "@/i18n";
+import { getBackend } from "@/ipc/client";
 import type { RowDto } from "@/ipc/types";
-import { needsLine, queuePosition, type IntakeCounts, type IntakeQueueName, type QueuedTrack } from "@/lib/intakeQueue";
+import { energyOf, intakeActionForKey, intakeChord, nextQueuedIndex, type IntakeAction, type PrepColour } from "@/lib/intakeEdits";
+import { needsLine, queuePosition, type IntakeCounts, type IntakeQueueName, type IntakeQueuePage, type QueuedTrack } from "@/lib/intakeQueue";
+import { refusal } from "@/lib/menu";
 import { formatKey } from "@/lib/preferences";
+import type { KeyOverrides, Platform } from "@/lib/shortcuts";
+import { useCommands } from "@/store/useCommands";
+import { useEventCallback } from "@/store/useEventCallback";
 import { usePreferences } from "@/store/usePreferences";
+import { IntakeTrackPanel } from "./IntakeTrackPanel";
 import styles from "./IntakeView.module.css";
+import { useIntakeColours } from "./useIntakeColours";
 import { useIntakeQueue } from "./useIntakeQueue";
+
+type Backend = Awaited<ReturnType<typeof getBackend>>;
+
+/** What an edit-and-move started on: the track, where it stood, and the load request it began under. */
+interface IntakeOperation {
+  gen: number;
+  id: string;
+  page: IntakeQueuePage;
+  index: number;
+  queue: IntakeQueueName;
+}
+
+/** A "mark and next" step: the marked track, its place in its queue, and where the view went. */
+interface IntakeMark {
+  id: string;
+  position: number;
+  queue: IntakeQueueName;
+  advancedTo: string;
+}
 
 /** How many queued tracks one page holds: the most a refresh ever reads. */
 export const INTAKE_PAGE = 200;
@@ -58,6 +85,16 @@ export interface IntakeViewProps {
   onLoad: (row: RowDto) => Promise<boolean>;
   /** A refresh failed (the message, for the status line), or recovered (`null`). */
   onProblem?: ((message: string | null) => void) | undefined;
+  /**
+   * Writes one Library edit through the window's single edit path (App's
+   * `writeEdit`: Library Protection, the status line's report); resolves
+   * whether it was written (wbx-63).
+   */
+  onEdit: (what: string, edit: (backend: Backend) => Promise<unknown>) => Promise<boolean>;
+  /** Library Protection is on: why `onEdit` refused, when it says no more. */
+  protectLibrary: boolean;
+  platform: Platform;
+  keyOverrides?: KeyOverrides | undefined;
 }
 
 /** When a page was read, as the stale note says it. */
@@ -66,7 +103,7 @@ function clock(at: Date | null): string {
 }
 
 export function IntakeView(props: IntakeViewProps) {
-  const { queue, onQueue, counts, loadedTrackId, onLoad, onProblem } = props;
+  const { queue, onQueue, counts, loadedTrackId, onLoad, onProblem, onEdit, protectLibrary, platform, keyOverrides } = props;
   const t = useTranslation();
   // Only the page shown is read (bounded refreshes); paging moves the offset.
   const [offset, setOffset] = useState(0);
@@ -77,6 +114,11 @@ export function IntakeView(props: IntakeViewProps) {
   const [loadFailed, setLoadFailed] = useState<{ wanted: string; kept: string | null } | null>(null);
   const request = useRef(0);
   const listRef = useRef<HTMLDivElement>(null);
+  const { colours, failed: coloursFailed, retry: retryColours } = useIntakeColours();
+  const [editFailure, setEditFailure] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
 
   // Tell the status line about a failed refresh, and that it recovered.
   const problem = failed !== null && page !== null ? `${t(TITLES[queue])} could not be refreshed: ${failed}` : null;
@@ -86,20 +128,28 @@ export function IntakeView(props: IntakeViewProps) {
   const shownId = pending ?? loadedTrackId;
   const index = page && shownId !== null ? page.tracks.findIndex((track) => track.id === shownId) : -1;
 
-  const choose = useCallback(async (at: number) => {
-    const track = page?.tracks[at];
-    const row = page?.rows[at];
-    if (!track || !row) return;
+  /** Asks the deck to load a queued track; resolves whether it loaded. */
+  const loadQueued = useCallback(async (track: QueuedTrack, row: RowDto): Promise<boolean> => {
     const ask = ++request.current;
     setPending(track.id);
     setLoadFailed(null);
     const kept = page?.tracks.find((queued) => queued.id === loadedTrackId)?.title ?? null;
     const loaded = await onLoad(row);
     // A later choice supersedes this one, whatever became of it.
-    if (ask !== request.current) return;
+    if (ask !== request.current) return loaded;
     setPending(null);
     if (!loaded) setLoadFailed({ wanted: track.title, kept });
+    return loaded;
   }, [page, onLoad, loadedTrackId]);
+
+  const choose = useCallback(async (at: number) => {
+    const track = page?.tracks[at];
+    const row = page?.rows[at];
+    if (!track || !row) return;
+    setEditFailure(null);
+    setNote(null);
+    await loadQueued(track, row);
+  }, [page, loadQueued]);
 
   // Keep the chosen row in view as the keys move it.
   useEffect(() => {
@@ -128,6 +178,242 @@ export function IntakeView(props: IntakeViewProps) {
 
   const title = t(TITLES[queue]);
   const selected = index >= 0 ? page?.tracks[index] : undefined;
+  const selectedRow = index >= 0 ? page?.rows[index] : undefined;
+  // Every track of a queue has the queue's colour: none, or Problem.
+  const queueColour = queue === "problems" ? (colours?.problem ?? null) : null;
+
+  /**
+   * One edit of the chosen track through the window's edit path. A refusal
+   * is said in the panel as well as the status line; resolves whether it
+   * was written.
+   */
+  const edit = useCallback(async (what: string, change: (backend: Backend) => Promise<unknown>): Promise<boolean> => {
+    let reason: string | null = null;
+    const written = await onEdit(what, async (backend) => {
+      try {
+        return await change(backend);
+      } catch (error) {
+        reason = error instanceof Error ? error.message : String((error as { message?: unknown } | null)?.message ?? error);
+        throw error;
+      }
+    });
+    setEditFailure(written ? null : `${t("Not saved")}: ${reason ?? refusal(protectLibrary)}`);
+    return written;
+  }, [onEdit, protectLibrary, t]);
+
+  // What async work checks before it moves anything: the shown track and
+  // the load request it started under. A DJ who chose another track since
+  // owns the selection; nothing started before may move it.
+  const shownRef = useRef(shownId);
+  shownRef.current = shownId;
+  const queueRef = useRef(queue);
+  queueRef.current = queue;
+  const begin = (): IntakeOperation | null => {
+    if (!selected || !page) return null;
+    return { gen: request.current, id: selected.id, page, index, queue };
+  };
+  const owns = (op: IntakeOperation) => request.current === op.gen && shownRef.current === op.id;
+
+  /** One operation at a time (a mark, a save then a mark, a skip): the rest wait for it or are ignored. */
+  const exclusive = useCallback(async (work: () => Promise<void>) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
+    try {
+      await work();
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  }, []);
+
+  /**
+   * Moves on from the track `op` started on, if the DJ has not chosen
+   * another since: the next row of its page, else the first of the next
+   * page (`left`: the track has just left the queue, so that page starts
+   * one earlier). Answers the track it loaded.
+   */
+  const advance = useCallback(async (op: IntakeOperation, left: boolean): Promise<string | null> => {
+    const next = nextQueuedIndex(op.page.tracks.length, op.index);
+    if (next !== null) {
+      const track = op.page.tracks[next];
+      const row = op.page.rows[next];
+      if (!track || !row || !owns(op)) return null;
+      await loadQueued(track, row);
+      return track.id;
+    }
+    if (op.page.nextOffset === null) {
+      if (owns(op)) setNote(t("That was the last track in the queue."));
+      return null;
+    }
+    const start = op.page.nextOffset - (left ? 1 : 0);
+    const backend = await getBackend();
+    const following = await backend.intakeQueue(op.queue, start, 1).catch(() => null);
+    const track = following?.tracks[0];
+    const row = following?.rows[0];
+    // The read took a while: the DJ may have moved on meanwhile.
+    if (!track || !row || !owns(op)) return null;
+    setOffset(start);
+    await loadQueued(track, row);
+    return track.id;
+  }, [loadQueued, t]);
+
+  // Saves of the title and artist on their way: a mark waits for them, and
+  // is not made if one was refused.
+  const savesOnTheirWay = useRef(new Set<Promise<boolean>>());
+  const savesWritten = async () => (await Promise.all([...savesOnTheirWay.current])).every(Boolean);
+
+  // "Mark and next" steps Undo can take back whole: the track, where it
+  // stood in its queue, and the track the view moved to.
+  const marks = useRef<IntakeMark[]>([]);
+
+  /**
+   * Gives `op`'s track a Prep colour (or none). When that takes it out of
+   * the queue and the DJ is still on it, moves on, and remembers the step
+   * so that its Undo brings the track back.
+   */
+  const colourThenNext = useCallback(async (op: IntakeOperation, colour: PrepColour | null): Promise<void> => {
+    setNote(null);
+    if (!(await savesWritten()) || !owns(op)) return;
+    const what = colour === null ? t("Prep colour cleared.") : `${t("Prep colour")}: ${colour.label}.`;
+    const written = await edit(what, (backend) => backend.intakeSetPrepColour(op.id, colour?.id ?? null));
+    const stays = (colour?.id ?? null) === (queueColour?.id ?? null);
+    if (!written || stays || !owns(op)) return;
+    const position = op.page.offset + op.index;
+    const to = await advance(op, true);
+    if (to !== null) marks.current.push({ id: op.id, position, queue: op.queue, advancedTo: to });
+  }, [edit, queueColour, advance, t]);
+
+  const setPrepColour = useEventCallback((colour: PrepColour | null) => {
+    const op = begin();
+    if (op) void exclusive(() => colourThenNext(op, colour));
+  });
+  const markClean = useEventCallback(() => {
+    const op = begin();
+    if (!op) return;
+    if (colours?.clean) { const clean = colours.clean; void exclusive(() => colourThenNext(op, clean)); }
+    else if (colours) setEditFailure(t("No colour label is named Clean, so there is no Clean to mark."));
+  });
+  /** Ctrl+Enter in a field: its save, and only if it was written and the DJ is still on the track, the mark. */
+  const saveThenMark = useEventCallback((save: () => Promise<boolean>) => {
+    const op = begin();
+    if (!op) return;
+    const clean = colours?.clean ?? null;
+    void exclusive(async () => {
+      const saved = await save();
+      if (!saved || !owns(op)) return;
+      if (clean) await colourThenNext(op, clean);
+      else setEditFailure(t("No colour label is named Clean, so there is no Clean to mark."));
+    });
+  });
+  const markProblem = useEventCallback(() => {
+    const op = begin();
+    if (!op) return;
+    const problem = colours?.problem ?? null;
+    if (problem && queueColour?.id === problem.id) {
+      // Already Problem (the Problems queue): only move on.
+      void exclusive(async () => { await advance(op, false); });
+    } else if (problem) {
+      void exclusive(() => colourThenNext(op, problem));
+    } else if (colours) {
+      setEditFailure(t("No colour label is named Problem, so there is no Problem to mark."));
+    }
+  });
+  const skip = useEventCallback(() => {
+    const op = begin();
+    if (!op) return;
+    setEditFailure(null);
+    setNote(null);
+    void exclusive(async () => { await advance(op, false); });
+  });
+
+  // An Undo that put a marked track back in its queue takes the whole step
+  // back: the track is chosen and loaded again, on its page. Only while the
+  // DJ is still where that step left them; otherwise the chain is broken
+  // and nothing moves.
+  const restoreAfterUndo = useEventCallback(async () => {
+    const top = marks.current.at(-1);
+    if (!top) return;
+    if (top.queue !== queueRef.current || shownRef.current !== top.advancedTo) {
+      marks.current = [];
+      return;
+    }
+    const gen = request.current;
+    const backend = await getBackend();
+    const back = await backend.intakeQueue(top.queue, top.position, 1).catch(() => null);
+    const track = back?.tracks[0];
+    const row = back?.rows[0];
+    // This Undo was of something else, or the DJ moved meanwhile.
+    if (!track || !row || track.id !== top.id) return;
+    if (request.current !== gen || shownRef.current !== top.advancedTo) return;
+    marks.current.pop();
+    setOffset(Math.floor(top.position / INTAKE_PAGE) * INTAKE_PAGE);
+    setEditFailure(null);
+    setNote(null);
+    await loadQueued(track, row);
+  });
+  useEffect(() => {
+    let live = true;
+    let stop: (() => void) | null = null;
+    void getBackend().then((backend) => {
+      if (!live) return;
+      stop = backend.onEditHistory((history) => {
+        // A step back leaves something to redo.
+        if (history.canRedo) void restoreAfterUndo();
+      });
+    });
+    return () => { live = false; stop?.(); };
+  }, [restoreAfterUndo]);
+
+  const setEnergy = useCallback((level: number) => {
+    if (!selected) return Promise.resolve(false);
+    const id = selected.id;
+    return edit(level === 0 ? t("Energy cleared.") : `${t("Energy")} ${level}.`, (backend) => backend.edits.setTrackRating([id], level));
+  }, [selected, edit, t]);
+  const setField = useCallback((field: "title" | "artist", value: string) => {
+    if (!selected) return Promise.resolve(false);
+    const id = selected.id;
+    const saving = edit(field === "title" ? t("Title saved.") : t("Artist saved."), (backend) => backend.edits.setTrackField([id], field, value));
+    savesOnTheirWay.current.add(saving);
+    void saving.finally(() => savesOnTheirWay.current.delete(saving));
+    return saving;
+  }, [selected, edit, t]);
+
+  // The view's actions, for the palette and the keys: live while a track is chosen.
+  const run = (action: IntakeAction): boolean => {
+    if (!selected) return false;
+    const level = energyOf(action);
+    if (level !== null) { void setEnergy(level); return true; }
+    if (action === "intakeMarkClean") markClean();
+    else if (action === "intakeMarkProblem") markProblem();
+    else skip();
+    return true;
+  };
+  useCommands({
+    intakeMarkClean: () => run("intakeMarkClean"),
+    intakeMarkProblem: () => run("intakeMarkProblem"),
+    intakeSkip: () => run("intakeSkip"),
+    intakeEnergy1: () => run("intakeEnergy1"),
+    intakeEnergy2: () => run("intakeEnergy2"),
+    intakeEnergy3: () => run("intakeEnergy3"),
+    intakeEnergy4: () => run("intakeEnergy4"),
+    intakeEnergy5: () => run("intakeEnergy5"),
+  });
+
+  // Their keys: heard on the way down, ahead of the deck (P and Shift with
+  // a digit are deck keys in the Export key map; see `intakeEdits.ts`).
+  // A text field keeps its keys; Ctrl+Enter there is the field's own.
+  const onWindowKey = useEventCallback((event: globalThis.KeyboardEvent) => {
+    const action = intakeActionForKey(event, platform, event.target as HTMLElement | null, keyOverrides);
+    if (action === null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) run(action);
+  });
+  useEffect(() => {
+    window.addEventListener("keydown", onWindowKey, true);
+    return () => window.removeEventListener("keydown", onWindowKey, true);
+  }, [onWindowKey]);
 
   // Nothing read yet: still reading, or the first read failed (the Library
   // still loading, no service). `library:ready` and Retry read again.
@@ -233,7 +519,42 @@ export function IntakeView(props: IntakeViewProps) {
           </nav>
         ) : null}
       </section>
-      <TrackPanel track={selected} suggestionsUnavailable={page.suggestionsUnavailable} />
+      {selected ? (
+        <IntakeTrackPanel
+          track={selected}
+          energy={selectedRow?.rating ?? 0}
+          prepColour={queueColour}
+          colours={colours}
+          coloursFailed={coloursFailed}
+          onRetryColours={retryColours}
+          onTitle={(value) => setField("title", value)}
+          onArtist={(value) => setField("artist", value)}
+          onEnergy={setEnergy}
+          onPrepColour={setPrepColour}
+          onSaveThenMark={saveThenMark}
+          onMarkClean={markClean}
+          onMarkProblem={markProblem}
+          onSkip={skip}
+          busy={busy}
+          failure={editFailure}
+          note={note}
+          keys={{
+            markClean: intakeChord("intakeMarkClean", keyOverrides),
+            markProblem: intakeChord("intakeMarkProblem", keyOverrides),
+            skip: intakeChord("intakeSkip", keyOverrides),
+          }}
+          platform={platform}
+          suggestionsUnavailable={page.suggestionsUnavailable}
+        />
+      ) : (
+        <section className={styles.panel} aria-label={t("Track")} data-testid="intake-panel">
+          <p className={styles.hint}>{t("Choose a track in the queue to load it into the player.")}</p>
+          {note !== null ? <p className={styles.hint} data-testid="intake-note" role="status">{note}</p> : null}
+          {page.suggestionsUnavailable !== null ? (
+            <p className={styles.hint} data-testid="intake-suggestions-unavailable">{t("Proposed titles and artists could not be read")}: {page.suggestionsUnavailable}</p>
+          ) : null}
+        </section>
+      )}
     </div>
   );
 }
@@ -263,43 +584,5 @@ function QueueRow({ track, selected, onChoose }: { track: QueuedTrack; selected:
       <span className={styles.rowFacts}>{facts}</span>
       <span className={styles.rowNeeds} data-testid="intake-needs">{t(needsLine(track))}</span>
     </div>
-  );
-}
-
-/**
- * The selected track's panel: what is still empty, informing, never
- * blocking. wbx-63 puts the edits here (title and artist in place, Energy,
- * Prep colour, tags, "mark Clean and next").
- */
-function TrackPanel({ track, suggestionsUnavailable }: { track: QueuedTrack | undefined; suggestionsUnavailable: string | null }) {
-  const t = useTranslation();
-  if (!track) {
-    return (
-      <section className={styles.panel} aria-label={t("Track")} data-testid="intake-panel">
-        <p className={styles.hint}>{t("Choose a track in the queue to load it into the player.")}</p>
-      </section>
-    );
-  }
-  return (
-    <section className={styles.panel} aria-label={t("Track")} data-testid="intake-panel">
-      <dl className={styles.fields}>
-        <dt>{t("Title")}</dt><dd data-testid="intake-panel-title">{track.title}</dd>
-        <dt>{t("Artist")}</dt><dd>{track.artist}</dd>
-      </dl>
-      {track.suggestions.length > 0 ? (
-        <ul className={styles.suggestions} aria-label={t("Proposed")}>
-          {track.suggestions.map((suggestion) => (
-            <li key={`${suggestion.field}:${suggestion.value}`}>
-              <span className={styles.label}>{t(suggestion.field)}</span> {suggestion.value}
-              <span className={styles.source}> {suggestion.source} · {suggestion.confidence.toFixed(2)}</span>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      <p className={styles.open} data-testid="intake-panel-needs">{t(needsLine(track))}</p>
-      {suggestionsUnavailable !== null ? (
-        <p className={styles.hint} data-testid="intake-suggestions-unavailable">{t("Proposed titles and artists could not be read")}: {suggestionsUnavailable}</p>
-      ) : null}
-    </section>
   );
 }
