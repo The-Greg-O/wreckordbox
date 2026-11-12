@@ -433,6 +433,13 @@ impl Shared {
                     self.with_library(|library| crate::stems::parent(library, id))?
                 })
             }
+            decisions if crate::decisions::answers(decisions) => {
+                // The Sidecar's too: the Library is only read, to find a
+                // track a Decision or its Fact is about.
+                crate::decisions::answer(&self.stems, request, &|id| {
+                    self.with_library(|library| crate::stems::parent(library, id))?
+                })
+            }
             intake if crate::intake::answers(intake) => {
                 let (result, changed) = self.with_library(|library| {
                     crate::intake::answer(library, &self.stems, request)

@@ -276,7 +276,30 @@ pub(crate) fn answer(
     answer.map_err(|e| ServiceError::new(service_codes::SERVICE_FAILED, e.to_string()))
 }
 
-fn arguments<T: serde::de::DeserializeOwned>(request: &Request) -> Result<T, ServiceError> {
+/// Records Facts as `facts.record` does, for a command of another module
+/// that produces them (a Decision's answer).
+pub(crate) fn record(
+    stems: &Arc<Stems>,
+    record: RecordFacts,
+    lookup: &dyn Fn(&str) -> Result<ParentAudio, ServiceError>,
+) -> Result<Recorded, ServiceError> {
+    Facts {
+        sidecar: stems.sidecar()?,
+        stems,
+    }
+    .record(record, lookup)
+}
+
+/// The Run with that identifier, if it can still be recorded in.
+pub(crate) fn open_run(stems: &Arc<Stems>, id: i64) -> Result<Run, ServiceError> {
+    Facts {
+        sidecar: stems.sidecar()?,
+        stems,
+    }
+    .open_run(id)
+}
+
+pub(crate) fn arguments<T: serde::de::DeserializeOwned>(request: &Request) -> Result<T, ServiceError> {
     serde_json::from_value(request.args.clone()).map_err(|e| {
         ServiceError::new(
             service_codes::BAD_REQUEST,
@@ -619,7 +642,7 @@ fn check(
 }
 
 /// A source as given, checked: every source but the DJ has a name.
-fn source(given: &SourceArg) -> Result<Source, ServiceError> {
+pub(crate) fn source(given: &SourceArg) -> Result<Source, ServiceError> {
     let name = given.name.trim();
     if !name.is_empty() {
         return Ok(Source::new(given.kind, name));
@@ -661,7 +684,7 @@ fn default_description(facts: &[Checked]) -> String {
     )
 }
 
-fn sidecar_error(error: &SidecarError) -> ServiceError {
+pub(crate) fn sidecar_error(error: &SidecarError) -> ServiceError {
     match error {
         SidecarError::KindsFile { .. } => {
             ServiceError::new(codes::KINDS_FILE_INVALID, error.to_string())

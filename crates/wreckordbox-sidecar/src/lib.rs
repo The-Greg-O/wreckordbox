@@ -18,6 +18,8 @@
 //!   value. [`Sidecar::record`] itself takes any kind; whoever records a
 //!   Fact for someone else checks it against [`Kinds`] first.
 //! - [`Sidecar::record_stems`] and [`Sidecar::stems`] are the Stems kind.
+//! - [`decisions`] is the Decisions: judgements between fixed candidates
+//!   and the answers Deciders gave them. Not Facts, in tables of their own.
 //! - [`fingerprint_file`] fingerprints a track's audio.
 //!
 //! There is no Ledger, Unwind or Projection here. A Fact is never changed
@@ -28,6 +30,7 @@
 //! rekordbox-format crate.
 
 mod audio;
+pub mod decisions;
 mod fingerprint;
 mod kinds;
 pub mod stems;
@@ -97,6 +100,26 @@ pub enum SidecarError {
     /// A set that is not exactly one Stem for each of the four roles.
     #[error("a Stem set is one Stem each for vocals, other, bass and drums: {0}")]
     StemSet(String),
+    /// No Decision with that identifier.
+    #[error("there is no Decision {0}")]
+    NoDecision(i64),
+    /// A Decision that cannot be asked as it stands: no question, or a
+    /// context that is not an object.
+    #[error("{0}")]
+    Decision(String),
+    /// Candidates a Decision cannot be asked with.
+    #[error("{0}")]
+    Candidates(String),
+    /// An answer that names none of its Decision's candidates.
+    #[error("\"{choice}\" is not a candidate of Decision {decision}; its candidates are: {}", candidates.join(", "))]
+    NotACandidate {
+        decision: i64,
+        choice: String,
+        candidates: Vec<String>,
+    },
+    /// A probability that is not one, or probabilities that do not agree.
+    #[error("{0}")]
+    Probability(String),
 }
 
 pub type Result<T> = std::result::Result<T, SidecarError>;
