@@ -205,11 +205,22 @@ fn lame_error(error: impl std::fmt::Display) -> io::Error {
 impl Mp3 {
     fn new(file: File, sample_rate: u32) -> io::Result<Self> {
         use mp3lame_encoder::{Bitrate, Builder, Quality, VbrMode};
+        // 320 kbit/s is MPEG-1, which has these three rates. LAME would
+        // otherwise resample to a rate of its choosing, and the file would
+        // no longer hold the frames rendered.
+        if ![32_000, 44_100, 48_000].contains(&sample_rate) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("MP3 at 320 kbit/s is 32, 44.1 or 48 kHz, not {sample_rate} Hz"),
+            ));
+        }
         let lame = Builder::new()
             .ok_or_else(|| lame_error("cannot start"))?
             .with_num_channels(2)
             .map_err(lame_error)?
             .with_sample_rate(sample_rate)
+            .map_err(lame_error)?
+            .with_output_sample_rate(std::num::NonZeroU32::new(sample_rate))
             .map_err(lame_error)?
             .with_brate(Bitrate::Kbps320)
             .map_err(lame_error)?
