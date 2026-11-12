@@ -1098,6 +1098,8 @@ pub async fn open_view(state: &State<'_, Arc<AppState>>, path: String, format: S
         filter: rbl_index::TrackFilter::default(),
     };
     let field = spec.search_field;
+    // The view shell's Track Filter over the Stick's own fields (wbx-57).
+    let filter = device_filter(&spec.filter);
     blocking("open_view", move || {
         let mount = connected(&path)?;
         let format = format_from(&format)?;
@@ -1121,7 +1123,7 @@ pub async fn open_view(state: &State<'_, Arc<AppState>>, path: String, format: S
             .filter_map(|(at, id)| library.track(*id).map(|t| device_row(&mount, t, at)))
             .collect();
         handle.remember_device_assets(&mount, library.tracks.iter().map(|t| assets_of(&mount, t)));
-        let mut view = DeviceView::open(rows, &parsed, field);
+        let mut view = DeviceView::open_filtered(rows, &parsed, field, &filter);
         let mut remaining = MAX_BROWSER_EXT_VIEW_BYTES;
         for row in &mut view.rows {
             if let Some(track) = library.track(row.id) {
@@ -1130,6 +1132,55 @@ pub async fn open_view(state: &State<'_, Arc<AppState>>, path: String, format: S
         }
         let (view_id, len, generation) = handle.open_device_view(view);
         Ok(ViewHandleDto { view_id, len, gen: generation, totals: None })
+    })
+    .await
+}
+
+/// The Track Filter as a Stick's rows can answer it (wbx-57): key, Energy,
+/// Prep colour and BPM. A Stick's library as read carries no tags of the DJ's, so tag
+/// picks are not applied here; the bar says so on a Stick playlist.
+fn device_filter(dto: &crate::dto::TrackFilterDto) -> rbl_index::device::DeviceFilter {
+    let keys = match (&dto.keys, &dto.key_identities) {
+        (None, None) => None,
+        (names, identities) => Some(names.iter().chain(identities).flatten().cloned().collect()),
+    };
+    rbl_index::device::DeviceFilter {
+        keys,
+        ratings: dto.ratings.clone(),
+        colors: dto.colors.as_ref().map(|names| crate::state::colour_ids(names)),
+        bpm: dto.bpm.as_ref().map(crate::state::bpm_from_wire),
+    }
+}
+
+/// What the Track Filter bar offers on a Stick list: the keys and whole BPMs
+/// of the list's own rows, read the same way the list is (wbx-57).
+pub async fn filter_values(path: String, format: String, playlist: String, query: String, field: rbl_index::SearchField) -> AppResult<crate::dto::FilterValuesDto> {
+    blocking("filter_values", move || {
+        let mount = connected(&path)?;
+        let format = format_from(&format)?;
+        let playlist = id_from(&playlist)?;
+        let library = wreckordbox_stick_outline::read(&mount, |stick| stick.library(format))
+            .map_err(|error| crate::stick_recovery::read_error(&mount, error))?;
+        let ids: Vec<u32> = if playlist == 0 {
+            library.tracks.iter().map(|t| t.id).collect()
+        } else {
+            library.node(playlist).map(|n| n.tracks.clone()).unwrap_or_default()
+        };
+        let rows: Vec<DeviceRow> = ids.iter().enumerate().filter_map(|(at, id)| library.track(*id).map(|t| device_row(&mount, t, at))).collect();
+        let spec = rbl_index::ViewSpec {
+            source: rbl_index::TrackSource::Collection,
+            sort: rbl_index::SortColumn::TrackNo,
+            descending: false,
+            query,
+            filter: rbl_index::TrackFilter::default(),
+        };
+        let searched = DeviceView::open(rows, &spec, field);
+        let values = rbl_index::device::device_filter_values(&searched.rows);
+        Ok(crate::dto::FilterValuesDto {
+            bpms: values.bpms.into_iter().map(|c| crate::dto::CountedDto { value: c.value, count: c.count }).collect(),
+            keys: values.keys.into_iter().map(|c| crate::dto::CountedDto { value: c.value, count: c.count }).collect(),
+            tags: Vec::new(),
+        })
     })
     .await
 }

@@ -31,6 +31,7 @@ import { referenceDeviceSettings } from "./mock-device-settings";
 import { createMockDeviceLibraries, type MockImportEntry } from "./mock-device-library";
 import { createMockIntake } from "./mock-intake";
 import { keyLightRows } from "./mock-key-lights";
+import { FILTER_FIXTURE_SIZE, filterFixtureColors, filterFixtureMembers, filterFixtureRows, filterFixtureTags } from "./mock-filter-fixture";
 
 const ARTISTS = [
   "MORTEN", "ARTBAT", "Meduza", "Vintage Culture", "Tujamo", "UMEK", "Kryder", "Joel Corry",
@@ -122,11 +123,30 @@ function passesFilter(
   held: readonly string[],
   categories: readonly { tags: readonly { id: string; name: string }[] }[],
 ): boolean {
+  if (!passesFields(row, color, filter)) return false;
+  for (const pick of filter.tags ?? []) {
+    if (pick.tags.length === 0) continue;
+    const carries = (name: string) =>
+      (categories[pick.category]?.tags ?? []).some((t) => t.name === name && held.includes(t.id));
+    if (!(pick.any ? pick.tags.some(carries) : pick.tags.every(carries))) return false;
+  }
+  return true;
+}
+
+/**
+ * The columns a Stick's rows carry too: BPM, key, Energy and Prep colour, as
+ * `rbl-index` tests them. `rangesX100` (the view shell's bar) decides alone
+ * when given; `keyIdentities` take every spelling of a key on the wheel and a
+ * name off it exactly; colour 0 is `none`.
+ */
+function passesFields(row: RowDto, color: number, filter: TrackFilter): boolean {
   if (filter.bpm) {
-    const { values, tolerancePct, masterBpmX100 } = filter.bpm;
+    const { values, tolerancePct, masterBpmX100, rangesX100 } = filter.bpm;
     const within = (centre: number) =>
       Math.abs(row.bpmX100 - centre) <= Math.floor((centre * tolerancePct) / 100);
-    if (values.length > 0) {
+    if (rangesX100 && rangesX100.length > 0) {
+      if (!rangesX100.some(([lo, hi]) => row.bpmX100 >= lo && row.bpmX100 <= hi)) return false;
+    } else if (values.length > 0) {
       const hit =
         tolerancePct === 0
           ? values.includes(wholeBpm(row.bpmX100))
@@ -136,15 +156,14 @@ function passesFilter(
       return false;
     }
   }
-  if (filter.keys && !filter.keys.includes(row.key)) return false;
-  if (filter.ratings && !filter.ratings.includes(row.rating)) return false;
-  if (filter.colors && !filter.colors.includes(COLOR_NAMES[color - 1] ?? "")) return false;
-  for (const pick of filter.tags ?? []) {
-    if (pick.tags.length === 0) continue;
-    const carries = (name: string) =>
-      (categories[pick.category]?.tags ?? []).some((t) => t.name === name && held.includes(t.id));
-    if (!(pick.any ? pick.tags.some(carries) : pick.tags.every(carries))) return false;
+  if (filter.keys || filter.keyIdentities) {
+    const identity = (key: string) => toCamelot(key) || key;
+    const named = filter.keys?.includes(row.key) ?? false;
+    const identified = row.key !== "" && (filter.keyIdentities ?? []).some((wanted) => identity(wanted) === identity(row.key));
+    if (!named && !identified) return false;
   }
+  if (filter.ratings && !filter.ratings.includes(row.rating)) return false;
+  if (filter.colors && !filter.colors.includes(color === 0 ? "none" : COLOR_NAMES[color - 1] ?? "")) return false;
   return true;
 }
 
@@ -432,7 +451,9 @@ export interface MockOptions {
 }
 
 export function createMockBackend(options: MockOptions = {}): Backend {
-  const trackCount = options.trackCount ?? readCountFromUrl() ?? 2000;
+  // `?filterFixture`: the Track Filter bar's constructed Library (wbx-57).
+  const filterFixture = readFlagFromUrl("filterFixture");
+  const trackCount = filterFixture ? FILTER_FIXTURE_SIZE : options.trackCount ?? readCountFromUrl() ?? 2000;
   const latency = options.latencyMs ?? readLatencyFromUrl() ?? 0;
   // What the Log window reads in a browser: a start-up line, then whatever
   // the status bar said.
@@ -458,7 +479,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       (on) => { recordProtection(on); };
   }
   const playlistFixture = options.playlistFixture ?? readPlaylistFixtureFromUrl();
-  const all = readFlagFromUrl("keyLights") ? keyLightRows(makeRows(12)) : makeRows(trackCount);
+  const all = readFlagFromUrl("keyLights") ? keyLightRows(makeRows(12)) : filterFixture ? filterFixtureRows(makeRows(trackCount)) : makeRows(trackCount);
   // A disposable browser fixture for external file drops. It is opt-in and
   // survives a page reload so the collection view can verify the import.
   const dropFixture = readFlagFromUrl("dropFixture");
@@ -517,7 +538,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     hooks.__pendingFileChecks = (id) => pendingFileChecks.get(id)?.length ?? 0;
     hooks.__completedFileChecks = () => completedFileChecks;
   }
-  const colors = makeColors(trackCount);
+  const colors = filterFixture ? filterFixtureColors() : makeColors(trackCount);
   const rowPositions = new Map(all.map((row, index) => [row.id, index]));
   // What the row DTO does not carry, made up per track and edited in place.
   const details = new Map<string, TrackDetails>();
@@ -534,6 +555,9 @@ export function createMockBackend(options: MockOptions = {}): Backend {
    * seeded slice; one made here starts empty, as a new one does.
    */
   const membership = new Map<string, string[]>();
+  if (filterFixture) {
+    for (const [playlist, rows] of filterFixtureMembers()) membership.set(playlist, rows.map((i) => all[i]?.id ?? ""));
+  }
   /** The Tag List's track ids, in its order. */
   const tagList: string[] = [];
   /** Intelligent playlists' rules, by id. */
@@ -1959,7 +1983,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       hotCueAutoLoad: true,
       publish: false,
       hasArtwork: false,
-      myTags: seed % 4 === 0 ? ["t-peak"] : [],
+      myTags: filterFixture ? filterFixtureTags(seed - 100000) : seed % 4 === 0 ? ["t-peak"] : [],
     };
     details.set(row.id, d);
     return d;
@@ -2315,6 +2339,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       // answer before the library is up. A mock that served rows while the
       // summary was still failing would not be standing in for anything.
       if (!ready) return notReady();
+      // A test's way to make list opens fail (track-filter-bar.spec.ts).
+      if ((globalThis as { __failOpenView?: boolean }).__failOpenView) return Promise.reject(new Error("The list could not be read."));
       if (spec.source.kind === "device") {
         const refused = unfinished(spec.source.path);
         if (refused) return refused;
@@ -2322,7 +2348,9 @@ export function createMockBackend(options: MockOptions = {}): Backend {
         let rows: RowDto[];
         try {
           rows = stickLibraries.rows(spec.source.path, spec.source.format, spec.source.playlist)
-            .filter((row) => q === "" || matchesSearch(row, q, spec.searchField ?? "all"));
+            .filter((row) => q === "" || matchesSearch(row, q, spec.searchField ?? "all"))
+            // The Stick's own fields; a Stick's library carries no MyTags.
+            .filter((row) => !spec.filter || passesFields(row, 0, spec.filter));
         } catch (error) {
           return Promise.reject(error instanceof Error ? error : new Error(String(error)));
         }
@@ -3754,6 +3782,16 @@ export function createMockBackend(options: MockOptions = {}): Backend {
 
     filterValues: (spec) => {
       if (!ready) return notReady();
+      if (spec.source.kind === "device") {
+        // What the Stick list holds, as the Rust side reads it from the Stick.
+        const q = fold(spec.query.trim());
+        const keys = new Map<string, number>();
+        for (const row of stickLibraries.rows(spec.source.path, spec.source.format, spec.source.playlist)) {
+          if (q !== "" && !matchesSearch(row, q, spec.searchField ?? "all")) continue;
+          if (row.key !== "") keys.set(row.key, (keys.get(row.key) ?? 0) + 1);
+        }
+        return wait<FilterValues>({ bpms: [], keys: [...keys].map(([value, count]) => ({ value, count })), tags: [] });
+      }
       // Over the source and query alone, never the filter's own result.
       const bpms = new Map<number, number>();
       const keys = new Map<string, number>();

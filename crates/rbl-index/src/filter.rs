@@ -26,6 +26,11 @@ pub struct BpmFilter {
     /// The master player's BPM, x100 as the library stores it. `None` when
     /// no deck is loaded, which greys the ± list and makes it inert.
     pub master_bpm_x100: Option<u32>,
+    /// Tempo ranges in hundredths, inclusive (wbx-57, the view shell's bar).
+    /// When any is given they alone decide: a track in any one passes, and
+    /// `values`, the tolerance and the master player are not consulted. A
+    /// range whose low end is above its high end admits nothing.
+    pub ranges_x100: Vec<(u32, u32)>,
 }
 
 /// One filter per column. `None` is an unticked column: no constraint.
@@ -98,42 +103,7 @@ impl TrackFilter {
             keys.sort_unstable();
             keys.dedup();
         }
-        let bpm = self.bpm.as_ref().map(|b| {
-            let mut ranges: Vec<(u32, u32)> = Vec::with_capacity(b.values.len().max(1));
-            if b.values.is_empty() {
-                // `All` plus a tolerance: a band around the master player. With
-                // no master player the ± list is inert and the column matches
-                // everything, which is what an unticked one does.
-                if let Some(master) = b.master_bpm_x100 {
-                    ranges.push(band(master, b.tolerance_pct));
-                }
-                BpmRule {
-                    ranges,
-                    whole: Vec::new(),
-                    any: b.master_bpm_x100.is_none(),
-                }
-            } else if b.tolerance_pct == 0 {
-                // A picked whole BPM at ±0% is the bucket the list grouped it
-                // into, not the exact hundredth: 127.98 sits under 128.
-                let mut whole = b.values.clone();
-                whole.sort_unstable();
-                whole.dedup();
-                BpmRule {
-                    ranges,
-                    whole,
-                    any: false,
-                }
-            } else {
-                for &value in &b.values {
-                    ranges.push(band(value.saturating_mul(100), b.tolerance_pct));
-                }
-                BpmRule {
-                    ranges,
-                    whole: Vec::new(),
-                    any: false,
-                }
-            }
-        });
+        let bpm = self.bpm.as_ref().map(bpm_rule);
         let tags = self
             .tags
             .iter()
@@ -158,6 +128,59 @@ impl TrackFilter {
             colors,
             tags,
         }
+    }
+}
+
+/// The rule a BPM column compiles to.
+fn bpm_rule(b: &BpmFilter) -> BpmRule {
+    let mut ranges: Vec<(u32, u32)> = Vec::with_capacity(b.values.len().max(1));
+    if !b.ranges_x100.is_empty() {
+        BpmRule {
+            ranges: b.ranges_x100.clone(),
+            whole: Vec::new(),
+            any: false,
+        }
+    } else if b.values.is_empty() {
+        // `All` plus a tolerance: a band around the master player. With
+        // no master player the ± list is inert and the column matches
+        // everything, which is what an unticked one does.
+        if let Some(master) = b.master_bpm_x100 {
+            ranges.push(band(master, b.tolerance_pct));
+        }
+        BpmRule {
+            ranges,
+            whole: Vec::new(),
+            any: b.master_bpm_x100.is_none(),
+        }
+    } else if b.tolerance_pct == 0 {
+        // A picked whole BPM at ±0% is the bucket the list grouped it
+        // into, not the exact hundredth: 127.98 sits under 128.
+        let mut whole = b.values.clone();
+        whole.sort_unstable();
+        whole.dedup();
+        BpmRule {
+            ranges,
+            whole,
+            any: false,
+        }
+    } else {
+        for &value in &b.values {
+            ranges.push(band(value.saturating_mul(100), b.tolerance_pct));
+        }
+        BpmRule {
+            ranges,
+            whole: Vec::new(),
+            any: false,
+        }
+    }
+}
+
+impl BpmFilter {
+    /// Whether a tempo, in hundredths, passes this column. For lists that are
+    /// not the collection's columns (a Stick's rows).
+    #[must_use]
+    pub fn admits(&self, bpm_x100: u32) -> bool {
+        bpm_rule(self).matches(bpm_x100)
     }
 }
 
@@ -400,6 +423,26 @@ impl Library {
                 })
             })
             .collect()
+    }
+
+    /// Dense key ids carrying one of `identities` as the view shell's bar
+    /// means a key (wbx-57): a key on the Camelot wheel, in any spelling
+    /// (`8A`, `Am`, Open Key `1m`), takes every id spelling the same key; a
+    /// name off the wheel takes the ids spelled exactly so.
+    #[must_use]
+    pub fn key_ids_identified(&self, identities: &[String]) -> Vec<u32> {
+        let mut out = Vec::new();
+        for id in 0..self.keys.len() {
+            let dense = u32::try_from(id).unwrap_or(NO_ID);
+            let name = self.keys.name(dense);
+            if identities
+                .iter()
+                .any(|wanted| crate::key::same_key(name, wanted))
+            {
+                out.push(dense);
+            }
+        }
+        out
     }
 
     /// Dense key ids whose name is one of `names`.

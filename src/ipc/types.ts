@@ -2301,6 +2301,12 @@ export interface BpmFilter {
   tolerancePct: number;
   /** The master player's BPM x100, or `null` when no deck is loaded. */
   masterBpmX100: number | null;
+  /**
+   * Tempo ranges in hundredths, inclusive (the view shell's bar, wbx-57).
+   * When any is given they alone decide; a range whose low end is above its
+   * high end admits nothing.
+   */
+  rangesX100?: [number, number][];
 }
 
 /**
@@ -2310,6 +2316,11 @@ export interface BpmFilter {
 export interface TrackFilter {
   bpm?: BpmFilter;
   keys?: string[];
+  /**
+   * Keys by identity (the view shell's bar, wbx-57): a Camelot code takes
+   * every spelling of that key; a name off the wheel only itself.
+   */
+  keyIdentities?: string[];
   ratings?: number[];
   colors?: string[];
   /** One entry per ticked My Tag column with tags picked. */
