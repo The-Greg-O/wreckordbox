@@ -57,6 +57,8 @@ pub struct ThemeRoles {
     pub text_bright: String,
     /// Focus, the active filter, the deck marker.
     pub accent: String,
+    /// Text and glyphs on a control filled with the accent.
+    pub on_accent: String,
     /// The two ends of the active view tab's line.
     pub tab_from: String,
     pub tab_to: String,
@@ -150,6 +152,30 @@ fn contrast(one: Rgb, other: Rgb) -> f64 {
 /// Below this a selected row's text cannot be read on its ground.
 const SELECTION_CONTRAST: f64 = 2.0;
 
+/// What a label on an accent-filled control needs against the accent.
+const ON_ACCENT_CONTRAST: f64 = 4.5;
+
+/// The colour for text on a control filled with `accent`: the theme's own
+/// darkest ground or brightest text, whichever stands out more, and plain
+/// black or white where neither of the theme's stands out enough. An accent
+/// can be any colour at all, the text colour included, so nothing fixed is
+/// safe on it.
+fn on_accent(accent: Rgb, candidates: [Rgb; 2]) -> Rgb {
+    let best = |colours: [Rgb; 2]| {
+        if contrast(colours[0], accent) >= contrast(colours[1], accent) {
+            colours[0]
+        } else {
+            colours[1]
+        }
+    };
+    let own = best(candidates);
+    if contrast(own, accent) >= ON_ACCENT_CONTRAST {
+        own
+    } else {
+        best([[0, 0, 0], [255, 255, 255]])
+    }
+}
+
 /// The roles for a `colors.toml`, or `None` when it does not give both a
 /// `background` and a `foreground`, in which case the interface keeps its
 /// built-in colours whole rather than mixing two palettes.
@@ -184,9 +210,11 @@ pub fn roles_from_colors(text: &str) -> Option<ThemeRoles> {
     let selection = get(&["selection"])
         .filter(|selection| contrast(*selection, foreground) >= SELECTION_CONTRAST)
         .unwrap_or_else(|| mix(background, foreground, 0.18));
+    let ground = get(&["darker_background"]).unwrap_or_else(|| mix(background, black, darker));
+    let text_bright = get(&["bright_foreground", "color15"]).unwrap_or(foreground);
     Some(ThemeRoles {
         mode: if light { "light" } else { "dark" }.to_owned(),
-        ground: hex(get(&["darker_background"]).unwrap_or_else(|| mix(background, black, darker))),
+        ground: hex(ground),
         panel: hex(get(&["dark_background"]).unwrap_or_else(|| mix(background, black, dark))),
         working: hex(background),
         hairline: hex(
@@ -198,8 +226,9 @@ pub fn roles_from_colors(text: &str) -> Option<ThemeRoles> {
         text_dim: hex(
             get(&["dark_foreground"]).unwrap_or_else(|| mix(foreground, background, 0.45))
         ),
-        text_bright: hex(get(&["bright_foreground", "color15"]).unwrap_or(foreground)),
+        text_bright: hex(text_bright),
         accent: hex(accent),
+        on_accent: hex(on_accent(accent, [ground, text_bright])),
         tab_from: hex(get(&["bright_magenta", "color13", "magenta", "color5"]).unwrap_or(accent)),
         tab_to: hex(get(&["bright_yellow", "color11", "yellow", "color3"]).unwrap_or(accent)),
     })
@@ -260,13 +289,69 @@ pub fn system_monospace_font() -> Option<String> {
     css_family(&String::from_utf8_lossy(&answer.stdout))
 }
 
+/// Where the theme and the font are read from, and so what a switch of
+/// either writes to.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Sources {
+    /// The colour file, if this system has a place for one.
+    pub colors: Option<PathBuf>,
+    /// True for an Omarchy theme: `colors` sits in a theme folder that a
+    /// switch replaces whole (or a link that is pointed elsewhere), so it is
+    /// the folder holding the theme folder that has to be watched. False for
+    /// a file that is rewritten where it is.
+    pub theme_folder_is_replaced: bool,
+    /// The folder `omarchy font set` writes `fonts.conf` into.
+    pub font_folder: Option<PathBuf>,
+}
+
+impl Sources {
+    /// The override where it is set, else the active Omarchy theme on Linux.
+    /// Other systems have nothing to read and keep upstream's colours.
+    #[must_use]
+    pub fn of_this_system() -> Self {
+        let overridden = std::env::var_os(COLORS_FILE_ENV).is_some_and(|path| !path.is_empty());
+        Self {
+            colors: colors_file(),
+            theme_folder_is_replaced: !overridden,
+            font_folder: cfg!(target_os = "linux")
+                .then(dirs::config_dir)
+                .flatten()
+                .map(|config| config.join("fontconfig")),
+        }
+    }
+
+    /// The theme as these sources give it now.
+    #[must_use]
+    pub fn read(&self) -> Theme {
+        Theme {
+            roles: self.colors.as_deref().and_then(roles_from_file),
+            font: system_monospace_font(),
+        }
+    }
+
+    /// The folders whose entries change on a switch. They need not exist.
+    fn folders(&self) -> Vec<PathBuf> {
+        // The folder the colour file is in, for a file rewritten where it
+        // is; and for an Omarchy theme also the folder holding that one,
+        // where a switch removes the theme folder and puts another in.
+        let theme = self.colors.as_deref().and_then(Path::parent);
+        let holding = theme
+            .filter(|_| self.theme_folder_is_replaced)
+            .and_then(Path::parent);
+        holding
+            .into_iter()
+            .chain(theme)
+            .chain(self.font_folder.as_deref())
+            .filter(|folder| folder.is_absolute())
+            .map(Path::to_path_buf)
+            .collect()
+    }
+}
+
 /// The theme as it stands now.
 #[must_use]
 pub fn current() -> Theme {
-    Theme {
-        roles: colors_file().and_then(|path| roles_from_file(&path)),
-        font: system_monospace_font(),
-    }
+    Sources::of_this_system().read()
 }
 
 /// The theme, for a window that has just opened.
@@ -276,82 +361,201 @@ pub fn theme_roles() -> Theme {
 }
 
 /// Tells every window when the theme changes, for as long as the app runs.
+pub fn follow<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    follow_sources(app, Sources::of_this_system());
+}
+
+/// Tells every window when what `sources` name changes, for as long as the
+/// app runs.
 ///
-/// Waits on the folder a switch writes into (inotify, no polling) and reads
-/// the theme again once the writes have settled. Does nothing where there is
-/// no such folder: a machine without Omarchy has no switch to follow.
-pub fn follow(app: &tauri::AppHandle) {
+/// Waits on the folders a switch writes into (inotify, no polling) and reads
+/// the theme again once the writes have settled. A folder that is not there
+/// yet, or that is removed and made again, is picked up when it appears: the
+/// nearest folder above it that does exist is watched for it meanwhile.
+/// Linux only; elsewhere there is no theme to follow.
+pub fn follow_sources<R: tauri::Runtime>(app: &tauri::AppHandle<R>, sources: Sources) {
     #[cfg(target_os = "linux")]
-    watch::start(app.clone());
+    {
+        let app = app.clone();
+        let spawned = std::thread::Builder::new()
+            .name("theme-watch".into())
+            .spawn(move || {
+                watch::run(
+                    &sources.folders(),
+                    || sources.read(),
+                    |theme| {
+                        tracing::info!(themed = theme.roles.is_some(), font = ?theme.font, "theme changed");
+                        let _ = tauri::Emitter::emit(&app, CHANGED_EVENT, theme);
+                    },
+                );
+            });
+        if let Err(error) = spawned {
+            tracing::warn!(%error, "could not start the theme watcher");
+        }
+    }
     #[cfg(not(target_os = "linux"))]
-    let _ = app;
+    let _ = (app, sources);
 }
 
 #[cfg(target_os = "linux")]
 mod watch {
-    use std::path::PathBuf;
+    use std::collections::HashMap;
+    use std::ffi::OsString;
+    use std::path::{Path, PathBuf};
     use std::time::Duration;
 
-    use inotify::{Inotify, WatchMask};
+    use inotify::{Event, EventMask, Inotify, WatchDescriptor, WatchMask};
 
-    use super::{colors_file, current, CHANGED_EVENT, COLORS_FILE_ENV};
+    use super::Theme;
 
     /// A switch is several writes over a moment; read once they stop.
     const SETTLE: Duration = Duration::from_millis(250);
 
-    /// The folders whose entries change on a theme or font switch.
-    fn folders() -> Vec<PathBuf> {
-        let mut folders = Vec::new();
-        if let Some(colors) = colors_file() {
-            let overridden = std::env::var_os(COLORS_FILE_ENV).is_some_and(|path| !path.is_empty());
-            // The override is one file, rewritten in place. The active theme
-            // is a folder that is replaced whole, so its parent is watched.
-            let folder = if overridden {
-                colors.parent()
-            } else {
-                colors.parent().and_then(|theme| theme.parent())
-            };
-            folders.extend(folder.map(PathBuf::from));
-        }
-        // `omarchy font set` rewrites fonts.conf here.
-        folders.extend(dirs::config_dir().map(|config| config.join("fontconfig")));
-        folders.retain(|folder| folder.is_dir());
-        folders
+    /// One mask for every watch: a folder can be watched both for itself and
+    /// as the nearest existing folder above another, and inotify keeps one
+    /// mask per folder.
+    fn mask() -> WatchMask {
+        WatchMask::CREATE
+            | WatchMask::CLOSE_WRITE
+            | WatchMask::MOVED_TO
+            | WatchMask::MOVED_FROM
+            | WatchMask::DELETE
+            | WatchMask::DELETE_SELF
+            | WatchMask::MOVE_SELF
     }
 
-    pub(super) fn start(app: tauri::AppHandle) {
-        let folders = folders();
+    /// What a watched folder is watched for.
+    #[derive(Default)]
+    struct Interest {
+        /// Anything in it: it is one of the folders a switch writes into.
+        everything: bool,
+        /// Entries of these names: the next step down to a folder that does
+        /// not exist yet.
+        names: Vec<OsString>,
+    }
+
+    struct Watches {
+        inotify: Inotify,
+        interests: HashMap<WatchDescriptor, Interest>,
+    }
+
+    impl Watches {
+        fn interest(&mut self, folder: &Path) -> Option<&mut Interest> {
+            let watch = self.inotify.watches().add(folder, mask()).ok()?;
+            Some(self.interests.entry(watch).or_default())
+        }
+
+        /// Watches `folder`, or while it does not exist the nearest folder
+        /// above it that does, for the entry that leads down to it.
+        fn reach(&mut self, folder: &Path) {
+            // Each pass watches one level; a path is not deeper than this.
+            for _ in 0..64 {
+                if folder.is_dir() {
+                    if let Some(interest) = self.interest(folder) {
+                        interest.everything = true;
+                        return;
+                    }
+                }
+                let Some((above, name)) = nearest_existing(folder) else {
+                    return;
+                };
+                let Some(interest) = self.interest(&above) else {
+                    return;
+                };
+                if !interest.names.contains(&name) {
+                    interest.names.push(name.clone());
+                }
+                // It may have appeared between the look and the watch; if
+                // so go round again and step down into it.
+                if !above.join(&name).is_dir() {
+                    return;
+                }
+            }
+        }
+
+        /// Starts again from nothing: folders come and go, and a watch on a
+        /// removed folder is dead.
+        fn register(&mut self, folders: &[PathBuf]) {
+            for (watch, _) in self.interests.drain() {
+                let _ = self.inotify.watches().remove(watch);
+            }
+            for folder in folders {
+                self.reach(folder);
+            }
+        }
+
+        /// Whether `event` could mean a switch. An event for a watch that
+        /// has since been dropped is not one.
+        fn concerns(&self, event: &Event<&std::ffi::OsStr>) -> bool {
+            let Some(interest) = self.interests.get(&event.wd) else {
+                return false;
+            };
+            let gone = EventMask::DELETE_SELF | EventMask::MOVE_SELF | EventMask::IGNORED;
+            interest.everything
+                || event.mask.intersects(gone)
+                || event
+                    .name
+                    .is_some_and(|name| interest.names.iter().any(|wanted| wanted == name))
+        }
+    }
+
+    /// The deepest existing folder above `folder`, and the name of the entry
+    /// in it that leads towards `folder`.
+    fn nearest_existing(folder: &Path) -> Option<(PathBuf, OsString)> {
+        let mut below = folder;
+        loop {
+            let above = below.parent()?;
+            if above.is_dir() {
+                return Some((above.to_path_buf(), below.file_name()?.to_os_string()));
+            }
+            below = above;
+        }
+    }
+
+    /// Calls `tell` with the theme each time what `read` returns changes
+    /// after something happened in `folders`. Returns only if inotify fails.
+    pub(super) fn run(folders: &[PathBuf], read: impl Fn() -> Theme, mut tell: impl FnMut(&Theme)) {
         if folders.is_empty() {
             return;
         }
-        let spawned = std::thread::Builder::new().name("theme-watch".into()).spawn(move || {
-            let Ok(mut inotify) = Inotify::init() else { return };
-            let mask = WatchMask::CREATE | WatchMask::CLOSE_WRITE | WatchMask::MOVED_TO | WatchMask::DELETE;
-            let watched = folders.iter().filter(|folder| inotify.watches().add(folder, mask).is_ok()).count();
-            if watched == 0 {
+        let Ok(inotify) = Inotify::init() else { return };
+        let mut watches = Watches {
+            inotify,
+            interests: HashMap::new(),
+        };
+        watches.register(folders);
+        let mut shown = read();
+        let mut buffer = [0_u8; 4096];
+        loop {
+            if watches.interests.is_empty() {
                 return;
             }
-            let mut shown = current();
-            let mut buffer = [0_u8; 4096];
-            // Blocks until something in a watched folder changes.
-            while inotify.read_events_blocking(&mut buffer).is_ok() {
-                loop {
-                    std::thread::sleep(SETTLE);
-                    let more = inotify.read_events(&mut buffer).is_ok_and(|events| events.count() > 0);
-                    if !more {
-                        break;
-                    }
-                }
-                let now = current();
-                if now != shown {
-                    tracing::info!(themed = now.roles.is_some(), font = ?now.font, "theme changed");
-                    let _ = tauri::Emitter::emit(&app, CHANGED_EVENT, &now);
-                    shown = now;
+            // Blocks until something happens in a watched folder.
+            let Ok(mut events) = watches.inotify.read_events_blocking(&mut buffer) else {
+                return;
+            };
+            let interests = &watches;
+            if !events.any(|event| interests.concerns(&event)) {
+                continue;
+            }
+            loop {
+                std::thread::sleep(SETTLE);
+                let Ok(mut events) = watches.inotify.read_events(&mut buffer) else {
+                    break;
+                };
+                let interests = &watches;
+                if !events.any(|event| interests.concerns(&event)) {
+                    break;
                 }
             }
-        });
-        if let Err(error) = spawned {
-            tracing::warn!(%error, "could not start the theme watcher");
+            // Watch first, read second: a write that lands after the read is
+            // then already watched for.
+            watches.register(folders);
+            let now = read();
+            if now != shown {
+                tell(&now);
+                shown = now;
+            }
         }
     }
 }
@@ -410,6 +614,7 @@ bright_magenta = "#bb9af7"
                 text_dim: "#565f89".into(),
                 text_bright: "#c0caf5".into(),
                 accent: "#7aa2f7".into(),
+                on_accent: "#0e0e14".into(),
                 tab_from: "#bb9af7".into(),
                 tab_to: "#ff9e64".into(),
             }
@@ -468,6 +673,36 @@ color15 = "#ddc7a1"
         for ground in [&roles.ground, &roles.panel, &roles.working] {
             assert!(pair(ground, &roles.text) >= 4.5);
             assert!(pair(ground, &roles.text_dim) >= 2.5);
+        }
+    }
+
+    #[test]
+    fn text_on_the_accent_can_be_read_whatever_the_accent_is() {
+        let pair = |one: &str, other: &str| {
+            contrast(rgb(one).unwrap_or_default(), rgb(other).unwrap_or_default())
+        };
+        // No accent given: the accent is the text colour itself, and the old
+        // fixed near-white label on it could not be seen at all.
+        let same = roles_from_colors("background = \"#101010\"\nforeground = \"#f0f0f0\"\n")
+            .unwrap_or_else(|| panic!("two colours are enough"));
+        assert_eq!(same.accent, "#f0f0f0");
+        assert!(pair(&same.on_accent, &same.accent) >= 4.5);
+        for theme in [
+            TOKYO_NIGHT,
+            FROM_TERMINAL,
+            // A mid accent on which neither of the theme's own ends is enough.
+            "background = \"#777777\"\nforeground = \"#888888\"\naccent = \"#808080\"\n",
+            // A light theme with a pale accent.
+            "background = \"#eff1f5\"\nforeground = \"#4c4f69\"\naccent = \"#f9e2af\"\n",
+            "background = \"#0e1016\"\nforeground = \"#eef0f6\"\naccent = \"#b9f24b\"\n",
+        ] {
+            let roles = roles_from_colors(theme).unwrap_or_else(|| panic!("has roles"));
+            assert!(
+                pair(&roles.on_accent, &roles.accent) >= 4.5,
+                "{} on {}",
+                roles.on_accent,
+                roles.accent
+            );
         }
     }
 
