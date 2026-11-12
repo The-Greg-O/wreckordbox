@@ -243,12 +243,7 @@ impl Sidecar {
 
     /// Gives a live Mutant new edits: a JSON object that replaces the edits
     /// it had. The edits before are kept in its history.
-    pub fn edit_mutant(
-        &self,
-        id: i64,
-        edits: &Value,
-        update: &MutantUpdate,
-    ) -> Result<Committed> {
+    pub fn edit_mutant(&self, id: i64, edits: &Value, update: &MutantUpdate) -> Result<Committed> {
         let edits = edits_text(edits)?;
         self.change(id, actions::EDITED, Some(&edits), update)
     }
@@ -400,9 +395,11 @@ fn take_run(tx: &rusqlite::Transaction, run: InRun, source: &Source) -> Result<(
     match run {
         InRun::Open(run) => {
             let finished: Option<Option<i64>> = tx
-                .query_row("SELECT finished_at FROM run WHERE id = ?1", [run.0], |row| {
-                    row.get(0)
-                })
+                .query_row(
+                    "SELECT finished_at FROM run WHERE id = ?1",
+                    [run.0],
+                    |row| row.get(0),
+                )
                 .optional()?;
             match finished {
                 None => Err(SidecarError::NoRun(run)),

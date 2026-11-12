@@ -485,7 +485,10 @@ impl Mutants<'_> {
             .description
             .clone()
             .unwrap_or_else(|| format!("Remove Mutant {}", stored.id));
-        let Committed { mutant: removed, run } = self
+        let Committed {
+            mutant: removed,
+            run,
+        } = self
             .sidecar
             .remove_mutant(
                 stored.id,

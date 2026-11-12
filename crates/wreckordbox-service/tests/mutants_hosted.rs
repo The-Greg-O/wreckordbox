@@ -221,7 +221,9 @@ fn hold_the_audio(pipe: &Path) -> (Receiver<()>, Sender<()>) {
 }
 
 fn turn() -> std::sync::MutexGuard<'static, ()> {
-    TURNS.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    TURNS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[test]
@@ -322,7 +324,14 @@ fn an_entry_moved_while_it_is_being_mutated_is_mutated_where_it_is_now() {
         .unwrap();
     assert_eq!(made["mutant"]["entry_id"], entry.as_str());
     assert_eq!(made["mutant"]["position"], 1);
-    assert_eq!(made["run"]["description"].as_str().unwrap().split(' ').nth(2), Some("1"));
+    assert_eq!(
+        made["run"]["description"]
+            .as_str()
+            .unwrap()
+            .split(' ')
+            .nth(2),
+        Some("1")
+    );
     assert_eq!(hosted.listed()[0]["position"], 1);
     assert_eq!(hosted.mutant_events().len(), 1);
 }
@@ -347,9 +356,7 @@ fn a_run_another_client_ends_while_a_mutant_is_being_made_in_it_takes_nothing_mo
         json!({ "entry": entry, "run": run }),
     );
     reading.recv_timeout(Duration::from_secs(10)).unwrap();
-    let finished: Value = other
-        .call(runs::RUNS_FINISH, json!({ "id": run }))
-        .unwrap();
+    let finished: Value = other.call(runs::RUNS_FINISH, json!({ "id": run })).unwrap();
     assert!(!finished["finished_at"].is_null(), "{finished}");
     go.send(()).unwrap();
 

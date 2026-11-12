@@ -354,7 +354,10 @@ fn playlists_tree_prints_the_tree_with_each_rule_on_its_line() {
 fn playlists_tracks_gives_each_track_the_identifier_of_its_entrys_row() {
     let sandbox = Sandbox::new();
 
-    let result = json_of(&sandbox, &["--json", "playlists", "tracks", &playlist_id(1)]);
+    let result = json_of(
+        &sandbox,
+        &["--json", "playlists", "tracks", &playlist_id(1)],
+    );
 
     // The fixture's rows of playlist 1 have these identifiers, in order.
     let entries: Vec<&str> = result["tracks"]
