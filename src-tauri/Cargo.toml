@@ -52,6 +52,7 @@ rbl-deck = { path = "../crates/rbl-deck" }
 rbl-prolink = { path = "../crates/rbl-prolink" }
 rbl-link = { path = "../crates/rbl-link" }
 rbl-export = { path = "../crates/rbl-export" }
+wreckordbox-stick-outline = { path = "../crates/wreckordbox-stick-outline" }
 rbl-devices = { path = "../crates/rbl-devices" }
 rbl-pdb = { path = "../crates/rbl-pdb" }
 rbl-onelibrary = { path = "../crates/rbl-onelibrary" }
