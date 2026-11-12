@@ -1,0 +1,23 @@
+[package]
+name = "wreckordbox-stick-outline"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "A mounted Stick's playlist trees, read without writing anything to the Stick."
+
+[lints]
+workspace = true
+
+[dependencies]
+rbl-core = { path = "../rbl-core" }
+rbl-export = { path = "../rbl-export" }
+rbl-onelibrary = { path = "../rbl-onelibrary" }
+rbl-pdb = { path = "../rbl-pdb" }
+serde = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+serde_json = { workspace = true }
+rbl-anlz = { path = "../rbl-anlz" }
