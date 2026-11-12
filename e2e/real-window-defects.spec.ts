@@ -119,3 +119,29 @@ test("a track that left the deck while it was being analysed shows its whole wav
   await loadRow(drawing);
   await expect.poll(() => overviewDrawnTo(page), { timeout: 5_000 }).toBeGreaterThan(0.9);
 });
+
+test("a Stick's name is not cut short in the tree while there is room, and its full name is on hover and to assistive technology", async ({ page }) => {
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem("defects-seeded")) return;
+    sessionStorage.setItem("defects-seeded", "1");
+    localStorage.setItem("rbl.preferences", JSON.stringify({ advanced: { protectLibrary: false }, view: { viewShell: true } }));
+  });
+  await page.goto("/");
+  await expect(page.getByTestId("browser-title")).toContainText("Tracks)");
+  const tree = page.getByTestId("shell-tree").getByRole("tree", { name: "Tree" });
+  const stick = tree.getByRole("treeitem", { name: "DJ STICK", exact: true });
+  await expect(stick).toBeVisible();
+  await expect(stick).toHaveAttribute("title", "DJ STICK");
+  // Its protection is still said beside it, in words to a reader.
+  await expect(stick.locator("[data-stick-protection]")).toHaveText("Protected");
+  const name = stick.locator("[data-name]");
+  // Shown whole: the name's box holds all of its text.
+  const fit = await name.evaluate((el) => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    return { text: range.getBoundingClientRect().width, box: el.getBoundingClientRect().width, scroll: el.scrollWidth, client: el.clientWidth };
+  });
+  expect(fit.box, JSON.stringify(fit)).toBeGreaterThanOrEqual(fit.text - 0.5);
+  await expect(name).toHaveText("DJ STICK");
+  await page.screenshot({ path: test.info().outputPath("stick-name.png") });
+});
