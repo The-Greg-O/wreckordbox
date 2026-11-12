@@ -126,3 +126,194 @@ fn querying_an_empty_sidecar_creates_nothing_and_is_readable_with_protection_on(
     assert_eq!(refused.error_json()["error"]["code"], "library_protected");
     assert!(!s.sidecar_dir().exists());
 }
+
+#[test]
+fn measurements_are_verified_without_marking_stale_or_reattaching_on_a_read() {
+    let s = Sandbox::new();
+    let track = s.import_track("Meter.wav", 1);
+    let audio = s.path().join("audio/Meter.wav");
+    let original = std::fs::read(&audio).unwrap();
+    let recorded = ok(
+        &s,
+        &[
+            "facts",
+            "record",
+            &track,
+            "intensity",
+            r#"{"summary":0.7}"#,
+            "--source",
+            "tool:meter",
+            "--confidence",
+            "1",
+        ],
+    );
+    let id = &recorded["facts"][0]["id"];
+    let before = ok(&s, &["facts", "show", &track, "--all"]);
+    let runs = ok(&s, &["runs", "list"]);
+    let query = ["facts", "standing", &track, "intensity"];
+    assert_eq!(ok(&s, &query)["standing"]["id"], *id);
+    let mut changed = original.clone();
+    changed[44] ^= 0x55;
+    std::fs::write(&audio, &changed).unwrap();
+    let result = ok(&s, &query);
+    assert_eq!(result["standing"], Value::Null);
+    assert_eq!(result["stale"][0]["id"], *id);
+    assert_eq!(result["stale"][0]["stale"], true);
+    assert_eq!(ok(&s, &["facts", "show", &track, "--all"]), before);
+    assert_eq!(ok(&s, &["runs", "list"]), runs);
+    std::fs::write(&audio, &original).unwrap();
+    assert_eq!(ok(&s, &query)["standing"]["id"], *id);
+    std::fs::remove_file(&audio).unwrap();
+    let result = s.cli(&["--json", "facts", "standing", &track, "intensity"]);
+    assert!(!result.status.success());
+    assert_eq!(result.error_json()["error"]["code"], "track_file_missing");
+    assert_eq!(ok(&s, &["facts", "show", &track, "--all"]), before);
+}
+
+#[test]
+fn same_source_replacements_stay_archived_and_ties_are_deterministic() {
+    let s = Sandbox::new();
+    let first = record(&s, "agent:one", "5", "1");
+    let replaced = record(&s, "agent:one", "2", "0.2");
+    assert_eq!(standing(&s)["standing"]["id"], replaced["id"]);
+    let second = record(&s, "agent:two", "3", "0.2");
+    let result = standing(&s);
+    assert_eq!(result["standing"]["id"], second["id"]);
+    assert_eq!(result["reason"]["code"], "latest_fact");
+    let archived = result["superseded"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["id"] == first["id"])
+        .unwrap();
+    assert_eq!(archived["superseded_by"], replaced["id"]);
+    assert_eq!(archived["confidence"], 1.0);
+    let raw_before = ok(&s, &["facts", "show", "10003", "--all"]);
+    let text = s.cli(&["facts", "standing", "10003", "energy"]);
+    assert!(text.status.success(), "{}", text.stderr);
+    assert!(text.stdout.contains(&format!(
+        "Standing Fact {}: 3 (agent:two, confidence 0.2).",
+        second["id"]
+    )));
+    assert!(text.stdout.contains("Source precedence and confidence tie"));
+    assert!(text.stdout.contains("Superseded Fact"));
+    assert_eq!(ok(&s, &["facts", "show", "10003", "--all"]), raw_before);
+}
+
+#[test]
+fn invalid_or_unreadable_rules_do_not_fall_back_and_cannot_demote_the_dj() {
+    let s = Sandbox::new();
+    record(&s, "dj", "2", "1");
+    let file = s.sidecar_dir().join("source-precedence.toml");
+    for contents in [
+        "[sources]\ndj = -10\n",
+        "[sources]\n\"agent:\" = 10\n",
+        "[sources]\n\"Agent:tagger\" = 10\n",
+        "[source]\n\"agent:tagger\" = 10\n",
+        "[sources]\n\"agent:tagger\" = 1.5\n",
+        "not TOML [",
+    ] {
+        std::fs::write(&file, contents).unwrap();
+        let result = s.cli(&["--json", "facts", "standing", "10003", "energy"]);
+        assert!(!result.status.success(), "{contents}");
+        assert_eq!(
+            result.error_json()["error"]["code"],
+            "source_precedence_invalid"
+        );
+    }
+    std::fs::remove_file(&file).unwrap();
+    std::fs::create_dir(&file).unwrap();
+    let result = s.cli(&["--json", "facts", "standing", "10003", "energy"]);
+    assert!(!result.status.success());
+    assert_eq!(
+        result.error_json()["error"]["code"],
+        "source_precedence_invalid"
+    );
+}
+
+#[test]
+fn a_snapshot_query_never_migrates_or_tidies_an_existing_sidecar() {
+    let s = Sandbox::new();
+    ok(&s, &["status"]);
+    // Install an old store after the service starts, so its lazy writer is
+    // unopened. The read must report the problem and leave every byte alone.
+    std::fs::create_dir_all(s.sidecar_dir().join("work/keep")).unwrap();
+    let sentinel = s.sidecar_dir().join("work/keep/sentinel");
+    std::fs::write(&sentinel, "do not tidy a read").unwrap();
+    let file = s.sidecar_dir().join("sidecar.db");
+    let db = rusqlite::Connection::open(&file).unwrap();
+    db.execute_batch("CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT); INSERT INTO meta VALUES ('schema_version', '1');").unwrap();
+    drop(db);
+    let before = std::fs::read(&file).unwrap();
+    let result = s.cli(&["--json", "facts", "standing", "10003", "energy"]);
+    assert!(!result.status.success());
+    assert_eq!(result.error_json()["error"]["code"], "sidecar_failed");
+    assert_eq!(std::fs::read(&file).unwrap(), before);
+    assert_eq!(
+        std::fs::read_to_string(&sentinel).unwrap(),
+        "do not tidy a read"
+    );
+    assert!(!s.sidecar_dir().join("sidecar.db-wal").exists());
+}
+
+#[test]
+fn a_read_does_not_reattach_but_resolves_the_mapping_after_a_producer_does() {
+    let s = Sandbox::new();
+    let old = s.import_track("Readd.wav", 1);
+    let mut service = s.serve();
+    let dj = ok(
+        &s,
+        &["facts", "record", &old, "energy", "2", "--source", "dj"],
+    )["facts"][0]
+        .clone();
+    service.kill().unwrap();
+    service.wait().unwrap();
+    let mut new = String::new();
+    s.edit(|writer| {
+        writer.delete_track(&old).unwrap();
+        new = writer
+            .import_file(&s.path().join("audio/Readd.wav"))
+            .unwrap();
+    });
+    assert_ne!(new, old);
+    let before = ok(&s, &["runs", "list"]);
+    assert_eq!(
+        ok(&s, &["facts", "standing", &new, "energy"])["standing"],
+        Value::Null
+    );
+    assert_eq!(ok(&s, &["runs", "list"]), before);
+    // A genuine producer observes the current identity, then records.
+    ok(
+        &s,
+        &[
+            "facts",
+            "record",
+            &new,
+            "energy",
+            "5",
+            "--source",
+            "agent:tagger",
+            "--confidence",
+            "1",
+        ],
+    );
+    let result = ok(&s, &["facts", "standing", &new, "energy"]);
+    assert_eq!(result["standing"]["id"], dj["id"]);
+    assert_eq!(result["standing"]["run"], dj["run"]);
+    assert_eq!(result["standing"]["track_id"], new);
+    assert_eq!(result["reason"]["code"], "dj");
+}
+
+#[test]
+fn an_unreadable_store_is_not_reported_as_an_empty_answer() {
+    let s = Sandbox::new();
+    ok(&s, &["status"]);
+    std::fs::create_dir_all(s.sidecar_dir().join("sidecar.db")).unwrap();
+    let result = s.cli(&["--json", "facts", "standing", "10003", "energy"]);
+    assert!(
+        !result.status.success(),
+        "an unusable store was silently treated as empty: {}",
+        result.stdout
+    );
+    assert_eq!(result.error_json()["error"]["code"], "sidecar_failed");
+}

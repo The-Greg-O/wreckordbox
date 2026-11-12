@@ -38,7 +38,7 @@ pub struct Standing {
     pub standing: Option<Fact>,
     pub reason: Explanation,
     /// Includes original history and current answers outranked by the winner.
-    /// For the latter, superseded_by is computed, not persisted.
+    /// For the latter, `superseded_by` is computed, not persisted.
     pub superseded: Vec<Fact>,
     /// Measurements whose fingerprints do not match current audio.
     pub stale: Vec<Fact>,

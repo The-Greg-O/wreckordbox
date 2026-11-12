@@ -113,7 +113,7 @@ impl Rules {
                 Reason::Dj
             } else if self.priority(&first.source) != self.priority(&second.source) {
                 Reason::SourcePrecedence
-            } else if first.confidence != second.confidence {
+            } else if first.confidence.partial_cmp(&second.confidence) != Some(Ordering::Equal) {
                 Reason::Confidence
             } else {
                 Reason::LatestFact
@@ -126,7 +126,11 @@ impl Rules {
         (a.source.kind == SourceKind::Dj)
             .cmp(&(b.source.kind == SourceKind::Dj))
             .then_with(|| self.priority(&a.source).cmp(&self.priority(&b.source)))
-            .then_with(|| a.confidence.total_cmp(&b.confidence))
+            .then_with(|| {
+                a.confidence
+                    .partial_cmp(&b.confidence)
+                    .unwrap_or(Ordering::Equal)
+            })
             .then_with(|| a.id.cmp(&b.id))
     }
 }
