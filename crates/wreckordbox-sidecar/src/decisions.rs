@@ -44,7 +44,7 @@ use crate::{
     Fact, Fingerprint, Kind, NewFact, Result, RunId, Sidecar, SidecarError, Source, SourceKind,
 };
 
-/// The tables Decisions add to the store.
+/// The tables Decisions add to the store: version 3, after Mutants.
 pub(crate) const SCHEMA: &str = "
 CREATE TABLE decision (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,

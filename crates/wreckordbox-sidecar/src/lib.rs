@@ -23,6 +23,8 @@
 //! - [`Sidecar::record_stems`] and [`Sidecar::stems`] are the Stems kind.
 //! - [`decisions`] is the Decisions: judgements between fixed candidates
 //!   and the answers Deciders gave them. Not Facts, in tables of their own.
+//! - [`mutants`] is the Mutants: a playlist entry's own edited version of a
+//!   track. Not Facts, in tables of their own, kept by the same rules.
 //! - [`fingerprint_file`] fingerprints a track's audio.
 //!
 //! There is no Ledger, Unwind or Projection here. A Fact is never changed
@@ -36,6 +38,7 @@ mod audio;
 pub mod decisions;
 mod fingerprint;
 mod kinds;
+pub mod mutants;
 pub mod stems;
 mod store;
 pub mod tag_schema;
@@ -128,6 +131,18 @@ pub enum SidecarError {
     /// A probability that is not one, or probabilities that do not agree.
     #[error("{0}")]
     Probability(String),
+    /// A playlist entry that already has a Mutant.
+    #[error("playlist entry {entry_id} is already a Mutant (Mutant {mutant})")]
+    AlreadyMutant { entry_id: String, mutant: i64 },
+    /// No live Mutant with that identifier.
+    #[error("there is no Mutant {0}")]
+    NoMutant(i64),
+    /// A change named a Run the store does not have.
+    #[error("there is no Run {}", .0 .0)]
+    NoRun(RunId),
+    /// A change named a Run that has ended.
+    #[error("Run {} has ended", .0 .0)]
+    RunFinished(RunId),
 }
 
 pub type Result<T> = std::result::Result<T, SidecarError>;

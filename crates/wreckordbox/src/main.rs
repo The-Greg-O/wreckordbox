@@ -7,6 +7,7 @@
 mod decisions;
 mod facts;
 mod intake;
+mod mutants;
 mod mytag_edits;
 mod reading;
 mod schema;
@@ -90,6 +91,12 @@ enum Commands {
     Decisions {
         #[command(subcommand)]
         command: decisions::DecisionCommands,
+    },
+    /// Mutants: a playlist's own edited version of a track, kept for one
+    /// playlist entry and never written into the Library.
+    Mutants {
+        #[command(subcommand)]
+        command: mutants::MutantCommands,
     },
     /// The Intake and Problems queues: tracks with no Prep colour, tracks
     /// marked Problem, and what each still needs.
@@ -250,6 +257,9 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
         }
         Commands::Decisions { command } => {
             print(&decisions::run(&mut connect(&config)?, cli.json, command)?);
+        }
+        Commands::Mutants { command } => {
+            print(&mutants::run(&mut connect(&config)?, cli.json, command)?);
         }
         Commands::Intake { command } => {
             print(&intake::run(&mut connect(&config)?, cli.json, command)?);

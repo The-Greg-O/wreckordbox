@@ -13,9 +13,11 @@
 mod client;
 pub mod decider;
 pub mod decisions;
+mod entries;
 pub mod facts;
 pub mod intake;
 mod library;
+pub mod mutants;
 pub mod mytag_edits;
 pub mod native_stems;
 pub mod protocol;

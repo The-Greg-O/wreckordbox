@@ -75,6 +75,48 @@ fn version_one_store(dir: &tempfile::TempDir) -> std::path::PathBuf {
     folder
 }
 
+/// A Sidecar folder holding the frozen version 2 store (Mutants, before
+/// Decisions), never opened by this version of the crate.
+fn version_two_store(dir: &tempfile::TempDir) -> std::path::PathBuf {
+    let folder = version_one_store(dir);
+    raw(&folder)
+        .execute_batch(include_str!("fixtures/sidecar-v2.sql"))
+        .unwrap();
+    folder
+}
+
+/// Every column of every row of `table`, as text.
+fn rows_of(folder: &std::path::Path, table: &str) -> Vec<String> {
+    let db = raw(folder);
+    let mut statement = db
+        .prepare(&format!("SELECT * FROM {table} ORDER BY id"))
+        .unwrap();
+    let width = statement.column_count();
+    let mut found = statement.query([]).unwrap();
+    let mut rows = Vec::new();
+    while let Some(row) = found.next().unwrap() {
+        let cells: Vec<String> = (0..width)
+            .map(|at| format!("{:?}", row.get_ref(at).unwrap()))
+            .collect();
+        rows.push(cells.join("|"));
+    }
+    rows
+}
+
+/// Every table, index and trigger the store holds, by type and name.
+fn shape(folder: &std::path::Path) -> Vec<(String, String)> {
+    raw(folder)
+        .prepare(
+            "SELECT type, name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'
+             ORDER BY type, name",
+        )
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+}
+
 fn raw(folder: &std::path::Path) -> rusqlite::Connection {
     rusqlite::Connection::open(folder.join("sidecar.db")).unwrap()
 }
@@ -137,7 +179,10 @@ fn a_version_one_store_is_brought_up_to_date_with_every_record_as_it_was() {
 
     let sidecar = Sidecar::open(&folder).unwrap();
 
-    assert!(schema_version(&folder) >= 2);
+    assert_eq!(schema_version(&folder), 3);
+    for table in ["mutant", "mutant_change", "decision", "decision_answer"] {
+        assert!(tables(&folder).contains(&table.to_owned()), "{table}");
+    }
     assert_eq!(version_one_rows(&folder), before);
     // And as the crate reads them: value, provenance, Run and supersession.
     let facts = sidecar.facts("10003", "genre").unwrap();
@@ -222,10 +267,103 @@ fn a_migration_that_fails_part_way_leaves_version_one_intact_and_can_be_retried(
         .unwrap();
     let sidecar = Sidecar::open(&folder).unwrap();
 
-    assert!(schema_version(&folder) >= 2);
+    assert_eq!(schema_version(&folder), 3);
     assert_eq!(version_one_rows(&folder), before);
     let id = genre_question(&sidecar);
     assert!(sidecar.decision(id).unwrap().unwrap().pending);
+}
+
+#[test]
+fn a_new_store_is_made_at_version_three_in_the_shape_an_old_one_is_brought_to() {
+    let dir = tempfile::tempdir().unwrap();
+    let fresh = dir.path().join("fresh");
+    let sidecar = Sidecar::open(&fresh).unwrap();
+    assert_eq!(schema_version(&fresh), 3);
+    let id = genre_question(&sidecar);
+    sidecar
+        .answer_decision(&answer(id, &agent("tagger"), "Techno", 0.6))
+        .unwrap();
+    drop(sidecar);
+
+    let (one, two) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (from_one, from_two) = (version_one_store(&one), version_two_store(&two));
+    drop(Sidecar::open(&from_one).unwrap());
+    drop(Sidecar::open(&from_two).unwrap());
+
+    assert_eq!(shape(&from_one), shape(&fresh));
+    assert_eq!(shape(&from_two), shape(&fresh));
+    let again = Sidecar::open(&fresh).unwrap();
+    assert_eq!(schema_version(&fresh), 3);
+    assert_eq!(again.decision(id).unwrap().unwrap().answers.len(), 1);
+}
+
+#[test]
+fn a_version_two_store_keeps_its_mutants_when_brought_to_version_three() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = version_two_store(&dir);
+    assert_eq!(schema_version(&folder), 2);
+    let before = (
+        version_one_rows(&folder),
+        rows_of(&folder, "mutant"),
+        rows_of(&folder, "mutant_change"),
+    );
+    assert_eq!((before.1.len(), before.2.len()), (1, 1));
+
+    let sidecar = Sidecar::open(&folder).unwrap();
+
+    assert_eq!(schema_version(&folder), 3);
+    let after = (
+        version_one_rows(&folder),
+        rows_of(&folder, "mutant"),
+        rows_of(&folder, "mutant_change"),
+    );
+    assert_eq!(after, before);
+    // And as the crate reads it.
+    let mutant = sidecar.mutant(2).unwrap().unwrap();
+    assert_eq!(
+        (
+            mutant.entry_id.as_str(),
+            mutant.track_id.as_str(),
+            &mutant.edits,
+            mutant.run.0
+        ),
+        ("400", "10003", &json!({ "gain_db": -3 }), 8)
+    );
+    assert!(mutant.is_live());
+    assert_eq!(sidecar.mutant_changes(2).unwrap().len(), 1);
+    let id = genre_question(&sidecar);
+    sidecar
+        .answer_decision(&answer(id, &agent("tagger"), "Techno", 0.6))
+        .unwrap();
+    drop(sidecar);
+
+    let again = Sidecar::open(&folder).unwrap();
+
+    assert_eq!(schema_version(&folder), 3);
+    assert_eq!(rows_of(&folder, "mutant"), before.1);
+    assert_eq!(again.decision(id).unwrap().unwrap().answers[0].choice, "Techno");
+}
+
+#[test]
+fn a_migration_from_version_two_that_fails_part_way_leaves_version_two_intact() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = version_two_store(&dir);
+    raw(&folder)
+        .execute_batch("CREATE TABLE decision_answer_by_decider (in_the_way INTEGER)")
+        .unwrap();
+    let before = (shape(&folder), rows_of(&folder, "mutant"), version_one_rows(&folder));
+
+    assert!(matches!(Sidecar::open(&folder), Err(SidecarError::Db(_))));
+
+    assert_eq!(schema_version(&folder), 2);
+    let after = (shape(&folder), rows_of(&folder, "mutant"), version_one_rows(&folder));
+    assert_eq!(after, before, "nothing of version 3 was left behind");
+    raw(&folder)
+        .execute_batch("DROP TABLE decision_answer_by_decider")
+        .unwrap();
+    let sidecar = Sidecar::open(&folder).unwrap();
+    assert_eq!(schema_version(&folder), 3);
+    assert!(sidecar.mutant(2).unwrap().unwrap().is_live());
 }
 
 #[test]
