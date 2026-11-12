@@ -296,7 +296,13 @@ test("a playlist deep in folders keeps a name that can be read and opened", asyn
 test("a Library of twenty thousand playlists draws only what is in view, and all of it can be reached", async ({ page }) => {
   await enableViewShell(page);
   await page.goto("/?bigTree=1");
-  await expect(page.getByTestId("browser-title")).toContainText("Tracks)");
+  // Measured on an idle machine (wbx-45.17), page start to this title, five
+  // runs: about 0.5 s with twenty thousand playlists against 0.44 s with the
+  // ordinary mock, and up to 1.5 s for a worker's first page while the dev
+  // server compiles. Before Add To Playlist's names were made in one pass it
+  // was 2.4 s, and timed out under load. 5 s is three times the slowest of
+  // those: a wait past it is a slowness to find, not to wait out.
+  await expect(page.getByTestId("browser-title")).toContainText("Tracks)", { timeout: 5_000 });
   await expect(item(page, "Archive 1")).toBeVisible();
   expect(await tree(page).getByRole("treeitem").count()).toBeLessThan(200);
 
