@@ -194,6 +194,23 @@ fn the_command_works_on_the_open_windows_library() {
 }
 
 #[test]
+fn unreadable_run_status_does_not_mean_the_service_stopped() {
+    let window = window();
+    window.host().unwrap();
+    let dir = window.location.master_db.parent().unwrap().join("wreckordbox-sidecar");
+    std::fs::create_dir_all(dir.join("work")).unwrap();
+    std::fs::write(dir.join("work/keep"), b"keep").unwrap();
+    std::fs::write(dir.join("sidecar.db"), b"corrupt fixture").unwrap();
+    let status = tauri::async_runtime::block_on(rbxport_lib::service_status::service_activity(window.app.state())).unwrap();
+    let status = serde_json::to_value(status).unwrap();
+    assert_eq!(status["connected"], true);
+    assert_eq!(status["runsUnavailable"], true);
+    assert_eq!(status["problem"], serde_json::Value::Null);
+    assert!(dir.join("work/keep").exists());
+    assert!(window.cli(&["--json", "tracks", "list"]).ok);
+}
+
+#[test]
 fn active_runs_follow_cli_work_in_the_host_and_a_second_client() {
     let window = window();
     let snapshot = || {
@@ -281,6 +298,10 @@ fn active_runs_follow_cli_work_in_the_host_and_a_second_client() {
         Some(service_host::STOPPED_MESSAGE)
     );
     assert!(stopped.runs.is_empty());
+    window.state().stop_service();
+    window.host().unwrap();
+    assert!(snapshot().connected);
+    assert!(snapshot().problem.is_none());
 }
 
 #[test]

@@ -25,14 +25,18 @@ use crate::{io, Fingerprint, Result, SidecarError};
 /// The version of the stored shape this crate reads and writes. A store from
 /// a newer wreckordbox is refused rather than guessed at; an older one is
 /// brought up to date by [`MIGRATIONS`] when it is opened.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// What each version after the first adds, in order: the version a store is
 /// at once the statements have run, and the statements. A new store is made
 /// at version 1 by [`SCHEMA`] and then taken through every one of these, so
 /// a new store and an old one brought up to date hold the same tables. Add
 /// a version at the end; never change one that has shipped.
-const MIGRATIONS: &[(u32, &str)] = &[(2, crate::mutants::SCHEMA), (3, crate::decisions::SCHEMA)];
+const MIGRATIONS: &[(u32, &str)] = &[
+    (2, crate::mutants::SCHEMA),
+    (3, crate::decisions::SCHEMA),
+    (4, crate::active_runs::SCHEMA),
+];
 
 // A migration added without raising `SCHEMA_VERSION`, or the reverse,
 // does not build.
@@ -289,7 +293,7 @@ impl Fact {
 /// An open Sidecar. One process owns it: the Library service.
 pub struct Sidecar {
     dir: PathBuf,
-    db: Mutex<Connection>,
+    pub(crate) db: Mutex<Connection>,
 }
 
 impl std::fmt::Debug for Sidecar {
