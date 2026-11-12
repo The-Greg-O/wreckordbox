@@ -105,9 +105,7 @@ pub fn run(
                 separated_text(&separated)
             })
         }
-        StemCommands::Write { id, stick } => {
-            crate::stems_write::run(client, as_json, id, stick)
-        }
+        StemCommands::Write { id, stick } => crate::stems_write::run(client, as_json, id, stick),
         StemCommands::Show { id } => {
             let stems: TrackStems =
                 client.call(commands::STEMS_SHOW, json!(TrackId { id: id.clone() }))?;

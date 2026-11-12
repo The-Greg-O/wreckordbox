@@ -41,10 +41,10 @@ fn written_text(written: &NativeStems) -> String {
             track.id, track.title, skipped.reason, written.track_path
         );
     }
-    let folder = written
-        .folder
-        .as_deref()
-        .map_or_else(|| written.stick.clone(), |folder| written.stick.join(folder));
+    let folder = written.folder.as_deref().map_or_else(
+        || written.stick.clone(),
+        |folder| written.stick.join(folder),
+    );
     let mut text = if written.replaced {
         format!(
             "Replaced the Native stems for track {} \"{}\" at {}",

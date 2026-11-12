@@ -109,14 +109,22 @@ pub struct SkippedName {
     pub reason: String,
 }
 
-/// The track, where its audio is, and the Library's own identifier (0 when
-/// it has none), which a Stick's library names for each track it holds.
-pub(crate) fn parent(library: &OpenLibrary, id: &str) -> Result<(ParentAudio, u64), ServiceError> {
-    let found = stems::parent(library, id)?;
+/// What the command needs of the Library.
+pub(crate) struct Found {
+    /// The track and where its audio is.
+    audio: ParentAudio,
+    /// The Library's own identifier (0 when it has none), which a Stick's
+    /// library names for each track it holds.
+    library_id: u64,
+}
+
+/// Looks the track up in the Library.
+pub(crate) fn parent(library: &OpenLibrary, id: &str) -> Result<Found, ServiceError> {
+    let audio = stems::parent(library, id)?;
     let library_id = library
         .with_db(|db| Ok(rbl_db::export_info::db_id(db.connection()).unwrap_or(0)))
         .unwrap_or(0);
-    Ok((found, library_id))
+    Ok(Found { audio, library_id })
 }
 
 /// One write at a time: two for the same track would share a staging folder.
@@ -128,7 +136,7 @@ static WRITING: Mutex<()> = Mutex::new(());
 pub(crate) fn answer(
     stems: &Arc<Stems>,
     request: &Request,
-    lookup: &dyn Fn(&str) -> Result<(ParentAudio, u64), ServiceError>,
+    lookup: &dyn Fn(&str) -> Result<Found, ServiceError>,
 ) -> Result<Value, ServiceError> {
     let args: WriteStems = serde_json::from_value(request.args.clone()).map_err(|e| {
         ServiceError::new(
@@ -136,7 +144,10 @@ pub(crate) fn answer(
             format!("bad arguments to {}: {e}", request.command),
         )
     })?;
-    let (found, library_id) = lookup(&args.id)?;
+    let Found {
+        audio: found,
+        library_id,
+    } = lookup(&args.id)?;
     let track = found.parent().clone();
     let stick = args.stick.as_path();
     if !stick.is_absolute() {
@@ -284,11 +295,7 @@ fn current_stems(stems: &Stems, track: &Parent, audio: &Path) -> Result<StemSet,
         Some(_) => Err(none(
             "has Stems recorded in the Sidecar, and their audio files are gone",
         )),
-        None if sidecar
-            .stems(&track.id)
-            .map_err(|e| failed(&e))?
-            .is_empty() =>
-        {
+        None if sidecar.stems(&track.id).map_err(|e| failed(&e))?.is_empty() => {
             Err(none("has no Stems in the Sidecar"))
         }
         None => Err(none(

@@ -103,7 +103,9 @@ impl Rig {
     fn record_stems(&self, track: &str, name: &str, frames: u32) {
         let sidecar = Sidecar::open(&self.sandbox.sidecar_dir()).unwrap();
         let source = Source::new(SourceKind::Tool, "separation-engine");
-        let run = sidecar.begin_run(&source, "Synthetic Stems for a test").unwrap();
+        let run = sidecar
+            .begin_run(&source, "Synthetic Stems for a test")
+            .unwrap();
         let workspace = sidecar.workspace(run).unwrap();
         let files: Vec<(Role, PathBuf)> = Role::ALL
             .into_iter()
@@ -178,7 +180,8 @@ impl Rig {
     fn write(&self, track: &str, json: bool) -> common::Run {
         let stick = self.stick().to_str().unwrap();
         if json {
-            self.sandbox.cli(&["--json", "stems", "write", track, stick])
+            self.sandbox
+                .cli(&["--json", "stems", "write", track, stick])
         } else {
             self.sandbox.cli(&["stems", "write", track, stick])
         }
@@ -198,7 +201,10 @@ fn native_stems_are_written_to_a_spare_stick_and_the_deck_plays_all_four() {
     assert_eq!(written["track"]["title"], "Night Bus");
     assert_eq!(written["outcome"], "written");
     assert_eq!(written["stick"], rig.stick().to_str().unwrap());
-    assert_eq!(written["track_path"], "Contents/Artist/Single/Night Bus.wav");
+    assert_eq!(
+        written["track_path"],
+        "Contents/Artist/Single/Night Bus.wav"
+    );
     assert_eq!(written["key"], "Night Bus");
     assert_eq!(written["folder"], "STEMS/Night Bus");
     assert_eq!(
@@ -211,10 +217,14 @@ fn native_stems_are_written_to_a_spare_stick_and_the_deck_plays_all_four() {
     assert_eq!(written["skipped"], serde_json::Value::Null);
 
     // The deck, from the path its library holds for the track.
-    let loaded = deck::load(&[rig.stick()], &rig.track_file(&track)).expect("the deck finds the set");
+    let loaded =
+        deck::load(&[rig.stick()], &rig.track_file(&track)).expect("the deck finds the set");
     assert_eq!(loaded.folder, rig.stick().join("STEMS/Night Bus"));
     assert_eq!((loaded.rank, loaded.identity), (0, Identity::Proven));
-    assert_eq!(loaded.pads.keys().copied().collect::<Vec<_>>(), [1, 2, 3, 4]);
+    assert_eq!(
+        loaded.pads.keys().copied().collect::<Vec<_>>(),
+        [1, 2, 3, 4]
+    );
     for (pad, stem) in &loaded.pads {
         assert_eq!((stem.sample_rate, stem.channels), (44_100, 2), "pad {pad}");
         // Exactly the parent's length, as the Sidecar holds it.
@@ -223,7 +233,10 @@ fn native_stems_are_written_to_a_spare_stick_and_the_deck_plays_all_four() {
         // of the way in, give or take one short Vorbis block.
         let onset = u64::from(FRAMES / 5);
         assert!(stem.peak(0, onset - 256) < 200, "pad {pad} starts early");
-        assert!(stem.peak(onset, onset + 512) > 8_000, "pad {pad} starts late");
+        assert!(
+            stem.peak(onset, onset + 512) > 8_000,
+            "pad {pad} starts late"
+        );
     }
     assert!(deck::counts_as_made(&loaded.folder));
 }
@@ -243,16 +256,27 @@ fn the_sticks_exported_library_still_reads_back_and_only_the_stems_folder_was_ad
     assert_eq!(libraries(&rig), before);
     assert_eq!(before[1].tracks.len(), 1);
     let report = rbl_export::verify(rig.stick()).unwrap();
-    assert!(report.is_ok(), "{}", rbl_export::verification_failure(&report));
+    assert!(
+        report.is_ok(),
+        "{}",
+        rbl_export::verification_failure(&report)
+    );
     let files_after = deck::snapshot(rig.stick());
     let added: Vec<&PathBuf> = files_after
         .keys()
         .filter(|path| !files_before.contains_key(*path))
         .collect();
     assert_eq!(added.len(), 5, "{added:?}");
-    assert!(added.iter().all(|path| path.starts_with("STEMS/Night Bus")), "{added:?}");
+    assert!(
+        added.iter().all(|path| path.starts_with("STEMS/Night Bus")),
+        "{added:?}"
+    );
     for (path, bytes) in &files_before {
-        assert!(files_after.get(path) == Some(bytes), "{} changed", path.display());
+        assert!(
+            files_after.get(path) == Some(bytes),
+            "{} changed",
+            path.display()
+        );
     }
 }
 
@@ -349,9 +373,13 @@ fn a_stick_with_no_exported_library_or_that_is_not_there_fails() {
     assert_eq!(empty.error_json()["error"]["code"], "track_not_on_stick");
 
     let nowhere = rig.stick().join("no such folder");
-    let missing = rig
-        .sandbox
-        .cli(&["--json", "stems", "write", &track, nowhere.to_str().unwrap()]);
+    let missing = rig.sandbox.cli(&[
+        "--json",
+        "stems",
+        "write",
+        &track,
+        nowhere.to_str().unwrap(),
+    ]);
     assert!(!missing.status.success());
     assert_eq!(missing.error_json()["error"]["code"], "stick_not_found");
 }
@@ -454,7 +482,8 @@ fn a_name_fat_cannot_store_as_written_gets_the_layouts_underscore() {
 fn a_stick_exported_from_another_library_does_not_hold_this_librarys_track() {
     let (rig, track) = Rig::ready("Night Bus.wav");
     let ours = {
-        let db = rbl_db::Library::open(rig.sandbox.location().clone(), rbl_db::OpenMode::ReadOnly).unwrap();
+        let db = rbl_db::Library::open(rig.sandbox.location().clone(), rbl_db::OpenMode::ReadOnly)
+            .unwrap();
         rbl_db::export_info::db_id(db.connection()).unwrap()
     };
     assert_ne!(ours, 0);
