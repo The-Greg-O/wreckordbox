@@ -124,6 +124,18 @@
 
 @container shell (max-width: 800px) {
   .panel { padding: var(--s-shell-space-5); gap: var(--s-shell-space-5); }
+  /* The panel scrolls in a short window; "Mark Clean and next" stays at its
+     foot, as the design draws it (wbx-69). */
+  .actions {
+    position: sticky;
+    bottom: calc(-1 * var(--s-shell-space-5));
+    z-index: 1;
+    margin-bottom: calc(-1 * var(--s-shell-space-5));
+    padding-bottom: var(--s-shell-space-5);
+    background: var(--role-working);
+  }
   .field { grid-template-columns: minmax(0, 1fr); gap: var(--s-shell-space-2); }
   .secondary { margin-left: 0; }
+  /* What the track needs is said once, in the counter above (wbx-69). */
+  .actions .open { display: none; }
 }

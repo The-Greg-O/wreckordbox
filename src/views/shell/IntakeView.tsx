@@ -36,6 +36,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent }
 import { useTranslation } from "@/i18n";
 import { getBackend } from "@/ipc/client";
 import type { RowDto } from "@/ipc/types";
+import { counterStep } from "@/lib/intakeCounter";
 import { energyOf, intakeActionForKey, intakeChord, nextQueuedIndex, type IntakeAction, type PrepColour } from "@/lib/intakeEdits";
 import { needsLine, queuePosition, type IntakeCounts, type IntakeQueueName, type IntakeQueuePage, type QueuedTrack } from "@/lib/intakeQueue";
 import { refusal } from "@/lib/menu";
@@ -262,6 +263,31 @@ export function IntakeView(props: IntakeViewProps) {
     await loadQueued(track, row);
     return track.id;
   }, [loadQueued, t]);
+
+  /**
+   * The half-width counter's previous (`-1`) and next (`1`), wbx-69: what
+   * choosing the neighbouring row would do, across a page's edge too (one
+   * track read, then the view holds its page). A DJ who chose another
+   * track while that read was on its way keeps their choice.
+   */
+  const step = useEventCallback(async (delta: -1 | 1) => {
+    if (!page) return;
+    const to = counterStep({ length: page.tracks.length, offset: page.offset, nextOffset: page.nextOffset, index }, delta, INTAKE_PAGE);
+    if (to === null) return;
+    if (to.kind === "row") { await choose(to.at); return; }
+    const op = begin();
+    if (!op) return;
+    setEditFailure(null);
+    setNote(null);
+    const backend = await getBackend();
+    const read = await backend.intakeQueue(op.queue, to.read, 1).catch(() => null);
+    const track = read?.tracks[0];
+    const row = read?.rows[0];
+    if (!owns(op)) return;
+    if (!track || !row) { setNote(t("The neighbouring track could not be read.")); return; }
+    setOffset(to.offset);
+    await loadQueued(track, row);
+  });
 
   // The tag panel's state and writes (wbx-65), kept here so they outlive
   // the panel of any one track: a mark waits for its track's tag writes,
@@ -544,10 +570,24 @@ export function IntakeView(props: IntakeViewProps) {
       data-own-activation=""
     >
       <section className={styles.queue} aria-label={t(`${TITLES[queue]} queue`)}>
-        <header className={styles.heading}>
+        {/* At half width (wbx-69) this heading is the queue: the position,
+            what the chosen track needs, previous and next; the list and
+            its pages give way (`IntakeView.module.css`). */}
+        <header className={styles.heading} role="group" aria-label={t(`${TITLES[queue]} counter`)} data-track={selected?.id}>
           <h2>{title}</h2>
           <span className={styles.position} data-testid="intake-position">
             {queuePosition(index < 0 ? -1 : page.offset + index, page.total)}
+          </span>
+          <span className={`${styles.counterOnly} ${styles.counterNeeds}`} data-testid="intake-counter-needs" title={selected ? t(needsLine(selected)) : undefined}>
+            {selected ? t(needsLine(selected)) : ""}
+          </span>
+          <span className={`${styles.counterOnly} ${styles.counterSteps}`}>
+            <button type="button" className={styles.step} aria-label={t("Previous track")} title={t("Previous track")}
+              disabled={counterStep({ length: page.tracks.length, offset: page.offset, nextOffset: page.nextOffset, index }, -1, INTAKE_PAGE) === null}
+              onClick={() => { void step(-1); }}>◀</button>
+            <button type="button" className={styles.step} aria-label={t("Next track")} title={t("Next track")}
+              disabled={counterStep({ length: page.tracks.length, offset: page.offset, nextOffset: page.nextOffset, index }, 1, INTAKE_PAGE) === null}
+              onClick={() => { void step(1); }}>▶</button>
           </span>
         </header>
         {stale}

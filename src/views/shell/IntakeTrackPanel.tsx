@@ -156,7 +156,7 @@ export function IntakeTrackPanel(props: IntakeTrackPanelProps) {
       {failure !== null ? <p className={styles.failed} data-testid="intake-edit-failed" role="alert">{failure}</p> : null}
       {note !== null ? <p className={styles.note} data-testid="intake-note" role="status">{note}</p> : null}
 
-      <div className={styles.actions}>
+      <div className={styles.actions} data-testid="intake-actions">
         <button
           type="button"
           className={styles.markClean}

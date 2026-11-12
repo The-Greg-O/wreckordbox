@@ -150,14 +150,48 @@
 .offer:hover { border-color: var(--role-accent); }
 .offerCount { color: var(--role-tab-to); }
 
-/* At half width the queue sits above the panel, at most a third of the view
-   (the design's counter in place of the queue is wbx-69). */
+/* The counter's parts: drawn only at half width, where the heading is the queue. */
+.counterOnly { display: none; }
+.counterNeeds {
+  flex: 1 1 14ch;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  text-align: right;
+  color: var(--iv-missing);
+}
+.counterSteps { gap: var(--s-shell-space-3); margin-left: auto; }
+.step {
+  min-width: 34px;
+  padding: var(--s-shell-space-2) var(--s-shell-space-4);
+  border: var(--s-shell-border) solid var(--role-border);
+  border-radius: var(--s-shell-radius);
+  background: var(--role-control);
+  color: var(--role-text);
+  font: inherit;
+  cursor: pointer;
+}
+.step:hover:not(:disabled) { border-color: var(--role-accent); }
+.step:focus-visible { outline: var(--s-shell-border) solid var(--role-accent); outline-offset: 1px; }
+.step:disabled { opacity: 0.4; cursor: default; }
+
+/* Half width (wbx-69, docs/design/screens/intake "Sizes"): the queue
+   becomes a counter, "2 of 23" with what the track needs and previous and
+   next, over the track panel, which takes the rest of the height. The list
+   and its pages stay mounted (display: none), so the choice survives the
+   window widening again. 800px is tokens.md's breakpoint; see ViewShell. */
 @container shell (max-width: 800px) {
   .view {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 34%) minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
   }
   .queue { border-right: 0; border-bottom: var(--s-shell-border) solid var(--role-ground); }
+  .heading { flex-wrap: wrap; align-items: center; row-gap: var(--s-shell-space-2); border-bottom: 0; }
+  /* Scoped by .queue: `.pages` is declared further down. */
+  .queue .rows, .queue .pages { display: none; }
+  .counterOnly { display: inline-flex; }
+  .counterNeeds { display: block; }
 }
 
 /* A refresh that failed: the page shown is what was read before. */
