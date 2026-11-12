@@ -122,6 +122,22 @@ pub trait Stretcher: Send {
     fn pitch_scale(&self) -> f32 {
         1.0
     }
+
+    /// Frames of silence to feed before the first real audio, so the start
+    /// of a file is treated like its middle. Only the offline path
+    /// ([`crate::Offline`]) asks: a deck starts wherever the DJ pressed play
+    /// and has nothing to line up against. Read after the ratio and pitch
+    /// are set, since a backend's answer can depend on them.
+    fn start_pad(&self) -> usize {
+        0
+    }
+
+    /// Frames of output to discard after a fresh start (and `start_pad` of
+    /// silence) before the output lines up with the first real input frame.
+    /// The same caveats as [`Stretcher::start_pad`].
+    fn start_delay(&self) -> usize {
+        0
+    }
 }
 
 /// Overlap-add with a similarity search: see the module comment.
