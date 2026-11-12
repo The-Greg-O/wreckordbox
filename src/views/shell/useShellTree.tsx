@@ -14,29 +14,25 @@
  * (the selected node belongs to the shell and survives a switch), and
  * choosing a queue in the tree shows that queue as the selection.
  */
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 
 import type { TreeNode } from "@/ipc/types";
-import { shellTreeQueueId, shellViewForRow, type IntakeQueue, type ShellTreeRow } from "@/lib/shellTree";
+import { shellTreeQueueId, shellViewForRow, type IntakeQueue, type ShellStick, type ShellTreeRow } from "@/lib/shellTree";
 import type { ShellView } from "@/lib/shellViews";
 import { ShellTree } from "./ShellTree";
 
-export function useShellTree({ library, sticks, readSticks, selectedNode, onSelectNode, view, onViewChange, onReadStick }: {
+export function useShellTree({ library, sticks, selectedNode, onSelectNode, view, onViewChange }: {
   /** The Library's tree, as the backend sends it. */
   library: readonly TreeNode[];
-  /** The mounted Sticks' nodes, as `useDeviceLibraries` lays them out. */
-  sticks: readonly TreeNode[];
-  /** The paths of the Sticks whose libraries have been read. */
-  readSticks: ReadonlySet<string>;
+  /** The mounted Sticks, as `useStickOutlines` reads them. */
+  sticks: readonly ShellStick[];
   selectedNode: TreeNode | null;
   onSelectNode: (node: TreeNode) => void;
   view: ShellView;
   onViewChange: (view: ShellView) => void;
-  onReadStick: (node: TreeNode) => void;
 }): { tree: ReactNode; intakeQueue: IntakeQueue } {
   const [intakeQueue, setIntakeQueue] = useState<IntakeQueue>("intake");
   const [queueChosen, setQueueChosen] = useState(false);
-  const nodes = useMemo(() => [...library, ...sticks], [library, sticks]);
 
   const open = useCallback((row: ShellTreeRow) => {
     setQueueChosen(row.queue !== undefined);
@@ -46,6 +42,6 @@ export function useShellTree({ library, sticks, readSticks, selectedNode, onSele
   }, [onSelectNode, onViewChange]);
 
   const selectedId = view === "intake" && queueChosen ? shellTreeQueueId(intakeQueue) : selectedNode?.id ?? null;
-  const tree = <ShellTree nodes={nodes} selectedId={selectedId} onOpen={open} onReadStick={onReadStick} readSticks={readSticks} />;
+  const tree = <ShellTree library={library} sticks={sticks} selectedId={selectedId} onOpen={open} />;
   return { tree, intakeQueue };
 }

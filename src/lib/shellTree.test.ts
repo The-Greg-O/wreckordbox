@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { TreeNode } from "@/ipc/types";
 import { deviceNodeId } from "./deviceLibrary";
-import { shellTreeRows, shellViewForRow, type ShellTreeRow } from "./shellTree";
+import { shellTreeRows, shellViewForRow, type ShellStick, type ShellTreeRow } from "./shellTree";
 
 /** A Library tree as the backend sends it: flat, with a depth per node. */
 const LIBRARY: TreeNode[] = [
@@ -21,22 +21,15 @@ const LIBRARY: TreeNode[] = [
 ];
 
 const STICK = "/run/media/dj/GIGSTICK";
-const at = (format: "deviceLibrary" | "oneLibrary", role: "library" | "allTracks" | "playlists" | "node", id = "0") =>
-  deviceNodeId({ path: STICK, format, role, id });
-/** A Stick whose two libraries have been read, as `withDeviceLibraries` lays them out. */
-const STICK_NODES: TreeNode[] = [
-  { id: `device:${STICK}`, name: "GIGSTICK", kind: "device", depth: 0, lazy: true, expanded: false },
-  { id: at("deviceLibrary", "library"), name: "Device Library", kind: "deviceLibrary", depth: 1 },
-  { id: at("deviceLibrary", "allTracks"), name: "All Tracks", kind: "deviceAllTracks", depth: 2, childCount: 140 },
-  { id: at("deviceLibrary", "playlists"), name: "Playlists", kind: "devicePlaylists", depth: 2 },
-  { id: at("deviceLibrary", "node", "1"), name: "Main", kind: "devicePlaylist", depth: 3, childCount: 140 },
-  { id: at("deviceLibrary", "node", "2"), name: "Sets", kind: "deviceFolder", depth: 3, expanded: false },
-  { id: at("deviceLibrary", "node", "3"), name: "Techno", kind: "devicePlaylist", depth: 4, childCount: 49 },
-  { id: at("oneLibrary", "library"), name: "OneLibrary", kind: "deviceLibrary", depth: 1 },
-  { id: at("oneLibrary", "allTracks"), name: "All Tracks", kind: "deviceAllTracks", depth: 2, childCount: 140 },
-  { id: at("oneLibrary", "playlists"), name: "Playlists", kind: "devicePlaylists", depth: 2 },
-  { id: at("oneLibrary", "node", "1"), name: "Main", kind: "devicePlaylist", depth: 3, childCount: 140 },
-];
+type Outline = NonNullable<ShellStick["outline"]>;
+type Library = Outline["libraries"][number];
+const node = (id: number, parent: number, name: string, depth: number, count: number, folder = false) =>
+  ({ id: String(id), parentId: String(parent), name, folder, depth, count });
+/** The real stick's shape: a list, a folder holding one, at the top level. */
+const PLAYLISTS = [node(1, 0, "Main", 0, 140), node(2, 0, "Sets", 0, 1, true), node(3, 2, "Techno", 1, 49)];
+const lib = (format: Library["format"], nodes: Library["nodes"]): Library => ({ format, nodes });
+const stick = (outline: Outline | null): ShellStick => ({ path: STICK, name: "GIGSTICK", outline });
+const fromStick = (rows: ShellTreeRow[]) => rows.slice(rows.findIndex((row) => row.kind === "stick")).map(line);
 
 /** A row as `kind depth name [count]`, for reading a whole tree at once. */
 const line = (row: ShellTreeRow) =>
@@ -44,7 +37,7 @@ const line = (row: ShellTreeRow) =>
 
 describe("the shell's tree", () => {
   it("lists the Library's All Tracks, Intake and Problems, then every playlist at any depth, then Set plans", () => {
-    expect(shellTreeRows({ nodes: LIBRARY }).map(line)).toEqual([
+    expect(shellTreeRows({ library: LIBRARY }).map(line)).toEqual([
       "heading 0 Library",
       "allTracks 0 All Tracks 412",
       "intake 0 Intake",
@@ -63,7 +56,7 @@ describe("the shell's tree", () => {
   });
 
   it("shows every folder open whatever the old tree had closed, and hides what is under one the DJ closes", () => {
-    const rows = shellTreeRows({ nodes: LIBRARY, collapsed: new Set(["f2"]) });
+    const rows = shellTreeRows({ library: LIBRARY, collapsed: new Set(["f2"]) });
     expect(rows.map((row) => row.name)).not.toContain("Deeper");
     expect(rows.map((row) => row.name)).not.toContain("Bottom");
     // What follows the closed folder at its own level is still there.
@@ -73,7 +66,7 @@ describe("the shell's tree", () => {
   });
 
   it("opens Library rows on the Library's own nodes, and Intake and Problems on a queue", () => {
-    const rows = shellTreeRows({ nodes: LIBRARY });
+    const rows = shellTreeRows({ library: LIBRARY });
     expect(rows.find((row) => row.kind === "allTracks")?.node).toBe(LIBRARY[0]);
     expect(rows.find((row) => row.name === "Bottom")?.node).toBe(LIBRARY[6]);
     expect(rows.find((row) => row.kind === "intake")).toMatchObject({ queue: "intake" });
@@ -82,37 +75,90 @@ describe("the shell's tree", () => {
   });
 
   it("lists Set plans once there are some", () => {
-    const rows = shellTreeRows({ nodes: LIBRARY, setPlans: [{ id: "plan-1", name: "Friday peak hour", count: 16 }] });
+    const rows = shellTreeRows({ library: LIBRARY, setPlans: [{ id: "plan-1", name: "Friday peak hour", count: 16 }] });
     expect(rows.slice(-2).map(line)).toEqual(["heading 0 Set plans", "setPlan 0 Friday peak hour 16"]);
   });
 
-  it("lists a mounted Stick with the playlists of its first library, once, and nothing for a Stick that is gone", () => {
-    const rows = shellTreeRows({ nodes: [...LIBRARY, ...STICK_NODES] });
-    expect(rows.slice(rows.findIndex((row) => row.kind === "stick")).map(line)).toEqual([
+  it("lists a mounted Stick with its playlists once when both of its libraries hold the same ones", () => {
+    const rows = shellTreeRows({
+      library: LIBRARY,
+      sticks: [stick({ pending: false, libraries: [lib("deviceLibrary", PLAYLISTS), lib("oneLibrary", PLAYLISTS)] })],
+    });
+    expect(fromStick(rows)).toEqual([
       "stick 0 GIGSTICK",
       "stickPlaylist 0 Main 140",
       "stickFolder 0 Sets",
       "stickPlaylist 1 Techno 49",
     ]);
-    expect(rows.find((row) => row.kind === "stick")?.node).toBe(STICK_NODES[0]);
-    expect(rows.find((row) => row.name === "Techno")?.node).toBe(STICK_NODES[6]);
-    expect(shellTreeRows({ nodes: LIBRARY }).some((row) => row.kind === "stick")).toBe(false);
+    expect(rows.find((row) => row.kind === "stick")?.node).toMatchObject({ id: `device:${STICK}`, kind: "device" });
+    // A row opens that playlist of the Device Library, as the old tree's did.
+    expect(rows.find((row) => row.name === "Techno")?.node).toMatchObject({
+      id: deviceNodeId({ path: STICK, format: "deviceLibrary", role: "node", id: "3" }),
+      kind: "devicePlaylist",
+    });
+    expect(shellTreeRows({ library: LIBRARY }).some((row) => row.kind === "stick")).toBe(false);
   });
 
-  it("says so when a Stick that has been read holds no playlists, and says nothing before it is read", () => {
-    const unread = shellTreeRows({ nodes: [STICK_NODES[0] as TreeNode] });
-    expect(unread.slice(unread.findIndex((row) => row.kind === "stick")).map(line)).toEqual(["stick 0 GIGSTICK"]);
-    const bare = shellTreeRows({ nodes: STICK_NODES.slice(0, 4) });
-    expect(bare.slice(bare.findIndex((row) => row.kind === "stick")).map(line)).toEqual([
+  it("lists each library under its own name when they differ, so a playlist in only one is not lost", () => {
+    const rows = shellTreeRows({
+      library: LIBRARY,
+      sticks: [stick({ pending: false, libraries: [lib("deviceLibrary", PLAYLISTS), lib("oneLibrary", [...PLAYLISTS, node(9, 0, "Only Here", 0, 2)])] })],
+    });
+    expect(fromStick(rows)).toEqual([
+      "stick 0 GIGSTICK",
+      "stickLibrary 0 Device Library",
+      "stickPlaylist 0 Main 140",
+      "stickFolder 0 Sets",
+      "stickPlaylist 1 Techno 49",
+      "stickLibrary 0 OneLibrary",
+      "stickPlaylist 0 Main 140",
+      "stickFolder 0 Sets",
+      "stickPlaylist 1 Techno 49",
+      "stickPlaylist 0 Only Here 2",
+    ]);
+    expect(rows.find((row) => row.name === "Only Here")?.node?.id).toBe(deviceNodeId({ path: STICK, format: "oneLibrary", role: "node", id: "9" }));
+    // Every row has its own id, though the two libraries name theirs alike.
+    expect(new Set(rows.map((row) => row.id)).size).toBe(rows.length);
+  });
+
+  it("shows OneLibrary's playlists when the Device Library is empty", () => {
+    const rows = shellTreeRows({
+      library: LIBRARY,
+      sticks: [stick({ pending: false, libraries: [lib("deviceLibrary", []), lib("oneLibrary", PLAYLISTS)] })],
+    });
+    expect(fromStick(rows)).toEqual([
+      "stick 0 GIGSTICK",
+      "stickLibrary 0 Device Library",
+      "empty 0 No playlists",
+      "stickLibrary 0 OneLibrary",
+      "stickPlaylist 0 Main 140",
+      "stickFolder 0 Sets",
+      "stickPlaylist 1 Techno 49",
+    ]);
+  });
+
+  it("says nothing under a Stick not read yet, 'No playlists' under one read with none, and so when a write to it did not finish", () => {
+    expect(fromStick(shellTreeRows({ library: LIBRARY, sticks: [stick(null)] }))).toEqual(["stick 0 GIGSTICK"]);
+    expect(fromStick(shellTreeRows({ library: LIBRARY, sticks: [stick({ pending: false, libraries: [] })] }))).toEqual([
       "stick 0 GIGSTICK",
       "empty 0 No playlists",
     ]);
-    // A Stick read and found to hold no library at all (never written) says the same.
-    const blank = shellTreeRows({ nodes: [STICK_NODES[0] as TreeNode], readSticks: new Set([STICK]) });
-    expect(blank.slice(blank.findIndex((row) => row.kind === "stick")).map(line)).toEqual([
+    expect(fromStick(shellTreeRows({ library: LIBRARY, sticks: [stick({ pending: false, libraries: [lib("oneLibrary", [])] })] }))).toEqual([
       "stick 0 GIGSTICK",
       "empty 0 No playlists",
     ]);
+    expect(fromStick(shellTreeRows({ library: LIBRARY, sticks: [stick({ pending: true, libraries: [] })] }))).toEqual([
+      "stick 0 GIGSTICK",
+      "empty 0 A write to this Stick did not finish",
+    ]);
+  });
+
+  it("builds a very large tree without running out of stack", () => {
+    const many: TreeNode[] = [{ id: "all", name: "All Tracks", kind: "allTracks", depth: 0 }];
+    for (let i = 0; i < 200_000; i += 1) many.push({ id: `p${i}`, name: `List ${i}`, kind: "playlist", depth: 1, childCount: 1 });
+    const stickNodes = Array.from({ length: 200_000 }, (_, i) => node(i + 1, 0, `Stick list ${i}`, 0, 1));
+    const rows = shellTreeRows({ library: many, sticks: [stick({ pending: false, libraries: [lib("deviceLibrary", stickNodes)] })] });
+    expect(rows.length).toBeGreaterThan(400_000);
   });
 
   it("sends Intake and Problems to the Intake view, a Stick to the Stick view and the rest to the Library view", () => {

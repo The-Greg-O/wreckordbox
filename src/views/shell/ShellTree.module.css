@@ -2,23 +2,27 @@
    docs/design/screens/library: group headings in small uppercase labels,
    one row per place, counts at the right, the selected row on the
    selection colour with the accent down its left edge. */
+/* Only the rows in view are drawn (ShellTree.tsx): every part has a fixed
+   height, set from the same tokens the component reads, and each group is
+   placed at the offset the component works out. */
 .tree {
   min-width: 0;
   min-height: 0;
-  overflow: auto;
-  padding: var(--s-shell-space-4) 0;
+  overflow-x: hidden;
+  overflow-y: auto;
   font: var(--f-size-shell) / 1.2 var(--f-shell);
   font-variant-numeric: tabular-nums;
   color: var(--c-text);
 }
 
-.group + .group { margin-top: var(--s-shell-space-5); }
+.content { position: relative; }
+.group { position: absolute; left: 0; right: 0; }
 
 .heading, .stick {
   display: flex;
   align-items: center;
   gap: var(--s-shell-space-2);
-  min-height: var(--s-shell-heading-h);
+  height: var(--s-shell-heading-h);
   padding: 0 var(--s-shell-space-4);
   font-size: var(--f-size-shell-label);
   letter-spacing: var(--f-tracking-shell-label);
@@ -31,8 +35,8 @@
   display: flex;
   align-items: center;
   gap: var(--s-shell-space-3);
-  min-height: var(--s-shell-row-h);
-  /* Each level in by one wide spacing step. */
+  height: var(--s-shell-row-h);
+  /* Each level in by one wide spacing step, up to the component's cap. */
   padding: 0 var(--s-shell-space-4) 0 calc(var(--s-shell-space-4) + var(--depth, 0) * var(--s-shell-space-6));
   border-left: calc(2 * var(--s-shell-border)) solid transparent;
   cursor: pointer;
@@ -40,6 +44,7 @@
 }
 
 .stick {
+  height: var(--s-shell-row-h);
   cursor: pointer;
   border-left: calc(2 * var(--s-shell-border)) solid transparent;
   user-select: none;
@@ -90,11 +95,20 @@
 }
 
 /* A group with nothing in it says so, in the dim colour, not as a place. */
-.empty {
-  min-height: var(--s-shell-row-h);
+.empty, .library {
+  height: var(--s-shell-row-h);
   display: flex;
   align-items: center;
   padding: 0 var(--s-shell-space-4);
   color: var(--c-text-dim);
   font-style: italic;
+}
+
+/* The name of one of a Stick's two libraries, when they list different
+   playlists: a label, not a place. */
+.library {
+  font-style: normal;
+  font-size: var(--f-size-shell-label);
+  letter-spacing: var(--f-tracking-shell-label);
+  text-transform: uppercase;
 }

@@ -8,12 +8,15 @@
  * Stick with that Stick's playlists. There are no sections to switch
  * between as the old tree's rail had: all of it is in view at once.
  *
- * Pure functions over the flat node array the window already holds (the
- * Library's tree followed by the Devices section, see `deviceLibrary.ts`),
- * so the shape is tested without a backend. `ShellTree.tsx` draws the rows.
+ * Pure functions over the Library's flat node array and each mounted
+ * Stick's outline (`stickOutline`, read without writing to the Stick), so
+ * the shape is tested without a backend. `ShellTree.tsx` draws the rows.
+ *
+ * Rows are appended one at a time, never spread into a call: a Library or
+ * a Stick with hundreds of thousands of playlists would overflow the stack.
  */
-import type { TreeNode } from "@/ipc/types";
-import { devicePath } from "./devices";
+import type { StickOutline, TreeNode } from "@/ipc/types";
+import { deviceNodeId } from "./deviceLibrary";
 import type { ShellView } from "./shellViews";
 
 /** The two queues the Intake view shows: no Prep colour, and Prep colour Problem. */
@@ -29,6 +32,8 @@ export type ShellTreeRowKind =
   | "setPlan"
   /** A mounted Stick: its group's heading, and the way into the Stick view. */
   | "stick"
+  /** The name of one of a Stick's two libraries, when they differ. Not a place. */
+  | "stickLibrary"
   | "stickFolder" | "stickPlaylist";
 
 export interface ShellTreeRow {
@@ -56,6 +61,13 @@ export interface ShellSetPlan {
   count?: number;
 }
 
+/** A mounted Stick, and its outline once read (null until then). */
+export interface ShellStick {
+  path: string;
+  name: string;
+  outline: StickOutline | null;
+}
+
 export const SHELL_TREE_INTAKE_ID = "shell:intake";
 export const SHELL_TREE_PROBLEMS_ID = "shell:problems";
 
@@ -68,18 +80,18 @@ const heading = (id: string, name: string): ShellTreeRow => ({ id: `shell:headin
 const empty = (id: string, name: string): ShellTreeRow => ({ id: `shell:empty:${id}`, kind: "empty", name, depth: 0 });
 
 /**
- * Rows for a run of folders and lists, skipping what sits under a folder
- * the DJ closed. `base` is the depth of the run's top level in the flat
- * array.
+ * Appends the rows for a run of folders and lists to `out`, skipping what
+ * sits under a folder the DJ closed. `base` is the depth of the run's top
+ * level in the flat array.
  */
 function nested(
+  out: ShellTreeRow[],
   nodes: readonly TreeNode[],
   base: number,
   collapsed: ReadonlySet<string>,
   kindOf: (node: TreeNode) => ShellTreeRowKind,
   isFolder: (node: TreeNode) => boolean,
-): ShellTreeRow[] {
-  const out: ShellTreeRow[] = [];
+): void {
   // The depth of the closed folder being skipped under, if any.
   let closedAt: number | null = null;
   for (const node of nodes) {
@@ -100,32 +112,97 @@ function nested(
     });
     if (folder && !open) closedAt = node.depth;
   }
+}
+
+const LIBRARY_NAMES: Record<StickOutline["libraries"][number]["format"], string> = {
+  deviceLibrary: "Device Library",
+  oneLibrary: "OneLibrary",
+};
+
+type StickLibrary = StickOutline["libraries"][number];
+
+/** Whether two libraries list the same playlists, in the same tree, with the same counts. */
+function sameLists(a: StickLibrary, b: StickLibrary): boolean {
+  if (a.nodes.length !== b.nodes.length) return false;
+  return a.nodes.every((node, i) => {
+    const other = b.nodes[i];
+    return other !== undefined && other.name === node.name && other.folder === node.folder &&
+      other.depth === node.depth && other.count === node.count;
+  });
+}
+
+/** A Stick library's nodes as the Library view opens them (see `deviceLibrary.ts`). */
+function stickNodes(path: string, library: StickLibrary): TreeNode[] {
+  const out: TreeNode[] = [];
+  for (const node of library.nodes) {
+    out.push({
+      id: deviceNodeId({ path, format: library.format, role: "node", id: node.id }),
+      name: node.name,
+      kind: node.folder ? "deviceFolder" : "devicePlaylist",
+      // Below the Stick, its library, and the library's Playlists heading,
+      // as the old Devices tree lays them out.
+      depth: node.depth + 3,
+      childCount: node.count,
+    });
+  }
   return out;
+}
+
+function stickRows(out: ShellTreeRow[], stick: ShellStick, collapsed: ReadonlySet<string>): void {
+  const id = `device:${stick.path}`;
+  out.push({ id, kind: "stick", name: stick.name, depth: 0, node: { id, name: stick.name, kind: "device", depth: 0 } });
+  const outline = stick.outline;
+  if (outline === null) return;
+  if (outline.pending) {
+    out.push(empty(id, "A write to this Stick did not finish"));
+    return;
+  }
+  const lists = (library: StickLibrary) => {
+    nested(
+      out, stickNodes(stick.path, library), 3, collapsed,
+      (node) => (node.kind === "deviceFolder" ? "stickFolder" : "stickPlaylist"),
+      (node) => node.kind === "deviceFolder",
+    );
+  };
+  const [first, second] = outline.libraries;
+  // One list when there is one library, or both list the same playlists (a
+  // Stick this app or rekordbox wrote); each under its own name otherwise,
+  // since the DJ can change one without the other.
+  if (first === undefined || (second === undefined && first.nodes.length === 0) ||
+      (second !== undefined && first.nodes.length === 0 && second.nodes.length === 0)) {
+    out.push(empty(id, "No playlists"));
+    return;
+  }
+  if (second === undefined || sameLists(first, second)) {
+    lists(first);
+    return;
+  }
+  for (const library of outline.libraries) {
+    const libraryId = `${id}:library:${library.format}`;
+    out.push({ id: libraryId, kind: "stickLibrary", name: LIBRARY_NAMES[library.format], depth: 0 });
+    if (library.nodes.length === 0) out.push(empty(libraryId, "No playlists"));
+    else lists(library);
+  }
 }
 
 /**
  * The tree's rows, top to bottom.
  *
- * `nodes` is the Library's tree and the Devices section in one flat array;
- * anything else in it (Histories, the Explorer, Related Tracks, the Tag
- * List) is not part of this tree and is passed over. Folders are open unless
- * their id is in `collapsed`: the open and closed state the Library's nodes
- * carry is the old tree's and is not read. A Stick not yet read has no line
- * under it; one read with no playlists says so.
+ * `library` is the Library's tree as the backend sends it; anything in it
+ * that is not All Tracks or a playlist (Histories, the Explorer, Related
+ * Tracks, the Tag List) is not part of this tree and is passed over.
+ * Folders are open unless their id is in `collapsed`: the open and closed
+ * state the Library's nodes carry is the old tree's and is not read.
  */
-export function shellTreeRows({ nodes, setPlans = [], collapsed = new Set(), readSticks = new Set() }: {
-  nodes: readonly TreeNode[];
+export function shellTreeRows({ library, sticks = [], setPlans = [], collapsed = new Set() }: {
+  library: readonly TreeNode[];
+  sticks?: readonly ShellStick[];
   setPlans?: readonly ShellSetPlan[];
   collapsed?: ReadonlySet<string>;
-  /**
-   * The paths of the Sticks whose libraries have been read, so one that
-   * holds none (never written) can be told from one not read yet.
-   */
-  readSticks?: ReadonlySet<string>;
 }): ShellTreeRow[] {
   const out: ShellTreeRow[] = [heading("library", "Library")];
 
-  const all = nodes.find((node) => node.kind === "allTracks");
+  const all = library.find((node) => node.kind === "allTracks");
   if (all) {
     out.push({
       id: all.id, kind: "allTracks", name: all.name, depth: 0, node: all,
@@ -136,13 +213,18 @@ export function shellTreeRows({ nodes, setPlans = [], collapsed = new Set(), rea
   out.push({ id: SHELL_TREE_PROBLEMS_ID, kind: "problems", name: "Problems", depth: 0, queue: "problems" });
 
   out.push(heading("playlists", "Playlists"));
-  const lists = nodes.filter((node) => node.kind === "folder" || node.kind === "playlist" || node.kind === "smartPlaylist");
-  const top = lists.reduce((least, node) => Math.min(least, node.depth), Number.POSITIVE_INFINITY);
-  out.push(...nested(
-    lists, top, collapsed,
+  const lists: TreeNode[] = [];
+  let top = Number.POSITIVE_INFINITY;
+  for (const node of library) {
+    if (node.kind !== "folder" && node.kind !== "playlist" && node.kind !== "smartPlaylist") continue;
+    lists.push(node);
+    if (node.depth < top) top = node.depth;
+  }
+  nested(
+    out, lists, top, collapsed,
     (node) => (node.kind === "folder" ? "folder" : node.kind === "smartPlaylist" ? "smartPlaylist" : "playlist"),
     (node) => node.kind === "folder",
-  ));
+  );
 
   out.push(heading("setPlans", "Set plans"));
   if (setPlans.length === 0) out.push(empty("setPlans", "No Set plans yet"));
@@ -153,41 +235,13 @@ export function shellTreeRows({ nodes, setPlans = [], collapsed = new Set(), rea
     });
   }
 
-  // Each mounted Stick, then the playlists of the first library read from
-  // it. A Stick written by this app or by rekordbox holds the same playlists
-  // in both of its libraries (Device Library and OneLibrary), so they are
-  // listed once; the old Devices tree is where the two are told apart.
-  for (let i = 0; i < nodes.length; i += 1) {
-    const device = nodes[i];
-    if (device?.kind !== "device") continue;
-    out.push({ id: device.id, kind: "stick", name: device.name, depth: 0, node: device });
-    const under: TreeNode[] = [];
-    let libraries = 0;
-    for (let j = i + 1; j < nodes.length; j += 1) {
-      const node = nodes[j];
-      if (node === undefined || node.depth <= device.depth) break;
-      if (node.kind === "deviceLibrary") libraries += 1;
-      if (libraries > 1) break;
-      if (node.kind === "deviceFolder" || node.kind === "devicePlaylist") under.push(node);
-    }
-    const path = devicePath(device.id);
-    if (libraries === 0 && (path === null || !readSticks.has(path))) continue;
-    if (under.length === 0) {
-      out.push(empty(device.id, "No playlists"));
-      continue;
-    }
-    out.push(...nested(
-      under, device.depth + 3, collapsed,
-      (node) => (node.kind === "deviceFolder" ? "stickFolder" : "stickPlaylist"),
-      (node) => node.kind === "deviceFolder",
-    ));
-  }
+  for (const stick of sticks) stickRows(out, stick, collapsed);
   return out;
 }
 
 /** Whether a row is a place that can be selected. */
 export function isShellTreePlace(kind: ShellTreeRowKind): boolean {
-  return kind !== "heading" && kind !== "empty";
+  return kind !== "heading" && kind !== "empty" && kind !== "stickLibrary";
 }
 
 /** The view a selected row opens in: its queue in Intake, a Stick in the Stick view, a list in the Library. */

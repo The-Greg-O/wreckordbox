@@ -164,3 +164,151 @@ test("the tree is worked from the keyboard: arrows move, Enter opens, Left and R
   await page.keyboard.press("ArrowRight");
   await expect(item(page, "Melodic Vox")).toBeVisible();
 });
+
+const TEST = "/Volumes/TEST";
+/** Calls one of the mock's hooks for the shell tree's Stick reads. */
+async function mock(page: Page, hook: string, ...args: unknown[]) {
+  await page.evaluate(({ hook, args }) => {
+    (window as unknown as Record<string, (...a: unknown[]) => unknown>)[hook]?.(...args);
+  }, { hook, args });
+}
+/** The window asks for the mounted devices again when it regains focus. */
+const refocus = (page: Page) => page.evaluate(() => window.dispatchEvent(new Event("focus")));
+const reads = (page: Page) => page.evaluate((path) =>
+  (window as unknown as { __stickOutlineReads: (p: string) => number }).__stickOutlineReads(path), TEST);
+
+test("a Stick is read once when it is mounted, and not again when nothing about it changed", async ({ page }) => {
+  await open(page);
+  await expect.poll(() => names(group(page, "Stick TEST"))).toContain("Melodic Vox");
+  expect(await reads(page)).toBe(1);
+  for (let i = 0; i < 3; i += 1) await refocus(page);
+  await page.waitForTimeout(500);
+  expect(await reads(page)).toBe(1);
+  // Put back after being pulled out, it is a new mount and read again.
+  await mock(page, "__unmountDevice", TEST);
+  await refocus(page);
+  await expect(group(page, "Stick TEST")).toHaveCount(0);
+  await mock(page, "__remountDevice", TEST);
+  await refocus(page);
+  await expect.poll(() => names(group(page, "Stick TEST"))).toContain("Melodic Vox");
+  expect(await reads(page)).toBe(2);
+});
+
+test("an answer for a Stick pulled out, or replaced, while it was being read is dropped", async ({ page }) => {
+  await open(page);
+  await expect.poll(() => names(group(page, "Stick TEST"))).toContain("Melodic Vox");
+
+  // Pulled out while being read: its answer comes too late to bring it back.
+  await mock(page, "__holdStickOutline", TEST);
+  await mock(page, "__unmountDevice", TEST);
+  await refocus(page);
+  await expect(group(page, "Stick TEST")).toHaveCount(0);
+  await mock(page, "__remountDevice", TEST);
+  await refocus(page);
+  await expect(group(page, "Stick TEST")).toBeVisible();
+  await mock(page, "__unmountDevice", TEST);
+  await refocus(page);
+  await expect(group(page, "Stick TEST")).toHaveCount(0);
+  await mock(page, "__releaseStickOutline", TEST);
+  await page.waitForTimeout(500);
+  await expect(group(page, "Stick TEST")).toHaveCount(0);
+
+  // Replaced at the same mount point while the old one's read is held: the
+  // new Stick's playlists stay, whenever the old answer arrives.
+  await mock(page, "__holdStickOutline", TEST);
+  await mock(page, "__remountDevice", TEST);
+  await refocus(page);
+  await expect(group(page, "Stick TEST")).toBeVisible();
+  await mock(page, "__unmountDevice", TEST);
+  await refocus(page);
+  await expect(group(page, "Stick TEST")).toHaveCount(0);
+  await mock(page, "__remountDevice", TEST, {
+    pending: false,
+    libraries: [{ format: "deviceLibrary", nodes: [{ id: "1", parentId: "0", name: "Fresh", folder: false, depth: 0, count: 2 }] }],
+  });
+  await refocus(page);
+  await expect.poll(() => names(group(page, "Stick TEST"))).toEqual(["TEST", "Fresh"]);
+  await mock(page, "__releaseStickOutline", TEST);
+  await page.waitForTimeout(500);
+  expect(await names(group(page, "Stick TEST"))).toEqual(["TEST", "Fresh"]);
+});
+
+test("the tree's keys move only the tree: playback and the list's selection are untouched", async ({ page }) => {
+  await open(page);
+  await item(page, "Melodic Vox").click();
+  await expect(page.getByTestId("browser-title")).toContainText("Melodic Vox");
+  const titles = working(page).locator('[role="gridcell"][data-col="title"]');
+  await titles.nth(1).dblclick();
+  const play = page.getByTestId("shell-player").getByRole("button", { name: "Play", exact: true });
+  await expect(play).toBeEnabled();
+  await play.click();
+  await expect(page.getByTestId("shell-player").getByRole("button", { name: "Pause", exact: true })).toBeVisible();
+  await rows(page).nth(3).click();
+  const selected = rows(page).and(page.locator("[data-selected]"));
+  await expect(selected).toHaveCount(1);
+  const selectedTitle = await selected.locator('[data-col="title"]').innerText();
+  const deck = () => page.evaluate(() => (window as unknown as { __deckSeconds: () => { aNow: number } }).__deckSeconds().aNow);
+
+  await item(page, "Melodic Vox").focus();
+  const before = await deck();
+  // Left goes to the parent folder, Right on an open folder into it, Home and
+  // End to either end; each again where it has nowhere further to go.
+  await page.keyboard.press("ArrowLeft");
+  await expect(item(page, "CURRENT")).toBeFocused();
+  await page.keyboard.press("ArrowLeft");
+  await expect(item(page, "CURRENT")).toHaveAttribute("aria-expanded", "false");
+  await page.keyboard.press("ArrowLeft");
+  await expect(item(page, "CURRENT")).toBeFocused();
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowRight");
+  await expect(item(page, "Melodic Vox")).toBeFocused();
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("Home");
+  await expect(item(page, "All Tracks")).toBeFocused();
+  await page.keyboard.press("Home");
+  await page.keyboard.press("End");
+  await expect(group(page, "Stick TEST").getByRole("treeitem").last()).toBeFocused();
+  await page.keyboard.press("End");
+  const after = await deck();
+
+  // The deck ran on without a jump either way.
+  expect(after).toBeGreaterThanOrEqual(before);
+  expect(after - before).toBeLessThan(4);
+  await expect(page.getByTestId("shell-player").getByRole("button", { name: "Pause", exact: true })).toBeVisible();
+  // The list's selection did not move, and the tree's selection is still the playlist.
+  await expect(selected).toHaveCount(1);
+  await expect(selected.locator('[data-col="title"]')).toHaveText(selectedTitle);
+  await expect(item(page, "Melodic Vox")).toHaveAttribute("aria-selected", "true");
+});
+
+test("a playlist deep in folders keeps a name that can be read and opened", async ({ page }) => {
+  await enableViewShell(page);
+  await page.goto("/?deepFolders=1");
+  await expect(page.getByTestId("browser-title")).toContainText("Tracks)");
+  const label = tree(page).getByText("The Deep End", { exact: true });
+  await expect(label).toBeVisible();
+  expect((await label.boundingBox())?.width ?? 0).toBeGreaterThan(70);
+  await expect(item(page, "The Deep End")).toHaveAttribute("aria-level", "17");
+  await label.click();
+  await expect(page.getByTestId("browser-title")).toContainText("The Deep End");
+});
+
+test("a Library of twenty thousand playlists draws only what is in view, and all of it can be reached", async ({ page }) => {
+  await enableViewShell(page);
+  await page.goto("/?bigTree=1");
+  await expect(page.getByTestId("browser-title")).toContainText("Tracks)");
+  await expect(item(page, "Archive 1")).toBeVisible();
+  expect(await tree(page).getByRole("treeitem").count()).toBeLessThan(200);
+
+  await tree(page).evaluate((element) => { element.scrollTop = element.scrollHeight; });
+  await expect(item(page, "Archive 20000")).toBeVisible();
+  expect(await tree(page).getByRole("treeitem").count()).toBeLessThan(200);
+  await item(page, "Archive 20000").click();
+  await expect(page.getByTestId("browser-title")).toContainText("Archive 20000");
+
+  await item(page, "Archive 20000").focus();
+  await page.keyboard.press("Home");
+  await expect(item(page, "All Tracks")).toBeFocused();
+  await page.keyboard.press("End");
+  await expect(group(page, "Stick TEST").getByRole("treeitem").last()).toBeFocused();
+});
