@@ -363,9 +363,11 @@ fn undo_refuses_a_value_changed_outside_the_history_and_drops_only_that_entry() 
 
 /// What a Ledger is told, in order: the step, the label, what it reverses,
 /// and the identifier it answered.
+type Told = (rbl_library::ledger::Step, String, Option<i64>, i64);
+
 #[derive(Default)]
 struct LedgerTape {
-    changes: parking_lot::Mutex<Vec<(rbl_library::ledger::Step, String, Option<i64>, i64)>>,
+    changes: parking_lot::Mutex<Vec<Told>>,
     /// The edits the history keeps no entry for, as they were named.
     notes: parking_lot::Mutex<Vec<(rbl_library::ledger::Unkept, Option<String>)>>,
     /// Why it cannot record, when it cannot.

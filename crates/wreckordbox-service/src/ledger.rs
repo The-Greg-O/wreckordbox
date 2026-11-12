@@ -883,17 +883,13 @@ impl Keeper {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn spill_file(&self, sidecar: &Sidecar) -> PathBuf {
-        sidecar.dir().join(SPILL_FILE)
-    }
-
     /// Deals once with what an earlier service left: entries it spilled
     /// and a window Run it never ended.
-    fn settle(&self, sidecar: &Sidecar, state: &mut State) -> Result<(), String> {
+    fn settle(sidecar: &Sidecar, state: &mut State) -> Result<(), String> {
         if state.settled {
             return Ok(());
         }
-        let file = self.spill_file(sidecar);
+        let file = spill_file(sidecar);
         if file.is_file() && state.unwritten.is_empty() {
             let text = std::fs::read_to_string(&file)
                 .map_err(|e| format!("{} could not be read: {e}", file.display()))?;
@@ -917,19 +913,18 @@ impl Keeper {
 
     /// Writes every entry still waiting into the Ledger, oldest first, and
     /// removes the spill file.
-    fn write_waiting(&self, sidecar: &Sidecar, state: &mut State) -> Result<(), String> {
+    fn write_waiting(sidecar: &Sidecar, state: &mut State) -> Result<(), String> {
         while let Some(waiting) = state.unwritten.first() {
-            let run = match waiting.run {
-                Some(run) => RunId(run),
-                None => {
-                    let run = sidecar
-                        .begin_run(&waiting.source, &waiting.description)
-                        .map_err(|e| e.to_string())?;
-                    sidecar
-                        .finish_run(run, "recorded late")
-                        .map_err(|e| e.to_string())?;
-                    run
-                }
+            let run = if let Some(run) = waiting.run {
+                RunId(run)
+            } else {
+                let run = sidecar
+                    .begin_run(&waiting.source, &waiting.description)
+                    .map_err(|e| e.to_string())?;
+                sidecar
+                    .finish_run(run, "recorded late")
+                    .map_err(|e| e.to_string())?;
+                run
             };
             sidecar
                 .append(&NewEntry {
@@ -949,7 +944,7 @@ impl Keeper {
                 .map_err(|e| e.to_string())?;
             state.unwritten.remove(0);
         }
-        let file = self.spill_file(sidecar);
+        let file = spill_file(sidecar);
         if file.is_file() {
             std::fs::remove_file(&file)
                 .map_err(|e| format!("{} could not be removed: {e}", file.display()))?;
@@ -1063,7 +1058,7 @@ impl Keeper {
                     let on_disk = sidecar
                         .as_ref()
                         .map_err(|e| e.message.clone())
-                        .and_then(|sidecar| spill(&self.spill_file(sidecar), &spilled));
+                        .and_then(|sidecar| spill(&spill_file(sidecar), &spilled));
                     tracing::error!(
                         %error,
                         kept_on_disk = on_disk.is_ok(),
@@ -1082,9 +1077,9 @@ impl rbl_library::ledger::Ledger for Keeper {
     fn ready(&self) -> Result<(), String> {
         let sidecar = self.stems.sidecar().map_err(|e| e.message)?;
         let mut state = self.state();
-        self.settle(&sidecar, &mut state)?;
+        Self::settle(&sidecar, &mut state)?;
         if !state.unwritten.is_empty() {
-            self.write_waiting(&sidecar, &mut state)
+            Self::write_waiting(&sidecar, &mut state)
                 .map_err(|e| format!("an earlier change is still not recorded ({e})"))?;
         }
         sidecar.ledger_ready().map_err(|e| e.to_string())
@@ -1130,6 +1125,11 @@ impl rbl_library::ledger::Ledger for Keeper {
             payload: None,
         });
     }
+}
+
+/// Where entries the Ledger could not take wait.
+fn spill_file(sidecar: &Sidecar) -> PathBuf {
+    sidecar.dir().join(SPILL_FILE)
 }
 
 /// What a command's own Run is called when the caller did not say.
