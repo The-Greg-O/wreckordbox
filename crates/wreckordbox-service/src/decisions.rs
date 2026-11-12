@@ -36,14 +36,14 @@ use serde_json::{json, Value};
 pub use wreckordbox_sidecar::decisions::{
     Answer, Candidate, Decision, DecisionState, QuestionType, NO, YES,
 };
-use wreckordbox_sidecar::decisions::{DecisionQuery, NewAnswer, NewDecision};
+use wreckordbox_sidecar::decisions::{
+    DecisionQuery, FactOfAnswer, NewAnswer, NewDecision, RunOfAnswer,
+};
 use wreckordbox_sidecar::{Kinds, RunId, Sidecar, SidecarError};
 
 pub use crate::decider::Rule;
 use crate::decider::{self, NoRuling};
-use crate::facts::{
-    self, Fact, FactToRecord, RecordFacts, Run, Source, SourceArg, SourceKind, ValueType,
-};
+use crate::facts::{self, Fact, FactToRecord, Run, Source, SourceArg, SourceKind, ValueType};
 use crate::protocol::{codes as service_codes, Request, ServiceError};
 use crate::stems::{self, ParentAudio, Stems};
 
@@ -463,7 +463,8 @@ impl<'a> Decisions<'a> {
     }
 
     /// Records an answer, and its Fact when one is asked for. Everything is
-    /// checked before anything is written.
+    /// checked before anything is written, and an answer with a Fact is
+    /// written with it as one change to the Sidecar.
     fn give(&self, given: &Given) -> Result<Answered, ServiceError> {
         let decision = given.decision;
         let then = given.then;
@@ -488,73 +489,107 @@ impl<'a> Decisions<'a> {
             ));
         }
 
-        let (fact, run) = if let Some(wanted) = &then.fact {
-            let track = wanted
-                .track
-                .clone()
-                .or_else(|| decision.track_id.clone())
-                .ok_or_else(|| {
-                    ServiceError::new(
-                        codes::FACT_NEEDS_TRACK,
-                        format!(
-                            "Decision {} is about no track; say which track the Fact is about",
-                            decision.id
-                        ),
-                    )
-                })?;
-            let value = match &wanted.value {
-                Some(value) => value.clone(),
-                None => self.value_of(&wanted.kind, decision, given.choice)?,
-            };
-            // The Facts command's own path: the kind's declaration, the
-            // track, the Run and the audio's fingerprint are checked there.
-            let recorded = facts::record(
-                self.stems,
-                RecordFacts {
-                    run: then.run,
-                    description: then.description.clone().or_else(|| {
-                        then.run.is_none().then(|| {
-                            format!(
-                                "Decision {} answered by {}",
-                                decision.id, given.decider.name
-                            )
-                        })
-                    }),
-                    source: Some(SourceArg {
-                        kind: given.decider.kind,
-                        name: given.decider.name.clone(),
-                    }),
-                    confidence: Some(choice_probability),
-                    facts: vec![FactToRecord {
-                        track,
-                        kind: wanted.kind.clone(),
-                        value,
-                        confidence: None,
-                        source: None,
-                    }],
-                },
-                self.lookup,
-            )?;
-            (recorded.facts.into_iter().next(), Some(recorded.run))
-        } else {
+        let Some(wanted) = &then.fact else {
             let run = then
                 .run
                 .map(|run| facts::open_run(self.stems, run))
                 .transpose()?;
-            (None, run)
+            new.run = run.as_ref().map(|run| run.id);
+            let (decision, answer) = self
+                .sidecar
+                .answer_decision(&new)
+                .map_err(|e| sidecar_error(&e))?;
+            self.changed(&decision, Some(answer.id));
+            return Ok(Answered {
+                decision,
+                answer,
+                fact: None,
+                run,
+            });
         };
 
-        new.fact_id = fact.as_ref().map(|fact| fact.id);
-        new.run = run.as_ref().map(|run| run.id);
-        let (decision, answer) = self
+        let track = wanted
+            .track
+            .clone()
+            .or_else(|| decision.track_id.clone())
+            .ok_or_else(|| {
+                ServiceError::new(
+                    codes::FACT_NEEDS_TRACK,
+                    format!(
+                        "Decision {} is about no track; say which track the Fact is about",
+                        decision.id
+                    ),
+                )
+            })?;
+        let value = match &wanted.value {
+            Some(value) => value.clone(),
+            None => self.value_of(&wanted.kind, decision, given.choice)?,
+        };
+        // Every check `facts.record` makes, with nothing written: the
+        // kind's declaration, the value, the track, the audio, the Run.
+        let fact = facts::checked(
+            self.stems,
+            FactToRecord {
+                track,
+                kind: wanted.kind.clone(),
+                value,
+                confidence: None,
+                source: None,
+            },
+            given.decider,
+            choice_probability,
+            self.lookup,
+        )?;
+        if let Some(run) = then.run {
+            facts::open_run(self.stems, run)?;
+        }
+        let description = then
+            .description
+            .as_deref()
+            .map(str::trim)
+            .filter(|description| !description.is_empty())
+            .map_or_else(
+                || {
+                    format!(
+                        "Decision {} answered by {}",
+                        decision.id, given.decider.name
+                    )
+                },
+                str::to_owned,
+            );
+        // One transaction: the answer, the Fact, what the Fact supersedes
+        // and the Run made for them. Clients are told only once it holds.
+        let (decision, answer, recorded) = self
             .sidecar
-            .answer_decision(&new)
+            .answer_decision_with_fact(
+                &new,
+                &FactOfAnswer {
+                    track_id: &fact.track_id,
+                    fingerprint: fact.fingerprint.as_ref(),
+                    kind: fact.kind.kind(),
+                    value: fact.value.clone(),
+                    run: match then.run {
+                        Some(run) => RunOfAnswer::Open(RunId(run)),
+                        None => RunOfAnswer::Made {
+                            description: &description,
+                        },
+                    },
+                },
+            )
             .map_err(|e| sidecar_error(&e))?;
+        let run = self
+            .sidecar
+            .run(recorded.run)
+            .map_err(|e| sidecar_error(&e))?;
+        let recorded = Fact::from(recorded);
+        // The answer stands whatever becomes of the stale-marking, which
+        // the next command about the track's audio does again.
+        let _ = facts::recorded(self.stems, &recorded, fact.fingerprint.as_ref());
         self.changed(&decision, Some(answer.id));
         Ok(Answered {
             decision,
             answer,
-            fact,
+            fact: Some(recorded),
             run,
         })
     }

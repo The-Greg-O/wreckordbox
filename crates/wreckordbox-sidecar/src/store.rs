@@ -22,17 +22,21 @@ use serde_json::Value;
 
 use crate::{io, Fingerprint, Result, SidecarError};
 
-/// Raised when a stored shape changes. A store from a newer wreckordbox is
-/// refused rather than guessed at; an older one is brought up to date by
-/// [`MIGRATIONS`] when it is opened.
-pub const SCHEMA_VERSION: u32 = 2;
+/// The version of the stored shape this crate reads and writes: the last
+/// of [`MIGRATIONS`]. A store from a newer wreckordbox is refused rather
+/// than guessed at; an older one is brought up to date when it is opened.
+pub const SCHEMA_VERSION: u32 = MIGRATIONS[MIGRATIONS.len() - 1].0;
 
-/// What each version after the first adds, in order: the version a store is
-/// at once the statements have run, and the statements. A new store is made
-/// at version 1 by [`SCHEMA`] and then taken through every one of these, so
-/// a new store and an old one brought up to date hold the same tables. Add
-/// a version at the end; never change one that has shipped.
-const MIGRATIONS: &[(u32, &str)] = &[(2, crate::decisions::SCHEMA)];
+/// What each version after the first adds, in ascending order: the version
+/// a store is at once the statements have run, and the statements. A new
+/// store is made at version 1 by [`SCHEMA`] and then taken through every one
+/// of these, so a new store and an old one brought up to date hold the same
+/// tables. Add a version at the end; never change one that has shipped.
+const MIGRATIONS: &[(u32, &str)] = &[
+    // One line each, and nothing else names a version's number: to renumber
+    // a version that has not shipped, change its number here.
+    (2, crate::decisions::SCHEMA),
+];
 
 const DATABASE_FILE: &str = "sidecar.db";
 /// Where a tool writes before its result is accepted. Emptied on open.
@@ -514,7 +518,7 @@ impl Sidecar {
 
 /// One Fact, inside a transaction: declares the kind, writes the Fact and
 /// supersedes the same source's earlier ones.
-fn record_in(tx: &rusqlite::Transaction, new: &NewFact) -> Result<Fact> {
+pub(crate) fn record_in(tx: &rusqlite::Transaction, new: &NewFact) -> Result<Fact> {
     if !(0.0..=1.0).contains(&new.confidence) {
         return Err(SidecarError::Invalid(format!(
             "a confidence is from 0 to 1, not {}",

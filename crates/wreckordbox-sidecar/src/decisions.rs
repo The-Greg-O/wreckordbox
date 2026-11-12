@@ -8,7 +8,7 @@
 //! ```
 //!
 //! Both tables are append-only: a row is written once and never changed or
-//! deleted, and triggers in the store refuse either. A Decision is the question as it was asked (its type, its
+//! deleted or replaced, and triggers in the store refuse all three. A Decision is the question as it was asked (its type, its
 //! text, the context supplied and the candidates). An answer is one
 //! Decider's choice among those candidates. A Decision with no answer is
 //! pending. The same Decision can be answered again, by another Decider or
@@ -39,8 +39,10 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::store::now;
-use crate::{Result, RunId, Sidecar, SidecarError, Source, SourceKind};
+use crate::store::{now, record_in};
+use crate::{
+    Fact, Fingerprint, Kind, NewFact, Result, RunId, Sidecar, SidecarError, Source, SourceKind,
+};
 
 /// The tables Decisions add to the store.
 pub(crate) const SCHEMA: &str = "
@@ -72,6 +74,15 @@ CREATE TABLE decision_answer (
 
 -- Append-only, held by the store itself: a Decision and an answer are
 -- written once.
+-- INSERT OR REPLACE deletes the row it replaces without firing a DELETE
+-- trigger (unless the connection has recursive triggers on), so taking an
+-- identifier that is in use is refused here.
+CREATE TRIGGER decision_is_never_replaced BEFORE INSERT ON decision
+WHEN EXISTS (SELECT 1 FROM decision WHERE id = NEW.id)
+BEGIN SELECT RAISE(ABORT, 'a Decision is never replaced'); END;
+CREATE TRIGGER decision_answer_is_never_replaced BEFORE INSERT ON decision_answer
+WHEN EXISTS (SELECT 1 FROM decision_answer WHERE id = NEW.id)
+BEGIN SELECT RAISE(ABORT, 'an answer to a Decision is never replaced'); END;
 CREATE TRIGGER decision_is_never_changed BEFORE UPDATE ON decision
 BEGIN SELECT RAISE(ABORT, 'a Decision is never changed'); END;
 CREATE TRIGGER decision_is_never_deleted BEFORE DELETE ON decision
@@ -190,6 +201,29 @@ pub struct NewAnswer<'a> {
     pub fact_id: Option<i64>,
     /// The Run the answer was given in, when it was given in one.
     pub run: Option<RunId>,
+}
+
+/// The Fact an answer produces: the Decider's choice recorded about a
+/// track. Its source is the answer's Decider and its confidence the
+/// probability of the choice.
+#[derive(Debug, Clone)]
+pub struct FactOfAnswer<'a> {
+    pub track_id: &'a str,
+    /// Of the track's audio now; required for a Measurement.
+    pub fingerprint: Option<&'a Fingerprint>,
+    pub kind: Kind<'a>,
+    pub value: Value,
+    /// The Run the answer and the Fact belong to.
+    pub run: RunOfAnswer<'a>,
+}
+
+/// Which Run an answer and its Fact belong to.
+#[derive(Debug, Clone, Copy)]
+pub enum RunOfAnswer<'a> {
+    /// A Run already started and not ended. It stays open.
+    Open(RunId),
+    /// A Run made for this answer alone, by its Decider, and ended with it.
+    Made { description: &'a str },
 }
 
 /// An answer as the Sidecar holds it.
@@ -316,37 +350,88 @@ impl Sidecar {
         let tx = db.transaction()?;
         let decision =
             read_decision(&tx, new.decision)?.ok_or(SidecarError::NoDecision(new.decision))?;
-        let (choice_probability, probabilities) = checked_answer(&decision, new)?;
-        tx.execute(
-            "INSERT INTO decision_answer (decision_id, decider_kind, decider_name, choice,
-                                          choice_probability, probabilities, reason, fact_id, run_id, answered_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            params![
-                new.decision,
-                new.decider.kind.as_str(),
-                new.decider.name,
-                new.choice,
-                choice_probability,
-                probabilities
-                    .as_ref()
-                    .map(|all| serde_json::to_string(all).unwrap_or_default()),
-                new.reason.map(str::trim).filter(|reason| !reason.is_empty()),
-                new.fact_id,
-                new.run.map(|run| run.0),
-                now(),
-            ],
-        )?;
-        let id = tx.last_insert_rowid();
+        let checked = checked_answer(&decision, new)?;
+        let id = insert_answer(&tx, new, &checked, new.fact_id, new.run)?;
+        let answered = answered(&tx, new.decision, id)?;
+        tx.commit()?;
+        Ok(answered)
+    }
+
+    /// Records an answer and the Fact it produces as one change: the
+    /// answer, the Fact (with the Decider as its source and the probability
+    /// of the choice as its confidence), the supersession of the Decider's
+    /// earlier Fact of that kind for the track, and the Run made for them
+    /// if one is, are all written in one transaction or none is. So the
+    /// order of a Decider's answers is the order of the Facts they
+    /// produced, and an answer that cannot be written leaves no Fact.
+    ///
+    /// `fact_id` and `run` of `new` are not read: they are the Fact
+    /// recorded and the Run of `fact`.
+    pub fn answer_decision_with_fact(
+        &self,
+        new: &NewAnswer,
+        fact: &FactOfAnswer,
+    ) -> Result<(Decision, Answer, Fact)> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
         let decision =
             read_decision(&tx, new.decision)?.ok_or(SidecarError::NoDecision(new.decision))?;
+        let checked = checked_answer(&decision, new)?;
+        let run = match fact.run {
+            RunOfAnswer::Open(run) => {
+                let finished_at: Option<Option<i64>> = tx
+                    .query_row(
+                        "SELECT finished_at FROM run WHERE id = ?1",
+                        [run.0],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                match finished_at {
+                    Some(None) => run,
+                    Some(Some(_)) => {
+                        return Err(SidecarError::Invalid(format!("Run {} has ended", run.0)))
+                    }
+                    None => {
+                        return Err(SidecarError::Invalid(format!("there is no Run {}", run.0)))
+                    }
+                }
+            }
+            RunOfAnswer::Made { description } => {
+                tx.execute(
+                    "INSERT INTO run (source_kind, source_name, description, started_at)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![
+                        new.decider.kind.as_str(),
+                        new.decider.name,
+                        description,
+                        now()
+                    ],
+                )?;
+                RunId(tx.last_insert_rowid())
+            }
+        };
+        let recorded = record_in(
+            &tx,
+            &NewFact {
+                track_id: fact.track_id,
+                fingerprint: fact.fingerprint,
+                kind: fact.kind,
+                value: fact.value.clone(),
+                source: new.decider,
+                confidence: checked.0,
+                run,
+            },
+        )?;
+        let id = insert_answer(&tx, new, &checked, Some(recorded.id), Some(run))?;
+        if matches!(fact.run, RunOfAnswer::Made { .. }) {
+            tx.execute(
+                "UPDATE run SET finished_at = ?2, outcome = ?3 WHERE id = ?1",
+                params![run.0, now(), "recorded 1 Fact"],
+            )?;
+        }
+        let (decision, answer) = answered(&tx, new.decision, id)?;
         tx.commit()?;
-        let answer = decision
-            .answers
-            .iter()
-            .find(|answer| answer.id == id)
-            .cloned()
-            .ok_or(SidecarError::NoDecision(new.decision))?;
-        Ok((decision, answer))
+        Ok((decision, answer, recorded))
     }
 
     /// Checks an answer as [`answer_decision`](Self::answer_decision)
@@ -408,6 +493,50 @@ impl Sidecar {
         }
         Ok((decisions, usize::try_from(total).unwrap_or(0)))
     }
+}
+
+/// Writes an answer that has been checked, inside a transaction, and
+/// answers its identifier.
+fn insert_answer(
+    tx: &rusqlite::Transaction,
+    new: &NewAnswer,
+    (choice_probability, probabilities): &(f64, Option<BTreeMap<String, f64>>),
+    fact_id: Option<i64>,
+    run: Option<RunId>,
+) -> Result<i64> {
+    tx.execute(
+        "INSERT INTO decision_answer (decision_id, decider_kind, decider_name, choice,
+                                      choice_probability, probabilities, reason, fact_id, run_id, answered_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            new.decision,
+            new.decider.kind.as_str(),
+            new.decider.name,
+            new.choice,
+            choice_probability,
+            probabilities
+                .as_ref()
+                .map(|all| serde_json::to_string(all).unwrap_or_default()),
+            new.reason.map(str::trim).filter(|reason| !reason.is_empty()),
+            fact_id,
+            run.map(|run| run.0),
+            now(),
+        ],
+    )?;
+    Ok(tx.last_insert_rowid())
+}
+
+/// A Decision and the answer just written to it, read inside the
+/// transaction that wrote it.
+fn answered(tx: &rusqlite::Transaction, decision: i64, answer: i64) -> Result<(Decision, Answer)> {
+    let decision = read_decision(tx, decision)?.ok_or(SidecarError::NoDecision(decision))?;
+    let answer = decision
+        .answers
+        .iter()
+        .find(|one| one.id == answer)
+        .cloned()
+        .ok_or(SidecarError::NoDecision(decision.id))?;
+    Ok((decision, answer))
 }
 
 /// The candidates a Decision of this type is stored with.
@@ -483,13 +612,8 @@ fn checked_answer(
             }
             unit(&format!("\"{name}\""), *probability)?;
         }
-        let sum: f64 = all.values().sum();
-        if sum > 1.0 + TOLERANCE {
-            return Err(SidecarError::Probability(format!(
-                "the probabilities of the candidates add up to {sum}, which is more than 1"
-            )));
-        }
     }
+    // The probability of the choice first, from wherever it was said.
     let among = probabilities
         .as_ref()
         .and_then(|all| all.get(new.choice).copied());
@@ -509,6 +633,16 @@ fn checked_answer(
         }
     };
     unit("the choice", choice_probability)?;
+    // Then the whole distribution, with the choice in it exactly once.
+    if let Some(all) = &mut probabilities {
+        all.insert(new.choice.to_owned(), choice_probability);
+        let sum: f64 = all.values().sum();
+        if sum > 1.0 + TOLERANCE {
+            return Err(SidecarError::Probability(format!(
+                "the probabilities of the candidates, the choice's included, add up to {sum}, which is more than 1"
+            )));
+        }
+    }
     if decision.question_type == QuestionType::YesNo {
         // Two candidates that exclude each other: one probability fixes
         // the other, so both are always stored.
