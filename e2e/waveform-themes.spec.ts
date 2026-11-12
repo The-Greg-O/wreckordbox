@@ -161,6 +161,264 @@ test("a row preview never keeps the last theme's pixels: recoloured from its byt
   await expect.poll(() => page.locator("[data-preview-wave][data-wave-failed]").count()).toBeGreaterThan(2);
 });
 
+/** WCAG contrast of two colours. */
+const contrastOf = (a: readonly number[], b: readonly number[]) => {
+  const lum = (c: readonly number[]) => {
+    const [r = 0, g = 0, bl = 0] = c.map((v) => { const x = v / 255; return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+  };
+  const [x, y] = [lum(a), lum(b)];
+  return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+};
+
+/**
+ * The screen at device resolution, read back in the page as one canvas, and
+ * a reader of its pixels by CSS position.
+ */
+async function screen(page: Page) {
+  const shot = await page.screenshot({ scale: "device", animations: "disabled" });
+  await page.evaluate(async (png) => {
+    const image = new Image();
+    image.src = `data:image/png;base64,${png}`;
+    await image.decode();
+    const c = document.createElement("canvas");
+    c.width = image.width;
+    c.height = image.height;
+    const ctx = c.getContext("2d", { willReadFrequently: true })!;
+    ctx.drawImage(image, 0, 0);
+    (window as unknown as { __screen: ImageData; __screenRatio: number }).__screen = ctx.getImageData(0, 0, c.width, c.height);
+    (window as unknown as { __screenRatio: number }).__screenRatio = image.width / innerWidth;
+  }, shot.toString("base64"));
+}
+
+/**
+ * Of a waveform canvas's drawn pixels (opaque in its own store), the share
+ * that on screen stand out from its well by 3:1 or more.
+ */
+async function legibleShare(page: Page, canvas: Locator, skipTop = 0): Promise<{ share: number; well: number[] }> {
+  // The waveform alone: the markers over it (and their halos) are hidden.
+  await page.evaluate(() => {
+    const style = document.createElement("style");
+    style.id = "only-canvases";
+    style.textContent = "* { visibility: hidden !important; } canvas { visibility: visible !important; }";
+    document.head.append(style);
+  });
+  await screen(page);
+  await page.evaluate(() => document.getElementById("only-canvases")?.remove());
+  return canvas.evaluate((c: HTMLCanvasElement, top) => {
+    const w = window as unknown as { __screen: ImageData; __screenRatio: number };
+    const ratio = w.__screenRatio;
+    let well = [0, 0, 0];
+    for (let at = c.parentElement; at; at = at.parentElement) {
+      const m = /rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)(?:[\s,/]+([\d.]+))?/.exec(getComputedStyle(at).backgroundColor);
+      if (m && (m[4] === undefined || Number(m[4]) > 0.5)) { well = [Number(m[1]), Number(m[2]), Number(m[3])]; break; }
+    }
+    const lum = (r: number, g: number, b: number) => [r, g, b].map((v) => { const x = v / 255; return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; })
+      .reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i]!, 0);
+    const wl = lum(well[0]!, well[1]!, well[2]!);
+    const r = c.getBoundingClientRect();
+    // What is on screen of it: the viewport and every ancestor that clips.
+    let [left, right] = [Math.max(0, r.left), Math.min(innerWidth, r.right)];
+    for (let el = c.parentElement; el; el = el.parentElement) {
+      if (getComputedStyle(el).overflow === "visible") continue;
+      const e = el.getBoundingClientRect();
+      [left, right] = [Math.max(left, e.left), Math.min(right, e.right)];
+    }
+    const own = c.getContext("2d")!.getImageData(0, 0, c.width, c.height).data;
+    // At its reported place and a device pixel either way: the detail's
+    // sliding strip is composited a device pixel off its box (see `sharpness`).
+    let best = 0;
+    for (const dx of [0, 1, -1]) {
+      let drawn = 0;
+      let legible = 0;
+      for (let y = Math.ceil(top * ratio); y < c.height; y += 1) {
+        for (let x = Math.ceil((left - r.left) * ratio) + 1; x < Math.floor((right - r.left) * ratio) - 1; x += 1) {
+          if (own[(y * c.width + x) * 4 + 3] !== 255) continue;
+          const sx = Math.round(r.left * ratio) + x + dx;
+          const sy = Math.round(r.top * ratio) + y;
+          const i = (sy * w.__screen.width + sx) * 4;
+          const l = lum(w.__screen.data[i]!, w.__screen.data[i + 1]!, w.__screen.data[i + 2]!);
+          drawn += 1;
+          if ((Math.max(l, wl) + 0.05) / (Math.min(l, wl) + 0.05) >= 3) legible += 1;
+        }
+      }
+      best = Math.max(best, drawn === 0 ? 0 : legible / drawn);
+    }
+    return { share: best, well };
+  }, skipTop);
+}
+
+/** Light: Catppuccin Latte's blue and mauve, with a black bright foreground. Low: shades of the well itself. */
+const PALETTES = {
+  dark: { low: "#7aa2f7", mid: "#ad8ee6", high: "#c0caf5" },
+  light: { low: "#1e66f5", mid: "#8839ef", high: "#000000" },
+  low: { low: "#0e0e14", mid: "#15151d", high: "#1c1c26" },
+} as const;
+const LIGHT_ROLES = {
+  mode: "light", ground: "#dce0e8", panel: "#e6e9ef", working: "#eff1f5", hairline: "#ccd0da", selection: "#bcc0cc",
+  border: "#9ca0b0", text: "#4c4f69", textDim: "#6c6f85", textBright: "#000000", accent: "#1e66f5", onAccent: "#ffffff",
+  tabFrom: "#8839ef", tabTo: "#fe640b",
+};
+
+test("the Theme waveform stands out from its well in a dark, a light and a low-contrast palette, in every waveform", async ({ page }) => {
+  await seedShell(page, { waveformColor: "theme" });
+  await page.goto("/");
+  await expect(page.getByTestId("shell")).toBeVisible();
+  await page.getByRole("tablist", { name: "Views" }).getByRole("tab", { name: "Intake" }).click();
+  await page.getByRole("listbox", { name: "Intake queue" }).getByRole("option").filter({ hasText: /· \d{2,3} ·/ }).first().click();
+  const compact = shellPlayer(page).getByTestId("compact-player-overview").locator("canvas").first();
+  const large = shellPlayer(page).getByTestId("large-player-wave").locator("canvas").first();
+  for (const [name, wave] of Object.entries(PALETTES)) {
+    await showTheme(page, { roles: name === "light" ? LIGHT_ROLES : roles("#7aa2f7"), wave });
+    for (const [where, canvas] of [["compact overview", compact], ["large detail", large]] as const) {
+      await expect.poll(async () => (await legibleShare(page, canvas)).share, `${name} ${where}`).toBeGreaterThanOrEqual(0.95);
+    }
+  }
+});
+
+test("upstream's deck and the rows draw the Theme waveform legibly on their wells too", async ({ page }) => {
+  await openDeck(page, { waveformColor: "theme" });
+  const row = page.locator("[data-preview-wave]").nth(4);
+  for (const [name, wave] of Object.entries(PALETTES)) {
+    await showTheme(page, { roles: name === "light" ? LIGHT_ROLES : roles("#7aa2f7"), wave });
+    // A row's own canvas carries its cue badges along the top: below them.
+    for (const [where, canvas, skip] of [["overview", deckOverview(page), 0], ["detail", page.locator('[data-testid="player-detail"] canvas').first(), 0], ["row", row, 9]] as const) {
+      await expect.poll(async () => (await legibleShare(page, canvas, skip)).share, `${name} ${where}`).toBeGreaterThanOrEqual(0.95);
+    }
+  }
+});
+
+/**
+ * How far a marker stands out from what is on either side of it on screen:
+ * the marker's own colour (at its centre) against the colours one to two
+ * device pixels outside its edges, at `row` (a CSS y; its own middle by
+ * default). The highest contrast found.
+ */
+async function standsOut(page: Page, marker: Locator, row?: number | "brightest"): Promise<{ colour: number[]; contrast: number; around: string }> {
+  await screen(page);
+  return marker.evaluate((el: Element, at) => {
+    const w = window as unknown as { __screen: ImageData; __screenRatio: number };
+    const ratio = w.__screenRatio;
+    const r = el.getBoundingClientRect();
+    const pxAt = (x: number, yy: number) => { const i = (yy * w.__screen.width + x) * 4; return [w.__screen.data[i]!, w.__screen.data[i + 1]!, w.__screen.data[i + 2]!]; };
+    const lum = (c: number[]) => c.map((v) => { const x = v / 255; return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; })
+      .reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i]!, 0);
+    // The marker's device pixels: `left` to `right - 1`.
+    const left = Math.round(r.left * ratio);
+    const right = left + Math.max(1, Math.round(r.width * ratio));
+    // Its middle column; for a wide marker (a badge, wider than its letter's
+    // strokes; a loop, over a waveform with gaps) the brightest of the first
+    // columns inside its left edge.
+    const inside = right - left > 4 ? [1, 2, 3, 4, 5, 6].map((d) => left + d).filter((x) => x < right) : [left + Math.floor((right - left - 1) / 2)];
+    const brightestAt = (yy: number) => inside.map((x) => pxAt(x, yy)).reduce((a, b) => (lum(b) > lum(a) ? b : a));
+    // The row: given; or, for "brightest", the row of the marker where what
+    // is under it is brightest (a band, not a gap); else its middle, or for
+    // a badge just inside its top.
+    let y = Math.round((typeof at === "number" ? at : (r.width * ratio > 4 ? r.top + 1.5 : r.top + r.height / 2)) * ratio);
+    if (at === "brightest") {
+      for (let yy = Math.ceil(r.top * ratio) + 2; yy < Math.floor(r.bottom * ratio) - 2; yy += 1) {
+        if (lum(brightestAt(yy)) > lum(brightestAt(y))) y = yy;
+      }
+    }
+    const px = (x: number) => pxAt(x, y);
+    const colour = brightestAt(y);
+    let best = 1;
+    for (const x of [left - 1, left - 2, right, right + 1]) {
+      const [a, b] = [lum(colour), lum(px(x))];
+      best = Math.max(best, (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05));
+    }
+    const around = [left - 2, left - 1, ...inside, right, right + 1].map((x) => `${x}:${px(x).join(",")}`).join(" ");
+    return { colour, contrast: best, around: `${around} y=${y} box ${r.left},${r.width}` };
+  }, row);
+}
+
+const hex = (c: readonly number[]) => `#${c.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+
+test("a marker over a Theme band of its own colour still stands out, its colour unchanged: bar lines, heads, hot cues and the active loop", async ({ page }) => {
+  await openDeck(page, { waveformColor: "theme" });
+  const deckEl = deck(page);
+  // Into the music, so the markers sit over the waveform, not silence.
+  const over = (await page.getByTestId("player-overview").boundingBox())!;
+  await page.mouse.click(over.x + over.width * 0.4, over.y + over.height / 2);
+  const detail = page.locator('[data-testid="player-detail"] canvas').first();
+  const middle = async () => { const b = (await detail.boundingBox())!; return b.y + b.height / 2; };
+  // Two bar lines inside the visible well.
+  const well = (await page.getByTestId("player-detail").boundingBox())!;
+  const shownBeats = await deckEl.locator('[data-testid="beat-grid-marker"]').evaluateAll((els, [l, r]) =>
+    els.map((el, i) => [i, el.getBoundingClientRect().left] as const).filter(([, x]) => x > l! + 20 && x < r! - 20).map(([i]) => i),
+  [well.x, well.x + well.width]);
+  expect(shownBeats.length).toBeGreaterThan(4);
+  const outlines = (on: boolean) => page.evaluate((v) => { document.documentElement.dataset.waveTheme = v; }, on ? "theme" : "off");
+  const markers: [string, Locator, boolean][] = [
+    ["a bar line", deckEl.locator('[data-testid="beat-grid-marker"]').nth(shownBeats[1]!), true],
+    ["another bar line", deckEl.locator('[data-testid="beat-grid-marker"]').nth(shownBeats[4]!), true],
+    ["the detail's head", page.getByTestId("player-detail-head"), true],
+    ["the overview's head", page.getByTestId("player-head"), false],
+    ["a hot cue's badge", page.getByTestId("player-overview").locator("[data-cue] b").first(), false],
+    ["the active loop", page.getByTestId("player-detail").locator("[data-active]").first(), true],
+  ];
+  const hidden: string[] = [];
+  for (const [what, marker, inDetail] of markers) {
+    // The loop last, on its own: its band is drawn over the heads.
+    if (what === "the active loop") {
+      await deckEl.getByRole("button", { name: "4 beat loop" }).click();
+      await expect(deckEl.getByRole("button", { name: "Exit loop" })).toHaveText("4");
+    }
+    await expect(marker, what).toBeVisible();
+    // Its colour as drawn over a waveform it differs from.
+    await showTheme(page, { wave: PALETTES.dark });
+    const row = what === "the active loop" ? "brightest" : inDetail ? await middle() : undefined;
+    const { colour } = await standsOut(page, marker, row);
+    // Every band in the marker's own colour.
+    const same = hex(colour);
+    await showTheme(page, { wave: { low: same, mid: same, high: same } });
+    await expect.poll(async () => (await standsOut(page, marker, row)).contrast, { message: `${what}: ${(await standsOut(page, marker, row)).around}` }).toBeGreaterThanOrEqual(1.8);
+    expect(contrastOf((await standsOut(page, marker, row)).colour, colour), `${what} keeps its colour`).toBeLessThan(1.1);
+    // The same, without the outline: lost where a band of its colour is beside it.
+    await outlines(false);
+    if ((await standsOut(page, marker, row)).contrast < 1.2) hidden.push(what);
+    await outlines(true);
+  }
+  // The case is real: without the outline a marker does vanish into a band of
+  // its colour (the overview's head here; the others still differ from what
+  // is beside them in this track, partly because a band too close to the
+  // well is moved off a grey marker's colour).
+  expect(hidden, "markers lost without an outline").toContain("the overview's head");
+});
+
+test("a row's canvas-painted cue badge stands out from a Theme band of its own colour", async ({ page }) => {
+  await openDeck(page, { waveformColor: "theme" });
+  // The cue badge green (rekordbox's hot cue colour) for every band.
+  await showTheme(page, { wave: { low: "#3ceb50", mid: "#3ceb50", high: "#3ceb50" } });
+  const rows = page.locator("[data-preview-wave]");
+  await expect.poll(() => rows.count()).toBeGreaterThan(4);
+  // Of each badge (a square of the cue's colour along the top), a device
+  // pixel below and beside it is the backplate, darker than both.
+  const plated = () => rows.evaluateAll((canvases: HTMLCanvasElement[]) => {
+    let badges = 0;
+    let plated = 0;
+    for (const c of canvases.slice(0, 10)) {
+      const d = c.getContext("2d")!.getImageData(0, 0, c.width, c.height).data;
+      const at = (x: number, y: number) => (y * c.width + x) * 4;
+      // A badge is a solid square of its colour, 7 CSS pixels a side, at the top.
+      const size = Math.round(7 * (c.width / c.getBoundingClientRect().width));
+      const green = (x: number, y: number) => { const i = at(x, y); return d[i]! < 100 && d[i + 1]! > 200 && d[i + 2]! < 120 && d[i + 3] === 255; };
+      for (let x = 2; x < c.width - size - 2; x += 1) {
+        let square = true;
+        for (let y = 0; y < size - 1 && square; y += 1) square = green(x, y) && green(x + size - 2, y);
+        if (!square || green(x - 1, size - 2)) continue; // a badge's left edge, by its whole height
+        badges += 1;
+        // Beside it and under it, the backplate: dark, not the band's green.
+        if (d[at(x - 1, size - 2) + 1]! < 60 && d[at(x + 1, size + 0) + 1]! < 60) plated += 1;
+      }
+    }
+    return { badges, plated };
+  });
+  await expect.poll(async () => (await plated()).badges).toBeGreaterThan(2);
+  const { badges, plated: done } = await plated();
+  expect(done).toBe(badges);
+});
+
 /**
  * Each waveform canvas's own pixels against what the screen shows of it.
  *

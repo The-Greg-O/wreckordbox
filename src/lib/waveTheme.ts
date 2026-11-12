@@ -45,18 +45,99 @@ export function themeWave(theme: Pick<Theme, "wave">): ThemeWave {
   return { low: band("low"), mid: band("mid"), high: band("high") };
 }
 
-let held: { key: string; colours: WaveColours } | null = null;
+export type Rgb = readonly [number, number, number];
+
+/** `#rrggbb` as its three channels. */
+export function hexRgb(hex: string): Rgb {
+  const n = Number.parseInt(hex.slice(1, 7), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function luminance([r, g, b]: Rgb): number {
+  const linear = (v: number) => {
+    const s = v / 255;
+    return s <= 0.040_45 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
+}
+
+/** WCAG contrast ratio, 1 (none) to 21. */
+export function contrastRatio(one: Rgb, other: Rgb): number {
+  const [a, b] = [luminance(one), luminance(other)];
+  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+}
 
 /**
- * The colours for `palette` under `theme`. The same object comes back while
- * the colours are the same, so it can key an effect.
+ * What a band must stand out from its well by (WCAG's figure for graphics),
+ * and what an adjusted band is taken to. The targets rise from the low band
+ * to the core so that bands lifted off the same well stay apart.
  */
-export function waveColoursFrom(palette: WaveformTheme, theme: Pick<Theme, "wave">): WaveColours {
+export const WELL_CONTRAST = 3;
+const WELL_TARGETS = { low: 3, mid: 4, high: 5.5 } as const;
+
+/**
+ * `hex`, or where it stands out from `well` by less than `least`, `hex`
+ * moved towards white or black (whichever the well is further from) until
+ * it stands out by `target`. A theme's own colours are kept wherever they
+ * can be seen: a light theme's black foreground on the black well of the
+ * player, or a low-contrast palette's shades of its own ground, are not.
+ */
+export function legibleOn(hex: string, well: Rgb, least = WELL_CONTRAST, target = least): string {
+  const colour = hexRgb(hex);
+  if (contrastRatio(colour, well) >= least) return hex;
+  const toward: Rgb = contrastRatio([255, 255, 255], well) >= contrastRatio([0, 0, 0], well) ? [255, 255, 255] : [0, 0, 0];
+  let mixed: Rgb = colour;
+  for (let step = 1; step <= 20; step += 1) {
+    const t = step / 20;
+    mixed = [0, 1, 2].map((i) => Math.round(colour[i]! + (toward[i]! - colour[i]!) * t)) as unknown as Rgb;
+    if (contrastRatio(mixed, well) >= target) break;
+  }
+  return `#${mixed.map(byte).join("")}`;
+}
+
+/** At most this many sets of colours are held (a well per kind of strip and row). */
+const HELD_MOST = 32;
+const held = new Map<string, WaveColours>();
+
+/**
+ * The colours for `palette` under `theme`, each Theme band legible on
+ * `well` (the colour behind the canvas; black where unknown). The same
+ * object comes back while the colours are the same, so it can key an
+ * effect.
+ */
+export function waveColoursFrom(palette: WaveformTheme, theme: Pick<Theme, "wave">, well: Rgb = [0, 0, 0]): WaveColours {
   if (palette !== "theme") return MEASURED_COLOURS;
-  const { low, mid, high } = themeWave(theme);
+  const own = themeWave(theme);
+  const low = legibleOn(own.low, well, WELL_CONTRAST, WELL_TARGETS.low);
+  const mid = legibleOn(own.mid, well, WELL_CONTRAST, WELL_TARGETS.mid);
+  const high = legibleOn(own.high, well, WELL_CONTRAST, WELL_TARGETS.high);
   const key = `${low}${mid}${high}`;
-  if (held?.key !== key) held = { key, colours: themeWaveColours(low, mid, high) };
-  return held.colours;
+  let colours = held.get(key);
+  if (!colours) {
+    colours = themeWaveColours(low, mid, high);
+    if (held.size >= HELD_MOST) held.clear();
+    held.set(key, colours);
+  }
+  return colours;
+}
+
+/**
+ * The colour a canvas is drawn over: the background of the nearest element
+ * around it that paints one. Black where none does.
+ */
+export function wellOf(element: Element | null): Rgb {
+  for (let at = element?.parentElement ?? null; at; at = at.parentElement) {
+    const match = /rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)(?:[\s,/]+([\d.]+))?/.exec(getComputedStyle(at).backgroundColor);
+    if (match && (match[4] === undefined || Number(match[4]) > 0.5)) {
+      return [Number(match[1]), Number(match[2]), Number(match[3])];
+    }
+  }
+  return [0, 0, 0];
+}
+
+/** `#rrggbb` of a well, for a cache key. */
+export function wellKey(well: Rgb): string {
+  return well.map(byte).join("");
 }
 
 /** A short name for a set of colours, for a cache key. */
@@ -82,7 +163,7 @@ export function effectiveWaveform(
 }
 
 /** The theme this window shows, kept current. */
-function useShownTheme(): Theme {
+export function useShownTheme(): Theme {
   return useSyncExternalStore(subscribeShownTheme, shownTheme, shownTheme);
 }
 
@@ -96,8 +177,8 @@ export function useWaveformTheme(): { palette: WaveformTheme; fromFile: boolean 
   return useEffectiveWaveform(usePreferences().view.waveformColor);
 }
 
-/** The colours to hand the waveform drawing for `palette`. */
-export function useWaveColours(palette: WaveformTheme): WaveColours {
+/** The colours to hand the waveform drawing for `palette`, on `well`. */
+export function useWaveColours(palette: WaveformTheme, well?: Rgb): WaveColours {
   const theme = useShownTheme();
-  return waveColoursFrom(palette, theme);
+  return waveColoursFrom(palette, theme, well);
 }

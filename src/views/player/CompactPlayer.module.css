@@ -187,3 +187,9 @@
   }
   .button, .size { min-width: 22px; padding: 0 var(--s-shell-space-1); }
 }
+
+/* A dark halo on each marker under the Theme waveform: see Player.module.css. */
+:global(:root[data-wave-theme="theme"]) :is(.playhead, .phrase) {
+  /* A box's outline, a CSS pixel all round; its own colour untouched. */
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.85);
+}

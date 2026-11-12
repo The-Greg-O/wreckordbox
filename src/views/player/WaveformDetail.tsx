@@ -18,7 +18,7 @@ import type { WaveformKind } from "@/ipc/types";
 import { coveredSize, exactBackingSize } from "@/lib/canvasSize";
 import { usePixelRatio } from "@/lib/pixelRatio";
 import { detailWaveOriginMs, detailWaveWindow, waveSlice } from "@/lib/player";
-import { useWaveColours, useWaveformTheme } from "@/lib/waveTheme";
+import { useShownTheme, useWaveformTheme, waveColoursFrom, wellOf } from "@/lib/waveTheme";
 
 /** Raw waveform bytes per track. Small — a few hundred bytes each. */
 const bytesByTrack = new Map<string, Uint8Array>();
@@ -136,8 +136,9 @@ export const WaveformDetail = memo(function WaveformDetail({
   // The waveform theme in force (the theme file's, else View › Color ›
   // Waveform color): each palette reads its own tags.
   const { palette } = useWaveformTheme();
-  // That palette's colours: the measured ones, or the Omarchy theme's.
-  const colours = useWaveColours(palette);
+  // The Omarchy theme's colours for the Theme palette (read at draw time,
+  // legible on the well this canvas is drawn over).
+  const theme = useShownTheme();
   // Device pixels per CSS pixel, kept current: a paused waveform is redrawn
   // when the scale or the display's density changes with no resize.
   const ratio = usePixelRatio();
@@ -246,6 +247,9 @@ export const WaveformDetail = memo(function WaveformDetail({
     canvas.style.height = `${box.height}px`;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    // That palette's colours: the measured ones, or the Omarchy theme's,
+    // each band standing out from the well behind this canvas.
+    const colours = waveColoursFrom(palette, theme, wellOf(canvas));
 
     if (pcmWindow) {
       const loaded = pcmData?.trackId === trackId && pcmData.revision === revision ? pcmData : null;
@@ -287,7 +291,7 @@ export const WaveformDetail = memo(function WaveformDetail({
       bottom: inset.bottom * scale,
     }, colours);
     ctx.restore();
-  }, [data, pcmData, trackId, revision, progress, span, durationMs, firstBeatMs, width, height, half, detail, palette, colours, inset.top, inset.bottom, pcmWindow, ratio]);
+  }, [data, pcmData, trackId, revision, progress, span, durationMs, firstBeatMs, width, height, half, detail, palette, theme, inset.top, inset.bottom, pcmWindow, ratio]);
 
   return <canvas ref={ref} style={{ width: "100%", height: "100%", display: "block" }} />;
 });

@@ -3245,6 +3245,12 @@ function AppBody() {
     ));
   }, [sessionReady, screen.rows, waveformPalette]);
 
+  // The waveform theme in force, for the markers drawn over every waveform:
+  // under Theme they get a halo (Player.module.css).
+  useEffect(() => {
+    document.documentElement.dataset.waveTheme = waveformPalette;
+  }, [waveformPalette]);
+
   // Written on every change rather than on exit: a window that is force-quit,
   // or a machine that loses power, still comes back where it was. It is a few
   // hundred bytes to localStorage, not something worth batching.

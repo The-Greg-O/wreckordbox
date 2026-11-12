@@ -16,7 +16,7 @@ import { useTranslation } from "@/i18n";
 import { hotCueColour } from "@/lib/hotCueColours";
 import { previewBackingSize } from "@/lib/canvasSize";
 import { onPixelRatioChange, pixelRatio } from "@/lib/pixelRatio";
-import { useWaveColours, useWaveformTheme, waveColoursKey } from "@/lib/waveTheme";
+import { useShownTheme, useWaveformTheme, waveColoursFrom, waveColoursKey, wellOf } from "@/lib/waveTheme";
 import { usePreferences } from "@/store/usePreferences";
 import { previewPositionMs, startPreview, stopPreview, usePreview } from "@/store/usePreview";
 import styles from "./TrackTable.module.css";
@@ -203,7 +203,7 @@ export const WaveformPreview = memo(function WaveformPreview({
   const { palette } = useWaveformTheme();
   const half = overviewWaveform !== "full";
   // The waveform theme's colours: the measured ones, or the desktop theme's.
-  const colours = useWaveColours(palette);
+  const theme = useShownTheme();
   // The device pixels a CSS pixel covers, whole-interface scale included. The
   // row keeps its CSS size when the scale changes, so nothing else would
   // resize the canvas below and repaint it: `dpr` is one of the effect's keys.
@@ -217,6 +217,8 @@ export const WaveformPreview = memo(function WaveformPreview({
 
   useEffect(() => {
     let cancelled = false;
+    // Each Theme band legible on the row behind this preview.
+    const colours = waveColoursFrom(palette, theme, wellOf(ref.current));
     const key = `${startupCache ? "startup" : "live"}:${palette}:${waveColoursKey(colours)}:${half ? "half" : "full"}:${WaveformCache.key(trackId, width, dpr)}`;
 
     const paint = (entry: { bitmap: CanvasImageSource }) => {
@@ -231,8 +233,11 @@ export const WaveformPreview = memo(function WaveformPreview({
       // default, as rekordbox's row preview does.
       const badges = hotCues.map(([letter, at, colour, loop]) =>
         [letter, at, hotCueColour(colour, letter, loop === true, hotCueColor)] as const);
-      drawPreviewMemoryCues(ctx, memoryCues ?? [], durationSec * 1000, canvas.width, dpr, memoryCueColours);
-      drawPreviewCues(ctx, badges, durationSec * 1000, canvas.width, dpr);
+      // Over the Theme palette's colours a marker gets a backplate, so a band
+      // in the marker's own colour cannot hide it; its colour is unchanged.
+      const outline = palette === "theme";
+      drawPreviewMemoryCues(ctx, memoryCues ?? [], durationSec * 1000, canvas.width, dpr, memoryCueColours, outline);
+      drawPreviewCues(ctx, badges, durationSec * 1000, canvas.width, dpr, outline);
     };
 
     const cached = cache.get(key);
@@ -264,7 +269,7 @@ export const WaveformPreview = memo(function WaveformPreview({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [trackId, width, boxWidth, boxHeight, hotCues, memoryCues, memoryCueColours, durationSec, palette, colours, half, hotCueColor, startupCache, dpr]);
+  }, [trackId, width, boxWidth, boxHeight, hotCues, memoryCues, memoryCueColours, durationSec, palette, theme, half, hotCueColor, startupCache, dpr]);
 
   return (
     <span className={styles.previewWave} style={{ width: `${width}px`, height: `${height}px` }}>

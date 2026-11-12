@@ -700,9 +700,12 @@ export function drawPreviewCues(
   durationMs: number,
   width: number,
   dpr: number,
+  /** A dark backplate a device pixel round each badge: over a waveform in any colour (the Theme palette). */
+  outline = false,
 ): void {
   if (cues.length === 0 || durationMs <= 0 || width <= 0) return;
   const size = PREVIEW_BADGE * dpr;
+  const edge = Math.max(1, Math.round(dpr));
   ctx.font = `700 ${PREVIEW_BADGE_FONT * dpr}px ${UI_FONT}`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
@@ -710,6 +713,10 @@ export function drawPreviewCues(
     const at = Math.min(Math.max(positionMs / durationMs, 0), 1);
     // Whole device pixels, so the square has a crisp edge at every DPR.
     const x = Math.round(Math.min(at * width, width - size));
+    if (outline) {
+      ctx.fillStyle = MARKER_BACKPLATE;
+      ctx.fillRect(x - edge, 0, size + 2 * edge, size + edge);
+    }
     ctx.fillStyle = colour ?? CUE_HOT;
     ctx.fillRect(x, 0, size, size);
     ctx.fillStyle = CUE_HOT_TEXT;
@@ -756,15 +763,27 @@ export function previewClickMs(
 export function drawPreviewMemoryCues(
   ctx: CanvasRenderingContext2D, positions: readonly number[], durationMs: number, width: number, dpr: number,
   colours: readonly number[] = [],
+  /** A dark backplate a device pixel round each triangle, as `drawPreviewCues`. */
+  outline = false,
 ): void {
   if (durationMs <= 0 || width <= 0 || positions.length === 0) return;
   const half = 3 * dpr;
   const height = 4 * dpr;
+  const edge = Math.max(1, Math.round(dpr));
   for (const [index, position] of positions.entries()) {
     if (position < 0 || position > durationMs || !Number.isFinite(position)) continue;
     const own = memoryCueListColour(colours[index]);
-    ctx.fillStyle = own ? memoryCueMarkerColour(own) : theme.color.cueHead.value;
     const x = Math.round(position / durationMs * width);
+    if (outline) {
+      ctx.fillStyle = MARKER_BACKPLATE;
+      ctx.beginPath();
+      ctx.moveTo(x - half - 2 * edge, 0);
+      ctx.lineTo(x + half + 2 * edge, 0);
+      ctx.lineTo(x, height + 2 * edge);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.fillStyle = own ? memoryCueMarkerColour(own) : theme.color.cueHead.value;
     ctx.beginPath();
     ctx.moveTo(x - half, 0);
     ctx.lineTo(x + half, 0);
@@ -773,6 +792,13 @@ export function drawPreviewMemoryCues(
     ctx.fill();
   }
 }
+
+/**
+ * The backplate under a marker drawn over a waveform whose colours are not
+ * rekordbox's (the Theme palette): the marker keeps its own colour and stands
+ * out from a band of the same colour by this edge.
+ */
+export const MARKER_BACKPLATE = "rgba(0, 0, 0, 0.85)";
 
 /** Renders a preview to an offscreen bitmap at device resolution. */
 export async function renderPreview(
