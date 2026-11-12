@@ -35,7 +35,14 @@ pub struct Restored {
     /// Whether Stem audio was in the backup. Without it, a track whose Stem
     /// audio is not on this machine needs separating again.
     pub stems: bool,
+    /// The Ledger entry that records the restore, when there is a Sidecar
+    /// to record it in. `None` also when it could not be written; the
+    /// restore stands either way.
+    pub ledger_entry: Option<i64>,
 }
+
+/// The kind of the Ledger entry a restore writes.
+pub const RESTORED: &str = "restore";
 
 /// One backup of this Library, as `backup list` shows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,6 +102,7 @@ pub fn restore(
             }
         })?;
     let contents = rbl_backup::sidecar_part::Contents::read(archive).map_err(|e| from_backup(&e))?;
+    let manifest = rbl_backup::manifest::Manifest::read(archive).map_err(|e| from_backup(&e))?;
     rbl_backup::restore::restore(
         &Request {
             archive,
@@ -119,12 +127,78 @@ pub fn restore(
         ),
         None => None,
     };
+    // Still holding the lock: the next owner reads the Ledger with the
+    // restore in it.
+    let ledger_entry = note_restore(library, archive, manifest.created_at, sidecar.is_some());
     Ok(Restored {
         archive: archive.to_path_buf(),
         library: library.master_db.clone(),
         sidecar,
         stems: contents.is_some_and(|contents| contents.stems),
+        ledger_entry,
     })
+}
+
+/// Writes, in the Sidecar the Library now has, a Ledger entry saying the
+/// Library was replaced by a backup's, in a Run of its own.
+///
+/// The Ledger and the Library must not disagree silently after a restore.
+/// When the Sidecar came back with the Library, its entries and intents are
+/// those the backup was taken with: a backup reads the Sidecar before the
+/// Library, so every entry in it is of a change the restored Library has,
+/// and an intent still open there becomes an unconfirmed entry, as after
+/// any stop. When the backup held no Sidecar (one made before backups
+/// carried it), the Ledger kept here describes changes the restored Library
+/// may not have; this entry says so, after every one of them, and the
+/// conflict check of Undo and Unwind refuses to take back what is not
+/// there. Nothing is written when there is no Sidecar; a failure is logged
+/// and leaves the restore as it is.
+fn note_restore(library: &LibraryLocation, archive: &Path, created_at: u64, with_sidecar: bool) -> Option<i64> {
+    use wreckordbox_sidecar::ledger::{Action, NewEntry, Store};
+    let folder = rbl_backup::sidecar_part::Destination::of(library).ok()?.path;
+    if !folder.join(rbl_backup::sidecar_part::DATABASE_FILE).is_file() {
+        return None;
+    }
+    let name = archive.file_name().map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+    let label = if with_sidecar {
+        format!("The Library and the Sidecar were restored from the backup {name}.")
+    } else {
+        format!(
+            "The Library was restored from the backup {name}, which holds no Sidecar. Entries before this one may describe changes the restored Library does not have."
+        )
+    };
+    let payload = serde_json::json!({ "backup": name, "created_at": created_at, "sidecar": with_sidecar });
+    let command = serde_json::json!({ "name": "backup.restore", "args": { "backup": name } });
+    let written = (|| -> wreckordbox_sidecar::Result<i64> {
+        let sidecar = wreckordbox_sidecar::Sidecar::open(&folder)?;
+        let source = wreckordbox_sidecar::Source::new(wreckordbox_sidecar::SourceKind::Dj, "dj");
+        let run = sidecar.begin_owned_run(&source, "Restore a backup")?;
+        let id = sidecar.append(&NewEntry {
+            id: None,
+            run,
+            store: Store::Library,
+            source: &source,
+            at: None,
+            action: Action::Write,
+            kind: RESTORED,
+            label: &label,
+            command: Some(&command),
+            reverses: None,
+            part_of: None,
+            reversible: false,
+            format: 1,
+            payload: Some(&payload),
+        })?;
+        sidecar.finish_run(run, "restored")?;
+        Ok(id)
+    })();
+    match written {
+        Ok(id) => Some(id),
+        Err(error) => {
+            tracing::warn!(%error, "the restore could not be recorded in the Ledger");
+            None
+        }
+    }
 }
 
 /// The backups of `library` in the backup folder the window saves new ones

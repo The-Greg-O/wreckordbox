@@ -125,6 +125,20 @@ fn separating_a_track_keeps_four_stems_in_the_sidecar_each_as_long_as_their_pare
     assert_eq!(sandbox.engine_runs(), 1);
 }
 
+#[test]
+fn stems_are_kept_while_library_protection_is_on_for_the_sidecar_is_not_the_library() {
+    let sandbox = Sandbox::new();
+    let track = import(&sandbox, "Protected.wav", 800);
+    sandbox.protect(true);
+
+    let stems = separate(&sandbox, &track);
+
+    assert_eq!(roles(&stems["stems"]).len(), 4);
+    // The Library itself is still closed to change.
+    let rate = sandbox.cli(&["--json", "tracks", "rate", &track, "3"]);
+    assert_eq!(rate.error_json()["error"]["code"], "library_protected");
+}
+
 fn show(sandbox: &Sandbox, track: &str) -> serde_json::Value {
     let run = sandbox.cli(&["--json", "stems", "show", track]);
     assert!(run.status.success(), "{}", run.stderr);
@@ -475,7 +489,8 @@ fn library_shape(sandbox: &Sandbox) -> Vec<(String, String, i64)> {
 }
 
 #[test]
-fn stems_and_facts_add_no_table_column_or_row_to_the_library_and_live_in_a_folder_beside_it() {
+fn stems_facts_and_mutants_add_no_table_column_or_row_to_the_library_and_live_in_a_folder_beside_it(
+) {
     let sandbox = Sandbox::new();
     let track = import(&sandbox, "Night Bus.wav", 4_410);
     let before = library_shape(&sandbox);
@@ -515,7 +530,7 @@ fn stems_and_facts_add_no_table_column_or_row_to_the_library_and_live_in_a_folde
         "0.8",
     ]);
     assert!(fact.status.success(), "{}", fact.stderr);
-    let listed = sandbox.cli(&["--json", "facts", "show", &track]);
+    let listed = sandbox.cli(&["--json", "facts", "show", &track, "--check-audio"]);
     assert!(listed.status.success(), "{}", listed.stderr);
     let kinds: Vec<String> = listed.json()["facts"]
         .as_array()
@@ -524,6 +539,32 @@ fn stems_and_facts_add_no_table_column_or_row_to_the_library_and_live_in_a_folde
         .map(|fact| fact["kind"].as_str().unwrap().to_owned())
         .collect();
     assert_eq!(kinds, ["genre", "stems"]);
+
+    // So does a Mutant: the playlist entry it is made for stays, in the
+    // Library, the track it was.
+    let entries = |sandbox: &Sandbox| {
+        let run = sandbox.cli(&["--json", "playlists", "tracks", "900000"]);
+        assert!(run.status.success(), "{}", run.stderr);
+        run.json()["tracks"].clone()
+    };
+    let entries_before = entries(&sandbox);
+    let mutant = sandbox.cli(&[
+        "--json",
+        "mutants",
+        "create",
+        "--playlist",
+        "900000",
+        "--position",
+        "1",
+        "--source",
+        "agent:preparer",
+    ]);
+    assert!(mutant.status.success(), "{}", mutant.stderr);
+    assert_eq!(
+        mutant.json()["mutant"]["parent"]["id"],
+        entries_before[0]["id"]
+    );
+    assert_eq!(entries(&sandbox), entries_before);
 
     assert!(!sandbox.sidecar_dir().exists());
     assert_eq!(library_shape(&sandbox), before);

@@ -70,7 +70,10 @@ impl DeviceView {
             SortColumn::DateAdded => rows.sort_by(|a, b| a.date_added.cmp(&b.date_added)),
             column => {
                 if let Some(text) = text_of(column) {
-                    let mut keyed: Vec<(String, DeviceRow)> = rows.into_iter().map(|r| (folded(column, text(&r)), r)).collect();
+                    let mut keyed: Vec<(String, DeviceRow)> = rows
+                        .into_iter()
+                        .map(|r| (folded(column, text(&r)), r))
+                        .collect();
                     keyed.sort_by(|a, b| a.0.cmp(&b.0));
                     rows = keyed.into_iter().map(|(_, r)| r).collect();
                 }
@@ -134,11 +137,21 @@ fn matches(row: &DeviceRow, query: &str, field: SearchField) -> bool {
         SearchField::Genre => &[&row.genre],
         SearchField::Label => &[&row.label],
         SearchField::Comment => &[&row.comment],
-        SearchField::All => &[&row.title, &row.artist, &row.album, &row.genre, &row.label, &row.comment, &row.key],
+        SearchField::All => &[
+            &row.title,
+            &row.artist,
+            &row.album,
+            &row.genre,
+            &row.label,
+            &row.comment,
+            &row.key,
+        ],
         _ => &[],
     };
     let folded: Vec<String> = fields.iter().map(|f| fold(f)).collect();
-    query.split_whitespace().all(|token| folded.iter().any(|f| f.contains(token)))
+    query
+        .split_whitespace()
+        .all(|token| folded.iter().any(|f| f.contains(token)))
 }
 
 #[cfg(test)]
@@ -147,15 +160,33 @@ mod tests {
     use super::*;
 
     fn row(id: u32, title: &str, artist: &str, bpm: u32, key: &str) -> DeviceRow {
-        DeviceRow { id, position: id, title: title.into(), artist: artist.into(), bpm_x100: bpm, key: key.into(), ..DeviceRow::default() }
+        DeviceRow {
+            id,
+            position: id,
+            title: title.into(),
+            artist: artist.into(),
+            bpm_x100: bpm,
+            key: key.into(),
+            ..DeviceRow::default()
+        }
     }
 
     fn rows() -> Vec<DeviceRow> {
-        vec![row(1, "Zebra", "ARTBAT", 12_800, "Am"), row(2, "Ápple", "Meduza", 13_000, "C"), row(3, "Mango", "Tujamo", 12_400, "Am")]
+        vec![
+            row(1, "Zebra", "ARTBAT", 12_800, "Am"),
+            row(2, "Ápple", "Meduza", 13_000, "C"),
+            row(3, "Mango", "Tujamo", 12_400, "Am"),
+        ]
     }
 
     fn spec(sort: SortColumn, descending: bool, query: &str) -> ViewSpec {
-        ViewSpec { source: crate::TrackSource::Collection, sort, descending, query: query.into(), filter: crate::TrackFilter::default() }
+        ViewSpec {
+            source: crate::TrackSource::Collection,
+            sort,
+            descending,
+            query: query.into(),
+            filter: crate::TrackFilter::default(),
+        }
     }
 
     fn ids(view: &DeviceView) -> Vec<u32> {
@@ -164,20 +195,67 @@ mod tests {
 
     #[test]
     fn no_sort_keeps_the_lists_own_order() {
-        assert_eq!(ids(&DeviceView::open(rows(), &spec(SortColumn::TrackNo, false, ""), SearchField::All)), vec![1, 2, 3]);
-        assert_eq!(ids(&DeviceView::open(rows(), &spec(SortColumn::TrackNo, true, ""), SearchField::All)), vec![3, 2, 1]);
+        assert_eq!(
+            ids(&DeviceView::open(
+                rows(),
+                &spec(SortColumn::TrackNo, false, ""),
+                SearchField::All
+            )),
+            vec![1, 2, 3]
+        );
+        assert_eq!(
+            ids(&DeviceView::open(
+                rows(),
+                &spec(SortColumn::TrackNo, true, ""),
+                SearchField::All
+            )),
+            vec![3, 2, 1]
+        );
     }
 
     #[test]
     fn text_sorts_fold_accents_and_case_the_way_the_collection_does() {
-        assert_eq!(ids(&DeviceView::open(rows(), &spec(SortColumn::Title, false, ""), SearchField::All)), vec![2, 3, 1]);
-        assert_eq!(ids(&DeviceView::open(rows(), &spec(SortColumn::Bpm, true, ""), SearchField::All)), vec![2, 1, 3]);
+        assert_eq!(
+            ids(&DeviceView::open(
+                rows(),
+                &spec(SortColumn::Title, false, ""),
+                SearchField::All
+            )),
+            vec![2, 3, 1]
+        );
+        assert_eq!(
+            ids(&DeviceView::open(
+                rows(),
+                &spec(SortColumn::Bpm, true, ""),
+                SearchField::All
+            )),
+            vec![2, 1, 3]
+        );
     }
 
     #[test]
     fn a_search_keeps_rows_with_every_token() {
-        assert_eq!(ids(&DeviceView::open(rows(), &spec(SortColumn::TrackNo, false, "apple meduza"), SearchField::All)), vec![2]);
-        assert_eq!(ids(&DeviceView::open(rows(), &spec(SortColumn::TrackNo, false, "am"), SearchField::All)), vec![1, 3]);
-        assert!(DeviceView::open(rows(), &spec(SortColumn::TrackNo, false, "zebra"), SearchField::Artist).is_empty());
+        assert_eq!(
+            ids(&DeviceView::open(
+                rows(),
+                &spec(SortColumn::TrackNo, false, "apple meduza"),
+                SearchField::All
+            )),
+            vec![2]
+        );
+        assert_eq!(
+            ids(&DeviceView::open(
+                rows(),
+                &spec(SortColumn::TrackNo, false, "am"),
+                SearchField::All
+            )),
+            vec![1, 3]
+        );
+        assert!(DeviceView::open(
+            rows(),
+            &spec(SortColumn::TrackNo, false, "zebra"),
+            SearchField::Artist
+        )
+        .is_empty());
     }
 }

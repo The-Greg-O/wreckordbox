@@ -13,6 +13,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
 };
+use wreckordbox_sidecar::mutants::{InRun, Mutant, MutantChange, MutantUpdate, NewMutant};
 use wreckordbox_sidecar::stems::{NewStems, Role, StemSet};
 use wreckordbox_sidecar::{fingerprint_file, Fact, Fingerprint, Kind, NewFact, Run, RunId, Sidecar, Source, SourceKind};
 
@@ -25,9 +26,9 @@ fn entries(archive: &Path) -> Vec<String> {
 }
 
 /// A Library with a Sidecar beside it: a Fact from the DJ in its own Run,
-/// one track's Stems, a stand-in for a table a later version adds (named
-/// `mutant`; it is not the Mutants store, only proof that a table this code
-/// does not know travels), a kinds file, a Recipe in a folder, and data
+/// one track's Stems, a Mutant of a playlist entry, a table a later version
+/// might add (proof that a table this code does not know travels), a kinds
+/// file, a Recipe in a folder, and data
 /// that can be made again.
 struct Fixture {
     dir: tempfile::TempDir,
@@ -57,6 +58,11 @@ fn record(sidecar: &Sidecar, track: &str, kind: &str, value: serde_json::Value) 
 }
 
 fn separate(sidecar: &Sidecar, parent: &Fingerprint) -> StemSet {
+    separate_as(sidecar, parent, 0)
+}
+
+/// A separation whose Stems' samples all have `value`.
+fn separate_as(sidecar: &Sidecar, parent: &Fingerprint, value: i16) -> StemSet {
     let source = Source { kind: SourceKind::Tool, name: "separation-engine".to_owned() };
     let run = sidecar.begin_run(&source, "Separate").unwrap();
     let workspace = sidecar.workspace(run).unwrap();
@@ -64,7 +70,7 @@ fn separate(sidecar: &Sidecar, parent: &Fingerprint) -> StemSet {
         .into_iter()
         .map(|role| {
             let path = workspace.join(format!("{role}.wav"));
-            audio::write_audio(&path, 500, 0, None);
+            audio::write_audio(&path, 500, value, None);
             (role, path)
         })
         .collect();
@@ -85,6 +91,11 @@ fn separate(sidecar: &Sidecar, parent: &Fingerprint) -> StemSet {
 }
 
 fn fixture() -> Fixture {
+    fixture_with(true)
+}
+
+/// The fixture, with or without its separation.
+fn fixture_with(separated: bool) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let location = testing::library(dir.path());
     testing::set_rating(&location, 4);
@@ -94,12 +105,26 @@ fn fixture() -> Fixture {
     let parent = fingerprint_file(&parent_audio).unwrap();
     let sidecar = Sidecar::open(&sidecar_dir).unwrap();
     record(&sidecar, TAGGED, "genre", serde_json::json!("house"));
-    separate(&sidecar, &parent);
+    if separated {
+        separate(&sidecar, &parent);
+    }
     drop(sidecar);
-    // What a later version keeps in the same database travels by rule. A
-    // stand-in table, not the real Mutants schema.
+    let sidecar = Sidecar::open(&sidecar_dir).unwrap();
+    sidecar
+        .create_mutant(&NewMutant {
+            playlist_id: "900001",
+            entry_id: "entry-a",
+            track_id: SEPARATED,
+            fingerprint: Some(&parent),
+            edits: serde_json::json!({ "stems": { "vocals": false } }),
+            source: &dj(),
+            run: InRun::Own { description: "Mutate" },
+        })
+        .unwrap();
+    drop(sidecar);
+    // What a later version keeps in the same database travels by rule.
     let db = rusqlite::Connection::open(sidecar_dir.join("sidecar.db")).unwrap();
-    db.execute_batch("CREATE TABLE mutant (id INTEGER PRIMARY KEY, playlist TEXT, edits TEXT); INSERT INTO mutant VALUES (1, 'Friday', 'no vocals');").unwrap();
+    db.execute_batch("CREATE TABLE later_table (id INTEGER PRIMARY KEY, playlist TEXT, edits TEXT); INSERT INTO later_table VALUES (1, 'Friday', 'no vocals');").unwrap();
     drop(db);
     fs::write(sidecar_dir.join(wreckordbox_sidecar::KINDS_FILE), KINDS).unwrap();
     fs::create_dir_all(sidecar_dir.join("recipes/empty")).unwrap();
@@ -119,6 +144,7 @@ fn fixture() -> Fixture {
 struct Known {
     facts: Vec<Fact>,
     runs: Vec<Option<Run>>,
+    mutants: Vec<(Mutant, Vec<MutantChange>)>,
     stand_in_rows: Vec<(i64, String, String)>,
 }
 
@@ -131,17 +157,26 @@ impl Fixture {
         let sidecar = Sidecar::open(&self.sidecar_dir).unwrap();
         let mut facts = sidecar.facts_of_track(TAGGED).unwrap();
         facts.extend(sidecar.facts_of_track(SEPARATED).unwrap());
-        let runs = (1..=4).map(|id| sidecar.run(RunId(id)).unwrap()).collect();
+        let runs = (1..=6).map(|id| sidecar.run(RunId(id)).unwrap()).collect();
+        let mutants = sidecar
+            .mutants(None)
+            .unwrap()
+            .into_iter()
+            .map(|mutant| {
+                let changes = sidecar.mutant_changes(mutant.id).unwrap();
+                (mutant, changes)
+            })
+            .collect();
         drop(sidecar);
         let db = rusqlite::Connection::open(self.sidecar_dir.join("sidecar.db")).unwrap();
         let stand_in_rows = db
-            .prepare("SELECT id, playlist, edits FROM mutant")
+            .prepare("SELECT id, playlist, edits FROM later_table")
             .unwrap()
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
             .unwrap()
             .map(Result::unwrap)
             .collect();
-        Known { facts, runs, stand_in_rows }
+        Known { facts, runs, mutants, stand_in_rows }
     }
 
     fn stems(&self) -> Option<StemSet> {
@@ -153,9 +188,13 @@ impl Fixture {
         testing::set_rating(&self.location, 1);
         let sidecar = Sidecar::open(&self.sidecar_dir).unwrap();
         record(&sidecar, TAGGED, "genre", serde_json::json!("techno"));
+        if let Some(mutant) = sidecar.mutant_of_entry("entry-a").unwrap() {
+            let update = MutantUpdate { fingerprint: None, source: &dj(), run: InRun::Own { description: "Edit" } };
+            sidecar.edit_mutant(mutant.id, &serde_json::json!({ "key_shift": 2 }), &update).unwrap();
+        }
         drop(sidecar);
         let db = rusqlite::Connection::open(self.sidecar_dir.join("sidecar.db")).unwrap();
-        db.execute("UPDATE mutant SET edits = 'no drums'", []).unwrap();
+        db.execute("UPDATE later_table SET edits = 'no drums'", []).unwrap();
         drop(db);
         fs::write(self.sidecar_dir.join(wreckordbox_sidecar::KINDS_FILE), "edited").unwrap();
         fs::write(self.sidecar_dir.join("tag-schema.toml"), "written later").unwrap();
@@ -221,6 +260,8 @@ fn a_restore_puts_facts_runs_and_an_unknown_table_back_as_they_were_with_the_lib
     let fixture = fixture();
     let before = fixture.known();
     assert_eq!(before.facts.len(), 2);
+    assert_eq!(before.mutants.len(), 1);
+    assert_eq!(before.mutants[0].0.edits, serde_json::json!({ "stems": { "vocals": false } }));
     assert_eq!(before.stand_in_rows, [(1, "Friday".to_owned(), "no vocals".to_owned())]);
     testing::archive(&fixture.location, &fixture.archive, None);
     fixture.change();
@@ -325,6 +366,38 @@ fn stem_audio_travels_when_the_backup_is_asked_to_include_it() {
     assert_eq!(fixture.stems(), Some(before));
     assert_eq!(fs::read(&vocals).unwrap(), original);
     assert!(!fixture.sidecar_dir.join("stems/10009").exists());
+}
+
+/// Restoring a Sidecar rewinds Run identifiers, and Stem folders are named
+/// after Runs: a separation made after restoring an older backup can write
+/// other audio at the very paths a newer backup's Stems record. Restoring
+/// that newer backup without its Stem audio must not take those files for
+/// its Stems.
+#[test]
+fn stem_audio_left_on_disk_by_a_later_separation_at_the_same_paths_is_not_taken_for_a_restored_backups_stems() {
+    let fixture = fixture_with(false);
+    let older = fixture.dir.path().join("older.zip");
+    testing::archive(&fixture.location, &older, None);
+    let sidecar = Sidecar::open(&fixture.sidecar_dir).unwrap();
+    let saved = separate_as(&sidecar, &fixture.parent, 0);
+    drop(sidecar);
+    testing::archive(&fixture.location, &fixture.archive, None);
+
+    fixture.restore(&older, Parts::ALL).unwrap();
+    assert_eq!(fixture.stems(), None);
+    let sidecar = Sidecar::open(&fixture.sidecar_dir).unwrap();
+    let later = separate_as(&sidecar, &fixture.parent, 9);
+    drop(sidecar);
+    // The Run was numbered again: the later Stems are at the same paths.
+    let paths = |set: &StemSet| set.stems.iter().map(|stem| stem.path.clone()).collect::<Vec<_>>();
+    assert_eq!(paths(&later), paths(&saved));
+
+    fixture.restore(&fixture.archive, Parts::ALL).unwrap();
+    assert!(paths(&saved).iter().all(|path| path.is_file()));
+    assert_eq!(fixture.stems(), None);
+    let recorded = Sidecar::open(&fixture.sidecar_dir).unwrap().stems(SEPARATED).unwrap();
+    assert_eq!(recorded.len(), 1);
+    assert!(!recorded[0].audio_present());
 }
 
 /// The fixture's backup with one entry's contents replaced.
@@ -500,6 +573,35 @@ fn an_interrupted_restore_of_the_sidecar_rolls_back_and_a_committed_one_is_finis
     }
 }
 
+/// A restore into a Sidecar folder `WRECKORDBOX_SIDECAR_DIR` named, which
+/// the program recovering after it does not name: the journal's own record
+/// of the folder is what recovery acts on.
+#[test]
+fn an_interrupted_restore_into_a_sidecar_folder_named_elsewhere_rolls_back_without_that_setting() {
+    let fixture = fixture();
+    let chosen = fixture.dir.path().join("chosen-sidecar");
+    fs::create_dir_all(&chosen).unwrap();
+    let kinds = chosen.join(wreckordbox_sidecar::KINDS_FILE);
+    fs::write(&kinds, "before").unwrap();
+    let (staged, previous) = journal(&fixture, false, &kinds);
+    let mut recorded: rbl_backup::journal::Journal = serde_json::from_slice(&fs::read(rbl_backup::journal::path(&fixture.state())).unwrap()).unwrap();
+    recorded.sidecar = Some(chosen.canonicalize().unwrap());
+    recorded.swaps[0].target = chosen.canonicalize().unwrap().join(wreckordbox_sidecar::KINDS_FILE);
+    recorded.swaps[0].staged = chosen.canonicalize().unwrap().join(staged.file_name().unwrap());
+    recorded.swaps[0].previous = chosen.canonicalize().unwrap().join(previous.file_name().unwrap());
+    fs::write(rbl_backup::journal::path(&fixture.state()), serde_json::to_vec(&recorded).unwrap()).unwrap();
+    fs::write(chosen.join(staged.file_name().unwrap()), "after").unwrap();
+    fs::rename(&kinds, chosen.join(previous.file_name().unwrap())).unwrap();
+    fs::rename(chosen.join(staged.file_name().unwrap()), &kinds).unwrap();
+    assert!(std::env::var_os(rbl_backup::sidecar_part::DIR_ENV).is_none());
+
+    rbl_backup::journal::recover(&fixture.state(), &fixture.location).unwrap();
+    rbl_backup::journal::recover(&fixture.state(), &fixture.location).unwrap();
+    assert_eq!(fs::read_to_string(&kinds).unwrap(), "before");
+    assert_eq!(fs::read_dir(&chosen).unwrap().count(), 1);
+    assert!(!rbl_backup::journal::pending(&fixture.state()));
+}
+
 #[test]
 fn a_journal_cannot_name_what_a_backup_never_holds_or_a_path_outside_the_sidecar() {
     let fixture = fixture();
@@ -659,9 +761,9 @@ fn a_backup_taken_while_a_writer_holds_the_sidecar_open_has_every_committed_row_
     let fixture = fixture();
     let before = fixture.known();
     let writer = rusqlite::Connection::open(fixture.sidecar_dir.join("sidecar.db")).unwrap();
-    writer.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; INSERT INTO mutant VALUES (2, 'Saturday', 'committed');").unwrap();
+    writer.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; INSERT INTO later_table VALUES (2, 'Saturday', 'committed');").unwrap();
     assert!(fs::metadata(fixture.sidecar_dir.join("sidecar.db-wal")).unwrap().len() > 0);
-    writer.execute_batch("BEGIN IMMEDIATE; INSERT INTO mutant VALUES (3, 'Sunday', 'not committed');").unwrap();
+    writer.execute_batch("BEGIN IMMEDIATE; INSERT INTO later_table VALUES (3, 'Sunday', 'not committed');").unwrap();
     testing::archive(&fixture.location, &fixture.archive, None);
     writer.execute_batch("ROLLBACK;").unwrap();
     drop(writer);

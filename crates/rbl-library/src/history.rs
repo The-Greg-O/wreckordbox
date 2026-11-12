@@ -5,12 +5,16 @@
 //! edit made in the window are entries of the same history. Not saved.
 //!
 //! [`EditHistory::record`] is the one place every recorded edit passes
-//! through.
+//! through. A [`Ledger`] given to the history
+//! ([`EditHistory::keep_ledger`]) is told of each edit there, and of each
+//! Undo and Redo, so the durable record does not depend on the history
+//! being kept.
 
 use std::sync::Arc;
 
 use rbl_db::DbError;
 
+use crate::ledger::{Ledger, Link, Step, Unkept};
 use crate::Touched;
 
 /// The history label of an Info panel, rating, colour or comment edit.
@@ -330,6 +334,9 @@ fn step_track_edits(
 pub struct HistoryEntry {
     pub edit: LibraryEdit,
     pub label: &'static str,
+    /// What the history's [`Ledger`] called this edit, or its latest Undo
+    /// or Redo, when there is a Ledger and it recorded it.
+    pub ledger: Option<i64>,
 }
 
 /// Bounded session history for reversible library edits. The payloads retain
@@ -339,6 +346,8 @@ pub struct HistoryEntry {
 pub struct EditHistory {
     undo: Vec<HistoryEntry>,
     redo: Vec<HistoryEntry>,
+    /// Told of every edit recorded here and every step of one.
+    ledger: Option<Arc<dyn Ledger>>,
 }
 
 impl EditHistory {
@@ -351,7 +360,8 @@ impl EditHistory {
     /// slice of one Add Tracks to Playlist extends the entry its first
     /// slice recorded here; see [`Self::record_addition`].)
     pub fn record(&mut self, edit: LibraryEdit, label: &'static str) {
-        self.undo.push(HistoryEntry { edit, label });
+        let ledger = self.ledger.as_ref().and_then(|ledger| ledger.record(Step::Edit, &edit, label, Link::default()));
+        self.undo.push(HistoryEntry { edit, label, ledger });
         if self.undo.len() > Self::LIMIT {
             self.undo.remove(0);
         }
@@ -371,19 +381,58 @@ impl EditHistory {
         if addition.is_empty() {
             return;
         }
-        if let (Some(id), Some(HistoryEntry { edit: LibraryEdit::AddPlaylistTracks { addition: open, transaction: Some(open_id) }, .. }))
+        if let (Some(id), Some(HistoryEntry { edit: LibraryEdit::AddPlaylistTracks { addition: open, transaction: Some(open_id) }, ledger: first, .. }))
             = (&transaction, self.undo.last_mut())
         {
             if open_id == id && open.absorb(&addition) {
                 self.redo.clear();
+                // The Ledger records each slice as it is made, as part of
+                // the first: Undo takes back the whole add, and its entry
+                // reverses the first slice and so every slice part of it.
+                if let Some(ledger) = &self.ledger {
+                    let slice = LibraryEdit::AddPlaylistTracks { addition, transaction };
+                    ledger.record(Step::Edit, &slice, label, Link { reverses: None, part_of: *first });
+                }
                 return;
             }
         }
         self.record(LibraryEdit::AddPlaylistTracks { addition, transaction }, label);
     }
 
+    /// Gives the history a [`Ledger`] to tell of every edit and step from
+    /// now on, or takes it away (`None`).
+    pub fn keep_ledger(&mut self, ledger: Option<Arc<dyn Ledger>>) {
+        self.ledger = ledger;
+    }
+
+    /// The [`Ledger`] the history tells, when it has one. Take it out and
+    /// let the history go before asking it anything.
+    pub fn ledger(&self) -> Option<Arc<dyn Ledger>> {
+        self.ledger.clone()
+    }
+
     pub fn clear_redo(&mut self) {
         self.redo.clear();
+    }
+
+    /// An edit the history records nothing for was made: the Redo branch
+    /// ends ([`Self::clear_redo`]) and the [`Ledger`] is told, by `name`
+    /// when the caller has one for it. Call it once the write is made.
+    pub fn unrecorded(&mut self, name: Option<&str>) {
+        self.redo.clear();
+        if let Some(ledger) = &self.ledger {
+            ledger.note(Unkept::Unrecorded, name);
+        }
+    }
+
+    /// An edit that removed rows for good was made: both stacks are
+    /// emptied ([`Self::clear`]) and the [`Ledger`] is told, by `name` when
+    /// the caller has one for it. Call it once the write is made.
+    pub fn permanent(&mut self, name: Option<&str>) {
+        self.clear();
+        if let Some(ledger) = &self.ledger {
+            ledger.note(Unkept::Permanent, name);
+        }
     }
 
     /// Takes the next Undo (`undo`) or Redo entry off its stack and leaves
@@ -416,8 +465,15 @@ impl EditHistory {
 
     /// Moves an entry that has just been undone (`undone`) to Redo, or one
     /// redone back to Undo. Not a recording: the edit is already in the
-    /// history.
-    fn stepped(&mut self, entry: HistoryEntry, undone: bool) {
+    /// history. The Ledger is told of the step.
+    fn stepped(&mut self, mut entry: HistoryEntry, undone: bool) {
+        if let Some(ledger) = &self.ledger {
+            let step = if undone { Step::Undo } else { Step::Redo };
+            // The step's own identifier, so the next step names it; never
+            // the one before, which would make a Redo name the edit rather
+            // than the Undo it reverses.
+            entry.ledger = ledger.record(step, &entry.edit, entry.label, Link { reverses: entry.ledger, part_of: None });
+        }
         if undone { self.redo.push(entry); } else { self.undo.push(entry); }
     }
 }
@@ -469,12 +525,18 @@ impl crate::LibraryCore {
         action: impl FnOnce(&mut rbl_db::write::Writer) -> Result<(T, LibraryEdit), DbError>,
     ) -> Result<(T, crate::Change), DbError> {
         let _gate = self.edit_gate().lock();
-        let ((value, reversible), change) = self.edit(host, crate::History::Caller, touched, action)?;
+        let kind = touched.change_kind();
+        // The refresh's own failure is kept aside: the edit is made by then
+        // and goes into the history (and the Ledger) whatever it says.
+        let (value, reversible, refreshed) = self.write_then(host, crate::History::Caller, action, |db, (value, reversible)| {
+            Ok((value, reversible, self.refresh_after_edit(host, db, touched)))
+        })?;
         if !reversible.is_empty() {
             self.history.lock().record(reversible, label);
             host.history_changed();
         }
-        Ok((value, change))
+        let generation = refreshed?;
+        Ok((value, crate::Change { kind, generation }))
     }
 
     /// One edit that Undo must never traverse, whole: the guarded write and
@@ -494,7 +556,7 @@ impl crate::LibraryCore {
         let had = {
             let mut history = self.history.lock();
             let had = history.undo_label().is_some() || history.redo_label().is_some();
-            history.clear();
+            history.permanent(None);
             had
         };
         if had {
@@ -529,14 +591,17 @@ impl crate::LibraryCore {
                 entry.edit.check(w, undo)?;
                 entry.edit.apply(w, undo)
             },
-            |db, ()| self.refresh_after_edit(host, db, touched.clone()),
+            // Kept aside: the step is made by then and is recorded whatever
+            // the refresh says.
+            |db, ()| Ok(self.refresh_after_edit(host, db, touched.clone())),
         );
         let mut history = self.history.lock();
         match result {
-            Ok(generation) => {
+            Ok(refreshed) => {
                 history.drop_next(undo);
                 let label = entry.label;
                 history.stepped(entry, undo);
+                let generation = refreshed.map_err(StepError::Write)?;
                 Ok(Stepped { label, touched, generation })
             }
             Err(DbError::Conflict(reason)) => {

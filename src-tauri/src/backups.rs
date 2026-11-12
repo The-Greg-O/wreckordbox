@@ -613,7 +613,7 @@ mod tests {
             rbl_db::fixture::build(dir.path(), rbl_db::fixture::Shape::default()).unwrap();
         let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
         let (library, _) = rbl_index::load(&db).unwrap();
-        let state = AppState::with_backups(dir.path().join("backups"));
+        let state = AppState::unprotected(dir.path().join("backups"));
         state.set_library(library, false, db.schema().db_version, 0, location.clone());
         (dir, state, location)
     }
@@ -671,7 +671,7 @@ mod tests {
         let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
         let db_version = db.schema().db_version;
         let (library, _) = rbl_index::load(&db).unwrap();
-        let state = AppState::with_backups(dir.path().join("read-only-backups"));
+        let state = AppState::unprotected(dir.path().join("read-only-backups"));
         state.set_library(library, true, db_version, 0, location);
 
         let backup = PathBuf::from(create(&state).unwrap());
@@ -873,7 +873,7 @@ mod tests {
         assert_eq!(created.parent(), Some(canonical.as_path()));
         assert_eq!(list(&state).unwrap().len(), 1);
         assert_ne!(state.backup_dir(), canonical);
-        let restarted = AppState::with_backups(state.backup_dir());
+        let restarted = AppState::unprotected(state.backup_dir());
         assert_eq!(restarted.backup_destination(), canonical);
         let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
         let (library, _) = rbl_index::load(&db).unwrap();
@@ -898,7 +898,7 @@ mod tests {
         state.backup_progress.lock().running = true;
         assert!(state.set_backup_destination(dir.path()).is_err());
         assert_eq!(state.backup_destination(), previous);
-        assert_eq!(AppState::with_backups(state.backup_dir()).backup_destination(), previous);
+        assert_eq!(AppState::unprotected(state.backup_dir()).backup_destination(), previous);
     }
 
     #[test]
@@ -1023,7 +1023,12 @@ mod tests {
         for path in discarded(&root) {
             wait_until_gone(&path);
         }
-        let names: Vec<_> = fs::read_dir(&root).unwrap().map(|e| e.unwrap().file_name()).collect();
+        // The Library Protection record shares the state folder; it is not staging.
+        let names: Vec<_> = fs::read_dir(&root)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .filter(|name| name != rbl_library::protection::FILE && name != rbl_library::protection::LOCK_FILE)
+            .collect();
         assert_eq!(names, [saved.file_name().unwrap()]);
     }
 

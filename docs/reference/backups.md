@@ -309,8 +309,19 @@ to the current library. After deleting, the folder is flushed.
 
 ## Restoring a backup
 
-Restore lives in the separate RBXport Restore app. Its logic is in
-`rbl_backup::restore`, which RBXport's tests also run. A restore:
+In wreckordbox a backup is restored by `wreckordbox backup restore <zip>
+--yes` (`crates/wreckordbox/src/backup.rs`, `wreckordbox_service::backup`),
+which the embedded scripts hand a backup holding the Sidecar to. It takes
+the Library's ownership lock (the one a Library service, by itself or
+hosted by the window, holds for as long as it has the Library) before it
+reads anything and keeps it until the restore has finished or been put
+back, so it is refused while either runs and neither can start during it.
+Every owner of the Library recovers a pending journal under that lock before
+it opens the Library or the Sidecar (`Service::begin`). After a restore it
+appends a Ledger entry of kind `restore` to the Sidecar the Library now has.
+The separate RBXport Restore app does not know about the Sidecar and must
+not be used for a backup holding one. The logic is `rbl_backup::restore`. A
+restore:
 
 ```mermaid
 flowchart TD
@@ -356,8 +367,11 @@ A restore:
    checksum, and stored symbolic links are refused. Files and folders are
    flushed.
 7. Opens the unpacked database with the library's key and runs
-   `quick_check`. Every unpacked top-level SQLite database of the Sidecar
-   must pass `quick_check` too.
+   `quick_check`. The Sidecar's `sidecar.db` must be there, be SQLite
+   whatever its first bytes, pass `quick_check` and hold a Sidecar schema
+   version; every database `sidecar.json` lists (at any depth) must be there
+   and pass `quick_check`; and any other unpacked file that starts as a
+   database must pass it too.
 8. Checks again that rekordbox and RBXport are not running, then saves the
    restore journal (`backup-restore.json` in the local state folder).
 9. For each target: renames the current file or folder aside to
@@ -376,9 +390,14 @@ library's own targets or a top-level entry of the Sidecar's folder that a
 backup can hold; anything else is refused.
 
 The Sidecar's folder is found at restore time (`WRECKORDBOX_SIDECAR_DIR`, or
-beside `master.db`), so a restore and any recovery after it must run with
-the same setting. The program restoring must not have the Sidecar open: the
-same guard that requires wreckordbox to be closed covers it.
+beside `master.db`) and checked before a backup reads it or a restore,
+orphan clean-up or recovery writes in it (`sidecar_part::Destination`): it
+must be an absolute plain path, not a symbolic link, and must not hold the
+Library's folder or overlap `share/` or any file a restore replaces. The
+folders above it are resolved and the result pinned; just before the first
+replacement it is checked again. The journal records that folder, and
+recovery acts on it whatever the environment of the program recovering,
+after checking it again.
 
 ```mermaid
 stateDiagram-v2
@@ -394,7 +413,11 @@ stateDiagram-v2
 ### Standalone restore scripts
 
 Every backup contains `restore-rekordbox.sh` and `restore-rekordbox.ps1`.
-After unzipping, either one restores the backup without RBXport or RBXport
+For a backup holding the Sidecar (`sidecar.json` beside the script) they
+change nothing themselves: they run `wreckordbox backup restore <zip> --yes`
+(`WRECKORDBOX_BIN` or `wreckordbox` on the path; `WRECKORDBOX_BACKUP` or the
+extracted folder's name plus `.zip`) or refuse. For any other backup, after
+unzipping, either one restores the backup without RBXport or RBXport
 Restore. The script:
 
 - checks that it is in an extracted backup and that rekordbox is not running;

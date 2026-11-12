@@ -135,7 +135,6 @@ impl StemSet {
     /// asked, so a restored Sidecar remembers separations whose files did
     /// not come back. Such a set is not the track's Stems; the track needs
     /// separating again.
-    #[must_use]
     ///
     /// The files must also be the ones recorded: each is hashed and checked
     /// against the hash recorded with the set, since a later separation can

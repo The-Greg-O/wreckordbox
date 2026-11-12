@@ -24,6 +24,7 @@ import { useCommands } from "@/store/useCommands";
 import type { TrackSearchField } from "@/lib/search";
 
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useLibraryProtection } from "@/store/useLibraryProtection";
 import { droppedFilePaths, getBackend, subscribeNativeFileDrops } from "@/ipc/client";
 import type {
   Backend, DeckId, DeckTick, Device, ImportReport, LibraryProblem, LibrarySummary, RowDto, SortColumn, TrackField, TreeNode, ViewSpec,
@@ -66,7 +67,10 @@ import { onPreviewError, stopPreview } from "@/store/usePreview";
 import { MasterOutputProvider, MasterOutputConnection, useMasterControls, useMasterDisplay } from "@/store/MasterOutput";
 import { asLayout, deckCount, isFullDeck, type PlayerLayout } from "@/lib/layout";
 import { DEFAULT_SHELL_VIEW, type ShellView } from "@/lib/shellViews";
+import { useLibraryColumns } from "@/store/useLibraryColumns";
 import { SHELL_PLAYER_LAYOUT, ViewShell } from "@/views/shell/ViewShell";
+import { useShellTree } from "@/views/shell/useShellTree";
+import { useStickOutlines } from "@/store/useStickOutlines";
 import { FIELD_LABEL } from "@/views/info/fieldLabel";
 import { SubBrowser } from "@/views/subbrowser/SubBrowser";
 import { RightRail } from "@/views/browser/RightRail";
@@ -95,9 +99,11 @@ import { TrackFilter } from "@/views/browser/TrackFilter";
 import { EMPTY_FILTER, toSpecFilter, type FilterState } from "@/lib/trackFilter";
 import type { AnalysisResult, DeviceFormat, DeviceImportMissing, DevicePlaylistEdit, DevicePlaylistImportPlan, FilterValues, LinkPeerSeen, LinkStatus, ListTotals, RelocateSearch, SmartRule, TrackLookups, UnanalysedTracks } from "@/ipc/types";
 import { statusBarListText } from "@/lib/format";
+import { StatusLine } from "@/views/shell/StatusLine";
 import { autoRelocated, missingAmong, relocateSteps, relocateTracks } from "@/lib/relocate";
 import { useTooltip } from "@/store/usePreferences";
 import { useTranslation } from "@/i18n";
+import { CommandPaletteButton, CommandPaletteHost } from "@/views/palette/CommandPalette";
 import { nativeMenuLabels } from "@/lib/nativeMenu";
 
 /** The commands the shell itself registers, and so the keys it runs. */
@@ -120,6 +126,8 @@ const FolderClashDialog = lazy(() => import("@/components/FolderClashDialog").th
 const DeviceImportCopyDialog = lazy(() => import("@/components/DeviceImportCopyDialog").then(m => ({ default: m.DeviceImportCopyDialog })));
 const AnalysisDialog = lazy(() => import("@/views/analysis/AnalysisDialog").then(m => ({ default: m.AnalysisDialog })));
 const NewLibraryDialog = lazy(() => import("@/views/library/NewLibraryDialog").then(m => ({ default: m.NewLibraryDialog })));
+/** No Sticks: what the shell's tree reads while the shell is off. */
+const NO_DEVICES: readonly Device[] = [];
 const DevicePanel = lazy(() => import("@/views/devices/DevicePanel").then(m => ({ default: m.DevicePanel })));
 const InfoPanel = lazy(() => import("@/views/info/InfoPanel").then(m => ({ default: m.InfoPanel })));
 const LogView = lazy(() => import("@/views/log/LogView").then(m => ({ default: m.LogView })));
@@ -467,6 +475,8 @@ function AppBody() {
   // Each mode has its own columns, as rekordbox keeps a `-FullArtwork`
   // layout beside each table's.
   const cols = useColumns(columnContext, artworkMode);
+  // The view shell's Library has its own columns and row look (#55).
+  const libraryColumns = useLibraryColumns();
   // The Preferences window, and the pane it opens on: the missing-file
   // manager lives under Advanced, so the File menu opens it there. In the
   // shell it is a window of its own; in a browser, which has no windows to
@@ -561,6 +571,9 @@ function AppBody() {
    * the layout menu last chose; the choice itself is kept for the old layout.
    */
   const shellOn = prefs.preferences.view.viewShell;
+  // The shell's tree reads each Stick's playlists without writing to it
+  // (ticket #52); only drawn, so only read, with the shell on.
+  const shellSticks = useStickOutlines(shellOn ? devices : NO_DEVICES, deviceLibraries.revision);
   const layout: PlayerLayout = shellOn ? SHELL_PLAYER_LAYOUT : chosenLayout;
   /** The view in the shell's working area. Here, so it outlives nothing it should not. */
   const [shellView, setShellView] = useState<ShellView>(DEFAULT_SHELL_VIEW);
@@ -697,6 +710,13 @@ function AppBody() {
       stop?.();
     };
   }, []);
+  // Library Protection belongs to the backend, which refuses every change
+  // while it is on; the preference shows what the backend last said.
+  const updateAdvanced = prefs.update;
+  useLibraryProtection(
+    advancedPrefs.protectLibrary,
+    useCallback((on: boolean) => updateAdvanced("advanced", { protectLibrary: on }), [updateAdvanced]),
+  );
   jobError.current = (job, error) => refuse(error instanceof Error ? error.message : `${job.label} failed.`);
   // A waveform click whose track could not be previewed says why.
   useEffect(() => onPreviewError(refuse), [refuse]);
@@ -1021,30 +1041,52 @@ function AppBody() {
     event.currentTarget.releasePointerCapture(event.pointerId);
   }, []);
 
-  /** Runs one edit and reports what happened, refusals included. */
-  const runEdit = useCallback(
-    async (what: string, edit: (b: Awaited<ReturnType<typeof getBackend>>) => Promise<unknown>) => {
+  /** Runs one edit and reports what happened, refusals included; resolves whether it was written. */
+  const writeEdit = useCallback(
+    async (what: string, edit: (b: Awaited<ReturnType<typeof getBackend>>) => Promise<unknown>): Promise<boolean> => {
       // Library Protection is a choice the backend cannot see, so it is
       // refused here, with the same words the menu uses. rekordbox holding
       // the database is the backend's to refuse, checked as the write starts.
       if (advancedPrefs.protectLibrary) {
         refuse(refusal(true));
-        return;
+        return false;
       }
       const backend = await getBackend();
       try {
         await edit(backend);
         report(what);
+        return true;
       } catch (e) {
         refuse(e instanceof Error ? e.message : "That could not be saved.");
+        return false;
       }
     },
     [report, refuse, advancedPrefs.protectLibrary],
+  );
+  /** Runs one edit and reports what happened, refusals included. */
+  const runEdit = useCallback(
+    async (what: string, edit: (b: Awaited<ReturnType<typeof getBackend>>) => Promise<unknown>) => {
+      await writeEdit(what, edit);
+    },
+    [writeEdit],
   );
 
   /** Shows an edit at once, so the interface does not wait on the reload. */
   const showPending = useCallback((id: string, patch: Partial<RowDto>) => {
     setPendingEdits((edits) => new Map(edits).set(id, { ...edits.get(id), ...patch }));
+  }, []);
+  /** Takes back one field of edits shown at once, when the write did not happen. */
+  const dropPending = useCallback((ids: readonly string[], field: keyof RowDto) => {
+    setPendingEdits((edits) => {
+      const next = new Map(edits);
+      for (const id of ids) {
+        const patch = { ...next.get(id) };
+        delete patch[field];
+        if (Object.keys(patch).length === 0) next.delete(id);
+        else next.set(id, patch);
+      }
+      return next;
+    });
   }, []);
 
   /**
@@ -1065,11 +1107,15 @@ function AppBody() {
     (ids: readonly string[], stars: number) => {
       if (ids.some(refuseLoose)) return;
       for (const id of ids) showPending(id, { rating: stars });
-      void runEdit(stars === 0 ? "Rating cleared." : `Rated ${stars} of 5.`, (b) =>
+      void writeEdit(stars === 0 ? "Rating cleared." : `Rated ${stars} of 5.`, (b) =>
         b.edits.setTrackRating(ids, stars),
-      );
+      ).then((written) => {
+        // A refused write takes back what was shown, so the row says what
+        // the Library holds.
+        if (!written) dropPending(ids, "rating");
+      });
     },
-    [runEdit, showPending, refuseLoose],
+    [writeEdit, showPending, dropPending, refuseLoose],
   );
   const rateTrack = useCallback((id: string, stars: number) => rateTracks([id], stars), [rateTracks]);
 
@@ -2490,6 +2536,34 @@ function AppBody() {
     editHistory, runLibraryHistory,
   ]);
 
+  // The command palette (#54): from the view shell, a part only the old
+  // layout draws (the two-deck layout, the Information and Sub-Browser
+  // windows, the tempo slider) switches to that layout and shows it; the
+  // palette's "Use the view shell" comes back.
+  const updateView = prefs.update;
+  const setShell = useCallback((on: boolean) => updateView("view", { viewShell: on }), [updateView]);
+  const runOldLayout = useCallback((id: string) => {
+    updateView("view", { viewShell: false });
+    if (id === "info") {
+      setInfoOpen(true);
+      setMyTagOpen(false);
+      return;
+    }
+    if (id === "sub") {
+      setSubOpen(true);
+      return;
+    }
+    runMenu(id);
+  }, [updateView, runMenu]);
+  const paletteHistory = useMemo(
+    () => ({ undo: editHistory.canUndo, redo: editHistory.canRedo }),
+    [editHistory.canUndo, editHistory.canRedo],
+  );
+  const paletteLoaded = useMemo(
+    () => ({ a: playerTrack !== null, b: playerTrackB !== null }),
+    [playerTrack, playerTrackB],
+  );
+
   // The Track and Playlist menus' greyed items, worked out from the focus
   // and what the lists and trees report, and sent on whenever they change.
   useEffect(() => {
@@ -3270,7 +3344,7 @@ function AppBody() {
   // log as it appears, so the Log window still has it once the bar moves on;
   // a running job's changing progress text is left out.
   const statusActivity = note !== null && !note.failed ? note.text : "";
-  const statusError = playerError ?? loadError ?? serviceProblem ?? [...exportJobs.values()].find(job => job.state === "failed")?.title
+  const statusError = playerError ?? loadError ?? (shellOn ? null : serviceProblem) ?? [...exportJobs.values()].find(job => job.state === "failed")?.title
     ?? (note?.failed === true ? note.text : null);
   const loggedActivity = note?.busy === true ? "" : statusActivity;
   useEffect(() => {
@@ -3308,6 +3382,7 @@ function AppBody() {
             devices={menuDevices}
             onExportLoop={exportLoop}
             simple={!isFullDeck(layout)}
+            compact={shellOn}
             dragging={draggedTracks !== null}
             onDropTrack={loadDroppedInto.a}
             onLoadSelected={loadSelectedInto.a}
@@ -3381,6 +3456,16 @@ function AppBody() {
           onDeviceImport={importFromDevice}
         />
   );
+  // The main list's columns: the Library view's own in the shell (#55).
+  const listColumns = shellOn ? libraryColumns : {
+    columns: cols.columns, onColumnMove: cols.move, onColumnResize: cols.resize, onColumnToggle: cols.toggle,
+    onColumnAutoSize: cols.autoSize, onColumnAutoSizeAll: cols.autoSizeEvery,
+    artworkMode, onArtworkMode: setArtworkMode,
+  };
+  const shellTree = useShellTree({
+    library: tree, sticks: shellSticks, selectedNode, onSelectNode: setSelectedNode,
+    view: shellView, onViewChange: changeShellView,
+  });
   const library = (
         selectedDevice ? (
           <Suspense fallback={null}><DevicePanel
@@ -3428,8 +3513,7 @@ function AppBody() {
           trafficLight={activeTrafficLight}
           onTrafficLight={setTrafficLight}
           trafficKey={trafficKey}
-          artworkMode={artworkMode}
-          onArtworkMode={setArtworkMode}
+          {...listColumns}
           onFocusedRow={(row, from) => { void openInDeckA(row, from); }}
           onSelectedRow={setSelectedRow}
           onDragTracks={setDraggedTracks}
@@ -3460,12 +3544,6 @@ function AppBody() {
           onSearchFieldChange={setSearchField}
           onQueryChange={setQuery}
           searchRef={searchRef}
-          columns={cols.columns}
-          onColumnMove={cols.move}
-          onColumnResize={cols.resize}
-          onColumnToggle={cols.toggle}
-          onColumnAutoSize={cols.autoSize}
-          onColumnAutoSizeAll={cols.autoSizeEvery}
           seed={seed}
           onFirstRows={onFirstRows}
           filterOpen={filterOpen}
@@ -3476,6 +3554,10 @@ function AppBody() {
   );
   const dialogs = (
       <Suspense fallback={null}>
+      {/* The command palette (#54): in both layouts, since Linux has no menu row. */}
+      <CommandPaletteHost platform={platform} keyOverrides={keyOverrides} shell={shellOn} readOnly={readOnly}
+        history={paletteHistory} loaded={paletteLoaded}
+        runMenu={runMenu} runOldLayout={runOldLayout} setShell={setShell} openPreferences={openPreferences} />
       {duplicatePrompt ? (
         <DuplicateTracksDialog playlist={duplicatePrompt.playlist} duplicates={duplicatePrompt.duplicates}
           total={duplicatePrompt.total} onAnswer={duplicatePrompt.settle} />
@@ -3592,8 +3674,9 @@ function AppBody() {
         />
       </div>
   );
+  const Status = shellOn ? StatusLine : StatusBar;
   const statusBar = (
-      <StatusBar
+      <Status
         jobs={jobList}
         onStopJob={stopJob}
         exports={(exportRunning ? exportBatch : []).map(job => ({
@@ -3648,9 +3731,12 @@ function AppBody() {
           platform={platform}
           keyOverrides={keyOverrides}
           player={deckA}
-          tree={treeView}
+          tree={shellTree.tree}
+          intakeQueue={shellTree.intakeQueue}
+          stick={selectedDevice ? library : undefined}
           library={library}
           status={<>{linkStrip}{statusBar}</>}
+          topBarEnd={<CommandPaletteButton platform={platform} />}
         />
         {dialogs}
       </div>
@@ -3668,6 +3754,7 @@ function AppBody() {
         onOpenSettings={openViewSettings}
         layout={chosenLayout}
         onLayoutChange={setLayout}
+        beforeSettings={<CommandPaletteButton platform={platform} />}
       />
       {/* Full Browser draws no deck at all, and no gutter under one. */}
       {deckCount(layout) > 0 ? (

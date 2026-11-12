@@ -168,6 +168,8 @@ pub(crate) fn answers(command: &str) -> bool {
 pub(crate) struct ParentAudio {
     parent: Parent,
     path: PathBuf,
+    pub(crate) identity: wreckordbox_sidecar::attachments::IdentifyingFields,
+    pub(crate) index: Arc<rbl_index::Library>,
 }
 
 impl ParentAudio {
@@ -190,14 +192,26 @@ pub(crate) fn parent(library: &OpenLibrary, id: &str) -> Result<ParentAudio, Ser
             format!("there is no track {id} in the Library"),
         ));
     };
+    Ok(audio_at(&index, row))
+}
+
+/// A track of the index by its row, as [`parent`] finds it.
+pub(crate) fn audio_at(index: &Arc<rbl_index::Library>, row: rbl_index::Row) -> ParentAudio {
     let at = row as usize;
-    Ok(ParentAudio {
+    ParentAudio {
+        identity: wreckordbox_sidecar::attachments::IdentifyingFields {
+            title: index.title.get(at).to_owned(),
+            artist: index.artist_name(row).to_owned(),
+            mix_name: index.mix_name(row).to_owned(),
+            duration: index.length_sec.get(at).copied().unwrap_or(0),
+        },
+        index: Arc::clone(index),
         parent: Parent {
             id: index.ids.get(at).copied().unwrap_or(0).to_string(),
             title: index.title.get(at).to_owned(),
         },
         path: PathBuf::from(index.folder_path.get(at)),
-    })
+    }
 }
 
 /// Answers one of this module's commands. `lookup` finds a track in the
@@ -226,12 +240,16 @@ pub(crate) fn answer(
 /// that may be running.
 pub(crate) struct Stems {
     sidecar_dir: PathBuf,
+    pub(crate) run_status: Mutex<crate::run_status::RunStatus>,
     command: Vec<OsString>,
     sidecar: Mutex<Option<Arc<Sidecar>>>,
     /// The separation in progress, if any.
     running: Mutex<Option<Arc<Job>>>,
     /// Where events go to reach clients and the host.
     events: Mutex<Sender<Event>>,
+    /// The Intensity measuring on this Sidecar, and whether the service has
+    /// closed it.
+    pub(crate) intensity: crate::intensity::Lifecycle,
 }
 
 struct Job {
@@ -257,11 +275,13 @@ impl Stems {
             .filter(|command| !command.trim().is_empty())
             .map_or_else(default_command, |command| parse_command(&command));
         Arc::new(Self {
+            run_status: Mutex::new(crate::run_status::RunStatus::new(&sidecar_dir)),
             sidecar_dir,
             command,
             sidecar: Mutex::new(None),
             running: Mutex::new(None),
             events: Mutex::new(events),
+            intensity: crate::intensity::Lifecycle::default(),
         })
     }
 
@@ -272,6 +292,22 @@ impl Stems {
         if let Some(job) = lock(&self.running).as_ref() {
             job.cancel.cancel();
         }
+    }
+
+    /// Inspect an existing writer without opening it; retain the guard so a
+    /// status snapshot cannot race an opening writer. Busy means unknown.
+    pub(crate) fn with_current_sidecar<T>(
+        &self,
+        read: impl FnOnce(Option<&Sidecar>) -> T,
+    ) -> Option<T> {
+        self.sidecar
+            .try_lock()
+            .ok()
+            .map(|open| read(open.as_deref()))
+    }
+
+    pub(crate) fn sidecar_dir(&self) -> &Path {
+        &self.sidecar_dir
     }
 
     /// The Sidecar, opened on first use.
@@ -303,7 +339,9 @@ impl Stems {
     }
 
     fn separate(self: &Arc<Self>, found: ParentAudio) -> Result<Separated, ServiceError> {
-        let ParentAudio { parent, path } = found;
+        let fingerprint = fingerprint(found.parent(), found.path())?;
+        let (_, marked_stale) = self.before_record(&found, Some(&fingerprint), None)?;
+        let parent = found.parent().clone();
         let job = {
             // Held while deciding, so two requests for one track cannot
             // both decide to separate it.
@@ -321,13 +359,6 @@ impl Stems {
                 Arc::clone(job)
             } else {
                 let sidecar = self.sidecar()?;
-                let fingerprint = fingerprint(&parent, &path)?;
-                let marked_stale = sidecar
-                    .mark_stale(&parent.id, &fingerprint)
-                    .map_err(|e| sidecar_error(&e))?;
-                if !marked_stale.is_empty() {
-                    self.changed(&parent.id, None, &marked_stale);
-                }
                 let current = sidecar
                     .current_stems(&parent.id, &fingerprint)
                     .map_err(|e| sidecar_error(&e))?
@@ -350,8 +381,7 @@ impl Stems {
                 *running = Some(Arc::clone(&job));
                 let (stems, work) = (Arc::clone(self), Arc::clone(&job));
                 std::thread::spawn(move || {
-                    let outcome =
-                        stems.run(&sidecar, &work, parent, &path, &fingerprint, marked_stale);
+                    let outcome = stems.run(&sidecar, &work, &found, &fingerprint, marked_stale);
                     *lock(&stems.running) = None;
                     *lock(&work.outcome) = Some(outcome);
                     work.done.notify_all();
@@ -377,11 +407,12 @@ impl Stems {
         &self,
         sidecar: &Sidecar,
         job: &Job,
-        parent: Parent,
-        path: &Path,
+        found: &ParentAudio,
         fingerprint: &Fingerprint,
         marked_stale: Vec<i64>,
     ) -> Result<Separated, ServiceError> {
+        let parent = found.parent().clone();
+        let path = found.path();
         let source = Source::new(SourceKind::Tool, "separation-engine");
         let run = sidecar
             .begin_run(
@@ -414,6 +445,7 @@ impl Stems {
                     .iter()
                     .filter_map(|(name, file)| Some((Role::named(name)?, file.clone())))
                     .collect();
+                self.before_record(found, Some(fingerprint), Some(run))?;
                 sidecar
                     .record_stems(&NewStems {
                         track_id: &parent.id,
@@ -452,30 +484,22 @@ impl Stems {
     }
 
     fn show(&self, found: ParentAudio) -> Result<TrackStems, ServiceError> {
-        let ParentAudio { parent, path } = found;
+        let fingerprint = fingerprint(found.parent(), found.path()).ok();
+        self.observe_audio(&found, fingerprint.as_ref())?;
+        let ParentAudio { parent, .. } = found;
         let sidecar = self.sidecar()?;
-        // With the audio at hand, Stems made from other audio are found
-        // out here too, so nothing reads stale Stems as current.
-        if path.is_file() {
-            let fingerprint = fingerprint(&parent, &path)?;
-            let marked_stale = sidecar
-                .mark_stale(&parent.id, &fingerprint)
-                .map_err(|e| sidecar_error(&e))?;
-            if !marked_stale.is_empty() {
-                self.changed(&parent.id, None, &marked_stale);
-            }
-        }
         let (current, previous): (Vec<StemSet>, Vec<StemSet>) = sidecar
             .stems(&parent.id)
             .map_err(|e| sidecar_error(&e))?
             .into_iter()
-            .partition(StemSet::is_current);
+            .partition(|set| set.is_current() && fingerprint.as_ref() == Some(&set.fingerprint));
         Ok(TrackStems {
             track: parent,
-            // Stems recorded without their audio files, as after restoring
-            // a backup that left Stem audio out, are not Stems: the track
-            // reads as needing separation.
-            stems: current.into_iter().next().filter(StemSet::audio_present),
+            // Stems whose audio files are missing or are not the ones
+            // recorded (a restored Sidecar can rewind Run identifiers, so
+            // a later separation may have written other audio at the same
+            // path) are not Stems: the track reads as needing separation.
+            stems: current.into_iter().find(StemSet::audio_present),
             previous,
         })
     }
@@ -517,7 +541,7 @@ pub(crate) fn fingerprint(parent: &Parent, path: &Path) -> Result<Fingerprint, S
     })
 }
 
-fn sidecar_error(error: &SidecarError) -> ServiceError {
+pub(crate) fn sidecar_error(error: &SidecarError) -> ServiceError {
     let code = match error {
         SidecarError::StemLength { .. } => codes::STEM_LENGTH_MISMATCH,
         SidecarError::StemSet(_) | SidecarError::Audio { .. } => codes::SEPARATION_FAILED,

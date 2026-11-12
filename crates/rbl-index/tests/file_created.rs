@@ -1,6 +1,11 @@
 //! The file system's creation time as a browser column (#308): read from the
 //! files, sorted in the index, blank where it cannot be read.
-#![allow(clippy::pedantic, clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+#![allow(
+    clippy::pedantic,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing
+)]
 
 use std::path::Path;
 use std::time::{Duration, UNIX_EPOCH};
@@ -20,7 +25,12 @@ fn platform_created(path: &Path) -> Option<i64> {
 }
 
 fn track(id: u64, path: &'static str) -> TestTrack {
-    TestTrack { id, title: "t", path, ..TestTrack::default() }
+    TestTrack {
+        id,
+        title: "t",
+        path,
+        ..TestTrack::default()
+    }
 }
 
 fn spec(descending: bool) -> ViewSpec {
@@ -42,7 +52,10 @@ fn a_files_creation_time_is_what_the_platform_reports() {
     // Where the file system records one (macOS, Windows, Linux with statx),
     // it is about now.
     if let Some(secs) = created_secs(&file) {
-        let now = std::time::SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+        let now = std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
         assert!((now - secs).abs() < 300, "created {secs}, now {now}");
     }
 }
@@ -62,7 +75,11 @@ fn a_track_reads_its_own_files_creation_time() {
     let library = library_from(&[track(1, leak(&file)), track(2, "/no/such/file.mp3")]);
     assert_eq!(library.file_created(0), platform_created(&file));
     assert_eq!(library.file_created(1), None);
-    assert_eq!(library.file_created(99), None, "a row past the end is blank, not a panic");
+    assert_eq!(
+        library.file_created(99),
+        None,
+        "a row past the end is blank, not a panic"
+    );
 }
 
 #[test]
@@ -85,7 +102,10 @@ fn sorting_by_creation_puts_unknown_first_then_oldest_to_newest() {
     ]);
     let ids = |descending| {
         let view = library.open_view(&spec(descending));
-        view.rows.iter().map(|&row| library.ids[row as usize]).collect::<Vec<_>>()
+        view.rows
+            .iter()
+            .map(|&row| library.ids[row as usize])
+            .collect::<Vec<_>>()
     };
     if platform_created(&older).is_some() {
         assert_eq!(ids(false), vec![2, 3, 1]);
@@ -118,7 +138,16 @@ fn a_large_library_reads_on_worker_threads_to_the_same_result() {
     // Every third track has no file, so the parallel read has to keep each
     // row's own answer in its own place.
     let tracks: Vec<_> = (0..5000u64)
-        .map(|i| track(i + 1, if i % 3 == 0 { "/no/such/file.mp3" } else { present }))
+        .map(|i| {
+            track(
+                i + 1,
+                if i % 3 == 0 {
+                    "/no/such/file.mp3"
+                } else {
+                    present
+                },
+            )
+        })
         .collect();
     let library = library_from(&tracks);
     let view = library.open_view(&spec(false));
@@ -154,8 +183,22 @@ fn a_folder_sorts_its_tracks_and_loose_files_by_creation_together() {
     ];
     let view = library.open_folder(files, &spec(false));
     if platform_created(&held).is_some() {
-        assert_eq!(view.entries, [FolderEntry::File(1), FolderEntry::Track(0), FolderEntry::File(0)]);
+        assert_eq!(
+            view.entries,
+            [
+                FolderEntry::File(1),
+                FolderEntry::Track(0),
+                FolderEntry::File(0)
+            ]
+        );
     } else {
-        assert_eq!(view.entries, [FolderEntry::File(0), FolderEntry::File(1), FolderEntry::Track(0)]);
+        assert_eq!(
+            view.entries,
+            [
+                FolderEntry::File(0),
+                FolderEntry::File(1),
+                FolderEntry::Track(0)
+            ]
+        );
     }
 }

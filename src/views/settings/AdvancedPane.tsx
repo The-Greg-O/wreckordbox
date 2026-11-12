@@ -46,23 +46,42 @@ export function AdvancedPane({ tab, summary }: {
   const [writingMyTags, setWritingMyTags] = useState(false);
   const [myTagFailure, setMyTagFailure] = useState<string | null>(null);
   const [unlockWarning, setUnlockWarning] = useState(false);
+  const [protectionFailure, setProtectionFailure] = useState<string | null>(null);
   const warningDialog = useRef<HTMLElement>(null);
 
   useEffect(() => {
     if (unlockWarning) warningDialog.current?.focus();
   }, [unlockWarning]);
 
-  const setLibraryProtection = async (protectLibrary: boolean) => {
-    if (protectLibrary) {
-      set({ protectLibrary: true });
-      return;
+  /**
+   * The backend owns Library Protection: the switch is turned there, and
+   * shown turned only once it is recorded. When it cannot be, the DJ is
+   * told, and the switch shows what the backend still holds.
+   */
+  const recordProtection = async (protectLibrary: boolean) => {
+    setProtectionFailure(null);
+    const backend = await getBackend();
+    try {
+      const now = await backend.setLibraryProtection(protectLibrary);
+      set({ protectLibrary: now.protectLibrary });
+    } catch (error) {
+      setProtectionFailure(errorMessage(error));
+      const now = await backend.libraryProtection().catch(() => ({ protectLibrary: true }));
+      set({ protectLibrary: now.protectLibrary });
     }
+  };
+
+  const setLibraryProtection = async (protectLibrary: boolean) => {
     setCheckingBackup(true);
     try {
+      if (protectLibrary) {
+        await recordProtection(true);
+        return;
+      }
       const backend = await getBackend();
       const backups = await backend.listBackups().catch(() => null);
       if (backups && backups.length > 0) {
-        set({ protectLibrary: false });
+        await recordProtection(false);
         return;
       }
       setUnlockWarning(true);
@@ -117,6 +136,7 @@ export function AdvancedPane({ tab, summary }: {
             disabled={checkingBackup}
             onChange={(protectLibrary) => { void setLibraryProtection(protectLibrary); }}
           />
+          {protectionFailure ? <Note failed>{protectionFailure}</Note> : null}
         </Section>
         <Section title="Edit Library">
           <Toggle
@@ -208,7 +228,8 @@ export function AdvancedPane({ tab, summary }: {
             <div className={styles.warningActions}>
               <Button onClick={() => {
                 setUnlockWarning(false);
-                set({ protectLibrary: false });
+                setCheckingBackup(true);
+                void recordProtection(false).finally(() => setCheckingBackup(false));
               }}>{t("Unlock anyway")}</Button>
               <Button onClick={() => setUnlockWarning(false)}>{t("Cancel")}</Button>
             </div>

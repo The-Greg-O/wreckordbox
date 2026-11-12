@@ -55,17 +55,50 @@ week-old estimate on opening Backups or while that pane stays open.
 
 ## Restore
 
-Restore through the separate RBXport Restore app. Quit both RBXport and
-rekordbox first. The restore app lists backups and uses `summary.json` when
-available to show their contents.
+Restore a backup with wreckordbox's own command, after quitting the
+wreckordbox window and rekordbox:
 
-Restore the whole backup or selected components: database, analysis, artwork,
-or Sync Manager/Automix selections. The Sidecar is restored together with the
-database, so what wreckordbox knows always matches the Library it is about.
-A backup made before backups carried the Sidecar restores as it always did
-and leaves the Sidecar on the machine untouched. If interrupted, the next RBXport or
-RBXport Restore startup rolls back the operation, or completes it when new
-files were already in place, before opening the library.
+```sh
+wreckordbox backup list                       # this Library's backups, newest first
+wreckordbox backup restore <backup.zip> --yes
+```
+
+`backup restore` puts back the whole backup: the database, analysis,
+artwork, Sync Manager/Automix selections and, when the backup holds one,
+the Sidecar, so what wreckordbox knows always matches the Library it is
+about. Without `--yes` it only says what it would replace. It is refused,
+with nothing changed, while the wreckordbox window or a Library service has
+the Library (quit the window, or run `wreckordbox stop`), while rekordbox
+runs, and for a damaged backup or another Library's. The Library is locked
+for the whole restore, so neither the window nor a service can start part
+way through. The restore is recorded in the Ledger.
+
+If a restore is interrupted, the next program to open the Library (the
+window, or a service a `wreckordbox` command starts) rolls it back, or
+completes it when the new files were already in place, before it reads the
+Library or the Sidecar.
+
+A backup made before backups carried the Sidecar restores the Library and
+leaves the Sidecar on the machine as it is; the Ledger entry for that
+restore says that entries before it may describe changes the restored
+Library does not have.
+
+### The scripts inside a backup
+
+Every backup also holds `restore-rekordbox.sh` (macOS, Linux) and
+`restore-rekordbox.ps1` (Windows), for restoring without wreckordbox. For a
+backup that holds the Sidecar they do not restore anything themselves: they
+hand the backup's `.zip` to `wreckordbox backup restore` when that command
+is installed (or named by `WRECKORDBOX_BIN`) and the `.zip` is beside the
+extracted folder (or named by `WRECKORDBOX_BACKUP`), and otherwise stop
+before changing anything. For an older backup with no Sidecar they restore
+the Library's files as they always did.
+
+### RBXport Restore
+
+The separate RBXport Restore app does not know about the Sidecar. Do not
+use it for a backup that holds one (a backup with a `sidecar.json`): it
+would put back the Library without the Sidecar that matches it.
 
 ## Developer entry points
 

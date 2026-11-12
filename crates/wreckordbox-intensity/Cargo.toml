@@ -1,0 +1,23 @@
+[package]
+name = "wreckordbox-intensity"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Intensity: a measurement of how hard a track hits and how that changes over its length."
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+# The decoder the tempo, key and waveform analysis reads through, so a time
+# here is a time on the beat grid's timeline.
+rbl-audio = { path = "../rbl-audio" }
+# The transform `rbl-analysis` uses.
+realfft = "3"
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tempfile = "3"
