@@ -7,6 +7,7 @@
 mod decisions;
 mod facts;
 mod intake;
+mod intensity;
 mod ledger;
 mod mutants;
 mod mytag_edits;
@@ -129,6 +130,13 @@ enum Commands {
         run: ledger::RunOptions,
         #[command(subcommand)]
         command: intake::IntakeCommands,
+    },
+    /// Measure Intensity: how hard a track hits and how that changes over
+    /// its length, from its audio. Kept in the Sidecar; never changes the
+    /// Library.
+    Intensity {
+        #[command(subcommand)]
+        command: intensity::IntensityCommands,
     },
     /// Check the Tag schema, or write a first one from the Library's
     /// MyTags.
@@ -310,6 +318,9 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
         }
         Commands::Intake { command, .. } => {
             print(&intake::run(&mut connect(&config)?, cli.json, command)?);
+        }
+        Commands::Intensity { command } => {
+            print(&intensity::run(&mut connect(&config)?, cli.json, command)?);
         }
         Commands::Schema { command } => {
             let (text, ok) = schema::run(&mut connect(&config)?, cli.json, command)?;

@@ -16,6 +16,8 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 rbl-db = { path = "../rbl-db" }
+# Only to give a test track a beat grid.
+rbl-anlz = { path = "../rbl-anlz" }
 # `stems write` tests: a fixture Sidecar holding synthetic Stems, a
 # temporary folder exported to as a Stick, and the independent reader of
 # Native stems (its Vorbis decoder).
