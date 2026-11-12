@@ -1393,3 +1393,26 @@ button.cueDelete:disabled { color: var(--c-icon-off); }
 .player[data-flipped] .tempoRamp:not(.overviewRamp) {
   bottom: calc(var(--s-beat-marker-top) + var(--s-beat-head-h) + 2px);
 }
+
+/* Under the Theme waveform (wbx-48) the bands take any theme's colours, so a
+   band can be the colour of a marker over it. Each marker keeps its own
+   colour and gets a dark outline a CSS pixel wide to stand out from it.
+   rekordbox's own palettes (3Band, RGB, Blue) keep its exact markers. */
+:global(:root[data-wave-theme="theme"]) :is(.playhead, .loopBand, .hotCueBadge, .beat, .downbeat, .phrase) {
+  /* A box's outline, a CSS pixel all round; its own colour untouched. */
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.85);
+}
+/* A loop's tint is the element's opacity, which would fade its outline too;
+   and a tint of its own colour over a band of that colour is no change at
+   all. So the same tint goes in the fill, and its edges are drawn solid. */
+:global(:root[data-wave-theme="theme"]) .loopBand {
+  opacity: 1;
+  background: color-mix(in srgb, var(--c-loop-band) 18%, transparent);
+}
+:global(:root[data-wave-theme="theme"]) .loopBand[data-active] {
+  background: color-mix(in srgb, var(--c-loop-band) 38%, transparent);
+}
+:global(:root[data-wave-theme="theme"]) :is(.hotCue, .memoryCue) {
+  /* Drawn as shapes (borders, pseudo-elements): a halo that follows them. */
+  filter: drop-shadow(1px 0 0 rgb(0 0 0 / 0.85)) drop-shadow(-1px 0 0 rgb(0 0 0 / 0.85)) drop-shadow(0 1px 0 rgb(0 0 0 / 0.85));
+}

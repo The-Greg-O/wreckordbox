@@ -69,7 +69,14 @@ export type Theme = {
   monoFontSize?: number | null;
   /** The theme file's mistakes. */
   problems?: ThemeProblem[];
+  /** The Omarchy palette's colours for the Theme waveform (never the theme file's); absent without a usable Omarchy theme. */
+  wave?: ThemeWave | null;
+  /** The theme file's waveform colour theme, which wins over Preferences; absent when the file sets none. */
+  waveform?: string | null;
 };
+
+/** The Theme waveform's band colours, each `#rrggbb`: the theme's blue, magenta and bright foreground. */
+export type ThemeWave = { low: string; mid: string; high: string };
 
 const COLOUR_PROPERTIES: Record<Exclude<keyof ThemeRoles, "mode" | "control" | "accentHover" | "builtIn">, string> = {
   ground: "--role-ground",

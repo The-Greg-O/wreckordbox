@@ -90,6 +90,7 @@ import { DualZoom } from "@/views/player/DualDeck";
 import type { PreferencesTarget } from "@/views/settings/Preferences";
 import { PreferencesProvider, usePreferencesStore } from "@/store/usePreferences";
 import { stepUiScale, type PreferencePane } from "@/lib/preferences";
+import { useEffectiveWaveform } from "@/lib/waveTheme";
 import { answer, deckNumber, setPlaying, whenLoaded, withSetting, type ScriptHandler } from "@/lib/scripting";
 import { continuesFrom, playedToEnd, skipRowIndex, type ListPosition } from "@/lib/continuousPlay";
 import { useAnalysis } from "@/store/useAnalysis";
@@ -511,6 +512,7 @@ function AppBody() {
   }, []);
   const prefs = usePreferencesStore();
   const { view: viewPrefs, advanced: advancedPrefs, analysis: analysisPrefs } = prefs.preferences;
+  const { palette: waveformPalette } = useEffectiveWaveform(viewPrefs.waveformColor);
   // Every write path reads this one flag: rekordbox holding the database,
   // or Library Protection in Preferences, refuse the same way.
   const backupJob = useBackupProgress();
@@ -3257,9 +3259,15 @@ function AppBody() {
     if (!sessionReady || screen.rows.length === 0) return;
     void getBackend().then(backend => backend.rememberScreenAssets(
       screen.rows.map(row => row.id),
-      waveformKindOf(viewPrefs.waveformColor, false),
+      waveformKindOf(waveformPalette, false),
     ));
-  }, [sessionReady, screen.rows, viewPrefs.waveformColor]);
+  }, [sessionReady, screen.rows, waveformPalette]);
+
+  // The waveform theme in force, for the markers drawn over every waveform:
+  // under Theme they get a halo (Player.module.css).
+  useEffect(() => {
+    document.documentElement.dataset.waveTheme = waveformPalette;
+  }, [waveformPalette]);
 
   // Written on every change rather than on exit: a window that is force-quit,
   // or a machine that loses power, still comes back where it was. It is a few

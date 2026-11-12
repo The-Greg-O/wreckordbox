@@ -253,3 +253,36 @@ describe("the row preview's shape", () => {
     expect(drawnHalf).toEqual([true, false]);
   });
 });
+
+describe("a row preview at a whole-interface scale", () => {
+  it("is shown over exactly its own device pixels where the row covers a fraction of one", async () => {
+    const { setPixelZoom } = await import("@/lib/pixelRatio");
+    // 1.1: a 15pt preview covers 16.5 device pixels; its canvas is 17.
+    act(() => setPixelZoom(1.1));
+    act(() => root.render(<WaveformPreview trackId="scaled" width={122} height={15} hotCues={[]} durationSec={300} />));
+    const canvas = host.querySelector("canvas");
+    expect([canvas?.width, canvas?.height]).toEqual([134, 17]);
+    expect(parseFloat(canvas?.style.width ?? "") * 1.1).toBeCloseTo(134, 6);
+    expect(parseFloat(canvas?.style.height ?? "") * 1.1).toBeCloseTo(17, 6);
+    act(() => setPixelZoom(1));
+  });
+
+  it("covers whole display points on a dense display, where the engine draws a canvas over nothing finer", async () => {
+    const { setPixelZoom } = await import("@/lib/pixelRatio");
+    const display = Object.getOwnPropertyDescriptor(window, "devicePixelRatio");
+    Object.defineProperty(window, "devicePixelRatio", { configurable: true, value: 2 });
+    try {
+      // 0.7 on a 2x display: 170.8 by 21 device pixels, drawn as 170 by 22.
+      act(() => setPixelZoom(0.7));
+      act(() => root.render(<WaveformPreview trackId="dense" width={122} height={15} hotCues={[]} durationSec={300} />));
+      const canvas = host.querySelector("canvas");
+      expect([canvas?.width, canvas?.height]).toEqual([170, 22]);
+      expect(parseFloat(canvas?.style.width ?? "") * 1.4).toBeCloseTo(170, 6);
+      expect(parseFloat(canvas?.style.height ?? "") * 1.4).toBeCloseTo(22, 6);
+    } finally {
+      act(() => setPixelZoom(1));
+      if (display) Object.defineProperty(window, "devicePixelRatio", display);
+      else Reflect.deleteProperty(window, "devicePixelRatio");
+    }
+  });
+});

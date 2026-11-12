@@ -10,11 +10,13 @@ import { getBackend } from "@/ipc/client";
 import type { RowCue } from "@/ipc/types";
 import {
   drawPreviewMemoryCues, drawPreviewCues, previewClickMs, renderPreview, waveformKindOf, WaveformCache,
-  type RenderedWaveform, type WavePalette,
+  type RenderedWaveform, type WaveColours, type WavePalette,
 } from "@/canvas";
 import { useTranslation } from "@/i18n";
 import { hotCueColour } from "@/lib/hotCueColours";
+import { previewBackingSize } from "@/lib/canvasSize";
 import { onPixelRatioChange, pixelRatio } from "@/lib/pixelRatio";
+import { useShownTheme, useWaveformTheme, waveColoursFrom, waveColoursKey, wellOf } from "@/lib/waveTheme";
 import { usePreferences } from "@/store/usePreferences";
 import { previewPositionMs, startPreview, stopPreview, usePreview } from "@/store/usePreview";
 import styles from "./TrackTable.module.css";
@@ -22,13 +24,45 @@ import styles from "./TrackTable.module.css";
 /** Shared across every row: bounded, and released when entries fall out. */
 const cache = new WaveformCache(500);
 
+/**
+ * Each row's waveform bytes as last read, by track and tag kind: a change of
+ * waveform theme or colours redraws from these without a read, so a row can
+ * never be left in the old theme because a fresh read failed. A few
+ * kilobytes each, at most `RAW_MOST` of them, the least recently used first
+ * to go.
+ */
+const RAW_MOST = 1000;
+const raw = new Map<string, Uint8Array>();
+
+function rawKey(trackId: string, palette: WavePalette): string {
+  return `${trackId}:${waveformKindOf(palette, false)}`;
+}
+
+function keepRaw(key: string, bytes: Uint8Array): void {
+  raw.delete(key);
+  raw.set(key, bytes);
+  while (raw.size > RAW_MOST) {
+    const oldest = raw.keys().next().value;
+    if (oldest === undefined) break;
+    raw.delete(oldest);
+  }
+}
+
+function forgetRaw(trackId: string): void {
+  for (const key of [...raw.keys()]) if (key.startsWith(`${trackId}:`)) raw.delete(key);
+}
+
 export function clearWaveformPreviewCache(): void {
   cache.clear();
+  raw.clear();
 }
 // A re-analysed track's renderings are stale; its rows draw afresh when they
 // next settle. One subscription for the module rather than one per row.
 void getBackend().then((backend) => {
-  backend.onAnalysisChanged((trackId) => cache.forget(trackId));
+  backend.onAnalysisChanged((trackId) => {
+    cache.forget(trackId);
+    forgetRaw(trackId);
+  });
 });
 
 /**
@@ -96,6 +130,7 @@ async function load(
   dpr: number,
   palette: WavePalette,
   half: boolean,
+  colours: WaveColours,
 ): Promise<RenderedWaveform | null> {
   const existing = inFlight.get(key);
   if (existing) return existing;
@@ -103,10 +138,15 @@ async function load(
   const pending = (async () => {
     await acquire();
     try {
-      const backend = await getBackend();
-      const data = await backend.trackWaveform(trackId, waveformKindOf(palette, false));
-      if (data.length === 0) return null;
-      const rendered = await renderPreview(data, width, height, dpr, palette, half);
+      const bytesKey = rawKey(trackId, palette);
+      let data = raw.get(bytesKey);
+      if (!data) {
+        const backend = await getBackend();
+        data = await backend.trackWaveform(trackId, waveformKindOf(palette, false));
+        if (data.length === 0) return null;
+        keepRaw(bytesKey, data);
+      }
+      const rendered = await renderPreview(data, width, height, dpr, palette, half, colours);
       if (rendered) cache.set(key, rendered);
       return rendered;
     } catch {
@@ -159,30 +199,45 @@ export const WaveformPreview = memo(function WaveformPreview({
   // bitmap rendered in one palette is not the row in another. View ›
   // Full/Preview Waveform switches the row between half and full, as it does
   // in rekordbox.
-  const { waveformColor: palette, hotCueColor, overviewWaveform } = usePreferences().view;
+  const { hotCueColor, overviewWaveform } = usePreferences().view;
+  const { palette } = useWaveformTheme();
   const half = overviewWaveform !== "full";
+  // The waveform theme's colours: the measured ones, or the desktop theme's.
+  const theme = useShownTheme();
   // The device pixels a CSS pixel covers, whole-interface scale included. The
   // row keeps its CSS size when the scale changes, so nothing else would
   // resize the canvas below and repaint it: `dpr` is one of the effect's keys.
   const dpr = useSyncExternalStore(onPixelRatioChange, pixelRatio, serverPixelRatio);
 
+  // The canvas's own pixels: whole display points, which is all the engine
+  // draws a canvas over, and the box that covers exactly those.
+  const { width: storeWidth, height: storeHeight } = previewBackingSize(width, height, dpr);
+  const boxWidth = storeWidth / dpr;
+  const boxHeight = storeHeight / dpr;
+
   useEffect(() => {
     let cancelled = false;
-    const key = `${startupCache ? "startup" : "live"}:${palette}:${half ? "half" : "full"}:${WaveformCache.key(trackId, width, dpr)}`;
+    // Each Theme band legible on the row behind this preview.
+    const colours = waveColoursFrom(palette, theme, wellOf(ref.current));
+    const key = `${startupCache ? "startup" : "live"}:${palette}:${waveColoursKey(colours)}:${half ? "half" : "full"}:${WaveformCache.key(trackId, width, dpr)}`;
 
     const paint = (entry: { bitmap: CanvasImageSource }) => {
       const canvas = ref.current;
       if (!canvas || cancelled) return;
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
+      canvas.removeAttribute("data-wave-failed");
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(entry.bitmap, 0, 0, canvas.width, canvas.height);
       // A cue without a colour of its own takes its slot's HOT CUE color
       // default, as rekordbox's row preview does.
       const badges = hotCues.map(([letter, at, colour, loop]) =>
         [letter, at, hotCueColour(colour, letter, loop === true, hotCueColor)] as const);
-      drawPreviewMemoryCues(ctx, memoryCues ?? [], durationSec * 1000, canvas.width, dpr, memoryCueColours);
-      drawPreviewCues(ctx, badges, durationSec * 1000, canvas.width, dpr);
+      // Over the Theme palette's colours a marker gets a backplate, so a band
+      // in the marker's own colour cannot hide it; its colour is unchanged.
+      const outline = palette === "theme";
+      drawPreviewMemoryCues(ctx, memoryCues ?? [], durationSec * 1000, canvas.width, dpr, memoryCueColours, outline);
+      drawPreviewCues(ctx, badges, durationSec * 1000, canvas.width, dpr, outline);
     };
 
     const cached = cache.get(key);
@@ -192,26 +247,40 @@ export const WaveformPreview = memo(function WaveformPreview({
     }
 
     // Nothing is asked for until the row has settled. A row a flick goes past
-    // is unmounted before this fires, and the request is never made.
+    // is unmounted before this fires, and the request is never made. A row
+    // whose bytes are already here (a theme change) costs no read and waits
+    // for nothing.
     const timer = window.setTimeout(() => {
-      void load(trackId, key, width, height, dpr, palette, half).then((rendered) => {
-        if (rendered) paint(rendered);
+      void load(trackId, key, boxWidth, boxHeight, dpr, palette, half, colours).then((rendered) => {
+        if (rendered) {
+          paint(rendered);
+          return;
+        }
+        // Nothing to draw in this theme (no analysis, or the read failed):
+        // never leave the last theme's pixels standing.
+        const canvas = ref.current;
+        if (!canvas || cancelled) return;
+        canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+        canvas.setAttribute("data-wave-failed", "");
       });
-    }, SETTLE_MS);
+    }, raw.has(rawKey(trackId, palette)) ? 0 : SETTLE_MS);
 
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [trackId, width, height, hotCues, memoryCues, memoryCueColours, durationSec, palette, half, hotCueColor, startupCache, dpr]);
+  }, [trackId, width, boxWidth, boxHeight, hotCues, memoryCues, memoryCueColours, durationSec, palette, theme, half, hotCueColor, startupCache, dpr]);
 
   return (
     <span className={styles.previewWave} style={{ width: `${width}px`, height: `${height}px` }}>
       <canvas
         ref={ref}
-        width={Math.round(width * dpr)}
-        height={Math.round(height * dpr)}
-        style={{ width: `${width}px`, height: `${height}px` }}
+        width={storeWidth}
+        height={storeHeight}
+        // Shown over exactly its own device pixels: at a whole-interface
+        // scale the row's size is often a fraction of one, and a canvas
+        // stretched over the fraction has every row blended into the next.
+        style={{ width: `${boxWidth}px`, height: `${boxHeight}px` }}
         data-preview-wave
         aria-hidden
       />
