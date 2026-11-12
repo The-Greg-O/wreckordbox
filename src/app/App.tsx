@@ -3573,7 +3573,7 @@ function AppBody() {
           {...(shellOn ? {} : { onToggleFilter: toggleFilter })}
           filterBar={shellOn ? (
             <TrackFilterBar model={shellFilter.model} onChange={shellFilter.onChange} values={shellFilter.values}
-              valuesError={shellFilter.valuesError} count={shellFilter.count} keyDisplay={viewPrefs.keyDisplay} />
+              valuesError={shellFilter.valuesError} count={shellFilter.count} keyDisplay={viewPrefs.keyDisplay} keySort={viewPrefs.keySort} />
           ) : filterBar}
         />
         )

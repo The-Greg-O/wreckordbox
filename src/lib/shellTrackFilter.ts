@@ -17,7 +17,9 @@
  *
  * Pure; nothing here touches a row or the backend.
  */
-import type { TrackFilter } from "@/ipc/types";
+import type { Counted, KeyDisplay, TrackFilter } from "@/ipc/types";
+import { toCamelot } from "@/lib/camelot";
+import { formatKey } from "@/lib/preferences";
 
 /** The MyTags picked in one category, and its AND / OR switch. */
 export interface ShellTagPick {
@@ -217,7 +219,70 @@ export function pickSummaries(f: ShellFilter, keyName: (stored: string) => strin
     myTags: Object.fromEntries(f.myTags.map((p) => [p.category, p.tags.join(p.any ? " or " : ", ")])),
     energy: f.energy === null ? null : range(f.energy.min, f.energy.max),
     bpm,
-    keys: f.keys.length > 0 ? f.keys.map(keyName).join(", ") : null,
+    // Several spellings of one key are one name.
+    keys: f.keys.length > 0 ? [...new Set(f.keys.map(keyName))].join(", ") : null,
     prepColours: f.prepColours.length > 0 ? f.prepColours.join(", ") : null,
   };
+}
+
+/** One key the bar offers: as the list shows it, and every stored spelling of it. */
+export interface KeyChoice {
+  label: string;
+  stored: string[];
+  count: number;
+}
+
+/**
+ * The keys the bar offers, written and ordered as the list writes and sorts
+ * them (wbx-56): `formatKey` with the view's key display, so `Am`, `8A` and
+ * Open Key `1m` stored on different tracks are one choice; in wheel order
+ * when the key sort is `musical` (or `auto` with Camelot shown), otherwise
+ * Classic alphabetical by the shown name. `offered` is the backend's list,
+ * in any order.
+ */
+export function keyChoices(
+  offered: readonly Counted<string>[],
+  display: KeyDisplay,
+  keySort: "auto" | "alphabetical" | "musical",
+): KeyChoice[] {
+  const byLabel = new Map<string, KeyChoice>();
+  for (const { value, count } of offered) {
+    const label = formatKey(value, display);
+    const choice = byLabel.get(label);
+    if (choice) {
+      choice.stored.push(value);
+      choice.count += count;
+    } else {
+      byLabel.set(label, { label, stored: [value], count });
+    }
+  }
+  const choices = [...byLabel.values()];
+  const wheel = keySort === "musical" || (keySort === "auto" && display === "alphanumeric");
+  const byName = (a: KeyChoice, b: KeyChoice) => {
+    const left = a.label.toLowerCase();
+    const right = b.label.toLowerCase();
+    return left === right ? 0 : left < right ? -1 : 1;
+  };
+  // Wheel order is `rbl-index`'s `camelot_rank`: number, then A before B,
+  // keys off the wheel last by name. Classic is the list's comparator: the
+  // shown name, case-folded.
+  return choices.sort(wheel ? (a, b) => wheelRank(a.stored[0] ?? "") - wheelRank(b.stored[0] ?? "") || byName(a, b) : byName);
+}
+
+/** A key's place on the wheel: 1A, 1B, 2A ... 12B, then everything else. */
+function wheelRank(key: string): number {
+  const code = toCamelot(key);
+  if (!code) return 1000;
+  return Number(code.slice(0, -1)) * 2 + (code.endsWith("B") ? 1 : 0);
+}
+
+/** Whether every spelling of a key choice is picked. */
+export function keyChoicePicked(f: ShellFilter, choice: KeyChoice): boolean {
+  return choice.stored.every((key) => f.keys.includes(key));
+}
+
+/** Picks every spelling of a key choice, or unpicks them all. */
+export function toggleKeyChoice(f: ShellFilter, choice: KeyChoice): ShellFilter {
+  if (keyChoicePicked(f, choice)) return { ...f, keys: f.keys.filter((key) => !choice.stored.includes(key)) };
+  return { ...f, keys: [...f.keys, ...choice.stored.filter((key) => !f.keys.includes(key))] };
 }

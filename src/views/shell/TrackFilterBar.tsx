@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import type { FilterValues } from "@/ipc/types";
-import { toCamelot } from "@/lib/camelot";
+import type { FilterValues, KeyDisplay } from "@/ipc/types";
+import { formatKey } from "@/lib/preferences";
 import { OWN_ACTIVATION } from "@/lib/shortcuts";
 import {
-  EMPTY_SHELL_FILTER, ENERGY_LEVELS, clearCategory, isFiltering, pickSummaries, setBpmRange, setEnergyRange,
-  setTagsAny, toggleKey, togglePrepColour, toggleTag, type ShellFilter,
+  EMPTY_SHELL_FILTER, ENERGY_LEVELS, clearCategory, isFiltering, keyChoicePicked, keyChoices, pickSummaries, setBpmRange,
+  setEnergyRange, setTagsAny, toggleKeyChoice, togglePrepColour, toggleTag, type KeyChoice, type ShellFilter,
 } from "@/lib/shellTrackFilter";
 import { COLOR_NAMES } from "@/lib/trackFilter";
 import type { FilterCount } from "./useShellTrackFilter";
@@ -23,8 +23,9 @@ export interface TrackFilterBarProps {
   values: FilterValues | null;
   valuesError: string | null;
   count: FilterCount;
-  /** How keys are written: Camelot (`alphanumeric`) or as stored. */
-  keyDisplay: "classic" | "alphanumeric";
+  /** How the list writes and sorts keys (wbx-56): `view.keyDisplay`, `view.keySort`. */
+  keyDisplay: KeyDisplay;
+  keySort: "auto" | "alphabetical" | "musical";
 }
 
 /**
@@ -36,11 +37,12 @@ export interface TrackFilterBarProps {
  * works from the keyboard, and the bar owns Space and Enter so they never
  * reach the deck.
  */
-export function TrackFilterBar({ model, onChange, values, valuesError, count, keyDisplay }: TrackFilterBarProps) {
+export function TrackFilterBar({ model, onChange, values, valuesError, count, keyDisplay, keySort }: TrackFilterBarProps) {
   const [open, setOpen] = useState<Panel | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const buttons = useRef(new Map<string, HTMLButtonElement>());
-  const keyName = (stored: string) => (keyDisplay === "alphanumeric" ? toCamelot(stored) || stored : stored);
+  const keyName = (stored: string) => formatKey(stored, keyDisplay);
+  const keys = keyChoices(values?.keys ?? [], keyDisplay, keySort);
   const said = pickSummaries(model, keyName);
   const categories = values?.tags ?? [];
   const filtering = isFiltering(model);
@@ -124,7 +126,7 @@ export function TrackFilterBar({ model, onChange, values, valuesError, count, ke
       {valuesError !== null ? <p className={styles.problem} role="alert">The filter's choices could not be read: {valuesError}</p> : null}
       {open !== null ? (
         <div id="track-filter-panel" className={styles.panel}>
-          <PanelBody panel={open} model={model} onChange={onChange} values={values} keyName={keyName} />
+          <PanelBody panel={open} model={model} onChange={onChange} values={values} keys={keys} />
         </div>
       ) : null}
     </div>
@@ -151,12 +153,12 @@ function Toggle({ name, pressed, onPress, swatch }: { name: string; pressed: boo
   );
 }
 
-function PanelBody({ panel, model, onChange, values, keyName }: {
+function PanelBody({ panel, model, onChange, values, keys }: {
   panel: Panel;
   model: ShellFilter;
   onChange: (next: ShellFilter) => void;
   values: FilterValues | null;
-  keyName: (stored: string) => string;
+  keys: KeyChoice[];
 }) {
   switch (panel.kind) {
     case "tags": {
@@ -210,11 +212,11 @@ function PanelBody({ panel, model, onChange, values, keyName }: {
     case "key":
       return (
         <div role="group" aria-label="Keys" className={styles.choices}>
-          {(values?.keys ?? []).map(({ value }) => (
-            <Toggle key={value} name={keyName(value)} pressed={model.keys.includes(value)}
-              onPress={() => onChange(toggleKey(model, value))} />
+          {keys.map((choice) => (
+            <Toggle key={choice.label} name={choice.label} pressed={keyChoicePicked(model, choice)}
+              onPress={() => onChange(toggleKeyChoice(model, choice))} />
           ))}
-          {values && values.keys.length === 0 ? <span className={styles.empty}>No keys in this list</span> : null}
+          {values && keys.length === 0 ? <span className={styles.empty}>No keys in this list</span> : null}
         </div>
       );
   }

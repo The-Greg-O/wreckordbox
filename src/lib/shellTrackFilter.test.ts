@@ -12,6 +12,9 @@ import {
   togglePrepColour,
   toggleTag,
   setTagsAny,
+  keyChoices,
+  keyChoicePicked,
+  toggleKeyChoice,
   type ShellFilter,
 } from "./shellTrackFilter";
 import cases from "./shellTrackFilter.cases.json";
@@ -177,4 +180,42 @@ describe("the cases both sides are checked against", () => {
       expect(toServiceSelection(filter)).toEqual(c.service);
     });
   }
+});
+
+describe("the key choices", () => {
+  // In no particular order.
+  const offered = [
+    { value: "Am", count: 3 },
+    { value: "8A", count: 1 },
+    { value: "Em", count: 2 },
+    { value: "C", count: 4 },
+    { value: "1m", count: 1 },
+    { value: "Unknown", count: 1 },
+  ];
+
+  it("in Camelot, one choice per key on the wheel, in wheel order, whatever the spelling", () => {
+    expect(keyChoices(offered, "alphanumeric", "auto")).toEqual([
+      { label: "8A", stored: ["Am", "8A", "1m"], count: 5 },
+      { label: "8B", stored: ["C"], count: 4 },
+      { label: "9A", stored: ["Em"], count: 2 },
+      { label: "Unknown", stored: ["Unknown"], count: 1 },
+    ]);
+  });
+
+  it("in Classic, alphabetical by the shown name, as the list sorts Classic keys", () => {
+    expect(keyChoices(offered, "classic", "auto").map((c) => c.label)).toEqual(["Am", "C", "Em", "Unknown"]);
+  });
+
+  it("an explicit sort wins over the display", () => {
+    expect(keyChoices(offered, "classic", "musical").map((c) => c.label)).toEqual(["Am", "C", "Em", "Unknown"]);
+    expect(keyChoices(offered, "alphanumeric", "alphabetical").map((c) => c.label)).toEqual(["8A", "8B", "9A", "Unknown"]);
+  });
+
+  it("a choice is picked when every spelling of it is, and toggles them together", () => {
+    const [eight] = keyChoices(offered, "alphanumeric", "auto");
+    const picked = toggleKeyChoice(EMPTY_SHELL_FILTER, eight!);
+    expect(picked.keys).toEqual(["Am", "8A", "1m"]);
+    expect(keyChoicePicked(picked, eight!)).toBe(true);
+    expect(toggleKeyChoice(picked, eight!).keys).toEqual([]);
+  });
 });

@@ -214,3 +214,44 @@ test("a count that cannot be read says so instead of showing an old number", asy
   await bar(page).getByRole("combobox", { name: "Energy from" }).selectOption("4");
   await expect(count(page)).toHaveText(/count unavailable/i);
 });
+
+/** The Key panel's choices, as written. */
+async function keyLabels(page: Page): Promise<string[]> {
+  await control(page, "Key").click();
+  const labels = (await bar(page).getByRole("group", { name: "Keys" }).getByRole("button").allInnerTexts()).map((t) => t.trim());
+  await control(page, "Key").click();
+  return labels;
+}
+
+test("keys are offered as the list writes them, in wheel order with Camelot shown", async ({ page }) => {
+  await open(page);
+  const labels = await keyLabels(page);
+  expect(labels.length).toBeGreaterThan(3);
+  for (const label of labels) expect(label).toMatch(/^(1[0-2]|[1-9])[AB]$/);
+  // Each key once, around the wheel: 1A, 1B, 2A ... 12B.
+  const rank = (label: string) => Number(label.slice(0, -1)) * 2 + (label.endsWith("B") ? 1 : 0);
+  expect(labels).toEqual([...new Set(labels)].sort((a, b) => rank(a) - rank(b)));
+
+  // Picking one keeps exactly the rows whose key cell says it.
+  await control(page, "Key").click();
+  await bar(page).getByRole("group", { name: "Keys" }).getByRole("button", { name: labels[0]!, exact: true }).click();
+  await control(page, "Energy").click();
+  await bar(page).getByRole("combobox", { name: "Energy from" }).selectOption("4");
+  await counted(page);
+  for (const row of await everyRow(page)) {
+    await expect(cell(row, "key")).toHaveText(new RegExp(`\\b${labels[0]}\\b`));
+  }
+});
+
+test("with Classic keys chosen, keys are offered in Classic, alphabetically", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("rbl.preferences", JSON.stringify({
+    advanced: { protectLibrary: false },
+    view: { viewShell: true, keyDisplay: "classic" },
+  })));
+  await page.goto("/?writable=1");
+  await expect(page.getByTestId("browser-title")).toContainText("Tracks)", { timeout: 15_000 });
+  const labels = await keyLabels(page);
+  expect(labels.length).toBeGreaterThan(3);
+  for (const label of labels) expect(label).toMatch(/^[A-G][#b]?m?$/);
+  expect(labels).toEqual([...labels].sort((a, b) => (a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0)));
+});
