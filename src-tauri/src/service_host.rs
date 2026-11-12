@@ -26,9 +26,11 @@ use std::sync::{Arc, Weak};
 
 use rbl_db::LibraryLocation;
 use rbl_library::Host;
-use wreckordbox_service::{
-    codes, events, protection, ChangeKind, Config, LibraryChanged, Service, ServiceError,
-};
+use rbl_library::protection::ProtectionState;
+use tauri::Manager as _;
+use wreckordbox_service::{codes, events, ChangeKind, Config, LibraryChanged, Service, ServiceError};
+
+use crate::error::AppResult;
 
 use crate::state::AppState;
 
@@ -36,8 +38,9 @@ use crate::state::AppState;
 /// message to show.
 pub const SERVICE_STOPPED: &str = "service:stopped";
 
-/// The interface's event for Library Protection turned from the command
-/// line: whether it is now on.
+/// The interface's event for every turn of Library Protection, by
+/// whoever: a [`ProtectionDto`]. Sent in order; one with a lower revision
+/// than one already applied is stale.
 pub const PROTECTION_CHANGED: &str = "library-protection:changed";
 
 /// What the DJ is told when the window's service stops under it.
@@ -52,9 +55,6 @@ pub trait FrontEnd: Send + Sync + 'static {
     /// The window is not, or is no longer, the Library's writer; `message`
     /// is for the DJ.
     fn cannot_write(&self, message: &str);
-    /// A client of the service turned Library Protection on or off. The
-    /// interface takes it up as its own preference.
-    fn protection_changed(&self, _protect_library: bool) {}
 }
 
 /// The service the window is hosting, and for which Library.
@@ -150,12 +150,6 @@ impl AppState {
                         if let Ok(change) = serde_json::from_value::<LibraryChanged>(event.data) {
                             front.library_changed(change);
                         }
-                    } else if event.event == protection::PROTECTION_CHANGED {
-                        if let Ok(now) =
-                            serde_json::from_value::<protection::Protection>(event.data)
-                        {
-                            front.protection_changed(now.protect_library);
-                        }
                     }
                 }
             });
@@ -228,16 +222,11 @@ impl<R: tauri::Runtime> FrontEnd for Interface<R> {
     fn cannot_write(&self, message: &str) {
         let _ = tauri::Emitter::emit(&self.0, SERVICE_STOPPED, message);
     }
-
-    fn protection_changed(&self, protect_library: bool) {
-        let _ = tauri::Emitter::emit(&self.0, PROTECTION_CHANGED, protect_library);
-    }
 }
 
 /// Hosts the service for the Library the app is about to read. A Library
 /// that is not there yet has nothing to host; the next load tries again.
 pub(crate) fn host<R: tauri::Runtime>(app: &tauri::AppHandle<R>, location: &LibraryLocation) {
-    use tauri::Manager as _;
     if !location.master_db.is_file() {
         return;
     }
@@ -262,7 +251,6 @@ pub fn host_with<R: tauri::Runtime>(
     location: &LibraryLocation,
     config: &Config,
 ) -> Result<(), ServiceError> {
-    use tauri::Manager as _;
     let state = Arc::clone(app.state::<Arc<AppState>>().inner());
     // The window's service lasts as long as the window, clients or not.
     let config = Config { idle_exit: None, ..config.clone() };
@@ -277,31 +265,82 @@ pub fn service_problem(state: tauri::State<'_, Arc<AppState>>) -> Option<String>
     state.service_problem()
 }
 
-/// Library Protection as it is recorded for the Library service, or nothing
-/// when nothing is. The window's preferences live in its own storage, which
-/// the service cannot read; this file, in the folder the two share, is
-/// what the service obeys (`wreckordbox_service::protection`).
-#[tauri::command]
-#[allow(
-    clippy::needless_pass_by_value,
-    reason = "a command is handed its state by value"
-)]
-pub fn library_protection(state: tauri::State<'_, Arc<AppState>>) -> Option<bool> {
-    protection::stored(state.core().recovery_dir())
+/// Library Protection as the window is told it. The Library core owns the
+/// switch (`rbl_library::protection`); the window's preference only shows
+/// it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtectionDto {
+    pub protect_library: bool,
+    /// Higher for every later change.
+    pub revision: u64,
 }
 
-/// Records Library Protection for the Library service, when the DJ turns
-/// it in Preferences.
+impl From<ProtectionState> for ProtectionDto {
+    fn from(state: ProtectionState) -> Self {
+        Self { protect_library: state.protect_library, revision: state.revision }
+    }
+}
+
+/// Tells the interface of every turn of Library Protection, whoever made
+/// it (Preferences, the command line, a script), in order, as
+/// [`PROTECTION_CHANGED`]. Call once, when the app starts.
+pub fn announce_protection<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    let (send, turns) = std::sync::mpsc::channel::<ProtectionState>();
+    // The core calls this under its edit gate: only queue.
+    app.state::<Arc<AppState>>().core().watch_protection(move |state| send.send(state).is_ok());
+    let app = app.clone();
+    std::thread::spawn(move || {
+        for state in turns {
+            let _ = tauri::Emitter::emit(&app, PROTECTION_CHANGED, ProtectionDto::from(state));
+        }
+    });
+}
+
+/// Library Protection as it stands.
 #[tauri::command]
 #[allow(
     clippy::needless_pass_by_value,
     reason = "a command is handed its state by value"
 )]
-pub fn record_library_protection(
+pub fn library_protection(state: tauri::State<'_, Arc<AppState>>) -> ProtectionDto {
+    state.core().protection().into()
+}
+
+/// The window's stored preference, taken up as Library Protection only the
+/// first time, while nothing has ever been recorded; answers what stands.
+#[tauri::command]
+pub async fn adopt_library_protection(
     state: tauri::State<'_, Arc<AppState>>,
-    on: bool,
-) -> Result<(), crate::error::AppError> {
-    protection::store(state.core().recovery_dir(), on).map_err(|error| {
-        crate::error::AppError::internal(format!("could not record Library Protection: {error}"))
+    window_preference: bool,
+) -> AppResult<ProtectionDto> {
+    let state = Arc::clone(&state);
+    crate::commands::blocking("adopt_library_protection", move || {
+        state.core().adopt_protection(window_preference).map(ProtectionDto::from).map_err(not_recorded)
     })
+    .await
+}
+
+/// Turns Library Protection on or off, as the DJ does in Preferences.
+/// Answers once it is recorded; an error when it could not be.
+#[tauri::command]
+pub async fn set_library_protection(
+    state: tauri::State<'_, Arc<AppState>>,
+    protect_library: bool,
+) -> AppResult<ProtectionDto> {
+    let state = Arc::clone(&state);
+    crate::commands::blocking("set_library_protection", move || {
+        state.core().set_protection(protect_library).map(|turned| turned.now.into()).map_err(not_recorded)
+    })
+    .await
+}
+
+/// What the DJ is told when the switch could not be saved: said plainly,
+/// since the interface shows it beside the switch.
+fn not_recorded(error: std::io::Error) -> crate::error::AppError {
+    tracing::error!(%error, "Library Protection could not be saved");
+    crate::error::AppError::new(
+        crate::error::ErrorKind::ReadOnly,
+        format!("Library Protection could not be saved: {error}"),
+    )
 }

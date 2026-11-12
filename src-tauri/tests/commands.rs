@@ -66,6 +66,8 @@ fn shell_prepared(shape: Shape, prepare: impl FnOnce(&Path, &rbl_db::LibraryLoca
     prepare(dir.path(), &location);
 
     let state = AppState::with_backups(dir.path().join("backups"));
+    // As on the machine of a DJ who edits: Library Protection off.
+    state.core().set_protection(false).unwrap();
     let db = Db::open(location.clone(), OpenMode::ReadOnly).expect("open the fixture");
     let (library, _) = rbl_index::load(&db).expect("index the fixture");
     state.set_library(library, false, db.schema().db_version, 0, location.clone());
@@ -1640,23 +1642,38 @@ fn every_edit_bumps_the_generation_and_tells_the_interface() {
 #[test]
 fn library_backups_are_manual_only() {
     let s = shell();
-    let backups = s._dir.path().join("backups");
-    assert!(!backups.exists());
+    let backups_dir = s._dir.path().join("backups");
+    // What is in the backup folder besides the Library Protection record,
+    // which is kept in the same state folder.
+    let backups = || -> Vec<std::path::PathBuf> {
+        std::fs::read_dir(&backups_dir)
+            .map(|entries| {
+                entries
+                    .map(|entry| entry.unwrap().path())
+                    .filter(|path| {
+                        let name = path.file_name().unwrap().to_string_lossy();
+                        name != rbl_library::protection::FILE && name != rbl_library::protection::LOCK_FILE
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    assert!(backups().is_empty());
 
     run(commands::set_track_rating(s.handle(), s.state(), vec![track_id(0)], 3)).unwrap();
-    assert!(!backups.exists(), "the first edit must not back up");
+    assert!(backups().is_empty(), "the first edit must not back up");
 
     // Every kind of edit opens its own writer; none should copy the database.
     run(commands::set_track_comment(s.handle(), s.state(), vec![track_id(0)], "x".into())).unwrap();
     run(commands::create_playlist(s.handle(), s.state(), "Later".into(), ROOT.into(), None)).unwrap();
     run(cues::add_cue(s.handle(), s.state(), track_id(0), CueKind::Memory, 1_000)).unwrap();
     run(details::set_track_field(s.handle(), s.state(), vec![track_id(0)], "title".into(), "T".into(), None)).unwrap();
-    assert!(!backups.exists(), "edits must not back up automatically");
+    assert!(backups().is_empty(), "edits must not back up automatically");
 
     let path = run(commands::back_up_library(s.state())).unwrap();
     assert!(Path::new(&path).is_file(), "manual backups remain available");
     run(commands::set_track_rating(s.handle(), s.state(), vec![track_id(0)], 4)).unwrap();
-    assert_eq!(std::fs::read_dir(&backups).unwrap().count(), 1);
+    assert_eq!(backups().len(), 1);
 }
 
 #[test]

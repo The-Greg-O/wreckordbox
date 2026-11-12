@@ -806,7 +806,7 @@ mod tests {
     fn app_state(f: &Fixture) -> AppState {
         let db = Db::open(f.location.clone(), OpenMode::ReadOnly).unwrap();
         let (library, _) = rbl_index::load(&db).unwrap();
-        let state = AppState::with_backups(f.dir.path().join("app/backups"));
+        let state = AppState::unprotected(f.dir.path().join("app/backups"));
         state.set_library(library, false, db.schema().db_version, 0, f.location.clone());
         crate::backups::create(&state).unwrap();
         state

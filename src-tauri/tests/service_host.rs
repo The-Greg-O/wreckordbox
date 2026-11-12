@@ -83,6 +83,9 @@ fn window() -> Window {
     app.state::<Arc<AppState>>().on_history_changed(move || {
         let _ = tauri::Emitter::emit(&handle, "edit-history:changed", commands::current_history(handle.state::<Arc<AppState>>().inner()));
     });
+    // As the app does at start: every turn of Library Protection reaches
+    // the interface.
+    service_host::announce_protection(app.handle());
     let window = Window { dir, app, location, changes, stopped, history };
     // As on the machine of a DJ who edits: Library Protection is off.
     window.protect(false);
@@ -100,6 +103,7 @@ fn loading_window() -> Window {
     std::fs::create_dir_all(dir.path().join("home")).unwrap();
     let app = tauri::test::mock_app();
     app.manage(Arc::new(AppState::with_backups(dir.path().join("backups"))));
+    service_host::announce_protection(app.handle());
     let window = Window { dir, app, location, changes: Arc::default(), stopped: Arc::default(), history: Arc::default() };
     window.protect(false);
     window.host().unwrap();
@@ -161,12 +165,27 @@ impl Window {
         service_host::host_with(self.app.handle(), &self.location, &self.config())
     }
 
-    /// Turns Library Protection on or off, as the window records it for
-    /// the service: a file in the folder the two share.
+    /// Turns Library Protection on or off through the real command the
+    /// Preferences window calls.
     fn protect(&self, on: bool) {
-        let state_dir = self.dir.path().join("backups");
-        std::fs::create_dir_all(&state_dir).unwrap();
-        std::fs::write(state_dir.join("library-protection.json"), format!("{{\"protect_library\":{on}}}")).unwrap();
+        let now = run(service_host::set_library_protection(self.state(), on)).unwrap();
+        assert_eq!(now.protect_library, on);
+    }
+
+    /// Every Library Protection change from now on that the interface would
+    /// have been sent. An earlier change's announcement may still be on its
+    /// way: it is older than what stands now, so it is left out.
+    fn heard_protection(&self) -> Heard<service_host::ProtectionDto> {
+        let heard: Heard<service_host::ProtectionDto> = Arc::default();
+        let told = Arc::clone(&heard);
+        let standing = service_host::library_protection(self.state()).revision;
+        self.app.listen(service_host::PROTECTION_CHANGED, move |event| {
+            let now: service_host::ProtectionDto = serde_json::from_str(event.payload()).unwrap();
+            if now.revision > standing {
+                told.lock().unwrap().push(now);
+            }
+        });
+        heard
     }
 
     /// Reads the Library, as the app does once it is hosting.
@@ -402,6 +421,29 @@ fn a_command_sent_while_the_window_is_still_reading_the_library_waits_and_succee
     assert_eq!(window.rating(&id), 4);
 }
 
+/// A MyTag edit reads the My Tag catalogue from the database before it
+/// edits: that read waits for a loading window too, rather than answering
+/// that there is no Library.
+#[test]
+fn a_mytag_edit_sent_while_the_window_is_still_reading_the_library_waits_and_succeeds() {
+    let window = loading_window();
+    let id = track_id(1);
+    let immediate = window.cli_waiting(Some(0), &["--json", "mytags", "assign", fixture::MY_TAG_PEAK, &id]);
+    assert!(!immediate.ok);
+    let error: serde_json::Value = serde_json::from_str(&immediate.stderr).unwrap();
+    assert_eq!(error["error"]["code"], codes::LIBRARY_LOADING);
+
+    let mut command = window.command(None, &["--json", "mytags", "assign", fixture::MY_TAG_PEAK, &id]).spawn().unwrap();
+    std::thread::sleep(Duration::from_millis(700));
+    assert!(command.try_wait().unwrap().is_none(), "the command did not wait for the Library");
+    window.load();
+    let assigned = finished(command.wait_with_output().unwrap());
+
+    assert_eq!(assigned.json()["changed"], 1);
+    let index = window.state().library().unwrap();
+    assert_eq!(index.my_tag_keys(index.row_of(&id).unwrap() as usize).len(), 1);
+}
+
 #[test]
 fn a_command_gives_up_with_library_loading_when_the_window_takes_too_long() {
     let window = loading_window();
@@ -466,50 +508,154 @@ fn protection_turned_off_from_the_command_reaches_the_interface_and_edits_go_thr
     let window = window();
     window.host().unwrap();
     window.protect(true);
-    let heard: Heard<bool> = Arc::default();
-    let told = Arc::clone(&heard);
-    window.app.listen("library-protection:changed", move |event| {
-        told.lock().unwrap().push(serde_json::from_str::<bool>(event.payload()).unwrap());
-    });
+    let heard = window.heard_protection();
     let id = track_id(1);
     assert!(!window.cli(&["tracks", "rate", &id, "4"]).ok);
+    let on = service_host::library_protection(window.state());
 
     let off = window.cli(&["--json", "protection", "off"]).json();
 
-    assert_eq!(off, serde_json::json!({ "protect_library": false, "previous": true }));
-    // The interface makes it its own preference, so the status bar and the
-    // window's own edits agree with the command.
+    assert_eq!(off["protect_library"], false);
+    assert_eq!(off["previous"], true);
+    assert!(off["revision"].as_u64().unwrap() > on.revision);
+    // The interface shows what the core recorded, with its revision.
     eventually("library-protection:changed", || !heard.lock().unwrap().is_empty());
-    assert_eq!(*heard.lock().unwrap(), [false]);
+    assert_eq!(
+        *heard.lock().unwrap(),
+        [service_host::ProtectionDto { protect_library: false, revision: off["revision"].as_u64().unwrap() }]
+    );
     window.cli(&["tracks", "rate", &id, "4"]).succeeded();
     assert_eq!(window.rating(&id), 4);
 }
 
+/// The window's side, end to end: the DJ turns the switch with the real
+/// command Preferences calls, and the real `wreckordbox` command obeys it.
 #[test]
 fn the_switch_the_dj_turns_in_preferences_is_the_one_the_command_obeys() {
     let window = window();
     window.host().unwrap();
+    let heard = window.heard_protection();
     let id = track_id(1);
 
-    // What the interface calls when the preference changes.
-    service_host::record_library_protection(window.state(), true).unwrap();
+    let on = run(service_host::set_library_protection(window.state(), true)).unwrap();
 
-    assert_eq!(service_host::library_protection(window.state()), Some(true));
+    assert!(on.protect_library);
+    assert_eq!(service_host::library_protection(window.state()), on);
     assert_eq!(window.cli(&["--json", "protection"]).json()["protect_library"], true);
-    assert!(!window.cli(&["tracks", "rate", &id, "4"]).ok);
+    let refused = window.cli(&["--json", "tracks", "rate", &id, "4"]);
+    assert!(!refused.ok);
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&refused.stderr).unwrap()["error"]["code"], "library_protected");
     assert_eq!(window.rating(&id), 0);
 
-    service_host::record_library_protection(window.state(), false).unwrap();
+    let off = run(service_host::set_library_protection(window.state(), false)).unwrap();
     window.cli(&["tracks", "rate", &id, "4"]).succeeded();
     assert_eq!(window.rating(&id), 4);
+    eventually("library-protection:changed", || heard.lock().unwrap().len() == 2);
+    assert_eq!(*heard.lock().unwrap(), [on, off]);
+    assert!(on.revision < off.revision);
+}
+
+/// The window's own Rust commands are refused by the core, not only by the
+/// interface: an edit, and Undo and Redo of edits made before protection
+/// was turned on.
+#[test]
+fn the_windows_own_edits_and_undo_and_redo_are_refused_while_protection_is_on() {
+    let window = window();
+    window.host().unwrap();
+    let id = track_id(1);
+    let app = || window.app.handle().clone();
+    run(commands::set_track_rating(app(), window.state(), vec![id.clone()], 3)).unwrap();
+    run(commands::set_track_rating(app(), window.state(), vec![id.clone()], 5)).unwrap();
+    run(commands::undo_edit(app(), window.state())).unwrap();
+    assert_eq!(window.rating(&id), 3);
+    window.protect(true);
+    let generation = window.generation();
+
+    let edit = run(commands::set_track_rating(app(), window.state(), vec![id.clone()], 1)).unwrap_err();
+    let undo = run(commands::undo_edit(app(), window.state())).unwrap_err();
+    let redo = run(commands::redo_edit(app(), window.state())).unwrap_err();
+
+    for error in [&edit, &undo, &redo] {
+        assert_eq!(error.message, "Editing is locked by Library Protection. Turn it off in Preferences to edit.");
+    }
+    assert_eq!(window.rating(&id), 3);
+    assert_eq!(window.generation(), generation);
+    // Both steps are still there for when protection is off.
+    let history = commands::current_history(window.state().inner());
+    assert!(history.can_undo && history.can_redo);
+
+    window.protect(false);
+    run(commands::redo_edit(app(), window.state())).unwrap();
+    assert_eq!(window.rating(&id), 5);
 }
 
 #[test]
-fn a_window_on_a_machine_with_nothing_recorded_is_told_so() {
+fn on_a_machine_with_nothing_recorded_protection_is_on_until_the_windows_preference_is_taken_up_once() {
     let window = window();
     std::fs::remove_file(window.dir.path().join("backups/library-protection.json")).unwrap();
+    window.host().unwrap();
+    let id = track_id(1);
 
-    assert_eq!(service_host::library_protection(window.state()), None);
+    assert!(service_host::library_protection(window.state()).protect_library);
+    assert!(!window.cli(&["tracks", "rate", &id, "4"]).ok);
+
+    // The window's first start: its stored preference becomes the switch.
+    let adopted = run(service_host::adopt_library_protection(window.state(), false)).unwrap();
+    assert!(!adopted.protect_library);
+    window.cli(&["tracks", "rate", &id, "4"]).succeeded();
+
+    // A later start with a stale preference changes nothing.
+    let again = run(service_host::adopt_library_protection(window.state(), true)).unwrap();
+    assert_eq!(again, adopted);
+}
+
+#[test]
+fn a_restarted_window_keeps_what_was_recorded_whatever_its_preference_says() {
+    let window = window();
+    window.protect(true);
+
+    // The app again, on the same state folder.
+    let restarted = AppState::with_backups(window.dir.path().join("backups"));
+    let now = restarted.core().protection();
+    assert!(now.protect_library);
+    let adopted = restarted.core().adopt_protection(false).unwrap();
+    assert!(adopted.protect_library);
+}
+
+#[test]
+fn an_unreadable_record_keeps_protection_on_when_the_window_opens() {
+    let window = window();
+    std::fs::write(window.dir.path().join("backups/library-protection.json"), b"not json").unwrap();
+    window.host().unwrap();
+
+    let adopted = run(service_host::adopt_library_protection(window.state(), false)).unwrap();
+
+    assert!(adopted.protect_library);
+    assert!(!window.cli(&["tracks", "rate", &track_id(1), "4"]).ok);
+}
+
+#[test]
+fn a_switch_that_cannot_be_recorded_is_an_error_and_never_opens_the_library() {
+    let window = window();
+    window.host().unwrap();
+    let id = track_id(1);
+    let folder = window.dir.path().join("backups");
+    let writable = std::fs::metadata(&folder).unwrap().permissions();
+    let mut read_only = writable.clone();
+    read_only.set_readonly(true);
+    std::fs::set_permissions(&folder, read_only).unwrap();
+
+    let turned = run(service_host::set_library_protection(window.state(), true));
+    let now = service_host::library_protection(window.state());
+    let rate = window.cli(&["--json", "tracks", "rate", &id, "4"]);
+    std::fs::set_permissions(&folder, writable).unwrap();
+
+    let error = turned.unwrap_err();
+    assert!(error.message.starts_with("Library Protection could not be saved"), "{}", error.message);
+    // On all the same, in the window and for the command.
+    assert!(now.protect_library);
+    assert!(!rate.ok);
+    assert_eq!(window.rating(&id), 0);
 }
 
 #[test]

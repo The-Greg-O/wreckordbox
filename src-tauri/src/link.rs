@@ -871,7 +871,7 @@ mod grid_offset_tests {
         let location = rbl_db::fixture::build(dir.path(), rbl_db::fixture::Shape::default()).unwrap();
         let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
         let (library, _) = rbl_index::load(&db).unwrap();
-        let state = Arc::new(AppState::with_backups(dir.path().join("backups")));
+        let state = Arc::new(AppState::unprotected(dir.path().join("backups")));
         state.set_library(library, false, db.schema().db_version, 0, location);
         crate::backups::create(&state).unwrap();
         let original = state.library().unwrap();
@@ -933,7 +933,7 @@ mod grid_offset_tests {
         let location = rbl_db::fixture::build(dir.path(), rbl_db::fixture::Shape::default()).unwrap();
         let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
         let (library, _) = rbl_index::load(&db).unwrap();
-        let state = Arc::new(AppState::with_backups(dir.path().join("backups")));
+        let state = Arc::new(AppState::unprotected(dir.path().join("backups")));
         state.set_library(library, false, db.schema().db_version, 0, location);
         crate::backups::create(&state).unwrap();
         let notifications = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -991,7 +991,7 @@ mod grid_offset_tests {
         let location = rbl_db::fixture::build(dir.path(), rbl_db::fixture::Shape::default()).unwrap();
         let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
         let (library, _) = rbl_index::load(&db).unwrap();
-        let state = Arc::new(AppState::with_backups(dir.path().join("backups")));
+        let state = Arc::new(AppState::unprotected(dir.path().join("backups")));
         state.set_library(library, false, db.schema().db_version, 0, location);
         crate::backups::create(&state).unwrap();
         let notifications = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -1079,7 +1079,7 @@ mod grid_offset_tests {
 
         let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
         let (library, _) = rbl_index::load(&db).unwrap();
-        let state = Arc::new(AppState::with_backups(dir.path().join("backups")));
+        let state = Arc::new(AppState::unprotected(dir.path().join("backups")));
         state.set_library(library, false, db.schema().db_version, 0, location);
         let source = StateSource(
             Arc::downgrade(&state),
@@ -1106,7 +1106,7 @@ mod grid_offset_tests {
         std::fs::write(&dat, &original).unwrap();
         let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
         let (library, _) = rbl_index::load(&db).unwrap();
-        let state = AppState::with_backups(dir.path().join("backups"));
+        let state = AppState::unprotected(dir.path().join("backups"));
         state.set_library(library, false, db.schema().db_version, 0, location);
         crate::backups::create(&state).unwrap();
         let track = rbl_db::fixture::track_id(1);
@@ -1139,7 +1139,7 @@ mod history_tests {
         let location = rbl_db::fixture::build(dir.path(), rbl_db::fixture::Shape::default()).unwrap();
         let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
         let (library, _) = rbl_index::load(&db).unwrap();
-        let state = Arc::new(AppState::with_backups(dir.path().join("backups")));
+        let state = Arc::new(AppState::unprotected(dir.path().join("backups")));
         state.set_library(library, false, db.schema().db_version, 0, location);
         crate::backups::create(&state).unwrap();
         let ended = Arc::new(std::sync::atomic::AtomicUsize::new(0));

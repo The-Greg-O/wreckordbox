@@ -875,7 +875,7 @@ mod tests {
             .execute("UPDATE djmdContent SET Analysed = 0, AnalysisDataPath = '', ImagePath = '', ContentLink = NULL WHERE ID = ?1", [track_id(0)])
             .unwrap();
         let (library, _) = rbl_index::load(&db).unwrap();
-        let state = AppState::with_backups(dir.join("backups"));
+        let state = AppState::unprotected(dir.join("backups"));
         state.set_library(library, false, None, 0, location.clone());
         crate::backups::create(&state).unwrap();
         (state, location)
@@ -966,7 +966,7 @@ mod tests {
 
         let db = Db::open(location.clone(), OpenMode::ReadOnly).unwrap();
         let (library, _) = rbl_index::load(&db).unwrap();
-        let state = AppState::with_backups(dir.path().join("backups"));
+        let state = AppState::unprotected(dir.path().join("backups"));
         let share = location.share_root.clone();
         state.set_library(library, false, None, 0, location.clone());
         crate::backups::create(&state).unwrap();

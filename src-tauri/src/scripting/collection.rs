@@ -43,7 +43,7 @@ mod tests {
         let library_id = rbl_db::export_info::db_id(db.connection()).unwrap().to_string();
         let request = serde_json::json!({"library_id":library_id,"tracks":[{"id":id,"path":path}]}).to_string();
         let (library, _) = rbl_index::load(&db).unwrap();
-        let state = Arc::new(AppState::with_backups(dir.path().join("backups")));
+        let state = Arc::new(AppState::unprotected(dir.path().join("backups")));
         state.set_library(library, false, db.schema().db_version, 0, location);
         let app = tauri::test::mock_app();app.manage(Arc::clone(&state));
         let bridge = Arc::new(Bridge::default());app.manage(Arc::clone(&bridge));

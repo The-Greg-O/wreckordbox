@@ -328,7 +328,7 @@ mod tests {
         let location = rbl_db::fixture::build(dir.path(), rbl_db::fixture::Shape::default()).unwrap();
         let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
         let (library, _) = rbl_index::load(&db).unwrap();
-        let state = AppState::with_backups(dir.path().join("backups"));
+        let state = AppState::unprotected(dir.path().join("backups"));
         state.set_library(library, false, db.schema().db_version, 0, location.clone());
         let id = rbl_db::fixture::track_id(0);
         let source_path: String = db.connection().query_row("SELECT FolderPath FROM djmdContent WHERE ID=?1", [&id], |r| r.get(0)).unwrap();
@@ -433,7 +433,7 @@ mod tests {
         let location = rbl_db::fixture::build(dir.path(), rbl_db::fixture::Shape::default()).unwrap();
         let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
         let (library, _) = rbl_index::load(&db).unwrap();
-        let state = AppState::with_backups(dir.path().join("backups"));
+        let state = AppState::unprotected(dir.path().join("backups"));
         state.set_library(library, false, db.schema().db_version, 0, location.clone());
         let id = rbl_db::fixture::track_id(0);
         let source_path: String = db.connection().query_row("SELECT FolderPath FROM djmdContent WHERE ID=?1", [&id], |r| r.get(0)).unwrap();
@@ -562,7 +562,7 @@ mod tests {
         let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
         let (library, _) = rbl_index::load(&db).unwrap();
         let db_id = rbl_db::export_info::db_id(db.connection()).unwrap();
-        let state = AppState::with_backups(dir.path().join("backups"));
+        let state = AppState::unprotected(dir.path().join("backups"));
         state.set_library(library, false, db.schema().db_version, 0, location.clone());
         drop(db);
         let live = rbl_db::fixture::track_id(0);
@@ -634,7 +634,7 @@ mod tests {
         let (library, _) = rbl_index::load(&db).unwrap();
         let db_id = rbl_db::export_info::db_id(db.connection()).unwrap();
         let tracks = library.len();
-        let state = AppState::with_backups(dir.join("backups"));
+        let state = AppState::unprotected(dir.join("backups"));
         state.set_library(library, false, db.schema().db_version, 0, location.clone());
         drop(db);
         let usb = dir.join("usb");
@@ -782,7 +782,7 @@ mod tests {
         let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
         let (library, _) = rbl_index::load(&db).unwrap();
         drop(db);
-        let state = AppState::with_backups(dir.path().join("state/backups"));
+        let state = AppState::unprotected(dir.path().join("state/backups"));
         state.set_library(library, false, None, 0, location);
         let usb = dir.path().join("usb");
         std::fs::create_dir_all(usb.join("PIONEER")).unwrap();
@@ -830,7 +830,7 @@ mod tests {
             br#"[{"path":"missing-track.wav","present":true}]"#,
         )
         .unwrap();
-        let state = AppState::with_backups(dir.path().join("backups"));
+        let state = AppState::unprotected(dir.path().join("backups"));
         let editor = crate::grid::GridEditor::at(state.backup_dir());
 
         let error = import(&state, &editor, &usb, false, true, false, false).unwrap_err();

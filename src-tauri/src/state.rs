@@ -144,6 +144,17 @@ impl AppState {
         }
     }
 
+    /// [`Self::with_backups`] with Library Protection recorded off in
+    /// `backup_dir`, as on the machine of a DJ who edits: for tests that
+    /// write. Protection itself is the core's (`rbl_library::protection`).
+    #[cfg(test)]
+    #[allow(clippy::expect_used, reason = "a test's setup")]
+    pub(crate) fn unprotected(backup_dir: impl Into<std::path::PathBuf>) -> Self {
+        let state = Self::with_backups(backup_dir);
+        state.core.set_protection(false).expect("record Library Protection off");
+        state
+    }
+
     /// The Library core: the index, its views and the edit path, with no
     /// window in it.
     pub fn core(&self) -> &LibraryCore {
@@ -981,7 +992,7 @@ mod edit_refresh_tests {
         let location = rbl_db::fixture::build(dir.path(), rbl_db::fixture::Shape::default()).unwrap();
         let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
         let (library, _) = rbl_index::load(&db).unwrap();
-        let state = AppState::with_backups(dir.path().join("backups"));
+        let state = AppState::unprotected(dir.path().join("backups"));
         state.set_library(library, false, db.schema().db_version, 0, location.clone());
         crate::backups::create(&state).unwrap();
         let track = rbl_db::fixture::track_id(1);
@@ -1032,7 +1043,7 @@ mod played_tests {
     /// link played bit; RESET and another library clear both.
     #[test]
     fn played_tracks_show_deck_plays_and_hold_link_plays_until_link_is_on() {
-        let state = AppState::with_backups(tempfile::tempdir().unwrap().path().join("backups"));
+        let state = AppState::unprotected(tempfile::tempdir().unwrap().path().join("backups"));
         assert_eq!(state.played_tracks(), [] as [String; 0]);
         assert!(state.mark_deck_played("12"));
         assert!(!state.mark_deck_played("12"), "already marked");
@@ -1050,7 +1061,7 @@ mod played_tests {
     #[test]
     fn another_library_starts_with_nothing_played() {
         let dir = tempfile::tempdir().unwrap();
-        let state = AppState::with_backups(dir.path().join("backups"));
+        let state = AppState::unprotected(dir.path().join("backups"));
         let one = rbl_db::fixture::build(&dir.path().join("one"), rbl_db::fixture::Shape::default()).unwrap();
         let two = rbl_db::fixture::build(&dir.path().join("two"), rbl_db::fixture::Shape::default()).unwrap();
         let load = |location: &rbl_db::LibraryLocation| {

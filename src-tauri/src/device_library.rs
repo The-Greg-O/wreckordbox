@@ -1878,7 +1878,7 @@ mod tests {
     fn state_over(rig: &Rig) -> AppState {
         let db = rbl_db::Library::open(rig.location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
         let (library, _) = rbl_index::load(&db).unwrap();
-        let state = AppState::with_backups(rig.dir.path().join("backups"));
+        let state = AppState::unprotected(rig.dir.path().join("backups"));
         state.set_library(library, false, db.schema().db_version, 0, rig.location.clone());
         state
     }
