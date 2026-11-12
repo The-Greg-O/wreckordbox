@@ -87,6 +87,22 @@ export function exactBackingSize(
   };
 }
 
+/**
+ * The CSS box that covers exactly a store's device pixels.
+ *
+ * An element's size times the ratio is often not a whole number: a 30pt
+ * strip at a 1.25 scale covers 37.5 device pixels. The store is whole (38),
+ * and shown at the element's own size the engine resamples it onto 37 or 38
+ * rows, which blends every row of a waveform into the next [OBS WebKitGTK,
+ * aarch64 Linux: screenshots against the canvas's own pixels at each scale].
+ * Shown in this box instead, one store pixel is one device pixel; the engine
+ * snaps the box's position to whole pixels by itself.
+ */
+export function coveredSize(store: BackingSize, ratio: number = pixelRatio()): BackingSize {
+  const scale = storeScale(ratio);
+  return { width: store.width / scale, height: store.height / scale };
+}
+
 function finite(value: number, fallback: number): number {
   return Number.isFinite(value) ? value : fallback;
 }

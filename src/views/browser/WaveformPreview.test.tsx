@@ -253,3 +253,17 @@ describe("the row preview's shape", () => {
     expect(drawnHalf).toEqual([true, false]);
   });
 });
+
+describe("a row preview at a whole-interface scale", () => {
+  it("is shown over exactly its own device pixels where the row covers a fraction of one", async () => {
+    const { setPixelZoom } = await import("@/lib/pixelRatio");
+    // 1.1: a 15pt preview covers 16.5 device pixels; its canvas is 17.
+    act(() => setPixelZoom(1.1));
+    act(() => root.render(<WaveformPreview trackId="scaled" width={122} height={15} hotCues={[]} durationSec={300} />));
+    const canvas = host.querySelector("canvas");
+    expect([canvas?.width, canvas?.height]).toEqual([134, 17]);
+    expect(parseFloat(canvas?.style.width ?? "") * 1.1).toBeCloseTo(134, 6);
+    expect(parseFloat(canvas?.style.height ?? "") * 1.1).toBeCloseTo(17, 6);
+    act(() => setPixelZoom(1));
+  });
+});

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { backingSize, exactBackingSize, MAX_RATIO, MAX_WIDTH, STEP } from "./canvasSize";
+import { backingSize, coveredSize, exactBackingSize, MAX_RATIO, MAX_WIDTH, STEP } from "./canvasSize";
 import { setPixelZoom } from "./pixelRatio";
 
 describe("backingSize", () => {
@@ -69,5 +69,29 @@ describe("under the whole-interface scale", () => {
   it("still stops at twice the display's pixels", () => {
     setPixelZoom(1.5);
     expect(exactBackingSize(1000, 100, 3 * 1.5)).toEqual(exactBackingSize(1000, 100, MAX_RATIO * 1.5));
+  });
+});
+
+describe("the box a store is shown in", () => {
+  afterEach(() => setPixelZoom(1));
+
+  it("covers exactly the store's device pixels where the element covers a fraction of one", () => {
+    // At 1.25 a 30pt strip covers 37.5 device pixels. The store is 38, and
+    // shown over 37.5 every row of it is blended into the next.
+    setPixelZoom(1.25);
+    const store = exactBackingSize(1080, 30, 1.25);
+    expect(store).toEqual({ width: 1350, height: 38 });
+    expect(coveredSize(store, 1.25)).toEqual({ width: 1080, height: 30.4 });
+  });
+
+  it("is the element's own size where that is already whole device pixels", () => {
+    expect(coveredSize(exactBackingSize(1440, 30, 1), 1)).toEqual({ width: 1440, height: 30 });
+    expect(coveredSize(exactBackingSize(720, 30, 2), 2)).toEqual({ width: 720, height: 30 });
+  });
+
+  it("stays the element's size on a display denser than a store is built for", () => {
+    const store = exactBackingSize(400, 30, 3);
+    expect(store).toEqual({ width: 800, height: 60 });
+    expect(coveredSize(store, 3)).toEqual({ width: 400, height: 30 });
   });
 });

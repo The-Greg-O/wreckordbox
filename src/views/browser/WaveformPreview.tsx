@@ -209,13 +209,18 @@ export const WaveformPreview = memo(function WaveformPreview({
     };
   }, [trackId, width, height, hotCues, memoryCues, memoryCueColours, durationSec, palette, colours, half, hotCueColor, startupCache, dpr]);
 
+  const storeWidth = Math.max(1, Math.round(width * dpr));
+  const storeHeight = Math.max(1, Math.round(height * dpr));
   return (
     <span className={styles.previewWave} style={{ width: `${width}px`, height: `${height}px` }}>
       <canvas
         ref={ref}
-        width={Math.round(width * dpr)}
-        height={Math.round(height * dpr)}
-        style={{ width: `${width}px`, height: `${height}px` }}
+        width={storeWidth}
+        height={storeHeight}
+        // Shown over exactly its own device pixels: at a whole-interface
+        // scale the row's size is often a fraction of one, and a canvas
+        // stretched over the fraction has every row blended into the next.
+        style={{ width: `${storeWidth / dpr}px`, height: `${storeHeight / dpr}px` }}
         data-preview-wave
         aria-hidden
       />

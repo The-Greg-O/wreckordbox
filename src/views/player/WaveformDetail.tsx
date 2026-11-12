@@ -15,7 +15,7 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "rea
 import { drawPcmWave, drawWave, strideOf, waveformKindOf, type HalfWaveform, type WavePalette } from "@/canvas";
 import { getBackend } from "@/ipc/client";
 import type { WaveformKind } from "@/ipc/types";
-import { exactBackingSize } from "@/lib/canvasSize";
+import { coveredSize, exactBackingSize } from "@/lib/canvasSize";
 import { detailWaveOriginMs, detailWaveWindow, waveSlice } from "@/lib/player";
 import { useWaveColours } from "@/lib/waveTheme";
 import { usePreferences } from "@/store/usePreferences";
@@ -234,6 +234,12 @@ export const WaveformDetail = memo(function WaveformDetail({
     // Assigning either clears the canvas, so only when it actually changed.
     if (canvas.width !== w) canvas.width = w;
     if (canvas.height !== h) canvas.height = h;
+    // Shown over exactly those device pixels. The strip's own size is often
+    // a fraction of one at a whole-interface scale, and a store stretched
+    // over the fraction is resampled: every row blended into the next.
+    const box = coveredSize({ width: w, height: h });
+    canvas.style.width = `${box.width}px`;
+    canvas.style.height = `${box.height}px`;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 

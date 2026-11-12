@@ -213,7 +213,7 @@ test("the Theme waveform draws in the desktop theme's colours, follows them, and
   expect(await paints(overview, measuredBlue)).toBe(false);
 
   // The desktop theme changes under the open window: the waveform follows.
-  await page.evaluate(() => document.documentElement.style.setProperty("--theme-blue", "#f38ba8"));
+  await page.evaluate(() => document.documentElement.style.setProperty("--role-blue", "#f38ba8"));
   await expect.poll(() => paints(overview, [243, 139, 168])).toBe(true);
   expect(await paints(overview, tokyoBlue)).toBe(false);
 

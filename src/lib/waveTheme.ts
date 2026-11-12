@@ -16,11 +16,15 @@ import { useSyncExternalStore } from "react";
 
 import { MEASURED_COLOURS, themeWaveColours, type WaveColours, type WavePalette } from "@/canvas/waveform";
 
-/** The custom properties the Theme palette reads, by the band each colours. */
+/**
+ * The custom properties the Theme palette reads, by the band each colours.
+ * Named as the theme roles are (`--role-*`, `docs/design/tokens.md`): the
+ * theme's `blue`, its `magenta` and its `bright_foreground`.
+ */
 export const THEME_WAVE_ROLES = {
-  low: "--theme-blue",
-  mid: "--theme-magenta",
-  high: "--theme-bright-foreground",
+  low: "--role-blue",
+  mid: "--role-magenta",
+  high: "--role-text-bright",
 } as const;
 
 /** Tokyo Night's blue, magenta and bright foreground (`docs/design/tokens.md`). */
@@ -73,9 +77,12 @@ function readRoot(name: string): string {
 
 const listeners = new Set<() => void>();
 let observer: MutationObserver | null = null;
+/** The Theme colours as last read from the root; null when they must be read again. */
+let read: WaveColours | null = null;
 
 /** Tells every waveform the desktop theme's colours may have changed. */
 export function waveThemeChanged(): void {
+  read = null;
   for (const listener of listeners) listener();
 }
 
@@ -87,6 +94,7 @@ export function waveThemeChanged(): void {
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
   if (!observer && typeof MutationObserver !== "undefined" && typeof document !== "undefined") {
+    read = null;
     observer = new MutationObserver(waveThemeChanged);
     observer.observe(document.documentElement, { attributes: true });
     observer.observe(document.head, { childList: true, subtree: true, characterData: true, attributes: true });
@@ -96,15 +104,28 @@ function subscribe(listener: () => void): () => void {
     if (listeners.size === 0) {
       observer?.disconnect();
       observer = null;
+      read = null;
     }
   };
+}
+
+/**
+ * The root's colours for `palette`. Read from the computed style once per
+ * change while anything is watching, not once per waveform: a list has a
+ * preview in every row.
+ */
+function current(palette: WavePalette): WaveColours {
+  if (palette !== "theme") return MEASURED_COLOURS;
+  if (!observer) return waveColoursFrom(palette, readRoot);
+  read ??= waveColoursFrom(palette, readRoot);
+  return read;
 }
 
 /** The colours to hand the waveform drawing for the chosen waveform theme. */
 export function useWaveColours(palette: WavePalette): WaveColours {
   return useSyncExternalStore(
     subscribe,
-    () => waveColoursFrom(palette, readRoot),
+    () => current(palette),
     () => waveColoursFrom(palette, () => ""),
   );
 }
