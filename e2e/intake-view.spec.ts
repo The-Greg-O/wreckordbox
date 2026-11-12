@@ -172,9 +172,12 @@ test("Problems from the tree uses the same view; with no colour named Problem it
 test("the queue never pushes the large player out of a half-width window", async ({ page }) => {
   await page.setViewportSize({ width: 640, height: 800 });
   await openIntake(page);
-  await options(page).nth(2).click();
+  // At half width the queue is a counter (wbx-69; intake-half-width.spec.ts).
+  const next = page.getByRole("button", { name: "Next track", exact: true });
+  await next.click();
+  await next.click();
+  await expect(page.getByTestId("intake-position")).toHaveText(/^2 of \d+$/);
   await expect(detail(page)).toBeVisible();
-  await expect(options(page).nth(2)).toBeVisible();
   const box = await detail(page).boundingBox();
   expect(box!.width).toBeLessThanOrEqual(640);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(640);
