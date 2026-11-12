@@ -226,7 +226,8 @@ fn rewrite_unseen(path: &std::path::Path, value: u8) {
 }
 
 #[test]
-fn stem_audio_is_checked_against_its_recorded_hash_once_until_the_file_changes_and_always_before_a_stick_write() {
+fn stem_audio_is_checked_against_its_recorded_hash_once_until_the_file_changes_and_always_before_a_stick_write(
+) {
     let made = made();
     let (run, files) = made.separation(500);
     let set = made.record(run, &files).unwrap();
@@ -235,7 +236,13 @@ fn stem_audio_is_checked_against_its_recorded_hash_once_until_the_file_changes_a
 
     // Rewritten with other audio of the same length (a later separation at
     // the same path): a new modification time, so it is read again.
-    let vocals = set.stems.iter().find(|stem| stem.role == Role::Vocals).unwrap().path.clone();
+    let vocals = set
+        .stems
+        .iter()
+        .find(|stem| stem.role == Role::Vocals)
+        .unwrap()
+        .path
+        .clone();
     let original = std::fs::read(&vocals).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(20));
     let mut other = original.clone();

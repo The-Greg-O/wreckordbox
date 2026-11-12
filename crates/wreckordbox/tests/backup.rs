@@ -236,7 +236,10 @@ fn a_restore_that_stopped_between_the_library_and_the_sidecar_is_put_right_by_th
 /// Sidecar, which nothing must leave.
 fn staged(sandbox: &Sandbox) -> Vec<String> {
     let mut names = Vec::new();
-    for dir in [sandbox.master_db().parent().unwrap().to_path_buf(), sidecar_dir(sandbox)] {
+    for dir in [
+        sandbox.master_db().parent().unwrap().to_path_buf(),
+        sidecar_dir(sandbox),
+    ] {
         if let Ok(entries) = std::fs::read_dir(&dir) {
             names.extend(
                 entries
@@ -249,7 +252,8 @@ fn staged(sandbox: &Sandbox) -> Vec<String> {
 }
 
 #[test]
-fn a_restore_is_refused_before_anything_is_staged_while_library_protection_is_on_or_not_known_to_be_off() {
+fn a_restore_is_refused_before_anything_is_staged_while_library_protection_is_on_or_not_known_to_be_off(
+) {
     let (sandbox, archive, before) = backed_up();
     let changed = facts(&sandbox);
     let refused_with_protection = |what: &str| {
@@ -257,10 +261,19 @@ fn a_restore_is_refused_before_anything_is_staged_while_library_protection_is_on
         assert!(!refused.status.success(), "{what}");
         let error = refused.error_json()["error"].clone();
         assert_eq!(error["code"], "library_protected", "{what}: {error}");
-        assert!(error["message"].as_str().unwrap().contains("does not turn protection off"), "{what}: {error}");
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .contains("does not turn protection off"),
+            "{what}: {error}"
+        );
         assert_eq!(testing::rating(sandbox.location()), 1, "{what}");
         assert_eq!(facts(&sandbox), changed, "{what}");
-        assert!(!rbl_backup::journal::pending(&sandbox.state_dir()), "{what}");
+        assert!(
+            !rbl_backup::journal::pending(&sandbox.state_dir()),
+            "{what}"
+        );
         assert!(staged(&sandbox).is_empty(), "{what}");
     };
     sandbox.protect(true);
@@ -317,7 +330,11 @@ fn a_restore_that_stopped_with_the_library_database_set_aside_is_recovered_by_th
 fn restore_entries(sandbox: &Sandbox) -> i64 {
     rusqlite::Connection::open(sidecar_dir(sandbox).join("sidecar.db"))
         .unwrap()
-        .query_row("SELECT count(*) FROM ledger WHERE kind = 'restore'", [], |row| row.get(0))
+        .query_row(
+            "SELECT count(*) FROM ledger WHERE kind = 'restore'",
+            [],
+            |row| row.get(0),
+        )
         .unwrap()
 }
 
@@ -333,7 +350,8 @@ fn owed(sandbox: &Sandbox, archive: &Path) -> serde_json::Value {
 }
 
 #[test]
-fn a_restore_stopped_after_its_files_are_in_place_is_recorded_in_the_ledger_once_by_the_next_owner() {
+fn a_restore_stopped_after_its_files_are_in_place_is_recorded_in_the_ledger_once_by_the_next_owner()
+{
     use std::os::unix::fs::PermissionsExt as _;
     let (sandbox, archive, before) = backed_up();
     // Stopped once every file is in place and before the entry is written.
@@ -358,7 +376,9 @@ fn a_restore_stopped_after_its_files_are_in_place_is_recorded_in_the_ledger_once
     // The entry cannot be written: the next owner says so, and keeps the
     // journal for the one after.
     let folder = sidecar_dir(&sandbox);
-    let mode = |path: &Path, mode| std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    let mode = |path: &Path, mode| {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap()
+    };
     mode(&folder.join("sidecar.db"), 0o444);
     mode(&folder, 0o555);
     let failed = cli(&sandbox, &["--json", "status"]);

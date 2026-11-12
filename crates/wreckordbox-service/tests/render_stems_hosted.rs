@@ -157,8 +157,13 @@ fn only_stems_verified_current_for_the_audio_as_it_is_reach_the_renderer() {
     std::fs::write(&handed.stems.vocals, &other).unwrap();
     let replaced = service.current_stems_for_render(&track).unwrap_err();
     assert_eq!(replaced.code, NO_CURRENT_STEMS, "{replaced:?}");
-    let shown = service.call(commands::STEMS_SHOW, json!({ "id": track })).unwrap();
+    let shown = service
+        .call(commands::STEMS_SHOW, json!({ "id": track }))
+        .unwrap();
     assert!(shown["stems"].is_null(), "{shown}");
     std::fs::write(&handed.stems.vocals, &vocals).unwrap();
-    assert_eq!(service.current_stems_for_render(&track).unwrap().fact_id, handed.fact_id);
+    assert_eq!(
+        service.current_stems_for_render(&track).unwrap().fact_id,
+        handed.fact_id
+    );
 }

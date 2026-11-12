@@ -175,10 +175,16 @@ fn record_owed(recovery_dir: &Path) -> Result<Option<i64>, ServiceError> {
     };
     let Ok(Owing { mut ledger }) = serde_json::from_value::<Owing>(owed) else {
         // Owed by another program: not ours to write.
-        return Err(unrecorded(&"the journal owes something this wreckordbox does not know"));
+        return Err(unrecorded(
+            &"the journal owes something this wreckordbox does not know",
+        ));
     };
     let id = match ledger.folder.clone().as_deref() {
-        Some(folder) if folder.join(rbl_backup::sidecar_part::DATABASE_FILE).is_file() => {
+        Some(folder)
+            if folder
+                .join(rbl_backup::sidecar_part::DATABASE_FILE)
+                .is_file() =>
+        {
             Some(write_entry(recovery_dir, folder, &mut ledger).map_err(|e| unrecorded(&e))?)
         }
         // No Sidecar to record it in.
@@ -192,25 +198,53 @@ fn write_entry(recovery_dir: &Path, folder: &Path, ledger: &mut Owed) -> Result<
     use wreckordbox_sidecar::ledger::{Action, Intent, NewEntry, Store};
     let sidecar = wreckordbox_sidecar::Sidecar::open(folder).map_err(|e| e.to_string())?;
     let source = wreckordbox_sidecar::Source::new(wreckordbox_sidecar::SourceKind::Dj, "dj");
-    let command = serde_json::json!({ "name": "backup.restore", "args": { "backup": ledger.backup } });
-    let id = match ledger.id {
-        Some(id) => id,
-        None => {
-            let at = i64::try_from(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| since.as_millis())).unwrap_or(i64::MAX);
+    let command =
+        serde_json::json!({ "name": "backup.restore", "args": { "backup": ledger.backup } });
+    let id = if let Some(id) = ledger.id {
+        id
+    } else {
+        {
+            let at = i64::try_from(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |since| since.as_millis()),
+            )
+            .unwrap_or(i64::MAX);
             let id = sidecar
-                .begin_intent(&Intent { source: &source, run: None, description: "Restore a backup", command: Some(&command), at }, &[])
+                .begin_intent(
+                    &Intent {
+                        source: &source,
+                        run: None,
+                        description: "Restore a backup",
+                        command: Some(&command),
+                        at,
+                    },
+                    &[],
+                )
                 .map_err(|e| e.to_string())?;
             ledger.id = Some(id);
-            rbl_backup::journal::update_owed(recovery_dir, serde_json::json!(Owing { ledger: ledger.clone() }))
-                .map_err(|e| e.to_string())?;
+            rbl_backup::journal::update_owed(
+                recovery_dir,
+                serde_json::json!(Owing {
+                    ledger: ledger.clone()
+                }),
+            )
+            .map_err(|e| e.to_string())?;
             id
         }
     };
-    if sidecar.ledger_entry(id).map_err(|e| e.to_string())?.is_some() {
+    if sidecar
+        .ledger_entry(id)
+        .map_err(|e| e.to_string())?
+        .is_some()
+    {
         return Ok(id);
     }
     let label = if ledger.sidecar {
-        format!("The Library and the Sidecar were restored from the backup {}.", ledger.backup)
+        format!(
+            "The Library and the Sidecar were restored from the backup {}.",
+            ledger.backup
+        )
     } else {
         format!(
             "The Library was restored from the backup {}, which holds no Sidecar. Entries before this one may describe changes the restored Library does not have.",
@@ -218,7 +252,9 @@ fn write_entry(recovery_dir: &Path, folder: &Path, ledger: &mut Owed) -> Result<
         )
     };
     let payload = serde_json::json!({ "backup": ledger.backup, "created_at": ledger.created_at, "sidecar": ledger.sidecar });
-    let run = sidecar.begin_owned_run(&source, "Restore a backup").map_err(|e| e.to_string())?;
+    let run = sidecar
+        .begin_owned_run(&source, "Restore a backup")
+        .map_err(|e| e.to_string())?;
     sidecar
         .append(&NewEntry {
             id: Some(id),
@@ -237,7 +273,9 @@ fn write_entry(recovery_dir: &Path, folder: &Path, ledger: &mut Owed) -> Result<
             payload: Some(&payload),
         })
         .map_err(|e| e.to_string())?;
-    sidecar.finish_run(run, "restored").map_err(|e| e.to_string())?;
+    sidecar
+        .finish_run(run, "restored")
+        .map_err(|e| e.to_string())?;
     Ok(id)
 }
 
@@ -281,12 +319,20 @@ pub fn restore_owned(
     let contents =
         rbl_backup::sidecar_part::Contents::read(archive).map_err(|e| from_backup(&e))?;
     let manifest = rbl_backup::manifest::Manifest::read(archive).map_err(|e| from_backup(&e))?;
-    let folder = rbl_backup::sidecar_part::Destination::of(library).ok().map(|destination| destination.path);
+    let folder = rbl_backup::sidecar_part::Destination::of(library)
+        .ok()
+        .map(|destination| destination.path);
     let backup = archive
         .file_name()
         .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
     let owed = Owing {
-        ledger: Owed { backup, created_at: manifest.created_at, sidecar: contents.is_some(), folder: folder.clone(), id: None },
+        ledger: Owed {
+            backup,
+            created_at: manifest.created_at,
+            sidecar: contents.is_some(),
+            folder: folder.clone(),
+            id: None,
+        },
     };
     rbl_backup::restore::restore_owing(
         &Request {
@@ -301,7 +347,9 @@ pub fn restore_owned(
         // DJ's, and can be turned while this runs.
         &|| {
             if protected() {
-                Err(rbl_backup::Error::Refused(crate::protection::MESSAGE.to_owned()))
+                Err(rbl_backup::Error::Refused(
+                    crate::protection::MESSAGE.to_owned(),
+                ))
             } else {
                 Ok(())
             }

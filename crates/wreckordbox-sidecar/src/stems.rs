@@ -151,9 +151,9 @@ impl StemSet {
     #[must_use]
     pub fn audio_present(&self) -> bool {
         self.stems.iter().all(|stem| {
-            stem.hash
-                .as_deref()
-                .is_some_and(|recorded| cached_hash(&stem.path).is_ok_and(|found| found == recorded))
+            stem.hash.as_deref().is_some_and(|recorded| {
+                cached_hash(&stem.path).is_ok_and(|found| found == recorded)
+            })
         })
     }
 
@@ -179,26 +179,37 @@ struct Seen {
 }
 
 fn seen(path: &Path) -> Option<Seen> {
-    let meta = std::fs::metadata(path).ok().filter(std::fs::Metadata::is_file)?;
+    let meta = std::fs::metadata(path)
+        .ok()
+        .filter(std::fs::Metadata::is_file)?;
     #[cfg(unix)]
     let inode = std::os::unix::fs::MetadataExt::ino(&meta);
     #[cfg(not(unix))]
     let inode = 0;
-    Some(Seen { len: meta.len(), modified: meta.modified().ok(), inode })
+    Some(Seen {
+        len: meta.len(),
+        modified: meta.modified().ok(),
+        inode,
+    })
 }
 
 type Kept = std::collections::HashMap<PathBuf, (Seen, String)>;
 
 fn kept() -> std::sync::MutexGuard<'static, Kept> {
     static KEPT: std::sync::OnceLock<std::sync::Mutex<Kept>> = std::sync::OnceLock::new();
-    KEPT.get_or_init(Default::default).lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    KEPT.get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// The file's hash, from what was kept when the file is as it was then.
 fn cached_hash(path: &Path) -> Result<String> {
     let Some(now) = seen(path) else {
         kept().remove(path);
-        return Err(SidecarError::Invalid(format!("{} is not a file", path.display())));
+        return Err(SidecarError::Invalid(format!(
+            "{} is not a file",
+            path.display()
+        )));
     };
     if let Some((then, hash)) = kept().get(path) {
         if *then == now {
