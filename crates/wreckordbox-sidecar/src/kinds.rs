@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::store::{Kind, Nature};
+use crate::tag_schema::{Problem, TagSchema};
 use crate::{Result, SidecarError};
 
 /// The file in the Sidecar's folder that declares kinds beyond the
@@ -258,7 +259,11 @@ impl Kinds {
                     "The track's four Stems. Recorded by a separation.",
                 )
             },
-            judgement("genre", ValueType::Text, "The track's genre."),
+            judgement(
+                "genre",
+                ValueType::Texts,
+                "The track's genres: the most specific terms of the genre tree, each implying its parents.",
+            ),
             judgement("mood", ValueType::Texts, "The moods the track has."),
             judgement(
                 "situation",
@@ -302,11 +307,93 @@ impl Kinds {
         ]
     }
 
-    /// The built-in kinds and those declared in the Sidecar folder's
-    /// [`KINDS_FILE`], if there is one. A file that does not parse, or that
-    /// declares a kind badly, is refused whole
-    /// ([`SidecarError::KindsFile`]).
+    /// Every declared kind: the built-in ones, those of the Sidecar
+    /// folder's [`KINDS_FILE`], and the dimensions of its Tag schema
+    /// ([`TAG_SCHEMA_FILE`](crate::TAG_SCHEMA_FILE)), if there are such
+    /// files. Either file is refused whole when it has a mistake
+    /// ([`SidecarError::KindsFile`], [`SidecarError::TagSchema`]).
     pub fn load(sidecar_dir: &Path) -> Result<Self> {
+        let declared = Self::load_declared(sidecar_dir)?;
+        let file = sidecar_dir.join(crate::TAG_SCHEMA_FILE);
+        if !file.is_file() {
+            return Ok(declared);
+        }
+        TagSchema::load(&file)
+            .and_then(|schema| declared.with_schema(&schema))
+            .map_err(|problems| SidecarError::TagSchema {
+                path: file,
+                why: problems
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            })
+    }
+
+    /// These kinds with the Tag schema's dimensions bound to theirs. A
+    /// dimension's name is the name of its kind of Fact:
+    ///
+    /// - a dimension named after a kind already declared (`genre`, `mood`)
+    ///   uses it, and that kind must be a Judgement whose value is text or
+    ///   a list of texts;
+    /// - any other dimension declares its kind: a Judgement, a list of
+    ///   texts.
+    ///
+    /// Either way the kind's values are then the identifiers of the
+    /// dimension's terms and nothing else.
+    pub fn with_schema(mut self, schema: &TagSchema) -> std::result::Result<Self, Vec<Problem>> {
+        let mut problems = Vec::new();
+        for dimension in &schema.dimensions {
+            let choices: Vec<String> = dimension.terms.iter().map(|term| term.id.clone()).collect();
+            let Some(kind) = self
+                .declared
+                .iter_mut()
+                .find(|kind| kind.name == dimension.name)
+            else {
+                self.declared.push(Declaration {
+                    name: dimension.name.clone(),
+                    nature: Nature::Judgement,
+                    value: ValueType::Texts,
+                    choices,
+                    min: None,
+                    max: None,
+                    description: if dimension.description.is_empty() {
+                        format!("The {} dimension of the Tag schema.", dimension.name)
+                    } else {
+                        dimension.description.clone()
+                    },
+                    built_in: false,
+                    reserved: false,
+                });
+                continue;
+            };
+            let texts = matches!(kind.value, ValueType::Text | ValueType::Texts);
+            if kind.nature != Nature::Judgement || !texts || kind.reserved {
+                problems.push(Problem {
+                    line: dimension.line,
+                    message: format!(
+                        "the dimension {name} would hold Facts of the kind {name}, which is declared a {} taking {}; a dimension's kind is a Judgement taking text or a list of texts. Call the dimension something else",
+                        kind.nature,
+                        kind.takes(),
+                        name = dimension.name
+                    ),
+                });
+                continue;
+            }
+            kind.choices = choices;
+        }
+        if problems.is_empty() {
+            Ok(self)
+        } else {
+            Err(problems)
+        }
+    }
+
+    /// The built-in kinds and those declared in the Sidecar folder's
+    /// [`KINDS_FILE`], if there is one, without the Tag schema's. A file
+    /// that does not parse, or that declares a kind badly, is refused whole
+    /// ([`SidecarError::KindsFile`]).
+    pub fn load_declared(sidecar_dir: &Path) -> Result<Self> {
         let file = sidecar_dir.join(KINDS_FILE);
         let mut declared = Self::built_in();
         let text = match std::fs::read_to_string(&file) {
