@@ -378,6 +378,13 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
             while Client::connect(&socket).is_ok() && std::time::Instant::now() < deadline {
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
+            // And until it has let go of the Library: it stops answering
+            // before it does, and a restore right after would be refused.
+            while !wreckordbox_service::library_released(&library.master_db)
+                && std::time::Instant::now() < deadline
+            {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
             print(if cli.json {
                 "{}"
             } else {
