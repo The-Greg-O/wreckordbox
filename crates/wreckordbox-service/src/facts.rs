@@ -481,12 +481,24 @@ impl Facts<'_> {
         lookup: &dyn Fn(&str) -> Result<ParentAudio, ServiceError>,
     ) -> Result<TrackFacts, ServiceError> {
         let found = lookup(&wanted.id)?;
+        let kinds = self.kinds();
         if let Some(kind) = &wanted.kind {
-            let kinds = self.kinds()?;
-            if kinds.get(kind).is_none() {
-                return Err(not_declared(kind, &kinds));
+            let kinds = kinds.as_ref().map_err(Clone::clone)?;
+            // While the Tag schema has a mistake its dimensions are not
+            // declared, and their Facts are still to be read.
+            if kinds.get(kind).is_none() && !kinds.schema_is_broken() {
+                return Err(not_declared(kind, kinds));
             }
         }
+        // What is stored is read whatever state the files are in; a value
+        // from when its kind took another shape is given as the kind takes
+        // it now.
+        let as_now = |mut fact: Fact| {
+            if let Some(kind) = kinds.as_ref().ok().and_then(|kinds| kinds.get(&fact.kind)) {
+                fact.value = kind.normalise(std::mem::take(&mut fact.value));
+            }
+            fact
+        };
         let track = found.parent().clone();
         let fingerprint = stems::fingerprint(&track, found.path()).ok();
         let (attachments, _) = self.stems.observe_audio(&found, fingerprint.as_ref())?;
@@ -495,7 +507,7 @@ impl Facts<'_> {
             None => self.sidecar.facts_of_track(&track.id),
         }
         .map_err(|e| sidecar_error(&e))?;
-        let facts: Vec<Fact> = facts.into_iter().map(Fact::from).collect();
+        let facts: Vec<Fact> = facts.into_iter().map(Fact::from).map(as_now).collect();
         let stale = facts.iter().filter(|fact| fact.stale).cloned().collect();
         let unverified = facts
             .iter()
@@ -545,9 +557,16 @@ fn check(
     tracks: &mut HashMap<String, (ParentAudio, Option<Fingerprint>)>,
     lookup: &dyn Fn(&str) -> Result<ParentAudio, ServiceError>,
 ) -> Result<Checked, ServiceError> {
+    // A Tag schema with a mistake holds back the kinds it governs, and
+    // only those.
+    if let Some(error) = kinds.refused_by_schema(&fact.kind) {
+        return Err(sidecar_error(&error));
+    }
     let Some(kind) = kinds.get(&fact.kind) else {
         return Err(not_declared(&fact.kind, kinds));
     };
+    let mut fact = fact;
+    fact.value = kind.normalise(std::mem::take(&mut fact.value));
     if kind.reserved {
         return Err(ServiceError::new(
             codes::KIND_RESERVED,
@@ -613,7 +632,7 @@ fn check(
 }
 
 /// A source as given, checked: every source but the DJ has a name.
-fn source(given: &SourceArg) -> Result<Source, ServiceError> {
+pub(crate) fn source(given: &SourceArg) -> Result<Source, ServiceError> {
     let name = given.name.trim();
     if !name.is_empty() {
         return Ok(Source::new(given.kind, name));
@@ -659,6 +678,9 @@ fn sidecar_error(error: &SidecarError) -> ServiceError {
     match error {
         SidecarError::KindsFile { .. } => {
             ServiceError::new(codes::KINDS_FILE_INVALID, error.to_string())
+        }
+        SidecarError::TagSchema { .. } => {
+            ServiceError::new(crate::schema::codes::TAG_SCHEMA_INVALID, error.to_string())
         }
         _ => ServiceError::new(
             stems::codes::SIDECAR_FAILED,

@@ -23,10 +23,20 @@ use serde_json::Value;
 use crate::{io, Fingerprint, Result, SidecarError};
 
 /// Raised when a stored shape changes. A store from a newer wreckordbox is
-/// refused rather than guessed at.
-pub const SCHEMA_VERSION: u32 = 2;
+/// refused rather than guessed at; an older one is brought up to date by
+/// [`MIGRATIONS`] when it is opened.
+pub const SCHEMA_VERSION: u32 = 3;
 
-const MIGRATIONS: &[(u32, &str)] = &[(2, crate::attachments::SCHEMA)];
+/// What each version after the first adds, in order: the version a store is
+/// at once the statements have run, and the statements. A new store is made
+/// at version 1 by [`SCHEMA`] and then taken through every one of these, so
+/// a new store and an old one brought up to date hold the same tables. Add
+/// a version at the end; never change one that has shipped.
+const MIGRATIONS: &[(u32, &str)] = &[(2, crate::mutants::SCHEMA), (3, crate::attachments::SCHEMA)];
+
+// A migration added without raising `SCHEMA_VERSION`, or the reverse,
+// does not build.
+const _: () = assert!(MIGRATIONS[MIGRATIONS.len() - 1].0 == SCHEMA_VERSION);
 
 const DATABASE_FILE: &str = "sidecar.db";
 /// Where a tool writes before its result is accepted. Emptied on open.
@@ -155,7 +165,7 @@ pub enum SourceKind {
 }
 
 impl SourceKind {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Dj => "dj",
             Self::Agent => "agent",
@@ -164,7 +174,7 @@ impl SourceKind {
         }
     }
 
-    fn from_stored(text: &str) -> Self {
+    pub(crate) fn from_stored(text: &str) -> Self {
         match text {
             "dj" => Self::Dj,
             "agent" => Self::Agent,
@@ -313,45 +323,43 @@ impl Sidecar {
             [],
             |row| row.get(0),
         )?;
-        let found = if has_meta {
-            let found: u32 = db
-                .query_row(
-                    "SELECT value FROM meta WHERE key = 'schema_version'",
-                    [],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()?
-                .and_then(|version| version.parse().ok())
-                .unwrap_or(0);
-            if found > SCHEMA_VERSION {
-                return Err(SidecarError::Newer {
-                    path,
-                    found,
-                    supported: SCHEMA_VERSION,
-                });
-            }
-            found
+        let found: u32 = if has_meta {
+            db.query_row(
+                "SELECT value FROM meta WHERE key = 'schema_version'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .and_then(|version| version.parse().ok())
+            .unwrap_or(0)
         } else {
+            0
+        };
+        if found > SCHEMA_VERSION {
+            return Err(SidecarError::Newer {
+                path,
+                found,
+                supported: SCHEMA_VERSION,
+            });
+        }
+        if found < SCHEMA_VERSION {
+            // All of it or none: a store is never left between versions.
             let tx = db.transaction()?;
-            tx.execute_batch(SCHEMA)?;
+            if !has_meta {
+                tx.execute_batch(SCHEMA)?;
+            }
+            for (version, statements) in MIGRATIONS {
+                if *version > found {
+                    tx.execute_batch(statements)?;
+                }
+            }
             tx.execute(
-                "INSERT INTO meta (key, value) VALUES ('schema_version', ?1)",
-                ["1"],
+                "INSERT INTO meta (key, value) VALUES ('schema_version', ?1)
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                [SCHEMA_VERSION.to_string()],
             )?;
             tx.commit()?;
-            1
-        };
-        let tx = db.transaction()?;
-        for &(version, sql) in MIGRATIONS {
-            if version > found {
-                tx.execute_batch(sql)?;
-                tx.execute(
-                    "UPDATE meta SET value = ?1 WHERE key = 'schema_version'",
-                    [version.to_string()],
-                )?;
-            }
         }
-        tx.commit()?;
         Ok(Self {
             dir,
             db: Mutex::new(db),
@@ -385,27 +393,7 @@ impl Sidecar {
 
     /// One Run by its identifier.
     pub fn run(&self, run: RunId) -> Result<Option<Run>> {
-        Ok(self
-            .db()
-            .query_row(
-                "SELECT id, source_kind, source_name, description, started_at, finished_at, outcome
-                 FROM run WHERE id = ?1",
-                [run.0],
-                |row| {
-                    Ok(Run {
-                        id: RunId(row.get(0)?),
-                        source: Source {
-                            kind: SourceKind::from_stored(&row.get::<_, String>(1)?),
-                            name: row.get(2)?,
-                        },
-                        description: row.get(3)?,
-                        started_at: row.get(4)?,
-                        finished_at: row.get(5)?,
-                        outcome: row.get(6)?,
-                    })
-                },
-            )
-            .optional()?)
+        Ok(run_in(&self.db(), run)?)
     }
 
     /// An empty folder for `run` to write into before its result is
@@ -617,6 +605,29 @@ fn read_fact(row: &Row) -> rusqlite::Result<Fact> {
         superseded_at: row.get(12)?,
         superseded_by: row.get(13)?,
     })
+}
+
+/// One Run, read on `db` (a transaction, to read what it has written).
+pub(crate) fn run_in(db: &Connection, run: RunId) -> rusqlite::Result<Option<Run>> {
+    db.query_row(
+        "SELECT id, source_kind, source_name, description, started_at, finished_at, outcome
+         FROM run WHERE id = ?1",
+        [run.0],
+        |row| {
+            Ok(Run {
+                id: RunId(row.get(0)?),
+                source: Source {
+                    kind: SourceKind::from_stored(&row.get::<_, String>(1)?),
+                    name: row.get(2)?,
+                },
+                description: row.get(3)?,
+                started_at: row.get(4)?,
+                finished_at: row.get(5)?,
+                outcome: row.get(6)?,
+            })
+        },
+    )
+    .optional()
 }
 
 pub(crate) fn now() -> i64 {

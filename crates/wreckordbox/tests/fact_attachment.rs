@@ -153,7 +153,7 @@ fn a_fingerprint_reattaches_facts_with_their_provenance_and_survives_restart() {
     );
     let shown = ok(&s, &["facts", "show", &next, "--kind", "genre"]);
     assert_eq!(shown["facts"].as_array().unwrap().len(), 1);
-    assert_eq!(shown["facts"][0]["value"], "House");
+    assert_eq!(shown["facts"][0]["value"], json!(["House"]));
     change_audio(&s);
     assert_eq!(
         ok(&s, &["facts", "show", &next])["stale"][0]["id"],

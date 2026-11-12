@@ -101,6 +101,16 @@ impl OpenLibrary {
         }
     }
 
+    /// Runs `read` while no edit is under way: it holds the core's edit
+    /// gate, which every edit (the window's included) holds from its write
+    /// to the re-read of the index. So the index and the database `read`
+    /// sees are the same Library, and nothing is edited until it returns.
+    /// It writes nothing; keep it short, as an edit waits for it.
+    pub(crate) fn steady<T>(&self, read: impl FnOnce() -> T) -> T {
+        let _gate = self.core.edit_gate().lock();
+        read()
+    }
+
     /// The index as it stands now: a snapshot an edit does not change.
     pub(crate) fn index(&self) -> Result<Arc<rbl_index::Library>, ServiceError> {
         self.core

@@ -66,7 +66,7 @@ fn a_fact_recorded_about_a_track_is_read_back_with_its_source_confidence_run_and
     let fact = &recorded["facts"][0];
     assert_eq!(fact["track_id"], "10003");
     assert_eq!(fact["kind"], "genre");
-    assert_eq!(fact["value"], "Tech House");
+    assert_eq!(fact["value"], json!(["Tech House"]));
 
     let shown = ok(&sandbox, &["facts", "show", "10003"]);
     assert_eq!(
@@ -139,7 +139,7 @@ fn ids(facts: &[Value]) -> Vec<i64> {
 fn many_facts_read_from_standard_input_are_recorded_in_one_run() {
     let sandbox = Sandbox::new();
     let lines = concat!(
-        r#"{"track": "10001", "kind": "genre", "value": "Techno", "confidence": 0.9}"#,
+        r#"{"track": "10001", "kind": "genre", "value": ["Techno"], "confidence": 0.9}"#,
         "\n",
         r#"{"track": "10001", "kind": "mood", "value": ["Dark", "Hypnotic"]}"#,
         "\n\n",
@@ -310,9 +310,9 @@ fn an_undeclared_kind_or_a_value_of_the_wrong_type_is_refused_and_nothing_is_rec
     assert_eq!(record(&["energy", "high"])["code"], "wrong_value_type");
     assert_eq!(record(&["energy", "9"])["code"], "wrong_value_type");
     assert_eq!(record(&["energy", "3.5"])["code"], "wrong_value_type");
-    // Genre is one text.
+    // Vocals is one text.
     assert_eq!(
-        record(&["genre", "Tech", "House"])["code"],
+        record(&["vocals", "Full", "Instrumental"])["code"],
         "wrong_value_type"
     );
     // Prep colour is one of the colour labels.
@@ -336,7 +336,7 @@ fn an_undeclared_kind_or_a_value_of_the_wrong_type_is_refused_and_nothing_is_rec
             "0.8",
         ],
         concat!(
-            r#"{"track": "10003", "kind": "genre", "value": "Techno"}"#,
+            r#"{"track": "10003", "kind": "genre", "value": ["Techno"]}"#,
             "\n",
             r#"{"track": "10003", "kind": "genre", "value": 7}"#,
             "\n",
@@ -362,9 +362,9 @@ fn an_undeclared_kind_or_a_value_of_the_wrong_type_is_refused_and_nothing_is_rec
             "0.8",
         ],
         concat!(
-            r#"{"track": "10003", "kind": "genre", "value": "Techno"}"#,
+            r#"{"track": "10003", "kind": "genre", "value": ["Techno"]}"#,
             "\n",
-            r#"{"track": "77", "kind": "genre", "value": "Techno"}"#,
+            r#"{"track": "77", "kind": "genre", "value": ["Techno"]}"#,
             "\n",
         ),
     );
@@ -497,7 +497,7 @@ fn every_declared_kind_says_whether_it_is_a_judgement_or_a_measurement_and_its_v
         declared,
         [
             ("stems", "measurement", "object"),
-            ("genre", "judgement", "text"),
+            ("genre", "judgement", "texts"),
             ("mood", "judgement", "texts"),
             ("situation", "judgement", "texts"),
             ("sound", "judgement", "texts"),
@@ -672,7 +672,7 @@ fn facts_from_different_sources_about_the_same_track_and_kind_stand_side_by_side
         .map(|fact| {
             (
                 fact["source"]["kind"].as_str().unwrap(),
-                fact["value"].as_str().unwrap(),
+                fact["value"][0].as_str().unwrap(),
             )
         })
         .collect();
@@ -700,7 +700,7 @@ fn facts_from_different_sources_about_the_same_track_and_kind_stand_side_by_side
         .unwrap();
     assert_eq!(kept["superseded"], true);
     assert_eq!(kept["superseded_by"], again["id"]);
-    assert_eq!(kept["value"], "Tech House");
+    assert_eq!(kept["value"], json!(["Tech House"]));
 
     // Asking for a kind that is not declared is a mistake, not an empty list.
     assert_eq!(
@@ -764,7 +764,7 @@ fn recording_facts_changes_nothing_in_the_library_and_other_clients_hear_only_of
         &sandbox,
         &["--json", "facts", "record-many", "--source", "dj"],
         concat!(
-            r#"{"track": "10003", "kind": "genre", "value": "Techno"}"#,
+            r#"{"track": "10003", "kind": "genre", "value": ["Techno"]}"#,
             "\n",
             r#"{"track": "10004", "kind": "prep_colour", "value": "Green"}"#,
             "\n",
@@ -999,7 +999,7 @@ fn by_hand_the_results_are_readable_lines_and_a_table() {
         &sandbox,
         &["facts", "record-many", "--source", "dj"],
         concat!(
-            r#"{"track": "10003", "kind": "genre", "value": "Techno"}"#,
+            r#"{"track": "10003", "kind": "genre", "value": ["Techno"]}"#,
             "\n",
             r#"{"track": "10004", "kind": "energy", "value": 4}"#,
             "\n",

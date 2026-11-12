@@ -48,6 +48,7 @@ fn old_facts_can_reattach_after_migration_but_known_stale_audio_is_not_an_identi
             "DROP VIEW attached_fact;
             DROP TABLE fact_attachment; DROP TABLE attachment_change;
             DROP TABLE attachment_review; DROP TABLE track_identity;
+            DROP TABLE mutant_change; DROP TABLE mutant;
             UPDATE meta SET value = '1' WHERE key = 'schema_version';",
         )
         .unwrap();
