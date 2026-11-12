@@ -1,6 +1,6 @@
 //! Current work without opening a Sidecar writer or scanning finished history.
 use crate::{stems::Stems, ServiceError};
-use std::path::PathBuf;
+use std::path::Path;
 use std::time::{Duration, Instant};
 pub use wreckordbox_sidecar::ActiveRun;
 use wreckordbox_sidecar::{ActiveRunsReader, Sidecar};
@@ -12,7 +12,7 @@ pub(crate) struct RunStatus {
     retry_after: Option<Instant>,
 }
 impl RunStatus {
-    pub(crate) fn new(dir: PathBuf) -> Self {
+    pub(crate) fn new(dir: &Path) -> Self {
         Self {
             reader: ActiveRunsReader::new(dir),
             retry_after: None,

@@ -97,6 +97,8 @@ fn current_work_includes_old_and_concurrent_runs_but_never_finished_work() {
 fn reading_old_or_newer_sidecars_never_migrates_or_tidies_them() {
     for version in [1, 999] {
         let sandbox = Sandbox::new();
+        // Ledger startup performs recovery; isolate the status query from it.
+        sandbox.status();
         let dir = sandbox.sidecar_dir();
         std::fs::create_dir_all(dir.join("work")).unwrap();
         let work = dir.join("work/unfinished");
@@ -135,6 +137,8 @@ fn reading_old_or_newer_sidecars_never_migrates_or_tidies_them() {
 #[test]
 fn a_status_read_of_a_current_sidecar_preserves_work_and_database_files() {
     let sandbox = Sandbox::new();
+    // Install the closed fixture after startup, before any Sidecar writer opens.
+    sandbox.status();
     let dir = sandbox.sidecar_dir();
     let sidecar = wreckordbox_sidecar::Sidecar::open(&dir).unwrap();
     let id = sidecar
@@ -164,6 +168,8 @@ fn a_status_read_of_a_current_sidecar_preserves_work_and_database_files() {
 #[test]
 fn unavailable_status_backs_off_at_the_service_and_recovers() {
     let sandbox = Sandbox::new();
+    // Install the closed fixture after startup, before any Sidecar writer opens.
+    sandbox.status();
     let dir = sandbox.sidecar_dir();
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("sidecar.db"), b"corrupt fixture").unwrap();

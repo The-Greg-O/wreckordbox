@@ -1,5 +1,5 @@
 //! Cheap, read-only current work. Status never opens the Sidecar writer.
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::TryLockError;
 use std::time::SystemTime;
 
@@ -64,7 +64,7 @@ pub struct ActiveRunsReader {
 }
 
 impl ActiveRunsReader {
-    pub fn new(dir: PathBuf) -> Self {
+    pub fn new(dir: &Path) -> Self {
         Self {
             path: dir.join("sidecar.db"),
             snapshot: None,

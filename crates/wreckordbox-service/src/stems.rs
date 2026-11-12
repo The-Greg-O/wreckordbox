@@ -258,7 +258,7 @@ impl Stems {
             .filter(|command| !command.trim().is_empty())
             .map_or_else(default_command, |command| parse_command(&command));
         Arc::new(Self {
-            run_status: Mutex::new(crate::run_status::RunStatus::new(sidecar_dir.clone())),
+            run_status: Mutex::new(crate::run_status::RunStatus::new(&sidecar_dir)),
             sidecar_dir,
             command,
             sidecar: Mutex::new(None),

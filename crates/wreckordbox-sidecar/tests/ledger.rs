@@ -156,6 +156,9 @@ fn an_entry_is_never_changed_or_removed_and_survives_reopening() {
 fn downgrade(dir: &std::path::Path, version: u32) {
     let raw = rusqlite::Connection::open(dir.join("sidecar.db")).unwrap();
     let mut drop = String::new();
+    if version < 5 {
+        drop.push_str("DROP INDEX run_unfinished;");
+    }
     if version < 4 {
         drop.push_str(
             "DROP TRIGGER fact_takes_its_place_in_order;
@@ -178,7 +181,7 @@ fn downgrade(dir: &std::path::Path, version: u32) {
 
 #[test]
 fn a_store_from_each_earlier_version_is_given_the_ledger_and_keeps_its_facts_in_order() {
-    for version in [1, 2, 3] {
+    for version in [1, 2, 3, 4] {
         let dir = tempfile::tempdir().unwrap();
         let source = agent();
         let (run, facts) = {
