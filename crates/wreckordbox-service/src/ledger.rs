@@ -88,10 +88,10 @@
 //! the edit gate or the history, and never calls a host or sends an
 //! event.
 
-#[path = "file_ledger.rs"]
-mod files;
 #[path = "bulk_ledger.rs"]
 mod bulk;
+#[path = "file_ledger.rs"]
+mod files;
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -466,7 +466,9 @@ pub mod stored {
                         })
                     })
                     .collect::<Option<Vec<_>>>()?;
-                Some(LibraryEdit::Judgements(rbl_library::judgements::Judgements { changes }))
+                Some(LibraryEdit::Judgements(
+                    rbl_library::judgements::Judgements { changes },
+                ))
             }
             _ => None,
         }
@@ -535,15 +537,17 @@ pub mod stored {
                     after: ids("after"),
                 });
             }
-            "dj_judgements" => values.extend(list("changes").iter().map(|change| ValueChange {
-                subject: track(change),
-                field: change
-                    .get("kind")
-                    .and_then(Value::as_str)
-                    .unwrap_or("?")
-                    .to_owned(),
-                before: field(change, "before"),
-                after: field(change, "after"),
+            "dj_judgements" => values.extend(list("changes").iter().map(|change| {
+                ValueChange {
+                    subject: track(change),
+                    field: change
+                        .get("kind")
+                        .and_then(Value::as_str)
+                        .unwrap_or("?")
+                        .to_owned(),
+                    before: field(change, "before"),
+                    after: field(change, "after"),
+                }
             })),
             _ => {}
         }
@@ -1777,20 +1781,30 @@ impl Keeper {
 }
 
 impl rbl_library::ledger::Ledger for Keeper {
-    fn bulk(&self, kind: rbl_library::bulk::Kind) -> Option<Arc<dyn rbl_library::bulk::Recorder>> { Some(bulk::make(self, kind)) }
+    fn bulk(&self, kind: rbl_library::bulk::Kind) -> Option<Arc<dyn rbl_library::bulk::Recorder>> {
+        Some(bulk::make(self, kind))
+    }
 
     fn begin(&self) -> Result<(), String> {
-        if let Some(active) = bulk::active(self) { active.set_bulk(false); }
+        if let Some(active) = bulk::active(self) {
+            active.set_bulk(false);
+        }
         self.begin_operation(None)
     }
 
     fn begin_unkept(&self) -> Result<(), String> {
-        if let Some(active) = bulk::active(self) { active.set_bulk(true); return active.begin(); }
+        if let Some(active) = bulk::active(self) {
+            active.set_bulk(true);
+            return active.begin();
+        }
         self.begin_operation(None)
     }
 
     fn begin_file(&self, kind: &str, track: &str, values: &Value) -> Result<(), String> {
-        if let Some(active) = bulk::active(self) { active.set_bulk(true); return active.begin(); }
+        if let Some(active) = bulk::active(self) {
+            active.set_bulk(true);
+            return active.begin();
+        }
         let mut args = values.as_object().cloned().unwrap_or_default();
         args.insert("kind".to_owned(), Value::from(kind));
         args.insert("track".to_owned(), Value::from(track));
@@ -1804,7 +1818,10 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn file_written(&self, kind: &str, track: &str) {
-        if let Some(active) = bulk::active(self).filter(|active| active.is_bulk()) { active.written(true); return; }
+        if let Some(active) = bulk::active(self).filter(|active| active.is_bulk()) {
+            active.written(true);
+            return;
+        }
         let command = self.state().op.as_ref().and_then(|op| op.command.clone());
         let args = command.as_ref().and_then(|command| command.get("args"));
         let reason =
@@ -1857,7 +1874,13 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn written(&self, wrote: bool) {
-        if let Some(active) = bulk::active(self).filter(|active| active.is_bulk()) { active.written(wrote); if wrote && self.faults.abort_after_write { std::process::abort(); } return; }
+        if let Some(active) = bulk::active(self).filter(|active| active.is_bulk()) {
+            active.written(wrote);
+            if wrote && self.faults.abort_after_write {
+                std::process::abort();
+            }
+            return;
+        }
         if let Some(op) = self.state().op.as_mut() {
             op.wrote = Some(wrote);
             if !wrote {
@@ -1906,7 +1929,9 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn note(&self, kept: Unkept, name: Option<&str>) {
-        if bulk::active(self).is_some_and(|active| active.is_bulk()) { return; }
+        if bulk::active(self).is_some_and(|active| active.is_bulk()) {
+            return;
+        }
         // Named by the caller, else by the command being answered. A write
         // with neither is not an edit (analysis, an import, a player): not
         // recorded here (bead wbx-14.11), and its intent needs no entry.
