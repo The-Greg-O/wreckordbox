@@ -169,7 +169,7 @@ test("the browser row's CUE mark follows the deck without a reload", async ({ pa
   await expect(pad(page, "A")).toHaveAttribute("aria-pressed", "true");
   await expect(cueMark(page)).toContainText("CUE");
   // `command + 1` is `Clear Hot Cue A`.
-  await page.keyboard.press("Meta+1");
+  await page.keyboard.press("ControlOrMeta+1");
   await expect(pad(page, "A")).toHaveAttribute("aria-pressed", "false");
   await expect(cueMark(page)).not.toContainText("CUE");
 });
@@ -218,7 +218,7 @@ test("with rekordbox holding the library, setting and clearing are refused and c
   since = Date.now();
   await page.keyboard.press("1");
   await expect.poll(fromA(since)).toBe(true);
-  await page.keyboard.press("Meta+1");
+  await page.keyboard.press("ControlOrMeta+1");
   await page.waitForTimeout(200);
   await expect(pad(page, "A")).toHaveAttribute("aria-pressed", "true");
 });

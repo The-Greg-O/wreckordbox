@@ -24,17 +24,26 @@ pub(super) fn metadata(
     id: &str,
 ) -> Result<(Option<TrackRecord>, Vec<Cue>), ServiceError> {
     let index = library.index()?;
+    library.with_db(|db| metadata_in(db, &index, id))
+}
+
+/// [`metadata`] through a connection already open: a list describing many
+/// parents opens the Library once, not once per parent (wbx-80; in a hosted
+/// service every open of the encrypted Library derives its key again).
+pub(super) fn metadata_in(
+    db: &rbl_db::Library,
+    index: &rbl_index::Library,
+    id: &str,
+) -> Result<(Option<TrackRecord>, Vec<Cue>), ServiceError> {
     let Some(row) = index.row_of(id) else {
         return Ok((None, Vec::new()));
     };
     // Cue edits do not rebuild the track index; reload live rows here. Lists
     // deduplicate this projection per parent, so this is not per Mutant.
-    let comments = library.with_db(|db| {
-        rbl_index::reload_cues_of(db, &index, id)
-            .map_err(|e| ServiceError::new("library_failed", e.to_string()))?;
-        rbl_db::details::cue_comments(db.connection(), id)
-            .map_err(|e| ServiceError::new("library_failed", e.to_string()))
-    })?;
+    rbl_index::reload_cues_of(db, index, id)
+        .map_err(|e| ServiceError::new("library_failed", e.to_string()))?;
+    let comments = rbl_db::details::cue_comments(db.connection(), id)
+        .map_err(|e| ServiceError::new("library_failed", e.to_string()))?;
     let cues = index
         .cues_of(row)
         .iter()
@@ -50,7 +59,7 @@ pub(super) fn metadata(
                 .unwrap_or_default(),
         })
         .collect();
-    Ok((Some(crate::tracks::record(&index, row)), cues))
+    Ok((Some(crate::tracks::record(index, row)), cues))
 }
 
 pub(super) fn source_readiness(parent: Option<&TrackRecord>) -> Renderability {

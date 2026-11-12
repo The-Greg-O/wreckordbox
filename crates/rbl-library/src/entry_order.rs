@@ -236,7 +236,7 @@ fn write_numbers(
 /// `rb_local_usn` in the Library. The protected writer's own function reads
 /// a fixed list of tables; this reads every table that has the column, a
 /// superset, so the number is never lower than the writer would choose.
-fn next_usn(conn: &Connection) -> Result<i64, DbError> {
+pub(crate) fn next_usn(conn: &Connection) -> Result<i64, DbError> {
     let counter: i64 = conn
         .query_row(
             "SELECT COALESCE(int_1, 0) FROM agentRegistry WHERE registry_id = 'localUpdateCount'",
@@ -266,7 +266,7 @@ fn next_usn(conn: &Connection) -> Result<i64, DbError> {
         .ok_or_else(|| DbError::WriteRefused("local update counter overflow".into()))
 }
 
-fn is_plain_playlist(conn: &Connection, playlist: &str) -> Result<bool, DbError> {
+pub(crate) fn is_plain_playlist(conn: &Connection, playlist: &str) -> Result<bool, DbError> {
     let attribute: Option<i64> = conn
         .query_row(
             "SELECT Attribute FROM djmdPlaylist WHERE ID = ?1 AND rb_local_deleted = 0",
@@ -278,7 +278,7 @@ fn is_plain_playlist(conn: &Connection, playlist: &str) -> Result<bool, DbError>
     Ok(attribute == Some(rbl_db::write::ATTRIBUTE_PLAYLIST))
 }
 
-fn refuse_while_rekordbox_runs(writer: &rbl_db::write::Writer) -> Result<(), DbError> {
+pub(crate) fn refuse_while_rekordbox_runs(writer: &rbl_db::write::Writer) -> Result<(), DbError> {
     if writer.library().location().is_real_install && rbl_db::is_rekordbox_running() {
         return Err(DbError::WriteRefused(
             "rekordbox is running. Quit it before making changes.".to_owned(),
@@ -289,17 +289,17 @@ fn refuse_while_rekordbox_runs(writer: &rbl_db::write::Writer) -> Result<(), DbE
 
 /// An immediate transaction on a shared connection, rolled back unless
 /// committed.
-struct Immediate<'a> {
+pub(crate) struct Immediate<'a> {
     conn: &'a Connection,
     done: bool,
 }
 
 impl<'a> Immediate<'a> {
-    fn begin(conn: &'a Connection) -> Result<Self, DbError> {
+    pub(crate) fn begin(conn: &'a Connection) -> Result<Self, DbError> {
         conn.execute_batch("BEGIN IMMEDIATE")?;
         Ok(Self { conn, done: false })
     }
-    fn commit(mut self) -> Result<(), DbError> {
+    pub(crate) fn commit(mut self) -> Result<(), DbError> {
         self.conn.execute_batch("COMMIT")?;
         self.done = true;
         Ok(())

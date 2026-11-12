@@ -45,6 +45,7 @@ mod facts_snapshot;
 mod fingerprint;
 mod kinds;
 pub mod ledger;
+pub mod mutant_follow;
 pub mod mutants;
 pub mod precedence;
 pub mod stems;

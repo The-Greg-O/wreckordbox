@@ -22,10 +22,12 @@ pub mod intensity;
 pub mod ledger;
 mod library;
 pub mod mutant_edits;
+mod mutant_follow;
 mod mutant_reads;
 pub mod mutants;
 pub mod mytag_edits;
 pub mod native_stems;
+pub mod playlist_edits;
 pub mod protection;
 pub mod protocol;
 pub mod reading;
@@ -205,5 +207,23 @@ fn lock_path(master_db: &Path) -> PathBuf {
 }
 
 const LOCK_FILE: &str = ".wreckordbox-service.lock";
+
+/// Whether no service holds the Library's lock now. A service answers
+/// `stop` before it lets go of the Library, so whoever stops one and then
+/// needs the Library to itself (a restore) waits for this. Probes with a
+/// shared lock, let go at once.
+#[must_use]
+pub fn library_released(master_db: &Path) -> bool {
+    let Ok(file) = std::fs::File::open(lock_path(master_db)) else {
+        return true;
+    };
+    match file.try_lock_shared() {
+        Ok(()) => {
+            let _ = file.unlock();
+            true
+        }
+        Err(_) => false,
+    }
+}
 
 mod dj_facts;

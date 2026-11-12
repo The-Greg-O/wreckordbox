@@ -62,6 +62,7 @@ mod scripting;
 pub mod service_host;
 pub mod intake_view;
 pub mod playlist_entries;
+pub mod mutant_window;
 pub mod service_status;
 pub mod device_settings;
 pub mod dto;
@@ -587,6 +588,7 @@ pub fn run() {
             new_library::library_problem,
             service_host::service_problem,
             intake_view::intake_queue,
+            mutant_window::collection_removal_mutants,
             intake_view::intake_counts,
             intake_view::intake_colours,
             intake_view::intake_set_prep_colour,

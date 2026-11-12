@@ -1,4 +1,5 @@
 import { ConfirmHost } from "@/components/ConfirmDialog";
+import { removalQuestion } from "@/lib/collectionRemoval";
 import type { DuplicateAnswer } from "@/components/DuplicateTracksDialog";
 import type { FolderClashAnswer } from "@/lib/folderDrop";
 import { JobQueue, slices, type JobView } from "@/lib/jobQueue";
@@ -85,7 +86,7 @@ import { MyTagPanel } from "@/views/browser/MyTagPanel";
 import { columnContextFor, useColumns, type ColumnContext } from "@/store/useColumns";
 import { useExplorer } from "@/store/useExplorer";
 import { hasLooseId, importLoose, isLooseId } from "@/lib/explorer";
-import { childrenOf, containerOf, parentFor, withSources } from "@/lib/tree";
+import { childrenOf, parentFor, playlistPaths, withSources } from "@/lib/tree";
 import { DETAIL_BARS } from "@/lib/player";
 import type { Deck as SyncDeck } from "@/lib/sync";
 import { LayoutDualIcon } from "@/components/icons";
@@ -2062,10 +2063,12 @@ function AppBody() {
     async (ids: readonly string[]): Promise<boolean> => {
       if (ids.length === 0) return false;
       const backend = await getBackend();
-      const count = `${ids.length} track${ids.length === 1 ? "" : "s"}`;
-      const sure = await backend.confirm(
-        `Remove ${count} from the collection? This can’t be undone. The files stay where they are.`,
-      );
+      // The Mutants that would go with the tracks, named before asking
+      // (wbx-80); a failure to read them is said, not hidden.
+      const mutants = await backend.edits
+        .collectionRemovalMutants([...ids])
+        .catch((e: unknown) => ({ error: e instanceof Error ? e.message : String(e) }));
+      const sure = await backend.confirm(removalQuestion(ids.length, mutants));
       if (!sure) return false;
       jobs.add({
         label: t("Removing {count} from the collection", { count: ids.length }),
@@ -2324,20 +2327,7 @@ function AppBody() {
 
   // What the track menu's Add To Playlist and Export Track offer: the
   // playlists under their folders, and the connected sticks.
-  const menuPlaylists = useMemo(() => {
-    // Folders' names accumulate down the tree, which is in order, so a
-    // playlist's container has been named by the time it is reached.
-    const names = new Map<string, string>();
-    const out: { id: string; name: string }[] = [];
-    for (const node of tree) {
-      if (node.kind !== "playlist" && node.kind !== "folder") continue;
-      const above = names.get(containerOf(tree, node)) ?? "";
-      const name = above === "" ? node.name : `${above} › ${node.name}`;
-      names.set(node.id, name);
-      if (node.kind === "playlist") out.push({ id: node.id, name });
-    }
-    return out;
-  }, [tree]);
+  const menuPlaylists = useMemo(() => playlistPaths(tree), [tree]);
   const menuDevices = useMemo(() => devices.map((d) => ({ id: d.path, name: d.name })), [devices]);
 
   // Asked first, as rekordbox asks, though Edit › Undo can bring them back.

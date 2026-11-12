@@ -3605,8 +3605,9 @@ pub async fn import_folder_playlist<R: tauri::Runtime>(
         let files = rbl_db::import::audio_files_in(&dir, &mut budget);
         // Held from the write to the history entry, so no Undo runs between.
         let _gate = writing.edit_gate().lock();
-        let mut outcome = writing
-            .write(|writer| {
+        // A Replace existing is planned for the replaced list's Mutants (wbx-80).
+        let replacing = replace.is_some();
+        let mut outcome = crate::mutant_window::write_replacing(&writing, replacing, |writer| {
                 let clash = match (replace.as_deref(), copy.unwrap_or(false)) {
                     (Some(id), _) => rbl_db::write::FolderClash::Replace(id),
                     (None, true) => rbl_db::write::FolderClash::Copy,
@@ -3649,6 +3650,9 @@ pub async fn import_folder_playlist<R: tauri::Runtime>(
             // new playlist away and puts the replaced list back. The tracks
             // it imported stay in the collection.
             writing.edit_history().lock().record(LibraryEdit::ReplacePlaylist(replacement), "Replace Playlist");
+        } else if replacing {
+            // A write of the history's own that it keeps no entry for.
+            writing.edit_history().lock().unrecorded(None);
         } else if report.playlist.is_some() {
             // An edit outside the undo history starts a new branch.
             writing.edit_history().lock().clear_redo();
@@ -4358,8 +4362,9 @@ async fn import_collection<R: tauri::Runtime>(
         // Looked for under the same edit gate as the import, so nothing can
         // make a same-named list between the question and the write.
         let _gate = writing.edit_gate().lock();
-        let outcome = writing
-            .write(|writer| {
+        // A Replace existing is planned for the Mutants of the playlists it
+        // may replace (wbx-80).
+        let outcome = crate::mutant_window::write_replacing(&writing, replace, |writer| {
                 if !replace {
                     let same_named = rbl_db::xml::same_named_lists(writer.library(), &document)?;
                     if !same_named.is_empty() {
@@ -4398,6 +4403,9 @@ async fn import_collection<R: tauri::Runtime>(
                 LibraryEdit::ReplacePlaylistContents(replacements),
                 REPLACE_PLAYLIST_CONTENTS,
             );
+        } else if replace {
+            // A write of the history's own that it keeps no entry for.
+            writing.edit_history().lock().unrecorded(None);
         } else if report.imported > 0 || report.playlists > 0 || changed_playlists {
             wrote_outside_history(&writing, false);
         }

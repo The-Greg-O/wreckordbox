@@ -306,6 +306,7 @@ pub mod stored {
             LibraryEdit::AddPlaylistTracks { .. } => "add_playlist_tracks",
             LibraryEdit::ReorderPlaylist(_) => "reorder_playlist",
             LibraryEdit::ReorderEntries(_) => "reorder_playlist_entries",
+            LibraryEdit::CopyPlaylist(_) => "copy_playlist",
             LibraryEdit::Track(_) => "track",
             LibraryEdit::KeyEdit { .. } => "key_edit",
             LibraryEdit::TrackTags { .. } => "track_tags",
@@ -604,6 +605,7 @@ pub(crate) fn takes_run(command: &str) -> bool {
     command == crate::protocol::commands::TRACKS_RATE
         || command == crate::intake::commands::TRACKS_SET_PREP_COLOUR
         || crate::mytag_edits::answers(command)
+        || crate::playlist_edits::answers(command)
 }
 
 pub(crate) fn answers(command: &str) -> bool {
@@ -812,6 +814,16 @@ struct Spilled {
     dj_snapshot: Option<Value>,
     #[serde(default)]
     dj_facts: Option<wreckordbox_sidecar::dj_facts::NativeFacts>,
+    /// The Mutants' consequences of the change (wbx-80), applied with it.
+    #[serde(default)]
+    follow: wreckordbox_sidecar::mutant_follow::Follow,
+    /// The consequences could not be worked out when the entry was made:
+    /// they are worked out from the Library and `mutant_plan` when it is
+    /// written.
+    #[serde(default)]
+    recover_mutants: bool,
+    #[serde(default)]
+    mutant_plan: Option<Value>,
 }
 
 struct WindowRun {
@@ -837,6 +849,8 @@ struct Op {
     description: String,
     command: Option<Value>,
     dj_snapshot: Option<Value>,
+    /// What the write planned for Mutants before it was made (wbx-80).
+    mutant_plan: Option<Value>,
 }
 
 #[derive(Default)]
@@ -868,6 +882,11 @@ struct Draft<'a> {
     reverses: Option<i64>,
     part_of: Option<i64>,
     payload: Option<Value>,
+    /// What the change means for the Mutants of its entries (wbx-80), or
+    /// why that could not be worked out.
+    follow: Result<wreckordbox_sidecar::mutant_follow::Follow, String>,
+    /// The plan its write left with the intent, for working it out again.
+    plan: Option<Value>,
 }
 
 /// Failures a test can inject into a service with [`FAULTS_ENV`], honoured
@@ -1214,14 +1233,21 @@ impl Keeper {
         }
         self.write_waiting(sidecar, state)?;
         for open in sidecar.open_intents().map_err(|e| e.to_string())? {
+            // What the unconfirmed write did to entries: the Library as it
+            // is, and what it planned. A failed read keeps it unsettled.
+            let follow =
+                crate::mutant_follow::recover(&self.location, sidecar, open.mutant_plan.as_ref())
+                    .map_err(|why| {
+                    format!("the Mutants of an unconfirmed change could not be recovered: {why}")
+                })?;
             let run = match open.run {
                 Some(run) => run,
                 None => late_run(sidecar, &open.source, &open.description)?,
             };
             let facts =
                 crate::dj_facts::recover(&self.location, &self.stems, open.dj_snapshot.as_ref());
-            sidecar
-                .append_with_dj_facts(
+            let (_, followed) = sidecar
+                .append_following(
                     &NewEntry {
                         id: Some(open.id),
                         run,
@@ -1244,8 +1270,10 @@ impl Keeper {
                     },
                     &facts,
                     true,
+                    &follow,
                 )
                 .map_err(|e| e.to_string())?;
+            crate::mutant_follow::announce(&self.stems, &followed);
         }
         sidecar
             .finish_owned_runs("wreckordbox stopped without ending it")
@@ -1272,8 +1300,19 @@ impl Keeper {
                     waiting.dj_snapshot.as_ref(),
                 ),
             };
-            sidecar
-                .append_with_dj_facts(
+            let recovered;
+            let follow = if waiting.recover_mutants {
+                recovered = crate::mutant_follow::recover(
+                    &self.location,
+                    sidecar,
+                    waiting.mutant_plan.as_ref(),
+                )?;
+                &recovered
+            } else {
+                &waiting.follow
+            };
+            let (_, followed) = sidecar
+                .append_following(
                     &NewEntry {
                         id: waiting.id,
                         run,
@@ -1292,8 +1331,10 @@ impl Keeper {
                     },
                     &facts,
                     reconciled,
+                    follow,
                 )
                 .map_err(|e| e.to_string())?;
+            crate::mutant_follow::announce(&self.stems, &followed);
             state.unwritten.remove(0);
             if self.faults.abort_in_replay {
                 std::process::abort();
@@ -1324,6 +1365,18 @@ impl Keeper {
             state.done.push(op.id);
             return;
         }
+        let follow = match crate::mutant_follow::recover(
+            &self.location,
+            sidecar,
+            op.mutant_plan.as_ref(),
+        ) {
+            Ok(follow) => follow,
+            Err(error) => {
+                // Left as an open intent: the next service recovers it.
+                tracing::error!(%error, intent = op.id, "a change's Mutants could not be recovered; the next service tries again");
+                return;
+            }
+        };
         let run = if op.window {
             self.window_run(sidecar, state)
         } else {
@@ -1334,7 +1387,7 @@ impl Keeper {
             let facts =
                 crate::dj_facts::recover(&self.location, &self.stems, op.dj_snapshot.as_ref());
             sidecar
-                .append_with_dj_facts(
+                .append_following(
                     &NewEntry {
                         id: Some(op.id),
                         run,
@@ -1357,11 +1410,43 @@ impl Keeper {
                     },
                     &facts,
                     true,
+                    &follow,
                 )
+                .map(|(_, followed)| crate::mutant_follow::announce(&self.stems, &followed))
                 .map_err(|e| e.to_string())
         });
         if let Err(error) = appended {
             tracing::error!(%error, intent = op.id, "a change to the Library was made and could not be recorded; the next service reports it");
+        }
+    }
+
+    /// Before a write that replaces or copies playlist entries: what its
+    /// Mutants need should the write never be confirmed, kept with the
+    /// write's intent (wbx-80). Best effort, as recovery evidence is: it
+    /// never refuses a write, and a write it could not plan is recovered
+    /// by detaching, without carrying.
+    fn plan_mutants(&self, db: &rbl_db::Library, targets: &rbl_library::ledger::Preparation) {
+        let Ok(sidecar) = self.stems.sidecar() else {
+            return;
+        };
+        let plan = match crate::mutant_follow::plan_before(db, &sidecar, targets.replaces_entries) {
+            Ok(Some(plan)) => plan,
+            Ok(None) => return,
+            Err(error) => {
+                tracing::warn!(%error, "the Mutants of a replacement or copy could not be planned");
+                return;
+            }
+        };
+        let id = {
+            let mut state = self.state();
+            let Some(op) = state.op.as_mut() else {
+                return;
+            };
+            op.mutant_plan = Some(plan.clone());
+            op.id
+        };
+        if let Err(error) = sidecar.capture_mutant_plan(id, &plan) {
+            tracing::warn!(%error, "a Mutant plan could not be kept with its intent");
         }
     }
 
@@ -1474,12 +1559,20 @@ impl Keeper {
             }
             let at = now();
             let reversible = draft.payload.is_some();
+            let (follow, unworked) = match draft.follow {
+                Ok(follow) => (follow, None),
+                Err(why) => (wreckordbox_sidecar::mutant_follow::Follow::default(), Some(why)),
+            };
             let written = match (&sidecar, &run) {
+                (Ok(_), Ok(_)) if unworked.is_some() => Err(format!(
+                    "the Mutants' consequences could not be worked out: {}",
+                    unworked.clone().unwrap_or_default()
+                )),
                 (Ok(_), Ok(_)) if self.faults.refuse_append() => {
                     Err("the Sidecar refused the entry (injected)".to_owned())
                 }
                 (Ok(sidecar), Ok(run)) if state.unwritten.is_empty() => sidecar
-                    .append_with_dj_facts(&NewEntry {
+                    .append_following(&NewEntry {
                         id,
                         run: *run,
                         store: Store::Library,
@@ -1494,7 +1587,11 @@ impl Keeper {
                         reversible,
                         format: stored::FORMAT,
                         payload: draft.payload.as_ref(),
-                    }, &dj_facts, false)
+                    }, &dj_facts, false, &follow)
+                    .map(|(id, followed)| {
+                        crate::mutant_follow::announce(&self.stems, &followed);
+                        id
+                    })
                     .map_err(|e| e.to_string()),
                 (Ok(_), Ok(_)) => Err("earlier entries are still waiting to be written".to_owned()),
                 (Err(error), _) => Err(error.message.clone()),
@@ -1523,6 +1620,9 @@ impl Keeper {
                         payload: draft.payload,
                         dj_snapshot,
                         dj_facts: Some(dj_facts),
+                        recover_mutants: unworked.is_some(),
+                        mutant_plan: draft.plan,
+                        follow,
                     };
                     let on_disk = sidecar
                         .as_ref()
@@ -1618,6 +1718,7 @@ impl Keeper {
             description,
             command,
             dj_snapshot,
+            mutant_plan: None,
         });
         drop(state);
         if let Some(delay) = self.faults.delay_after_begin {
@@ -1679,10 +1780,14 @@ impl rbl_library::ledger::Ledger for Keeper {
             reverses: None,
             part_of: None,
             payload: None,
+            // A file edit moves no playlist entry.
+            follow: Ok(wreckordbox_sidecar::mutant_follow::Follow::default()),
+            plan: None,
         });
     }
 
     fn prepare(&self, db: &rbl_db::Library, targets: &rbl_library::ledger::Preparation) {
+        self.plan_mutants(db, targets);
         let mut state = self.state();
         let Some(op) = state
             .op
@@ -1721,6 +1826,21 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn record(&self, step: Step, edit: &LibraryEdit, label: &str, link: Link) -> Option<i64> {
+        let sidecar = self.stems.sidecar().ok();
+        // The plan the write left with its intent, before it was made.
+        let plan = self
+            .state()
+            .op
+            .as_ref()
+            .filter(|op| !op.recorded)
+            .and_then(|op| op.mutant_plan.clone());
+        let follow = crate::mutant_follow::of_edit(
+            &self.location,
+            sidecar.as_deref(),
+            step,
+            edit,
+            plan.as_ref(),
+        );
         self.append(Draft {
             action: match step {
                 Step::Edit => Action::Edit,
@@ -1732,6 +1852,8 @@ impl rbl_library::ledger::Ledger for Keeper {
             reverses: link.reverses,
             part_of: link.part_of,
             payload: stored::store(edit),
+            follow,
+            plan,
         })
     }
 
@@ -1753,6 +1875,16 @@ impl rbl_library::ledger::Ledger for Keeper {
             }
             return;
         };
+        // Rows removed for good (Remove from Collection) name no entries:
+        // the Mutants are brought into line with the Library instead.
+        let follow = match kept {
+            Unkept::Permanent => self
+                .stems
+                .sidecar()
+                .map_err(|error| error.message)
+                .and_then(|sidecar| crate::mutant_follow::reconcile(&self.location, &sidecar)),
+            Unkept::Unrecorded => Ok(wreckordbox_sidecar::mutant_follow::Follow::default()),
+        };
         self.append(Draft {
             action: Action::Edit,
             kind: match kept {
@@ -1763,6 +1895,8 @@ impl rbl_library::ledger::Ledger for Keeper {
             reverses: None,
             part_of: None,
             payload: None,
+            follow,
+            plan: None,
         });
     }
 }

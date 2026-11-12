@@ -71,7 +71,7 @@ test("Auto Relocate shows Searching... and analysis asked for meanwhile waits fo
   await expect(search.getByRole("button")).toHaveCount(0);
 
   await rowOf(page, 0).locator('[data-col="title"]').click();
-  await page.keyboard.press("Shift+Meta+A");
+  await page.keyboard.press("Shift+ControlOrMeta+A");
   const dialog = page.getByRole("dialog", { name: "Analysis Setting" });
   await dialog.getByRole("button", { name: "OK", exact: true }).click();
   await expect(status).toContainText("Analyzing 1 trackQueued");
