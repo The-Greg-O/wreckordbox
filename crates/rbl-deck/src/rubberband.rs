@@ -46,6 +46,8 @@ mod ffi {
         pub fn rubberband_set_pitch_scale(state: RubberBandState, scale: f64);
         pub fn rubberband_set_max_process_size(state: RubberBandState, samples: u32);
         pub fn rubberband_get_samples_required(state: RubberBandState) -> u32;
+        pub fn rubberband_get_preferred_start_pad(state: RubberBandState) -> u32;
+        pub fn rubberband_get_start_delay(state: RubberBandState) -> u32;
         pub fn rubberband_process(
             state: RubberBandState,
             input: *const *const f32,
@@ -172,6 +174,16 @@ impl Stretcher for RubberBand {
 
     fn pitch_scale(&self) -> f32 {
         self.pitch_scale
+    }
+
+    fn start_pad(&self) -> usize {
+        // SAFETY: a live state; the call only reads.
+        unsafe { ffi::rubberband_get_preferred_start_pad(self.state) as usize }
+    }
+
+    fn start_delay(&self) -> usize {
+        // SAFETY: a live state; the call only reads.
+        unsafe { ffi::rubberband_get_start_delay(self.state) as usize }
     }
 
     fn wants(&self) -> usize {
