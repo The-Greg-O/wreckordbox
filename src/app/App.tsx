@@ -2182,7 +2182,7 @@ function AppBody() {
         },
       });
     },
-    [afterWrite, analysisPrefs.auto, analysis, jobs, t],
+    [afterWrite, analysisPrefs.auto, analysis, jobs, t, refuse],
   );
 
   // Analysis Lock: the GRID panel's lock, set from the list on every

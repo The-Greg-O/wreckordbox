@@ -92,9 +92,10 @@ export function useAnalysis(
   }, []);
   useEffect(() => {
     mounted.current = true;
+    const active = inFlight.current;
     return () => {
       mounted.current = false;
-      if (inFlight.current.size === 0) finishOperation();
+      if (active.size === 0) finishOperation();
     };
   }, [finishOperation]);
   // Whether a run has been going, so the drain fires once at its end.

@@ -145,14 +145,14 @@ it("queues tracks without key analysis when Analyze key is off", async () => {
 it("shares one Ledger operation across concurrent tracks and ends it after the last completion", async () => {
  const finish = new Map<string, (result: AnalysisResult) => void>();
  held.analyseTrack.mockImplementation((id: string) => new Promise<AnalysisResult>(resolve => finish.set(id, resolve)));
- await act(async () => {root.render(<Harness preferences={DEFAULT_PREFERENCES.analysis}/>);});
- await act(async () => {analysis.add([{id:"one",title:"One"},{id:"two",title:"Two"}]);});
+ await act(async () => {root.render(<Harness preferences={DEFAULT_PREFERENCES.analysis}/>); await Promise.resolve();});
+ await act(async () => {analysis.add([{id:"one",title:"One"},{id:"two",title:"Two"}]); await Promise.resolve();});
  expect(held.beginLedgerOperation).toHaveBeenCalledTimes(1);
- expect(held.analyseTrack.mock.calls.map(call => call[6])).toEqual(["analysis-operation","analysis-operation"]);
+ expect(held.analyseTrack.mock.calls.map(call => String(call[6]))).toEqual(["analysis-operation","analysis-operation"]);
  const value=(id:string):AnalysisResult=>({trackId:id,bpmX100:12800,key:"Am",beats:1,peak:1,durationSec:1,elapsedMs:1,analysisPath:""});
- await act(async () => {finish.get("one")!(value("one"));});
+ await act(async () => {finish.get("one")!(value("one")); await Promise.resolve();});
  expect(held.finishLedgerOperation).not.toHaveBeenCalled();
- await act(async () => {finish.get("two")!(value("two"));});
+ await act(async () => {finish.get("two")!(value("two")); await Promise.resolve();});
  expect(held.finishLedgerOperation).toHaveBeenCalledExactlyOnceWith("analysis-operation");
 });
 
