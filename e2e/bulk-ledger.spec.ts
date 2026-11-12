@@ -5,7 +5,7 @@ test("analysis completes one operation and shows a Ledger failure separately fro
   const rows = page.getByRole("row").filter({ has: page.getByRole("gridcell") });
   await rows.nth(2).click();
   await rows.nth(3).click({ modifiers: ["Shift"] });
-  await page.keyboard.press("Shift+Meta+A");
+  await page.keyboard.press("Shift+ControlOrMeta+A");
   const dialog = page.getByRole("dialog", { name: "Analysis Setting" });
   await dialog.getByRole("button", { name: "OK", exact: true }).click();
   await expect(page.getByRole("contentinfo")).toContainText("Library changes were accepted, but their Ledger recording is incomplete.");

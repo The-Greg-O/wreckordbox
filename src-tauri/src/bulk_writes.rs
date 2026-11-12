@@ -91,7 +91,7 @@ impl Recording {
             Ok(value) => Ok((value, warning)),
             Err(mut error) => {
                 if let Some(warning) = warning {
-                    error.message.push_str(" ");
+                    error.message.push(' ');
                     error.message.push_str(&warning);
                 }
                 Err(error)

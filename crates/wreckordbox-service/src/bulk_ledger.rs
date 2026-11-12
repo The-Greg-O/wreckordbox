@@ -123,6 +123,10 @@ impl Drop for Scope {
     }
 }
 #[derive(Default)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "admission, completion and degraded recording are independent states"
+)]
 struct State {
     began: bool,
     intent: Option<i64>,
@@ -265,15 +269,14 @@ impl Session {
         }
         let result = (|| -> Result<(), String> {
             let sidecar = self.stems.sidecar().map_err(|e| e.message)?;
-            let run = match state.run {
-                Some(run) => run,
-                None => {
-                    let run = sidecar
-                        .begin_bulk_run(state.intent, &self.source, self.description)
-                        .map_err(|e| e.to_string())?;
-                    state.run = Some(run);
-                    run
-                }
+            let run = if let Some(run) = state.run {
+                run
+            } else {
+                let run = sidecar
+                    .begin_bulk_run(state.intent, &self.source, self.description)
+                    .map_err(|e| e.to_string())?;
+                state.run = Some(run);
+                run
             };
             if self.faults.refuse_append() {
                 return Err("injected bulk append failure".into());
@@ -311,7 +314,7 @@ impl Session {
             }
             Err(error) => {
                 state.failed_flush = true;
-                self.warning(state, error)
+                self.warning(state, error);
             }
         }
     }

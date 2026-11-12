@@ -374,3 +374,52 @@ fn finishing_during_a_write_waits_for_its_result() {
         .unwrap();
     assert_eq!(shown["entries"][0]["kind"], "analysis");
 }
+
+#[test]
+fn an_unavailable_sidecar_does_not_refuse_this_or_the_next_bulk_write() {
+    let f = Fixture::new(3);
+    std::fs::create_dir_all(f.dir.path().join("library/wreckordbox-sidecar/sidecar.db")).unwrap();
+    for i in 0..2 {
+        let operation = Operation::new(&f.core, Kind::Analysis);
+        operation
+            .run(
+                json!({"track":fixture::track_id(i)}),
+                || {
+                    f.core.write_then(
+                        &NoHost,
+                        History::Outside,
+                        |w| {
+                            w.set_analysis(
+                                &fixture::track_id(i),
+                                &rbl_db::write::AnalysisWrite {
+                                    bpm_x100: 12345,
+                                    key: None,
+                                    analysis_path: "/fixture/ANLZ0000.DAT",
+                                    length_sec: None,
+                                },
+                            )
+                        },
+                        |_, value| Ok(value),
+                    )
+                },
+                |_| vec![json!({"track":fixture::track_id(i)})],
+            )
+            .unwrap();
+        assert!(operation.finish().unwrap().contains("accepted"));
+        let db = f.core.open_read_only().unwrap();
+        assert_eq!(
+            db.connection()
+                .query_row(
+                    "SELECT BPM FROM djmdContent WHERE ID=?1",
+                    [fixture::track_id(i)],
+                    |row| row.get::<_, u32>(0)
+                )
+                .unwrap(),
+            12345
+        );
+    }
+    assert!(
+        f.service.call("runs.list", json!({})).is_err(),
+        "an unavailable Sidecar is not an empty Ledger"
+    );
+}

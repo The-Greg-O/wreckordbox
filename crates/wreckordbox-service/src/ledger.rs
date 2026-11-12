@@ -59,8 +59,8 @@
 //!    [`UNCONFIRMED`] under its identifier when the next write begins or
 //!    the service stops.
 //!
-//! On start, and before `runs.list` or `runs.show` answers, the Keeper
-//! settles what an earlier service left: its kept entries are written,
+//! On start and at write admission, the Keeper settles what an earlier
+//! service left: its kept entries are written,
 //! each intent no entry settled becomes an [`UNCONFIRMED`] entry saying
 //! the change was begun and not confirmed (whether the Library committed
 //! it is not known), and the Runs it owned (the window's, a command's
@@ -73,6 +73,12 @@
 //! meanwhile. When the service stops, no write is begun, the Library's
 //! edit gate is taken so the window's edit in progress is over and
 //! recorded, and only then is the Ledger taken off the core.
+//!
+//! Bulk analysis and local-file imports use `rbl_library::bulk::Operation`:
+//! one operation intent and lazy Run, with confirmed results flushed in bounded
+//! batches. Only writes outside Undo history join it; recorded playlist edits
+//! retain their ordinary preparation and transactional Mutant Follows. See
+//! `bulk_ledger.rs` for bounded degradation when recording fails.
 //!
 //! # Locks
 //!
@@ -1169,8 +1175,7 @@ impl Keeper {
     }
 
     /// Settles what an earlier service left, when there is a Sidecar:
-    /// asked before the Ledger is read and as the service starts, so a
-    /// reader never sees less than was done.
+    /// asked as the service starts. Queries never call this or open a writer.
     pub(crate) fn recover(&self) -> Result<(), ServiceError> {
         let Some(sidecar) = self.stems.sidecar_if_made()? else {
             self.state().settled = true;

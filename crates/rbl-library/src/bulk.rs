@@ -5,7 +5,10 @@ use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
+    /// Results of the analysis tool, regardless of who requested the batch.
     Analysis,
+    /// Local file imports, attributed to the caller (or the DJ in the window).
+    /// Player metadata and Round-trip need their own player source, not this kind.
     Import,
 }
 
@@ -43,7 +46,12 @@ impl Operation {
         if let Some(step) = &mut step {
             step.complete(match &result {
                 Ok(value) => values(value),
-                Err(error) => vec![serde_json::json!({"target":target,"status":"partial_or_failed","error":error.to_string()})],
+                Err(error) => {
+                    let mut record =
+                        serde_json::json!({"status":"partial_or_failed","error":error.to_string()});
+                    record["target"] = target;
+                    vec![record]
+                }
             });
         }
         result
