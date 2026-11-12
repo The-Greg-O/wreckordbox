@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use wreckordbox_sidecar::{
     dj_facts::{NativeAudio, NativeFact, NativeFacts},
-    TagSchema, TAG_SCHEMA_FILE,
+    Kinds, TagSchema, ValueType, TAG_SCHEMA_FILE,
 };
 
 type Values = BTreeMap<String, BTreeMap<String, Value>>;
@@ -17,6 +17,8 @@ struct Snapshot {
     schema: Option<String>,
     track: Option<String>,
     values: Values,
+    #[serde(default)]
+    text_dimensions: Vec<String>,
 }
 
 pub(crate) fn before(
@@ -41,11 +43,38 @@ pub(crate) fn before(
         })
         .and_then(|c| c["args"]["id"].as_str())
         .map(str::to_owned);
-    let values = read(location, schema.as_deref(), track.as_deref())?;
+    let text_dimensions = match schema.as_deref() {
+        Some(text) => {
+            let schema = TagSchema::parse(text)
+                .map_err(|errors| format!("invalid Tag schema: {errors:?}"))?;
+            let kinds = Kinds::load_declared(stems.sidecar_dir())
+                .map_err(|e| e.to_string())?
+                .with_schema(&schema)
+                .map_err(|errors| format!("invalid Tag schema: {errors:?}"))?;
+            schema
+                .dimensions
+                .iter()
+                .filter(|d| {
+                    kinds
+                        .get(&d.name)
+                        .is_some_and(|k| k.value == ValueType::Text)
+                })
+                .map(|d| d.name.clone())
+                .collect()
+        }
+        None => Vec::new(),
+    };
+    let values = read(
+        location,
+        schema.as_deref(),
+        track.as_deref(),
+        &text_dimensions,
+    )?;
     serde_json::to_value(Snapshot {
         schema,
         track,
         values,
+        text_dimensions,
     })
     .map_err(|e| e.to_string())
 }
@@ -58,7 +87,12 @@ pub(crate) fn changed(
         return Ok(NativeFacts::default());
     };
     let before: Snapshot = serde_json::from_value(before.clone()).map_err(|e| e.to_string())?;
-    let after = read(location, before.schema.as_deref(), before.track.as_deref())?;
+    let after = read(
+        location,
+        before.schema.as_deref(),
+        before.track.as_deref(),
+        &before.text_dimensions,
+    )?;
     let mut facts = Vec::new();
     for (track, fields) in before.values {
         let Some(current) = after.get(&track) else {
@@ -121,6 +155,7 @@ fn read(
     location: &LibraryLocation,
     schema: Option<&str>,
     track: Option<&str>,
+    text_dimensions: &[String],
 ) -> Result<Values, String> {
     let db = Library::open(location.clone(), OpenMode::ReadOnly).map_err(|e| e.to_string())?;
     let conn = db.connection();
@@ -213,7 +248,20 @@ fn read(
             }
             terms.sort();
             terms.dedup();
-            fields.insert(view.dimension.clone(), json!(terms));
+            let value =
+                if text_dimensions.contains(&view.dimension) {
+                    match terms.as_slice() {
+                        [] => Value::Null,
+                        [term] => json!(term),
+                        _ => return Err(format!(
+                            "{} is a single-text dimension but track {track} carries several terms",
+                            view.dimension
+                        )),
+                    }
+                } else {
+                    json!(terms)
+                };
+            fields.insert(view.dimension.clone(), value);
         }
     }
     Ok(values)

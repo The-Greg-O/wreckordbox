@@ -58,7 +58,33 @@ The reusable resolver is `wreckordbox_sidecar::precedence::Rules`. Callers
 supply one track and kind and verify Measurement fingerprints before resolving.
 Projection must also validate values against the current Tag schema.
 
-Automatic recording of Library hand edits as DJ Facts and atomic writes across
-the Library and Sidecar are still outstanding parts of wbx-19. This query
-resolves Facts already recorded by `facts record`, conversion or other producers;
-it does not turn a Library edit into a Fact.
+Library hand edits made by the window, or by the CLI with `--source dj`,
+record matching DJ Facts through the existing Ledger recording point. Unnamed
+CLI edits remain `tool:wreckordbox`; an agent or Projection retains its own
+source and produces no DJ Facts.
+
+Native fields are Energy (star rating), Prep colour (the canonical colour,
+not its custom label), title, artist, and MyTags mapped through the current
+Tag schema's deck labels to dimension term identifiers. A tree records only
+the most specific terms. List dimensions use lists; single-text dimensions
+use one term. A cleared scalar is `null`; a cleared list is `[]`. These explicit
+clears supersede earlier DJ answers. MyTags need a Tag schema to identify the
+questions they answer. Compatible older title/artist declarations in
+`kinds.toml` remain readable now that those kinds are built in.
+
+The Library and Sidecar have no shared transaction. Before the Library write,
+the Ledger commits its intent, retaining native pre-edit values and the schema
+used to interpret them. After the write, its single recording point commits
+the entry, DJ Facts, attachment/audio observations and Fact-to-entry links in
+one Sidecar transaction and clears the intent. A refused or failed Library
+write clears its intent without an entry or Fact. A failed Sidecar append
+retains the existing Ledger spill/intent for recovery; Fact queries report a
+pending edit instead of returning old standing data.
+
+On startup, an intent without a recorded entry becomes an `unconfirmed` entry.
+Its DJ Facts are reconciled from the Library's actual current native values,
+not from the interrupted command's arguments. `ledger_entry` identifies the
+entry and `reconciled: true` marks that recovery. Normal edits have
+`reconciled: false`. Undo and redo use the same path and supersede the prior
+DJ Facts. Linked native Facts are part of their Library entry, not duplicate
+edits in `runs show` or Run counts.

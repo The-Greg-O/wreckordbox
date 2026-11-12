@@ -169,3 +169,46 @@ fn a_hand_fact_keeps_the_audio_identity_for_reattachment() {
         fact["fingerprint"].as_str().unwrap()
     );
 }
+
+#[test]
+fn a_single_text_schema_dimension_records_its_term_not_a_list() {
+    let s = Sandbox::new();
+    std::fs::create_dir_all(s.sidecar_dir()).unwrap();
+    std::fs::write(
+        s.sidecar_dir().join("tag-schema.toml"),
+        r#"version = 1
+[dimensions.vocals]
+terms = [{id = "peak", name = "Peak"}, {id = "warm-up", name = "Warm-up"}]
+[deck]
+categories = [{dimension = "vocals", label = "Situation"}]
+"#,
+    )
+    .unwrap();
+    ok(
+        &s,
+        &[
+            "mytags",
+            "assign",
+            rbl_db::fixture::MY_TAG_PEAK,
+            "10003",
+            "--source",
+            "dj",
+        ],
+    );
+    assert_eq!(
+        ok(&s, &["facts", "standing", "10003", "vocals"])["standing"]["value"],
+        "peak"
+    );
+    ok(
+        &s,
+        &[
+            "mytags",
+            "unassign",
+            rbl_db::fixture::MY_TAG_PEAK,
+            "10003",
+            "--source",
+            "dj",
+        ],
+    );
+    assert!(ok(&s, &["facts", "standing", "10003", "vocals"])["standing"]["value"].is_null());
+}
