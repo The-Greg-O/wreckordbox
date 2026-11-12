@@ -625,6 +625,7 @@ async function realBackend(): Promise<Backend> {
     explorerChildren: (path) => invoke<ExplorerChildren>("explorer_children", { path }),
     deviceLibraries: (path) => invoke<DeviceLibrary[]>("device_libraries", { path }),
     stickOutline: (path) => invoke<StickOutline>("stick_outline", { path }),
+    settleStick: (path) => invoke<void>("stick_settle", { path }),
     devicePlaylistCollectionTracks: (path, format, tracks) =>
       invoke<(string | null)[]>("device_playlist_collection_tracks", { path, format, tracks }),
     devicePlaylistEdit: (path, format, edit) =>

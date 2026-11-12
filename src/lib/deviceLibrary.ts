@@ -14,6 +14,7 @@
  */
 import type { DeviceFormat, DeviceLibrary, TreeNode, ViewSpec } from "@/ipc/types";
 import { devicePath } from "./devices";
+import { unfinishedWriteNote } from "./stickRecovery";
 
 /** What a node under a stick is. */
 export type DeviceNodeRole = "library" | "allTracks" | "playlists" | "node";
@@ -84,6 +85,8 @@ export const LIBRARY_NAMES: Record<DeviceFormat, string> = {
 export function withDeviceLibraries(
   devices: readonly TreeNode[],
   loaded: ReadonlyMap<string, readonly DeviceLibrary[]>,
+  /** Sticks whose last write did not finish: a line says so instead (wbx-45.5). */
+  unfinished: ReadonlySet<string> = new Set(),
 ): TreeNode[] {
   const out: TreeNode[] = [];
   for (const device of devices) {
@@ -91,6 +94,10 @@ export function withDeviceLibraries(
     const path = devicePath(device.id);
     const libraries = path === null ? undefined : loaded.get(path);
     if (path === null || !libraries) continue;
+    if (unfinished.has(path)) {
+      out.push(unfinishedWriteNote(path, device.depth + 1));
+      continue;
+    }
     for (const library of libraries) {
       const ref = (role: DeviceNodeRole, id = "0") => deviceNodeId({ path, format: library.format, role, id });
       out.push({ id: ref("library"), name: LIBRARY_NAMES[library.format], kind: "deviceLibrary", depth: device.depth + 1 });

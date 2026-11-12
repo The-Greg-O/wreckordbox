@@ -5,6 +5,10 @@
  * are read again after an edit to them, and whenever the device list
  * changes (an export, a stick plugged in or out), since either can have
  * rewritten them. A stick that is gone is forgotten. Nothing is polled.
+ *
+ * None of these reads settles a stick's unfinished write: the backend
+ * refuses with `unfinishedWrite` and the tree says so under the stick
+ * (wbx-45.5). `settle` is the DJ's explicit action that does.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -12,6 +16,7 @@ import { getBackend } from "@/ipc/client";
 import type { Device, DeviceFormat, DeviceLibrary, DevicePlaylistEdit, DevicePlaylistEditResult, TreeNode } from "@/ipc/types";
 import { withDeviceLibraries } from "@/lib/deviceLibrary";
 import { deviceNodes, devicePath } from "@/lib/devices";
+import { isUnfinishedWrite } from "@/lib/stickRecovery";
 
 export interface DeviceLibraries {
   /** The Devices section: each stick, and under an opened one its libraries. */
@@ -26,11 +31,17 @@ export interface DeviceLibraries {
   refresh: (path: string) => Promise<void>;
   /** Bumped after every edit, so a view of a stick's library opens again. */
   revision: number;
+  /**
+   * Settles the stick's unfinished write (writes to it: only for the action
+   * the DJ chose), then reads it again. Rejects with the backend's reason.
+   */
+  settle: (path: string) => Promise<void>;
 }
 
 export function useDeviceLibraries(devices: readonly Device[]): DeviceLibraries {
   const [loaded, setLoaded] = useState<ReadonlyMap<string, readonly DeviceLibrary[]>>(() => new Map());
   const [revision, setRevision] = useState(0);
+  const [unfinished, setUnfinished] = useState<ReadonlySet<string>>(() => new Set());
   // Sticks asked for and not yet answered, so a double-click on a twisty
   // does not read the same stick twice.
   const pending = useRef<Set<string>>(new Set());
@@ -43,13 +54,22 @@ export function useDeviceLibraries(devices: readonly Device[]): DeviceLibraries 
     pending.current.add(path);
     const backend = await getBackend();
     let found: readonly DeviceLibrary[] = [];
+    let interrupted = false;
     try {
       found = await backend.deviceLibraries(path);
-    } catch {
+    } catch (error) {
       // Unreadable, or gone: a stick with nothing under it, as the Explorer
-      // shows a folder it may not open.
+      // shows a folder it may not open. An unfinished write is said.
+      interrupted = isUnfinishedWrite(error);
     }
     pending.current.delete(path);
+    setUnfinished((current) => {
+      if (current.has(path) === interrupted) return current;
+      const next = new Set(current);
+      if (interrupted) next.add(path);
+      else next.delete(path);
+      return next;
+    });
     setLoaded((current) => new Map(current).set(path, found));
   }, []);
 
@@ -93,7 +113,13 @@ export function useDeviceLibraries(devices: readonly Device[]): DeviceLibraries 
     setRevision((revision) => revision + 1);
   }, [read]);
 
-  const nodes = useMemo(() => withDeviceLibraries(deviceNodes(devices), loaded), [devices, loaded]);
+  const settle = useCallback(async (path: string) => {
+    const backend = await getBackend();
+    await backend.settleStick(path);
+    await refresh(path);
+  }, [refresh]);
 
-  return useMemo(() => ({ nodes, expand, edit, refresh, revision }), [nodes, expand, edit, refresh, revision]);
+  const nodes = useMemo(() => withDeviceLibraries(deviceNodes(devices), loaded, unfinished), [devices, loaded, unfinished]);
+
+  return useMemo(() => ({ nodes, expand, edit, refresh, revision, settle }), [nodes, expand, edit, refresh, revision, settle]);
 }

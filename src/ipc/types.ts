@@ -264,8 +264,12 @@ export interface AppErrorDto {
    * `conflict`: an Undo or Redo was refused because what it would write was
    * changed since by something outside the history; nothing was written and
    * the entry is gone (#506).
+   *
+   * `unfinishedWrite`: a Stick's last write did not finish. Reads of it
+   * report this instead of settling it; `settleStick` is the action that
+   * does (wbx-45.5).
    */
-  kind: "readOnly" | "notFound" | "malformed" | "cancelled" | "conflict" | "internal";
+  kind: "readOnly" | "notFound" | "malformed" | "cancelled" | "conflict" | "unfinishedWrite" | "internal";
   message: string;
   detail?: string;
 }
@@ -1124,6 +1128,14 @@ export interface Backend {
    * first, and reports one as `pending` with no playlists instead.
    */
   stickOutline(path: string): Promise<StickOutline>;
+  /**
+   * Settles a Stick's unfinished write: finishes the interrupted export if
+   * it can, otherwise puts back the files the Stick held before it; files
+   * another program wrote since are kept. This writes to the Stick: only for
+   * the action the DJ chose. Every read of such a Stick rejects with
+   * `unfinishedWrite` instead.
+   */
+  settleStick(path: string): Promise<void>;
   /** Maps collection track ids to rows already in one of a stick's libraries. */
   devicePlaylistCollectionTracks(path: string, format: DeviceFormat, tracks: string[]): Promise<(string | null)[]>;
   /**
