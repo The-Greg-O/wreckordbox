@@ -129,6 +129,12 @@
   --c-label-aqua: #56BDF3; /* measured from the device-panel captures docs/screenshots (rekordbox 7.2.11, 2x, 9.08.22 to 9.08.41 PM): the Aqua dot */
   --c-label-blue: #204FEF; /* measured from the device-panel captures docs/screenshots (rekordbox 7.2.11, 2x, 9.08.22 to 9.08.41 PM): the Blue dot */
   --c-label-purple: #8B1EEF; /* measured from the device-panel captures docs/screenshots (rekordbox 7.2.11, 2x, 9.08.22 to 9.08.41 PM): the Purple dot */
+  /* Energy's five levels, cool to hot (docs/design/tokens.md, Fixed colours; values from screens/mock.html). Meaning, not theme. */
+  --c-energy-1: #7aa2f7;
+  --c-energy-2: #0db9d7;
+  --c-energy-3: #9ece6a;
+  --c-energy-4: #ff9e64;
+  --c-energy-5: #f7768e;
   --c-info-tab-active: #3571E3; /* docs/screenshots 9.09.33/36/45 PM (rekordbox 7.2.11, 2x, the Information Window's Summary, Info and Artwork tabs): the selected tab's fill, (53,113,227) */
   --c-info-tab-active-text: #000000; /* docs/screenshots 9.09.33/36/45 PM (rekordbox 7.2.11, 2x, the Information Window's Summary, Info and Artwork tabs): the selected tab's label is black on the blue */
   --c-info-tab-text: #969696; /* docs/screenshots 9.09.33/36/45 PM (rekordbox 7.2.11, 2x, the Information Window's Summary, Info and Artwork tabs): an unselected tab's label, (150,150,150); its fill is the raised #323232 */

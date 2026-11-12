@@ -66,6 +66,7 @@ import { onPreviewError, stopPreview } from "@/store/usePreview";
 import { MasterOutputProvider, MasterOutputConnection, useMasterControls, useMasterDisplay } from "@/store/MasterOutput";
 import { asLayout, deckCount, isFullDeck, type PlayerLayout } from "@/lib/layout";
 import { DEFAULT_SHELL_VIEW, type ShellView } from "@/lib/shellViews";
+import { useLibraryColumns } from "@/store/useLibraryColumns";
 import { SHELL_PLAYER_LAYOUT, ViewShell } from "@/views/shell/ViewShell";
 import { FIELD_LABEL } from "@/views/info/fieldLabel";
 import { SubBrowser } from "@/views/subbrowser/SubBrowser";
@@ -467,6 +468,8 @@ function AppBody() {
   // Each mode has its own columns, as rekordbox keeps a `-FullArtwork`
   // layout beside each table's.
   const cols = useColumns(columnContext, artworkMode);
+  // The view shell's Library has its own columns and row look (#55).
+  const libraryColumns = useLibraryColumns();
   // The Preferences window, and the pane it opens on: the missing-file
   // manager lives under Advanced, so the File menu opens it there. In the
   // shell it is a window of its own; in a browser, which has no windows to
@@ -3381,6 +3384,12 @@ function AppBody() {
           onDeviceImport={importFromDevice}
         />
   );
+  // The main list's columns: the Library view's own in the shell (#55).
+  const listColumns = shellOn ? libraryColumns : {
+    columns: cols.columns, onColumnMove: cols.move, onColumnResize: cols.resize, onColumnToggle: cols.toggle,
+    onColumnAutoSize: cols.autoSize, onColumnAutoSizeAll: cols.autoSizeEvery,
+    artworkMode, onArtworkMode: setArtworkMode,
+  };
   const library = (
         selectedDevice ? (
           <Suspense fallback={null}><DevicePanel
@@ -3428,8 +3437,7 @@ function AppBody() {
           trafficLight={activeTrafficLight}
           onTrafficLight={setTrafficLight}
           trafficKey={trafficKey}
-          artworkMode={artworkMode}
-          onArtworkMode={setArtworkMode}
+          {...listColumns}
           onFocusedRow={(row, from) => { void openInDeckA(row, from); }}
           onSelectedRow={setSelectedRow}
           onDragTracks={setDraggedTracks}
@@ -3460,12 +3468,6 @@ function AppBody() {
           onSearchFieldChange={setSearchField}
           onQueryChange={setQuery}
           searchRef={searchRef}
-          columns={cols.columns}
-          onColumnMove={cols.move}
-          onColumnResize={cols.resize}
-          onColumnToggle={cols.toggle}
-          onColumnAutoSize={cols.autoSize}
-          onColumnAutoSizeAll={cols.autoSizeEvery}
           seed={seed}
           onFirstRows={onFirstRows}
           filterOpen={filterOpen}
