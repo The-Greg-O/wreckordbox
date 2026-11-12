@@ -194,6 +194,45 @@ fn the_command_works_on_the_open_windows_library() {
 }
 
 #[test]
+fn active_runs_follow_cli_work_in_the_host_and_a_second_client() {
+    let window = window();
+    let snapshot = || tauri::async_runtime::block_on(rbxport_lib::service_status::service_activity(window.app.state())).unwrap();
+    assert!(!snapshot().connected);
+    window.host().unwrap();
+    let generation = window.generation();
+    let active = || {
+        let snapshot = snapshot();
+        assert!(snapshot.connected);
+        assert!(snapshot.problem.is_none());
+        serde_json::to_value(snapshot.runs).unwrap()
+    };
+    assert_eq!(active(), serde_json::json!([]));
+    assert!(!window.location.master_db.parent().unwrap().join("wreckordbox-sidecar").exists(), "reading status must not create a Sidecar");
+    let mut client = window.client();
+    client.subscribe().unwrap();
+    let first = window.cli(&["--json", "runs", "start", "--source", "agent:tagger", "--description", "Tag the backlog"]).json();
+    let second = window.cli(&["--json", "runs", "start", "--source", "tool:meter", "--description", "Measure Intensity"]).json();
+    let expected = serde_json::json!([
+        { "id": first["id"], "description": "Tag the backlog" },
+        { "id": second["id"], "description": "Measure Intensity" }
+    ]);
+    assert_eq!(active(), expected);
+    assert_eq!(client.call::<serde_json::Value>("runs.active", serde_json::json!({})).unwrap(), expected);
+    window.cli(&["--json", "runs", "finish", &first["id"].to_string()]).json();
+    assert_eq!(active(), serde_json::json!([{ "id": second["id"], "description": "Measure Intensity" }]));
+    window.cli(&["--json", "runs", "finish", &second["id"].to_string()]).json();
+    assert_eq!(active(), serde_json::json!([]));
+    assert_eq!(window.generation(), generation);
+    assert!(window.changes.lock().unwrap().is_empty());
+    window.state().with_service(Service::stop).unwrap();
+    eventually("service:stopped", || !window.stopped.lock().unwrap().is_empty());
+    let stopped = snapshot();
+    assert!(!stopped.connected);
+    assert_eq!(stopped.problem.as_deref(), Some(service_host::STOPPED_MESSAGE));
+    assert!(stopped.runs.is_empty());
+}
+
+#[test]
 fn a_rating_set_from_the_command_shows_in_the_window_as_a_library_change() {
     let window = window();
     window.host().unwrap();

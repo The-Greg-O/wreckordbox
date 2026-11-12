@@ -11,6 +11,7 @@
  */
 import { TRACK_SEARCH_OPTIONS, type TrackSearchField } from "@/lib/search";
 import theme from "@/styles/theme";
+import { mockServiceActivity } from "./mock-service-activity";
 import { rowMemoryCueColours } from "@/lib/memoryCueColours";
 import { shiftByGridBeats } from "@/lib/player";
 
@@ -2920,9 +2921,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       return () => problemListeners.delete(listener);
     },
     libraryProblem: () => wait<LibraryProblem | null>(problem),
-    // The mock has no Library service to lose.
-    onServiceStopped: () => () => {},
-    serviceProblem: () => wait<string | null>(null),
+    ...mockServiceActivity(),
     createLibrary: async () => {
       await wait(undefined);
       libraryFound();

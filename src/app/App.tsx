@@ -95,6 +95,7 @@ import { TrackFilter } from "@/views/browser/TrackFilter";
 import { EMPTY_FILTER, toSpecFilter, type FilterState } from "@/lib/trackFilter";
 import type { AnalysisResult, DeviceFormat, DeviceImportMissing, DevicePlaylistEdit, DevicePlaylistImportPlan, FilterValues, LinkPeerSeen, LinkStatus, ListTotals, RelocateSearch, SmartRule, TrackLookups, UnanalysedTracks } from "@/ipc/types";
 import { statusBarListText } from "@/lib/format";
+import { StatusLine } from "@/views/shell/StatusLine";
 import { autoRelocated, missingAmong, relocateSteps, relocateTracks } from "@/lib/relocate";
 import { useTooltip } from "@/store/usePreferences";
 import { useTranslation } from "@/i18n";
@@ -3592,8 +3593,10 @@ function AppBody() {
         />
       </div>
   );
+  const Status = shellOn ? StatusLine : StatusBar;
   const statusBar = (
-      <StatusBar
+      <Status
+        serviceProblem={serviceProblem}
         jobs={jobList}
         onStopJob={stopJob}
         exports={(exportRunning ? exportBatch : []).map(job => ({

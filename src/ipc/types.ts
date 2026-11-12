@@ -373,6 +373,8 @@ export interface Backend {
   onServiceStopped(listener: (message: string) => void): () => void;
   /** What `onServiceStopped` said, for a window that was not listening yet. */
   serviceProblem(): Promise<string | null>;
+  /** Current connection and unfinished Runs, including work started by another client. */
+  serviceActivity(): Promise<import("./serviceActivity").ServiceActivity>;
 
   /**
    * Makes a new, empty library where rekordbox keeps one and loads it;
