@@ -2735,6 +2735,14 @@ function AppBody() {
     })();
   }, []);
 
+  // The DJ's explicit action in a Stick's panel, the one place the window
+  // settles a Stick's unfinished write (wbx-45.5); no read ever does. The
+  // Stick is read again (the shell's outline follows `revision`).
+  const settleStick = useCallback(async (path: string) => {
+    await deviceLibraries.settle(path);
+    refreshDevices();
+  }, [deviceLibraries, refreshDevices]);
+
   const ejectDeviceFromTree = useCallback(async (node: TreeNode) => {
     const path = devicePath(node.id);
     if (!path || ejectingDeviceRef.current || syncing || exportRunning) return;
@@ -3490,6 +3498,7 @@ function AppBody() {
             onSync={syncToDevice}
             onRefresh={refreshDevices}
             onError={refuse}
+            onSettle={settleStick}
             busy={syncing}
           /></Suspense>
         ) : (

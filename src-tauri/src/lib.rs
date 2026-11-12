@@ -35,6 +35,7 @@ mod diagnostics;
 mod explorer;
 mod device_library;
 mod stick_outline;
+mod stick_recovery;
 mod link;
 mod rx3_link;
 mod network_labels;
@@ -749,13 +750,13 @@ pub fn run() {
             cues::convert_memory_cues_to_hot,
             commands::filter_values,
             device_settings::device_settings,
-            device_settings::write_device_defaults,
             device_settings::save_device_settings,
             device_settings::ensure_device_library,
             explorer::explorer_roots,
             explorer::explorer_children,
             device_library::device_libraries,
             stick_outline::stick_outline,
+            stick_recovery::stick_settle,
             device_library::device_playlist_edit,
             device_library::device_playlist_add_files,
             device_library::device_playlist_collection_tracks,
