@@ -295,7 +295,25 @@ fn enrich_rows(state: &AppState, rows: &mut [RowDto], columns: &[String]) -> App
     if columns.iter().any(|column| column == "fileCreated") {
         enrich_file_created(state, rows)?;
     }
+    if columns.iter().any(|column| column == "myTags") {
+        enrich_my_tags(state, rows)?;
+    }
     Ok(())
+}
+
+/// Each row's MyTags with their ids and categories, for the view shell's
+/// Library (#55); see `row_my_tags`.
+fn enrich_my_tags(state: &AppState, rows: &mut [RowDto]) -> AppResult<()> {
+    state.read_db(|db| {
+        for row in rows.iter_mut() {
+            if row.id.starts_with("file:") {
+                continue;
+            }
+            let tags = crate::row_my_tags::row_my_tags(db.connection(), &row.id);
+            row.extra.get_or_insert_with(Default::default).insert("myTags".to_owned(), tags);
+        }
+        Ok(())
+    }).map_err(write_error)
 }
 
 /// The file system's creation time of each row's file, in seconds since the

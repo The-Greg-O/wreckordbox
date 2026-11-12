@@ -1154,10 +1154,10 @@ export const TrackTable = memo(function TrackTable({
     [layoutColumns, artworkMode, rowH],
   );
   const band = previewBand(rowH);
-  const extraColumns = useMemo(
-    () => EXTRA_COLUMNS.filter((key) => columns.some((column) => column.key === key) || look?.fetch.includes(key)),
-    [columns, look],
-  );
+  const extraColumns = useMemo(() => {
+    const shown = columns.map((column) => column.key);
+    return look ? look.fetch(shown) : EXTRA_COLUMNS.filter((key) => shown.includes(key));
+  }, [columns, look]);
   const headH = look?.headingHeight ?? COL_HEADER_H;
   const view = useTrackView(spec, libraryGeneration, pendingEdits, seed, extraColumns);
   const played = usePlayedTracks();

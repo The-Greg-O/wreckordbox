@@ -5,14 +5,14 @@
  * (`@/lib/columns`, which the old layout keeps until #77): its own labels,
  * widths sized for the design's density, and its own stored choice. The keys
  * are upstream's, so the list (`TrackTable`) fetches and draws them as it
- * always has; Energy is the star rating (CONTEXT.md) and MyTags the joined
- * MyTag names. Prep colour is not a column: it is a stripe at the row's left
+ * always has; Energy is the star rating (CONTEXT.md) and MyTags the
+ * track's MyTags with their ids and categories (the `myTags` field). Prep colour is not a column: it is a stripe at the row's left
  * edge (`prepColour`).
  *
  * Moving and resizing reuse `moveColumn` and `resizeColumn` from
  * `@/lib/columns`, which only need the key to be a known column.
  */
-import type { RowDto } from "@/ipc/types";
+import type { RowDto, RowMyTag } from "@/ipc/types";
 import { MAX_COLUMN_WIDTH, MIN_COLUMN_WIDTH, type ColumnKey, type ColumnSpec, type Layout } from "@/lib/columns";
 import { COLOR_NAMES } from "@/lib/trackFilter";
 
@@ -123,8 +123,11 @@ export function energyLevel(rating: number): number {
   return Math.min(5, Math.max(0, Math.round(rating)));
 }
 
-/** The MyTag names the backend joins with ", ". */
-export function myTagNames(value: unknown): string[] {
-  if (typeof value !== "string") return [];
-  return value.split(",").map((name) => name.trim()).filter((name) => name !== "");
+/**
+ * The row's MyTags as the Library holds them (the `myTags` field), each with
+ * its id and category (`myTags`, lifted by the IPC client). Never rebuilt
+ * from the joined display text: a tag's name may hold a comma.
+ */
+export function rowMyTags(row: Pick<RowDto, "myTags">): readonly RowMyTag[] {
+  return row.myTags ?? [];
 }

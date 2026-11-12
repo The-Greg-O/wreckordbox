@@ -56,6 +56,21 @@ export interface RowDto {
   missing?: boolean;
   /** Extra database fields requested for visible browser columns. */
   extra?: Record<string, string | number | boolean | null>;
+  /**
+   * The track's MyTags, each with its id and category, in the Library's
+   * order: present when the extra field `myTags` was asked for (the view
+   * shell's Library, #55). The backend sends them inside `extra`; the IPC
+   * client lifts them here (`rowMyTags.ts`).
+   */
+  myTags?: RowMyTag[];
+}
+
+/** One of a row's MyTags, as `fetchRows` sends it for the `myTags` field. */
+export interface RowMyTag {
+  id: string;
+  name: string;
+  /** The name of the MyTag column (category) it belongs to. */
+  category: string;
 }
 
 export type TrackSource =

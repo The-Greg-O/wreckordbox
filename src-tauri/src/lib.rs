@@ -20,6 +20,7 @@ pub mod commands;
 mod usb_import;
 pub mod cues;
 pub mod details;
+mod row_my_tags;
 pub mod grid;
 mod key_tag;
 mod durable;

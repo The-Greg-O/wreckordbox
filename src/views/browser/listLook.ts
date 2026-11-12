@@ -18,8 +18,12 @@ export interface ListLook {
   rowHeight: number;
   /** The headings' row height. */
   headingHeight: number;
-  /** Extra fields fetched whatever columns are on show (the Prep colour stripe needs `color`). */
-  fetch: readonly ColumnKey[];
+  /**
+   * The extra fields to fetch for the columns on show, in place of the
+   * table's own choice: the Library view adds `color` for the Prep colour
+   * stripe and asks for `myTags` (structured) rather than `myTag` (text).
+   */
+  fetch: (shown: readonly ColumnKey[]) => readonly string[];
   /** What the headings' menu lists, and which of those cannot be turned off. */
   menu: { columns: readonly ColumnSpec[]; required: readonly ColumnKey[] };
   /**

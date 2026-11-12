@@ -4,7 +4,7 @@ import {
   energyLevel,
   LIBRARY_OPTIONAL,
   libraryDefaultLayout,
-  myTagNames,
+  rowMyTags,
   prepColour,
   resolveLibrary,
   sanitiseLibrary,
@@ -84,9 +84,12 @@ describe("a row's Prep colour, Energy and MyTags", () => {
     expect(energyLevel(-1)).toBe(0);
   });
 
-  it("splits the MyTags the backend joins", () => {
-    expect(myTagNames("Dark, Driving, Vocal")).toEqual(["Dark", "Driving", "Vocal"]);
-    expect(myTagNames("")).toEqual([]);
-    expect(myTagNames(undefined)).toEqual([]);
+  it("reads the MyTags the Library sends, each as itself", () => {
+    const tags = [
+      { id: "1", name: "Dark, Driving", category: "Mood" },
+      { id: "2", name: "Vocal", category: "Sound" },
+    ];
+    expect(rowMyTags({ myTags: tags })).toEqual(tags);
+    expect(rowMyTags({})).toEqual([]);
   });
 });
