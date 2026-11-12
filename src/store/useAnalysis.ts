@@ -59,14 +59,14 @@ export function useAnalysis(
   const { mode, concurrentTracks, firstBeatCue, bpmRange, writeKeyTag, detectKey } = preferences ?? storedPreferences;
   // "Write the value to the ID3 tag" is read when a track's analysis is
   // sent, not when it was queued: rekordbox reads `writeKeyInTag` as each
-  // analysis completes. The key display format decides the notation.
+  // analysis completes. Stored notation is independent of the display choice.
   const keyTag = useRef<"classic" | "alphanumeric" | undefined>(undefined);
-  const keyDisplay = stored.view.keyDisplay;
-  const keyDisplayRef = useRef(keyDisplay);
+  const keyNotation = preferences?.keyNotation ?? storedPreferences.keyNotation ?? "classic";
+  const keyNotationRef = useRef(keyNotation);
   useEffect(() => {
-    keyTag.current = writeKeyTag ? keyDisplay : undefined;
-    keyDisplayRef.current = keyDisplay;
-  }, [writeKeyTag, keyDisplay]);
+    keyTag.current = writeKeyTag ? keyNotation : undefined;
+    keyNotationRef.current = keyNotation;
+  }, [writeKeyTag, keyNotation]);
   const [state, setState] = useState<QueueState>(emptyQueue);
   // The tracks whose request is in flight, so the effect below never sends
   // one twice.
@@ -98,8 +98,8 @@ export function useAnalysis(
         try {
           const backend = await getBackend();
           const trackMode = track.analysis?.mode ?? mode;
-          const result = keyDisplayRef.current === "alphanumeric"
-            ? await backend.analyseTrack(track.id, trackMode, track.analysis, keyTag.current, track.drawing || undefined, keyDisplayRef.current)
+          const result = keyNotationRef.current === "alphanumeric"
+            ? await backend.analyseTrack(track.id, trackMode, track.analysis, keyTag.current, track.drawing || undefined, keyNotationRef.current)
             : track.drawing
             ? await backend.analyseTrack(track.id, trackMode, track.analysis, keyTag.current, true)
             : keyTag.current

@@ -51,6 +51,13 @@ export function AnalysisPane(_: { tab: AnalysisTab }) {
     </Section>
     {/* rekordbox's Preferences > Analysis > Key Analysis, off by default. */}
     <Section title={t("Key Analysis")}>
+      <div data-own-activation="">
+        <Select label="Stored key notation" caption="Stored key notation" plain
+          value={preferences.analysis.keyNotation ?? "classic"}
+          choices={[{ value: "classic", label: "Classic" }, { value: "alphanumeric", label: "Camelot" }]}
+          onChange={(keyNotation) => update("analysis", { keyNotation })} />
+        <p>Notation written by analysis to the Library and file tags. Display notation is set separately in View.</p>
+      </div>
       <div className={styles.analysisSwitch}>
         <Toggle label={t("Analyze key")} checked={preferences.analysis.detectKey}
           onChange={(detectKey) => update("analysis", { detectKey })} />

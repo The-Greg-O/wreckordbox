@@ -363,8 +363,21 @@ fn parent_length(audio: &Path) -> Option<u64> {
 /// The track's Stems made from the audio it has now, with all four files
 /// in the Sidecar. Stems made from other audio are marked stale on the way,
 /// as every Stems command does, and are not written.
+///
+/// Before audio goes to a Stick, every Stem file is hashed again and must
+/// be the audio recorded with the set, whatever an earlier look found.
 fn current_stems(stems: &Stems, found: &ParentAudio) -> Result<StemSet, ServiceError> {
-    current_stems_verified(stems, found).map(|(set, _)| set)
+    let (set, _) = current_stems_verified(stems, found)?;
+    if !set.audio_verified() {
+        return Err(ServiceError::new(
+            codes::NO_CURRENT_STEMS,
+            format!(
+                "track {} \"{}\" has Stems recorded in the Sidecar whose audio files are not the ones recorded. Run `wreckordbox stems separate {}` first.",
+                found.parent().id, found.parent().title, found.parent().id
+            ),
+        ));
+    }
+    Ok(set)
 }
 
 /// [`current_stems`], with the fingerprint of the audio it was verified

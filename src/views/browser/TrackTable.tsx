@@ -361,6 +361,7 @@ const EditableCell = memo(function EditableCell({
       >
         <select
           className={styles.editor}
+          data-own-activation=""
           value={value}
           aria-label={label}
           autoFocus
@@ -729,8 +730,8 @@ const TrackRow = memo(function TrackRow({
                 {...(isKey ? {
                   choices: keyChoices,
                   choiceLabel: (k: string) => formatKey(k, keyDisplay),
-                  display: formatKey(row.key, keyDisplay),
-                  lit: trafficKey !== null && trafficLightLit(row.key, trafficKey, trafficReach),
+                  display: look?.keyCell?.(row.key, trafficKey, formatKey(row.key, keyDisplay)) ?? formatKey(row.key, keyDisplay),
+                  lit: !look?.keyCell && trafficKey !== null && trafficLightLit(row.key, trafficKey, trafficReach),
                   onOpen: onOpenKeys,
                 } : {})}
                 onEditBlocked={onEditBlocked}
@@ -807,7 +808,7 @@ const TrackRow = memo(function TrackRow({
         }
         if (col.key === "key") {
           // The Traffic Light: a key that goes with the loaded track's is lit.
-          const lit = trafficKey !== null && trafficLightLit(row.key, trafficKey, trafficReach);
+          const lit = !look?.keyCell && trafficKey !== null && trafficLightLit(row.key, trafficKey, trafficReach);
           return (
             <div
               key={col.key}
@@ -816,7 +817,7 @@ const TrackRow = memo(function TrackRow({
               data-lit={lit || undefined}
               role="gridcell"
             >
-              {formatKey(row.key, keyDisplay)}
+              {look?.keyCell?.(row.key, trafficKey, formatKey(row.key, keyDisplay)) ?? formatKey(row.key, keyDisplay)}
             </div>
           );
         }
@@ -2359,7 +2360,7 @@ export const TrackTable = memo(function TrackTable({
           */}
           {view.loading ? title : `${title} (${view.count} Tracks)`}
         </span>
-        {trafficLight && onTrafficLight ? (
+        {!look?.keyCell && trafficLight && onTrafficLight ? (
           <div ref={trafficBox} className={styles.trafficBox}>
             <button
               type="button"

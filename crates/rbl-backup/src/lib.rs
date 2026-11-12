@@ -11,6 +11,8 @@
 //! - `analysis/…`, a copy of `PIONEER/USBANLZ`.
 //! - `artwork/…`, a copy of `PIONEER/Artwork`.
 //! - Whichever of [`LIBRARY_FILES`] were beside `master.db`.
+//! - `sidecar.json` and `sidecar/…`, the Sidecar beside the Library: see
+//!   [`sidecar_part`]. Backups made before it existed lack both.
 //!
 //! A restore ignores any other entry.
 //!
@@ -22,6 +24,7 @@ pub mod archive;
 pub mod journal;
 pub mod manifest;
 pub mod restore;
+pub mod sidecar_part;
 pub mod sizes;
 pub mod summary;
 
@@ -129,6 +132,52 @@ pub mod testing {
     use std::{fs, io::Write, path::Path};
     use zip::{write::SimpleFileOptions, ZipWriter};
 
+    thread_local! {
+        static STOP: std::cell::Cell<Option<(usize, bool, bool)>> = const { std::cell::Cell::new(None) };
+        static CRASHED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// Makes the next restore on this thread stop just before it replaces
+    /// target number `swaps` (counting from 0), with everything before it
+    /// replaced. With `crash`, it stops as a process that died there would:
+    /// the journal is left for the next program to recover. Without, it
+    /// fails as an error there would, and puts everything back itself.
+    pub fn stop_before_swap(swaps: usize, crash: bool) {
+        STOP.with(|stop| stop.set(Some((swaps, crash, false))));
+        CRASHED.with(|crashed| crashed.set(false));
+    }
+
+    /// As [`stop_before_swap`], but between the two renames of target
+    /// number `swaps`: its current file is set aside and its replacement
+    /// not yet in place, so the target is missing.
+    pub fn stop_between_renames(swaps: usize, crash: bool) {
+        STOP.with(|stop| stop.set(Some((swaps, crash, true))));
+        CRASHED.with(|crashed| crashed.set(false));
+    }
+
+    pub(crate) fn step(done: usize) -> crate::Result<()> {
+        stop_at(done, false)
+    }
+
+    pub(crate) fn step_inside(done: usize) -> crate::Result<()> {
+        stop_at(done, true)
+    }
+
+    fn stop_at(done: usize, inside: bool) -> crate::Result<()> {
+        match STOP.with(std::cell::Cell::get) {
+            Some((at, crash, between)) if at == done && between == inside => {
+                STOP.with(|stop| stop.set(None));
+                CRASHED.with(|crashed| crashed.set(crash));
+                Err(crate::refused(if crash { "Simulated crash." } else { "Simulated failure." }))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    pub(crate) fn crashed() -> bool {
+        CRASHED.with(|crashed| crashed.replace(false))
+    }
+
     pub fn library(dir: &Path) -> rbl_db::LibraryLocation {
         rbl_db::fixture::build(dir, rbl_db::fixture::Shape::default()).unwrap()
     }
@@ -164,6 +213,11 @@ pub mod testing {
     /// Archives the library at `location` as RBXport does: a vacuumed
     /// database, both trees, the library files present and the manifest.
     pub fn archive(location: &rbl_db::LibraryLocation, to: &Path, summary: Option<&crate::summary::Summary>) {
+        archive_with(location, to, summary, crate::sidecar_part::Options::default());
+    }
+
+    /// As [`archive`], with the choices about the Sidecar's part given.
+    pub fn archive_with(location: &rbl_db::LibraryLocation, to: &Path, summary: Option<&crate::summary::Summary>, sidecar: crate::sidecar_part::Options) {
         let stage = tempfile::tempdir().unwrap();
         let db = stage.path().join("master.db");
         let snapshot = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
@@ -201,6 +255,15 @@ pub mod testing {
                         zip.write_all(&fs::read(&path).unwrap()).unwrap();
                     }
                 }
+            }
+        }
+        if let Some(part) = crate::sidecar_part::collect_for(location, sidecar, &mut || true).unwrap() {
+            for directory in &part.directories {
+                zip.add_directory(format!("{directory}/"), SimpleFileOptions::default()).unwrap();
+            }
+            for item in &part.files {
+                zip.start_file(&item.name, options).unwrap();
+                zip.write_all(&fs::read(&item.source).unwrap()).unwrap();
             }
         }
         let manifest = crate::manifest::Manifest {

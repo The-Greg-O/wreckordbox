@@ -145,4 +145,25 @@ fn only_stems_verified_current_for_the_audio_as_it_is_reach_the_renderer() {
     assert_eq!(again.fact_id, handed.fact_id);
     assert_eq!(again.stems, handed.stems);
     assert!(handed.audio_unchanged().unwrap());
+
+    // A Stem file holding other audio of the same length (a separation
+    // after a restore can reuse its path, wbx-89) is not the recorded one:
+    // the renderer is handed no Stems, as `stems show` shows none.
+    let vocals = std::fs::read(&handed.stems.vocals).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let mut other = vocals.clone();
+    let last = other.len() - 1;
+    other[last] ^= 0x55;
+    std::fs::write(&handed.stems.vocals, &other).unwrap();
+    let replaced = service.current_stems_for_render(&track).unwrap_err();
+    assert_eq!(replaced.code, NO_CURRENT_STEMS, "{replaced:?}");
+    let shown = service
+        .call(commands::STEMS_SHOW, json!({ "id": track }))
+        .unwrap();
+    assert!(shown["stems"].is_null(), "{shown}");
+    std::fs::write(&handed.stems.vocals, &vocals).unwrap();
+    assert_eq!(
+        service.current_stems_for_render(&track).unwrap().fact_id,
+        handed.fact_id
+    );
 }

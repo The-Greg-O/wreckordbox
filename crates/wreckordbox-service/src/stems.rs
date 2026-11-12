@@ -495,9 +495,11 @@ impl Stems {
             .partition(|set| set.is_current() && fingerprint.as_ref() == Some(&set.fingerprint));
         Ok(TrackStems {
             track: parent,
-            stems: current
-                .into_iter()
-                .find(|set| set.stems.iter().all(|stem| stem.path.is_file())),
+            // Stems whose audio files are missing or are not the ones
+            // recorded (a restored Sidecar can rewind Run identifiers, so
+            // a later separation may have written other audio at the same
+            // path) are not Stems: the track reads as needing separation.
+            stems: current.into_iter().find(StemSet::audio_present),
             previous,
         })
     }
