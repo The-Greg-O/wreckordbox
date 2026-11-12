@@ -66,6 +66,7 @@ import { onPreviewError, stopPreview } from "@/store/usePreview";
 import { MasterOutputProvider, MasterOutputConnection, useMasterControls, useMasterDisplay } from "@/store/MasterOutput";
 import { asLayout, deckCount, isFullDeck, type PlayerLayout } from "@/lib/layout";
 import { DEFAULT_SHELL_VIEW, type ShellView } from "@/lib/shellViews";
+import { useLibraryColumns } from "@/store/useLibraryColumns";
 import { SHELL_PLAYER_LAYOUT, ViewShell } from "@/views/shell/ViewShell";
 import { useShellTree } from "@/views/shell/useShellTree";
 import { useStickOutlines } from "@/store/useStickOutlines";
@@ -471,6 +472,8 @@ function AppBody() {
   // Each mode has its own columns, as rekordbox keeps a `-FullArtwork`
   // layout beside each table's.
   const cols = useColumns(columnContext, artworkMode);
+  // The view shell's Library has its own columns and row look (#55).
+  const libraryColumns = useLibraryColumns();
   // The Preferences window, and the pane it opens on: the missing-file
   // manager lives under Advanced, so the File menu opens it there. In the
   // shell it is a window of its own; in a browser, which has no windows to
@@ -1028,30 +1031,52 @@ function AppBody() {
     event.currentTarget.releasePointerCapture(event.pointerId);
   }, []);
 
-  /** Runs one edit and reports what happened, refusals included. */
-  const runEdit = useCallback(
-    async (what: string, edit: (b: Awaited<ReturnType<typeof getBackend>>) => Promise<unknown>) => {
+  /** Runs one edit and reports what happened, refusals included; resolves whether it was written. */
+  const writeEdit = useCallback(
+    async (what: string, edit: (b: Awaited<ReturnType<typeof getBackend>>) => Promise<unknown>): Promise<boolean> => {
       // Library Protection is a choice the backend cannot see, so it is
       // refused here, with the same words the menu uses. rekordbox holding
       // the database is the backend's to refuse, checked as the write starts.
       if (advancedPrefs.protectLibrary) {
         refuse(refusal(true));
-        return;
+        return false;
       }
       const backend = await getBackend();
       try {
         await edit(backend);
         report(what);
+        return true;
       } catch (e) {
         refuse(e instanceof Error ? e.message : "That could not be saved.");
+        return false;
       }
     },
     [report, refuse, advancedPrefs.protectLibrary],
+  );
+  /** Runs one edit and reports what happened, refusals included. */
+  const runEdit = useCallback(
+    async (what: string, edit: (b: Awaited<ReturnType<typeof getBackend>>) => Promise<unknown>) => {
+      await writeEdit(what, edit);
+    },
+    [writeEdit],
   );
 
   /** Shows an edit at once, so the interface does not wait on the reload. */
   const showPending = useCallback((id: string, patch: Partial<RowDto>) => {
     setPendingEdits((edits) => new Map(edits).set(id, { ...edits.get(id), ...patch }));
+  }, []);
+  /** Takes back one field of edits shown at once, when the write did not happen. */
+  const dropPending = useCallback((ids: readonly string[], field: keyof RowDto) => {
+    setPendingEdits((edits) => {
+      const next = new Map(edits);
+      for (const id of ids) {
+        const patch = { ...next.get(id) };
+        delete patch[field];
+        if (Object.keys(patch).length === 0) next.delete(id);
+        else next.set(id, patch);
+      }
+      return next;
+    });
   }, []);
 
   /**
@@ -1072,11 +1097,15 @@ function AppBody() {
     (ids: readonly string[], stars: number) => {
       if (ids.some(refuseLoose)) return;
       for (const id of ids) showPending(id, { rating: stars });
-      void runEdit(stars === 0 ? "Rating cleared." : `Rated ${stars} of 5.`, (b) =>
+      void writeEdit(stars === 0 ? "Rating cleared." : `Rated ${stars} of 5.`, (b) =>
         b.edits.setTrackRating(ids, stars),
-      );
+      ).then((written) => {
+        // A refused write takes back what was shown, so the row says what
+        // the Library holds.
+        if (!written) dropPending(ids, "rating");
+      });
     },
-    [runEdit, showPending, refuseLoose],
+    [writeEdit, showPending, dropPending, refuseLoose],
   );
   const rateTrack = useCallback((id: string, stars: number) => rateTracks([id], stars), [rateTracks]);
 
@@ -3389,6 +3418,12 @@ function AppBody() {
           onDeviceImport={importFromDevice}
         />
   );
+  // The main list's columns: the Library view's own in the shell (#55).
+  const listColumns = shellOn ? libraryColumns : {
+    columns: cols.columns, onColumnMove: cols.move, onColumnResize: cols.resize, onColumnToggle: cols.toggle,
+    onColumnAutoSize: cols.autoSize, onColumnAutoSizeAll: cols.autoSizeEvery,
+    artworkMode, onArtworkMode: setArtworkMode,
+  };
   const shellTree = useShellTree({
     library: tree, sticks: shellSticks, selectedNode, onSelectNode: setSelectedNode,
     view: shellView, onViewChange: changeShellView,
@@ -3440,8 +3475,7 @@ function AppBody() {
           trafficLight={activeTrafficLight}
           onTrafficLight={setTrafficLight}
           trafficKey={trafficKey}
-          artworkMode={artworkMode}
-          onArtworkMode={setArtworkMode}
+          {...listColumns}
           onFocusedRow={(row, from) => { void openInDeckA(row, from); }}
           onSelectedRow={setSelectedRow}
           onDragTracks={setDraggedTracks}
@@ -3472,12 +3506,6 @@ function AppBody() {
           onSearchFieldChange={setSearchField}
           onQueryChange={setQuery}
           searchRef={searchRef}
-          columns={cols.columns}
-          onColumnMove={cols.move}
-          onColumnResize={cols.resize}
-          onColumnToggle={cols.toggle}
-          onColumnAutoSize={cols.autoSize}
-          onColumnAutoSizeAll={cols.autoSizeEvery}
           seed={seed}
           onFirstRows={onFirstRows}
           filterOpen={filterOpen}

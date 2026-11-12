@@ -93,13 +93,29 @@ test("two decks playing cost no more per frame than none at all", async ({ page 
   );
 });
 
-test("scrolling the track list costs no more per frame than sitting still", async ({ page }, testInfo) => {
+/**
+ * The scroll gate runs twice: over upstream's layout, and with the view shell
+ * on (#55: its own row look, the Prep colour stripe, Energy pips and MyTags,
+ * which fetch more per row) over a much larger collection.
+ */
+const SCROLL_CASES = [
+  { name: "the track list", shell: false, query: "" },
+  { name: "the view shell's Library list over 20,000 tracks", shell: true, query: "?tracks=20000" },
+] as const;
+
+for (const scrollCase of SCROLL_CASES) {
+test(`scrolling ${scrollCase.name} costs no more per frame than sitting still`, async ({ page }, testInfo) => {
   // The other place a list app drops frames. Rows are virtualised and keyed by
   // id, and this is the gate that says so: a hard scroll — a screenful and a
   // half every frame, all the way down — against the same window sitting
   // still.
   await page.setViewportSize({ width: 1800, height: 1130 });
-  await page.goto(productionUrl);
+  if (scrollCase.shell) {
+    await page.addInitScript(() => localStorage.setItem("rbl.preferences", JSON.stringify({
+      advanced: { protectLibrary: false }, view: { viewShell: true },
+    })));
+  }
+  await page.goto(`${productionUrl}/${scrollCase.query}`);
   await expect(page.getByTestId("browser-title")).toContainText("Tracks)");
   // The whole collection, not the playlist the app opens on: thirty rows fit
   // on screen and a list that does not scroll measures nothing.
@@ -143,7 +159,13 @@ test("scrolling the track list costs no more per frame than sitting still", asyn
   }, FRAMES);
 
   expect(scrolling.travel).toBeGreaterThan(10_000);
-  expect(scrolling.median - still).toBeLessThan(
+  const cost = scrolling.median - still;
+  testInfo.annotations.push({
+    type: "frame cost",
+    description: `still ${still.toFixed(2)} ms, scrolling ${scrolling.median.toFixed(2)} ms, cost ${cost.toFixed(2)} ms over ${scrolling.travel} px`,
+  });
+  expect(cost).toBeLessThan(
     budgets.gates.browser.scrollFrameCostMs[browserName(testInfo.project.name)],
   );
 });
+}
