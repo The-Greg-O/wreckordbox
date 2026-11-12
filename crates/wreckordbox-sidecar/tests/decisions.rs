@@ -179,7 +179,7 @@ fn a_version_one_store_is_brought_up_to_date_with_every_record_as_it_was() {
 
     let sidecar = Sidecar::open(&folder).unwrap();
 
-    assert_eq!(schema_version(&folder), 3);
+    assert_eq!(schema_version(&folder), 4, "the current version");
     for table in ["mutant", "mutant_change", "decision", "decision_answer"] {
         assert!(tables(&folder).contains(&table.to_owned()), "{table}");
     }
@@ -267,7 +267,7 @@ fn a_migration_that_fails_part_way_leaves_version_one_intact_and_can_be_retried(
         .unwrap();
     let sidecar = Sidecar::open(&folder).unwrap();
 
-    assert_eq!(schema_version(&folder), 3);
+    assert_eq!(schema_version(&folder), 4, "the current version");
     assert_eq!(version_one_rows(&folder), before);
     let id = genre_question(&sidecar);
     assert!(sidecar.decision(id).unwrap().unwrap().pending);
@@ -278,7 +278,7 @@ fn a_new_store_is_made_at_version_three_in_the_shape_an_old_one_is_brought_to() 
     let dir = tempfile::tempdir().unwrap();
     let fresh = dir.path().join("fresh");
     let sidecar = Sidecar::open(&fresh).unwrap();
-    assert_eq!(schema_version(&fresh), 3);
+    assert_eq!(schema_version(&fresh), 4, "the current version");
     let id = genre_question(&sidecar);
     sidecar
         .answer_decision(&answer(id, &agent("tagger"), "Techno", 0.6))
@@ -293,7 +293,7 @@ fn a_new_store_is_made_at_version_three_in_the_shape_an_old_one_is_brought_to() 
     assert_eq!(shape(&from_one), shape(&fresh));
     assert_eq!(shape(&from_two), shape(&fresh));
     let again = Sidecar::open(&fresh).unwrap();
-    assert_eq!(schema_version(&fresh), 3);
+    assert_eq!(schema_version(&fresh), 4, "the current version");
     assert_eq!(again.decision(id).unwrap().unwrap().answers.len(), 1);
 }
 
@@ -311,7 +311,7 @@ fn a_version_two_store_keeps_its_mutants_when_brought_to_version_three() {
 
     let sidecar = Sidecar::open(&folder).unwrap();
 
-    assert_eq!(schema_version(&folder), 3);
+    assert_eq!(schema_version(&folder), 4, "the current version");
     let after = (
         version_one_rows(&folder),
         rows_of(&folder, "mutant"),
@@ -339,7 +339,7 @@ fn a_version_two_store_keeps_its_mutants_when_brought_to_version_three() {
 
     let again = Sidecar::open(&folder).unwrap();
 
-    assert_eq!(schema_version(&folder), 3);
+    assert_eq!(schema_version(&folder), 4, "the current version");
     assert_eq!(rows_of(&folder, "mutant"), before.1);
     assert_eq!(
         again.decision(id).unwrap().unwrap().answers[0].choice,
@@ -373,7 +373,7 @@ fn a_migration_from_version_two_that_fails_part_way_leaves_version_two_intact() 
         .execute_batch("DROP TABLE decision_answer_by_decider")
         .unwrap();
     let sidecar = Sidecar::open(&folder).unwrap();
-    assert_eq!(schema_version(&folder), 3);
+    assert_eq!(schema_version(&folder), 4, "the current version");
     assert!(sidecar.mutant(2).unwrap().unwrap().is_live());
 }
 

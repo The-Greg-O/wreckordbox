@@ -230,15 +230,21 @@ impl Service {
             let shared = Arc::clone(&shared);
             std::thread::spawn(move || stop_when_idle(&shared, idle_exit));
         }
+        // From here on every edit through the core, a client's or the
+        // hosting front end's, is recorded in the Ledger: installed, and
+        // what an earlier service left settled, before any client is
+        // accepted. A Ledger that cannot be settled now refuses every write
+        // and every read of it, saying why, until it can.
+        core.history()
+            .lock()
+            .keep_ledger(Some(shared.ledger.clone()));
+        if let Err(error) = shared.ledger.recover() {
+            tracing::error!(%error, "the Ledger could not be brought up to date");
+        }
         {
             let shared = Arc::clone(&shared);
             std::thread::spawn(move || accept_clients(&shared, &listener));
         }
-        // From here on every edit through the core, a client's or the
-        // hosting front end's, is recorded in the Ledger.
-        core.history()
-            .lock()
-            .keep_ledger(Some(shared.ledger.clone()));
         Ok(Self { shared })
     }
 
@@ -456,7 +462,17 @@ impl Shared {
                     self.with_library(|library| crate::stems::parent(library, id))?
                 })
             }
-            runs if crate::ledger::answers(runs) => crate::ledger::answer(&self.stems, request),
+            runs if crate::ledger::answers(runs) => {
+                crate::ledger::answer(&self.ledger, &self.stems, request)
+            }
+            crate::facts::commands::RUNS_FINISH => {
+                // Not while a command admitted to the Run is still in it.
+                self.ledger.finishing(&request.args, || {
+                    crate::facts::answer(&self.stems, request, &|id| {
+                        self.with_library(|library| crate::stems::parent(library, id))?
+                    })
+                })
+            }
             facts if crate::facts::answers(facts) => {
                 // The Sidecar's, not the Library's: the Library is only
                 // read, to find the track.
@@ -548,13 +564,21 @@ impl Shared {
         self.stems.cancel();
         // No more changes to send; the sending thread ends.
         drop(lock(&self.changes).take());
+        // No write is begun from now on; one already begun is recorded.
+        self.ledger.shut();
         // Waits for a command in progress, then closes the Library before
         // letting another service have it. The core, which a hosting front
-        // end keeps, is no longer this service's to record.
+        // end keeps, is no longer this service's to record: its edit gate
+        // is taken first, so an edit the window is making is over, and
+        // recorded, before the Ledger is taken off it.
         if let Some(owned) = lock(&self.library).take() {
-            owned.library.core().history().lock().keep_ledger(None);
+            let core = owned.library.core();
+            let _gate = core.edit_gate().lock();
+            self.ledger.close();
+            core.history().lock().keep_ledger(None);
+        } else {
+            self.ledger.close();
         }
-        self.ledger.close();
         *lock(&self.stopped.0) = true;
         self.stopped.1.notify_all();
     }

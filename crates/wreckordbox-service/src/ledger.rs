@@ -53,16 +53,18 @@
 //! event.
 
 use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use rbl_library::history::LibraryEdit;
-use rbl_library::ledger::{Step, Unkept};
+use rbl_library::ledger::{Link, Step, Unkept};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use wreckordbox_sidecar::ledger::{Action, Count, NewEntry, Store};
+use wreckordbox_sidecar::ledger::{Action, Count, Intent, NewEntry, Store};
 use wreckordbox_sidecar::{Run, RunId, Sidecar, Source, SourceKind};
 
 use crate::facts::SourceArg;
@@ -198,6 +200,9 @@ pub struct LedgerEntry {
     pub command: Option<Value>,
     /// The entry an Undo or Redo steps.
     pub reverses: Option<i64>,
+    /// The entry this one carries on: a later slice of one Add Tracks to
+    /// Playlist names the first, and is reversed with it.
+    pub part_of: Option<i64>,
     /// Whether `payload` is everything needed to take the change back.
     pub reversible: bool,
     /// The version of `payload`'s shape.
@@ -537,13 +542,16 @@ pub(crate) fn answers(command: &str) -> bool {
 
 /// Answers `runs.list` and `runs.show`. Reading never makes a Sidecar:
 /// with none there are no Runs.
-pub(crate) fn answer(stems: &Stems, request: &Request) -> Result<Value, ServiceError> {
+pub(crate) fn answer(keeper: &Keeper, stems: &Stems, request: &Request) -> Result<Value, ServiceError> {
     let bad = |e: serde_json::Error| {
         ServiceError::new(
             service_codes::BAD_REQUEST,
             format!("bad arguments to {}: {e}", request.command),
         )
     };
+    // What an earlier service left is settled first: a reader never sees
+    // less than was done.
+    keeper.recover()?;
     let sidecar = stems.sidecar_if_made()?;
     let answer = if request.command == commands::RUNS_LIST {
         let args: ListRuns = if request.args.is_null() {
@@ -639,6 +647,7 @@ fn entry(entry: wreckordbox_sidecar::ledger::Entry) -> LedgerEntry {
         label: entry.label,
         command: entry.command,
         reverses: entry.reverses,
+        part_of: entry.part_of,
         reversible: entry.reversible,
         format: entry.format,
         payload: entry.payload,
@@ -660,7 +669,9 @@ fn failed(error: &wreckordbox_sidecar::SidecarError) -> ServiceError {
 enum Target {
     /// The DJ, in the window's Run.
     Window,
-    /// A Run that was open before the command and stays open.
+    /// A Run that was open before the command and stays open. The command
+    /// is admitted to it ([`Keeper::admit`]): the Run cannot end until the
+    /// command is over.
     Joined { run: RunId, source: Source },
     /// A Run of the command's own, made when its first change is recorded.
     Own {
@@ -690,6 +701,10 @@ thread_local! {
 /// An entry that could not be written when it was made.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Spilled {
+    /// The identifier reserved for it before the Library was changed;
+    /// writing it again under the same one changes nothing.
+    #[serde(default)]
+    id: Option<i64>,
     /// The Run, when one could be found or made.
     run: Option<i64>,
     source: Source,
@@ -701,6 +716,8 @@ struct Spilled {
     label: String,
     command: Option<Value>,
     reverses: Option<i64>,
+    #[serde(default)]
+    part_of: Option<i64>,
     reversible: bool,
     format: u32,
     payload: Option<Value>,
@@ -711,15 +728,43 @@ struct WindowRun {
     last_edit: Instant,
 }
 
+/// The Library write begun last ([`Keeper::begin`]): its intent is in the
+/// Sidecar until an entry settles it.
+struct Op {
+    /// The intent's identifier, which its entry takes.
+    id: i64,
+    /// Whether it changed any row, once told.
+    wrote: Option<bool>,
+    /// Whether its entry was made (written or kept for later).
+    recorded: bool,
+    /// An unnamed write outside the history: deliberately not recorded
+    /// here (bead wbx-22).
+    unnamed: bool,
+    window: bool,
+    run: Option<RunId>,
+    source: Source,
+    description: String,
+    command: Option<Value>,
+}
+
 #[derive(Default)]
 struct State {
     window: Option<WindowRun>,
     /// Whether what an earlier service left behind has been dealt with:
-    /// its spill file read, its window Run ended.
+    /// its kept entries written, its intents settled, its Runs ended.
     settled: bool,
     /// Entries made and not yet in the Ledger, oldest first. Also in the
     /// spill file, when that could be written.
     unwritten: Vec<Spilled>,
+    op: Option<Op>,
+    /// Intents that needed no entry, removed with the next one.
+    done: Vec<i64>,
+    /// Runs with a command in them still being answered, and how many.
+    admitted: HashMap<i64, usize>,
+    /// Runs being ended: no command is admitted to them.
+    finishing: HashSet<i64>,
+    /// The service is stopping: no write is begun.
+    closed: bool,
 }
 
 /// One entry on its way into the Ledger.
@@ -728,14 +773,86 @@ struct Draft<'a> {
     kind: &'a str,
     label: &'a str,
     reverses: Option<i64>,
+    part_of: Option<i64>,
     payload: Option<Value>,
 }
+
+/// Failures a test can inject into a service with [`FAULTS_ENV`], honoured
+/// only under `RBXPORT_TEST`: a comma-separated list of
+/// `abort_after_write` (the process dies once a Library write is made,
+/// before its entry), `fail_append=N` (the next N entries are refused by
+/// the Sidecar), `abort_in_replay` (the process dies once the first kept
+/// entry is written back, before the rest) and `delay_after_begin_ms=N`
+/// (every Library write waits N ms once begun).
+pub const FAULTS_ENV: &str = "WRECKORDBOX_LEDGER_FAULTS";
+
+#[derive(Default)]
+struct Faults {
+    abort_after_write: bool,
+    fail_append: AtomicUsize,
+    abort_in_replay: bool,
+    delay_after_begin: Option<Duration>,
+}
+
+impl Faults {
+    fn from_env() -> Self {
+        let mut faults = Self::default();
+        if std::env::var("RBXPORT_TEST").as_deref() != Ok("1") {
+            return faults;
+        }
+        let Ok(list) = std::env::var(FAULTS_ENV) else {
+            return faults;
+        };
+        for fault in list.split(',').map(str::trim) {
+            let (name, value) = fault.split_once('=').unwrap_or((fault, ""));
+            let number = value.parse::<u64>().unwrap_or(1);
+            match name {
+                "abort_after_write" => faults.abort_after_write = true,
+                "fail_append" => {
+                    faults.fail_append = AtomicUsize::new(usize::try_from(number).unwrap_or(1));
+                }
+                "abort_in_replay" => faults.abort_in_replay = true,
+                "delay_after_begin_ms" => {
+                    faults.delay_after_begin = Some(Duration::from_millis(number));
+                }
+                _ => tracing::warn!(fault, "unknown Ledger fault ignored"),
+            }
+        }
+        faults
+    }
+
+    fn refuse_append(&self) -> bool {
+        let mut left = self.fail_append.load(Ordering::Acquire);
+        while left > 0 {
+            match self.fail_append.compare_exchange(
+                left,
+                left - 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return true,
+                Err(now) => left = now,
+            }
+        }
+        false
+    }
+}
+
+/// The label of an entry for a change whose outcome is not known.
+pub const UNCONFIRMED: &str = "unconfirmed";
+const BEGUN_NOT_CONFIRMED: &str =
+    "A change to the Library was begun and not confirmed: wreckordbox stopped before recording it";
+const MADE_NOT_RECORDED: &str =
+    "A change to the Library was made and its entry was not recorded";
 
 /// Keeps the Ledger for one service: the `Ledger` its Library core tells.
 pub(crate) struct Keeper {
     stems: Arc<Stems>,
     pause: Duration,
     state: Mutex<State>,
+    /// Signalled when a command leaves a Run.
+    left: Condvar,
+    faults: Faults,
 }
 
 impl Keeper {
@@ -748,6 +865,8 @@ impl Keeper {
             stems,
             pause,
             state: Mutex::new(State::default()),
+            left: Condvar::new(),
+            faults: Faults::from_env(),
         })
     }
 
@@ -757,7 +876,8 @@ impl Keeper {
     ///
     /// `from_client` is whether a client asked (a connection) or the
     /// process hosting the service did. A Run named on the request is
-    /// checked before anything is done.
+    /// checked before anything is done, and cannot end until the command
+    /// is over.
     pub(crate) fn attributed<T>(
         &self,
         from_client: bool,
@@ -769,6 +889,10 @@ impl Keeper {
             Ok(None) => return (answer(), None),
             Err(refused) => return (Err(refused), None),
         };
+        let admitted = match &target {
+            Target::Joined { run, .. } => Some(*run),
+            _ => None,
+        };
         let scope = Scope {
             target,
             command: json!({"name": request.command, "args": request.args}),
@@ -777,7 +901,11 @@ impl Keeper {
         };
         CURRENT.with(|current| *current.borrow_mut() = Some(scope));
         let result = answer();
-        let Some(scope) = CURRENT.with(|current| current.borrow_mut().take()) else {
+        let scope = CURRENT.with(|current| current.borrow_mut().take());
+        if let Some(run) = admitted {
+            self.leave(run);
+        }
+        let Some(scope) = scope else {
             return (result, None);
         };
         let run = match scope.target {
@@ -828,25 +956,7 @@ impl Keeper {
                     "a Run that exists has its description already: name the Run or describe a new one, not both",
                 ));
             }
-            let not_found = || {
-                ServiceError::new(
-                    crate::facts::codes::RUN_NOT_FOUND,
-                    format!("there is no Run {id}"),
-                )
-            };
-            let run = self
-                .stems
-                .sidecar_if_made()?
-                .ok_or_else(not_found)?
-                .run(RunId(id))
-                .map_err(|e| failed(&e))?
-                .ok_or_else(not_found)?;
-            if run.is_finished() {
-                return Err(ServiceError::new(
-                    crate::facts::codes::RUN_FINISHED,
-                    format!("Run {id} has ended; start another to change more"),
-                ));
-            }
+            let run = self.admit(id)?;
             return Ok(Some(Target::Joined {
                 run: run.id,
                 source: source.unwrap_or(run.source),
@@ -871,10 +981,112 @@ impl Keeper {
         }))
     }
 
-    /// Ends the window's Run, when one is open: the service is stopping.
+    /// Admits a command to open Run `id`: checked open and counted in one
+    /// step under the Keeper's lock, so a Run being ended
+    /// ([`Self::finishing`]) admits nothing and is not ended while a
+    /// command is in it.
+    fn admit(&self, id: i64) -> Result<Run, ServiceError> {
+        let not_found = || {
+            ServiceError::new(
+                crate::facts::codes::RUN_NOT_FOUND,
+                format!("there is no Run {id}"),
+            )
+        };
+        let ended = || {
+            ServiceError::new(
+                crate::facts::codes::RUN_FINISHED,
+                format!("Run {id} has ended; start another to change more"),
+            )
+        };
+        let sidecar = self.stems.sidecar_if_made()?.ok_or_else(not_found)?;
+        let mut state = self.state();
+        if state.finishing.contains(&id) {
+            return Err(ended());
+        }
+        let run = sidecar
+            .run(RunId(id))
+            .map_err(|e| failed(&e))?
+            .ok_or_else(not_found)?;
+        if run.is_finished() {
+            return Err(ended());
+        }
+        *state.admitted.entry(id).or_default() += 1;
+        Ok(run)
+    }
+
+    fn leave(&self, run: RunId) {
+        let mut state = self.state();
+        if let Some(count) = state.admitted.get_mut(&run.0) {
+            *count -= 1;
+            if *count == 0 {
+                state.admitted.remove(&run.0);
+            }
+        }
+        drop(state);
+        self.left.notify_all();
+    }
+
+    /// Ends a Run with `finish` once no command is in it: commands already
+    /// admitted are waited for, and no other is admitted meanwhile.
+    /// `args` are `runs.finish`'s.
+    pub(crate) fn finishing<T>(
+        &self,
+        args: &Value,
+        finish: impl FnOnce() -> Result<T, ServiceError>,
+    ) -> Result<T, ServiceError> {
+        let Some(id) = args.get("id").and_then(Value::as_i64) else {
+            return finish();
+        };
+        let mut state = self.state();
+        state.finishing.insert(id);
+        while state.admitted.get(&id).is_some_and(|count| *count > 0) {
+            state = self
+                .left
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+        let finished = finish();
+        state.finishing.remove(&id);
+        finished
+    }
+
+    /// Settles what an earlier service left, when there is a Sidecar:
+    /// asked before the Ledger is read and as the service starts, so a
+    /// reader never sees less than was done.
+    pub(crate) fn recover(&self) -> Result<(), ServiceError> {
+        let Some(sidecar) = self.stems.sidecar_if_made()? else {
+            return Ok(());
+        };
+        let mut state = self.state();
+        self.settle(&sidecar, &mut state).map_err(|why| {
+            ServiceError::new(
+                crate::stems::codes::SIDECAR_FAILED,
+                format!("the Ledger could not be brought up to date: {why}"),
+            )
+        })
+    }
+
+    /// The service is stopping: no further write is begun. Writes already
+    /// begun finish and are recorded.
+    pub(crate) fn shut(&self) {
+        self.state().closed = true;
+    }
+
+    /// Ends the window's Run and settles the last write's intent: the
+    /// service has stopped and every write it saw is over. Entries still
+    /// waiting stay in the spill file for the next service.
     pub(crate) fn close(&self) {
-        let window = self.state().window.take();
-        if let (Some(window), Ok(Some(sidecar))) = (window, self.stems.sidecar_if_made()) {
+        let mut state = self.state();
+        state.closed = true;
+        let Ok(Some(sidecar)) = self.stems.sidecar_if_made() else {
+            return;
+        };
+        self.close_op(&sidecar, &mut state);
+        let done = std::mem::take(&mut state.done);
+        if let Err(error) = sidecar.settle_intents(&done) {
+            tracing::warn!(%error, "could not settle the Ledger's last intents");
+        }
+        if let Some(window) = state.window.take() {
             let _ = sidecar.finish_run(window.run, "wreckordbox stopped");
         }
     }
@@ -883,51 +1095,64 @@ impl Keeper {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Deals once with what an earlier service left: entries it spilled
-    /// and a window Run it never ended.
-    fn settle(sidecar: &Sidecar, state: &mut State) -> Result<(), String> {
+    /// Deals once with what an earlier service left: its kept entries are
+    /// written (each once, under its own identifier), every intent no entry
+    /// settled becomes an entry saying its change was begun and not
+    /// confirmed, and the Runs it owned and never ended are ended. A
+    /// damaged spill file stops here, untouched, until the DJ deals with
+    /// it.
+    fn settle(&self, sidecar: &Sidecar, state: &mut State) -> Result<(), String> {
         if state.settled {
             return Ok(());
         }
         let file = spill_file(sidecar);
         if file.is_file() && state.unwritten.is_empty() {
-            let text = std::fs::read_to_string(&file)
-                .map_err(|e| format!("{} could not be read: {e}", file.display()))?;
-            for line in text.lines().filter(|line| !line.trim().is_empty()) {
-                let spilled: Spilled = serde_json::from_str(line).map_err(|e| {
-                    format!("{} holds a line that is not an entry: {e}", file.display())
-                })?;
-                state.unwritten.push(spilled);
-            }
+            state.unwritten = read_spill(&file)?;
+        }
+        self.write_waiting(sidecar, state)?;
+        for open in sidecar.open_intents().map_err(|e| e.to_string())? {
+            let run = match open.run {
+                Some(run) => run,
+                None => late_run(sidecar, &open.source, &open.description)?,
+            };
+            sidecar
+                .append(&NewEntry {
+                    id: Some(open.id),
+                    run,
+                    store: Store::Library,
+                    source: &open.source,
+                    at: Some(open.at),
+                    action: Action::Write,
+                    kind: UNCONFIRMED,
+                    label: BEGUN_NOT_CONFIRMED,
+                    command: open.command.as_ref(),
+                    reverses: None,
+                    part_of: None,
+                    reversible: false,
+                    format: stored::FORMAT,
+                    payload: None,
+                })
+                .map_err(|e| e.to_string())?;
         }
         sidecar
-            .finish_abandoned_runs(
-                &Source::new(SourceKind::Dj, "dj"),
-                WINDOW_RUN,
-                "wreckordbox stopped without ending it",
-            )
+            .finish_owned_runs("wreckordbox stopped without ending it")
             .map_err(|e| e.to_string())?;
         state.settled = true;
         Ok(())
     }
 
     /// Writes every entry still waiting into the Ledger, oldest first, and
-    /// removes the spill file.
-    fn write_waiting(sidecar: &Sidecar, state: &mut State) -> Result<(), String> {
+    /// removes the spill file. An entry already there under its identifier
+    /// (a replay cut short) is not written twice.
+    fn write_waiting(&self, sidecar: &Sidecar, state: &mut State) -> Result<(), String> {
         while let Some(waiting) = state.unwritten.first() {
-            let run = if let Some(run) = waiting.run {
-                RunId(run)
-            } else {
-                let run = sidecar
-                    .begin_run(&waiting.source, &waiting.description)
-                    .map_err(|e| e.to_string())?;
-                sidecar
-                    .finish_run(run, "recorded late")
-                    .map_err(|e| e.to_string())?;
-                run
+            let run = match waiting.run {
+                Some(run) => RunId(run),
+                None => late_run(sidecar, &waiting.source, &waiting.description)?,
             };
             sidecar
                 .append(&NewEntry {
+                    id: waiting.id,
                     run,
                     store: Store::Library,
                     source: &waiting.source,
@@ -937,12 +1162,16 @@ impl Keeper {
                     label: &waiting.label,
                     command: waiting.command.as_ref(),
                     reverses: waiting.reverses,
+                    part_of: waiting.part_of,
                     reversible: waiting.reversible,
                     format: waiting.format,
                     payload: waiting.payload.as_ref(),
                 })
                 .map_err(|e| e.to_string())?;
             state.unwritten.remove(0);
+            if self.faults.abort_in_replay {
+                std::process::abort();
+            }
         }
         let file = spill_file(sidecar);
         if file.is_file() {
@@ -950,6 +1179,54 @@ impl Keeper {
                 .map_err(|e| format!("{} could not be removed: {e}", file.display()))?;
         }
         Ok(())
+    }
+
+    /// The last write begun is over and the next is about to begin: a
+    /// write that changed the Library and was neither recorded nor
+    /// deliberately left out gets an entry saying so, under its intent's
+    /// identifier; one that needed no entry has its intent removed with
+    /// the next. When even that entry cannot be written, the intent stays,
+    /// and the next service reports the change as begun and not confirmed.
+    fn close_op(&self, sidecar: &Sidecar, state: &mut State) {
+        let Some(op) = state.op.take() else {
+            return;
+        };
+        if op.recorded {
+            return;
+        }
+        if op.unnamed || op.wrote != Some(true) {
+            state.done.push(op.id);
+            return;
+        }
+        let run = if op.window {
+            self.window_run(sidecar, state)
+        } else {
+            op.run
+                .map_or_else(|| late_run(sidecar, &op.source, &op.description), Ok)
+        };
+        let appended = run.and_then(|run| {
+            sidecar
+                .append(&NewEntry {
+                    id: Some(op.id),
+                    run,
+                    store: Store::Library,
+                    source: &op.source,
+                    at: None,
+                    action: Action::Write,
+                    kind: UNCONFIRMED,
+                    label: MADE_NOT_RECORDED,
+                    command: op.command.as_ref(),
+                    reverses: None,
+                    part_of: None,
+                    reversible: false,
+                    format: stored::FORMAT,
+                    payload: None,
+                })
+                .map_err(|e| e.to_string())
+        });
+        if let Err(error) = appended {
+            tracing::error!(%error, intent = op.id, "a change to the Library was made and could not be recorded; the next service reports it");
+        }
     }
 
     /// The window's Run: the one open, or a new one when there is none or
@@ -964,7 +1241,7 @@ impl Keeper {
             state.window = None;
         }
         let run = sidecar
-            .begin_run(&Source::new(SourceKind::Dj, "dj"), WINDOW_RUN)
+            .begin_owned_run(&Source::new(SourceKind::Dj, "dj"), WINDOW_RUN)
             .map_err(|e| e.to_string())?;
         state.window = Some(WindowRun {
             run,
@@ -975,8 +1252,8 @@ impl Keeper {
 
     /// Appends one entry for a change already made, attributed to the
     /// command this thread is answering or else to the DJ in the window.
-    /// Answers the entry's identifier; `None` when it had to be kept for
-    /// later.
+    /// Answers the entry's identifier: the one reserved for the write it
+    /// records, which it keeps even when it has to be written later.
     fn append(&self, draft: Draft) -> Option<i64> {
         CURRENT.with(|current| {
             let mut current = current.borrow_mut();
@@ -993,7 +1270,7 @@ impl Keeper {
                     let run = match (*made, sidecar) {
                         (Some(run), _) => Ok(run),
                         (None, Ok(sidecar)) => sidecar
-                            .begin_run(source, description)
+                            .begin_owned_run(source, description)
                             .map_err(|e| e.to_string())
                             .inspect(|run| *made = Some(*run)),
                         (None, Err(error)) => Err(error.message.clone()),
@@ -1013,11 +1290,24 @@ impl Keeper {
             if let Some(scope) = current.as_mut() {
                 scope.entries += 1;
             }
+            // The identifier its write reserved, for the first entry of
+            // that write; another (there should be none) takes the next.
+            let id = match state.op.as_mut() {
+                Some(op) if !op.recorded => {
+                    op.recorded = true;
+                    Some(op.id)
+                }
+                _ => None,
+            };
             let at = now();
             let reversible = draft.payload.is_some();
             let written = match (&sidecar, &run) {
+                (Ok(_), Ok(_)) if self.faults.refuse_append() => {
+                    Err("the Sidecar refused the entry (injected)".to_owned())
+                }
                 (Ok(sidecar), Ok(run)) if state.unwritten.is_empty() => sidecar
                     .append(&NewEntry {
+                        id,
                         run: *run,
                         store: Store::Library,
                         source: &source,
@@ -1027,6 +1317,7 @@ impl Keeper {
                         label: draft.label,
                         command: command.as_ref(),
                         reverses: draft.reverses,
+                        part_of: draft.part_of,
                         reversible,
                         format: stored::FORMAT,
                         payload: draft.payload.as_ref(),
@@ -1041,7 +1332,9 @@ impl Keeper {
                 Err(error) => {
                     // The Library has changed. Keep the entry: here, and on
                     // disk in case this process ends before it is written.
+                    // Its intent stays in the Sidecar until it is.
                     let spilled = Spilled {
+                        id,
                         run: run.ok().map(|run| run.0),
                         source,
                         description,
@@ -1051,6 +1344,7 @@ impl Keeper {
                         label: draft.label.to_owned(),
                         command,
                         reverses: draft.reverses,
+                        part_of: draft.part_of,
                         reversible,
                         format: stored::FORMAT,
                         payload: draft.payload,
@@ -1066,7 +1360,7 @@ impl Keeper {
                         "a change to the Library could not be written to the Ledger; it is kept and no further change is made until it is"
                     );
                     state.unwritten.push(spilled);
-                    None
+                    id
                 }
             }
         })
@@ -1074,24 +1368,82 @@ impl Keeper {
 }
 
 impl rbl_library::ledger::Ledger for Keeper {
-    fn ready(&self) -> Result<(), String> {
+    fn begin(&self) -> Result<(), String> {
         let sidecar = self.stems.sidecar().map_err(|e| e.message)?;
         let mut state = self.state();
-        Self::settle(&sidecar, &mut state)?;
+        if state.closed {
+            return Err("wreckordbox is stopping".to_owned());
+        }
+        self.settle(&sidecar, &mut state)?;
         if !state.unwritten.is_empty() {
-            Self::write_waiting(&sidecar, &mut state)
+            self.write_waiting(&sidecar, &mut state)
                 .map_err(|e| format!("an earlier change is still not recorded ({e})"))?;
         }
-        sidecar.ledger_ready().map_err(|e| e.to_string())
+        self.close_op(&sidecar, &mut state);
+        // Whose change it will be, as far as is known before it is made.
+        let (window, run, source, description, command) = CURRENT.with(|current| {
+            let current = current.borrow();
+            let command = current.as_ref().map(|scope| scope.command.clone());
+            match current.as_ref().map(|scope| &scope.target) {
+                Some(Target::Joined { run, source }) => {
+                    (false, Some(*run), source.clone(), String::new(), command)
+                }
+                Some(Target::Own { source, description, made }) => {
+                    (false, *made, source.clone(), description.clone(), command)
+                }
+                Some(Target::Window) | None => (
+                    true,
+                    state.window.as_ref().map(|window| window.run),
+                    Source::new(SourceKind::Dj, "dj"),
+                    WINDOW_RUN.to_owned(),
+                    command,
+                ),
+            }
+        });
+        let done = std::mem::take(&mut state.done);
+        let id = sidecar
+            .begin_intent(
+                &Intent {
+                    source: &source,
+                    run,
+                    description: &description,
+                    command: command.as_ref(),
+                    at: now(),
+                },
+                &done,
+            )
+            .map_err(|e| {
+                state.done = done.clone();
+                e.to_string()
+            })?;
+        state.op = Some(Op {
+            id,
+            wrote: None,
+            recorded: false,
+            unnamed: false,
+            window,
+            run,
+            source,
+            description,
+            command,
+        });
+        drop(state);
+        if let Some(delay) = self.faults.delay_after_begin {
+            std::thread::sleep(delay);
+        }
+        Ok(())
     }
 
-    fn record(
-        &self,
-        step: Step,
-        edit: &LibraryEdit,
-        label: &str,
-        reverses: Option<i64>,
-    ) -> Option<i64> {
+    fn written(&self, wrote: bool) {
+        if let Some(op) = self.state().op.as_mut() {
+            op.wrote = Some(wrote);
+        }
+        if wrote && self.faults.abort_after_write {
+            std::process::abort();
+        }
+    }
+
+    fn record(&self, step: Step, edit: &LibraryEdit, label: &str, link: Link) -> Option<i64> {
         self.append(Draft {
             action: match step {
                 Step::Edit => Action::Edit,
@@ -1100,7 +1452,8 @@ impl rbl_library::ledger::Ledger for Keeper {
             },
             kind: stored::kind_of(edit),
             label,
-            reverses,
+            reverses: link.reverses,
+            part_of: link.part_of,
             payload: stored::store(edit),
         })
     }
@@ -1108,10 +1461,13 @@ impl rbl_library::ledger::Ledger for Keeper {
     fn note(&self, kept: Unkept, name: Option<&str>) {
         // Named by the caller, else by the command being answered. A write
         // with neither is not an edit (analysis, an import, a player): not
-        // recorded here.
+        // recorded here (bead wbx-22), and its intent needs no entry.
         let command =
             CURRENT.with(|current| current.borrow().as_ref().map(|scope| scope.name.clone()));
         let Some(label) = name.map(str::to_owned).or(command) else {
+            if let Some(op) = self.state().op.as_mut() {
+                op.unnamed = true;
+            }
             return;
         };
         self.append(Draft {
@@ -1122,9 +1478,49 @@ impl rbl_library::ledger::Ledger for Keeper {
             },
             label: &label,
             reverses: None,
+            part_of: None,
             payload: None,
         });
     }
+}
+
+/// A Run, ended at once, for an entry written after the Run it was made
+/// in could be known.
+fn late_run(sidecar: &Sidecar, source: &Source, description: &str) -> Result<RunId, String> {
+    let description = if description.is_empty() {
+        "Changes recorded late"
+    } else {
+        description
+    };
+    let run = sidecar
+        .begin_run(source, description)
+        .map_err(|e| e.to_string())?;
+    sidecar
+        .finish_run(run, "recorded late")
+        .map_err(|e| e.to_string())?;
+    Ok(run)
+}
+
+/// Reads every kept entry in `file`, or none: a line that is not a whole
+/// entry stops recovery with the file left as it is.
+fn read_spill(file: &std::path::Path) -> Result<Vec<Spilled>, String> {
+    let text = std::fs::read_to_string(file)
+        .map_err(|e| format!("{} could not be read: {e}", file.display()))?;
+    let mut read = Vec::new();
+    for (number, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let spilled: Spilled = serde_json::from_str(line).map_err(|e| {
+            format!(
+                "{} holds, at line {}, something that is not a kept entry ({e}). It is left as it is and nothing is changed until it is dealt with: once the changes it records are known, move it aside",
+                file.display(),
+                number + 1
+            )
+        })?;
+        read.push(spilled);
+    }
+    Ok(read)
 }
 
 /// Where entries the Ledger could not take wait.

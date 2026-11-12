@@ -9,7 +9,7 @@
 )]
 
 use serde_json::json;
-use wreckordbox_sidecar::ledger::{Action, Count, NewEntry, Store};
+use wreckordbox_sidecar::ledger::{Action, Count, Intent, NewEntry, Store};
 use wreckordbox_sidecar::{Kind, NewFact, RunId, Sidecar, Source, SourceKind};
 
 fn agent() -> Source {
@@ -31,7 +31,9 @@ fn entry<'a>(
         kind: "track",
         label: "Track Edit",
         command,
+        id: None,
         reverses: None,
+        part_of: None,
         reversible: true,
         format: 1,
         payload: Some(payload),
@@ -149,72 +151,290 @@ fn an_entry_is_never_changed_or_removed_and_survives_reopening() {
     assert_eq!(entries[0].label, "Track Edit");
 }
 
-#[test]
-fn a_store_made_before_the_ledger_is_given_one_and_keeps_its_facts() {
-    let dir = tempfile::tempdir().unwrap();
-    let source = agent();
-    let fact = {
-        let sidecar = Sidecar::open(dir.path()).unwrap();
-        let run = sidecar.begin_run(&source, "Tag").unwrap();
-        sidecar
-            .record(&NewFact {
-                track_id: "10001",
-                fingerprint: None,
-                kind: Kind::judgement("genre"),
-                value: json!("Dub"),
-                source: &source,
-                confidence: 1.0,
-                run,
-            })
-            .unwrap()
-    };
-    // Back to what the store held before the Ledger (version 3).
-    let raw = rusqlite::Connection::open(dir.path().join("sidecar.db")).unwrap();
-    raw.execute_batch(
-        "DROP TRIGGER ledger_is_never_changed;
-         DROP TRIGGER ledger_is_never_removed;
-         DROP TABLE ledger;
-         UPDATE meta SET value = '3' WHERE key = 'schema_version';",
-    )
-    .unwrap();
-    drop(raw);
-
-    let sidecar = Sidecar::open(dir.path()).unwrap();
-    let run = sidecar.begin_run(&source, "Rate").unwrap();
-    let payload = json!({"values": []});
-    sidecar
-        .append(&entry(run, &source, &payload, None))
-        .unwrap();
-    assert_eq!(sidecar.facts_of_track("10001").unwrap()[0].id, fact.id);
-    let version: String = rusqlite::Connection::open(dir.path().join("sidecar.db"))
-        .unwrap()
-        .query_row(
-            "SELECT value FROM meta WHERE key = 'schema_version'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(version, "4");
+/// Takes a store back to what an older wreckordbox made: the shape of
+/// `version`, with what it held then.
+fn downgrade(dir: &std::path::Path, version: u32) {
+    let raw = rusqlite::Connection::open(dir.join("sidecar.db")).unwrap();
+    let mut drop = String::new();
+    if version < 4 {
+        drop.push_str(
+            "DROP TRIGGER fact_takes_its_place_in_order;
+             DROP TABLE ledger_intent; DROP TABLE ledger_owned_run;
+             DROP TABLE ledger; DROP TABLE ledger_order;
+             DROP INDEX fact_by_successor;",
+        );
+    }
+    if version < 3 {
+        drop.push_str("DROP TABLE decision_answer; DROP TABLE decision;");
+    }
+    if version < 2 {
+        drop.push_str("DROP TABLE mutant_change; DROP TABLE mutant;");
+    }
+    drop.push_str(&format!(
+        "UPDATE meta SET value = '{version}' WHERE key = 'schema_version';"
+    ));
+    raw.execute_batch(&drop).unwrap();
 }
 
 #[test]
-fn runs_left_open_by_a_process_that_died_are_ended() {
+fn a_store_from_each_earlier_version_is_given_the_ledger_and_keeps_its_facts_in_order() {
+    for version in [1, 2, 3] {
+        let dir = tempfile::tempdir().unwrap();
+        let source = agent();
+        let (run, facts) = {
+            let sidecar = Sidecar::open(dir.path()).unwrap();
+            let run = sidecar.begin_run(&source, "Tag").unwrap();
+            let fact = |value: &str| {
+                sidecar
+                    .record(&NewFact {
+                        track_id: "10001",
+                        fingerprint: None,
+                        kind: Kind::judgement("genre"),
+                        value: json!(value),
+                        source: &source,
+                        confidence: 1.0,
+                        run,
+                    })
+                    .unwrap()
+                    .id
+            };
+            (run, vec![fact("Dub"), fact("Dub Techno")])
+        };
+        downgrade(dir.path(), version);
+
+        let sidecar = Sidecar::open(dir.path()).unwrap();
+        let payload = json!({"values": []});
+        let id = sidecar
+            .append(&entry(run, &source, &payload, None))
+            .unwrap();
+        // The Facts it held keep their order, before what is added now.
+        let (entries, total) = sidecar.run_entries(run, 50, 0).unwrap();
+        assert_eq!(total, 3, "from version {version}");
+        let ids: Vec<i64> = entries.iter().map(|entry| entry.id).collect();
+        assert_eq!(ids, vec![facts[0], facts[1], id], "from version {version}");
+        let stored: String = rusqlite::Connection::open(dir.path().join("sidecar.db"))
+            .unwrap()
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, "4", "from version {version}");
+    }
+}
+
+#[test]
+fn library_entries_and_facts_made_in_the_same_millisecond_are_read_in_the_order_made() {
+    let dir = tempfile::tempdir().unwrap();
+    let sidecar = Sidecar::open(dir.path()).unwrap();
+    let source = agent();
+    let run = sidecar.begin_run(&source, "Tag and rate").unwrap();
+    let fact = sidecar
+        .record(&NewFact {
+            track_id: "10002",
+            fingerprint: None,
+            kind: Kind::judgement("genre"),
+            value: json!("Dub"),
+            source: &source,
+            confidence: 1.0,
+            run,
+        })
+        .unwrap();
+    let payload = json!({"values": []});
+    let edit = sidecar
+        .append(&NewEntry {
+            at: Some(fact.recorded_at),
+            ..entry(run, &source, &payload, None)
+        })
+        .unwrap();
+    let later = sidecar
+        .record(&NewFact {
+            track_id: "10003",
+            fingerprint: None,
+            kind: Kind::judgement("genre"),
+            value: json!("Dub"),
+            source: &source,
+            confidence: 1.0,
+            run,
+        })
+        .unwrap();
+    // An entry whose identifier was taken before the Fact was recorded is
+    // read before it, whenever it was written.
+    let reserved = sidecar
+        .begin_intent(
+            &Intent {
+                source: &source,
+                run: Some(run),
+                description: "Tag and rate",
+                command: None,
+                at: fact.recorded_at,
+            },
+            &[],
+        )
+        .unwrap();
+    let last = sidecar
+        .record(&NewFact {
+            track_id: "10004",
+            fingerprint: None,
+            kind: Kind::judgement("genre"),
+            value: json!("Dub"),
+            source: &source,
+            confidence: 1.0,
+            run,
+        })
+        .unwrap();
+    sidecar
+        .append(&NewEntry {
+            id: Some(reserved),
+            at: Some(fact.recorded_at),
+            ..entry(run, &source, &payload, None)
+        })
+        .unwrap();
+
+    let (entries, _) = sidecar.run_entries(run, 50, 0).unwrap();
+    let order: Vec<(Store, i64)> = entries.iter().map(|e| (e.store, e.id)).collect();
+    assert_eq!(
+        order,
+        vec![
+            (Store::Sidecar, fact.id),
+            (Store::Library, edit),
+            (Store::Sidecar, later.id),
+            (Store::Library, reserved),
+            (Store::Sidecar, last.id),
+        ]
+    );
+    // Paged by the same order.
+    let (page, _) = sidecar.run_entries(run, 2, 1).unwrap();
+    assert_eq!(
+        page.iter().map(|e| e.id).collect::<Vec<_>>(),
+        vec![edit, later.id]
+    );
+}
+
+#[test]
+fn the_fact_a_recorded_fact_replaced_is_found_by_an_index_not_a_scan() {
+    let dir = tempfile::tempdir().unwrap();
+    let sidecar = Sidecar::open(dir.path()).unwrap();
+    let source = agent();
+    let run = sidecar.begin_run(&source, "Tag").unwrap();
+    for track in 0..400 {
+        for value in ["Dub", "Dub Techno"] {
+            sidecar
+                .record(&NewFact {
+                    track_id: &format!("{}", 20_000 + track),
+                    fingerprint: None,
+                    kind: Kind::judgement("genre"),
+                    value: json!(value),
+                    source: &source,
+                    confidence: 1.0,
+                    run,
+                })
+                .unwrap();
+        }
+    }
+    let (page, total) = sidecar.run_entries(run, 50, 700).unwrap();
+    assert_eq!(total, 800);
+    assert_eq!(page.len(), 50);
+    // Each track's second Fact replaced its first.
+    for pair in page.chunks(2) {
+        assert!(pair[0].replaced.is_none());
+        assert_eq!(pair[1].replaced.as_ref().unwrap().id, pair[0].id);
+    }
+
+    let raw = rusqlite::Connection::open(dir.path().join("sidecar.db")).unwrap();
+    let plan: Vec<String> = raw
+        .prepare(&format!(
+            "EXPLAIN QUERY PLAN {}",
+            wreckordbox_sidecar::ledger::PAGE_QUERY
+        ))
+        .unwrap()
+        .query_map(rusqlite::params![run.0, 50, 0], |row| row.get::<_, String>(3))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(
+        // No table is scanned; only the page's own rows are sorted.
+        plan.iter()
+            .all(|step| !step.starts_with("SCAN") || step.starts_with("SCAN (subquery")),
+        "{plan:#?}"
+    );
+}
+
+#[test]
+fn an_entry_appended_again_under_its_identifier_is_kept_once_and_settles_its_intent() {
+    let dir = tempfile::tempdir().unwrap();
+    let sidecar = Sidecar::open(dir.path()).unwrap();
+    let source = agent();
+    let run = sidecar.begin_run(&source, "Rate").unwrap();
+    let command = json!({"name": "tracks.rate"});
+    let intent = Intent {
+        source: &source,
+        run: Some(run),
+        description: "Rate",
+        command: Some(&command),
+        at: 1_000,
+    };
+    let first = sidecar.begin_intent(&intent, &[]).unwrap();
+    let second = sidecar.begin_intent(&intent, &[]).unwrap();
+    assert!(second > first);
+    assert_eq!(
+        sidecar
+            .open_intents()
+            .unwrap()
+            .iter()
+            .map(|open| open.id)
+            .collect::<Vec<_>>(),
+        vec![first, second]
+    );
+
+    let payload = json!({"values": []});
+    let kept = NewEntry {
+        id: Some(first),
+        ..entry(run, &source, &payload, None)
+    };
+    assert_eq!(sidecar.append(&kept).unwrap(), first);
+    assert_eq!(sidecar.append(&kept).unwrap(), first, "a replay");
+    assert_eq!(sidecar.run_entries(run, 50, 0).unwrap().1, 1);
+    // Its intent went with it; the other is settled without an entry.
+    assert_eq!(sidecar.open_intents().unwrap()[0].id, second);
+    let third = sidecar.begin_intent(&intent, &[second]).unwrap();
+    assert_eq!(
+        sidecar
+            .open_intents()
+            .unwrap()
+            .iter()
+            .map(|open| open.id)
+            .collect::<Vec<_>>(),
+        vec![third]
+    );
+    sidecar.settle_intents(&[third]).unwrap();
+    assert!(sidecar.open_intents().unwrap().is_empty());
+}
+
+#[test]
+fn runs_wreckordbox_made_for_itself_and_left_open_by_a_process_that_died_are_ended() {
     let dir = tempfile::tempdir().unwrap();
     let sidecar = Sidecar::open(dir.path()).unwrap();
     let dj = Source::new(SourceKind::Dj, "dj");
-    let left = sidecar.begin_run(&dj, "Edits in the window").unwrap();
-    let other = sidecar.begin_run(&dj, "Something else").unwrap();
+    let left = sidecar.begin_owned_run(&dj, "Edits in the window").unwrap();
+    let command = sidecar.begin_owned_run(&agent(), "tracks.rate").unwrap();
+    let ended = sidecar.begin_owned_run(&dj, "Edits in the window").unwrap();
+    sidecar.finish_run(ended, "the DJ paused").unwrap();
+    // A Run a client started stays open for it.
+    let client = sidecar.begin_run(&dj, "Edits in the window").unwrap();
+    assert_eq!(sidecar.finish_owned_runs("wreckordbox stopped").unwrap(), 2);
+    for run in [left, command] {
+        assert_eq!(
+            sidecar.run(run).unwrap().unwrap().outcome.as_deref(),
+            Some("wreckordbox stopped")
+        );
+    }
     assert_eq!(
-        sidecar
-            .finish_abandoned_runs(&dj, "Edits in the window", "the window closed")
-            .unwrap(),
-        1
+        sidecar.run(ended).unwrap().unwrap().outcome.as_deref(),
+        Some("the DJ paused")
     );
-    assert_eq!(
-        sidecar.run(left).unwrap().unwrap().outcome.as_deref(),
-        Some("the window closed")
-    );
-    assert!(!sidecar.run(other).unwrap().unwrap().is_finished());
+    assert!(!sidecar.run(client).unwrap().unwrap().is_finished());
 }
 
 #[test]
@@ -269,5 +489,4 @@ fn marking_measurements_stale_is_an_entry_in_a_run_of_its_own() {
         entries[0].payload,
         Some(json!({"track": "10004", "fingerprint": after.as_str(), "facts": [fact.id]}))
     );
-    sidecar.ledger_ready().unwrap();
 }

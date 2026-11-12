@@ -252,11 +252,11 @@ fn edits_and_facts_made_in_one_run_are_listed_and_shown_together_also_after_a_re
         // A Fact's entry is the Fact, with the one it took the place of.
         assert_eq!(
             shown[3]["values"],
-            json!([{"subject": "track 10003", "field": "genre", "before": null, "after": "House"}])
+            json!([{"subject": "track 10003", "field": "genre", "before": null, "after": ["House"]}])
         );
         assert_eq!(
             shown[4]["values"],
-            json!([{"subject": "track 10003", "field": "genre", "before": "House", "after": "Tech House"}])
+            json!([{"subject": "track 10003", "field": "genre", "before": ["House"], "after": ["Tech House"]}])
         );
         assert_eq!(shown[4]["replaced"]["id"], shown[3]["fact"]["id"]);
         assert!(shown
@@ -423,10 +423,15 @@ fn runs_and_a_runs_entries_are_paged_and_read_as_tables() {
         shown.stdout
     );
 
-    // In text, an edit given a Run says which Run it is in; one made by
-    // hand with none stays one line.
+    // In text, every edit says which Run it is in: one made by hand with
+    // none names the Run made for it.
     let plain = sandbox.cli(&["tracks", "rate", "10005", "1"]);
-    assert_eq!(plain.stdout.lines().count(), 1, "{}", plain.stdout);
+    assert_eq!(plain.stdout.lines().count(), 2, "{}", plain.stdout);
+    assert!(
+        plain.stdout.lines().last().unwrap().starts_with("Run "),
+        "{}",
+        plain.stdout
+    );
     let rated = sandbox.cli(&["tracks", "rate", "10005", "2", "--run", &run]);
     assert!(
         rated

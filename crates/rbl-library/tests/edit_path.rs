@@ -368,15 +368,28 @@ type Told = (rbl_library::ledger::Step, String, Option<i64>, i64);
 #[derive(Default)]
 struct LedgerTape {
     changes: parking_lot::Mutex<Vec<Told>>,
+    /// The first slice each recorded change is part of, beside its id.
+    parts: parking_lot::Mutex<Vec<(i64, Option<i64>)>>,
     /// The edits the history keeps no entry for, as they were named.
     notes: parking_lot::Mutex<Vec<(rbl_library::ledger::Unkept, Option<String>)>>,
     /// Why it cannot record, when it cannot.
     broken: parking_lot::Mutex<Option<String>>,
+    /// Writes begun, and what each was then said to have written.
+    begun: parking_lot::Mutex<usize>,
+    written: parking_lot::Mutex<Vec<bool>>,
+    /// How many of the next records answer no identifier.
+    forget: parking_lot::Mutex<usize>,
 }
 
 impl rbl_library::ledger::Ledger for LedgerTape {
-    fn ready(&self) -> Result<(), String> {
-        self.broken.lock().clone().map_or(Ok(()), Err)
+    fn begin(&self) -> Result<(), String> {
+        self.broken.lock().clone().map_or(Ok(()), Err)?;
+        *self.begun.lock() += 1;
+        Ok(())
+    }
+
+    fn written(&self, wrote: bool) {
+        self.written.lock().push(wrote);
     }
 
     fn note(&self, kept: rbl_library::ledger::Unkept, name: Option<&str>) {
@@ -388,12 +401,18 @@ impl rbl_library::ledger::Ledger for LedgerTape {
         step: rbl_library::ledger::Step,
         edit: &rbl_library::history::LibraryEdit,
         label: &str,
-        reverses: Option<i64>,
+        link: rbl_library::ledger::Link,
     ) -> Option<i64> {
         assert!(!edit.is_empty(), "only a change is recorded");
         let mut changes = self.changes.lock();
         let id = i64::try_from(changes.len()).unwrap() + 100;
-        changes.push((step, label.to_owned(), reverses, id));
+        changes.push((step, label.to_owned(), link.reverses, id));
+        self.parts.lock().push((id, link.part_of));
+        let mut forget = self.forget.lock();
+        if *forget > 0 {
+            *forget -= 1;
+            return None;
+        }
         Some(id)
     }
 }
@@ -517,4 +536,100 @@ fn nothing_is_written_while_the_ledger_cannot_record() {
     *tape.broken.lock() = None;
     core.step_history(&NoHost, true).unwrap();
     assert_eq!(rating_of(&core, &track), 0);
+}
+
+#[test]
+fn an_edit_whose_refresh_fails_after_it_was_made_is_still_recorded() {
+    use rbl_library::history::{LibraryEdit, TRACK_EDIT};
+    use rbl_library::ledger::Step;
+
+    let dir = tempfile::tempdir().unwrap();
+    let core = core_in(dir.path());
+    let tape = std::sync::Arc::new(LedgerTape::default());
+    core.history().lock().keep_ledger(Some(tape.clone()));
+    let track = rbl_db::fixture::track_id(2);
+
+    // The rating is written; then the table the refresh reads is renamed
+    // away, so the re-read fails with the edit made.
+    let failed = core.recorded_edit(&NoHost, Touched::Metadata(vec![track.clone()]), TRACK_EDIT, |w| {
+        let (_, recorded) = w.set_rating_with_undo(&track, 4)?;
+        w.library()
+            .connection()
+            .execute_batch("ALTER TABLE djmdContent RENAME TO djmdContentGone")
+            .map_err(|e| rbl_db::DbError::Open(e.to_string()))?;
+        Ok(((), LibraryEdit::Track(vec![recorded])))
+    });
+
+    assert!(failed.is_err(), "the refresh failed");
+    assert_eq!(*tape.begun.lock(), 1);
+    assert_eq!(*tape.written.lock(), vec![true], "told before the refresh");
+    assert_eq!(*tape.changes.lock(), vec![(Step::Edit, TRACK_EDIT.to_owned(), None, 100)]);
+    assert_eq!(core.history().lock().undo_label(), Some(TRACK_EDIT));
+}
+
+#[test]
+fn a_redo_names_the_undo_it_reverses_even_when_the_undo_was_given_no_identifier() {
+    use rbl_library::history::{LibraryEdit, TRACK_EDIT};
+    use rbl_library::ledger::Step;
+
+    let dir = tempfile::tempdir().unwrap();
+    let core = core_in(dir.path());
+    let tape = std::sync::Arc::new(LedgerTape::default());
+    core.history().lock().keep_ledger(Some(tape.clone()));
+    let track = rbl_db::fixture::track_id(2);
+    core.recorded_edit(&NoHost, Touched::Metadata(vec![track.clone()]), TRACK_EDIT, |w| {
+        let (_, recorded) = w.set_rating_with_undo(&track, 3)?;
+        Ok(((), LibraryEdit::Track(vec![recorded])))
+    })
+    .unwrap();
+    *tape.forget.lock() = 1;
+    core.step_history(&NoHost, true).unwrap();
+    core.step_history(&NoHost, false).unwrap();
+
+    let label = TRACK_EDIT.to_owned();
+    assert_eq!(
+        *tape.changes.lock(),
+        vec![
+            (Step::Edit, label.clone(), None, 100),
+            (Step::Undo, label.clone(), Some(100), 101),
+            // Not the edit's: the Undo it reverses had none to give.
+            (Step::Redo, label, None, 102),
+        ]
+    );
+}
+
+#[test]
+fn every_slice_of_one_add_tracks_to_playlist_is_part_of_the_first_and_undone_with_it() {
+    use rbl_library::ledger::Step;
+
+    let dir = tempfile::tempdir().unwrap();
+    let core = core_in(dir.path());
+    let tape = std::sync::Arc::new(LedgerTape::default());
+    core.history().lock().keep_ledger(Some(tape.clone()));
+    let playlist = rbl_db::fixture::playlist_id(1);
+    let add = |tracks: &[usize]| {
+        let tracks: Vec<String> = tracks.iter().map(|&n| rbl_db::fixture::track_id(n)).collect();
+        let _gate = core.edit_gate().lock();
+        let addition = core
+            .write_then(
+                &NoHost,
+                History::Caller,
+                |w| w.add_tracks_with_undo(&playlist, &tracks, false).map(|(_, addition)| addition),
+                |_, addition| Ok(addition),
+            )
+            .unwrap();
+        core.history().lock().record_addition(addition, Some("drop-1".to_owned()), "Add Tracks to Playlist");
+    };
+    add(&[30, 31]);
+    add(&[32, 33]);
+    add(&[34]);
+    core.step_history(&NoHost, true).unwrap();
+
+    let steps: Vec<(Step, Option<i64>, i64)> =
+        tape.changes.lock().iter().map(|(step, _, reverses, id)| (*step, *reverses, *id)).collect();
+    assert_eq!(
+        steps,
+        vec![(Step::Edit, None, 100), (Step::Edit, None, 101), (Step::Edit, None, 102), (Step::Undo, Some(100), 103)]
+    );
+    assert_eq!(*tape.parts.lock(), vec![(100, None), (101, Some(100)), (102, Some(100)), (103, None)]);
 }
