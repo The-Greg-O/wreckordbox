@@ -49,6 +49,30 @@ export function containerOf(nodes: readonly TreeNode[], node: TreeNode): string 
 }
 
 /**
+ * Every playlist, named with the folders it sits in (`Gigs › Friday ›
+ * Warm-up`), in tree order: what Add To Playlist offers.
+ *
+ * One pass with the chain of nodes above the current one, rather than a
+ * `containerOf` per node, which walks the whole array each time: twenty
+ * thousand playlists took over a second that way (wbx-45.17). A node's
+ * container is the nearest node above it at a lesser depth, as there.
+ */
+export function playlistPaths(nodes: readonly TreeNode[]): { id: string; name: string }[] {
+  const chain: { depth: number; folder: boolean; path: string }[] = [];
+  const out: { id: string; name: string }[] = [];
+  for (const node of nodes) {
+    while (chain.length > 0 && (chain.at(-1)?.depth ?? 0) >= node.depth) chain.pop();
+    const container = chain.at(-1);
+    const above = container?.folder ? container.path : "";
+    const named = node.kind === "playlist" || node.kind === "folder";
+    const path = !named ? "" : above === "" ? node.name : `${above} › ${node.name}`;
+    if (node.kind === "playlist") out.push({ id: node.id, name: path });
+    chain.push({ depth: node.depth, folder: node.kind === "folder", path });
+  }
+  return out;
+}
+
+/**
  * The nodes sitting directly under `parent`, in tree order.
  *
  * One pass over the flat array rather than a `containerOf` per node, which

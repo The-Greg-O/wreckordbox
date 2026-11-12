@@ -86,7 +86,7 @@ import { MyTagPanel } from "@/views/browser/MyTagPanel";
 import { columnContextFor, useColumns, type ColumnContext } from "@/store/useColumns";
 import { useExplorer } from "@/store/useExplorer";
 import { hasLooseId, importLoose, isLooseId } from "@/lib/explorer";
-import { childrenOf, containerOf, parentFor, withSources } from "@/lib/tree";
+import { childrenOf, parentFor, playlistPaths, withSources } from "@/lib/tree";
 import { DETAIL_BARS } from "@/lib/player";
 import type { Deck as SyncDeck } from "@/lib/sync";
 import { LayoutDualIcon } from "@/components/icons";
@@ -2321,20 +2321,7 @@ function AppBody() {
 
   // What the track menu's Add To Playlist and Export Track offer: the
   // playlists under their folders, and the connected sticks.
-  const menuPlaylists = useMemo(() => {
-    // Folders' names accumulate down the tree, which is in order, so a
-    // playlist's container has been named by the time it is reached.
-    const names = new Map<string, string>();
-    const out: { id: string; name: string }[] = [];
-    for (const node of tree) {
-      if (node.kind !== "playlist" && node.kind !== "folder") continue;
-      const above = names.get(containerOf(tree, node)) ?? "";
-      const name = above === "" ? node.name : `${above} › ${node.name}`;
-      names.set(node.id, name);
-      if (node.kind === "playlist") out.push({ id: node.id, name });
-    }
-    return out;
-  }, [tree]);
+  const menuPlaylists = useMemo(() => playlistPaths(tree), [tree]);
   const menuDevices = useMemo(() => devices.map((d) => ({ id: d.path, name: d.name })), [devices]);
 
   // Asked first, as rekordbox asks, though Edit › Undo can bring them back.
