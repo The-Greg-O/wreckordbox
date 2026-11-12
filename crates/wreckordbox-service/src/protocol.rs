@@ -90,6 +90,10 @@ pub mod codes {
     /// A restore failed while it ran; it put back what it had changed,
     /// unless the message says otherwise.
     pub const RESTORE_FAILED: &str = "restore_failed";
+    /// A restore's files are in place, and the Ledger entry recording it
+    /// could not be written. Its journal stays, the Library is not opened
+    /// for edits, and the next owner tries again.
+    pub const RESTORE_UNRECORDED: &str = "restore_unrecorded";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

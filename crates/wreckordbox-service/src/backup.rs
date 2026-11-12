@@ -36,8 +36,7 @@ pub struct Restored {
     /// audio is not on this machine needs separating again.
     pub stems: bool,
     /// The Ledger entry that records the restore, when there is a Sidecar
-    /// to record it in. `None` also when it could not be written; the
-    /// restore stands either way.
+    /// to record it in.
     pub ledger_entry: Option<i64>,
 }
 
@@ -62,9 +61,65 @@ pub struct Backup {
 /// worked on.
 pub type Progress<'a> = dyn FnMut(&str, u64, u64, &str) + 'a;
 
-/// Finishes or rolls back a restore that stopped midway, if there is one.
-/// The caller must own the Library (hold its lock) and must not have opened
-/// the Library or the Sidecar yet.
+/// What the Library's lock file says while a restore holds it.
+pub const RESTORING: &str = "restoring a backup";
+
+/// The Library owned for a restore: its ownership lock, the one every
+/// service (by itself or hosted by the window) holds for as long as it has
+/// the Library, with [`RESTORING`] written in it. Released when dropped.
+pub struct Owned {
+    _lock: std::fs::File,
+}
+
+impl Owned {
+    /// Takes the Library for a restore. Refused ([`codes::RESTORE_REFUSED`])
+    /// while a service, the window or another restore has it.
+    pub fn take(library: &LibraryLocation) -> Result<Self, ServiceError> {
+        let lock = crate::server::take_lock(&library.master_db, Path::new(RESTORING)).map_err(|error| {
+            if error.code == codes::SERVICE_ALREADY_RUNNING {
+                ServiceError::new(
+                    codes::RESTORE_REFUSED,
+                    format!(
+                        "the Library is in use: {}. Quit the wreckordbox window, or stop the Library service with `wreckordbox stop`, then restore.",
+                        error.message
+                    ),
+                )
+            } else {
+                error
+            }
+        })?;
+        Ok(Self { _lock: lock })
+    }
+}
+
+/// Whether a restore owns the Library now: its lock is held, and what the
+/// holder wrote in it is [`RESTORING`]. A window that cannot host the
+/// service asks this to know it must wait rather than read.
+#[must_use]
+pub fn restoring(library: &LibraryLocation) -> bool {
+    use std::io::Read as _;
+    let Ok(mut file) = std::fs::File::open(crate::lock_path(&library.master_db)) else {
+        return false;
+    };
+    let mut note = String::new();
+    if file.read_to_string(&mut note).is_err() || note.lines().nth(1) != Some(RESTORING) {
+        return false;
+    }
+    // Held, by someone: a shared try fails while the holder has it.
+    match file.try_lock_shared() {
+        Ok(()) => {
+            let _ = file.unlock();
+            false
+        }
+        Err(_) => true,
+    }
+}
+
+/// Finishes or rolls back a restore that stopped midway, if there is one,
+/// and writes the Ledger entry a finished restore still owes. The caller
+/// must own the Library (hold its lock) and must not have opened the
+/// Library or the Sidecar yet. Until both are done, the journal stays and
+/// the Library is not opened ([`codes::RESTORE_UNFINISHED`]).
 pub(crate) fn recover(recovery_dir: &Path, library: &LibraryLocation) -> Result<(), ServiceError> {
     if !rbl_backup::journal::pending(recovery_dir) {
         return Ok(());
@@ -74,121 +129,99 @@ pub(crate) fn recover(recovery_dir: &Path, library: &LibraryLocation) -> Result<
             codes::RESTORE_UNFINISHED,
             format!("a restore of the Library stopped midway and could not be finished: {e}"),
         )
-    })
+    })?;
+    record_owed(recovery_dir).map(|_| ())
 }
 
-/// Restores the whole of the backup at `archive` as the Library at
-/// `library`, and its Sidecar with it when the backup holds one.
-///
-/// Refused, with nothing changed, while a service or the window owns the
-/// Library ([`codes::RESTORE_REFUSED`]); the Library's lock is held from
-/// before anything is read until the restore has finished or been put back.
-pub fn restore(
-    library: &LibraryLocation,
-    config: &Config,
-    archive: &Path,
-    progress: &mut Progress<'_>,
-) -> Result<Restored, ServiceError> {
-    let refused = |message: String| ServiceError::new(codes::RESTORE_REFUSED, message);
-    let _owned = crate::server::take_lock(&library.master_db, Path::new("restoring a backup"))
-        .map_err(|error| {
-            if error.code == codes::SERVICE_ALREADY_RUNNING {
-                refused(format!(
-                    "the Library is in use: {}. Quit the wreckordbox window, or stop the Library service with `wreckordbox stop`, then restore.",
-                    error.message
-                ))
-            } else {
-                error
-            }
-        })?;
-    let contents =
-        rbl_backup::sidecar_part::Contents::read(archive).map_err(|e| from_backup(&e))?;
-    let manifest = rbl_backup::manifest::Manifest::read(archive).map_err(|e| from_backup(&e))?;
-    rbl_backup::restore::restore(
-        &Request {
-            archive,
-            parts: Parts::ALL,
-            location: library,
-            state_dir: &config.recovery_dir,
-            sizes: None,
-        },
-        // The lock is held throughout: nothing else can have the Library.
-        &|| Ok(()),
-        &mut |phase, done, total, item| {
-            progress(phase_name(phase), done, total, item);
-            Ok(())
-        },
-    )
-    .map_err(|e| from_backup(&e))?;
-    let sidecar = match &contents {
-        Some(_) => Some(
-            rbl_backup::sidecar_part::Destination::of(library)
-                .map_err(|e| from_backup(&e))?
-                .path,
-        ),
-        None => None,
-    };
-    // Still holding the lock: the next owner reads the Ledger with the
-    // restore in it.
-    let ledger_entry = note_restore(library, archive, manifest.created_at, sidecar.is_some());
-    Ok(Restored {
-        archive: archive.to_path_buf(),
-        library: library.master_db.clone(),
-        sidecar,
-        stems: contents.is_some_and(|contents| contents.stems),
-        ledger_entry,
-    })
-}
-
-/// Writes, in the Sidecar the Library now has, a Ledger entry saying the
-/// Library was replaced by a backup's, in a Run of its own.
-///
-/// The Ledger and the Library must not disagree silently after a restore.
-/// When the Sidecar came back with the Library, its entries and intents are
-/// those the backup was taken with: a backup reads the Sidecar before the
-/// Library, so every entry in it is of a change the restored Library has,
-/// and an intent still open there becomes an unconfirmed entry, as after
-/// any stop. When the backup held no Sidecar (one made before backups
-/// carried it), the Ledger kept here describes changes the restored Library
-/// may not have; this entry says so, after every one of them, and the
-/// conflict check of Undo and Unwind refuses to take back what is not
-/// there. Nothing is written when there is no Sidecar; a failure is logged
-/// and leaves the restore as it is.
-fn note_restore(
-    library: &LibraryLocation,
-    archive: &Path,
+/// The record a restore owes the Ledger, kept in its journal
+/// (`rbl_backup::restore::restore_owing`) from before anything is replaced
+/// until it is written.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Owed {
+    /// The backup's file name.
+    backup: String,
+    /// When the backup was made, Unix milliseconds.
     created_at: u64,
-    with_sidecar: bool,
-) -> Option<i64> {
-    use wreckordbox_sidecar::ledger::{Action, NewEntry, Store};
-    let folder = rbl_backup::sidecar_part::Destination::of(library)
-        .ok()?
-        .path;
-    if !folder
-        .join(rbl_backup::sidecar_part::DATABASE_FILE)
-        .is_file()
-    {
-        return None;
-    }
-    let name = archive
-        .file_name()
-        .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
-    let label = if with_sidecar {
-        format!("The Library and the Sidecar were restored from the backup {name}.")
-    } else {
-        format!(
-            "The Library was restored from the backup {name}, which holds no Sidecar. Entries before this one may describe changes the restored Library does not have."
+    /// Whether the Sidecar came back with the Library.
+    sidecar: bool,
+    /// The Sidecar's folder the entry is written in, checked when the
+    /// restore began; `None` when there was none.
+    folder: Option<PathBuf>,
+    /// The entry's identifier, reserved by an intent once the files are
+    /// in place: appending under it again changes nothing.
+    #[serde(default)]
+    id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Owing {
+    ledger: Owed,
+}
+
+/// Writes the Ledger entry a finished restore owes, if it owes one, and
+/// lets go of its journal. Safe to repeat: the entry's identifier is
+/// reserved and saved before it is appended.
+fn record_owed(recovery_dir: &Path) -> Result<Option<i64>, ServiceError> {
+    let unrecorded = |why: &dyn std::fmt::Display| {
+        ServiceError::new(
+            codes::RESTORE_UNRECORDED,
+            format!(
+                "the backup was restored, but the Ledger entry recording it could not be written: {why}. The Library stays closed to edits until it is; open wreckordbox again to retry"
+            ),
         )
     };
-    let payload =
-        serde_json::json!({ "backup": name, "created_at": created_at, "sidecar": with_sidecar });
-    let command = serde_json::json!({ "name": "backup.restore", "args": { "backup": name } });
-    let written = (|| -> wreckordbox_sidecar::Result<i64> {
-        let sidecar = wreckordbox_sidecar::Sidecar::open(&folder)?;
-        let source = wreckordbox_sidecar::Source::new(wreckordbox_sidecar::SourceKind::Dj, "dj");
-        let run = sidecar.begin_owned_run(&source, "Restore a backup")?;
-        let id = sidecar.append(&NewEntry {
-            id: None,
+    let Some(owed) = rbl_backup::journal::owed(recovery_dir).map_err(|e| unrecorded(&e))? else {
+        return Ok(None);
+    };
+    let Ok(Owing { mut ledger }) = serde_json::from_value::<Owing>(owed) else {
+        // Owed by another program: not ours to write.
+        return Err(unrecorded(&"the journal owes something this wreckordbox does not know"));
+    };
+    let id = match ledger.folder.clone().as_deref() {
+        Some(folder) if folder.join(rbl_backup::sidecar_part::DATABASE_FILE).is_file() => {
+            Some(write_entry(recovery_dir, folder, &mut ledger).map_err(|e| unrecorded(&e))?)
+        }
+        // No Sidecar to record it in.
+        _ => None,
+    };
+    rbl_backup::journal::discharge(recovery_dir).map_err(|e| unrecorded(&e))?;
+    Ok(id)
+}
+
+fn write_entry(recovery_dir: &Path, folder: &Path, ledger: &mut Owed) -> Result<i64, String> {
+    use wreckordbox_sidecar::ledger::{Action, Intent, NewEntry, Store};
+    let sidecar = wreckordbox_sidecar::Sidecar::open(folder).map_err(|e| e.to_string())?;
+    let source = wreckordbox_sidecar::Source::new(wreckordbox_sidecar::SourceKind::Dj, "dj");
+    let command = serde_json::json!({ "name": "backup.restore", "args": { "backup": ledger.backup } });
+    let id = match ledger.id {
+        Some(id) => id,
+        None => {
+            let at = i64::try_from(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| since.as_millis())).unwrap_or(i64::MAX);
+            let id = sidecar
+                .begin_intent(&Intent { source: &source, run: None, description: "Restore a backup", command: Some(&command), at }, &[])
+                .map_err(|e| e.to_string())?;
+            ledger.id = Some(id);
+            rbl_backup::journal::update_owed(recovery_dir, serde_json::json!(Owing { ledger: ledger.clone() }))
+                .map_err(|e| e.to_string())?;
+            id
+        }
+    };
+    if sidecar.ledger_entry(id).map_err(|e| e.to_string())?.is_some() {
+        return Ok(id);
+    }
+    let label = if ledger.sidecar {
+        format!("The Library and the Sidecar were restored from the backup {}.", ledger.backup)
+    } else {
+        format!(
+            "The Library was restored from the backup {}, which holds no Sidecar. Entries before this one may describe changes the restored Library does not have.",
+            ledger.backup
+        )
+    };
+    let payload = serde_json::json!({ "backup": ledger.backup, "created_at": ledger.created_at, "sidecar": ledger.sidecar });
+    let run = sidecar.begin_owned_run(&source, "Restore a backup").map_err(|e| e.to_string())?;
+    sidecar
+        .append(&NewEntry {
+            id: Some(id),
             run,
             store: Store::Library,
             source: &source,
@@ -202,17 +235,107 @@ fn note_restore(
             reversible: false,
             format: 1,
             payload: Some(&payload),
-        })?;
-        sidecar.finish_run(run, "restored")?;
-        Ok(id)
-    })();
-    match written {
-        Ok(id) => Some(id),
-        Err(error) => {
-            tracing::warn!(%error, "the restore could not be recorded in the Ledger");
-            None
-        }
+        })
+        .map_err(|e| e.to_string())?;
+    sidecar.finish_run(run, "restored").map_err(|e| e.to_string())?;
+    Ok(id)
+}
+
+/// Restores the whole of the backup at `archive` as the Library at
+/// `library`, and its Sidecar with it when the backup holds one, and
+/// records it in the Ledger.
+///
+/// Refused, with nothing changed, while a service or the window owns the
+/// Library ([`codes::RESTORE_REFUSED`]) and while Library Protection is on
+/// or has never been recorded ([`codes::LIBRARY_PROTECTED`]): it is checked
+/// under the lock before anything is staged and again before anything is
+/// replaced. The Library's lock is held from before anything is read until
+/// the restore has finished, or been put back, and been recorded. The
+/// Ledger entry is owed in the restore's journal from before the first file
+/// is replaced, so a restore that stops after its files are in place is
+/// recorded by the next owner; a failure to record it fails the restore
+/// ([`codes::RESTORE_UNRECORDED`]) and keeps the journal.
+pub fn restore(
+    library: &LibraryLocation,
+    config: &Config,
+    archive: &Path,
+    progress: &mut Progress<'_>,
+) -> Result<Restored, ServiceError> {
+    let _owned = Owned::take(library)?;
+    restore_owned(library, config, archive, progress)
+}
+
+/// [`restore`], for a caller already holding [`Owned`].
+pub fn restore_owned(
+    library: &LibraryLocation,
+    config: &Config,
+    archive: &Path,
+    progress: &mut Progress<'_>,
+) -> Result<Restored, ServiceError> {
+    let protected = || crate::protection::is_on(&config.recovery_dir);
+    if protected() {
+        return Err(protection_refusal());
     }
+    // An earlier restore is finished or put back, and recorded, first.
+    recover(&config.recovery_dir, library)?;
+    let contents =
+        rbl_backup::sidecar_part::Contents::read(archive).map_err(|e| from_backup(&e))?;
+    let manifest = rbl_backup::manifest::Manifest::read(archive).map_err(|e| from_backup(&e))?;
+    let folder = rbl_backup::sidecar_part::Destination::of(library).ok().map(|destination| destination.path);
+    let backup = archive
+        .file_name()
+        .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+    let owed = Owing {
+        ledger: Owed { backup, created_at: manifest.created_at, sidecar: contents.is_some(), folder: folder.clone(), id: None },
+    };
+    rbl_backup::restore::restore_owing(
+        &Request {
+            archive,
+            parts: Parts::ALL,
+            location: library,
+            state_dir: &config.recovery_dir,
+            sizes: None,
+        },
+        Some(serde_json::json!(owed)),
+        // The lock keeps every other owner out; Library Protection is the
+        // DJ's, and can be turned while this runs.
+        &|| {
+            if protected() {
+                Err(rbl_backup::Error::Refused(crate::protection::MESSAGE.to_owned()))
+            } else {
+                Ok(())
+            }
+        },
+        &mut |phase, done, total, item| {
+            progress(phase_name(phase), done, total, item);
+            Ok(())
+        },
+    )
+    .map_err(|e| {
+        if protected() {
+            protection_refusal()
+        } else {
+            from_backup(&e)
+        }
+    })?;
+    let ledger_entry = record_owed(&config.recovery_dir)?;
+    Ok(Restored {
+        archive: archive.to_path_buf(),
+        library: library.master_db.clone(),
+        sidecar: contents.as_ref().and(folder),
+        stems: contents.is_some_and(|contents| contents.stems),
+        ledger_entry,
+    })
+}
+
+fn protection_refusal() -> ServiceError {
+    ServiceError::new(
+        codes::LIBRARY_PROTECTED,
+        format!(
+            "{} Restoring a backup replaces the Library, so it is refused too; --yes confirms the replacement, it does not turn protection off.",
+            crate::protection::MESSAGE
+        ),
+    )
 }
 
 /// The backups of `library` in the backup folder the window saves new ones

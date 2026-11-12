@@ -231,3 +231,147 @@ fn a_restore_that_stopped_between_the_library_and_the_sidecar_is_put_right_by_th
         .collect();
     assert!(leftovers.is_empty(), "{leftovers:?}");
 }
+
+/// Names a restore left staged or set aside beside the Library or in the
+/// Sidecar, which nothing must leave.
+fn staged(sandbox: &Sandbox) -> Vec<String> {
+    let mut names = Vec::new();
+    for dir in [sandbox.master_db().parent().unwrap().to_path_buf(), sidecar_dir(sandbox)] {
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            names.extend(
+                entries
+                    .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                    .filter(|name| name.starts_with(rbl_backup::journal::PREFIX)),
+            );
+        }
+    }
+    names
+}
+
+#[test]
+fn a_restore_is_refused_before_anything_is_staged_while_library_protection_is_on_or_not_known_to_be_off() {
+    let (sandbox, archive, before) = backed_up();
+    let changed = facts(&sandbox);
+    let refused_with_protection = |what: &str| {
+        let refused = restore(&sandbox, &archive);
+        assert!(!refused.status.success(), "{what}");
+        let error = refused.error_json()["error"].clone();
+        assert_eq!(error["code"], "library_protected", "{what}: {error}");
+        assert!(error["message"].as_str().unwrap().contains("does not turn protection off"), "{what}: {error}");
+        assert_eq!(testing::rating(sandbox.location()), 1, "{what}");
+        assert_eq!(facts(&sandbox), changed, "{what}");
+        assert!(!rbl_backup::journal::pending(&sandbox.state_dir()), "{what}");
+        assert!(staged(&sandbox).is_empty(), "{what}");
+    };
+    sandbox.protect(true);
+    refused_with_protection("protection on");
+    // Never recorded: protected by default.
+    std::fs::remove_file(sandbox.protection_file()).unwrap();
+    refused_with_protection("never recorded");
+    std::fs::write(sandbox.protection_file(), b"{not json").unwrap();
+    refused_with_protection("unreadable");
+
+    sandbox.protect(false);
+    let restored = restore(&sandbox, &archive);
+    assert!(restored.status.success(), "{}", restored.stderr);
+    assert_eq!(facts(&sandbox), before);
+}
+
+/// Stops a restore of the sandbox's backup in-process, as a process that
+/// died there would.
+fn crash(sandbox: &Sandbox, archive: &Path, owed: Option<serde_json::Value>) {
+    let crashed = rbl_backup::restore::restore_owing(
+        &rbl_backup::restore::Request {
+            archive,
+            parts: rbl_backup::restore::Parts::ALL,
+            location: sandbox.location(),
+            state_dir: &sandbox.state_dir(),
+            sizes: None,
+        },
+        owed,
+        &|| Ok(()),
+        &mut |_, _, _, _| Ok(()),
+    );
+    assert!(crashed.is_err());
+}
+
+#[test]
+fn a_restore_that_stopped_with_the_library_database_set_aside_is_recovered_by_the_next_command() {
+    let (sandbox, archive, _) = backed_up();
+    let changed = facts(&sandbox);
+    testing::stop_between_renames(0, true);
+    crash(&sandbox, &archive, None);
+    assert!(!sandbox.master_db().exists());
+    assert!(rbl_backup::journal::pending(&sandbox.state_dir()));
+
+    let status = cli(&sandbox, &["--json", "status"]);
+    assert!(status.status.success(), "{}", status.stderr);
+    assert!(sandbox.master_db().is_file());
+    assert!(!rbl_backup::journal::pending(&sandbox.state_dir()));
+    assert_eq!(testing::rating(sandbox.location()), 1);
+    assert_eq!(facts(&sandbox), changed);
+    assert!(staged(&sandbox).is_empty(), "{:?}", staged(&sandbox));
+}
+
+/// How many Ledger entries record a restore.
+fn restore_entries(sandbox: &Sandbox) -> i64 {
+    rusqlite::Connection::open(sidecar_dir(sandbox).join("sidecar.db"))
+        .unwrap()
+        .query_row("SELECT count(*) FROM ledger WHERE kind = 'restore'", [], |row| row.get(0))
+        .unwrap()
+}
+
+/// What `backup restore` owes the Ledger in its journal, as it saves it.
+fn owed(sandbox: &Sandbox, archive: &Path) -> serde_json::Value {
+    serde_json::json!({ "ledger": {
+        "backup": archive.file_name().unwrap().to_str().unwrap(),
+        "created_at": 1,
+        "sidecar": true,
+        "folder": sidecar_dir(sandbox).canonicalize().unwrap(),
+        "id": null,
+    } })
+}
+
+#[test]
+fn a_restore_stopped_after_its_files_are_in_place_is_recorded_in_the_ledger_once_by_the_next_owner() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let (sandbox, archive, before) = backed_up();
+    // Stopped once every file is in place and before the entry is written.
+    rbl_backup::restore::restore_owing(
+        &rbl_backup::restore::Request {
+            archive: &archive,
+            parts: rbl_backup::restore::Parts::ALL,
+            location: sandbox.location(),
+            state_dir: &sandbox.state_dir(),
+            sizes: None,
+        },
+        Some(owed(&sandbox, &archive)),
+        &|| Ok(()),
+        &mut |_, _, _, _| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(testing::rating(sandbox.location()), 4);
+    assert_eq!(facts(&sandbox), before);
+    assert!(rbl_backup::journal::pending(&sandbox.state_dir()));
+    assert_eq!(restore_entries(&sandbox), 0);
+
+    // The entry cannot be written: the next owner says so, and keeps the
+    // journal for the one after.
+    let folder = sidecar_dir(&sandbox);
+    let mode = |path: &Path, mode| std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    mode(&folder.join("sidecar.db"), 0o444);
+    mode(&folder, 0o555);
+    let failed = cli(&sandbox, &["--json", "status"]);
+    mode(&folder, 0o755);
+    mode(&folder.join("sidecar.db"), 0o644);
+    assert!(!failed.status.success());
+    let error = failed.error_json()["error"].clone();
+    assert_eq!(error["code"], "restore_unrecorded", "{error}");
+    assert!(rbl_backup::journal::pending(&sandbox.state_dir()));
+    assert_eq!(restore_entries(&sandbox), 0);
+    let status = cli(&sandbox, &["--json", "status"]);
+    assert!(status.status.success(), "{}", status.stderr);
+    assert!(!rbl_backup::journal::pending(&sandbox.state_dir()));
+    assert_eq!(restore_entries(&sandbox), 1);
+    assert_eq!(facts(&sandbox), before);
+}
