@@ -77,6 +77,24 @@ impl Sidecar {
         facts: &NativeFacts,
         reconciled: bool,
     ) -> Result<i64> {
+        self.append_in_one(
+            entry,
+            facts,
+            reconciled,
+            &crate::mutant_follow::Follow::default(),
+        )
+        .map(|(id, _)| id)
+    }
+
+    /// [`Self::append_with_dj_facts`] with the Mutant consequences of the
+    /// change in the same transaction (wbx-80, [`crate::mutant_follow`]).
+    pub(crate) fn append_in_one(
+        &self,
+        entry: &NewEntry,
+        facts: &NativeFacts,
+        reconciled: bool,
+        follow: &crate::mutant_follow::Follow,
+    ) -> Result<(i64, Vec<crate::mutant_follow::Followed>)> {
         let mut db = self.db();
         let tx = db.transaction()?;
         if let Some(id) = entry.id {
@@ -88,9 +106,18 @@ impl Sidecar {
             if exists {
                 let id = append_in(&tx, entry)?;
                 tx.commit()?;
-                return Ok(id);
+                return Ok((id, Vec::new()));
             }
         }
+        // The Mutants' consequences: with the entry or not at all. A
+        // failure fails the append, so the Ledger keeps both and writes
+        // them later together (wbx-80).
+        let followed = if follow.is_empty() {
+            Vec::new()
+        } else {
+            let at = entry.at.unwrap_or_else(crate::store::now);
+            crate::mutant_follow::apply_in(&tx, follow, entry.source, entry.run, at)?
+        };
         let mut facts = facts.clone();
         // Nothing from an agent/Projection is promoted by this observer.
         if entry.source.kind != SourceKind::Dj {
@@ -166,7 +193,7 @@ impl Sidecar {
             }
         };
         tx.commit()?;
-        Ok(id)
+        Ok((id, followed))
     }
 }
 fn with_omissions(entry: &NewEntry, skipped: &[Omission]) -> Option<Value> {
