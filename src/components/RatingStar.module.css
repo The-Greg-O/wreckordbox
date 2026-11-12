@@ -3,4 +3,9 @@
   flex: none;
   width: auto;
   aspect-ratio: 14 / 13.31;
+  color: var(--c-energy-0);
 }
+.star[data-lit] { color: var(--c-star-level); }
+:global(button):not(:disabled):hover > .star { color: var(--c-star-own); }
+/* A greyed control greys its stars with it. */
+:global(button):disabled > .star { color: inherit; }

@@ -706,7 +706,7 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  background: var(--c-pad-active);
+  background: var(--c-loop-band);
   opacity: 0.18;
   pointer-events: none;
   z-index: 1;
@@ -956,7 +956,7 @@
 /* On — the metronome clicking, the grid cut or locked — the icon goes blue
    on the button's own grey, as rekordbox's metronome does. */
 .editButton[aria-pressed="true"] { color: var(--c-pad-edit-on); }
-.editButton[aria-pressed="true"]:hover:not(:disabled) { color: #70b1ff; }
+.editButton[aria-pressed="true"]:hover:not(:disabled) { color: var(--c-pad-edit-on-hover); }
 /* Each icon is drawn in its button's box, so it fills the button. */
 .editIcon { width: 100%; height: 100%; }
 .editIcon :global(.dim) { fill: var(--c-pad-label); }
@@ -1053,6 +1053,8 @@
 }
 .memoryLabel:disabled { color: var(--c-icon-off); }
 .memoryLabel:hover:not(:disabled) { background: #383838; }
+/* Upstream greys a lit label under the pointer; its label goes back to the light one so it stays readable under a theme. */
+.memoryLabel[data-on]:hover:not(:disabled) { color: var(--c-icon-on); }
 
 .step {
   border: 0;
@@ -1084,9 +1086,9 @@
   flex: none;
   align-self: center;
 }
-.chip[data-on] { border-color: var(--c-pad-active); background: var(--c-pad-active); color: var(--c-icon-on); }
+.chip[data-on] { border-color: var(--c-pad-active); background: var(--c-pad-active); color: var(--c-on-accent, var(--c-icon-on)); }
 .chip:hover:not(:disabled) { background: #383838; border-color: #969696; color: #fff; }
-.chip[data-on]:hover:not(:disabled) { background: #4a82ed; border-color: #4a82ed; }
+.chip[data-on]:hover:not(:disabled) { background: var(--c-lit-hover); border-color: var(--c-lit-hover); color: var(--c-on-accent, #fff); }
 
 /* The beat count is the auto loop's button: a press loops that many beats
    from the head, and lit it is the loop that is playing. IN and RELOOP light
@@ -1100,7 +1102,7 @@ button.pageNumber {
 }
 button.pageNumber:disabled { color: var(--c-icon-off); }
 .pageNumber[data-on],
-.memoryLabel[data-on] { background: var(--c-pad-active); color: var(--c-icon-on); }
+.memoryLabel[data-on] { background: var(--c-pad-active); color: var(--c-on-accent, var(--c-icon-on)); }
 
 .pageNumber {
   min-width: 70px;
@@ -1114,7 +1116,7 @@ button.pageNumber:disabled { color: var(--c-icon-off); }
   padding: 0;
 }
 .pageNumber:hover:not(:disabled) { background: #383838; }
-.pageNumber[data-on]:hover:not(:disabled) { background: #4a82ed; }
+.pageNumber[data-on]:hover:not(:disabled) { background: var(--c-lit-hover); color: var(--c-on-accent, var(--c-icon-on)); }
 
 .padMenu {
   border: 0;
@@ -1283,7 +1285,7 @@ button.cueDelete:disabled { color: var(--c-icon-off); }
 .sideTab[data-on] {
   background: var(--c-tab-active);
   border-color: var(--c-tab-active);
-  color: var(--c-icon-on);
+  color: var(--c-on-accent, var(--c-icon-on));
 }
 
 

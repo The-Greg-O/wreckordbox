@@ -124,3 +124,6 @@ windows-core = "0.61"
 # ALSA sequencer backend: the XDJ-RX3's USB-MIDI output, for its Link Export
 # activation lease (`rx3_link.rs`).
 midir = "0.11"
+# Waiting on the folder an Omarchy theme switch writes into
+# (`omarchy_theme.rs`), without polling.
+inotify = { version = "0.11", default-features = false }
