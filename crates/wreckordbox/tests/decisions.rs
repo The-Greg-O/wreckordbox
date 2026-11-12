@@ -628,7 +628,7 @@ fn an_answer_can_produce_a_fact_whose_source_is_the_decider() {
     let fact = &answered["fact"];
     assert_eq!(fact["track_id"], "10003");
     assert_eq!(fact["kind"], "genre");
-    assert_eq!(fact["value"], "Tech House");
+    assert_eq!(fact["value"], json!(["Tech House"]));
     assert_eq!(fact["source"], json!({ "kind": "agent", "name": "tagger" }));
     assert_eq!(fact["confidence"], 0.8);
     assert_eq!(answered["answer"]["fact_id"], fact["id"]);
@@ -798,7 +798,7 @@ fn decisions_print_as_tables() {
         "{said}"
     );
     assert!(
-        said.contains("Recorded Fact 1 in Run 1: track 10003 genre = \"Tech House\"."),
+        said.contains("Recorded Fact 1 in Run 1: track 10003 genre = [\"Tech House\"]."),
         "{said}"
     );
 

@@ -222,7 +222,7 @@ fn two_clients_answering_as_one_decider_at_once_leave_the_later_answer_holding_t
                 later_fact["superseded"].clone(),
                 later_fact["value"].clone()
             ),
-            (json!(false), later["choice"].clone()),
+            (json!(false), json!([later["choice"].clone()])),
             "round {round}: the later answer's Fact is the Decider's live one"
         );
         assert_eq!(
