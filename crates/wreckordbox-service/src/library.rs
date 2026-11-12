@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use rbl_db::{DbError, LibraryLocation, OpenMode};
 use rbl_index::{SortColumn, TrackFilter, TrackSource, ViewSpec};
+use rbl_library::history::{LibraryEdit, TRACK_EDIT};
 use rbl_library::{History, Host, LibraryCore, NoHost, Touched};
 
 use crate::protocol::{
@@ -130,13 +131,65 @@ impl OpenLibrary {
         })
     }
 
+    /// Makes `action`'s writes through the Library's single edit path (the
+    /// write guards, the writes, the re-read of what they `touched`), and
+    /// answers its result beside what to tell every client. Outside the edit
+    /// history: it only ends the Redo branch. For an edit Undo can take
+    /// back use [`Self::recorded_edit`]; for one that removes rows for good,
+    /// [`Self::permanent_edit`].
+    pub(crate) fn edit<T>(
+        &self,
+        touched: Touched,
+        action: impl FnOnce(&mut rbl_db::write::Writer) -> Result<T, DbError>,
+    ) -> Result<(T, LibraryChanged), ServiceError> {
+        let (value, change) = self
+            .core
+            .edit(&*self.host, History::Outside, touched, action)
+            .map_err(|e| edit_error(&e))?;
+        let changed = LibraryChanged {
+            kind: match change.kind {
+                rbl_library::ChangeKind::Library => ChangeKind::Library,
+                rbl_library::ChangeKind::TagList => ChangeKind::TagList,
+            },
+            generation: change.generation,
+        };
+        Ok((value, changed))
+    }
+
+    /// [`Self::edit`] for an edit Undo can take back: `action` also answers
+    /// the entry the edit history keeps under `label`, as the window's own
+    /// edit of the kind would. Undo in the hosting window takes it back.
+    pub(crate) fn recorded_edit<T>(
+        &self,
+        touched: Touched,
+        label: &'static str,
+        action: impl FnOnce(&mut rbl_db::write::Writer) -> Result<(T, LibraryEdit), DbError>,
+    ) -> Result<(T, LibraryChanged), ServiceError> {
+        self.core
+            .recorded_edit(&*self.host, touched, label, action)
+            .map(|(value, change)| (value, change.into()))
+            .map_err(|e| edit_error(&e))
+    }
+
+    /// [`Self::edit`] for an edit that removes rows for good: the edit
+    /// history is emptied, as the window empties it after its own.
+    pub(crate) fn permanent_edit<T>(
+        &self,
+        touched: Touched,
+        action: impl FnOnce(&mut rbl_db::write::Writer) -> Result<T, DbError>,
+    ) -> Result<(T, LibraryChanged), ServiceError> {
+        self.core
+            .permanent_edit(&*self.host, touched, action)
+            .map(|(value, change)| (value, change.into()))
+            .map_err(|e| edit_error(&e))
+    }
+
     /// Sets one track's rating through the Library's single edit path, and
     /// answers what to tell the caller and what to tell every client.
     ///
     /// The write is the one the window's rating command makes
-    /// (`set_rating_with_undo`), so the edit history can take the entry it
-    /// yields once the history lives in the service; until then the edit is
-    /// outside the history.
+    /// (`set_rating_with_undo`) and is recorded in the core's edit history
+    /// as the window's is, so Undo in the window takes it back.
     pub(crate) fn rate(
         &self,
         edit: &RateTrack,
@@ -160,15 +213,14 @@ impl OpenLibrary {
         let previous = track(&before, row);
         let id = previous.id.clone();
         let stars = edit.rating;
-        let (_recorded, change) = self
-            .core
-            .edit(
-                &*self.host,
-                History::Outside,
-                Touched::Metadata(vec![id.clone()]),
-                |writer| writer.set_rating_with_undo(&id, stars),
-            )
-            .map_err(|e| edit_error(&e))?;
+        let ((), change) = self.recorded_edit(
+            Touched::Metadata(vec![id.clone()]),
+            TRACK_EDIT,
+            |writer| {
+                let (_, recorded) = writer.set_rating_with_undo(&id, stars)?;
+                Ok(((), LibraryEdit::Track(vec![recorded])))
+            },
+        )?;
         // Read back from the index the edit refreshed, not assumed.
         let after = self.index()?;
         let rating = after
@@ -182,7 +234,7 @@ impl OpenLibrary {
                 previous_rating: previous.rating,
                 generation: change.generation,
             },
-            change.into(),
+            change,
         ))
     }
 }

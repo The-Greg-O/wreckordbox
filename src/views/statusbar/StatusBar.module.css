@@ -90,30 +90,6 @@
 .messageLink:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 2px; }
 
 .selection { margin-left: auto; }
-.actions {
-  display: flex;
-  gap: 16px;
-  margin-right: calc(12px - var(--s-status-inset-right));
-}
-
-.reportBug {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border: 1px solid var(--c-raised);
-  border-radius: 3px;
-  background: transparent;
-  color: var(--c-text);
-  font: inherit;
-  font-size: var(--f-size-xs);
-  cursor: pointer;
-}
-.reportBug:hover { background: var(--c-raised); }
-.support:hover svg { color: var(--c-error); }
-.report:hover svg { color: var(--c-meter-green); }
-
 .warningAction {
   margin-left: 8px;
   padding: 1px 6px;

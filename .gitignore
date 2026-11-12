@@ -5,7 +5,6 @@ dist-mock/
 target/
 .DS_Store
 *.log
-.env.sentry
 
 # Tauri
 src-tauri/gen/

@@ -20,8 +20,6 @@ import {
   PrefKeyboardIcon, PrefViewIcon,
   LinkIcon,
 } from "@/components/icons";
-import { getBackend } from "@/ipc/client";
-import { ReportBug } from "@/views/report/ReportBug";
 import type { LibrarySummary, Limiter } from "@/ipc/types";
 import { usePreferencesContext } from "@/store/usePreferences";
 import type { PreferencePane } from "@/lib/preferences";
@@ -43,7 +41,7 @@ import { ViewPane, VIEW_TABS, type ViewTab } from "./ViewPane";
 
 /**
  * The sidebar, in the capture's order and wording, less PLAN and CLOUD, and
- * with About at the end — ours, for the version and the update check.
+ * with About at the end — ours, for the version, the credit and the licence.
  */
 export type Pane = "view" | "audio" | "analysis" | "djSystem" | "link" | "keyboard" | "advanced" | "backups" | "usbExport" | "rekordbox" | "about";
 
@@ -167,27 +165,18 @@ export function Preferences({
   const [tabs, setTabs] = useState<Tabs>(FIRST_TABS);
   const [query, setQuery] = useState("");
   const { reset } = usePreferencesContext();
-  const [reportOpen, setReportOpen] = useState(false);
-  const openReport = () => {
-    void getBackend().then((backend) => backend.openReportWindow()).then((opened) => {
-      if (!opened) setReportOpen(true);
-    });
-  };
 
   useEffect(() => {
     // Focus the window so Escape reaches it and a reader lands inside.
-    if (!reportOpen) window_.current?.focus();
+    window_.current?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        if (reportOpen) setReportOpen(false);
-        else onClose();
-      }
+      if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("keydown", onKey);
     };
-  }, [onClose, reportOpen]);
+  }, [onClose]);
 
   // A section target lands on its section, once its pane is the one shown.
   useLayoutEffect(() => {
@@ -289,7 +278,6 @@ export function Preferences({
                 </li>
               ))}
             </ul>
-            <Button className={styles.reportBug} onClick={openReport}>Report bug</Button>
           </nav>
 
           <div className={styles.content}>
@@ -356,7 +344,6 @@ export function Preferences({
           {body}
         </div>
       )}
-      {reportOpen ? <ReportBug onClose={() => setReportOpen(false)} /> : null}
     </>
   );
 }

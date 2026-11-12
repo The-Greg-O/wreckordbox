@@ -34,6 +34,8 @@ pub enum MyTagCommands {
         #[arg(long, value_name = "ROWS", default_value_t = DEFAULT_TRACK_LIMIT)]
         limit: usize,
     },
+    #[command(flatten)]
+    Edit(crate::mytag_edits::EditCommands),
 }
 
 #[derive(Subcommand)]
@@ -93,6 +95,7 @@ pub fn my_tags(
             let found: TaggedTracks = client.call(commands::MYTAGS_TRACKS, query(tag, *limit))?;
             Ok(shown(as_json, &json!(found), tagged_text(&found)))
         }
+        MyTagCommands::Edit(edit) => crate::mytag_edits::run(client, as_json, edit),
     }
 }
 

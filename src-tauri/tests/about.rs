@@ -57,3 +57,14 @@ fn about_shows_the_name_version_and_copyright_of_the_bundle() {
     assert!(metadata.name.is_some() && metadata.version.is_some());
     assert_eq!(metadata.name.as_deref(), Some("wreckordbox"));
 }
+
+/// The credit to upstream is plain text in the About information, not a
+/// link: the fork is based on rbxport and says so without pointing at it.
+#[test]
+fn about_credits_rbxport_in_plain_text() {
+    let app = app_with_real_config();
+    let metadata = rbxport_lib::menu::about_metadata(app.handle());
+    let credit = metadata.comments.expect("the About information carries a credit");
+    assert_eq!(credit, "wreckordbox is based on rbxport.");
+    assert!(!credit.contains("http") && metadata.website.is_none(), "the credit is not a link");
+}
