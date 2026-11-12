@@ -364,6 +364,15 @@ fn parent_length(audio: &Path) -> Option<u64> {
 /// in the Sidecar. Stems made from other audio are marked stale on the way,
 /// as every Stems command does, and are not written.
 fn current_stems(stems: &Stems, found: &ParentAudio) -> Result<StemSet, ServiceError> {
+    current_stems_verified(stems, found).map(|(set, _)| set)
+}
+
+/// [`current_stems`], with the fingerprint of the audio it was verified
+/// against. Also the renderer's boundary (`render_stems`).
+pub(crate) fn current_stems_verified(
+    stems: &Stems,
+    found: &ParentAudio,
+) -> Result<(StemSet, wreckordbox_sidecar::Fingerprint), ServiceError> {
     let track = found.parent();
     let audio = found.path();
     let none = |why: &str| {
@@ -387,7 +396,7 @@ fn current_stems(stems: &Stems, found: &ParentAudio) -> Result<StemSet, ServiceE
         .current_stems(&track.id, &fingerprint)
         .map_err(|e| failed(&e))?;
     match current {
-        Some(set) if set.stems.iter().all(|stem| stem.path.is_file()) => Ok(set),
+        Some(set) if set.stems.iter().all(|stem| stem.path.is_file()) => Ok((set, fingerprint)),
         Some(_) => Err(none(
             "has Stems recorded in the Sidecar, and their audio files are gone",
         )),

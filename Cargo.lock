@@ -7156,6 +7156,7 @@ dependencies = [
 name = "wreckordbox-render"
 version = "1.10.0"
 dependencies = [
+ "mp3lame-encoder",
  "rbl-audio",
  "rbl-deck",
  "rustix",
@@ -7180,6 +7181,7 @@ dependencies = [
  "tracing",
  "wreckordbox-intensity",
  "wreckordbox-native-stems",
+ "wreckordbox-render",
  "wreckordbox-sidecar",
 ]
 
