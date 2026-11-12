@@ -288,6 +288,11 @@ pub async fn write_device_defaults(path: String, defaults: StickDefaultsDto) -> 
         if !mount.is_dir() {
             return Err(AppError::new(ErrorKind::NotFound, "That device is no longer connected."));
         }
+        // Opening the panel is not the DJ asking to settle an unfinished
+        // write, which reading the settings would do (wbx-45.5).
+        if wreckordbox_stick_outline::unfinished_write(mount) {
+            return Err(crate::stick_recovery::unfinished_write());
+        }
         if rbl_devices::inspect(mount).is_some() {
             write_dev_defaults(mount, &defaults)?;
         }
@@ -382,7 +387,15 @@ pub async fn ensure_device_library(
 #[tauri::command]
 pub async fn device_settings(path: String) -> AppResult<DeviceSettingsDto> {
     crate::commands::blocking("device_settings", move || {
-        Ok(to_dto(&rbl_devices::settings::read(Path::new(&path))))
+        // `settings::read` settles an unfinished write first; opening the
+        // panel must not (wbx-45.5). The shared lease keeps a writer of ours
+        // from starting between the check and the read.
+        let mount = Path::new(&path);
+        let _lease = rbl_core::durable::read_lease(mount).ok().flatten();
+        if wreckordbox_stick_outline::unfinished_write(mount) {
+            return Err(crate::stick_recovery::unfinished_write());
+        }
+        Ok(to_dto(&rbl_devices::settings::read(mount)))
     })
     .await
 }

@@ -20,6 +20,9 @@ pub enum ErrorKind {
     /// since by something outside the library history (#506). Nothing was
     /// written; the entry is gone from the history.
     Conflict,
+    /// A Stick's last write did not finish. Reads report it instead of
+    /// settling it; settling is an action the DJ chooses (wbx-45.5).
+    UnfinishedWrite,
     /// A bug in our code; the detail is a crash-log reference, not a message for the user.
     Internal,
 }
