@@ -234,7 +234,7 @@ impl OpenLibrary {
                 previous_rating: previous.rating,
                 generation: change.generation,
             },
-            change.into(),
+            change,
         ))
     }
 }
