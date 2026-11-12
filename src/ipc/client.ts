@@ -9,14 +9,15 @@ import { confirmHandler } from "./confirmHost";
 import type {
   AnalysisStageDescriptor, AnalysisResult, AudioDevices, Backend, Backup, BackupProgress, BackupSizes, ConfirmReplace, Cue, SyncEstimate, DeckEvent, Device, DeviceLibrary,
   DevicePlaylistEditResult, DevicePlaylistImportPlan, DevicePlaylistImportResult, DeviceSettings, DeviceSyncState,
-  Diagnostics, Duplicates, LogPage, GridState, Limiter, PreferencesRequest, SmartRule, SyncDeviceReport, SyncProgress, XmlImportReport,
+  Diagnostics, Duplicates, LibraryProtection, LogPage, GridState, Limiter, PreferencesRequest, SmartRule, SyncDeviceReport, SyncProgress, XmlImportReport,
   ExportProgress, ExportReport, ExplorerChildren, ExplorerRoot, FilterValues, FolderPlaylistReport, Phrase, ImportReport,
   DatabaseDrive, EditHistoryState, ItunesLibrary, LibraryProblem, LibrarySummary, LinkPeerSeen, Meters,
   LinkStatus, MissingExportFile, MissingTrack, MissingTracks, PreviewState, UnanalysedTracks, ReferenceStickSettings, RelocateReport, RowDto, ScriptRequest, Tick,
   TreeNode, ViewHandle,
-  SelectionDetails, TrackDetails, TrackLookups, RelatedPlaylist,
+  SelectionDetails, TrackDetails, TrackLookups, RelatedPlaylist, StickOutline,
 } from "./types";
 import { tauriInvoke } from "./invoke";
+import { liftMyTags } from "./rowMyTags";
 
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -178,6 +179,16 @@ function subscribe<T>(event: string, listener: (payload: T) => void): () => void
   };
 }
 
+/**
+ * [`subscribe`], resolving with the unsubscribe once the listener is in
+ * place, for a caller that must not ask for a state before it can hear
+ * every change after it.
+ */
+async function subscribeListening<T>(event: string, listener: (payload: T) => void): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<T>(event, (e) => listener(e.payload));
+}
+
 async function realBackend(): Promise<Backend> {
   const invoke = await tauriInvoke();
   return {
@@ -187,7 +198,8 @@ async function realBackend(): Promise<Backend> {
     rememberScreenAssets: (ids, waveformKind) => invoke<void>("remember_screen_assets", { ids, waveformKind }),
     playlistTree: () => invoke<TreeNode[]>("playlist_tree"),
     openView: (spec) => invoke<ViewHandle>("open_view", { spec }),
-    fetchRows: (viewId, offset, len, extraColumns) => invoke<RowDto[]>("fetch_rows", { viewId, offset, len, extraColumns }),
+    fetchRows: (viewId, offset, len, extraColumns) =>
+      invoke<RowDto[]>("fetch_rows", { viewId, offset, len, extraColumns }).then(liftMyTags),
     viewIdsInRange: (viewId, from, to) => invoke<string[]>("view_ids_in_range", { viewId, from, to }),
     trackWaveform: async (trackId, kind, window) => {
       // Raw bytes rather than a JSON number array: the three-band detail tag
@@ -453,6 +465,11 @@ async function realBackend(): Promise<Backend> {
     libraryProblem: () => invoke<LibraryProblem | null>("library_problem"),
     onServiceStopped: (listener) => subscribe<string>("service:stopped", listener),
     serviceProblem: () => invoke<string | null>("service_problem"),
+    serviceActivity: () => invoke<import("./serviceActivity").ServiceActivity>("service_activity"),
+    libraryProtection: () => invoke<LibraryProtection>("library_protection"),
+    adoptLibraryProtection: (windowPreference) => invoke<LibraryProtection>("adopt_library_protection", { windowPreference }),
+    setLibraryProtection: (protectLibrary) => invoke<LibraryProtection>("set_library_protection", { protectLibrary }),
+    onLibraryProtectionChanged: (listener) => subscribeListening<LibraryProtection>("library-protection:changed", listener),
     createLibrary: () => invoke<void>("create_library"),
     useDefaultLibrary: () => invoke<void>("use_default_library"),
     databaseDrives: () => invoke<DatabaseDrive[]>("database_drives"),
@@ -465,6 +482,8 @@ async function realBackend(): Promise<Backend> {
     onMenu: (listener) => subscribe<string>("menu", listener),
     setMenuLabels: (labels) => invoke<void>("set_menu_labels", { labels }),
     setMenuEnabled: (items) => invoke<void>("set_menu_enabled", { items }),
+    runMenuItem: (id) => invoke<void>("run_menu_item", { id }),
+    runEditCommand: (edit) => invoke<void>("run_edit_command", { edit }),
     serveScripts: (handle) => {
       // Ready only once the listener is in: a request sent before then would
       // reach nobody and wait out its timeout.
@@ -605,6 +624,7 @@ async function realBackend(): Promise<Backend> {
     explorerRoots: () => invoke<ExplorerRoot[]>("explorer_roots"),
     explorerChildren: (path) => invoke<ExplorerChildren>("explorer_children", { path }),
     deviceLibraries: (path) => invoke<DeviceLibrary[]>("device_libraries", { path }),
+    stickOutline: (path) => invoke<StickOutline>("stick_outline", { path }),
     devicePlaylistCollectionTracks: (path, format, tracks) =>
       invoke<(string | null)[]>("device_playlist_collection_tracks", { path, format, tracks }),
     devicePlaylistEdit: (path, format, edit) =>

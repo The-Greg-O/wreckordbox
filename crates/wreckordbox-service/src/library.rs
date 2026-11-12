@@ -16,6 +16,7 @@ use rbl_index::{SortColumn, TrackFilter, TrackSource, ViewSpec};
 use rbl_library::history::{LibraryEdit, TRACK_EDIT};
 use rbl_library::{History, Host, LibraryCore, NoHost, Touched};
 
+use crate::protection;
 use crate::protocol::{
     codes, ChangeKind, LibraryChanged, RateTrack, RatedTrack, ServiceError, Track, TrackList,
     TrackQuery, DEFAULT_TRACK_LIMIT,
@@ -77,9 +78,12 @@ impl OpenLibrary {
         }
     }
 
-    /// The Library core, for the service to watch for changes.
-    pub(crate) fn core(&self) -> Arc<LibraryCore> {
-        Arc::clone(&self.core)
+    /// Hears every change to the Library, whoever made it; see
+    /// [`LibraryCore::watch`]. The core itself is not handed out, so that
+    /// nothing outside this file can write through it past
+    /// [`Self::change`].
+    pub(crate) fn watch(&self, watcher: impl FnMut(rbl_library::Change) -> bool + Send + 'static) {
+        self.core.watch(watcher);
     }
 
     /// Tracks in the Library, not counting deleted ones.
@@ -95,10 +99,24 @@ impl OpenLibrary {
         &self,
         read: impl FnOnce(&rbl_db::Library) -> Result<T, ServiceError>,
     ) -> Result<T, ServiceError> {
-        match &self.db {
-            Some(db) => read(db),
-            None => read(&self.core.open_read_only().map_err(|e| open_error(&e))?),
+        if let Some(db) = &self.db {
+            return read(db);
         }
+        // A hosting window that has not read the Library yet: the same
+        // answer the index gives, so a client waits and asks again rather
+        // than being told there is no Library.
+        self.index()?;
+        read(&self.core.open_read_only().map_err(|e| open_error(&e))?)
+    }
+
+    /// Runs `read` while no edit is under way: it holds the core's edit
+    /// gate, which every edit (the window's included) holds from its write
+    /// to the re-read of the index. So the index and the database `read`
+    /// sees are the same Library, and nothing is edited until it returns.
+    /// It writes nothing; keep it short, as an edit waits for it.
+    pub(crate) fn steady<T>(&self, read: impl FnOnce() -> T) -> T {
+        let _gate = self.core.edit_gate().lock();
+        read()
     }
 
     /// The folder the Library's analysis files are kept under.
@@ -136,6 +154,77 @@ impl OpenLibrary {
         })
     }
 
+    /// The service's one way to change the Library: every command that
+    /// does comes through here, whatever it changes and however the edit
+    /// history treats it. Library Protection is enforced by the core
+    /// itself, under the gate that serialises edits ([`LibraryCore::write_then`]
+    /// refuses every write while it is on), so a refusal comes back from
+    /// `write` before anything is written, recorded in the edit history or
+    /// told to a client; here it becomes [`codes::LIBRARY_PROTECTED`].
+    ///
+    /// `write` is handed the core and the host to make one of the core's
+    /// edits with ([`LibraryCore::edit`], `recorded_edit`,
+    /// `permanent_edit`). This is the only place in the crate that reads
+    /// `self.host`, which every writing method of the core needs, and the
+    /// core is never handed out of this file; `tests/one_edit_gate.rs`
+    /// lints for both.
+    ///
+    /// Reading does not come this way, and neither does writing to the
+    /// Sidecar, which is not the Library.
+    fn change<T>(
+        &self,
+        write: impl FnOnce(&LibraryCore, &dyn Host) -> Result<(T, rbl_library::Change), DbError>,
+    ) -> Result<(T, LibraryChanged), ServiceError> {
+        write(&self.core, &*self.host)
+            .map(|(value, change)| (value, change.into()))
+            .map_err(|e| edit_error(&e))
+    }
+
+    /// Gives the core's edit history `ledger` to tell of every edit from
+    /// now on (the Ledger, bead wbx-21).
+    pub(crate) fn keep_ledger(&self, ledger: Arc<dyn rbl_library::ledger::Ledger>) {
+        self.core.history().lock().keep_ledger(Some(ledger));
+    }
+
+    /// Takes the Ledger off the core once no edit is under way: the edit
+    /// gate is taken first, so an edit in progress (a hosting window's) is
+    /// over, and recorded, before `close` runs and the Ledger is removed.
+    pub(crate) fn let_go_of_ledger(&self, close: impl FnOnce()) {
+        let _gate = self.core.edit_gate().lock();
+        close();
+        self.core.history().lock().keep_ledger(None);
+    }
+
+    /// Library Protection as the core holds it.
+    pub(crate) fn protection(&self) -> protection::Protection {
+        self.core.protection().into()
+    }
+
+    /// Turns Library Protection on or off through the core, for the service
+    /// and the window alike, and answers what it was.
+    pub(crate) fn protect(&self, on: bool) -> Result<protection::ProtectionSet, ServiceError> {
+        let turned = self.core.set_protection(on).map_err(|e| {
+            ServiceError::new(
+                codes::SERVICE_FAILED,
+                format!("could not record Library Protection: {e}"),
+            )
+        })?;
+        Ok(protection::ProtectionSet {
+            protect_library: turned.now.protect_library,
+            previous: turned.previous,
+            revision: turned.now.revision,
+        })
+    }
+
+    /// Hears every change of Library Protection made through the core, in
+    /// order; see [`LibraryCore::watch_protection`].
+    pub(crate) fn watch_protection(
+        &self,
+        watcher: impl FnMut(rbl_library::protection::ProtectionState) -> bool + Send + 'static,
+    ) {
+        self.core.watch_protection(watcher);
+    }
+
     /// Makes `action`'s writes through the Library's single edit path (the
     /// write guards, the writes, the re-read of what they `touched`), and
     /// answers its result beside what to tell every client. Outside the edit
@@ -147,18 +236,7 @@ impl OpenLibrary {
         touched: Touched,
         action: impl FnOnce(&mut rbl_db::write::Writer) -> Result<T, DbError>,
     ) -> Result<(T, LibraryChanged), ServiceError> {
-        let (value, change) = self
-            .core
-            .edit(&*self.host, History::Outside, touched, action)
-            .map_err(|e| edit_error(&e))?;
-        let changed = LibraryChanged {
-            kind: match change.kind {
-                rbl_library::ChangeKind::Library => ChangeKind::Library,
-                rbl_library::ChangeKind::TagList => ChangeKind::TagList,
-            },
-            generation: change.generation,
-        };
-        Ok((value, changed))
+        self.change(|core, host| core.edit(host, History::Outside, touched, action))
     }
 
     /// [`Self::edit`] for an edit Undo can take back: `action` also answers
@@ -170,10 +248,7 @@ impl OpenLibrary {
         label: &'static str,
         action: impl FnOnce(&mut rbl_db::write::Writer) -> Result<(T, LibraryEdit), DbError>,
     ) -> Result<(T, LibraryChanged), ServiceError> {
-        self.core
-            .recorded_edit(&*self.host, touched, label, action)
-            .map(|(value, change)| (value, change.into()))
-            .map_err(|e| edit_error(&e))
+        self.change(|core, host| core.recorded_edit(host, touched, label, action))
     }
 
     /// [`Self::edit`] for an edit that removes rows for good: the edit
@@ -183,10 +258,7 @@ impl OpenLibrary {
         touched: Touched,
         action: impl FnOnce(&mut rbl_db::write::Writer) -> Result<T, DbError>,
     ) -> Result<(T, LibraryChanged), ServiceError> {
-        self.core
-            .permanent_edit(&*self.host, touched, action)
-            .map(|(value, change)| (value, change.into()))
-            .map_err(|e| edit_error(&e))
+        self.change(|core, host| core.permanent_edit(host, touched, action))
     }
 
     /// Sets one track's rating through the Library's single edit path, and
@@ -218,14 +290,11 @@ impl OpenLibrary {
         let previous = track(&before, row);
         let id = previous.id.clone();
         let stars = edit.rating;
-        let ((), change) = self.recorded_edit(
-            Touched::Metadata(vec![id.clone()]),
-            TRACK_EDIT,
-            |writer| {
+        let ((), change) =
+            self.recorded_edit(Touched::Metadata(vec![id.clone()]), TRACK_EDIT, |writer| {
                 let (_, recorded) = writer.set_rating_with_undo(&id, stars)?;
                 Ok(((), LibraryEdit::Track(vec![recorded])))
-            },
-        )?;
+            })?;
         // Read back from the index the edit refreshed, not assumed.
         let after = self.index()?;
         let rating = after
@@ -273,7 +342,12 @@ pub(crate) fn track(index: &rbl_index::Library, row: rbl_index::Row) -> Track {
 /// ones the window shows.
 fn edit_error(error: &DbError) -> ServiceError {
     match error {
+        refused if rbl_library::protection::refused(refused) => protection::refusal(),
         DbError::WriteRefused(why) => ServiceError::new(codes::WRITE_REFUSED, why.clone()),
+        // The core has no Library yet: a hosting window is still reading it.
+        DbError::NotInstalled(why) if why == rbl_library::NOT_LOADED => {
+            ServiceError::new(codes::LIBRARY_LOADING, why.clone())
+        }
         other => open_error(other),
     }
 }

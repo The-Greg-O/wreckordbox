@@ -121,7 +121,7 @@ function PickList<T extends string | number>({
 const Stars = memo(function Stars({ stars }: { stars: number }) {
   return (
     <span className={styles.stars} role="img" aria-label={`${stars} of 5`}>
-      {[1, 2, 3, 4, 5].map((star) => <RatingStar key={star} lit={star <= stars} className={styles.starIcon} />)}
+      {[1, 2, 3, 4, 5].map((star) => <RatingStar key={star} star={star} rating={stars} className={styles.starIcon} />)}
     </span>
   );
 });

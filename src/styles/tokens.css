@@ -1,18 +1,44 @@
 /* Shipped CSS token values. Their measured design source is maintained privately. */
+/* Theme roles (docs/design/tokens.md): the chrome's colours and face. The app
+   shell overwrites these from the active Omarchy theme and the system
+   monospace font (src-tauri/src/omarchy_theme.rs, src/lib/themeRoles.ts).
+   The values here are the fallbacks, upstream's own, for a machine without
+   Omarchy, for macOS and Windows, and for the browser mock. Only the chrome
+   tokens below refer to a role; a token that describes the music never does. */
+:root {
+  --role-ground: #000000; /* deepest ground: top bar, status line, waveform wells (theme: darker_background) */
+  --role-panel: #0F0F0F; /* panels: tree, player, target list (theme: dark_background) */
+  --role-working: #1E1E1E; /* the working area (theme: background) */
+  --role-hairline: #323232; /* hairlines, unset pips (theme: lighter_background) */
+  --role-control: #2B2B2B; /* a control's fill: player buttons (theme: lighter_background, as hairlines) */
+  --role-selection: #314B67; /* a selected row (theme: selection) */
+  --role-border: #646464; /* control borders (theme: muted) */
+  --role-text: #E6E6E6; /* text (theme: foreground) */
+  --role-text-dim: #9A9A9A; /* secondary text, labels (theme: dark_foreground) */
+  --role-text-bright: #FFFFFF; /* emphasised text (theme: bright_foreground) */
+  --role-accent: #1373EB; /* focus, active filter, deck marker (theme: accent) */
+  --role-on-accent: #F0F0F0; /* text and glyphs on an accent fill (theme: whichever of its darkest ground and brightest text stands out from the accent, else black or white) */
+  --role-accent-hover: #4A82ED; /* a lit control under the pointer (theme: derived in themeRoles.ts, the accent moved 15% away from its on-accent colour) */
+  --role-tab-from: #1373EB; /* the active view tab's line, left end (theme: bright_magenta) */
+  --role-tab-to: #1373EB; /* the active view tab's line, right end (theme: bright_yellow) */
+  --role-font: Arial, "Helvetica Neue", Helvetica, sans-serif; /* the system monospace font where the system names one */
+}
+
 :root {
   --c-titlebar: #363738; /* docs/screenshots (rekordbox 7.2.11, 2x) 9.09.33 PM: the window's title bar behind 'rekordbox', (54,55,56) at y 78..131 under the 1pt window-edge highlight; the old #262828 was sampled under a modal's dimming */
-  --c-black: #000000; /* player bg, splitters, status bar */
-  --c-top: #0F0F0F; /* top bar, odd rows */
-  --c-panel: #1E1E1E; /* tree, rails, column header, even rows */
-  --c-button: #2B2B2B; /* player buttons */
-  --c-raised: #323232; /* bottom bar, column dividers, inactive tab */
-  --c-select: #314B67; /* measured, modal over both captures (100% / 86% purity) */
-  --c-accent: #1373EB; /* active tab, sort arrow, MASTER border, Q */
+  --c-black: var(--role-ground); /* player bg, splitters, status bar */
+  --c-top: var(--role-panel); /* top bar, odd rows */
+  --c-panel: var(--role-working); /* tree, rails, column header, even rows */
+  --c-button: var(--role-control); /* player buttons */
+  --c-raised: var(--role-hairline); /* bottom bar, column dividers, inactive tab */
+  --c-select: var(--role-selection); /* measured, modal over both captures (100% / 86% purity) */
+  --c-accent: var(--role-accent); /* active tab, sort arrow, MASTER border, Q */
   --c-field: #000000; /* measured: search field interior is black; the old #4B4B4B was its magnifier glyph */
   --c-field-placeholder: #4B4B4B; /* measured: search placeholder text and magnifier glyph */
-  --c-text: #E6E6E6;
-  --c-text-dim: #9A9A9A;
+  --c-text: var(--role-text);
+  --c-text-dim: var(--role-text-dim);
   --c-played: #69B900; /* rekordbox 7.2.19 static: a played track's text in the track list, theme colour 0x30000e1 in the dark theme and the selected-row constant alike (ListViewer::findTextColour @0x1003efb70; the theme table from __GLOBAL__sub_I_ColorTheme.cpp, issue #540) */
+  --c-loop-band: #3571E3; /* a loop's band over the waveform; the pad blue, fixed because it is drawn on the music */
   --c-icon-off: #A0A0A0; /* skins/*_off.svg fill rgb(160,160,160) */
   --c-icon-on: #F0F0F0; /* skins/*_on.svg fill rgb(240,240,240) */
   --c-missing: #FF9600; /* measured: the orange [!] rekordbox 7.2.14 draws in the Attribute column for a track whose file is missing (Winrig chris-win11 2026-10-08, issue #201) */
@@ -62,6 +88,7 @@
   --c-play-ring-on: #60D330; /* sampled from a capture of the PLAY button with the deck running: the ring lights from the resting green */
   --c-play-glyph-on: #FFFFFF; /* sampled from the same capture: the triangle is a flat 255,255,255 while the deck runs, against #A0A0A0 at rest */
   --c-beat: #4C4C4C; /* measured from docs/screenshots; the detail band runs y 358..650: a beat marker's line */
+  --c-lit-hover: #4A82ED; /* a lit control under the pointer (the AU/Q pads, the deck's chips, the page numbers): upstream's lighter pad blue. Under a theme, the accent moved away from its label (--role-accent-hover) */
   --c-pad-active: #3571E3; /* measured from the pad row in a 2x capture of rekordbox 7.2.11: the AU and Q buttons when on */
   --c-pad-set: #3CEB50; /* measured from the pad row in a 2x capture of rekordbox 7.2.11: the square inside a hot-cue pad that holds a cue */
   --c-pad-well: #0F0F0F; /* measured from the pad row in a 2x capture of rekordbox 7.2.11: a hot-cue pad's own background */
@@ -129,6 +156,14 @@
   --c-label-aqua: #56BDF3; /* measured from the device-panel captures docs/screenshots (rekordbox 7.2.11, 2x, 9.08.22 to 9.08.41 PM): the Aqua dot */
   --c-label-blue: #204FEF; /* measured from the device-panel captures docs/screenshots (rekordbox 7.2.11, 2x, 9.08.22 to 9.08.41 PM): the Blue dot */
   --c-label-purple: #8B1EEF; /* measured from the device-panel captures docs/screenshots (rekordbox 7.2.11, 2x, 9.08.22 to 9.08.41 PM): the Purple dot */
+  /* Energy's five levels, cool to hot (docs/design/tokens.md, Fixed colours; values from screens/mock.html). Meaning, not theme:
+     the new list's pips and upstream's stars both use them, so a track's Energy looks the same in either layout and every theme. */
+  --c-energy-0: #414868; /* an unset pip or unlit star (screens/mock.html's e0) */
+  --c-energy-1: #7aa2f7;
+  --c-energy-2: #0db9d7;
+  --c-energy-3: #9ece6a;
+  --c-energy-4: #ff9e64;
+  --c-energy-5: #f7768e;
   --c-info-tab-active: #3571E3; /* docs/screenshots 9.09.33/36/45 PM (rekordbox 7.2.11, 2x, the Information Window's Summary, Info and Artwork tabs): the selected tab's fill, (53,113,227) */
   --c-info-tab-active-text: #000000; /* docs/screenshots 9.09.33/36/45 PM (rekordbox 7.2.11, 2x, the Information Window's Summary, Info and Artwork tabs): the selected tab's label is black on the blue */
   --c-info-tab-text: #969696; /* docs/screenshots 9.09.33/36/45 PM (rekordbox 7.2.11, 2x, the Information Window's Summary, Info and Artwork tabs): an unselected tab's label, (150,150,150); its fill is the raised #323232 */
@@ -185,6 +220,7 @@
   --c-pad-edit-off-glyph: #606060; /* docs/screenshots/grid-edit-row-2026-09-18@2x.png (rekordbox 7.2.11, 2x): the undo and redo arrows with nothing to undo, (96,96,96) */
   --c-pad-edit-off-bar: #484848; /* docs/screenshots/grid-edit-row-2026-09-18@2x.png (rekordbox 7.2.11, 2x): the beat lines on a grid-edit button that cannot act, (72,72,72) */
   --c-pad-edit-faint: #444444; /* docs/screenshots/grid-edit-row-2026-09-18@2x.png (rekordbox 7.2.11, 2x): the beats before the playhead on the adjust-from-here button, (68,68,68) read through the 1.5px lines' anti-aliasing */
+  --c-pad-edit-on-hover: #70B1FF; /* the lit metronome under the pointer; under a theme it stays the accent (the button's ground lightens instead) */
   --c-pad-edit-on: #4294F7; /* docs/screenshots/grid-edit-row-2026-09-18@2x.png (rekordbox 7.2.11, 2x): the metronome's bars while it runs, (66,148,247) on the button's own grey */
   --c-modal-scrim: rgb(0 0 0 / 55%); /* shared dimming layer behind modal windows */
   --c-shadow-soft: rgb(0 0 0 / 45%); /* shared shadow under compact menus */
@@ -616,7 +652,7 @@
   --s-link-mc-icon: 16px; /* measured from a live 2x capture of rekordbox 7.2 in EXPORT as tempo master (2026-09-14): the master-clock cluster at the strip's left — the recycle two-arrows and the MASTER gear, ~33px at 2x */
   --s-link-mc-gap: 4px; /* measured from a live 2x capture of rekordbox 7.2 in EXPORT as tempo master (2026-09-14): the master-clock cluster at the strip's left — the gap between the boxes and rows */
 
-  --f-ui: Arial, "Helvetica Neue", Helvetica, sans-serif; /* identified by ink-extent fit (0.70% RMS error) and corroborated by rekordbox3.settings MenuFontName=Arial; see design/measure/font-report.json */
+  --f-ui: var(--role-font); /* identified by ink-extent fit (0.70% RMS error) and corroborated by rekordbox3.settings MenuFontName=Arial; see design/measure/font-report.json */
   --f-size-ui: 16.5px; /* best aggregate fit over four measured strings */
   --f-size-sm: 12px; /* status bar 'Analyzing: 8319 Tracks', 128pt wide, bold */
   --f-size-bars: 14px; /* docs/screenshots at 2x: the bar count reads 20px tall over the detail band, which is a 14px face */
@@ -651,6 +687,45 @@
   --f-size-traffic-master: 10px; /* measured from the 2-player capture docs/screenshots (Screenshot 2026-09-08 at 3.00.12 PM, rekordbox 7.2.11, 2x): 'MASTER' in the box, a 14 capture px cap; bold */
   --f-size-link-label: 16px; /* docs/screenshots 2026-09-13 11.16.28 AM (rekordbox 7.2.11 EXPORT, 2x, LINK on, both decks empty): LINK, the player number, MIXER and a loaded title: a 23 capture px cap (11.5pt), Arial at 16px; LINK 68px wide at 2x, Arial 16 gives 72 */
   --f-size-link-lamp: 12.5px; /* docs/screenshots 2026-09-13 11.16.28 AM (rekordbox 7.2.11 EXPORT, 2x, LINK on, both decks empty): MASTER SYNC: an 18 capture px cap (9pt), Arial at 12.5px; 'MASTER SYNC' 184px wide at 2x */
+}
+
+/* A theme is applied. The lit states of upstream's chrome are a dozen blues
+   measured one by one from rekordbox; under a theme they are all the accent,
+   and what is written on them is the colour the theme gives for that
+   (--c-on-accent is not defined without a theme, so each place that uses it
+   falls back to upstream's own colour). Nothing here describes the music. */
+:root[data-theme-mode] {
+  --c-on-accent: var(--role-on-accent);
+  --c-pad-active: var(--role-accent);
+  --c-tab-active: var(--role-accent);
+  --c-filter-accent: var(--role-accent);
+  --c-mytag-check-on: var(--role-accent);
+  --c-mytag-tick: var(--role-on-accent);
+  --c-device-tab-on: var(--role-accent);
+  --c-info-tab-active: var(--role-accent);
+  --c-info-tab-active-text: var(--role-on-accent);
+  --c-rail-lit: var(--role-accent);
+  --c-pref-select: var(--role-accent);
+  --c-lit-hover: var(--role-accent-hover);
+  --c-pad-edit-on: var(--role-accent);
+  --c-pad-edit-on-hover: var(--role-accent);
+  --c-mytag-check-on-off: color-mix(in srgb, var(--role-accent) 50%, #282828);
+}
+
+/* A light theme. Upstream's layout draws its icons and many labels from fixed
+   light tokens that vanish on a light ground, so it keeps upstream's dark
+   grounds and text and takes only the accent and the face. The roles
+   themselves stay the theme's, for the view shell. Goes with upstream's
+   layout (#77). */
+:root[data-theme-mode="light"] {
+  --c-black: #000000;
+  --c-top: #0F0F0F;
+  --c-panel: #1E1E1E;
+  --c-button: #2B2B2B;
+  --c-raised: #323232;
+  --c-select: #314B67;
+  --c-text: #E6E6E6;
+  --c-text-dim: #9A9A9A;
 }
 
 /* rekordbox export mode is a single dark design; we commit to it rather than

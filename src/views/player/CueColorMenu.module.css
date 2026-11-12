@@ -15,7 +15,7 @@
 .hotMenu { width: 142px; min-width: 0; padding: 0; }
 .menu button { border: 0; color: inherit; font: inherit; cursor: default; }
 .memory, .reset, .comments { height: 25px; padding: 0 20px; background: transparent; text-align: left; }
-.memory:hover, .reset:hover, .comments:hover:not(:disabled) { background: var(--c-accent); }
+.memory:hover, .reset:hover, .comments:hover:not(:disabled) { background: var(--c-accent); color: var(--c-on-accent, var(--c-context-menu-text)); }
 .dot { display: inline-block; width: 9px; height: 9px; margin-right: 14px; border-radius: 50%; box-shadow: 0 0 3px currentColor; }
 .comments { margin: 0 0 8px; height: 32px; border-bottom: 1px solid var(--c-context-menu-separator) !important; text-align: center; }
 .comments:disabled { color: inherit; opacity: 1; }

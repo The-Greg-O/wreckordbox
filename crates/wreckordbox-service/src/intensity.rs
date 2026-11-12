@@ -62,7 +62,7 @@ use wreckordbox_sidecar::{Fact, Kind, Kinds, NewFact, Sidecar, SidecarError};
 
 use crate::library::OpenLibrary;
 use crate::protocol::{codes as service_codes, Request, ServiceError};
-use crate::stems::{self, SidecarChanged, Stems};
+use crate::stems::{self, ParentAudio, SidecarChanged, Stems};
 pub use crate::stems::{Fingerprint, Parent, RunId, Source, SourceKind};
 use crate::tracks::TrackSelection;
 
@@ -286,9 +286,9 @@ pub(crate) fn answers(command: &str) -> bool {
 
 /// A track to measure, as the Library has it.
 pub(crate) struct Target {
-    parent: Parent,
-    /// Where the Library says the audio file is.
-    path: PathBuf,
+    /// The track and where the Library says its audio file is, as every
+    /// Fact producer has it for observing the audio before recording.
+    found: ParentAudio,
     /// Where the Library says the track's analysis file is, when it has
     /// been analysed: the beat grid is in it.
     analysis: Option<PathBuf>,
@@ -323,11 +323,7 @@ pub(crate) fn targets(
             let at = row as usize;
             let analysis = index.analysis_path.get(at);
             Target {
-                parent: Parent {
-                    id: index.ids.get(at).copied().unwrap_or(0).to_string(),
-                    title: index.title.get(at).to_owned(),
-                },
-                path: PathBuf::from(index.folder_path.get(at)),
+                found: stems::audio_at(&index, row),
                 analysis: (!analysis.is_empty()).then(|| rbl_anlz::resolve(&share_root, analysis)),
             }
         })
@@ -535,7 +531,7 @@ fn measure(stems: &Arc<Stems>, targets: &[Target], force: bool) -> Result<Measur
         description: match targets {
             [only] => format!(
                 "Measure the Intensity of track {} \"{}\"",
-                only.parent.id, only.parent.title
+                only.found.parent().id, only.found.parent().title
             ),
             _ => format!("Measure the Intensity of {total} tracks"),
         },
@@ -568,7 +564,7 @@ fn measure(stems: &Arc<Stems>, targets: &[Target], force: bool) -> Result<Measur
         .map(|(outcome, target)| {
             outcome.unwrap_or_else(|| {
                 TrackOutcome::failed(
-                    &target.parent,
+                    &target.found.parent(),
                     None,
                     Vec::new(),
                     ServiceError::new(
@@ -614,33 +610,37 @@ impl Measuring<'_> {
     /// Settles one track and says so.
     fn settle(&self, target: &Target) -> TrackOutcome {
         if self.claim.stopped() {
-            return TrackOutcome::cancelled(&target.parent);
+            return TrackOutcome::cancelled(&target.found.parent());
         }
         let outcome = self.one(target);
         if outcome.status != Status::Cancelled {
             let done = self.done.fetch_add(1, Ordering::AcqRel) + 1;
-            self.progress(&target.parent, outcome.status.name(), done);
+            self.progress(&target.found.parent(), outcome.status.name(), done);
         }
         outcome
     }
 
     fn one(&self, target: &Target) -> TrackOutcome {
-        let parent = &target.parent;
+        let parent = target.found.parent();
+        let path = target.found.path();
         let mut marked: Vec<i64> = Vec::new();
         // A file that changes while it is measured is measured again from
         // what it holds now, a few times at most.
         for _ in 0..ATTEMPTS {
-            let fingerprint = match stems::fingerprint(parent, &target.path) {
+            let fingerprint = match stems::fingerprint(parent, path) {
                 Ok(fingerprint) => fingerprint,
                 Err(error) => return TrackOutcome::failed(parent, None, marked, error),
             };
             let failed = |marked_stale: Vec<i64>, error: ServiceError| {
                 TrackOutcome::failed(parent, Some(fingerprint.clone()), marked_stale, error)
             };
-            // Measurements made from other audio are found out first, so
-            // one of them is never taken for current.
-            match mark_stale(self.stems, self.sidecar, &parent.id, &fingerprint) {
-                Ok(stale) => marked.extend(stale),
+            // The audio is observed first, at the point every Fact producer
+            // shares: Facts of this audio left by a removed track are
+            // re-attached here, and Measurements made from other audio are
+            // marked stale, so one of them is never taken for current.
+            let run = *lock(&self.run);
+            match self.stems.before_record(&target.found, Some(&fingerprint), run) {
+                Ok((_, stale)) => marked.extend(stale),
                 Err(error) => return failed(marked, error),
             }
             let bars = bar_starts(target.analysis.as_deref());
@@ -655,7 +655,7 @@ impl Measuring<'_> {
             pause("decode", &parent.id);
             self.progress(parent, "measuring", self.done.load(Ordering::Acquire));
             self.decoded.fetch_add(1, Ordering::AcqRel);
-            let intensity = match wreckordbox_intensity::measure_file(&target.path, &bars, &|| {
+            let intensity = match wreckordbox_intensity::measure_file(path, &bars, &|| {
                 self.claim.stopped()
             }) {
                 Ok(Some(intensity)) => intensity,
@@ -682,7 +682,7 @@ impl Measuring<'_> {
             // Recorded only against the audio that was decoded: the file
             // is fingerprinted again, and if it is not what it was, the
             // track is measured afresh.
-            match stems::fingerprint(parent, &target.path) {
+            match stems::fingerprint(parent, path) {
                 Ok(after) if after == fingerprint => {}
                 Ok(_) => continue,
                 Err(error) => return failed(marked, error),
@@ -863,11 +863,9 @@ impl TrackOutcome {
 }
 
 fn show(stems: &Stems, target: Target) -> Result<TrackIntensity, ServiceError> {
-    let Target {
-        parent,
-        path,
-        analysis,
-    } = target;
+    let Target { found, analysis } = target;
+    let parent = found.parent().clone();
+    let path = found.path();
     let activity = stems.intensity.begin(false)?;
     let sidecar = stems.sidecar()?;
     // With the audio at hand, a Measurement made from other audio is
@@ -875,7 +873,7 @@ fn show(stems: &Stems, target: Target) -> Result<TrackIntensity, ServiceError> {
     // bars made for a beat grid the track no longer has are made again.
     if path.is_file() {
         let fingerprint = stems::fingerprint(&parent, &path)?;
-        mark_stale(stems, &sidecar, &parent.id, &fingerprint)?;
+        stems.before_record(&found, Some(&fingerprint), None)?;
         realign(
             stems,
             &sidecar,
@@ -1070,41 +1068,6 @@ fn bar_starts(analysis: Option<&Path>) -> Vec<f64> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-/// Marks the track's Measurements made from other audio stale and says
-/// so, one event per kind.
-fn mark_stale(
-    stems: &Stems,
-    sidecar: &Sidecar,
-    track_id: &str,
-    fingerprint: &Fingerprint,
-) -> Result<Vec<i64>, ServiceError> {
-    let stale = sidecar
-        .mark_stale(track_id, fingerprint)
-        .map_err(|e| sidecar_error(&e))?;
-    let mut by_kind: Vec<(String, Vec<i64>)> = Vec::new();
-    for id in &stale {
-        let Some(fact) = sidecar.fact(*id).map_err(|e| sidecar_error(&e))? else {
-            continue;
-        };
-        match by_kind.iter_mut().find(|(kind, _)| *kind == fact.kind) {
-            Some((_, ids)) => ids.push(*id),
-            None => by_kind.push((fact.kind, vec![*id])),
-        }
-    }
-    for (kind, ids) in by_kind {
-        stems.publish(
-            stems::events::SIDECAR_CHANGED,
-            json!(SidecarChanged {
-                track_id: track_id.to_owned(),
-                kind,
-                fact_id: None,
-                stale: ids,
-            }),
-        );
-    }
-    Ok(stale)
 }
 
 fn changed(stems: &Stems, track_id: &str, fact_id: Option<i64>, stale: &[i64]) {

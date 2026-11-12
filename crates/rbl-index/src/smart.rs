@@ -255,7 +255,12 @@ impl SmartRule {
     #[must_use]
     pub fn parse(xml: &str) -> Option<Self> {
         let mut tags = tags(smart_document(xml)?).into_iter();
-        let Tag::Open { name, attributes, closed } = tags.next()? else {
+        let Tag::Open {
+            name,
+            attributes,
+            closed,
+        } = tags.next()?
+        else {
             return None;
         };
         if !name.eq_ignore_ascii_case("NODE") {
@@ -267,7 +272,10 @@ impl SmartRule {
         } else {
             Logic::All
         };
-        let mut root = Group { logic, items: Vec::new() };
+        let mut root = Group {
+            logic,
+            items: Vec::new(),
+        };
         if closed {
             return Some(Self { root });
         }
@@ -275,7 +283,11 @@ impl SmartRule {
         let mut open = vec![name];
         for tag in tags {
             match tag {
-                Tag::Open { name, attributes, closed } => {
+                Tag::Open {
+                    name,
+                    attributes,
+                    closed,
+                } => {
                     if open.len() == 1 && name.eq_ignore_ascii_case("CONDITION") {
                         if let Some(condition) = condition(&attributes) {
                             root.items.push(Item::Condition(condition));
@@ -319,7 +331,10 @@ impl SmartRule {
             match id {
                 Some(id) => {
                     let id = node_id(id);
-                    let _ = write!(out, "<NODE Id=\"{id}\" LogicalOperator=\"{logic}\" AutomaticUpdate=\"0\"");
+                    let _ = write!(
+                        out,
+                        "<NODE Id=\"{id}\" LogicalOperator=\"{logic}\" AutomaticUpdate=\"0\""
+                    );
                 }
                 None => {
                     let _ = write!(out, "<NODE LogicalOperator=\"{logic}\"");
@@ -391,7 +406,9 @@ impl SmartRule {
     pub fn evaluate_on(&self, library: &Library, today: &Date) -> Vec<Row> {
         let compiled = CompiledGroup::from(&self.root, library, today);
         let count = u32::try_from(library.len()).unwrap_or(u32::MAX);
-        (0..count).filter(|&row| compiled.matches(library, row)).collect()
+        (0..count)
+            .filter(|&row| compiled.matches(library, row))
+            .collect()
     }
 }
 
@@ -498,7 +515,10 @@ pub fn bpm_to_stored(text: &str) -> String {
         Some(point) => {
             let whole = my_tag_key(text.get(..point).unwrap_or_default());
             let digit = |at: usize| my_tag_key(text.get(at..at + 1).unwrap_or_default());
-            whole.wrapping_mul(100).wrapping_add(digit(point + 1).wrapping_mul(10)).wrapping_add(digit(point + 2))
+            whole
+                .wrapping_mul(100)
+                .wrapping_add(digit(point + 1).wrapping_mul(10))
+                .wrapping_add(digit(point + 2))
         }
     };
     stored.to_string()
@@ -525,17 +545,35 @@ impl Condition {
     /// stores them (see the module notes): a BPM times 100 in all three
     /// values, and a rating outside a range with `ValueRight` `0`.
     #[must_use]
-    pub fn from_editor(property: Property, operator: Operator, left: &str, right: &str, unit: &str) -> Self {
+    pub fn from_editor(
+        property: Property,
+        operator: Operator,
+        left: &str,
+        right: &str,
+        unit: &str,
+    ) -> Self {
         let (left, right, unit) = match property {
-            Property::Bpm => (bpm_to_stored(left), bpm_to_stored(right), bpm_to_stored(unit)),
+            Property::Bpm => (
+                bpm_to_stored(left),
+                bpm_to_stored(right),
+                bpm_to_stored(unit),
+            ),
             // [OBS: rekordbox 7.2.14 stored "more than two stars" as
             // `ValueLeft="2" ValueRight="0"`; static, 7.2.19
             // `ConditionComp::sliderValueChanged` sets `ValueRight` to `0`
             // whenever the second slider, the range's, is hidden.]
-            Property::Rating if operator != Operator::InRange => (left.to_owned(), "0".to_owned(), unit.to_owned()),
+            Property::Rating if operator != Operator::InRange => {
+                (left.to_owned(), "0".to_owned(), unit.to_owned())
+            }
             _ => (left.to_owned(), right.to_owned(), unit.to_owned()),
         };
-        Self { property, operator, left, right, unit }
+        Self {
+            property,
+            operator,
+            left,
+            right,
+            unit,
+        }
     }
 
     /// The condition's values as the editor shows them: `(left, right,
@@ -544,7 +582,11 @@ impl Condition {
     pub fn editor_values(&self) -> (String, String, String) {
         match self.property {
             Property::Bpm => {
-                let right = if self.operator == Operator::InRange { bpm_for_editor(&self.right) } else { String::new() };
+                let right = if self.operator == Operator::InRange {
+                    bpm_for_editor(&self.right)
+                } else {
+                    String::new()
+                };
                 (bpm_for_editor(&self.left), right, String::new())
             }
             Property::Rating if self.operator != Operator::InRange => {
@@ -592,7 +634,9 @@ impl CompiledGroup {
                 .items
                 .iter()
                 .map(|item| match item {
-                    Item::Condition(c) => CompiledItem::Condition(CompiledCondition::from(c, library, today)),
+                    Item::Condition(c) => {
+                        CompiledItem::Condition(CompiledCondition::from(c, library, today))
+                    }
                     Item::Group(g) => CompiledItem::Group(Self::from(g, library, today)),
                 })
                 .collect(),
@@ -802,7 +846,10 @@ impl CompiledCondition {
             Operator::Less | Operator::NotInLast => days < self.low,
             Operator::InRange => days >= self.low && days <= self.high,
             Operator::InLast => days >= self.low,
-            Operator::Contains | Operator::NotContains | Operator::StartsWith | Operator::EndsWith => false,
+            Operator::Contains
+            | Operator::NotContains
+            | Operator::StartsWith
+            | Operator::EndsWith => false,
         }
     }
 }
@@ -1040,7 +1087,9 @@ mod tests {
         .unwrap();
         assert_eq!(rule.root.logic, Logic::Any);
         assert_eq!(rule.root.items.len(), 2);
-        let Item::Condition(first) = &rule.root.items[0] else { panic!() };
+        let Item::Condition(first) = &rule.root.items[0] else {
+            panic!()
+        };
         assert_eq!(first.property, Property::Genre);
         assert_eq!(first.operator, Operator::Contains);
         assert_eq!(first.left, "Tech & House");
@@ -1056,7 +1105,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(rule.root.items.len(), 1);
-        let Item::Condition(condition) = &rule.root.items[0] else { panic!() };
+        let Item::Condition(condition) = &rule.root.items[0] else {
+            panic!()
+        };
         assert_eq!(condition.property, Property::Rating);
         assert_eq!(rule.unsupported(), 0);
 
@@ -1088,7 +1139,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(rule.root.logic, Logic::Any);
-        let Item::Condition(condition) = &rule.root.items[0] else { panic!() };
+        let Item::Condition(condition) = &rule.root.items[0] else {
+            panic!()
+        };
         assert_eq!(condition.property, Property::Genre);
         assert_eq!(condition.operator, Operator::Equal);
 
@@ -1097,7 +1150,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(rule.root.logic, Logic::All);
-        let Item::Condition(condition) = &rule.root.items[0] else { panic!() };
+        let Item::Condition(condition) = &rule.root.items[0] else {
+            panic!()
+        };
         assert_eq!(condition.property, Property::Unsupported);
         assert_eq!(condition.operator, Operator::Equal);
     }
@@ -1130,11 +1185,19 @@ mod tests {
         assert_eq!(SmartRule::parse(&xml).unwrap(), rule);
     }
 
-    fn one(property: Property, operator: Operator, left: &str, right: &str, unit: &str) -> SmartRule {
+    fn one(
+        property: Property,
+        operator: Operator,
+        left: &str,
+        right: &str,
+        unit: &str,
+    ) -> SmartRule {
         SmartRule {
             root: Group {
                 logic: Logic::All,
-                items: vec![Item::Condition(Condition::from_editor(property, operator, left, right, unit))],
+                items: vec![Item::Condition(Condition::from_editor(
+                    property, operator, left, right, unit,
+                ))],
             },
         }
     }
@@ -1146,36 +1209,81 @@ mod tests {
     #[test]
     fn rules_are_written_byte_for_byte_as_rekordbox_writes_them() {
         let cases: [(u64, SmartRule, &str); 11] = [
-            (2_759_501_183, one(Property::Genre, Operator::Contains, "House", "", ""),
-             r#"<NODE Id="-1535466113" LogicalOperator="1" AutomaticUpdate="0"><CONDITION PropertyName="genre" Operator="8" ValueUnit="" ValueLeft="House" ValueRight=""/></NODE>"#),
-            (3_213_900_474, one(Property::Bpm, Operator::InRange, "120", "126.5", ""),
-             r#"<NODE Id="-1081066822" LogicalOperator="1" AutomaticUpdate="0"><CONDITION PropertyName="bpm" Operator="5" ValueUnit="0" ValueLeft="12000" ValueRight="12650"/></NODE>"#),
-            (2_465_685_253, one(Property::DateAdded, Operator::InLast, "30", "", "day"),
-             r#"<NODE Id="-1829282043" LogicalOperator="1" AutomaticUpdate="0"><CONDITION PropertyName="stockDate" Operator="6" ValueUnit="day" ValueLeft="30" ValueRight=""/></NODE>"#),
-            (3_744_254_916, one(Property::DateAdded, Operator::InLast, "2", "", "month"),
-             r#"<NODE Id="-550712380" LogicalOperator="1" AutomaticUpdate="0"><CONDITION PropertyName="stockDate" Operator="6" ValueUnit="month" ValueLeft="2" ValueRight=""/></NODE>"#),
-            (3_632_566_146, one(Property::Rating, Operator::Greater, "2", "", ""),
-             r#"<NODE Id="-662401150" LogicalOperator="1" AutomaticUpdate="0"><CONDITION PropertyName="rating" Operator="3" ValueUnit="" ValueLeft="2" ValueRight="0"/></NODE>"#),
-            (93_964_985, one(Property::Color, Operator::Equal, "1", "", ""),
-             r#"<NODE Id="93964985" LogicalOperator="1" AutomaticUpdate="0"><CONDITION PropertyName="grouping" Operator="1" ValueUnit="" ValueLeft="1" ValueRight=""/></NODE>"#),
-            (4_045_890_599, one(Property::Color, Operator::Equal, "0", "", ""),
-             r#"<NODE Id="-249076697" LogicalOperator="1" AutomaticUpdate="0"><CONDITION PropertyName="grouping" Operator="1" ValueUnit="" ValueLeft="0" ValueRight=""/></NODE>"#),
-            (1_755_093_896, one(Property::Duration, Operator::Greater, "300", "", ""),
-             r#"<NODE Id="1755093896" LogicalOperator="1" AutomaticUpdate="0"><CONDITION PropertyName="duration" Operator="3" ValueUnit="" ValueLeft="300" ValueRight=""/></NODE>"#),
-            (1_473_708_092, SmartRule {
-                root: Group {
-                    logic: Logic::Any,
-                    items: vec![
-                        Item::Condition(Condition::from_editor(Property::Artist, Operator::StartsWith, "a", "", "")),
-                        Item::Condition(Condition::from_editor(Property::FileName, Operator::Contains, "<&\">", "", "")),
-                    ],
+            (
+                2_759_501_183,
+                one(Property::Genre, Operator::Contains, "House", "", ""),
+                r#"<NODE Id="-1535466113" LogicalOperator="1" AutomaticUpdate="0"><CONDITION PropertyName="genre" Operator="8" ValueUnit="" ValueLeft="House" ValueRight=""/></NODE>"#,
+            ),
+            (
+                3_213_900_474,
+                one(Property::Bpm, Operator::InRange, "120", "126.5", ""),
+                r#"<NODE Id="-1081066822" LogicalOperator="1" AutomaticUpdate="0"><CONDITION PropertyName="bpm" Operator="5" ValueUnit="0" ValueLeft="12000" ValueRight="12650"/></NODE>"#,
+            ),
+            (
+                2_465_685_253,
+                one(Property::DateAdded, Operator::InLast, "30", "", "day"),
+                r#"<NODE Id="-1829282043" LogicalOperator="1" AutomaticUpdate="0"><CONDITION PropertyName="stockDate" Operator="6" ValueUnit="day" ValueLeft="30" ValueRight=""/></NODE>"#,
+            ),
+            (
+                3_744_254_916,
+                one(Property::DateAdded, Operator::InLast, "2", "", "month"),
+                r#"<NODE Id="-550712380" LogicalOperator="1" AutomaticUpdate="0"><CONDITION PropertyName="stockDate" Operator="6" ValueUnit="month" ValueLeft="2" ValueRight=""/></NODE>"#,
+            ),
+            (
+                3_632_566_146,
+                one(Property::Rating, Operator::Greater, "2", "", ""),
+                r#"<NODE Id="-662401150" LogicalOperator="1" AutomaticUpdate="0"><CONDITION PropertyName="rating" Operator="3" ValueUnit="" ValueLeft="2" ValueRight="0"/></NODE>"#,
+            ),
+            (
+                93_964_985,
+                one(Property::Color, Operator::Equal, "1", "", ""),
+                r#"<NODE Id="93964985" LogicalOperator="1" AutomaticUpdate="0"><CONDITION PropertyName="grouping" Operator="1" ValueUnit="" ValueLeft="1" ValueRight=""/></NODE>"#,
+            ),
+            (
+                4_045_890_599,
+                one(Property::Color, Operator::Equal, "0", "", ""),
+                r#"<NODE Id="-249076697" LogicalOperator="1" AutomaticUpdate="0"><CONDITION PropertyName="grouping" Operator="1" ValueUnit="" ValueLeft="0" ValueRight=""/></NODE>"#,
+            ),
+            (
+                1_755_093_896,
+                one(Property::Duration, Operator::Greater, "300", "", ""),
+                r#"<NODE Id="1755093896" LogicalOperator="1" AutomaticUpdate="0"><CONDITION PropertyName="duration" Operator="3" ValueUnit="" ValueLeft="300" ValueRight=""/></NODE>"#,
+            ),
+            (
+                1_473_708_092,
+                SmartRule {
+                    root: Group {
+                        logic: Logic::Any,
+                        items: vec![
+                            Item::Condition(Condition::from_editor(
+                                Property::Artist,
+                                Operator::StartsWith,
+                                "a",
+                                "",
+                                "",
+                            )),
+                            Item::Condition(Condition::from_editor(
+                                Property::FileName,
+                                Operator::Contains,
+                                "<&\">",
+                                "",
+                                "",
+                            )),
+                        ],
+                    },
                 },
-            },
-             r#"<NODE Id="1473708092" LogicalOperator="2" AutomaticUpdate="0"><CONDITION PropertyName="artist" Operator="10" ValueUnit="" ValueLeft="a" ValueRight=""/><CONDITION PropertyName="fileName" Operator="8" ValueUnit="" ValueLeft="&lt;&amp;&quot;&gt;" ValueRight=""/></NODE>"#),
-            (745_864_668, one(Property::DateAdded, Operator::Greater, "2020-01-31", "", ""),
-             r#"<NODE Id="745864668" LogicalOperator="1" AutomaticUpdate="0"><CONDITION PropertyName="stockDate" Operator="3" ValueUnit="" ValueLeft="2020-01-31" ValueRight=""/></NODE>"#),
-            (3_975_680_467, one(Property::Key, Operator::Equal, "Am", "", ""),
-             r#"<NODE Id="-319286829" LogicalOperator="1" AutomaticUpdate="0"><CONDITION PropertyName="key" Operator="1" ValueUnit="" ValueLeft="Am" ValueRight=""/></NODE>"#),
+                r#"<NODE Id="1473708092" LogicalOperator="2" AutomaticUpdate="0"><CONDITION PropertyName="artist" Operator="10" ValueUnit="" ValueLeft="a" ValueRight=""/><CONDITION PropertyName="fileName" Operator="8" ValueUnit="" ValueLeft="&lt;&amp;&quot;&gt;" ValueRight=""/></NODE>"#,
+            ),
+            (
+                745_864_668,
+                one(Property::DateAdded, Operator::Greater, "2020-01-31", "", ""),
+                r#"<NODE Id="745864668" LogicalOperator="1" AutomaticUpdate="0"><CONDITION PropertyName="stockDate" Operator="3" ValueUnit="" ValueLeft="2020-01-31" ValueRight=""/></NODE>"#,
+            ),
+            (
+                3_975_680_467,
+                one(Property::Key, Operator::Equal, "Am", "", ""),
+                r#"<NODE Id="-319286829" LogicalOperator="1" AutomaticUpdate="0"><CONDITION PropertyName="key" Operator="1" ValueUnit="" ValueLeft="Am" ValueRight=""/></NODE>"#,
+            ),
         ];
         for (id, rule, rekordbox) in cases {
             assert_eq!(rule.to_xml(id), rekordbox);
@@ -1188,22 +1296,42 @@ mod tests {
     fn attribute_values_are_escaped_as_juce_escapes_them() {
         assert_eq!(escape_attribute("<&\">"), "&lt;&amp;&quot;&gt;");
         assert_eq!(escape_attribute("Tom's"), "Tom's");
-        assert_eq!(escape_attribute("Caf\u{e9} \u{65e5}\u{1f600}"), "Caf&#233; &#26085;&#128512;");
+        assert_eq!(
+            escape_attribute("Caf\u{e9} \u{65e5}\u{1f600}"),
+            "Caf&#233; &#26085;&#128512;"
+        );
         assert_eq!(escape_attribute("a\tb\nc\r"), "a&#9;b&#10;c&#13;");
-        assert_eq!(escape_attribute("~ !#$%()*+,-./:;=?@[]_{|}"), "~ !#$%()*+,-./:;=?@[]_{|}");
+        assert_eq!(
+            escape_attribute("~ !#$%()*+,-./:;=?@[]_{|}"),
+            "~ !#$%()*+,-./:;=?@[]_{|}"
+        );
         // JUCE's legalChars table leaves `^` and `` ` `` out, and its switch
         // has no entity for them, so they are written as numbers.
         assert_eq!(escape_attribute("a^b`c"), "a&#94;b&#96;c");
         assert_eq!(escape_attribute("\u{7f}"), "&#127;");
         // What is escaped reads back as it was.
-        let rule = one(Property::Title, Operator::Contains, "Caf\u{e9} 'x' <&\">\t", "", "");
+        let rule = one(
+            Property::Title,
+            Operator::Contains,
+            "Caf\u{e9} 'x' <&\">\t",
+            "",
+            "",
+        );
         assert_eq!(SmartRule::parse(&rule.to_xml(1)).unwrap(), rule);
     }
 
     #[test]
     fn an_empty_group_closes_itself() {
-        let rule = SmartRule { root: Group { logic: Logic::All, items: Vec::new() } };
-        assert_eq!(rule.to_xml(7), r#"<NODE Id="7" LogicalOperator="1" AutomaticUpdate="0"/>"#);
+        let rule = SmartRule {
+            root: Group {
+                logic: Logic::All,
+                items: Vec::new(),
+            },
+        };
+        assert_eq!(
+            rule.to_xml(7),
+            r#"<NODE Id="7" LogicalOperator="1" AutomaticUpdate="0"/>"#
+        );
     }
 
     #[test]
@@ -1228,26 +1356,54 @@ mod tests {
         assert_eq!(bpm_for_editor("0"), "0");
 
         let rule = one(Property::Bpm, Operator::Equal, "128", "", "");
-        let Item::Condition(c) = &rule.root.items[0] else { panic!() };
-        assert_eq!((c.left.as_str(), c.right.as_str(), c.unit.as_str()), ("12800", "0", "0"));
-        assert_eq!(c.editor_values(), ("128".to_owned(), String::new(), String::new()));
+        let Item::Condition(c) = &rule.root.items[0] else {
+            panic!()
+        };
+        assert_eq!(
+            (c.left.as_str(), c.right.as_str(), c.unit.as_str()),
+            ("12800", "0", "0")
+        );
+        assert_eq!(
+            c.editor_values(),
+            ("128".to_owned(), String::new(), String::new())
+        );
     }
 
     #[test]
     fn a_rating_outside_a_range_stores_zero_on_the_right() {
-        let Item::Condition(c) = &one(Property::Rating, Operator::Equal, "3", "", "").root.items[0] else { panic!() };
+        let Item::Condition(c) = &one(Property::Rating, Operator::Equal, "3", "", "")
+            .root
+            .items[0]
+        else {
+            panic!()
+        };
         assert_eq!(c.right, "0");
-        assert_eq!(c.editor_values(), ("3".to_owned(), String::new(), String::new()));
-        let Item::Condition(c) = &one(Property::Rating, Operator::InRange, "1", "4", "").root.items[0] else { panic!() };
+        assert_eq!(
+            c.editor_values(),
+            ("3".to_owned(), String::new(), String::new())
+        );
+        let Item::Condition(c) = &one(Property::Rating, Operator::InRange, "1", "4", "")
+            .root
+            .items[0]
+        else {
+            panic!()
+        };
         assert_eq!((c.left.as_str(), c.right.as_str()), ("1", "4"));
-        assert_eq!(c.editor_values(), ("1".to_owned(), "4".to_owned(), String::new()));
+        assert_eq!(
+            c.editor_values(),
+            ("1".to_owned(), "4".to_owned(), String::new())
+        );
     }
 
     /// [OBS: issue #255, rekordbox on 2026-10-09] The first included day of
     /// "in the last N months" is the last day of the month N months back.
     #[test]
     fn months_window_starts_on_the_last_day_of_the_month_n_months_back() {
-        let day = |y, m, d| Date { year: y, month: m, day: d };
+        let day = |y, m, d| Date {
+            year: y,
+            month: m,
+            day: d,
+        };
         let today = day(2026, 10, 9);
         assert_eq!(today.minus(4, "month"), day(2026, 6, 30));
         assert_eq!(today.minus(6, "month"), day(2026, 4, 30));
@@ -1274,11 +1430,39 @@ mod tests {
     #[test]
     fn relative_dates_only_treat_singular_month_as_a_calendar_unit() {
         let d = Date::parse("2026-03-31 10:00:00").unwrap();
-        assert_eq!(d.minus(1, "month"), Date { year: 2026, month: 2, day: 28 });
-        assert_eq!(d.minus(2, "weeks"), Date { year: 2026, month: 3, day: 30 });
-        assert_eq!(d.minus(1, "MONTH"), Date { year: 2026, month: 2, day: 28 });
+        assert_eq!(
+            d.minus(1, "month"),
+            Date {
+                year: 2026,
+                month: 2,
+                day: 28
+            }
+        );
+        assert_eq!(
+            d.minus(2, "weeks"),
+            Date {
+                year: 2026,
+                month: 3,
+                day: 30
+            }
+        );
+        assert_eq!(
+            d.minus(1, "MONTH"),
+            Date {
+                year: 2026,
+                month: 2,
+                day: 28
+            }
+        );
         assert_eq!(d.minus(1, "year"), d);
-        assert_eq!(d.minus(31, "day"), Date { year: 2026, month: 3, day: 1 });
+        assert_eq!(
+            d.minus(31, "day"),
+            Date {
+                year: 2026,
+                month: 3,
+                day: 1
+            }
+        );
         assert_eq!(Date::parse("2024-02-29").unwrap().days(), 19_782);
         assert!(Date::parse("not a date").is_none());
     }
@@ -1358,7 +1542,9 @@ mod tests {
             r#"<NODE LogicalOperator="1"><CONDITION PropertyName="myTag" Operator="8" ValueLeft="12" ValueRight=""/></NODE>"#,
         )
         .unwrap();
-        let Item::Condition(condition) = &rule.root.items[0] else { panic!() };
+        let Item::Condition(condition) = &rule.root.items[0] else {
+            panic!()
+        };
         assert_eq!(condition.property, Property::MyTag);
         assert_eq!(rule.unsupported(), 0);
 
@@ -1372,7 +1558,11 @@ mod tests {
                     unit: String::new(),
                 },
                 &Library::default(),
-                &Date { year: 2025, month: 1, day: 31 },
+                &Date {
+                    year: 2025,
+                    month: 1,
+                    day: 31,
+                },
             )
         };
         assert!(compiled(Operator::Contains).tag_matches(&[3, 12]));
@@ -1381,7 +1571,12 @@ mod tests {
         assert!(compiled(Operator::NotContains).tag_matches(&[]));
         assert!(compiled(Operator::NotContains).tag_matches(&[3]));
         assert!(!compiled(Operator::NotContains).tag_matches(&[12]));
-        for operator in [Operator::Equal, Operator::NotEqual, Operator::Greater, Operator::StartsWith] {
+        for operator in [
+            Operator::Equal,
+            Operator::NotEqual,
+            Operator::Greater,
+            Operator::StartsWith,
+        ] {
             assert!(!compiled(operator).tag_matches(&[12]));
             assert!(!compiled(operator).tag_matches(&[]));
         }
@@ -1401,6 +1596,9 @@ mod tests {
         assert_eq!(color_id("Pink"), 0);
         assert_eq!(color_id("3"), 3);
         assert_eq!(color_id(" 3x"), 3);
-        assert_eq!(rbl_core::xml::unescape("a &lt;b&gt; &#39;c&#x27; &unknown; &"), "a <b> 'c' &unknown; &");
+        assert_eq!(
+            rbl_core::xml::unescape("a &lt;b&gt; &#39;c&#x27; &unknown; &"),
+            "a <b> 'c' &unknown; &"
+        );
     }
 }

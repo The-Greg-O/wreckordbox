@@ -109,7 +109,9 @@ pub fn library_from(tracks: &[TestTrack]) -> Library {
         lib.publish.push(u8::from(t.publish));
     }
     lib.count = tracks.len();
-    lib.set_cues(Cues::from_per_track(tracks.iter().map(|t| t.cues.clone()).collect()));
+    lib.set_cues(Cues::from_per_track(
+        tracks.iter().map(|t| t.cues.clone()).collect(),
+    ));
     lib.set_playlists(Playlists::default());
     lib.build_ranks();
     lib.build_search();
@@ -158,7 +160,13 @@ pub fn add_smart_playlist_with_members(
 }
 
 fn add_list(lib: &mut Library, name: &str, rows: &[Row], folder: bool) -> usize {
-    add_list_with(lib, name, rows, if folder { crate::ATTRIBUTE_FOLDER } else { 0 }, "")
+    add_list_with(
+        lib,
+        name,
+        rows,
+        if folder { crate::ATTRIBUTE_FOLDER } else { 0 },
+        "",
+    )
 }
 
 fn add_list_with(lib: &mut Library, name: &str, rows: &[Row], attribute: u8, rule: &str) -> usize {

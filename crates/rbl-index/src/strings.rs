@@ -14,7 +14,10 @@ pub struct StrColumn {
 
 impl StrColumn {
     pub fn with_capacity(rows: usize, bytes: usize) -> Self {
-        Self { bytes: Vec::with_capacity(bytes), spans: Vec::with_capacity(rows) }
+        Self {
+            bytes: Vec::with_capacity(bytes),
+            spans: Vec::with_capacity(rows),
+        }
     }
 
     pub fn push(&mut self, s: &str) {
@@ -26,9 +29,13 @@ impl StrColumn {
 
     #[inline]
     pub fn get(&self, row: usize) -> &str {
-        let Some(&(start, len)) = self.spans.get(row) else { return "" };
+        let Some(&(start, len)) = self.spans.get(row) else {
+            return "";
+        };
         let (a, b) = (start as usize, start as usize + len as usize);
-        self.bytes.get(a..b).map_or("", |s| std::str::from_utf8(s).unwrap_or(""))
+        self.bytes
+            .get(a..b)
+            .map_or("", |s| std::str::from_utf8(s).unwrap_or(""))
     }
 
     pub fn len(&self) -> usize {
@@ -44,7 +51,11 @@ impl StrColumn {
     pub(crate) fn replace_rows(&mut self, values: &std::collections::HashMap<usize, String>) {
         let mut next = Self::with_capacity(self.len(), self.bytes.len());
         for row in 0..self.len() {
-            next.push(values.get(&row).map_or_else(|| self.get(row), String::as_str));
+            next.push(
+                values
+                    .get(&row)
+                    .map_or_else(|| self.get(row), String::as_str),
+            );
         }
         *self = next;
     }
@@ -96,12 +107,20 @@ impl Interner {
 
     #[inline]
     pub fn name(&self, id: u32) -> &str {
-        if id == u32::MAX { "" } else { self.names.get(id as usize) }
+        if id == u32::MAX {
+            ""
+        } else {
+            self.names.get(id as usize)
+        }
     }
 
     #[inline]
     pub fn folded(&self, id: u32) -> &str {
-        if id == u32::MAX { "" } else { self.folded.get(id as usize) }
+        if id == u32::MAX {
+            ""
+        } else {
+            self.folded.get(id as usize)
+        }
     }
 
     pub fn len(&self) -> usize {

@@ -5,7 +5,12 @@
 //! is the playlist tree, so measure before restructuring anything.
 //!
 //! `cargo run --release -p rbl-index --example reload_split`
-#![allow(clippy::pedantic, clippy::print_stdout, clippy::unwrap_used, clippy::expect_used)]
+#![allow(
+    clippy::pedantic,
+    clippy::print_stdout,
+    clippy::unwrap_used,
+    clippy::expect_used
+)]
 
 use std::time::Instant;
 

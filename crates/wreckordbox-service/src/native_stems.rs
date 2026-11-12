@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use wreckordbox_native_stems::{
     NativeStemsError, Outcome, StemFiles, Unnameable, FILE_NAMES, SAMPLE_RATE, SPARE_STICK_MARKER,
     STEMS_FOLDER,
@@ -33,7 +33,7 @@ use wreckordbox_sidecar::stems::{Role, StemSet};
 
 use crate::library::OpenLibrary;
 use crate::protocol::{codes as service_codes, Request, ServiceError};
-use crate::stems::{self, Parent, ParentAudio, SidecarChanged, Stems};
+use crate::stems::{self, Parent, ParentAudio, Stems};
 
 /// The name of the command.
 pub mod commands {
@@ -188,7 +188,7 @@ pub(crate) fn answer(
             },
         ));
     }
-    let set = current_stems(stems, &track, found.path())?;
+    let set = current_stems(stems, &found)?;
     let file = |role: Role| -> Result<&Path, ServiceError> {
         set.stems
             .iter()
@@ -363,7 +363,9 @@ fn parent_length(audio: &Path) -> Option<u64> {
 /// The track's Stems made from the audio it has now, with all four files
 /// in the Sidecar. Stems made from other audio are marked stale on the way,
 /// as every Stems command does, and are not written.
-fn current_stems(stems: &Stems, track: &Parent, audio: &Path) -> Result<StemSet, ServiceError> {
+fn current_stems(stems: &Stems, found: &ParentAudio) -> Result<StemSet, ServiceError> {
+    let track = found.parent();
+    let audio = found.path();
     let none = |why: &str| {
         ServiceError::new(
             codes::NO_CURRENT_STEMS,
@@ -380,20 +382,7 @@ fn current_stems(stems: &Stems, track: &Parent, audio: &Path) -> Result<StemSet,
     let failed =
         |e: &dyn std::fmt::Display| ServiceError::new(stems::codes::SIDECAR_FAILED, e.to_string());
     let fingerprint = stems::fingerprint(track, audio)?;
-    let marked_stale = sidecar
-        .mark_stale(&track.id, &fingerprint)
-        .map_err(|e| failed(&e))?;
-    if !marked_stale.is_empty() {
-        stems.publish(
-            stems::events::SIDECAR_CHANGED,
-            json!(SidecarChanged {
-                track_id: track.id.clone(),
-                kind: wreckordbox_sidecar::stems::STEMS.name.to_owned(),
-                fact_id: None,
-                stale: marked_stale,
-            }),
-        );
-    }
+    stems.observe_audio(found, Some(&fingerprint))?;
     let current = sidecar
         .current_stems(&track.id, &fingerprint)
         .map_err(|e| failed(&e))?;

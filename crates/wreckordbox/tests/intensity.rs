@@ -265,10 +265,25 @@ fn measuring_a_track_stores_a_summary_and_a_curve_that_rises_where_the_audio_doe
     // No beat grid, so no bars; the time curve is there all the same.
     assert_eq!(value["bars"], Value::Null);
 
-    // It is an ordinary Fact of the built-in kind.
-    let facts = ok(
+    // It is an ordinary Fact of the built-in kind: a Measurement, so it
+    // stands among the track's Facts once its audio is checked, and is
+    // `unverified` until then.
+    let unchecked = ok(
         &sandbox,
         &["--json", "facts", "show", &track, "--kind", "intensity"],
+    );
+    assert_eq!(unchecked["unverified"][0]["id"], outcome["fact_id"]);
+    let facts = ok(
+        &sandbox,
+        &[
+            "--json",
+            "facts",
+            "show",
+            &track,
+            "--kind",
+            "intensity",
+            "--check-audio",
+        ],
     );
     assert_eq!(facts["facts"][0]["id"], outcome["fact_id"]);
     assert_eq!(facts["facts"][0]["nature"], "measurement");

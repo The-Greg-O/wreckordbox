@@ -2366,6 +2366,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "inotify"
+version = "0.11.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4cc00ea907cab49550b7da656f80ebb97be1b997d931fbcd28d39734e17ce592"
+dependencies = [
+ "bitflags 2.13.1",
+ "inotify-sys",
+ "libc",
+]
+
+[[package]]
+name = "inotify-sys"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c033f80b2c113cdf91ab7a33faa9cbc014726dcad99880c8609af2a370edf37d"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "inout"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4054,6 +4074,8 @@ dependencies = [
  "rbl-backup",
  "rbl-db",
  "rbl-index",
+ "serde",
+ "serde_json",
  "tempfile",
  "tracing",
 ]
@@ -4138,6 +4160,7 @@ dependencies = [
  "drag",
  "icu_collator",
  "icu_locale_core",
+ "inotify",
  "libc",
  "lofty",
  "midir",
@@ -4178,10 +4201,12 @@ dependencies = [
  "tracing-subscriber",
  "unicode-normalization",
  "uuid",
+ "webkit2gtk",
  "webview2-com",
  "windows-core 0.61.2",
  "windows-sys 0.61.2",
  "wreckordbox-service",
+ "wreckordbox-stick-outline",
  "zip",
 ]
 
@@ -7092,6 +7117,7 @@ dependencies = [
  "rbl-db",
  "rbl-export",
  "rbl-onelibrary",
+ "rusqlite",
  "serde_json",
  "tempfile",
  "wreckordbox-service",
@@ -7150,6 +7176,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tracing",
  "wreckordbox-intensity",
  "wreckordbox-native-stems",
  "wreckordbox-sidecar",
@@ -7167,6 +7194,21 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "toml 0.8.2",
+]
+
+[[package]]
+name = "wreckordbox-stick-outline"
+version = "1.10.0"
+dependencies = [
+ "rbl-anlz",
+ "rbl-core",
+ "rbl-export",
+ "rbl-onelibrary",
+ "rbl-pdb",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]

@@ -56,6 +56,21 @@ export interface RowDto {
   missing?: boolean;
   /** Extra database fields requested for visible browser columns. */
   extra?: Record<string, string | number | boolean | null>;
+  /**
+   * The track's MyTags, each with its id and category, in the Library's
+   * order: present when the extra field `myTags` was asked for (the view
+   * shell's Library, #55). The backend sends them inside `extra`; the IPC
+   * client lifts them here (`rowMyTags.ts`).
+   */
+  myTags?: RowMyTag[];
+}
+
+/** One of a row's MyTags, as `fetchRows` sends it for the `myTags` field. */
+export interface RowMyTag {
+  id: string;
+  name: string;
+  /** The name of the MyTag column (category) it belongs to. */
+  category: string;
 }
 
 export type TrackSource =
@@ -270,6 +285,13 @@ export interface AppErrorDto {
 export type WaveformKind = "bands" | "bandsDetail" | "mono" | "monoDetail" | "colour" | "colourDetail";
 
 
+/** Library Protection as the backend holds it. */
+export interface LibraryProtection {
+  protectLibrary: boolean;
+  /** Higher for every later change; a lower one than already seen is stale. */
+  revision: number;
+}
+
 export interface Backend {
   /** The installed rekordbox browseSetting.xml, when present. Read-only. */
   rekordboxBrowseSettings(): Promise<string | null>;
@@ -373,6 +395,27 @@ export interface Backend {
   onServiceStopped(listener: (message: string) => void): () => void;
   /** What `onServiceStopped` said, for a window that was not listening yet. */
   serviceProblem(): Promise<string | null>;
+  /** Current connection and unfinished Runs, including work started by another client. */
+  serviceActivity(): Promise<import("./serviceActivity").ServiceActivity>;
+  /**
+   * Library Protection as the backend holds it. The backend owns the
+   * switch (it refuses every change to the Library while it is on); the
+   * window's preference only shows it.
+   */
+  libraryProtection(): Promise<LibraryProtection>;
+  /**
+   * The window's stored preference, taken up only on the first start,
+   * while the backend has never recorded the switch; answers what stands.
+   */
+  adoptLibraryProtection(windowPreference: boolean): Promise<LibraryProtection>;
+  /** Turns Library Protection on or off; resolves once it is recorded. */
+  setLibraryProtection(protectLibrary: boolean): Promise<LibraryProtection>;
+  /**
+   * Library Protection was turned, by whoever; in order of `revision`.
+   * Resolves, with the unsubscribe, once the listener is in place: a turn
+   * made before that is not heard, so ask for the state only after it.
+   */
+  onLibraryProtectionChanged(listener: (now: LibraryProtection) => void): Promise<() => void>;
 
   /**
    * Makes a new, empty library where rekordbox keeps one and loads it;
@@ -649,6 +692,22 @@ export interface Backend {
 
   /** Greys or enables native menu items by id (the Track and Playlist menus). */
   setMenuEnabled(items: Readonly<Record<string, boolean>>): Promise<void>;
+
+  /**
+   * Runs a native menu item the shell does itself (Full screen, Close
+   * Window, Quit) for the command palette, which is the only way to them
+   * where there is no menu row (Linux, #54).
+   */
+  runMenuItem(id: "fullscreen" | "close-window" | "quit"): Promise<void>;
+
+  /**
+   * Runs one of the webview's own editing actions (Cut, Copy, Paste, Select
+   * All) on what has the keyboard, the way the native Edit menu did. On
+   * Linux it is WebKitGTK's `execute_editing_command`, the privileged path
+   * the native menu used, so Paste reads the system clipboard where
+   * JavaScript may not (#54). Rejects where the platform has no such path.
+   */
+  runEditCommand(edit: "cut" | "copy" | "paste" | "selectAll"): Promise<void>;
 
   /**
    * AppleScript's requests to the window: each is run with `handle` and its
@@ -1059,6 +1118,12 @@ export interface Backend {
    * tree. A stick with neither answers with none.
    */
   deviceLibraries(path: string): Promise<DeviceLibrary[]>;
+  /**
+   * A stick's playlist trees, for showing them, read without writing to the
+   * stick: unlike `deviceLibraries` it never finishes an interrupted export
+   * first, and reports one as `pending` with no playlists instead.
+   */
+  stickOutline(path: string): Promise<StickOutline>;
   /** Maps collection track ids to rows already in one of a stick's libraries. */
   devicePlaylistCollectionTracks(path: string, format: DeviceFormat, tracks: string[]): Promise<(string | null)[]>;
   /**
@@ -1327,6 +1392,13 @@ export interface DeviceLibrary {
   tracks: number;
   /** Playlists and folders in tree order. */
   nodes: DeviceLibraryNode[];
+}
+
+/** A stick's playlist trees, read without writing to it (`stickOutline`). */
+export interface StickOutline {
+  /** An earlier write to the stick did not finish; nothing is listed until it is. */
+  pending: boolean;
+  libraries: { format: DeviceFormat; nodes: DeviceLibraryNode[] }[];
 }
 
 export interface DeviceLibraryNode {
