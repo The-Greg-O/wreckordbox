@@ -123,7 +123,10 @@ impl Rig {
     /// Dry run, then load with its plan: the whole confirmed load.
     fn load_confirmed(&self, index: usize, playlists: &[&str]) -> Value {
         let dry = self.dry_run(index, playlists);
-        let plan = dry["plan"].as_str().expect(&dry.to_string()).to_owned();
+        let plan = dry["plan"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no plan: {dry}"))
+            .to_owned();
         let run = self.load(index, playlists, &plan);
         assert!(run.status.success(), "{}", run.stderr);
         run.json()
@@ -425,7 +428,7 @@ fn a_load_that_would_not_fit_is_refused_before_writing_saying_by_how_much() {
     let dry = rig.dry_run(0, &[&rig.set]);
     let short = dry["space"]["shortfall_bytes"]
         .as_u64()
-        .expect(&dry.to_string());
+        .unwrap_or_else(|| panic!("no shortfall: {dry}"));
     assert!(short > 0);
     let before = snapshot(&rig.paths[0]);
 

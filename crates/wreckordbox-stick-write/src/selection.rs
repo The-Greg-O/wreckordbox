@@ -232,6 +232,10 @@ impl ExportSelection {
     /// [`from_playlists`](Self::from_playlists) with tracks that go on the
     /// stick in no playlist: what Export Track put there, and what a
     /// stick's record says was put there before.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "moved unchanged from the window's commands, which the window's lints did not hold to this"
+    )]
     pub fn from_playlists_and_tracks(
         state: &dyn LibrarySource,
         library: &rbl_index::Library,

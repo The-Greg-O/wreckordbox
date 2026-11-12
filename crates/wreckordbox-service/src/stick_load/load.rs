@@ -491,10 +491,10 @@ pub(crate) fn load(
             after
         })
         .flatten();
-    let steps = std::cell::Cell::new(0_usize);
+    let progressed = std::cell::Cell::new(0_usize);
     let lost = std::cell::RefCell::new(None::<Refused>);
     let cancelled = || {
-        if fail_after.is_some_and(|after| steps.get() >= after) {
+        if fail_after.is_some_and(|after| progressed.get() >= after) {
             return true;
         }
         if lost.borrow().is_some() {
@@ -526,7 +526,7 @@ pub(crate) fn load(
             ..Default::default()
         },
         &mut |p| {
-            steps.set(steps.get() + 1);
+            progressed.set(progressed.get() + 1);
             progress(p.stage, p.done, p.total, by_title(&p.title));
         },
         &cancelled,
