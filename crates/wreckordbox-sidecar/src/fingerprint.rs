@@ -65,6 +65,50 @@ const AUDIO_DOMAIN: &[u8] = b"wreckordbox audio fingerprint 1\0";
 
 /// Fingerprints the audio in the file at `path`. Reads the whole file once.
 pub fn fingerprint_file(path: &Path) -> Result<Fingerprint> {
+    let before = crate::stems::file_stamp(path);
+    let result = read_fingerprint(path)?;
+    let mut cache = fingerprints();
+    match (before, crate::stems::file_stamp(path)) {
+        (Some(before), Some(after)) if before == after => {
+            if cache.len() >= 4096 {
+                cache.clear();
+            }
+            cache.insert(path.to_path_buf(), (after, result.clone()));
+        }
+        _ => {
+            cache.remove(path);
+        }
+    }
+    Ok(result)
+}
+
+type Fingerprints =
+    std::collections::HashMap<std::path::PathBuf, (crate::stems::FileStamp, Fingerprint)>;
+fn fingerprints() -> std::sync::MutexGuard<'static, Fingerprints> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<Fingerprints>> = std::sync::OnceLock::new();
+    CACHE
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Last verified fingerprint, only while size, modification time and inode match.
+/// Does not open the audio, or write any observation to the Sidecar.
+#[must_use]
+pub fn known_fingerprint(path: &Path) -> Option<Fingerprint> {
+    let now = crate::stems::file_stamp(path)?;
+    fingerprints()
+        .get(path)
+        .filter(|(then, _)| *then == now)
+        .map(|(_, fp)| fp.clone())
+}
+
+/// Verify on cache miss. Renders/Stick loads still use `fingerprint_file` freshly.
+pub fn fingerprint_cached(path: &Path) -> Result<Fingerprint> {
+    known_fingerprint(path).map_or_else(|| fingerprint_file(path), Ok)
+}
+
+fn read_fingerprint(path: &Path) -> Result<Fingerprint> {
     if let Some(audio) = audio_stream_hash(path)? {
         return Ok(Fingerprint(format!("a1:{}", audio.to_hex())));
     }

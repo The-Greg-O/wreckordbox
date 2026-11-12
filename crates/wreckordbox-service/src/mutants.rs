@@ -19,6 +19,8 @@
 //! A Mutant's edits are a JSON object, empty until something edits it: an
 //! absent key means that aspect is the parent's.
 
+#[path = "mutant_audio.rs"]
+mod audio;
 #[path = "mutant_commands.rs"]
 mod editing;
 use crate::mutant_edits::{self, Derived, Edits, Renderability};
@@ -106,6 +108,9 @@ pub struct CreateMutant {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WhichMutant {
+    /// Verify audio on a cache miss. Ordinary reads only inspect cached verdicts.
+    #[serde(default)]
+    pub check_audio: bool,
     /// The Mutant's identifier. A removed Mutant is still answered.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<i64>,
@@ -119,6 +124,8 @@ pub struct WhichMutant {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ListMutants {
+    #[serde(default)]
+    pub check_audio: bool,
     /// Only the Mutants of this playlist.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub playlist: Option<String>,
@@ -173,7 +180,7 @@ pub struct Mutant {
     pub edits: Value,
     /// Current parent metadata, never copied into the stored edits.
     pub inherited: Option<crate::tracks::TrackRecord>,
-    pub derived: Derived,
+    pub derived: Option<Derived>,
     pub renderability: Renderability,
     /// Who last changed it.
     pub source: Source,
@@ -210,6 +217,15 @@ pub struct MutantChanged {
     pub run: Run,
     /// True when the Run was made for this command (and ended with it).
     pub created_run: bool,
+}
+
+/// Edit/clear result. An unchanged edit has no Run and publishes no event.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EditOutcome {
+    pub mutant: Mutant,
+    pub run: Option<Run>,
+    pub created_run: bool,
+    pub changed: bool,
 }
 
 /// What `mutants.get` answers.
@@ -382,7 +398,10 @@ impl Mutants<'_> {
         // With no lock held, as an edit may come meanwhile: one read of the
         // parent's audio. A Mutant is about the music, so a parent whose
         // file is not at hand can still be mutated.
-        let fingerprint = wreckordbox_sidecar::fingerprint_file(&found.audio).ok();
+        let fingerprint = wreckordbox_sidecar::fingerprint_cached(&found.audio).ok();
+        let (initial_parent, _) =
+            self.read(|library| editing::metadata(library, &found.parent.id))?;
+        let renderability = self.readiness(&Edits::default(), initial_parent.as_ref(), false)?;
         // Again with no edit under way, until the change is committed: the
         // entry, its playlist and its track are looked up afresh, and an
         // edit that removed any of them meanwhile refuses the change.
@@ -425,9 +444,9 @@ impl Mutants<'_> {
         self.changed(&made, actions::CREATED);
         Ok(MutantChanged {
             mutant: Mutant {
-                renderability: editing::source_readiness(inherited.as_ref()),
+                renderability,
                 inherited,
-                derived,
+                derived: Some(derived),
                 id: made.id,
                 playlist: PlaylistName {
                     id: place.entry.playlist_id,
@@ -464,7 +483,7 @@ impl Mutants<'_> {
             })
             .collect();
         let mutant = self
-            .described(vec![stored])?
+            .described(vec![stored], which.check_audio)?
             .pop()
             .ok_or_else(|| ServiceError::new(service_codes::SERVICE_FAILED, "no Mutant"))?;
         Ok(MutantShown { mutant, history })
@@ -478,7 +497,7 @@ impl Mutants<'_> {
         if let (Some(playlist), Some(_)) = (&list.playlist, &list.track) {
             stored.retain(|mutant| &mutant.playlist_id == playlist);
         }
-        let mut mutants = self.described(stored)?;
+        let mut mutants = self.described(stored, list.check_audio)?;
         // By playlist as first met (the oldest Mutant's playlist first),
         // then in the playlist's order.
         let mut met: Vec<String> = Vec::new();
@@ -510,7 +529,7 @@ impl Mutants<'_> {
         // Described before the change, so that once it is committed nothing
         // is left to fail.
         let described = self
-            .described(vec![stored.clone()])?
+            .described(vec![stored.clone()], false)?
             .pop()
             .ok_or_else(|| ServiceError::new(service_codes::SERVICE_FAILED, "no Mutant"))?;
         let description = provenance
@@ -580,6 +599,7 @@ impl Mutants<'_> {
     fn described(
         &self,
         stored: Vec<wreckordbox_sidecar::mutants::Mutant>,
+        check_audio: bool,
     ) -> Result<Vec<Mutant>, ServiceError> {
         if stored.is_empty() {
             return Ok(Vec::new());
@@ -588,6 +608,7 @@ impl Mutants<'_> {
             library.steady(|| {
                 let index = library.index()?;
                 let mut playlists: HashMap<String, Vec<Entry>> = HashMap::new();
+                let mut parents = HashMap::new();
                 stored
                     .into_iter()
                     .map(|mutant| {
@@ -609,18 +630,39 @@ impl Mutants<'_> {
                             .row_of(&mutant.track_id)
                             .map(|row| index.title.get(row as usize).to_owned())
                             .unwrap_or_default();
-                        let (inherited, cues) = editing::metadata(library, &mutant.track_id)?;
-                        let edits = editing::parse_edits(mutant.edits.clone())?;
-                        let derived = mutant_edits::derive(
-                            &edits,
-                            inherited.as_ref(),
-                            &cues,
-                            &mutant.track_id,
-                        );
+                        if !parents.contains_key(&mutant.track_id) {
+                            parents.insert(
+                                mutant.track_id.clone(),
+                                editing::metadata(library, &mutant.track_id)?,
+                            );
+                        }
+                        let (inherited, cues) = parents[&mutant.track_id].clone();
+                        let parsed = editing::parse_edits(mutant.edits.clone()).and_then(|edits| {
+                            edits.validate_cues(inherited.as_ref(), &cues)?;
+                            Ok(edits)
+                        });
+                        let (derived, renderability) = match parsed {
+                            Ok(edits) => (
+                                Some(mutant_edits::derive(
+                                    &edits,
+                                    inherited.as_ref(),
+                                    &cues,
+                                    &mutant.track_id,
+                                )),
+                                Renderability::ready(),
+                            ),
+                            Err(error) => (
+                                None,
+                                Renderability::blocked(ServiceError::new(
+                                    "mutant_edits_invalid",
+                                    format!("Mutant {}: {}", mutant.id, error.message),
+                                )),
+                            ),
+                        };
                         Ok(Mutant {
                             inherited,
                             derived,
-                            renderability: Renderability::ready(),
+                            renderability,
                             removed: !mutant.is_live(),
                             id: mutant.id,
                             playlist: PlaylistName {
@@ -644,11 +686,23 @@ impl Mutants<'_> {
                     .collect()
             })
         })?;
+        let mut readiness = HashMap::new();
         for mutant in &mut described {
-            mutant.renderability = self.readiness(
-                &editing::parse_edits(mutant.edits.clone())?,
-                mutant.inherited.as_ref(),
-            )?;
+            if mutant.derived.is_none() {
+                continue;
+            }
+            let key = (mutant.parent.id.clone(), mutant.edits.to_string());
+            if !readiness.contains_key(&key) {
+                readiness.insert(
+                    key.clone(),
+                    self.readiness(
+                        &editing::parse_edits(mutant.edits.clone())?,
+                        mutant.inherited.as_ref(),
+                        check_audio,
+                    )?,
+                );
+            }
+            mutant.renderability = readiness[&key].clone();
         }
         Ok(described)
     }

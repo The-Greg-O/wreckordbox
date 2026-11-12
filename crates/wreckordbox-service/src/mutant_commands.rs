@@ -1,16 +1,16 @@
 //! Mutant edit transactions and live parent/readiness projection.
 use super::{
-    actions, again, inspect, mutant_edits, place, sidecar_error, stems, Committed, CreateMutant,
-    Edits, Fingerprint, Mutant, MutantChanged, MutantUpdate, Mutants, OpenLibrary, Parent,
-    PlaylistName, RemoveMutant, Renderability, ServiceError, Value,
+    actions, again, mutant_edits, place, sidecar_error, Committed, CreateMutant, EditOutcome,
+    Edits, Mutant, MutantUpdate, Mutants, OpenLibrary, PlaylistName, RemoveMutant, Renderability,
+    ServiceError, Value,
 };
-use crate::mutant_edits::{codes, ClearMutant, Cue, EditMutant};
+use crate::mutant_edits::{ClearMutant, Cue, EditMutant};
 use crate::tracks::TrackRecord;
 
 pub(super) fn parse_edits(value: Value) -> Result<Edits, ServiceError> {
     let failed = |message: String| {
         ServiceError::new(
-            "sidecar_failed",
+            "mutant_edits_invalid",
             format!("invalid stored Mutant edits: {message}"),
         )
     };
@@ -64,79 +64,7 @@ pub(super) fn source_readiness(parent: Option<&TrackRecord>) -> Renderability {
     }
 }
 impl Mutants<'_> {
-    pub(super) fn readiness(
-        &self,
-        edits: &Edits,
-        parent: Option<&TrackRecord>,
-    ) -> Result<Renderability, ServiceError> {
-        let source = source_readiness(parent);
-        if !source.renderable || edits.stems.is_none() {
-            return Ok(source);
-        }
-        let Some(parent) = parent else {
-            return Ok(source);
-        };
-        if let Err(error) = self.check_stems(parent) {
-            return if error.code == stems::codes::SIDECAR_FAILED {
-                Err(error)
-            } else {
-                Ok(Renderability::blocked(error))
-            };
-        }
-        let extension = std::path::Path::new(&parent.location)
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        if matches!(extension.as_str(), "mp3" | "m4a") {
-            return Ok(Renderability::blocked(ServiceError::new(codes::STEM_ALIGNMENT_UNKNOWN,
-                "Stem edits of MP3 and M4A parents cannot be rendered until wbx-49.1 aligns Stems to the parent's timeline")));
-        }
-        Ok(Renderability::ready())
-    }
-
-    fn check_stems(&self, parent: &TrackRecord) -> Result<Fingerprint, ServiceError> {
-        let facts = inspect(self.stems, |store| store.stem_facts(&parent.id))?;
-        let sets: Vec<_> = facts
-            .into_iter()
-            .filter(wreckordbox_sidecar::Fact::is_live)
-            .filter_map(|f| {
-                wreckordbox_sidecar::stems::StemSet::from_fact(self.stems.sidecar_dir(), f)
-            })
-            .collect();
-        if sets.is_empty() {
-            return Err(ServiceError::new(
-                codes::STEMS_MISSING,
-                "separation is needed: the parent has no Stems",
-            ));
-        }
-        let fingerprint = stems::fingerprint(
-            &Parent {
-                id: parent.id.clone(),
-                title: parent.title.clone(),
-            },
-            std::path::Path::new(&parent.location),
-        )?;
-        let matching: Vec<_> = sets
-            .iter()
-            .filter(|s| s.fingerprint == fingerprint)
-            .collect();
-        if matching.is_empty() {
-            return Err(ServiceError::new(
-                codes::STEMS_STALE,
-                "separation is needed: the Stems belong to different parent audio",
-            ));
-        }
-        if !matching.iter().any(|s| s.audio_verified()) {
-            return Err(ServiceError::new(
-                codes::STEMS_MISSING,
-                "separation is needed: Stem files are missing or damaged",
-            ));
-        }
-        Ok(fingerprint)
-    }
-
-    pub(super) fn edit(&self, args: &EditMutant) -> Result<MutantChanged, ServiceError> {
+    pub(super) fn edit(&self, args: &EditMutant) -> Result<EditOutcome, ServiceError> {
         self.change_edits(
             &RemoveMutant {
                 id: args.id,
@@ -145,11 +73,15 @@ impl Mutants<'_> {
                 source: args.source.clone(),
                 description: args.description.clone(),
             },
-            |edits| edits.patch(args.edits.clone()),
+            |edits| {
+                if let Ok(Value::Object(patch)) = serde_json::to_value(&args.edits) {
+                    edits.extend(patch);
+                }
+            },
             args.edits.stems.is_some(),
         )
     }
-    pub(super) fn clear(&self, args: &ClearMutant) -> Result<MutantChanged, ServiceError> {
+    pub(super) fn clear(&self, args: &ClearMutant) -> Result<EditOutcome, ServiceError> {
         self.change_edits(
             &RemoveMutant {
                 id: args.id,
@@ -158,7 +90,15 @@ impl Mutants<'_> {
                 source: args.source.clone(),
                 description: args.description.clone(),
             },
-            |edits| edits.clear(args.edit),
+            |edits| {
+                let key = match args.edit {
+                    crate::mutant_edits::Aspect::Stems => "stems",
+                    crate::mutant_edits::Aspect::KeyShift => "key_shift",
+                    crate::mutant_edits::Aspect::Tempo => "tempo",
+                    crate::mutant_edits::Aspect::Cues => "cues",
+                };
+                edits.remove(key);
+            },
             false,
         )
     }
@@ -166,23 +106,33 @@ impl Mutants<'_> {
     fn change_edits(
         &self,
         args: &RemoveMutant,
-        patch: impl FnOnce(&mut Edits),
+        patch: impl FnOnce(&mut serde_json::Map<String, Value>),
         check_stems: bool,
-    ) -> Result<MutantChanged, ServiceError> {
+    ) -> Result<EditOutcome, ServiceError> {
         let provenance =
             self.provenance(args.run, args.source.as_ref(), args.description.as_deref())?;
-        // Serialize patches without holding the Library gate while fingerprinting
-        // parent audio or hashing Stems. Recheck the entry/path before committing.
-        let _serial = self
-            .stems
-            .mutant_edits
+        let first = self.stored(args.id, args.entry.as_deref(), false)?;
+        let mutex = self.stems.mutant_lock(first.id);
+        let _serial = mutex
             .lock()
-            .map_err(|_| ServiceError::new("service_failed", "the Mutant edit lock failed"))?;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let stored = self.stored(args.id, args.entry.as_deref(), false)?;
-        let mut edits = parse_edits(stored.edits.clone())?;
-        patch(&mut edits);
+        // Parse, then patch, then validate: an older stored value can be repaired.
+        let mut raw = stored.edits.as_object().cloned().ok_or_else(|| {
+            ServiceError::new(
+                "mutant_edits_invalid",
+                format!(
+                    "Mutant {}: stored edits are not an object; inspect or remove this Mutant",
+                    stored.id
+                ),
+            )
+        })?;
+        patch(&mut raw);
+        let mut edits: Edits = serde_json::from_value(Value::Object(raw)).map_err(|e| {
+            ServiceError::new("mutant_edits_invalid", format!("Mutant {}: {e}", stored.id))
+        })?;
         edits.validate()?;
-        let (found, parent) = self.read(|library| {
+        let (found, parent, cues) = self.read(|library| {
             library.steady(|| {
                 let found = place(
                     library,
@@ -191,20 +141,36 @@ impl Mutants<'_> {
                         ..Default::default()
                     },
                 )?;
-                let (parent, _) = metadata(library, &stored.track_id)?;
-                Ok((found, parent))
+                let (parent, cues) = metadata(library, &stored.track_id)?;
+                Ok((found, parent, cues))
             })
         })?;
+        edits.validate_cues(parent.as_ref(), &cues)?;
+        let value = serde_json::to_value(&edits)
+            .map_err(|e| ServiceError::new("bad_request", e.to_string()))?;
+        if value == stored.edits {
+            let mutant = self
+                .described(vec![stored], false)?
+                .pop()
+                .ok_or_else(|| ServiceError::new("service_failed", "no Mutant"))?;
+            return Ok(EditOutcome {
+                mutant,
+                run: None,
+                created_run: false,
+                changed: false,
+            });
+        }
         let audio_stamp = stamp(&found.audio);
-        let fingerprint =
-            if check_stems && edits.stems.is_some() {
-                Some(self.check_stems(parent.as_ref().ok_or_else(|| {
-                    ServiceError::new("track_not_found", "the parent is missing")
-                })?)?)
-            } else {
-                wreckordbox_sidecar::fingerprint_file(&found.audio).ok()
-            };
-        let renderability = self.readiness(&edits, parent.as_ref())?;
+        if check_stems && edits.stems.is_some() {
+            self.check_stems(
+                parent
+                    .as_ref()
+                    .ok_or_else(|| ServiceError::new("track_not_found", "the parent is missing"))?,
+                true,
+            )?;
+        }
+        let fingerprint = wreckordbox_sidecar::known_fingerprint(&found.audio);
+        let renderability = self.readiness(&edits, parent.as_ref(), false)?;
         let (mutant, run) = self.read(|library| {
             library.steady(|| {
                 let current = self.stored(args.id, args.entry.as_deref(), false)?;
@@ -256,7 +222,7 @@ impl Mutants<'_> {
                         fingerprint: made.fingerprint,
                         edits: made.edits,
                         inherited,
-                        derived,
+                        derived: Some(derived),
                         renderability,
                         source: made.source,
                         run: made.run.0,
@@ -268,16 +234,16 @@ impl Mutants<'_> {
                 ))
             })
         })?;
-        Ok(MutantChanged {
+        Ok(EditOutcome {
             mutant,
-            run,
+            run: Some(run),
+            changed: true,
             created_run: provenance.run.is_none(),
         })
     }
 }
 
 // A quick recheck under the gate; the expensive content reads happen outside it.
-fn stamp(path: &std::path::Path) -> Option<(u64, std::time::SystemTime)> {
-    let metadata = std::fs::metadata(path).ok()?;
-    Some((metadata.len(), metadata.modified().ok()?))
+fn stamp(path: &std::path::Path) -> Option<wreckordbox_sidecar::stems::FileStamp> {
+    wreckordbox_sidecar::stems::file_stamp(path)
 }

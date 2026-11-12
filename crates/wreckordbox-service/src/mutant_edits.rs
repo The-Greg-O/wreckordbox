@@ -54,10 +54,11 @@ impl Cue {
     fn label(&self) -> String {
         match self.kind {
             0 | 4 => format!("memory cue at {} ms", self.position_ms),
-            k => format!(
+            k @ (1..=3 | 5..=17) => format!(
                 "cue {}",
                 char::from(b'A' + if k < 4 { k - 1 } else { k - 2 })
             ),
+            k => format!("cue kind {k} at {} ms", self.position_ms),
         }
     }
 }
@@ -111,20 +112,42 @@ impl Edits {
                 self.stems = None;
             }
         }
-        if let Some(cues) = &self.cues {
-            let mut hot = std::collections::HashSet::new();
-            for cue in cues {
-                if cue.kind > 17
-                    || (cue.out_ms != 0 && cue.out_ms <= cue.position_ms)
-                    || (cue.kind == 4 && cue.out_ms == 0)
-                    || cue.memory_colour.is_some_and(|c| c > 7)
-                    || (cue.kind != 0 && cue.kind != 4 && !hot.insert(cue.kind))
-                {
-                    return Err(ServiceError::new(
-                        codes::INVALID_CUES,
-                        "invalid cue kind, loop, colour or duplicate Hot Cue",
-                    ));
-                }
+        Ok(())
+    }
+    /// Preserve legacy parent rows exactly, while validating every new or moved cue.
+    pub fn validate_cues(
+        &self,
+        parent: Option<&TrackRecord>,
+        inherited: &[Cue],
+    ) -> Result<(), ServiceError> {
+        let Some(cues) = &self.cues else {
+            return Ok(());
+        };
+        let limit = parent
+            .filter(|p| p.duration_seconds > 0)
+            .map(|p| u64::from(p.duration_seconds) * 1000);
+        let mut remaining = inherited.to_vec();
+        for (index, cue) in cues.iter().enumerate() {
+            let duplicate = !matches!(cue.kind, 0 | 4)
+                && cues.iter().filter(|other| other.kind == cue.kind).count() > 1;
+            // A real parent row may use an older/extended representation. Permit
+            // each such row once, unchanged, including its original slot.
+            if let Some(at) = remaining.iter().position(|old| old == cue) {
+                remaining.remove(at);
+                continue;
+            }
+            if cue.kind > 17
+                || duplicate
+                || (cue.out_ms != 0 && cue.out_ms <= cue.position_ms)
+                || (cue.kind == 4 && cue.out_ms == 0)
+                || cue
+                    .memory_colour
+                    .is_some_and(|c| c > 7 || !matches!(cue.kind, 0 | 4))
+                || limit.is_some_and(|end| {
+                    u64::from(cue.position_ms) > end || u64::from(cue.out_ms) > end
+                })
+            {
+                return Err(ServiceError::new(codes::INVALID_CUES, format!("cue {} ({}): invalid kind, loop, colour, duplicate Hot Cue, or position beyond the parent's length", index + 1, cue.label())));
             }
         }
         Ok(())
@@ -256,40 +279,16 @@ pub fn derive(
         },
         key: parent.and_then(|p| transpose(&p.key, edits.key_shift.unwrap_or(0))),
         bpm: parent.and_then(|p| p.bpm).map(|b| b * tempo),
-        duration_seconds: parent.map(|p| f64::from(p.duration_seconds) / tempo),
+        duration_seconds: parent
+            .filter(|p| p.duration_seconds > 0)
+            .map(|p| f64::from(p.duration_seconds) / tempo),
         cues: edits.cues.clone().unwrap_or_else(|| parent_cues.to_vec()),
         grid_parent: parent_id.into(),
     }
 }
 
 fn transpose(name: &str, shift: i64) -> Option<String> {
-    if shift == 0 {
-        return (!name.is_empty()).then(|| name.to_owned());
-    }
-    // The shared parser tries Camelot first using a byte split at the last
-    // character. Normalize musical accidentals and reject other non-ASCII
-    // spellings before calling it; a major key ending in ♭/♯ must not panic.
-    let normalized = name.replace('♭', "b").replace('♯', "#");
-    if !normalized.is_ascii() {
-        return None;
-    }
-    let mut key = rbl_core::musickey::parse(&normalized)?;
-    key.pitch = u8::try_from((i64::from(key.pitch) + shift).rem_euclid(12)).ok()?;
-    let text = name.trim();
-    if text
-        .get(..text.len().saturating_sub(1))
-        .is_some_and(|n| n.parse::<u8>().is_ok())
-    {
-        let suffix = if key.mode == rbl_core::musickey::Mode::Minor {
-            'A'
-        } else {
-            'B'
-        };
-        return (1..=12)
-            .map(|n| format!("{n}{suffix}"))
-            .find(|candidate| rbl_core::musickey::parse(candidate) == Some(key));
-    }
-    Some(key.name())
+    rbl_index::key::transpose(name, shift)
 }
 
 /// Patch supplied aspects, preserving every other edit.
@@ -413,7 +412,7 @@ mod tests {
         }
         assert_eq!(transpose("", 1), None);
         assert_eq!(transpose("unknown", 2), None);
-        assert_eq!(transpose("unknown", 0).as_deref(), Some("unknown"));
+        assert_eq!(transpose("unknown", 0), None);
         for number in 1..=12 {
             for mode in ['A', 'B'] {
                 for shift in -6..=6 {

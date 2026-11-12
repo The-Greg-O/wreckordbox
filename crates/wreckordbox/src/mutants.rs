@@ -47,6 +47,9 @@ pub enum MutantCommands {
     /// Show one Mutant: its playlist, entry and parent track, its edits,
     /// and everything that has happened to it.
     Show {
+        /// Verify audio if its cached size/mtime/inode verdict is missing.
+        #[arg(long)]
+        check_audio: bool,
         /// The Mutant's identifier.
         #[arg(
             value_name = "MUTANT_ID",
@@ -61,6 +64,9 @@ pub enum MutantCommands {
     /// List the Mutants in the Library, or only those of one playlist or
     /// of one track.
     List {
+        /// Verify audio if its cached size/mtime/inode verdict is missing.
+        #[arg(long)]
+        check_audio: bool,
         /// Only the Mutants of this playlist.
         #[arg(long, value_name = "PLAYLIST_ID")]
         playlist: Option<String>,
@@ -138,10 +144,15 @@ pub fn run(
                 )
             }
         }
-        MutantCommands::Show { id, entry } => {
+        MutantCommands::Show {
+            id,
+            entry,
+            check_audio,
+        } => {
             let shown: MutantShown = client.call(
                 commands::MUTANTS_GET,
                 json!(WhichMutant {
+                    check_audio: *check_audio,
                     id: *id,
                     entry: entry.clone(),
                 }),
@@ -152,10 +163,15 @@ pub fn run(
                 shown_text(&shown)
             }
         }
-        MutantCommands::List { playlist, track } => {
+        MutantCommands::List {
+            playlist,
+            track,
+            check_audio,
+        } => {
             let list: MutantList = client.call(
                 commands::MUTANTS_LIST,
                 json!(ListMutants {
+                    check_audio: *check_audio,
                     playlist: playlist.clone(),
                     track: track.clone(),
                 }),
@@ -210,7 +226,10 @@ fn place_text(mutant: &Mutant) -> String {
 /// What differs from the parent, in a word. The edits are an object whose
 /// keys are the aspects edited.
 fn edits_text(mutant: &Mutant) -> String {
-    mutant.derived.description.clone()
+    mutant
+        .derived
+        .as_ref()
+        .map_or_else(|| "invalid stored edits".into(), |d| d.description.clone())
 }
 
 fn shown_text(shown: &MutantShown) -> String {
@@ -251,23 +270,28 @@ fn shown_text(shown: &MutantShown) -> String {
             "Key".to_owned(),
             mutant
                 .derived
-                .key
-                .clone()
+                .as_ref()
+                .and_then(|d| d.key.clone())
                 .unwrap_or_else(|| "unknown".into()),
         ],
         [
             "Tempo".to_owned(),
             mutant
                 .derived
-                .bpm
+                .as_ref()
+                .and_then(|d| d.bpm)
                 .map_or_else(|| "unknown".into(), |b| format!("{b:.2} BPM")),
         ],
         [
             "Length".to_owned(),
             mutant
                 .derived
-                .duration_seconds
-                .map_or_else(|| "unknown".into(), |s| format!("{s:.3} seconds")),
+                .as_ref()
+                .and_then(|d| d.duration_seconds)
+                .map_or_else(
+                    || "unknown".into(),
+                    |s| format!("approximately {s:.0} seconds"),
+                ),
         ],
         ["Renderable".to_owned(), readiness_text(mutant)],
     ];

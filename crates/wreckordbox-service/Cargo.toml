@@ -10,7 +10,6 @@ description = "The Library service: the one owner of the Library, and the client
 workspace = true
 
 [dependencies]
-rbl-core = { path = "../rbl-core" }
 rbl-db = { path = "../rbl-db" }
 # The index and search the window uses, so a query here matches the window.
 rbl-index = { path = "../rbl-index" }

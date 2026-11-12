@@ -2,7 +2,7 @@
 use super::Who;
 use clap::Subcommand;
 use serde_json::{json, Value};
-use wreckordbox_service::mutants::{commands, MutantChanged};
+use wreckordbox_service::mutants::{commands, EditOutcome};
 use wreckordbox_service::{Client, ServiceError};
 
 #[derive(Subcommand)]
@@ -58,16 +58,19 @@ pub(super) fn run(
             json!({"id":id,"entry":entry,"edit":edit,"run":who.run,"source":who.source,"description":who.description}),
         ),
     };
-    let changed: MutantChanged = client.call(command, value)?;
+    let changed: EditOutcome = client.call(command, value)?;
     if as_json {
         Ok(json!(changed).to_string())
     } else {
         Ok(format!(
-            "Mutant {}: {}. Renderable: {}. Run {}.",
+            "Mutant {}: {}. Renderable: {}. {}.",
             changed.mutant.id,
-            changed.mutant.derived.description,
+            super::edits_text(&changed.mutant),
             super::readiness_text(&changed.mutant),
-            changed.run.id.0
+            changed.run.as_ref().map_or_else(
+                || "Unchanged; no Run".into(),
+                |run| format!("Run {}", run.id.0)
+            )
         ))
     }
 }

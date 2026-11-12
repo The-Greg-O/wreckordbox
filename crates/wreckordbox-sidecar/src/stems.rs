@@ -157,6 +157,33 @@ impl StemSet {
         })
     }
 
+    /// Lookup only: never reads audio. None means a verification is needed.
+    #[must_use]
+    pub fn audio_cached(&self) -> Option<bool> {
+        let mut unknown = false;
+        for stem in &self.stems {
+            let Some(now) = file_stamp(&stem.path) else {
+                return Some(false);
+            };
+            let Some(recorded) = &stem.hash else {
+                return Some(false);
+            };
+            match kept().get(&stem.path) {
+                Some((then, hash)) if *then == now => {
+                    if hash != recorded {
+                        return Some(false);
+                    }
+                }
+                _ => unknown = true,
+            }
+        }
+        if unknown {
+            None
+        } else {
+            Some(true)
+        }
+    }
+
     /// [`Self::audio_present`], with every file hashed now whatever was
     /// kept: what a Stick write checks before it copies the audio.
     #[must_use]
@@ -171,14 +198,14 @@ impl StemSet {
 
 /// What identifies a file's contents cheaply: if any of these changes, the
 /// kept hash is not trusted.
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct Seen {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FileStamp {
     len: u64,
     modified: Option<std::time::SystemTime>,
     inode: u64,
 }
 
-fn seen(path: &Path) -> Option<Seen> {
+pub fn file_stamp(path: &Path) -> Option<FileStamp> {
     let meta = std::fs::metadata(path)
         .ok()
         .filter(std::fs::Metadata::is_file)?;
@@ -186,14 +213,14 @@ fn seen(path: &Path) -> Option<Seen> {
     let inode = std::os::unix::fs::MetadataExt::ino(&meta);
     #[cfg(not(unix))]
     let inode = 0;
-    Some(Seen {
+    Some(FileStamp {
         len: meta.len(),
         modified: meta.modified().ok(),
         inode,
     })
 }
 
-type Kept = std::collections::HashMap<PathBuf, (Seen, String)>;
+type Kept = std::collections::HashMap<PathBuf, (FileStamp, String)>;
 
 fn kept() -> std::sync::MutexGuard<'static, Kept> {
     static KEPT: std::sync::OnceLock<std::sync::Mutex<Kept>> = std::sync::OnceLock::new();
@@ -204,7 +231,7 @@ fn kept() -> std::sync::MutexGuard<'static, Kept> {
 
 /// The file's hash, from what was kept when the file is as it was then.
 fn cached_hash(path: &Path) -> Result<String> {
-    let Some(now) = seen(path) else {
+    let Some(now) = file_stamp(path) else {
         kept().remove(path);
         return Err(SidecarError::Invalid(format!(
             "{} is not a file",
@@ -222,9 +249,9 @@ fn cached_hash(path: &Path) -> Result<String> {
 /// The file's hash, read now, and kept for [`cached_hash`]. Kept only when
 /// the file did not change while it was read.
 fn fresh_hash(path: &Path) -> Result<String> {
-    let before = seen(path);
+    let before = file_stamp(path);
     let hash = content_hash(path)?;
-    match (before, seen(path)) {
+    match (before, file_stamp(path)) {
         (Some(before), Some(after)) if before == after => {
             kept().insert(path.to_path_buf(), (after, hash.clone()));
         }

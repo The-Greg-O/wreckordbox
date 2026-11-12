@@ -178,6 +178,7 @@ fn refusals_are_atomic_and_have_stable_codes() {
 
 fn audio_mutant(s: &Sandbox, name: &str) -> (String, String) {
     let track = s.import_track(name, 1);
+    wav44(&s.path().join("audio").join(name), 44_100);
     let mut playlist = String::new();
     s.edit(|w| {
         playlist = w.create_playlist("Set", "root").unwrap();
@@ -222,13 +223,16 @@ fn stems_are_verified_and_stale_edits_remain_clearable() {
         &id,
         json!({"stems":["melody","bass","drums"],"key_shift":1,"tempo":1.1}),
     );
-    assert_eq!(result["mutant"]["renderability"]["renderable"], true);
+    assert_eq!(
+        result["mutant"]["renderability"]["reason"]["code"],
+        "key_shift_unavailable"
+    );
     assert!(result["mutant"]["derived"]["description"]
         .as_str()
         .unwrap()
         .starts_with("no vocals, +1 st"));
     flip_audio(&s, &track);
-    let before = ok(&s, &["mutants", "show", &id]);
+    let before = ok(&s, &["mutants", "show", &id, "--check-audio"]);
     assert_eq!(
         before["mutant"]["renderability"]["reason"]["code"],
         "mutant_stems_stale"
@@ -254,7 +258,10 @@ fn stems_are_verified_and_stale_edits_remain_clearable() {
         "mutant_stems_stale"
     );
     let cleared = ok(&s, &["mutants", "clear", &id, "stems", "--source", "dj"]);
-    assert_eq!(cleared["mutant"]["renderability"]["renderable"], true);
+    assert_eq!(
+        cleared["mutant"]["renderability"]["reason"]["code"],
+        "key_shift_unavailable"
+    );
     assert_eq!(
         cleared["mutant"]["edits"],
         json!({"key_shift":2,"tempo":1.1})
@@ -333,43 +340,124 @@ fn edits_notify_a_second_client_and_preserve_run_provenance() {
 
 #[test]
 fn lossy_parent_stem_edits_are_stored_but_explicitly_not_renderable() {
-    // The fake separator accepts generated WAV contents. Naming these fixtures
-    // after lossy parents exercises the service's conservative format policy;
-    // codec/timeline correctness belongs to the renderer's own generated tests.
-    for extension in ["mp3", "m4a"] {
+    for extension in ["m4a", "mp4", "m4b", "bin"] {
         let s = Sandbox::new();
         let track = s.import_track("Parent.wav", 1);
         let path = s.path().join("audio").join(format!("Parent.{extension}"));
-        std::fs::rename(s.path().join("audio/Parent.wav"), &path).unwrap();
+        std::fs::copy(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../rbl-audio/tests/fixtures/tone-faststart.m4a"
+            ),
+            &path,
+        )
+        .unwrap();
         let mut playlist = String::new();
         s.edit(|w| {
             w.relocate(&track, &path).unwrap();
             playlist = w.create_playlist("Set", "root").unwrap();
-            w.add_tracks(&playlist, std::slice::from_ref(&track))
-                .unwrap();
+            w.add_tracks(&playlist, &[track.clone()]).unwrap();
         });
+        seed_stems(&s, &track, &path, 44_100);
         let id = make(&s, &playlist);
-        ok(&s, &["stems", "separate", &track]);
-        let changed = edit(&s, &id, json!({"stems":["vocals"],"key_shift":1}));
+        let changed = edit(&s, &id, json!({"stems":["vocals"]}));
         assert_eq!(changed["mutant"]["edits"]["stems"], json!(["vocals"]));
-        assert_eq!(changed["mutant"]["renderability"]["renderable"], false);
         assert_eq!(
-            changed["mutant"]["renderability"]["reason"]["code"],
-            "stem_alignment_unknown"
+            changed["mutant"]["renderability"]["reason"]["code"], "stem_alignment_unknown",
+            "{changed}"
         );
         assert_eq!(
             ok(&s, &["mutants", "show", &id])["mutant"],
             changed["mutant"]
         );
-        let text = s.cli(&["mutants", "show", &id]);
-        assert!(text.status.success());
-        assert!(text.stdout.contains("wbx-49.1"));
+        assert!(s.cli(&["mutants", "show", &id]).stdout.contains("wbx-49.1"));
         assert_eq!(
             ok(&s, &["mutants", "clear", &id, "stems", "--source", "dj"])["mutant"]
                 ["renderability"]["renderable"],
             true
         );
     }
+}
+
+fn wav44(path: &std::path::Path, frames: u32) {
+    let data = frames * 4;
+    let mut out = Vec::new();
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&2u16.to_le_bytes());
+    out.extend_from_slice(&44100u32.to_le_bytes());
+    out.extend_from_slice(&176400u32.to_le_bytes());
+    out.extend_from_slice(&4u16.to_le_bytes());
+    out.extend_from_slice(&16u16.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data.to_le_bytes());
+    out.resize(44 + data as usize, 0);
+    std::fs::write(path, out).unwrap();
+}
+fn seed_stems(s: &Sandbox, track: &str, parent: &std::path::Path, frames: u32) {
+    use wreckordbox_sidecar::stems::{NewStems, Role};
+    use wreckordbox_sidecar::{Sidecar, Source, SourceKind};
+    let store = Sidecar::open(&s.sidecar_dir()).unwrap();
+    let source = Source::new(SourceKind::Tool, "fixture");
+    let run = store.begin_run(&source, "Test Stems").unwrap();
+    let workspace = store.workspace(run).unwrap();
+    let files: Vec<_> = Role::ALL
+        .into_iter()
+        .map(|role| {
+            let path = workspace.join(format!("{role}.wav"));
+            wav44(&path, frames);
+            (role, path)
+        })
+        .collect();
+    let fingerprint = wreckordbox_sidecar::fingerprint_file(parent).unwrap();
+    store
+        .record_stems(&NewStems {
+            track_id: track,
+            fingerprint: &fingerprint,
+            parent_samples: u64::from(frames),
+            sample_rate: 44100,
+            files: &files,
+            source: &source,
+            produced_by: json!({"engine":"test"}),
+            run,
+        })
+        .unwrap();
+    store.finish_run(run, "recorded").unwrap();
+}
+
+#[test]
+fn review_renderer_length_and_capability_refusals_are_reported() {
+    let s = Sandbox::new();
+    let track = s.import_track("Parent.wav", 1);
+    let path = s.path().join("audio/Parent.wav");
+    wav44(&path, 44100);
+    let mut playlist = String::new();
+    s.edit(|w| {
+        playlist = w.create_playlist("Set", "root").unwrap();
+        w.add_tracks(&playlist, &[track.clone()]).unwrap();
+    });
+    seed_stems(&s, &track, &path, 44101);
+    let id = make(&s, &playlist);
+    assert_eq!(
+        edit(&s, &id, json!({"stems":["vocals"]}))["mutant"]["renderability"]["reason"]["code"],
+        "stems_do_not_fit_parent"
+    );
+    ok(&s, &["mutants", "clear", &id, "stems", "--source", "dj"]);
+    assert_eq!(
+        edit(&s, &id, json!({"key_shift":1}))["mutant"]["renderability"]["reason"]["code"],
+        "key_shift_unavailable"
+    );
+    ok(
+        &s,
+        &["mutants", "clear", &id, "key_shift", "--source", "dj"],
+    );
+    assert_eq!(
+        edit(&s, &id, json!({"tempo":1.1}))["mutant"]["renderability"]["reason"]["code"],
+        "tempo_unavailable"
+    );
 }
 
 fn stop(s: &Sandbox) {
@@ -418,9 +506,14 @@ fn reads_of_saved_and_stale_mutants_do_not_write_or_tidy_anything() {
     let show = ok(&s, &["mutants", "show", &id]);
     assert_eq!(
         show["mutant"]["renderability"]["reason"]["code"],
-        "mutant_stems_stale"
+        "mutant_audio_unverified"
     );
     assert_eq!(ok(&s, &["mutants", "list"])["mutants"][0], show["mutant"]);
+    assert_eq!(
+        ok(&s, &["mutants", "show", &id, "--check-audio"])["mutant"]["renderability"]["reason"]
+            ["code"],
+        "mutant_stems_stale"
+    );
     let after = files(&s.sidecar_dir());
     assert_eq!(
         after.keys().collect::<Vec<_>>(),
@@ -565,6 +658,265 @@ fn damaged_stored_edits_are_reported_instead_of_inventing_an_unedited_mutant() {
         [&id],
     )
     .unwrap();
-    assert_eq!(refused(&s, &["mutants", "show", &id]), "sidecar_failed");
-    assert_eq!(refused(&s, &["mutants", "list"]), "sidecar_failed");
+    let shown = ok(&s, &["mutants", "show", &id]);
+    assert_eq!(shown["mutant"]["edits"], "{broken");
+    assert_eq!(shown["mutant"]["derived"], Value::Null);
+    assert_eq!(
+        shown["mutant"]["renderability"]["reason"]["code"],
+        "mutant_edits_invalid"
+    );
+    assert_eq!(ok(&s, &["mutants", "list"])["mutants"][0], shown["mutant"]);
+    assert_eq!(
+        ok(&s, &["mutants", "remove", &id, "--source", "dj"])["mutant"]["removed"],
+        true
+    );
+}
+
+#[test]
+fn review_two_clients_each_make_150_edits_lists_and_shows_without_failure() {
+    let s = Sandbox::new();
+    let playlist = s.create_playlist("Set", &[2, 3]);
+    let id = make(&s, &playlist).parse::<i64>().unwrap();
+    std::thread::scope(|scope| {
+        let jobs: Vec<_> = (0..2).map(|who| scope.spawn({ let s=&s; move || {
+            let mut client = s.client();
+            let mut failures = Vec::new();
+            for i in 0..150 {
+                for (command, args) in [
+                    ("mutants.edit", json!({"id":id,"edits":{"key_shift":i%5},"source":{"kind":"dj"}})),
+                    ("mutants.list", json!({})),
+                    ("mutants.get", json!({"id":id})),
+                ] {
+                    if let Err(error) = client.call::<Value>(command, args) { failures.push(format!("{command}: {error:?}")); }
+                }
+            }
+            assert_eq!(failures, Vec::<String>::new(), "client {who}");
+        }})).collect();
+        for job in jobs {
+            job.join().unwrap();
+        }
+    });
+}
+
+#[test]
+fn review_outdated_edits_are_isolated_and_repairable() {
+    let s = Sandbox::new();
+    let playlist = s.create_playlist("Set", &[2]);
+    let id = make(&s, &playlist);
+    let db = rusqlite::Connection::open(s.sidecar_dir().join("sidecar.db")).unwrap();
+    let break_it = || {
+        db.execute(
+            "UPDATE mutant_change SET edits = '{\"tempo\":1.3}' WHERE mutant_id = ?1",
+            [&id],
+        )
+        .unwrap()
+    };
+    break_it();
+    let listed = ok(&s, &["mutants", "list"]);
+    assert_eq!(listed["total"], 1);
+    assert_eq!(
+        listed["mutants"][0]["renderability"]["reason"]["code"],
+        "mutant_edits_invalid"
+    );
+    assert_eq!(listed["mutants"][0]["derived"], Value::Null);
+    assert_eq!(
+        ok(&s, &["mutants", "show", &id])["mutant"]["edits"],
+        json!({"tempo":1.3})
+    );
+    assert_eq!(
+        ok(&s, &["mutants", "clear", &id, "tempo", "--source", "dj"])["mutant"]["edits"],
+        json!({})
+    );
+    break_it();
+    assert_eq!(
+        edit(&s, &id, json!({"tempo":1.1}))["mutant"]["edits"],
+        json!({"tempo":1.1})
+    );
+    break_it();
+    assert_eq!(
+        ok(&s, &["mutants", "remove", &id, "--source", "dj"])["mutant"]["removed"],
+        true
+    );
+}
+
+#[test]
+fn review_noop_edits_leave_no_run_change_or_event() {
+    let s = Sandbox::new();
+    let playlist = s.create_playlist("Set", &[2]);
+    let id = make(&s, &playlist);
+    let before = ok(&s, &["mutants", "show", &id]);
+    let mut watcher = s.client();
+    watcher.subscribe().unwrap();
+    while watcher
+        .next_event(std::time::Duration::from_millis(100))
+        .unwrap()
+        .is_some()
+    {}
+    for edits in [
+        json!({}),
+        json!({"key_shift":null}),
+        json!({"key_shift":0,"tempo":1.0}),
+        json!({"stems":["vocals","melody","bass","drums"]}),
+    ] {
+        let answer = edit(&s, &id, edits);
+        assert_eq!(answer["changed"], false);
+        assert_eq!(answer["run"], Value::Null);
+    }
+    let cleared = ok(&s, &["mutants", "clear", &id, "tempo", "--source", "dj"]);
+    assert_eq!(cleared["changed"], false);
+    assert_eq!(cleared["run"], Value::Null);
+    assert_eq!(ok(&s, &["mutants", "show", &id]), before);
+    assert_eq!(
+        watcher
+            .next_event(std::time::Duration::from_millis(100))
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
+fn review_key_recognition_matches_the_window() {
+    for (stored, expected) in [
+        ("A minor", json!("Bbm")),
+        ("Amin", json!("Bbm")),
+        ("AM", json!("Bbm")),
+        ("1m", json!("8m")),
+        ("1d", json!("8d")),
+        ("BB", json!("B")),
+        ("♭", Value::Null),
+    ] {
+        let s = Sandbox::new();
+        s.describe_track(2, "Parent", "Artist", stored, 3);
+        let playlist = s.create_playlist("Set", &[2]);
+        let id = make(&s, &playlist);
+        assert_eq!(
+            edit(&s, &id, json!({"key_shift":1}))["mutant"]["derived"]["key"],
+            expected,
+            "{stored}"
+        );
+    }
+}
+
+#[test]
+fn review_cues_respect_length_and_round_trip_real_parent_rows() {
+    let s = Sandbox::new();
+    s.edit(|w| {
+        w.add_cue("10002",1,100).unwrap(); w.add_cue("10002",1,200).unwrap();
+        for (id,kind,at) in [("legacy-loop",4,300),("legacy-kind",25,400)] {
+            w.library().connection().execute("INSERT INTO djmdCue (ID,ContentID,Kind,InMsec,OutMsec,Color,ColorTableIndex,Comment,rb_local_deleted,created_at,updated_at) VALUES (?1,'10002',?2,?3,0,0,0,'',0,'2026-01-01','2026-01-01')",rusqlite::params![id,kind,at]).unwrap();
+        }
+    });
+    let playlist = s.create_playlist("Set", &[2]);
+    let id = make(&s, &playlist);
+    let parent = ok(&s, &["mutants", "show", &id])["mutant"]["derived"]["cues"].clone();
+    assert_eq!(
+        edit(&s, &id, json!({"cues":parent}))["mutant"]["derived"]["cues"],
+        parent
+    );
+    for cue in [
+        json!({"kind":0,"position_ms":999999999}),
+        json!({"kind":0,"position_ms":1,"out_ms":999999999}),
+        json!({"kind":2,"position_ms":100,"memory_colour":3}),
+    ] {
+        assert_eq!(
+            refused(
+                &s,
+                &[
+                    "mutants",
+                    "edit",
+                    &id,
+                    "--edits",
+                    &json!({"cues":[cue]}).to_string(),
+                    "--source",
+                    "dj"
+                ]
+            ),
+            "mutant_invalid_cues"
+        );
+    }
+}
+
+#[test]
+#[ignore = "explicit 500-Mutant latency measurement"]
+fn review_benchmark_listing_500_mutants() {
+    let s = Sandbox::new();
+    let track = s.import_track("Parent.wav", 1);
+    let mut playlist = String::new();
+    s.edit(|w| {
+        playlist = w.create_playlist("Large set", "root").unwrap();
+        w.add_tracks_allowing(&playlist, &vec![track.clone(); 500], true)
+            .unwrap();
+    });
+    ok(&s, &["stems", "separate", &track]);
+    let mut client = s.client();
+    for position in 1..=500 {
+        let made: Value = client
+            .call(
+                "mutants.create",
+                json!({"playlist":playlist,"position":position,"source":{"kind":"dj"}}),
+            )
+            .unwrap();
+        let _:Value=client.call("mutants.edit",json!({"id":made["mutant"]["id"],"edits":{"stems":["vocals"]},"source":{"kind":"dj"}})).unwrap();
+    }
+    for iteration in 0..3 {
+        let start = std::time::Instant::now();
+        let response: Value = client.call("mutants.list", json!({})).unwrap();
+        assert_eq!(response["total"], 500);
+        println!("500 Mutants, one shared 1-second WAV parent, warm service, iteration {iteration}: {:.3} ms",start.elapsed().as_secs_f64()*1000.0);
+    }
+}
+
+#[test]
+fn review_reads_do_not_scan_audio_and_plain_edits_do_not_fingerprint() {
+    let s = Sandbox::new();
+    let track = s.import_track("Long.wav", 60);
+    let mut playlist = String::new();
+    s.edit(|w| {
+        playlist = w.create_playlist("Set", "root").unwrap();
+        w.add_tracks(&playlist, &[track.clone()]).unwrap();
+    });
+    let id = make(&s, &playlist);
+    ok(&s, &["stems", "separate", &track]);
+    edit(&s, &id, json!({"stems":["vocals"]}));
+    let pid = s.status()["pid"].as_u64().unwrap();
+    let bytes = || {
+        std::fs::read_to_string(format!("/proc/{pid}/io"))
+            .unwrap()
+            .lines()
+            .find_map(|l| {
+                l.strip_prefix("rchar: ")
+                    .map(|v| v.trim().parse::<u64>().unwrap())
+            })
+            .unwrap()
+    };
+    let before = bytes();
+    ok(&s, &["mutants", "show", &id]);
+    ok(&s, &["mutants", "list"]);
+    edit(&s, &id, json!({"key_shift":1}));
+    assert!(
+        bytes() - before < 2_000_000,
+        "read {} bytes for two reads and a key edit",
+        bytes() - before
+    );
+}
+
+#[test]
+fn review_wav_contents_with_mp3_name_are_renderable() {
+    let s = Sandbox::new();
+    let track = s.import_track("Parent.wav", 1);
+    wav44(&s.path().join("audio/Parent.wav"), 44100);
+    let path = s.path().join("audio/Parent.mp3");
+    std::fs::rename(s.path().join("audio/Parent.wav"), &path).unwrap();
+    let mut playlist = String::new();
+    s.edit(|w| {
+        w.relocate(&track, &path).unwrap();
+        playlist = w.create_playlist("Set", "root").unwrap();
+        w.add_tracks(&playlist, &[track.clone()]).unwrap();
+    });
+    let id = make(&s, &playlist);
+    ok(&s, &["stems", "separate", &track]);
+    assert_eq!(
+        edit(&s, &id, json!({"stems":["vocals"]}))["mutant"]["renderability"]["renderable"],
+        true
+    );
 }
