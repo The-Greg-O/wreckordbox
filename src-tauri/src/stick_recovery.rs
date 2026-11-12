@@ -30,12 +30,18 @@ pub fn unfinished_write() -> AppError {
 /// the DJ chose in the Stick's panel.
 #[tauri::command]
 pub async fn stick_settle(path: String) -> AppResult<()> {
-    blocking("stick_settle", move || settle(&PathBuf::from(path), rbl_db::is_rekordbox_app_running())).await
+    blocking("stick_settle", move || {
+        settle(&PathBuf::from(path), rbl_db::is_rekordbox_app_running())
+    })
+    .await
 }
 
 fn settle(mount: &std::path::Path, rekordbox_running: bool) -> AppResult<()> {
     if !mount.is_dir() {
-        return Err(AppError::new(ErrorKind::NotFound, "That device is no longer connected."));
+        return Err(AppError::new(
+            ErrorKind::NotFound,
+            "That device is no longer connected.",
+        ));
     }
     if rekordbox_running {
         return Err(AppError::new(
@@ -44,7 +50,11 @@ fn settle(mount: &std::path::Path, rekordbox_running: bool) -> AppResult<()> {
         ));
     }
     wreckordbox_stick_outline::settle(mount).map_err(|error| {
-        AppError::new(ErrorKind::Malformed, "The unfinished write on this Stick could not be settled.").with_detail(error.to_string())
+        AppError::new(
+            ErrorKind::Malformed,
+            "The unfinished write on this Stick could not be settled.",
+        )
+        .with_detail(error.to_string())
     })
 }
 
@@ -73,13 +83,35 @@ mod tests {
             .map(|i| {
                 let path = src.path().join(format!("t{i}.mp3"));
                 std::fs::write(&path, vec![i; 512]).unwrap();
-                rbl_export::SourceTrack { id: u64::from(i), source_path: path, title: format!("Track {i}"), artist: "TRIODE".into(), ..Default::default() }
+                rbl_export::SourceTrack {
+                    id: u64::from(i),
+                    source_path: path,
+                    title: format!("Track {i}"),
+                    artist: "TRIODE".into(),
+                    ..Default::default()
+                }
             })
             .collect();
         let playlists = vec![
-            rbl_export::SourcePlaylist { id: 10, name: "Sets".into(), folder: true, ..Default::default() },
-            rbl_export::SourcePlaylist { id: 11, name: "Friday".into(), parent_id: 10, track_indices: vec![0, 1], ..Default::default() },
-            rbl_export::SourcePlaylist { id: 12, name: "Warm Up".into(), track_indices: vec![2], ..Default::default() },
+            rbl_export::SourcePlaylist {
+                id: 10,
+                name: "Sets".into(),
+                folder: true,
+                ..Default::default()
+            },
+            rbl_export::SourcePlaylist {
+                id: 11,
+                name: "Friday".into(),
+                parent_id: 10,
+                track_indices: vec![0, 1],
+                ..Default::default()
+            },
+            rbl_export::SourcePlaylist {
+                id: 12,
+                name: "Warm Up".into(),
+                track_indices: vec![2],
+                ..Default::default()
+            },
         ];
         rbl_export::export(dest.path(), &tracks, &playlists).unwrap();
         (src, dest)
@@ -128,13 +160,19 @@ mod tests {
 
     fn app() -> tauri::App<tauri::test::MockRuntime> {
         let app = tauri::test::mock_app();
-        app.manage(Arc::new(AppState::with_backups(tempfile::tempdir().unwrap().keep())));
+        app.manage(Arc::new(AppState::with_backups(
+            tempfile::tempdir().unwrap().keep(),
+        )));
         app
     }
 
     fn device_spec(path: &Path, format: &str, playlist: &str) -> ViewSpecDto {
         ViewSpecDto {
-            source: TrackSourceDto::Device { path: path.to_string_lossy().into_owned(), format: format.into(), playlist: playlist.into() },
+            source: TrackSourceDto::Device {
+                path: path.to_string_lossy().into_owned(),
+                format: format.into(),
+                playlist: playlist.into(),
+            },
             sort: "trackNo".into(),
             descending: false,
             query: String::new(),
@@ -163,33 +201,68 @@ mod tests {
         let state = app.state::<Arc<AppState>>();
 
         // The old tree: expanding a Stick, and every later listing refresh.
-        assert_unfinished("device_libraries", run(crate::device_library::device_libraries(path.clone())));
-        assert_unfinished("device_libraries again", run(crate::device_library::device_libraries(path.clone())));
+        assert_unfinished(
+            "device_libraries",
+            run(crate::device_library::device_libraries(path.clone())),
+        );
+        assert_unfinished(
+            "device_libraries again",
+            run(crate::device_library::device_libraries(path.clone())),
+        );
         for format in ["deviceLibrary", "oneLibrary"] {
             // Opening a Stick playlist's tracks, and a library's All Tracks.
             for playlist in ["11", "0"] {
-                assert_unfinished("open_view", run(crate::commands::open_view(state.clone(), device_spec(mount, format, playlist))));
+                assert_unfinished(
+                    "open_view",
+                    run(crate::commands::open_view(
+                        state.clone(),
+                        device_spec(mount, format, playlist),
+                    )),
+                );
             }
             assert_unfinished(
                 "device_playlist_duplicates",
-                run(crate::device_library::device_playlist_duplicates(path.clone(), format.into(), "11".into(), vec![])),
+                run(crate::device_library::device_playlist_duplicates(
+                    path.clone(),
+                    format.into(),
+                    "11".into(),
+                    vec![],
+                )),
             );
             assert_unfinished(
                 "device_playlist_collection_tracks",
-                run(crate::device_library::device_playlist_collection_tracks(state.clone(), path.clone(), format.into(), vec!["1".into()])),
+                run(crate::device_library::device_playlist_collection_tracks(
+                    state.clone(),
+                    path.clone(),
+                    format.into(),
+                    vec!["1".into()],
+                )),
             );
             assert_unfinished(
                 "device_playlist_import_plan",
-                run(crate::device_library::device_playlist_import_plan(state.clone(), path.clone(), format.into(), "11".into(), None)),
+                run(crate::device_library::device_playlist_import_plan(
+                    state.clone(),
+                    path.clone(),
+                    format.into(),
+                    "11".into(),
+                    None,
+                )),
             );
         }
         // The Stick's panel, in either layout.
-        assert_unfinished("device_settings", run(crate::device_settings::device_settings(path.clone())));
+        assert_unfinished(
+            "device_settings",
+            run(crate::device_settings::device_settings(path.clone())),
+        );
         // The shell's tree.
         let outline = run(crate::stick_outline::stick_outline(path)).unwrap();
         assert!(outline.pending);
 
-        assert_eq!(snapshot(mount), before, "not a byte on the Stick changed, the journal included");
+        assert_eq!(
+            snapshot(mount),
+            before,
+            "not a byte on the Stick changed, the journal included"
+        );
         assert!(rbl_export::recovery_pending(mount));
     }
 
@@ -204,7 +277,9 @@ mod tests {
 
         assert_ne!(snapshot(mount), before, "the Stick was settled");
         assert!(!rbl_export::recovery_pending(mount));
-        let read = run(crate::device_library::device_libraries(mount.to_string_lossy().into_owned()));
+        let read = run(crate::device_library::device_libraries(
+            mount.to_string_lossy().into_owned(),
+        ));
         assert!(read.is_ok_or_not_unfinished(), "{read:?}");
     }
 
@@ -227,13 +302,38 @@ mod tests {
         let path = mount.to_string_lossy().into_owned();
         let libraries = run(crate::device_library::device_libraries(path.clone())).unwrap();
         assert_eq!(libraries.len(), 2);
-        assert_eq!(libraries[0].nodes.iter().map(|n| n.name.as_str()).collect::<Vec<_>>(), ["Sets", "Friday", "Warm Up"]);
-        let friday = libraries[0].nodes.iter().find(|n| n.name == "Friday").unwrap().id.clone();
+        assert_eq!(
+            libraries[0]
+                .nodes
+                .iter()
+                .map(|n| n.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Sets", "Friday", "Warm Up"]
+        );
+        let friday = libraries[0]
+            .nodes
+            .iter()
+            .find(|n| n.name == "Friday")
+            .unwrap()
+            .id
+            .clone();
         let app = app();
-        let handle = run(crate::commands::open_view(app.state::<Arc<AppState>>(), device_spec(mount, "deviceLibrary", &friday))).unwrap();
+        let handle = run(crate::commands::open_view(
+            app.state::<Arc<AppState>>(),
+            device_spec(mount, "deviceLibrary", &friday),
+        ))
+        .unwrap();
         assert_eq!(handle.len, 2);
-        assert!(run(crate::device_settings::device_settings(path)).unwrap().has_device_library);
-        assert_eq!(snapshot(mount), before, "reading a settled Stick writes nothing");
+        assert!(
+            run(crate::device_settings::device_settings(path))
+                .unwrap()
+                .has_device_library
+        );
+        assert_eq!(
+            snapshot(mount),
+            before,
+            "reading a settled Stick writes nothing"
+        );
     }
 
     trait NotUnfinished {
@@ -241,7 +341,9 @@ mod tests {
     }
     impl<T> NotUnfinished for AppResult<T> {
         fn is_ok_or_not_unfinished(&self) -> bool {
-            self.as_ref().err().is_none_or(|e| e.kind != ErrorKind::UnfinishedWrite)
+            self.as_ref()
+                .err()
+                .is_none_or(|e| e.kind != ErrorKind::UnfinishedWrite)
         }
     }
 }
