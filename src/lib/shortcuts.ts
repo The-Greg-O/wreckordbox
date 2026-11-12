@@ -148,6 +148,14 @@ export type Action =
   | "viewIntake"
   | "viewReview"
   | "viewStick"
+  // The Library view's second list, a target playlist (wbx-59). No row in
+  // `BINDINGS`: the keys are the shell's own while the list is shown. See
+  // `TARGET_ACTIONS` in `targetList.ts`.
+  | "toggleTargetList"
+  | "addToTarget"
+  | "moveTargetUp"
+  | "moveTargetDown"
+  | "swapTargetLists"
   // The GRID panel: `Adjust BPM/BeatGrid` (`command + G`) opens it, the
   // modified arrows are `Shift Beatgrid left/right`, and `Shift Beatgrid to
   // the center` (`option + command + \`) puts the nearest beat under the
