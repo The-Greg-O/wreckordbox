@@ -31,6 +31,7 @@ The summary is the mean of the time curve, with the mean of its highest and lowe
 ## Contracts
 
 - **Deterministic.** The same audio gives the same value, byte for byte as JSON, however the audio is cut into pieces on the way in. No randomness, no clock, no threads inside a measurement; stored numbers are rounded.
+- **Cost.** Roughly 0.45 s per minute of 44.1 kHz stereo WAV on one core of an Apple M2 under load, release build, decoding included (the `timing` example). Compressed formats add their decoding.
 - **Bounded memory.** One packet of audio is held at a time. What is kept per track is one number per 100 ms and three per spectral frame: about 100 kB for ten minutes.
 - **`METHOD_VERSION`** changes whenever the same audio would measure differently. The service measures again when a stored value is of another version.
 - **Bars** come from the bar starts the caller passes (the service reads them from the track's analysis file). No grid: `bars` is `null` and the time curve is unchanged.
