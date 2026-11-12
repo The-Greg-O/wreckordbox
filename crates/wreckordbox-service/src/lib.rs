@@ -20,6 +20,7 @@ pub mod mytag_edits;
 pub mod native_stems;
 pub mod protocol;
 pub mod reading;
+pub mod run_status;
 pub mod schema;
 mod separation;
 mod server;

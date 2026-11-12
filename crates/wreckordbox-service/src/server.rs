@@ -432,6 +432,7 @@ impl Shared {
                     self.with_library(|library| crate::stems::parent(library, id))?
                 })
             }
+            crate::run_status::RUNS_ACTIVE => crate::run_status::active(&self.stems),
             facts if crate::facts::answers(facts) => {
                 // The Sidecar's, not the Library's: the Library is only
                 // read, to find the track.
