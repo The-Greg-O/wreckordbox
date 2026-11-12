@@ -384,52 +384,80 @@ fn finishing_during_a_write_waits_for_its_result() {
 }
 
 #[test]
-fn an_unavailable_sidecar_does_not_refuse_this_or_the_next_bulk_write() {
+fn unavailable_storage_keeps_the_accepted_write_then_requires_catch_up() {
     let f = Fixture::new(3);
-    std::fs::create_dir_all(f.dir.path().join("library/wreckordbox-sidecar/sidecar.db")).unwrap();
-    for i in 0..2 {
-        let operation = Operation::new(&f.core, Kind::Analysis);
-        operation
-            .run(
-                json!({"track":fixture::track_id(i)}),
-                || {
-                    f.core.write_then(
-                        &NoHost,
-                        History::Outside,
-                        |w| {
-                            w.set_analysis(
-                                &fixture::track_id(i),
-                                &rbl_db::write::AnalysisWrite {
-                                    bpm_x100: 12345,
-                                    key: None,
-                                    analysis_path: "/fixture/ANLZ0000.DAT",
-                                    length_sec: None,
-                                },
-                            )
-                        },
-                        |_, value| Ok(value),
-                    )
-                },
-                |_| vec![json!({"track":fixture::track_id(i)})],
-            )
-            .unwrap();
-        assert!(operation.finish().unwrap().contains("accepted"));
-        let db = f.core.open_read_only().unwrap();
-        assert_eq!(
-            db.connection()
-                .query_row(
-                    "SELECT BPM FROM djmdContent WHERE ID=?1",
-                    [fixture::track_id(i)],
-                    |row| row.get::<_, u32>(0)
+    let unavailable = f.dir.path().join("library/wreckordbox-sidecar/sidecar.db");
+    std::fs::create_dir_all(&unavailable).unwrap();
+    let write = |operation: &Operation, i| {
+        operation.run(
+            json!({"track":fixture::track_id(i)}),
+            || {
+                f.core.write_then(
+                    &NoHost,
+                    History::Outside,
+                    |w| {
+                        w.set_analysis(
+                            &fixture::track_id(i),
+                            &rbl_db::write::AnalysisWrite {
+                                bpm_x100: 12345,
+                                key: None,
+                                analysis_path: "/fixture/ANLZ0000.DAT",
+                                length_sec: None,
+                            },
+                        )
+                    },
+                    |_, value| Ok(value),
                 )
-                .unwrap(),
-            12345
-        );
-    }
+            },
+            |_| vec![json!({"track":fixture::track_id(i)})],
+        )
+    };
+    let bpm = |i| {
+        f.core
+            .open_read_only()
+            .unwrap()
+            .connection()
+            .query_row(
+                "SELECT BPM FROM djmdContent WHERE ID=?1",
+                [fixture::track_id(i)],
+                |row| row.get::<_, u32>(0),
+            )
+            .unwrap()
+    };
+    let first = Operation::new(&f.core, Kind::Analysis);
+    write(&first, 0).unwrap();
+    assert!(first.finish().unwrap().contains("accepted"));
+    assert_eq!(bpm(0), 12345);
+    let before = bpm(1);
+    let refused = Operation::new(&f.core, Kind::Analysis);
+    assert!(write(&refused, 1).is_err());
+    assert_eq!(refused.finish(), None);
+    assert_eq!(bpm(1), before, "catch-up refusal precedes the native write");
     assert!(
         f.service.call("runs.list", json!({})).is_err(),
         "an unavailable Sidecar is not an empty Ledger"
     );
+    std::fs::remove_dir(&unavailable).unwrap();
+    let next = Operation::new(&f.core, Kind::Analysis);
+    write(&next, 1).unwrap();
+    assert_eq!(next.finish(), None);
+    let runs = f.runs();
+    assert_eq!(runs["total"], 2);
+    let mut tracks = std::collections::BTreeSet::new();
+    for run in runs["runs"].as_array().unwrap() {
+        let shown = f
+            .service
+            .call("runs.show", json!({"id":run["id"]}))
+            .unwrap();
+        assert_eq!(shown["pending_recording"]["total"], 0);
+        for entry in shown["entries"].as_array().unwrap() {
+            assert_ne!(entry["kind"], "unconfirmed");
+            for result in entry["payload"]["records"].as_array().unwrap() {
+                tracks.insert(result["track"].as_str().unwrap().to_owned());
+            }
+        }
+    }
+    assert_eq!(tracks, [fixture::track_id(0), fixture::track_id(1)].into());
 }
 
 #[path = "support/bulk_review.rs"]

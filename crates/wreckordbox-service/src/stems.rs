@@ -343,6 +343,19 @@ impl Stems {
         &self.sidecar_dir
     }
 
+    /// Recovery must stay local when a Library's Stick is locked or removed.
+    /// Hash only the path, never audio or Library contents.
+    pub(crate) fn bulk_recovery_dir(&self) -> PathBuf {
+        self.state_dir.join("ledger").join(format!("{:016x}", crate::fnv1a(self.sidecar_dir.as_os_str().as_encoded_bytes())))
+    }
+
+    /// Bulk publication is outside the native edit guard, so holds its own
+    /// Stick authorization for the recording transaction (no Library gate).
+    pub(crate) fn bulk_access(&self) -> Result<wreckordbox_stick_protection::Authorization, String> {
+        wreckordbox_stick_protection::authorize(&self.state_dir, &self.sidecar_dir).map_err(|error| error.to_string())
+    }
+
+
     /// Lets go of the Sidecar for a service that is stopping, as it lets go
     /// of the Library: the writer is closed now (its journal folded in),
     /// not when the last of the service's threads ends, and is not opened

@@ -136,7 +136,9 @@ impl Step for Scope {
                 return;
             }
         }
-        let last = stamps.pop().expect("nonempty acceptance stamps");
+        let Some(last) = stamps.pop() else {
+            return;
+        };
         if records.is_empty() {
             records.push(json!({"track":self.target.get("track"),"target":self.target,"status":"accepted_native_step","not_reversible_reason":"The writer returned no result values"}));
         }
@@ -231,11 +233,11 @@ pub(super) fn make(keeper: &Keeper, kind: Kind) -> Arc<dyn Recorder> {
     };
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let serial = NEXT.fetch_add(1, Ordering::Relaxed);
-    let spill = keeper.stems.sidecar_dir().join("ledger-bulk").join(format!(
-        "{}-{}-{serial}",
-        super::now(),
-        std::process::id()
-    ));
+    let spill = keeper
+        .stems
+        .bulk_recovery_dir()
+        .join("ledger-bulk")
+        .join(format!("{}-{}-{serial}", super::now(), std::process::id()));
     Arc::new(Handle(Arc::new(Session {
         owner: Arc::as_ptr(&keeper.stems) as usize,
         keeper: keeper.weak.clone(),
@@ -346,7 +348,9 @@ impl Session {
         if state.ended {
             return;
         }
-        if !record.value.is_object() { record.value = json!({"result":record.value}); }
+        if !record.value.is_object() {
+            record.value = json!({"result":record.value});
+        }
         if record.id.is_none() {
             record.value["order_unavailable"] = json!("The Sidecar could not reserve an id at acceptance; this entry retains its write time but its id was assigned later");
         }
@@ -379,6 +383,7 @@ impl Session {
         }
         let mut manifest = self.manifest(state);
         let result = (|| {
+            let _access = self.stems.bulk_access()?;
             let sidecar = self.stems.sidecar().map_err(|e| e.message)?;
             if manifest.run.is_none() {
                 manifest.run = Some(
@@ -436,6 +441,7 @@ impl Session {
         manifest.complete = true;
         let result = (|| {
             spill::mark_complete(&self.spill)?;
+            let _access = self.stems.bulk_access()?;
             let sidecar = self.stems.sidecar().map_err(|e| e.message)?;
             spill::replay(&self.spill, &sidecar, || self.before_append())?;
             if !state.unspilled.is_empty() {

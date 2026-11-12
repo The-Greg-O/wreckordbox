@@ -70,7 +70,14 @@ fn read<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display()))
 }
+fn local(path: &Path) -> Result<(), String> {
+    if wreckordbox_stick_protection::stick_root(path).is_some() {
+        return Err("Ledger recovery storage is on a Stick; named results must remain in memory until local storage is available".into());
+    }
+    Ok(())
+}
 fn write(path: &Path, value: &impl Serialize) -> Result<(), String> {
+    local(path)?;
     let bytes = serde_json::to_vec(value).map_err(|e| e.to_string())?;
     let tmp = path.with_extension("tmp");
     let mut file = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
@@ -91,6 +98,7 @@ pub(super) fn save(
     index: u64,
     records: &[Record],
 ) -> Result<(), String> {
+    local(dir)?;
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let header = dir.join("manifest.json");
     if !header.exists() {
@@ -126,6 +134,7 @@ pub(super) fn replay(
     if !dir.exists() {
         return Ok(());
     }
+    local(dir)?;
     let header = dir.join("manifest.json");
     let mut manifest: Manifest = read(&header)?;
     if manifest.run.is_none() {

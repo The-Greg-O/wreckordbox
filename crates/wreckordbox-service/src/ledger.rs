@@ -690,7 +690,7 @@ pub(crate) fn answer(
         let mut answer = read_ledger(sidecar, request)?;
         if request.command == commands::RUNS_SHOW {
             if let Some(run) = request.args["id"].as_i64() {
-                answer["pending_recording"] = bulk_spill::pending(stems.sidecar_dir(), run, answer["offset"].as_u64().and_then(|n| usize::try_from(n).ok()).unwrap_or(0), answer["limit"].as_u64().and_then(|n| usize::try_from(n).ok()).unwrap_or(DEFAULT_PAGE_LIMIT))
+                answer["pending_recording"] = bulk_spill::pending(&stems.bulk_recovery_dir(), run, answer["offset"].as_u64().and_then(|n| usize::try_from(n).ok()).unwrap_or(0), answer["limit"].as_u64().and_then(|n| usize::try_from(n).ok()).unwrap_or(DEFAULT_PAGE_LIMIT))
                     .map_err(|why|ServiceError::new(crate::stems::codes::SIDECAR_FAILED,why))?;
             }
         }
@@ -1250,7 +1250,7 @@ impl Keeper {
     /// asked as the service starts. Queries never call this or open a writer.
     pub(crate) fn recover(&self) -> Result<(), ServiceError> {
         let result = (|| {
-            let sidecar = if bulk_spill::exists(self.stems.sidecar_dir()) {
+            let sidecar = if bulk_spill::exists(&self.stems.bulk_recovery_dir()) {
                 Some(self.stems.sidecar()?)
             } else {
                 self.stems.sidecar_if_made()?
@@ -1340,7 +1340,7 @@ impl Keeper {
             state.unwritten = read_spill(&file)?;
         }
         self.write_waiting(sidecar, state)?;
-        bulk_spill::replay_all(self.stems.sidecar_dir(), sidecar)?;
+        bulk_spill::replay_all(&self.stems.bulk_recovery_dir(), sidecar)?;
         for open in sidecar.open_intents().map_err(|e| e.to_string())? {
             // What the unconfirmed write did to entries: the Library as it
             // is, and what it planned. A failed read keeps it unsettled.

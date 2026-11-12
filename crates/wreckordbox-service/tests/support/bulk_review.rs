@@ -378,3 +378,55 @@ fn protected_existing_sidecar_reports_the_startup_refusal() {
     );
     assert!(!error.message.contains("appeared after"));
 }
+
+#[test]
+fn protecting_a_stick_before_flush_keeps_recovery_off_the_stick() {
+    let f = Fixture::new(129);
+    let operation = Operation::new(&f.core, Kind::Analysis);
+    for i in 0..129 {
+        register(&f, &operation, i);
+    }
+    let run = f.runs()["runs"][0]["id"].clone();
+    let marker = f
+        .dir
+        .path()
+        .join("library")
+        .join(wreckordbox_stick_protection::STAND_IN_MARKER);
+    std::fs::write(&marker, "").unwrap();
+    let before = counts(&f);
+    assert!(operation.finish().is_some());
+    assert!(
+        !f.dir
+            .path()
+            .join("library/wreckordbox-sidecar/ledger-bulk")
+            .exists(),
+        "a deferred recording must not write recovery files onto a protected Stick"
+    );
+    assert_eq!(counts(&f), before);
+    let shown = f
+        .service
+        .call("runs.show", json!({"id":run,"limit":1000}))
+        .unwrap();
+    assert_eq!(shown["total"], 128);
+    assert_eq!(shown["pending_recording"]["total"], 1);
+    assert_eq!(
+        shown["pending_recording"]["records"][0]["result"]["track"],
+        fixture::track_id(128)
+    );
+    assert_eq!(
+        counts(&f),
+        before,
+        "reading pending results must not write either store"
+    );
+    // Fixture-only remount as an ordinary folder; never unlock a real Stick.
+    std::fs::remove_file(marker).unwrap();
+    f.service
+        .call("tracks.rate", json!({"id":fixture::track_id(0),"rating":4}))
+        .unwrap();
+    let shown = f
+        .service
+        .call("runs.show", json!({"id":run,"limit":1000}))
+        .unwrap();
+    assert_eq!(shown["total"], 129);
+    assert_eq!(shown["pending_recording"]["total"], 0);
+}
