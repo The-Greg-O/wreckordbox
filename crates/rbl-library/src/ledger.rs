@@ -125,7 +125,12 @@ pub trait Ledger: Send + Sync {
     /// A file-only change, after the file-edit guards and before publication.
     /// Keep the kind and track with the intent for crash recovery. No audio,
     /// file snapshots or database scans belong here.
-    fn begin_file(&self, _kind: &str, _track: &str) -> Result<(), String> {
+    fn begin_file(
+        &self,
+        _kind: &str,
+        _track: &str,
+        _values: &serde_json::Value,
+    ) -> Result<(), String> {
         self.begin()
     }
 

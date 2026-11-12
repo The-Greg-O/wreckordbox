@@ -149,26 +149,29 @@ fn file_only_edits_are_named_once_in_the_window_run() {
     let f = Fixture::new(3);
     let mut watcher = Client::connect(&f.config.socket_path(&f.location)).unwrap();
     watcher.subscribe().unwrap();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let events = calls.clone();
+    f.state.core().watch(move |_| {
+        events.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        true
+    });
+    let generation = f.state.core().generation();
     let before = std::fs::read(&f.ext).unwrap();
     assert!(f.phrase(rbl_anlz::PhraseEdit::Cut { beat: 25 }).unwrap());
     assert_ne!(std::fs::read(&f.ext).unwrap(), before);
     assert!(f.phrase(rbl_anlz::PhraseEdit::Clear { beat: 25 }).unwrap());
-    f.grid(234).unwrap();
-    assert_eq!(
-        rbl_anlz::Anlz::read(&f.dat).unwrap().grid_offset(),
-        Some(234)
-    );
     let runs = f.cli(&["runs", "list"]);
     assert_eq!(runs["total"], 1, "file-only writes need a Run");
     let run = &runs["runs"][0];
     assert_eq!(run["description"], "Edits in the window");
     let entries = f.cli(&["runs", "show", &run["id"].to_string()]);
-    assert_eq!(entries["total"], 3);
-    for (entry, kind) in entries["entries"].as_array().unwrap().iter().zip([
-        "phrase_cut",
-        "phrase_clear",
-        "link_grid_offset",
-    ]) {
+    assert_eq!(entries["total"], 2);
+    for (entry, kind) in entries["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(["phrase_cut", "phrase_clear"])
+    {
         assert_eq!(entry["kind"], kind);
         assert_eq!(entry["run"], run["id"]);
         assert_eq!(entry["source"], json!({"kind":"dj", "name":"dj"}));
@@ -183,6 +186,8 @@ fn file_only_edits_are_named_once_in_the_window_run() {
             .unwrap()
             .contains("previous analysis bytes were not retained"));
     }
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(f.state.core().generation(), generation);
     // File-only edits still do not refresh database rows or generate a burst
     // of Library events merely to record provenance.
     assert!(watcher
@@ -212,6 +217,7 @@ fn refused_and_unchanged_file_edits_leave_no_run_or_intent() {
     assert_eq!(std::fs::read(&f.dat).unwrap(), dat);
     assert_eq!(std::fs::read(&f.ext).unwrap(), ext);
     f.state.core().set_protection(false).unwrap();
+    f.grid(0).unwrap();
     assert!(!f.phrase(rbl_anlz::PhraseEdit::Cut { beat: 17 }).unwrap());
     assert!(crate::link::save_grid_offset(&f.state, "missing", 234).is_err());
     assert_eq!(f.cli(&["runs", "list"])["total"], 0);
@@ -272,13 +278,19 @@ fn file_guard_on_a_protected_stick_refuses_before_publication() {
         b"",
     )
     .unwrap();
-    let result = f.state.core().file_edit().map(|_edit| {
-        std::fs::write(&f.ext, b"a file-only change").unwrap();
-    });
-    assert!(
-        result.as_ref().is_err_and(rbl_library::stick::refused),
-        "{result:?}"
-    );
+    let dat = std::fs::read(&f.dat).unwrap();
+    for error in [
+        f.grid(234).unwrap_err(),
+        f.phrase(rbl_anlz::PhraseEdit::Cut { beat: 25 })
+            .unwrap_err(),
+    ] {
+        assert!(
+            error.message.contains("wreckordbox stick unlock"),
+            "{error:?}"
+        );
+        assert!(!error.message.contains("Ledger"));
+    }
+    assert_eq!(std::fs::read(&f.dat).unwrap(), dat);
     assert_eq!(std::fs::read(&f.ext).unwrap(), before);
     assert!(!f
         .location
@@ -318,71 +330,95 @@ fn file_ledger_fault_child() {
         .unwrap()
         .join("wreckordbox-sidecar/ledger-spill.jsonl");
     assert!(spill.is_file(), "the failed append is kept durably");
-    // The next edit replays the kept entry without duplicating it and still
-    // succeeds. Both edits belong to the window's one Run.
+    // Replay keeps the player's correction separate from the DJ's edit.
     assert!(f.phrase(rbl_anlz::PhraseEdit::Cut { beat: 25 }).unwrap());
     assert!(!spill.exists());
     let runs = f.cli(&["runs", "list"]);
-    assert_eq!(runs["total"], 1);
-    let entries = f.cli(&["runs", "show", &runs["runs"][0]["id"].to_string()]);
-    assert_eq!(entries["total"], 2);
-    assert_eq!(entries["entries"][0]["kind"], "link_grid_offset");
-    assert_eq!(entries["entries"][1]["kind"], "phrase_cut");
-    assert_ne!(entries["entries"][0]["id"], entries["entries"][1]["id"]);
+    assert_eq!(runs["total"], 2);
+    let mut ids = Vec::new();
+    for run in runs["runs"].as_array().unwrap() {
+        let entries = f.cli(&["runs", "show", &run["id"].to_string()]);
+        assert_eq!(entries["total"], 1);
+        ids.push(entries["entries"][0]["id"].clone());
+    }
+    assert_ne!(ids[0], ids[1]);
 }
 
 #[test]
-fn file_edits_survive_an_append_failure_and_a_crash_leaves_an_identified_intent() {
-    for (mode, fault) in [("spill", "fail_append=1"), ("crash", "abort_after_write")] {
-        let root = tempfile::tempdir().unwrap();
-        let output = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "file_ledger_tests::file_ledger_fault_child",
-                "--ignored",
-                "--nocapture",
-            ])
-            .env("WBX22_CHILD_ROOT", root.path())
-            .env("WBX22_CHILD_MODE", mode)
-            .env(wreckordbox_service::ledger::FAULTS_ENV, fault)
-            .output()
-            .unwrap();
-        if mode == "spill" {
-            assert!(
-                output.status.success(),
-                "{}\n{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-            continue;
-        }
-        use std::os::unix::process::ExitStatusExt;
-        assert_eq!(
-            output.status.signal(),
-            Some(6),
-            "{}",
+fn file_edits_survive_an_append_failure() {
+    fault_case("spill", "fail_append=1");
+}
+
+#[test]
+fn file_crash_before_publication() {
+    fault_case("before", "abort_before_file_publish");
+}
+
+#[test]
+fn file_crash_after_publication() {
+    fault_case("crash", "abort_after_write");
+}
+
+fn fault_case(mode: &str, fault: &str) {
+    let root = tempfile::tempdir().unwrap();
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "file_ledger_tests::file_ledger_fault_child",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("WBX22_CHILD_ROOT", root.path())
+        .env("WBX22_CHILD_MODE", mode)
+        .env(wreckordbox_service::ledger::FAULTS_ENV, fault)
+        .output()
+        .unwrap();
+    if mode == "spill" {
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        let fixture: Value =
-            serde_json::from_slice(&std::fs::read(root.path().join("fixture.json")).unwrap())
-                .unwrap();
-        let dir = PathBuf::from(fixture["dir"].as_str().unwrap());
-        let dat = PathBuf::from(fixture["dat"].as_str().unwrap());
-        assert_eq!(rbl_anlz::Anlz::read(&dat).unwrap().grid_offset(), Some(234));
-        let runs = cli_at(&dir, &["runs", "list"]);
-        assert_eq!(runs["total"], 1);
-        let entries = cli_at(&dir, &["runs", "show", &runs["runs"][0]["id"].to_string()]);
-        assert_eq!(entries["total"], 1);
-        let entry = &entries["entries"][0];
-        assert_eq!(entry["kind"], "unconfirmed");
-        assert_eq!(entry["reversible"], false);
-        assert_eq!(
-            entry["command"],
-            json!({"name":"files.edit", "args":{"kind":"link_grid_offset", "track":fixture::track_id(1)}})
-        );
-        assert_eq!(entry["source"], json!({"kind":"dj", "name":"dj"}));
-        cli_at(&dir, &["stop"]);
+        return;
     }
+    use std::os::unix::process::ExitStatusExt;
+    assert_eq!(
+        output.status.signal(),
+        Some(6),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let fixture: Value =
+        serde_json::from_slice(&std::fs::read(root.path().join("fixture.json")).unwrap()).unwrap();
+    let dir = PathBuf::from(fixture["dir"].as_str().unwrap());
+    let dat = PathBuf::from(fixture["dat"].as_str().unwrap());
+    assert_eq!(
+        rbl_anlz::Anlz::read(&dat).unwrap().grid_offset(),
+        Some(if mode == "before" { 0 } else { 234 })
+    );
+    let runs = cli_at(&dir, &["runs", "list"]);
+    assert_eq!(runs["total"], 1);
+    let entries = cli_at(&dir, &["runs", "show", &runs["runs"][0]["id"].to_string()]);
+    assert_eq!(entries["total"], 1);
+    cli_at(&dir, &["stop"]);
+    let entry = &entries["entries"][0];
+    assert_eq!(entry["kind"], "unconfirmed");
+    assert_eq!(entry["reversible"], false);
+    assert_eq!(entry["command"]["args"]["before"], 0);
+    assert_eq!(entry["command"]["args"]["after"], 234);
+    assert_eq!(entry["source"], json!({"kind":"tool", "name":"link"}));
+    assert!(
+        entry["label"]
+            .as_str()
+            .unwrap()
+            .contains(if mode == "before" {
+                "before state"
+            } else {
+                "after state"
+            }),
+        "{entry}"
+    );
 }
 
 #[test]
@@ -411,4 +447,185 @@ fn file_edit_latency_at_twenty_thousand_tracks() {
             times[3]
         );
     }
+}
+
+fn entries(f: &Fixture) -> Vec<Value> {
+    f.cli(&["runs", "list"])["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|run| {
+            f.cli(&["runs", "show", &run["id"].to_string()])["entries"]
+                .as_array()
+                .unwrap()
+                .clone()
+        })
+        .collect()
+}
+
+#[test]
+fn link_correction_has_its_own_non_dj_run() {
+    let f = Fixture::new(3);
+    let generation = f.state.core().generation();
+    f.phrase(rbl_anlz::PhraseEdit::Cut { beat: 25 }).unwrap();
+    f.grid(234).unwrap();
+    f.grid(235).unwrap();
+    assert_eq!(f.state.core().generation(), generation);
+    let runs = f.cli(&["runs", "list"]);
+    assert_eq!(runs["total"], 2);
+    let all = entries(&f);
+    assert_eq!(all.len(), 3, "recording must not produce DJ Facts");
+    let link: Vec<_> = all
+        .iter()
+        .filter(|e| e["kind"] == "link_grid_offset")
+        .collect();
+    assert_eq!(link.len(), 2);
+    assert_eq!(link[0]["source"], json!({"kind":"tool", "name":"link"}));
+    assert_eq!(link[0]["run"], link[1]["run"]);
+    let run = runs["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == link[0]["run"])
+        .unwrap();
+    assert_eq!(run["description"], "Changes from a player");
+}
+
+#[test]
+fn link_keeps_before_and_after_offset() {
+    let f = Fixture::new(3);
+    f.grid(234).unwrap();
+    let all = entries(&f);
+    assert_eq!(all[0]["command"]["args"]["before"], 0);
+    assert_eq!(all[0]["command"]["args"]["after"], 234);
+    assert_eq!(all[0]["reversible"], false);
+    assert!(all[0]["label"]
+        .as_str()
+        .unwrap()
+        .contains("Unwind does not yet reverse analysis file edits"));
+}
+
+#[test]
+fn identical_link_offset_does_not_write_any_file_or_sidecar() {
+    let f = Fixture::new(3);
+    f.grid(234).unwrap();
+    fn stamps(path: &std::path::Path) -> Vec<(PathBuf, std::time::SystemTime)> {
+        let mut out = Vec::new();
+        for entry in std::fs::read_dir(path).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_dir() {
+                out.extend(stamps(&entry.path()));
+            } else {
+                out.push((entry.path(), entry.metadata().unwrap().modified().unwrap()));
+            }
+        }
+        out.sort();
+        out
+    }
+    let before = stamps(f.location.master_db.parent().unwrap());
+    let dat_stamp = std::fs::metadata(&f.dat).unwrap().modified().unwrap();
+    f.grid(234).unwrap();
+    assert_eq!(stamps(f.location.master_db.parent().unwrap()), before);
+    assert_eq!(
+        std::fs::metadata(&f.dat).unwrap().modified().unwrap(),
+        dat_stamp
+    );
+    assert_eq!(entries(&f).len(), 1);
+}
+
+#[test]
+fn append_without_begin_does_not_reuse_the_previous_descriptor() {
+    let f = Fixture::new(3);
+    f.phrase(rbl_anlz::PhraseEdit::Cut { beat: 25 }).unwrap();
+    f.state
+        .core()
+        .history()
+        .lock()
+        .unrecorded(Some("Independent note"));
+    let all = entries(&f);
+    assert_eq!(all.len(), 2);
+    assert_ne!(all[0]["id"], all[1]["id"]);
+    assert!(all[1]["command"].is_null(), "{}", all[1]);
+}
+
+#[test]
+fn window_grid_edit_undo_redo_are_recorded_once_each() {
+    use crate::grid::{GridAction, GridEdit, GridEditor, GridOptions};
+    let f = Fixture::new(3);
+    let editor = GridEditor::at(f.dir.path());
+    let action = GridAction::Edit {
+        edit: GridEdit::Nudge { ms: 100 },
+        from_ms: None,
+    };
+    f.state.core().set_protection(true).unwrap();
+    assert!(crate::grid::guarded(
+        &f.state,
+        &editor,
+        &f.state.library().unwrap(),
+        &f.location,
+        &fixture::track_id(1),
+        action,
+        &GridOptions::default()
+    )
+    .is_err());
+    assert!(entries(&f).is_empty());
+    f.state.core().set_protection(false).unwrap();
+    for (action, time) in [
+        (action, 600),
+        (GridAction::Undo, 500),
+        (GridAction::Redo, 600),
+    ] {
+        crate::grid::guarded(
+            &f.state,
+            &editor,
+            &f.state.library().unwrap(),
+            &f.location,
+            &fixture::track_id(1),
+            action,
+            &GridOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            rbl_anlz::Anlz::read(&f.dat).unwrap().beat_grid().unwrap()[0].time_ms,
+            time
+        );
+    }
+    let all = entries(&f);
+    assert_eq!(all.len(), 3);
+    for (e, (action, before, after)) in
+        all.iter()
+            .zip([("write", 500, 600), ("undo", 600, 500), ("redo", 500, 600)])
+    {
+        assert_eq!(e["source"], json!({"kind":"dj", "name":"dj"}));
+        assert_eq!(e["action"], action);
+        assert_eq!(e["kind"], "window_grid");
+        assert_eq!(e["command"]["args"]["before"][0][0], before);
+        assert_eq!(e["command"]["args"]["after"][0][0], after);
+        assert_eq!(e["reversible"], false);
+    }
+    assert_eq!(f.cli(&["runs", "list"])["total"], 1);
+}
+
+#[test]
+fn player_run_closes_when_the_host_stops() {
+    let f = Fixture::new(3);
+    f.grid(234).unwrap();
+    f.service.stop();
+    let db = rusqlite::Connection::open_with_flags(
+        f.location
+            .master_db
+            .parent()
+            .unwrap()
+            .join("wreckordbox-sidecar/sidecar.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let outcome: Option<String> = db
+        .query_row(
+            "SELECT outcome FROM run WHERE source_name = 'link'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(outcome.as_deref(), Some("wreckordbox stopped"));
 }

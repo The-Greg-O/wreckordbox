@@ -82,6 +82,9 @@
 //! the edit gate or the history, and never calls a host or sends an
 //! event.
 
+#[path = "file_ledger.rs"]
+mod files;
+
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
@@ -817,7 +820,7 @@ struct Op {
     /// Whether its entry was made (written or kept for later).
     recorded: bool,
     /// An unnamed write outside the history: deliberately not recorded
-    /// here (bead wbx-22).
+    /// here (bead wbx-14.11).
     unnamed: bool,
     window: bool,
     run: Option<RunId>,
@@ -829,6 +832,7 @@ struct Op {
 
 #[derive(Default)]
 struct State {
+    player: Option<WindowRun>,
     window: Option<WindowRun>,
     /// Whether what an earlier service left behind has been dealt with:
     /// its kept entries written, its intents settled, its Runs ended.
@@ -869,6 +873,7 @@ pub const FAULTS_ENV: &str = "WRECKORDBOX_LEDGER_FAULTS";
 #[derive(Default)]
 struct Faults {
     abort_after_write: bool,
+    abort_before_file_publish: bool,
     fail_append: AtomicUsize,
     abort_in_replay: bool,
     delay_after_begin: Option<Duration>,
@@ -887,6 +892,7 @@ impl Faults {
             let (name, value) = fault.split_once('=').unwrap_or((fault, ""));
             let number = value.parse::<u64>().unwrap_or(1);
             match name {
+                "abort_before_file_publish" => faults.abort_before_file_publish = true,
                 "abort_after_write" => faults.abort_after_write = true,
                 "fail_append" => {
                     faults.fail_append = AtomicUsize::new(usize::try_from(number).unwrap_or(1));
@@ -1170,8 +1176,11 @@ impl Keeper {
         if let Err(error) = sidecar.settle_intents(&done) {
             tracing::warn!(%error, "could not settle the Ledger's last intents");
         }
-        if let Some(window) = state.window.take() {
-            let _ = sidecar.finish_run(window.run, "wreckordbox stopped");
+        for run in [state.window.take(), state.player.take()]
+            .into_iter()
+            .flatten()
+        {
+            let _ = sidecar.finish_run(run.run, "wreckordbox stopped");
         }
     }
 
@@ -1211,7 +1220,11 @@ impl Keeper {
                         at: Some(open.at),
                         action: Action::Write,
                         kind: UNCONFIRMED,
-                        label: BEGUN_NOT_CONFIRMED,
+                        label: &files::recovery_label(
+                            &self.location,
+                            open.command.as_ref(),
+                            BEGUN_NOT_CONFIRMED,
+                        ),
                         command: open.command.as_ref(),
                         reverses: None,
                         part_of: None,
@@ -1320,7 +1333,11 @@ impl Keeper {
                         at: None,
                         action: Action::Write,
                         kind: UNCONFIRMED,
-                        label: MADE_NOT_RECORDED,
+                        label: &files::recovery_label(
+                            &self.location,
+                            op.command.as_ref(),
+                            MADE_NOT_RECORDED,
+                        ),
                         command: op.command.as_ref(),
                         reverses: None,
                         part_of: None,
@@ -1359,6 +1376,24 @@ impl Keeper {
         Ok(run)
     }
 
+    fn player_run(&self, sidecar: &Sidecar, state: &mut State) -> Result<RunId, String> {
+        if let Some(player) = &mut state.player {
+            if player.last_edit.elapsed() < self.pause {
+                player.last_edit = Instant::now();
+                return Ok(player.run);
+            }
+            let _ = sidecar.finish_run(player.run, "the player paused");
+        }
+        let run = sidecar
+            .begin_owned_run(&Source::new(SourceKind::Tool, "link"), files::PLAYER_RUN)
+            .map_err(|e| e.to_string())?;
+        state.player = Some(WindowRun {
+            run,
+            last_edit: Instant::now(),
+        });
+        Ok(run)
+    }
+
     /// Appends one entry for a change already made, attributed to the
     /// command this thread is answering or else to the DJ in the window.
     /// Answers the entry's identifier: the one reserved for the write it
@@ -1369,9 +1404,22 @@ impl Keeper {
             let mut state = self.state();
             let sidecar = self.stems.sidecar();
             let dj = Source::new(SourceKind::Dj, "dj");
+            // An operation descriptor and evidence belong only to the entry
+            // claiming that operation's reserved identifier.
+            let fresh = state.op.as_ref().filter(|op| !op.recorded);
+            let command = fresh.and_then(|op| op.command.clone())
+                .or_else(|| current.as_ref().map(|scope| scope.command.clone()));
+            let dj_snapshot = fresh.and_then(|op| op.dj_snapshot.clone());
+            let player = fresh.is_some_and(|op| files::is_link(op.command.as_ref()));
             // Which Run and whose change, as far as can be told even when
             // the Sidecar cannot be written.
-            let (run, source, description) = match (current.as_mut().map(|scope| &mut scope.target), &sidecar) {
+            let (run, source, description) = if player {
+                let run = match &sidecar {
+                    Ok(sidecar) => self.player_run(sidecar, &mut state),
+                    Err(error) => Err(error.message.clone()),
+                };
+                (run, Source::new(SourceKind::Tool, "link"), files::PLAYER_RUN.to_owned())
+            } else { match (current.as_mut().map(|scope| &mut scope.target), &sidecar) {
                 (Some(Target::Joined { run, source }), _) => {
                     (Ok(*run), source.clone(), String::new())
                 }
@@ -1394,9 +1442,7 @@ impl Keeper {
                 (Some(Target::Window) | None, Err(error)) => {
                     (Err(error.message.clone()), dj, WINDOW_RUN.to_owned())
                 }
-            };
-            let command = state.op.as_ref().and_then(|op| op.command.clone())
-                .or_else(|| current.as_ref().map(|scope| scope.command.clone()));
+            }};
             if let Some(scope) = current.as_mut() {
                 scope.entries += 1;
             }
@@ -1409,7 +1455,6 @@ impl Keeper {
                 }
                 _ => None,
             };
-            let dj_snapshot = state.op.as_ref().and_then(|op| op.dj_snapshot.clone());
             let mut dj_facts = if source.kind == SourceKind::Dj && draft.action != Action::Undo {
                 crate::dj_facts::derive(&self.location, &self.stems, draft.kind, draft.payload.as_ref())
             } else { wreckordbox_sidecar::dj_facts::NativeFacts::default() };
@@ -1504,6 +1549,15 @@ impl Keeper {
         let (window, run, source, description, command) = CURRENT.with(|current| {
             let current = current.borrow();
             let command = file.or_else(|| current.as_ref().map(|scope| scope.command.clone()));
+            if files::is_link(command.as_ref()) {
+                return (
+                    false,
+                    state.player.as_ref().map(|player| player.run),
+                    Source::new(SourceKind::Tool, "link"),
+                    files::PLAYER_RUN.to_owned(),
+                    command,
+                );
+            }
             match current.as_ref().map(|scope| &scope.target) {
                 Some(Target::Joined { run, source }) => {
                     (false, Some(*run), source.clone(), String::new(), command)
@@ -1568,18 +1622,35 @@ impl rbl_library::ledger::Ledger for Keeper {
         self.begin_operation(None)
     }
 
-    fn begin_file(&self, kind: &str, track: &str) -> Result<(), String> {
-        self.begin_operation(Some(serde_json::json!({
-            "name": "files.edit", "args": {"kind": kind, "track": track}
-        })))
+    fn begin_file(&self, kind: &str, track: &str, values: &Value) -> Result<(), String> {
+        let mut args = values.as_object().cloned().unwrap_or_default();
+        args.insert("kind".to_owned(), Value::from(kind));
+        args.insert("track".to_owned(), Value::from(track));
+        self.begin_operation(Some(
+            serde_json::json!({"name": "files.edit", "args": args}),
+        ))?;
+        if self.faults.abort_before_file_publish {
+            std::process::abort();
+        }
+        Ok(())
     }
 
     fn file_written(&self, kind: &str, track: &str) {
-        let label = format!(
-            "{kind}: track {track}. Cannot reverse: previous analysis bytes were not retained."
-        );
+        let command = self.state().op.as_ref().and_then(|op| op.command.clone());
+        let args = command.as_ref().and_then(|command| command.get("args"));
+        let reason = if args.is_some_and(|args| args.get("before").is_some()) {
+            "Unwind does not yet reverse analysis file edits"
+        } else {
+            "previous analysis bytes were not retained"
+        };
+        let label = format!("{kind}: track {track}. Cannot reverse: {reason}.");
+        let action = match args.and_then(|args| args["step"].as_str()) {
+            Some("undo") => Action::Undo,
+            Some("redo") => Action::Redo,
+            _ => Action::Write,
+        };
         self.append(Draft {
-            action: Action::Write,
+            action,
             kind,
             label: &label,
             reverses: None,
@@ -1643,7 +1714,7 @@ impl rbl_library::ledger::Ledger for Keeper {
     fn note(&self, kept: Unkept, name: Option<&str>) {
         // Named by the caller, else by the command being answered. A write
         // with neither is not an edit (analysis, an import, a player): not
-        // recorded here (bead wbx-22), and its intent needs no entry.
+        // recorded here (bead wbx-14.11), and its intent needs no entry.
         let command =
             CURRENT.with(|current| current.borrow().as_ref().map(|scope| scope.name.clone()));
         let Some(label) = name.map(str::to_owned).or(command) else {
