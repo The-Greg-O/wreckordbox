@@ -351,6 +351,25 @@ fn playlists_tree_prints_the_tree_with_each_rule_on_its_line() {
 }
 
 #[test]
+fn playlists_tracks_gives_each_track_the_identifier_of_its_entrys_row() {
+    let sandbox = Sandbox::new();
+
+    let result = json_of(&sandbox, &["--json", "playlists", "tracks", &playlist_id(1)]);
+
+    // The fixture's rows of playlist 1 have these identifiers, in order.
+    let entries: Vec<&str> = result["tracks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|track| track["entry_id"].as_str().unwrap())
+        .collect();
+    let rows: Vec<String> = (0..5)
+        .map(|t| format!("fixture-song-0001-{t:04}-4000-8000-000000000000"))
+        .collect();
+    assert_eq!(entries, rows);
+}
+
+#[test]
 fn playlists_tracks_gives_a_playlists_tracks_in_its_order() {
     let made = prepared();
 

@@ -34,6 +34,10 @@ pub const SCHEMA_VERSION: u32 = 2;
 /// a version at the end; never change one that has shipped.
 const MIGRATIONS: &[(u32, &str)] = &[(2, crate::mutants::SCHEMA)];
 
+// A migration added without raising `SCHEMA_VERSION`, or the reverse,
+// does not build.
+const _: () = assert!(MIGRATIONS[MIGRATIONS.len() - 1].0 == SCHEMA_VERSION);
+
 const DATABASE_FILE: &str = "sidecar.db";
 /// Where a tool writes before its result is accepted. Emptied on open.
 const WORK_FOLDER: &str = "work";
@@ -389,27 +393,7 @@ impl Sidecar {
 
     /// One Run by its identifier.
     pub fn run(&self, run: RunId) -> Result<Option<Run>> {
-        Ok(self
-            .db()
-            .query_row(
-                "SELECT id, source_kind, source_name, description, started_at, finished_at, outcome
-                 FROM run WHERE id = ?1",
-                [run.0],
-                |row| {
-                    Ok(Run {
-                        id: RunId(row.get(0)?),
-                        source: Source {
-                            kind: SourceKind::from_stored(&row.get::<_, String>(1)?),
-                            name: row.get(2)?,
-                        },
-                        description: row.get(3)?,
-                        started_at: row.get(4)?,
-                        finished_at: row.get(5)?,
-                        outcome: row.get(6)?,
-                    })
-                },
-            )
-            .optional()?)
+        Ok(run_in(&self.db(), run)?)
     }
 
     /// An empty folder for `run` to write into before its result is
@@ -620,6 +604,29 @@ fn read_fact(row: &Row) -> rusqlite::Result<Fact> {
         superseded_at: row.get(12)?,
         superseded_by: row.get(13)?,
     })
+}
+
+/// One Run, read on `db` (a transaction, to read what it has written).
+pub(crate) fn run_in(db: &Connection, run: RunId) -> rusqlite::Result<Option<Run>> {
+    db.query_row(
+        "SELECT id, source_kind, source_name, description, started_at, finished_at, outcome
+         FROM run WHERE id = ?1",
+        [run.0],
+        |row| {
+            Ok(Run {
+                id: RunId(row.get(0)?),
+                source: Source {
+                    kind: SourceKind::from_stored(&row.get::<_, String>(1)?),
+                    name: row.get(2)?,
+                },
+                description: row.get(3)?,
+                started_at: row.get(4)?,
+                finished_at: row.get(5)?,
+                outcome: row.get(6)?,
+            })
+        },
+    )
+    .optional()
 }
 
 pub(crate) fn now() -> i64 {

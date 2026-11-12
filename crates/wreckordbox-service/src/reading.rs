@@ -310,13 +310,12 @@ pub(crate) fn answer(
     command: &str,
     args: &Value,
 ) -> Result<Value, ServiceError> {
-    let reader = Reader::new(library)?;
-    match command {
-        commands::MYTAGS_LIST => to_value(&reader.my_tags()),
-        commands::MYTAGS_OF_TRACK => to_value(&reader.my_tags_of(&arguments(command, args)?)?),
-        commands::MYTAGS_TRACKS => to_value(&reader.tagged(&arguments(command, args)?)?),
-        commands::PLAYLISTS_TREE => to_value(&reader.playlist_tree()),
-        commands::PLAYLISTS_TRACKS => {
+    if command == commands::PLAYLISTS_TRACKS {
+        // The order comes from the index and the entries' identifiers from
+        // the database: both read with no edit between them, or an entry
+        // could be paired with a position from before the edit.
+        return library.steady(|| {
+            let reader = Reader::new(library)?;
             let mut found = reader.playlist_tracks(&arguments(command, args)?)?;
             if found.playlist.kind == PlaylistKind::Playlist {
                 crate::entries::attach(
@@ -327,7 +326,14 @@ pub(crate) fn answer(
                 )?;
             }
             to_value(&found)
-        }
+        });
+    }
+    let reader = Reader::new(library)?;
+    match command {
+        commands::MYTAGS_LIST => to_value(&reader.my_tags()),
+        commands::MYTAGS_OF_TRACK => to_value(&reader.my_tags_of(&arguments(command, args)?)?),
+        commands::MYTAGS_TRACKS => to_value(&reader.tagged(&arguments(command, args)?)?),
+        commands::PLAYLISTS_TREE => to_value(&reader.playlist_tree()),
         commands::HISTORY_LIST => to_value(&reader.occasions()),
         commands::HISTORY_TRACKS => to_value(&reader.history_tracks(&arguments(command, args)?)?),
         unknown => Err(ServiceError::new(

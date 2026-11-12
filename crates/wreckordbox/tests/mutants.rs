@@ -200,6 +200,40 @@ fn entry_rows(sandbox: &Sandbox) -> Vec<String> {
     found
 }
 
+/// Every column of the track's own row, and of its cues, as the Library
+/// holds them: a Mutant must leave the parent exactly as it was.
+fn parent_rows(sandbox: &Sandbox, track: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    sandbox.edit(|writer| {
+        let db = writer.library().connection();
+        for (table, key) in [("djmdContent", "ID"), ("djmdCue", "ContentID")] {
+            let columns: Vec<String> = db
+                .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))
+                .unwrap()
+                .query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            let quoted: Vec<String> = columns
+                .iter()
+                .map(|column| format!("quote(\"{column}\")"))
+                .collect();
+            let mut rows = db
+                .prepare(&format!(
+                    "SELECT {} FROM {table} WHERE {key} = ?1 ORDER BY rowid",
+                    quoted.join(" || ',' || ")
+                ))
+                .unwrap();
+            found.extend(
+                rows.query_map([track], |row| row.get::<_, String>(0))
+                    .unwrap()
+                    .map(|row| format!("{table}: {}", row.unwrap())),
+            );
+        }
+    });
+    found
+}
+
 #[test]
 fn mutants_are_listed_for_one_playlist_and_across_the_library() {
     let sandbox = Sandbox::new();
@@ -661,8 +695,15 @@ fn creating_and_removing_a_mutant_changes_nothing_in_the_library() {
             .add_tracks(&playlist, std::slice::from_ref(&track))
             .unwrap();
     });
+    sandbox.edit(|writer| {
+        writer.set_comment(&track, "Warm, rolling").unwrap();
+        writer.add_cue(&track, 1, 250).unwrap();
+    });
     let shape = library_shape(&sandbox);
     let rows = entry_rows(&sandbox);
+    let parent = parent_rows(&sandbox, &track);
+    assert!(parent[0].contains("'Warm, rolling'"), "{parent:?}");
+    assert!(parent[1].starts_with("djmdCue: "), "{parent:?}");
     let listed_before = entries(&sandbox, &playlist);
 
     let entry = entry_at(&sandbox, &playlist, 3);
@@ -679,6 +720,7 @@ fn creating_and_removing_a_mutant_changes_nothing_in_the_library() {
     stop_service(&sandbox);
     assert_eq!(library_shape(&sandbox), shape);
     assert_eq!(entry_rows(&sandbox), rows);
+    assert_eq!(parent_rows(&sandbox, &track), parent);
 
     // Nor does removing it.
     let id = created["mutant"]["id"].as_i64().unwrap().to_string();
@@ -691,6 +733,7 @@ fn creating_and_removing_a_mutant_changes_nothing_in_the_library() {
     stop_service(&sandbox);
     assert_eq!(library_shape(&sandbox), shape);
     assert_eq!(entry_rows(&sandbox), rows);
+    assert_eq!(parent_rows(&sandbox, &track), parent);
 }
 
 #[test]
@@ -727,4 +770,60 @@ fn a_second_client_is_told_of_mutant_changes_as_sidecar_changes_not_library_chan
         )
     };
     assert_eq!(heard, [changed("created"), changed("removed")]);
+}
+
+/// Copies a live entry row of `from` into `playlist` under the identifier
+/// `id`: a membership row left under a playlist that has no entries of its
+/// own, as an import can leave one.
+fn leave_a_row(sandbox: &Sandbox, from: &str, playlist: &str, id: &str) {
+    sandbox.edit(|writer| {
+        let db = writer.library().connection();
+        db.execute(
+            "CREATE TEMP TABLE residual AS SELECT * FROM djmdSongPlaylist
+             WHERE PlaylistID = ?1 AND rb_local_deleted = 0 LIMIT 1",
+            [from],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE residual SET ID = ?1, PlaylistID = ?2, UUID = ?1",
+            [id, playlist],
+        )
+        .unwrap();
+        db.execute_batch(
+            "INSERT INTO djmdSongPlaylist SELECT * FROM residual; DROP TABLE residual;",
+        )
+        .unwrap();
+    });
+}
+
+#[test]
+fn a_row_left_under_a_folder_or_an_intelligent_playlist_is_not_an_entry_to_mutate() {
+    let sandbox = Sandbox::new();
+    let playlist = sandbox.create_playlist("Friday", &[2, 3]);
+    let genre = sandbox.create_genre_playlist("Dub", "Dub");
+    let mut folder = String::new();
+    sandbox.edit(|writer| folder = writer.create_folder("Crates", "root").unwrap());
+    leave_a_row(&sandbox, &playlist, &genre, "residual-in-intelligent");
+    leave_a_row(&sandbox, &playlist, &folder, "residual-in-folder");
+    let create = |args: &[&str]| {
+        let mut all = vec!["mutants", "create"];
+        all.extend_from_slice(args);
+        all.extend_from_slice(&["--source", "agent:preparer"]);
+        refused(&sandbox, &all)
+    };
+
+    assert_eq!(
+        create(&["residual-in-intelligent"]),
+        "playlist_entry_not_found"
+    );
+    assert_eq!(create(&["residual-in-folder"]), "playlist_entry_not_found");
+    assert_eq!(
+        create(&["--playlist", &genre, "--position", "1"]),
+        "playlist_entry_not_found"
+    );
+    assert_eq!(
+        create(&["--playlist", &folder, "--position", "1"]),
+        "playlist_entry_not_found"
+    );
+    assert_eq!(listed(&sandbox, None), Vec::<Value>::new());
 }

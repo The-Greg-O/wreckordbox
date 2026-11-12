@@ -35,7 +35,7 @@ use rusqlite::{params, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::store::{now, RunId, Sidecar, Source, SourceKind};
+use crate::store::{now, run_in, Run, RunId, Sidecar, Source, SourceKind};
 use crate::{Fingerprint, Result, SidecarError};
 
 /// What version 2 of the store adds.
@@ -98,7 +98,33 @@ pub struct NewMutant<'a> {
     /// The edits it starts with: a JSON object, empty for "as the parent".
     pub edits: Value,
     pub source: &'a Source,
-    pub run: RunId,
+    pub run: InRun<'a>,
+}
+
+/// The Run a change to a Mutant is made in. It is checked, made and ended
+/// in the transaction that records the change, so a change is never kept
+/// without its Run, nor made in a Run another caller has just ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InRun<'a> {
+    /// A Run that is open now. Refused with [`SidecarError::NoRun`] or
+    /// [`SidecarError::RunFinished`]; it stays open.
+    Open(RunId),
+    /// A Run made for this change alone, by the change's source, ended
+    /// with the outcome `"<action> Mutant <id>"`.
+    Own { description: &'a str },
+}
+
+impl From<RunId> for InRun<'_> {
+    fn from(run: RunId) -> Self {
+        Self::Open(run)
+    }
+}
+
+/// A change made: the Mutant as it is after it, and its Run as it is then.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Committed {
+    pub mutant: Mutant,
+    pub run: Run,
 }
 
 /// A change to a Mutant that exists: new edits, or its removal.
@@ -107,7 +133,7 @@ pub struct MutantUpdate<'a> {
     /// The fingerprint of the parent's audio as it is now, when known.
     pub fingerprint: Option<&'a Fingerprint>,
     pub source: &'a Source,
-    pub run: RunId,
+    pub run: InRun<'a>,
 }
 
 /// A Mutant as the Sidecar holds it.
@@ -160,8 +186,9 @@ pub struct MutantChange {
 
 impl Sidecar {
     /// Makes a Mutant for a playlist entry. Refused with
-    /// [`SidecarError::AlreadyMutant`] when the entry has one.
-    pub fn create_mutant(&self, new: &NewMutant) -> Result<Mutant> {
+    /// [`SidecarError::AlreadyMutant`] when the entry has one, and as
+    /// [`InRun`] says when its Run cannot take it; a refusal keeps nothing.
+    pub fn create_mutant(&self, new: &NewMutant) -> Result<Committed> {
         if new.playlist_id.is_empty() || new.entry_id.is_empty() || new.track_id.is_empty() {
             return Err(SidecarError::Invalid(
                 "a Mutant needs a playlist, an entry and a parent track".to_owned(),
@@ -183,6 +210,7 @@ impl Sidecar {
                 mutant,
             });
         }
+        let (run, own) = take_run(&tx, new.run, new.source)?;
         let at = now();
         let fingerprint = new.fingerprint.map(Fingerprint::as_str);
         tx.execute(
@@ -194,7 +222,7 @@ impl Sidecar {
                 new.track_id,
                 fingerprint,
                 at,
-                new.run.0
+                run.0
             ],
         )?;
         let id = tx.last_insert_rowid();
@@ -205,24 +233,29 @@ impl Sidecar {
             &edits,
             fingerprint,
             new.source,
-            new.run,
+            run,
             at,
         )?;
-        let mutant = tx.query_row(&select("WHERE mutant.id = ?1"), [id], read_mutant)?;
+        let committed = settle(&tx, id, actions::CREATED, run, own)?;
         tx.commit()?;
-        Ok(mutant)
+        Ok(committed)
     }
 
     /// Gives a live Mutant new edits: a JSON object that replaces the edits
     /// it had. The edits before are kept in its history.
-    pub fn edit_mutant(&self, id: i64, edits: &Value, update: &MutantUpdate) -> Result<Mutant> {
+    pub fn edit_mutant(
+        &self,
+        id: i64,
+        edits: &Value,
+        update: &MutantUpdate,
+    ) -> Result<Committed> {
         let edits = edits_text(edits)?;
         self.change(id, actions::EDITED, Some(&edits), update)
     }
 
     /// Removes a live Mutant: its entry is the core track again. Its rows
     /// are kept, marked removed.
-    pub fn remove_mutant(&self, id: i64, update: &MutantUpdate) -> Result<Mutant> {
+    pub fn remove_mutant(&self, id: i64, update: &MutantUpdate) -> Result<Committed> {
         self.change(id, actions::REMOVED, None, update)
     }
 
@@ -322,7 +355,7 @@ impl Sidecar {
         action: &str,
         edits: Option<&str>,
         update: &MutantUpdate,
-    ) -> Result<Mutant> {
+    ) -> Result<Committed> {
         let mut db = self.db();
         let tx = db.transaction()?;
         let current: Option<String> = tx
@@ -337,6 +370,7 @@ impl Sidecar {
         let Some(current) = current else {
             return Err(SidecarError::NoMutant(id));
         };
+        let (run, own) = take_run(&tx, update.run, update.source)?;
         let at = now();
         insert_change(
             &tx,
@@ -345,19 +379,66 @@ impl Sidecar {
             edits.unwrap_or(&current),
             update.fingerprint.map(Fingerprint::as_str),
             update.source,
-            update.run,
+            run,
             at,
         )?;
         if action == actions::REMOVED {
             tx.execute(
                 "UPDATE mutant SET removed_at = ?2, removed_run = ?3 WHERE id = ?1",
-                params![id, at, update.run.0],
+                params![id, at, run.0],
             )?;
         }
-        let mutant = tx.query_row(&select("WHERE mutant.id = ?1"), [id], read_mutant)?;
+        let committed = settle(&tx, id, action, run, own)?;
         tx.commit()?;
-        Ok(mutant)
+        Ok(committed)
     }
+}
+
+/// The Run a change goes in, inside its transaction: an open one checked,
+/// or one made now. Answers whether it was made.
+fn take_run(tx: &rusqlite::Transaction, run: InRun, source: &Source) -> Result<(RunId, bool)> {
+    match run {
+        InRun::Open(run) => {
+            let finished: Option<Option<i64>> = tx
+                .query_row("SELECT finished_at FROM run WHERE id = ?1", [run.0], |row| {
+                    row.get(0)
+                })
+                .optional()?;
+            match finished {
+                None => Err(SidecarError::NoRun(run)),
+                Some(Some(_)) => Err(SidecarError::RunFinished(run)),
+                Some(None) => Ok((run, false)),
+            }
+        }
+        InRun::Own { description } => {
+            tx.execute(
+                "INSERT INTO run (source_kind, source_name, description, started_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![source.kind.as_str(), source.name, description, now()],
+            )?;
+            Ok((RunId(tx.last_insert_rowid()), true))
+        }
+    }
+}
+
+/// Ends a Run made for one change, and reads back what the change left,
+/// still inside its transaction.
+fn settle(
+    tx: &rusqlite::Transaction,
+    mutant: i64,
+    action: &str,
+    run: RunId,
+    own: bool,
+) -> Result<Committed> {
+    if own {
+        tx.execute(
+            "UPDATE run SET finished_at = ?2, outcome = ?3 WHERE id = ?1",
+            params![run.0, now(), format!("{action} Mutant {mutant}")],
+        )?;
+    }
+    let read = tx.query_row(&select("WHERE mutant.id = ?1"), [mutant], read_mutant)?;
+    let run = run_in(tx, run)?.ok_or(SidecarError::NoRun(run))?;
+    Ok(Committed { mutant: read, run })
 }
 
 #[allow(

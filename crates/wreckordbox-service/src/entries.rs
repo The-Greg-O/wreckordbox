@@ -38,12 +38,17 @@ pub(crate) struct Entry {
 /// The entries of a playlist, in its order. An entry whose track is no
 /// longer in the Library is left out, as every listing leaves it out, so
 /// the positions here are the positions `playlists.tracks` gives. A folder,
-/// an intelligent playlist and an unknown identifier all have none.
+/// an intelligent playlist and an unknown identifier all have none: the
+/// kind is checked, so a membership row left under a folder or an
+/// intelligent playlist (an import can leave one) is not an entry.
 pub(crate) fn of_playlist(
     library: &OpenLibrary,
     index: &rbl_index::Library,
     playlist_id: &str,
 ) -> Result<Vec<Entry>, ServiceError> {
+    if !is_plain(index, playlist_id) {
+        return Ok(Vec::new());
+    }
     let rows: Vec<(String, String)> = library.with_db(|db| {
         let mut statement = db
             .connection()
@@ -114,6 +119,20 @@ pub(crate) fn find(
     Ok(of_playlist(library, index, &playlist)?
         .into_iter()
         .find(|entry| entry.id == entry_id))
+}
+
+/// Whether the Library has a plain playlist (not a folder, not an
+/// intelligent playlist) with this identifier now.
+fn is_plain(index: &rbl_index::Library, playlist_id: &str) -> bool {
+    let playlists = index.playlists();
+    let Some(at) = playlist_id
+        .parse()
+        .ok()
+        .and_then(|id| playlists.index_of(id))
+    else {
+        return false;
+    };
+    !playlists.is_folder(at) && !playlists.is_smart(at)
 }
 
 /// The name of a playlist that is in the Library now.

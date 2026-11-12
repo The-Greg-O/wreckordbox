@@ -106,6 +106,12 @@ pub enum SidecarError {
     /// No live Mutant with that identifier.
     #[error("there is no Mutant {0}")]
     NoMutant(i64),
+    /// A change named a Run the store does not have.
+    #[error("there is no Run {}", .0 .0)]
+    NoRun(RunId),
+    /// A change named a Run that has ended.
+    #[error("Run {} has ended", .0 .0)]
+    RunFinished(RunId),
 }
 
 pub type Result<T> = std::result::Result<T, SidecarError>;

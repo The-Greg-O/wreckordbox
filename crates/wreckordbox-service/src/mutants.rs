@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use wreckordbox_sidecar::mutants::{actions, MutantUpdate, NewMutant};
+use wreckordbox_sidecar::mutants::{actions, Committed, InRun, MutantUpdate, NewMutant};
 use wreckordbox_sidecar::{RunId, Sidecar, SidecarError};
 
 use crate::entries::{self, Entry};
@@ -307,6 +307,17 @@ struct Provenance {
     description: Option<String>,
 }
 
+impl Provenance {
+    /// The Run the change goes in: the one given, or one made for it with
+    /// `description` (the store checks, makes and ends it with the change).
+    fn in_run<'a>(&self, description: &'a str) -> InRun<'a> {
+        match &self.run {
+            Some(run) => InRun::Open(run.id),
+            None => InRun::Own { description },
+        }
+    }
+}
+
 impl Mutants<'_> {
     /// Reads the Library: `read` runs with the Library's lock held.
     fn read<T>(
@@ -327,7 +338,9 @@ impl Mutants<'_> {
     }
 
     fn create(&self, create: &CreateMutant) -> Result<MutantChanged, ServiceError> {
-        let place = self.read(|library| place(library, create))?;
+        // Found with no Library edit under way, so the entry, its position
+        // and its track are those of one state of the Library.
+        let found = self.read(|library| library.steady(|| place(library, create)))?;
         let provenance = self.provenance(
             create.run,
             create.source.as_ref(),
@@ -335,44 +348,47 @@ impl Mutants<'_> {
         )?;
         if let Some(existing) = self
             .sidecar
-            .mutant_of_entry(&place.entry.id)
+            .mutant_of_entry(&found.entry.id)
             .map_err(|e| sidecar_error(&e))?
         {
-            return Err(already(&place.entry.id, existing.id));
+            return Err(already(&found.entry.id, existing.id));
         }
-        // Outside the Library's lock: one read of the parent's audio. A
-        // Mutant is about the music, so a parent whose file is not at hand
-        // can still be mutated.
-        let fingerprint = place
-            .audio
-            .is_file()
-            .then(|| wreckordbox_sidecar::fingerprint_file(&place.audio).ok())
-            .flatten();
-        let (run, created_run) = self.run_for(&provenance, || {
-            format!(
-                "Mutate entry {} of playlist \"{}\" (track {} \"{}\")",
-                place.entry.position, place.playlist_name, place.parent.id, place.parent.title
-            )
+        // With no lock held, as an edit may come meanwhile: one read of the
+        // parent's audio. A Mutant is about the music, so a parent whose
+        // file is not at hand can still be mutated.
+        let fingerprint = wreckordbox_sidecar::fingerprint_file(&found.audio).ok();
+        // Again with no edit under way, until the change is committed: the
+        // entry, its playlist and its track are looked up afresh, and an
+        // edit that removed any of them meanwhile refuses the change.
+        let (place, committed) = self.read(|library| {
+            library.steady(|| {
+                let place = again(library, &found)?;
+                let description = provenance.description.clone().unwrap_or_else(|| {
+                    format!(
+                        "Mutate entry {} of playlist \"{}\" (track {} \"{}\")",
+                        place.entry.position,
+                        place.playlist_name,
+                        place.parent.id,
+                        place.parent.title
+                    )
+                });
+                let committed = self
+                    .sidecar
+                    .create_mutant(&NewMutant {
+                        playlist_id: &place.entry.playlist_id,
+                        entry_id: &place.entry.id,
+                        track_id: &place.entry.track_id,
+                        fingerprint: fingerprint.as_ref(),
+                        edits: json!({}),
+                        source: &provenance.source,
+                        run: provenance.in_run(&description),
+                    })
+                    .map_err(|e| sidecar_error(&e))?;
+                Ok((place, committed))
+            })
         })?;
-        let made = self.sidecar.create_mutant(&NewMutant {
-            playlist_id: &place.entry.playlist_id,
-            entry_id: &place.entry.id,
-            track_id: &place.entry.track_id,
-            fingerprint: fingerprint.as_ref(),
-            edits: json!({}),
-            source: &provenance.source,
-            run: run.id,
-        });
-        let made = match made {
-            Ok(made) => made,
-            Err(error) => {
-                if created_run {
-                    let _ = self.sidecar.finish_run(run.id, "refused");
-                }
-                return Err(sidecar_error(&error));
-            }
-        };
-        let run = self.finished(run, created_run, &format!("created Mutant {}", made.id))?;
+        // Committed: nothing below can fail.
+        let Committed { mutant: made, run } = committed;
         self.changed(&made, actions::CREATED);
         Ok(MutantChanged {
             mutant: Mutant {
@@ -393,7 +409,7 @@ impl Mutants<'_> {
                 removed: false,
             },
             run,
-            created_run,
+            created_run: provenance.run.is_none(),
         })
     }
 
@@ -459,36 +475,40 @@ impl Mutants<'_> {
             remove.source.as_ref(),
             remove.description.as_deref(),
         )?;
-        let (run, created_run) =
-            self.run_for(&provenance, || format!("Remove Mutant {}", stored.id))?;
-        let removed = self.sidecar.remove_mutant(
-            stored.id,
-            &MutantUpdate {
-                // The parent's audio is not read to remove a Mutant.
-                fingerprint: None,
-                source: &provenance.source,
-                run: run.id,
-            },
-        );
-        let removed = match removed {
-            Ok(removed) => removed,
-            Err(error) => {
-                if created_run {
-                    let _ = self.sidecar.finish_run(run.id, "refused");
-                }
-                return Err(sidecar_error(&error));
-            }
-        };
-        let run = self.finished(run, created_run, &format!("removed Mutant {}", removed.id))?;
-        self.changed(&removed, actions::REMOVED);
-        let mutant = self
-            .described(vec![removed])?
+        // Described before the change, so that once it is committed nothing
+        // is left to fail.
+        let described = self
+            .described(vec![stored.clone()])?
             .pop()
             .ok_or_else(|| ServiceError::new(service_codes::SERVICE_FAILED, "no Mutant"))?;
+        let description = provenance
+            .description
+            .clone()
+            .unwrap_or_else(|| format!("Remove Mutant {}", stored.id));
+        let Committed { mutant: removed, run } = self
+            .sidecar
+            .remove_mutant(
+                stored.id,
+                &MutantUpdate {
+                    // The parent's audio is not read to remove a Mutant.
+                    fingerprint: None,
+                    source: &provenance.source,
+                    run: provenance.in_run(&description),
+                },
+            )
+            .map_err(|e| sidecar_error(&e))?;
+        self.changed(&removed, actions::REMOVED);
         Ok(MutantChanged {
-            mutant,
+            mutant: Mutant {
+                removed: !removed.is_live(),
+                edits: removed.edits,
+                source: removed.source,
+                run: removed.run.0,
+                changed_at: removed.changed_at,
+                ..described
+            },
             run,
-            created_run,
+            created_run: provenance.run.is_none(),
         })
     }
 
@@ -640,45 +660,6 @@ impl Mutants<'_> {
         })
     }
 
-    /// The Run to make the change in: the one given, or one made now.
-    fn run_for(
-        &self,
-        provenance: &Provenance,
-        describe: impl FnOnce() -> String,
-    ) -> Result<(Run, bool), ServiceError> {
-        if let Some(run) = &provenance.run {
-            return Ok((run.clone(), false));
-        }
-        let description = provenance.description.clone().unwrap_or_else(describe);
-        let id = self
-            .sidecar
-            .begin_run(&provenance.source, &description)
-            .map_err(|e| sidecar_error(&e))?;
-        let run = self
-            .sidecar
-            .run(id)
-            .map_err(|e| sidecar_error(&e))?
-            .ok_or_else(|| {
-                ServiceError::new(stems::codes::SIDECAR_FAILED, "the Run was not kept")
-            })?;
-        Ok((run, true))
-    }
-
-    /// Ends a Run made for one command, and answers the Run as it is now.
-    fn finished(&self, run: Run, created: bool, outcome: &str) -> Result<Run, ServiceError> {
-        if !created {
-            return Ok(run);
-        }
-        self.sidecar
-            .finish_run(run.id, outcome)
-            .map_err(|e| sidecar_error(&e))?;
-        Ok(self
-            .sidecar
-            .run(run.id)
-            .map_err(|e| sidecar_error(&e))?
-            .unwrap_or(run))
-    }
-
     fn changed(&self, mutant: &wreckordbox_sidecar::mutants::Mutant, action: &str) {
         self.stems.publish(
             stems::events::SIDECAR_CHANGED,
@@ -743,6 +724,32 @@ fn place(library: &OpenLibrary, create: &CreateMutant) -> Result<Place, ServiceE
     })
 }
 
+/// The place `found` named, as the Library has it now: the same entry, of
+/// the same track in the same playlist, perhaps somewhere else in it.
+fn again(library: &OpenLibrary, found: &Place) -> Result<Place, ServiceError> {
+    let index = library.index()?;
+    let entry = entries::find(library, &index, &found.entry.id)?
+        .filter(|entry| {
+            entry.playlist_id == found.entry.playlist_id && entry.track_id == found.entry.track_id
+        })
+        .ok_or_else(|| {
+            ServiceError::new(
+                codes::PLAYLIST_ENTRY_NOT_FOUND,
+                format!(
+                    "playlist entry {} left the Library while it was being mutated",
+                    found.entry.id
+                ),
+            )
+        })?;
+    let parent = stems::parent(library, &entry.track_id)?;
+    Ok(Place {
+        playlist_name: entries::playlist_name(&index, &entry.playlist_id).unwrap_or_default(),
+        parent: parent.parent().clone(),
+        audio: parent.path().to_path_buf(),
+        entry,
+    })
+}
+
 fn already(entry: &str, mutant: i64) -> ServiceError {
     ServiceError::new(
         codes::ALREADY_A_MUTANT,
@@ -758,6 +765,14 @@ fn sidecar_error(error: &SidecarError) -> ServiceError {
     match error {
         SidecarError::AlreadyMutant { entry_id, mutant } => already(entry_id, *mutant),
         SidecarError::NoMutant(id) => no_mutant(*id),
+        SidecarError::NoRun(run) => ServiceError::new(
+            fact_codes::RUN_NOT_FOUND,
+            format!("there is no Run {}", run.0),
+        ),
+        SidecarError::RunFinished(run) => ServiceError::new(
+            fact_codes::RUN_FINISHED,
+            format!("Run {} has ended; start another to change more", run.0),
+        ),
         _ => ServiceError::new(
             stems::codes::SIDECAR_FAILED,
             format!("the Sidecar failed: {error}"),
