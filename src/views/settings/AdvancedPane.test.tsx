@@ -13,12 +13,16 @@ let host: HTMLDivElement;
 let root: Root;
 let update: ReturnType<typeof vi.fn>;
 let listBackups: ReturnType<typeof vi.fn>;
+let setLibraryProtection: ReturnType<typeof vi.fn>;
+let libraryProtection: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   update = vi.fn();
   listBackups = vi.fn().mockResolvedValue([]);
-  __setBackend({ listBackups } as unknown as Backend);
+  setLibraryProtection = vi.fn((on: boolean) => Promise.resolve({ protectLibrary: on, revision: 7 }));
+  libraryProtection = vi.fn(() => Promise.resolve({ protectLibrary: true, revision: 6 }));
+  __setBackend({ listBackups, setLibraryProtection, libraryProtection } as unknown as Backend);
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -85,6 +89,11 @@ async function toggleProtection() {
   const toggle = switchLabelled("Protect library edit.");
   if (!toggle) throw new Error("Library Protection toggle missing");
   await act(async () => { toggle.click(); await Promise.resolve(); await Promise.resolve(); });
+  await settle();
+}
+
+async function settle() {
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 }
 
 it("unlocks immediately when a backup exists", async () => {
@@ -93,6 +102,7 @@ it("unlocks immediately when a backup exists", async () => {
 
   await toggleProtection();
 
+  expect(setLibraryProtection).toHaveBeenCalledWith(false);
   expect(update).toHaveBeenCalledWith("advanced", { protectLibrary: false });
   expect(host.querySelector('[role="dialog"]')).toBeNull();
 });
@@ -120,7 +130,9 @@ it("unlocks without a backup only after explicit confirmation", async () => {
   const unlock = [...host.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')]
     .find(button => button.textContent === "Unlock anyway");
   await act(async () => { unlock?.click(); await Promise.resolve(); });
+  await settle();
 
+  expect(setLibraryProtection).toHaveBeenCalledWith(false);
   expect(update).toHaveBeenCalledWith("advanced", { protectLibrary: false });
 });
 
@@ -129,8 +141,35 @@ it("turns protection on without checking backups", async () => {
 
   await toggleProtection();
 
+  expect(setLibraryProtection).toHaveBeenCalledWith(true);
   expect(update).toHaveBeenCalledWith("advanced", { protectLibrary: true });
   expect(listBackups).not.toHaveBeenCalled();
+});
+
+it("shows the switch turned only once the backend has recorded it", async () => {
+  let record!: (now: { protectLibrary: boolean; revision: number }) => void;
+  setLibraryProtection.mockImplementation(() => new Promise((resolve) => { record = resolve; }));
+  mount(false);
+
+  await toggleProtection();
+  expect(update).not.toHaveBeenCalled();
+
+  await act(async () => { record({ protectLibrary: true, revision: 8 }); await Promise.resolve(); });
+  await settle();
+  expect(update).toHaveBeenCalledWith("advanced", { protectLibrary: true });
+});
+
+it("says so when the switch could not be recorded, and shows what the backend still holds", async () => {
+  setLibraryProtection.mockRejectedValue({ kind: "readOnly", message: "Library Protection could not be saved: disk full" });
+  libraryProtection.mockResolvedValue({ protectLibrary: true, revision: 9 });
+  listBackups.mockResolvedValue([{ path: "/backups/library.zip" }]);
+  mount(true);
+
+  await toggleProtection();
+
+  expect(host.textContent).toContain("Library Protection could not be saved: disk full");
+  expect(update).not.toHaveBeenCalledWith("advanced", { protectLibrary: false });
+  expect(update).toHaveBeenCalledWith("advanced", { protectLibrary: true });
 });
 
 it("offers the four same-name folder choices, Import as a copy first and chosen by default (#355)", () => {

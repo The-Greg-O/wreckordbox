@@ -4074,6 +4074,8 @@ dependencies = [
  "rbl-backup",
  "rbl-db",
  "rbl-index",
+ "serde",
+ "serde_json",
  "tempfile",
  "tracing",
 ]
@@ -4199,6 +4201,7 @@ dependencies = [
  "tracing-subscriber",
  "unicode-normalization",
  "uuid",
+ "webkit2gtk",
  "webview2-com",
  "windows-core 0.61.2",
  "windows-sys 0.61.2",

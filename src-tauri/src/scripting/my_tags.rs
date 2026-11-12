@@ -149,7 +149,7 @@ mod tests {
         let location = fixture::build(dir.path(), Shape::default()).unwrap();
         let db = Library::open(location.clone(), OpenMode::ReadOnly).unwrap();
         let (library, _) = rbl_index::load(&db).unwrap();
-        let state = Arc::new(AppState::with_backups(dir.path().join("backups")));
+        let state = Arc::new(AppState::unprotected(dir.path().join("backups")));
         state.set_library(library, false, db.schema().db_version, 0, location);
         let app = tauri::test::mock_app();
         app.manage(Arc::clone(&state));
@@ -186,7 +186,7 @@ mod tests {
         let location = fixture::build(dir.path(), Shape::default()).unwrap();
         let db = Library::open(location.clone(), OpenMode::ReadOnly).unwrap();
         let (library, _) = rbl_index::load(&db).unwrap();
-        let state = Arc::new(AppState::with_backups(dir.path().join("backups")));
+        let state = Arc::new(AppState::unprotected(dir.path().join("backups")));
         state.set_library(library, false, db.schema().db_version, 0, location);
         let app = tauri::test::mock_app();
         app.manage(Arc::clone(&state));

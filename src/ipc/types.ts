@@ -285,6 +285,13 @@ export interface AppErrorDto {
 export type WaveformKind = "bands" | "bandsDetail" | "mono" | "monoDetail" | "colour" | "colourDetail";
 
 
+/** Library Protection as the backend holds it. */
+export interface LibraryProtection {
+  protectLibrary: boolean;
+  /** Higher for every later change; a lower one than already seen is stale. */
+  revision: number;
+}
+
 export interface Backend {
   /** The installed rekordbox browseSetting.xml, when present. Read-only. */
   rekordboxBrowseSettings(): Promise<string | null>;
@@ -388,6 +395,25 @@ export interface Backend {
   onServiceStopped(listener: (message: string) => void): () => void;
   /** What `onServiceStopped` said, for a window that was not listening yet. */
   serviceProblem(): Promise<string | null>;
+  /**
+   * Library Protection as the backend holds it. The backend owns the
+   * switch (it refuses every change to the Library while it is on); the
+   * window's preference only shows it.
+   */
+  libraryProtection(): Promise<LibraryProtection>;
+  /**
+   * The window's stored preference, taken up only on the first start,
+   * while the backend has never recorded the switch; answers what stands.
+   */
+  adoptLibraryProtection(windowPreference: boolean): Promise<LibraryProtection>;
+  /** Turns Library Protection on or off; resolves once it is recorded. */
+  setLibraryProtection(protectLibrary: boolean): Promise<LibraryProtection>;
+  /**
+   * Library Protection was turned, by whoever; in order of `revision`.
+   * Resolves, with the unsubscribe, once the listener is in place: a turn
+   * made before that is not heard, so ask for the state only after it.
+   */
+  onLibraryProtectionChanged(listener: (now: LibraryProtection) => void): Promise<() => void>;
 
   /**
    * Makes a new, empty library where rekordbox keeps one and loads it;
@@ -664,6 +690,22 @@ export interface Backend {
 
   /** Greys or enables native menu items by id (the Track and Playlist menus). */
   setMenuEnabled(items: Readonly<Record<string, boolean>>): Promise<void>;
+
+  /**
+   * Runs a native menu item the shell does itself (Full screen, Close
+   * Window, Quit) for the command palette, which is the only way to them
+   * where there is no menu row (Linux, #54).
+   */
+  runMenuItem(id: "fullscreen" | "close-window" | "quit"): Promise<void>;
+
+  /**
+   * Runs one of the webview's own editing actions (Cut, Copy, Paste, Select
+   * All) on what has the keyboard, the way the native Edit menu did. On
+   * Linux it is WebKitGTK's `execute_editing_command`, the privileged path
+   * the native menu used, so Paste reads the system clipboard where
+   * JavaScript may not (#54). Rejects where the platform has no such path.
+   */
+  runEditCommand(edit: "cut" | "copy" | "paste" | "selectAll"): Promise<void>;
 
   /**
    * AppleScript's requests to the window: each is run with `handle` and its

@@ -66,6 +66,8 @@ fn undo_and_redo_name_the_change_they_step_across_a_kept_entry_and_a_stop_waits_
         recovery_dir: dir.path().join("recovery"),
     };
     let core = Arc::new(LibraryCore::new(config.recovery_dir.clone()));
+    // As on the machine of a DJ who edits: Library Protection is off.
+    core.set_protection(false).unwrap();
     let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
     let (index, _) = rbl_index::load(&db).unwrap();
     core.set_library(

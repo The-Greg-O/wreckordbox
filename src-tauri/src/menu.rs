@@ -128,6 +128,147 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     build_with_labels(app, &Labels::new())
 }
 
+/// Whether this platform draws the native menu at all.
+///
+/// Linux does not (wbx-54, ADR 0007): GTK's menu is a row inside the window
+/// that takes a line from the music and does not follow the interface scale.
+/// Every item it held is a command in the window's command palette
+/// (`src/lib/palette.ts`, whose test reads this file's ids), and the keys
+/// it answered are the window's own. macOS keeps its menu bar unchanged.
+#[must_use]
+pub const fn has_menu_row() -> bool {
+    !cfg!(target_os = "linux")
+}
+
+/// Installs the native menu where the platform has one.
+pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
+    if has_menu_row() {
+        app.set_menu(build(app)?)?;
+    }
+    Ok(())
+}
+
+/// The items only the shell can do, which the window therefore never hears
+/// of: the command palette asks for them through [`run_menu_item`].
+pub const SHELL_ITEMS: &[&str] = &["fullscreen", "close-window", "quit"];
+
+/// What the shell's own items need of a window. A seam, so a test can see
+/// Full screen and Close Window really act on a window (the mock runtime's
+/// windows keep no state).
+pub trait ShellWindow {
+    fn is_fullscreen(&self) -> bool;
+    fn set_fullscreen(&self, on: bool) -> Result<(), String>;
+    fn close(&self) -> Result<(), String>;
+}
+
+impl<R: Runtime> ShellWindow for tauri::WebviewWindow<R> {
+    fn is_fullscreen(&self) -> bool {
+        tauri::WebviewWindow::is_fullscreen(self).unwrap_or(false)
+    }
+    fn set_fullscreen(&self, on: bool) -> Result<(), String> {
+        tauri::WebviewWindow::set_fullscreen(self, on).map_err(|error| error.to_string())
+    }
+    fn close(&self) -> Result<(), String> {
+        tauri::WebviewWindow::close(self).map_err(|error| error.to_string())
+    }
+}
+
+/// Does one of [`SHELL_ITEMS`] to a window. `Ok(false)` for any other id.
+///
+/// Closing the main window is quitting (see the window-event handler in
+/// `lib.rs`), so Close Window and Quit both take the way out its close box
+/// does.
+pub fn run_shell_item(window: &impl ShellWindow, id: &str) -> Result<bool, String> {
+    match id {
+        "fullscreen" => {
+            let full = window.is_fullscreen();
+            window.set_fullscreen(!full)?;
+            Ok(true)
+        }
+        "close-window" | "quit" => {
+            window.close()?;
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
+/// Runs a menu item by id for the command palette, which is how a platform
+/// with no menu row reaches what the menu's native items did. An id that is
+/// not one of [`SHELL_ITEMS`] goes to the window as a menu click would.
+#[tauri::command]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Tauri's extractors are injected by value"
+)]
+pub fn run_menu_item<R: Runtime>(app: AppHandle<R>, id: String) -> Result<(), String> {
+    if SHELL_ITEMS.contains(&id.as_str()) {
+        match app.get_webview_window("main") {
+            Some(window) => {
+                run_shell_item(&window, &id)?;
+            }
+            // No window to close: quitting is still quitting.
+            None if id != "fullscreen" => app.exit(0),
+            None => {}
+        }
+        return Ok(());
+    }
+    on_event(&app, &id);
+    Ok(())
+}
+
+/// `WebKit`'s name for one of the Edit menu's editing actions, as the
+/// palette names them; `None` for anything else.
+pub fn editing_command(edit: &str) -> Option<&'static str> {
+    match edit {
+        "cut" => Some("Cut"),
+        "copy" => Some("Copy"),
+        "paste" => Some("Paste"),
+        "selectAll" => Some("SelectAll"),
+        _ => None,
+    }
+}
+
+/// Runs one of the Edit menu's editing actions in the calling window, for
+/// the command palette (#54).
+///
+/// The native Edit menu's Cut, Copy and Paste were the webview's own
+/// editing commands, run from the UI process. JavaScript cannot stand in
+/// for them: `WebKitGTK` keeps `JavaScript`'s clipboard access off unless the
+/// app turns it on (`javascript-can-access-clipboard`), and
+/// `execCommand("paste")` from a page is refused. So on Linux this asks
+/// `WebKitGTK` itself (`webkit_web_view_execute_editing_command`), the same privileged
+/// path a GTK menu item takes; it acts on the focused element and its
+/// selection. Elsewhere the native menu row is still there and does it, so
+/// this refuses and the window falls back to the page's own commands.
+#[tauri::command]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Tauri's extractors are injected by value"
+)]
+pub fn run_edit_command<R: Runtime>(
+    window: tauri::WebviewWindow<R>,
+    edit: String,
+) -> Result<(), String> {
+    let Some(command) = editing_command(&edit) else {
+        return Err(format!("not an editing action: {edit}"));
+    };
+    #[cfg(target_os = "linux")]
+    {
+        window
+            .with_webview(move |webview| {
+                use webkit2gtk::WebViewExt;
+                webview.inner().execute_editing_command(command);
+            })
+            .map_err(|error| error.to_string())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (window, command);
+        Err("the native Edit menu runs editing actions on this platform".to_owned())
+    }
+}
+
 fn build_with_labels<R: Runtime>(app: &AppHandle<R>, labels: &Labels) -> tauri::Result<Menu<R>> {
     let settings = MenuItemBuilder::with_id("settings", label(labels, "Settings…"))
         .accelerator("CmdOrCtrl+,")
@@ -143,8 +284,8 @@ fn build_with_labels<R: Runtime>(app: &AppHandle<R>, labels: &Labels) -> tauri::
     // rekordbox's own wording and place: File › Display All Missing Files,
     // between Import and the library items, opens the Missing File Manager
     // [OBS rekordbox 7.2.14, issue #201].
-    let missing =
-        MenuItemBuilder::with_id("missing", label(labels, "Display All Missing Files")).build(app)?;
+    let missing = MenuItemBuilder::with_id("missing", label(labels, "Display All Missing Files"))
+        .build(app)?;
     // rekordbox's own two, worded as its File menu words them.
     let import_xml = MenuItemBuilder::with_id("import-xml", label(labels, "Import rekordbox xml…"))
         .build(app)?;
@@ -291,10 +432,7 @@ fn build_with_labels<R: Runtime>(app: &AppHandle<R>, labels: &Labels) -> tauri::
         )?)
         .build()?;
 
-    Menu::with_items(
-        app,
-        &[&application, &file, &edit, &track, &playlist, &view],
-    )
+    Menu::with_items(app, &[&application, &file, &edit, &track, &playlist, &view])
 }
 
 /// A row of the Track or Playlist menu: an item the frontend runs and greys
@@ -489,8 +627,10 @@ fn apply_enabled<R: Runtime>(kinds: Vec<MenuItemKind<R>>, items: &Enabled) -> Re
     reason = "Tauri's AppHandle extractor is injected by value"
 )]
 pub fn set_menu_labels<R: Runtime>(app: AppHandle<R>, labels: Labels) -> Result<(), String> {
-    let menu = build_with_labels(&app, &labels).map_err(|error| error.to_string())?;
-    app.set_menu(menu).map_err(|error| error.to_string())?;
+    if has_menu_row() {
+        let menu = build_with_labels(&app, &labels).map_err(|error| error.to_string())?;
+        app.set_menu(menu).map_err(|error| error.to_string())?;
+    }
     if let Ok(mut saved) = saved_labels().write() {
         *saved = labels;
     }
@@ -504,8 +644,7 @@ pub fn set_menu_labels<R: Runtime>(app: AppHandle<R>, labels: Labels) -> Result<
 pub fn on_event<R: Runtime>(app: &AppHandle<R>, id: &str) {
     if id == "fullscreen" {
         if let Some(window) = app.get_webview_window("main") {
-            let full = window.is_fullscreen().unwrap_or(false);
-            let _ = window.set_fullscreen(!full);
+            let _ = run_shell_item(&window, id);
         }
         return;
     }

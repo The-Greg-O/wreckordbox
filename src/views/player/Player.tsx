@@ -96,6 +96,7 @@ import {
   beatNudgeFor, beatWait, inPhaseAt, MAX_TEMPO, MIN_TEMPO, syncTo, tempoFor, type Deck as SyncDeck,
 } from "@/lib/sync";
 import { detectPlatform, dispatchBinding, FIXED_JUMPS, matchBinding, type Action } from "@/lib/shortcuts";
+import { PALETTE_SURFACE } from "@/lib/palette";
 import { runCommand, type CommandHandler, type CommandHandlers, type CommandInput } from "@/lib/commands";
 import { useCommands } from "@/store/useCommands";
 import { keyMap } from "@/lib/keyPresets";
@@ -1286,6 +1287,9 @@ export const Player = memo(function Player({
     const elsewhere = (event: PointerEvent) => {
       const box = shell.current;
       if (!box) return;
+      // The command palette is passing through: closing it gives the
+      // keyboard back as it was, armed deck included (#54).
+      if (event.target instanceof Element && event.target.closest(`[${PALETTE_SURFACE}]`)) return;
       setArmed(box.contains(event.target as Node));
     };
     document.addEventListener("pointerdown", elsewhere, true);
@@ -1298,6 +1302,7 @@ export const Player = memo(function Player({
     if (!compact) return;
     const focusElsewhere = (event: FocusEvent) => {
       const box = shell.current;
+      if (event.target instanceof Element && event.target.closest(`[${PALETTE_SURFACE}]`)) return;
       if (box && event.target instanceof Node && !box.contains(event.target)) setArmed(false);
     };
     document.addEventListener("focusin", focusElsewhere, true);
