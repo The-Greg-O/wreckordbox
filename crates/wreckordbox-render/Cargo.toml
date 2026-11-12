@@ -24,6 +24,9 @@ rbl-audio = { path = "../rbl-audio" }
 # The stretcher, and its offline path. The player's engine, so a render and a
 # deck agree.
 rbl-deck = { path = "../rbl-deck", default-features = false }
+# MP3 output: the LAME binding the export's compatibility conversion already
+# encodes with (`rbl-audio`), at the same settings.
+mp3lame-encoder = "0.2.5"
 
 # The rename that refuses to replace (`renameat2(RENAME_NOREPLACE)`,
 # `renameatx_np(RENAME_EXCL)`). Already in the lock through tempfile.
