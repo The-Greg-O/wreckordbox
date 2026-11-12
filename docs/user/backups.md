@@ -15,6 +15,29 @@ A new backup is a ZIP file named `rbexport-YYYYMMDD-HHMM.zip` using local
 - `PIONEER/Artwork` images and thumbnails.
 - Sync Manager selections and the Automix playlist, when present.
 - `summary.json`, recording track/playlist/cue counts and component sizes.
+- The Sidecar: what wreckordbox knows beside the Library. Its database
+  (Facts, Runs, the record of which tracks have Stems, and whatever later
+  versions keep there, such as Mutants) and the
+  files you edit there (the kinds file, the Tag schema, Recipes).
+
+Left out of the Sidecar's part, because it can be made again: audition
+files, render caches and, unless you ask for it, Stem audio.
+
+### Stem audio
+
+Stem audio is not in a backup by default. It is about 215 MB for a
+five-minute track (four lossless files), so 100 separated tracks add roughly
+21 GB before compression, and lossless audio compresses little. The cost of
+leaving it out is time: separating a track again takes over twenty minutes.
+
+To include it, save a file named `backup-sidecar.json` holding
+`{"stems": true}` in wreckordbox's backup state folder (on Linux
+`~/.local/share/wreckordbox/backups/`). Every later backup then carries the
+Stem audio, and says so in its `sidecar.json`.
+
+Restoring a backup without Stem audio leaves any Stem audio already on the
+machine where it is. A track whose Stem audio is not there afterwards has no
+Stems and needs separating again; it is never shown as having them.
 
 ZIP creation uses maximum Deflate compression and parallel work based on CPU
 capacity. A same-minute backup is never overwritten. Backups stay until deleted.
@@ -37,7 +60,10 @@ rekordbox first. The restore app lists backups and uses `summary.json` when
 available to show their contents.
 
 Restore the whole backup or selected components: database, analysis, artwork,
-or Sync Manager/Automix selections. If interrupted, the next RBXport or
+or Sync Manager/Automix selections. The Sidecar is restored together with the
+database, so what wreckordbox knows always matches the Library it is about.
+A backup made before backups carried the Sidecar restores as it always did
+and leaves the Sidecar on the machine untouched. If interrupted, the next RBXport or
 RBXport Restore startup rolls back the operation, or completes it when new
 files were already in place, before opening the library.
 

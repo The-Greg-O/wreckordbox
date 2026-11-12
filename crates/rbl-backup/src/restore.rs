@@ -96,8 +96,10 @@ pub fn restore(request: &Request<'_>, guard: &dyn Fn() -> Result<()>, progress: 
     if !manifest.belongs_to(location) {
         return Err(refused("This backup belongs to another rekordbox library."));
     }
-    let zip = archive::open(request.archive)?;
+    let mut zip = archive::open(request.archive)?;
     let mut plan = Plan::new(&archive::names(&zip), &manifest, request.parts, location)?;
+    // The Sidecar goes back with the database it is about, never apart.
+    let sidecar = if request.parts.database { crate::sidecar_part::Contents::read_from(&mut zip)? } else { None };
     let summary = match request.sizes {
         Some(_) => None,
         None => crate::summary::Summary::read(request.archive).ok().flatten(),
@@ -106,6 +108,14 @@ pub fn restore(request: &Request<'_>, guard: &dyn Fn() -> Result<()>, progress: 
         Some(sizes) => request.parts.bytes(sizes),
         None => zip.decompressed_size().and_then(|bytes| u64::try_from(bytes).ok()).unwrap_or(0),
     };
+    if let Some(contents) = &sidecar {
+        if request.sizes.is_some() || summary.is_some() {
+            plan.bytes += contents.bytes;
+        }
+        let sidecar_dir = crate::sidecar_part::dir(location);
+        crate::sidecar_part::check_space(&sidecar_dir, contents)?;
+        plan.sidecar(&archive::names(&zip), contents, &sidecar_dir)?;
+    }
     drop(zip);
     plan.check_space(location)?;
     let result = (|| {
@@ -113,6 +123,10 @@ pub fn restore(request: &Request<'_>, guard: &dyn Fn() -> Result<()>, progress: 
         if let Some((database, wal)) = plan.database {
             progress(Phase::Validating, unpacked, unpacked, "Checking database · master.db")?;
             validate_database(&plan.stages[database].swap.staged, &plan.stages[wal].swap.staged, location)?;
+        }
+        if !plan.sidecar_files.is_empty() {
+            progress(Phase::Validating, unpacked, unpacked, "Checking the Sidecar")?;
+            plan.validate_sidecar()?;
         }
         progress(Phase::Replacing, unpacked, unpacked, "Replacing library files")?;
         crate::writable(location)?;
@@ -158,6 +172,8 @@ struct Plan {
     bytes: u64,
     /// The database's and its WAL's stages.
     database: Option<(usize, usize)>,
+    /// The stages of the Sidecar's top-level files, by the name shown.
+    sidecar_files: Vec<(usize, String)>,
 }
 
 impl Plan {
@@ -330,6 +346,71 @@ impl Plan {
         journal.committed = true;
         journal::save(state_dir, &journal)?;
         journal::recover(state_dir, location)
+    }
+}
+
+/// The Sidecar's part: see [`crate::sidecar_part`].
+impl Plan {
+    /// Plans the Sidecar at `sidecar_dir` back as the backup holds it. Each
+    /// top-level entry is a target of its own, so what a backup never holds
+    /// (the reserved folders, and Stem audio that was left out) stays where
+    /// it is; a kind of entry a backup holds that is on disk but not in
+    /// this one is set aside, as a stale WAL is.
+    fn sidecar(&mut self, names: &[String], contents: &crate::sidecar_part::Contents, sidecar_dir: &Path) -> Result<()> {
+        use std::collections::BTreeMap;
+        let mut held: BTreeMap<String, Vec<(PathBuf, usize, bool)>> = BTreeMap::new();
+        for (index, name) in names.iter().enumerate() {
+            let Some(relative) = crate::sidecar_part::entry(name) else { continue };
+            let mut parts = relative.components();
+            let Some(top) = parts.next().and_then(|part| part.as_os_str().to_str()) else { continue };
+            if crate::sidecar_part::backed_up(top, contents.stems) {
+                held.entry(top.to_owned()).or_default().push((parts.collect(), index, name.ends_with('/')));
+            }
+        }
+        if let Ok(present) = fs::read_dir(sidecar_dir) {
+            for entry in present {
+                if let Some(name) = entry?.file_name().to_str().filter(|name| crate::sidecar_part::backed_up(name, contents.stems)) {
+                    held.entry(name.to_owned()).or_default();
+                }
+            }
+        }
+        if held.is_empty() {
+            return Ok(());
+        }
+        // The folder the staged copies are unpacked in, should it be new.
+        self.directories.insert(sidecar_dir.to_path_buf());
+        for (name, entries) in held {
+            let target = sidecar_dir.join(&name);
+            let label = format!("Sidecar · {name}");
+            match entries.as_slice() {
+                [] => {
+                    self.single(&target, None, "")?;
+                }
+                [(inside, index, false)] if inside.as_os_str().is_empty() => {
+                    let stage = self.single(&target, Some(*index), &label)?;
+                    self.sidecar_files.push((stage, name));
+                }
+                // A file that is also a folder is no backup of ours.
+                entries if entries.iter().any(|(inside, _, is_dir)| inside.as_os_str().is_empty() && !is_dir) => {
+                    return Err(refused("The backup has an unsafe entry."));
+                }
+                entries => self.tree(&target, entries, &label)?,
+            }
+        }
+        self.files.sort_by_key(|file| file.index);
+        Ok(())
+    }
+
+    /// Every unpacked database of the Sidecar must pass SQLite's own check
+    /// before it can replace anything.
+    fn validate_sidecar(&self) -> Result<()> {
+        for (stage, name) in &self.sidecar_files {
+            let staged = &self.stages[*stage].swap.staged;
+            if crate::sidecar_part::is_database(staged) && !crate::sidecar_part::sound(staged)? {
+                return Err(refused(format!("The backup's Sidecar database {name} is damaged.")));
+            }
+        }
+        Ok(())
     }
 }
 

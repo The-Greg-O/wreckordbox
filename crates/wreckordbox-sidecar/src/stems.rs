@@ -122,6 +122,16 @@ impl StemSet {
     pub fn is_current(&self) -> bool {
         !self.stale && !self.superseded
     }
+
+    /// Whether every Stem's audio file is in the Sidecar. A set can be
+    /// recorded without its audio: a backup leaves Stem audio out unless
+    /// asked, so a restored Sidecar remembers separations whose files did
+    /// not come back. Such a set is not the track's Stems; the track needs
+    /// separating again.
+    #[must_use]
+    pub fn audio_present(&self) -> bool {
+        self.stems.iter().all(|stem| stem.path.is_file())
+    }
 }
 
 /// One Stem: its role and its audio file.
@@ -263,7 +273,10 @@ impl Sidecar {
     }
 
     /// The track's Stems now, if it has any that match `fingerprint`, the
-    /// track's audio as it is: neither replaced nor made from other audio.
+    /// track's audio as it is: neither replaced nor made from other audio,
+    /// and with their audio files in the Sidecar
+    /// ([`StemSet::audio_present`]). `None` means the track needs
+    /// separating.
     pub fn current_stems(
         &self,
         track_id: &str,
@@ -272,7 +285,8 @@ impl Sidecar {
         Ok(self
             .stems(track_id)?
             .into_iter()
-            .find(|set| set.is_current() && set.fingerprint == *fingerprint))
+            .find(|set| set.is_current() && set.fingerprint == *fingerprint)
+            .filter(StemSet::audio_present))
     }
 
     /// A Stems Fact as a Stem set; `None` for a Fact that is not one.

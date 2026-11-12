@@ -365,6 +365,16 @@ fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&str, u64, u6
             if let Some(error) = refused { return Err(error); }
             Some(prepared.map_err(error)?)
         } else { None };
+        // The Sidecar beside the Library: its database as a snapshot and
+        // the DJ's files, by the rule in `rbl_backup::sidecar_part`.
+        let mut stopped = None;
+        let sidecar = rbl_backup::sidecar_part::collect(
+            &rbl_backup::sidecar_part::dir(&location),
+            rbl_backup::sidecar_part::Options::saved(state.backup_dir()),
+            &mut || progress("preparing", 0, 0, "Scanning the Sidecar").map_err(|e| stopped = Some(e)).is_ok(),
+        );
+        if let Some(error) = stopped { return Err(error); }
+        let sidecar = sidecar.map_err(error)?;
         let mut check = || progress("preparing", 0, 0, "Measuring database files");
         let library_root = location.master_db.parent().ok_or_else(|| error("Invalid database path"))?;
         let library_files: Vec<_> = LIBRARY_FILES.into_iter().filter(|name| library_root.join(name).exists()).collect();
@@ -376,7 +386,8 @@ fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&str, u64, u6
             + library_bytes
             + if wal.exists() { tree_size(&wal, &mut check)? } else { 0 }
             + plan.as_ref().map_or(0, |plan| plan.bytes)
-            + art_plan.as_ref().map_or(0, |plan| plan.bytes);
+            + art_plan.as_ref().map_or(0, |plan| plan.bytes)
+            + sidecar.as_ref().map_or(0, |part| part.contents.bytes);
         progress("copying", 0, total, "Database · master.db")?;
         let mut copied = 0;
         let mut copied_file = |bytes, source: Option<&Path>| {
@@ -430,6 +441,24 @@ fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&str, u64, u6
             });
             if let Some(error) = refused { return Err(error); }
             compressed.map_err(error)?;
+        }
+        if let Some(part) = &sidecar {
+            for directory in &part.directories {
+                fs::create_dir_all(partial.join(directory)).map_err(error)?;
+            }
+            for item in &part.files {
+                let shown = item.name.strip_prefix("sidecar/").unwrap_or(&item.name);
+                let mut refused = None;
+                let compressed = crate::backup_zip::compress_file(&item.source, &partial.join(&item.name), &mut |delta| {
+                    bytes += delta;
+                    progress("copying", bytes, total.max(bytes), &format!("Sidecar · {shown}")).map_err(|e| {
+                        refused = Some(e);
+                        std::io::Error::new(std::io::ErrorKind::Interrupted, "Backup stopped")
+                    })
+                });
+                if let Some(error) = refused { return Err(error); }
+                compressed.map_err(error)?;
+            }
         }
         for name in ["master.db", "master.db-wal"] {
             let source = partial.join(name);
@@ -1037,6 +1066,59 @@ mod tests {
             })
             .unwrap()
     }
+    /// The Sidecar beside the Library travels with a backup: see
+    /// `rbl_backup::sidecar_part`, whose own tests cover the rules.
+    #[test]
+    fn the_sidecar_beside_the_library_round_trips() {
+        let (_dir, state, location) = fixture();
+        let sidecar = rbl_backup::sidecar_part::dir(&location);
+        fs::create_dir_all(sidecar.join("recipes")).unwrap();
+        fs::create_dir_all(sidecar.join("renders")).unwrap();
+        fs::create_dir_all(sidecar.join("stems/10001/run-1")).unwrap();
+        fs::write(sidecar.join("kinds.toml"), b"original kinds").unwrap();
+        fs::write(sidecar.join("recipes/friday.toml"), b"original recipe").unwrap();
+        fs::write(sidecar.join("renders/abc.wav"), b"a render").unwrap();
+        fs::write(sidecar.join("stems/10001/run-1/vocals.wav"), b"a stem").unwrap();
+        let facts = |value: Option<&str>| {
+            let db = rusqlite::Connection::open(sidecar.join("sidecar.db")).unwrap();
+            if let Some(value) = value {
+                db.execute_batch(&format!("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS fact (value TEXT); DELETE FROM fact; INSERT INTO fact VALUES ('{value}');")).unwrap();
+            }
+            db.query_row("SELECT value FROM fact", [], |row| row.get::<_, String>(0)).unwrap()
+        };
+        facts(Some("house"));
+        let mut items = Vec::new();
+        let snapshot = PathBuf::from(create_with_progress(&state, &mut |_, _, _, item| { items.push(item.to_owned()); Ok(()) }).unwrap());
+        assert!(items.iter().any(|item| item == "Sidecar · kinds.toml"), "{items:?}");
+        let zip = rbl_backup::archive::open(&snapshot).unwrap();
+        let mut held: Vec<String> = rbl_backup::archive::names(&zip).into_iter().filter(|name| name.starts_with("sidecar")).collect();
+        held.sort();
+        assert_eq!(held, ["sidecar.json", "sidecar/", "sidecar/kinds.toml", "sidecar/recipes/", "sidecar/recipes/friday.toml", "sidecar/sidecar.db"]);
+        let contents = rbl_backup::sidecar_part::Contents::read(&snapshot).unwrap().unwrap();
+        assert!(!contents.stems);
+        assert_eq!(contents.stems_bytes, 6);
+
+        facts(Some("techno"));
+        fs::write(sidecar.join("kinds.toml"), b"changed kinds").unwrap();
+        fs::remove_file(sidecar.join("recipes/friday.toml")).unwrap();
+        restore(&state, &location, &snapshot, rbl_backup::restore::Parts::ALL);
+        assert_eq!(facts(None), "house");
+        assert_eq!(fs::read(sidecar.join("kinds.toml")).unwrap(), b"original kinds");
+        assert_eq!(fs::read(sidecar.join("recipes/friday.toml")).unwrap(), b"original recipe");
+        assert_eq!(fs::read(sidecar.join("renders/abc.wav")).unwrap(), b"a render");
+        assert_eq!(fs::read(sidecar.join("stems/10001/run-1/vocals.wav")).unwrap(), b"a stem");
+
+        // Stem audio travels when the saved choice asks for it.
+        fs::write(state.backup_dir().join(rbl_backup::sidecar_part::OPTIONS_FILE), br#"{"stems": true}"#).unwrap();
+        // Two backups in one minute would share a name.
+        fs::rename(&snapshot, snapshot.with_file_name("earlier.zip")).unwrap();
+        let with_stems = PathBuf::from(create(&state).unwrap());
+        assert!(rbl_backup::sidecar_part::Contents::read(&with_stems).unwrap().unwrap().stems);
+        fs::remove_dir_all(sidecar.join("stems")).unwrap();
+        restore(&state, &location, &with_stems, rbl_backup::restore::Parts::ALL);
+        assert_eq!(fs::read(sidecar.join("stems/10001/run-1/vocals.wav")).unwrap(), b"a stem");
+    }
+
     #[test]
     fn artwork_vocals_and_library_selections_round_trip() {
         let (_dir, state, location) = fixture();

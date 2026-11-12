@@ -101,7 +101,7 @@ pub fn recover(root: &Path, location: &rbl_db::LibraryLocation) -> Result<()> {
     crate::writable(location)?;
     let allowed = restorable(location);
     for swap in &journal.swaps {
-        if !allowed.contains(&swap.target)
+        if !(allowed.contains(&swap.target) || crate::sidecar_part::may_replace(location, &swap.target))
             || swap.staged.parent() != swap.target.parent()
             || swap.previous.parent() != swap.target.parent()
             || !staged_name(&swap.staged)
@@ -135,6 +135,8 @@ pub fn remove_orphans(root: &Path, location: &rbl_db::LibraryLocation) -> Result
         return Ok(());
     }
     let mut parents: Vec<PathBuf> = restorable(location).iter().filter_map(|path| path.parent().map(Path::to_path_buf)).collect();
+    // The Sidecar's entries are staged inside its folder.
+    parents.push(crate::sidecar_part::dir(location));
     parents.sort();
     parents.dedup();
     for parent in parents {

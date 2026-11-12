@@ -18,6 +18,8 @@ The Library service owns it and is its only writer.
 - A Fact row is written once. Afterwards it is only ever marked stale (a Measurement whose audio changed) or superseded (the same source recorded a newer Fact of the same kind for the track). Nothing is deleted, so a Ledger can be added over what is stored.
 - A Stem set is one file each for vocals, other, bass and drums, and every one must be exactly as long in samples as its parent. The length is read from each file; a set that breaks the rule is refused and nothing is recorded.
 - Stem audio is kept as the tool wrote it (16-bit PCM WAV from the separation engine). Conversion for a Stick happens when the Stick is written.
+- A Stem set whose audio files are not in the Sidecar is not the track's Stems: `current_stems` answers none and the track needs separating again (`StemSet::audio_present`). That is how a track reads after a backup that left Stem audio out is restored.
+- A backup carries everything in the Sidecar's folder except data that can be made again (`crates/rbl-backup/src/sidecar_part.rs`). Keep such data only in the top-level folders reserved for it, which backups skip and restores leave alone: `work` (emptied on open), `auditions` (audition files), `renders` (the cache of rendered Mutants), `cache` (anything else). `stems` is backed up only when asked. Anything else put in the folder, a new table in `sidecar.db` or a new file, travels with backups without further work.
 - The fingerprint hashes the encoded audio stream inside the file, not the file: a move, a rename or a retag changes nothing, and any change to the audio does.
 
 ## Run focused checks

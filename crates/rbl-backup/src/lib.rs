@@ -11,6 +11,8 @@
 //! - `analysis/…`, a copy of `PIONEER/USBANLZ`.
 //! - `artwork/…`, a copy of `PIONEER/Artwork`.
 //! - Whichever of [`LIBRARY_FILES`] were beside `master.db`.
+//! - `sidecar.json` and `sidecar/…`, the Sidecar beside the Library: see
+//!   [`sidecar_part`]. Backups made before it existed lack both.
 //!
 //! A restore ignores any other entry.
 //!
@@ -22,6 +24,7 @@ pub mod archive;
 pub mod journal;
 pub mod manifest;
 pub mod restore;
+pub mod sidecar_part;
 pub mod sizes;
 pub mod summary;
 
@@ -164,6 +167,11 @@ pub mod testing {
     /// Archives the library at `location` as RBXport does: a vacuumed
     /// database, both trees, the library files present and the manifest.
     pub fn archive(location: &rbl_db::LibraryLocation, to: &Path, summary: Option<&crate::summary::Summary>) {
+        archive_with(location, to, summary, crate::sidecar_part::Options::default());
+    }
+
+    /// As [`archive`], with the choices about the Sidecar's part given.
+    pub fn archive_with(location: &rbl_db::LibraryLocation, to: &Path, summary: Option<&crate::summary::Summary>, sidecar: crate::sidecar_part::Options) {
         let stage = tempfile::tempdir().unwrap();
         let db = stage.path().join("master.db");
         let snapshot = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
@@ -201,6 +209,15 @@ pub mod testing {
                         zip.write_all(&fs::read(&path).unwrap()).unwrap();
                     }
                 }
+            }
+        }
+        if let Some(part) = crate::sidecar_part::collect(&crate::sidecar_part::dir(location), sidecar, &mut || true).unwrap() {
+            for directory in &part.directories {
+                zip.add_directory(format!("{directory}/"), SimpleFileOptions::default()).unwrap();
+            }
+            for item in &part.files {
+                zip.start_file(&item.name, options).unwrap();
+                zip.write_all(&fs::read(&item.source).unwrap()).unwrap();
             }
         }
         let manifest = crate::manifest::Manifest {

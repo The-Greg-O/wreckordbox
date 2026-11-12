@@ -190,3 +190,19 @@ fn opening_the_sidecar_clears_what_a_dead_run_left_in_its_workspace() {
     assert!(files.iter().all(|(_, path)| !path.exists()));
     assert_eq!(reopened.stems("10003").unwrap(), []);
 }
+
+#[test]
+fn stems_whose_audio_files_are_gone_are_not_the_tracks_current_stems() {
+    let made = made();
+    let (run, files) = made.separation(500);
+    let recorded = made.record(run, &files).unwrap();
+    assert!(recorded.audio_present());
+    assert!(made.sidecar.current_stems("10003", &made.parent).unwrap().is_some());
+
+    std::fs::remove_file(&recorded.stems[2].path).unwrap();
+
+    assert_eq!(made.sidecar.current_stems("10003", &made.parent).unwrap(), None);
+    let kept = made.sidecar.stems("10003").unwrap();
+    assert_eq!(kept.len(), 1);
+    assert!(kept[0].is_current() && !kept[0].audio_present());
+}
