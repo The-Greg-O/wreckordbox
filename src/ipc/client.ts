@@ -468,6 +468,7 @@ async function realBackend(): Promise<Backend> {
     setMenuLabels: (labels) => invoke<void>("set_menu_labels", { labels }),
     setMenuEnabled: (items) => invoke<void>("set_menu_enabled", { items }),
     runMenuItem: (id) => invoke<void>("run_menu_item", { id }),
+    runEditCommand: (edit) => invoke<void>("run_edit_command", { edit }),
     serveScripts: (handle) => {
       // Ready only once the listener is in: a request sent before then would
       // reach nobody and wait out its timeout.

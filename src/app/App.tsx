@@ -2527,6 +2527,34 @@ function AppBody() {
     editHistory, runLibraryHistory,
   ]);
 
+  // The command palette (#54): from the view shell, a part only the old
+  // layout draws (the two-deck layout, the Information and Sub-Browser
+  // windows, the tempo slider) switches to that layout and shows it; the
+  // palette's "Use the view shell" comes back.
+  const updateView = prefs.update;
+  const setShell = useCallback((on: boolean) => updateView("view", { viewShell: on }), [updateView]);
+  const runOldLayout = useCallback((id: string) => {
+    updateView("view", { viewShell: false });
+    if (id === "info") {
+      setInfoOpen(true);
+      setMyTagOpen(false);
+      return;
+    }
+    if (id === "sub") {
+      setSubOpen(true);
+      return;
+    }
+    runMenu(id);
+  }, [updateView, runMenu]);
+  const paletteHistory = useMemo(
+    () => ({ undo: editHistory.canUndo, redo: editHistory.canRedo }),
+    [editHistory.canUndo, editHistory.canRedo],
+  );
+  const paletteLoaded = useMemo(
+    () => ({ a: playerTrack !== null, b: playerTrackB !== null }),
+    [playerTrack, playerTrackB],
+  );
+
   // The Track and Playlist menus' greyed items, worked out from the focus
   // and what the lists and trees report, and sent on whenever they change.
   useEffect(() => {
@@ -3519,7 +3547,8 @@ function AppBody() {
       <Suspense fallback={null}>
       {/* The command palette (#54): in both layouts, since Linux has no menu row. */}
       <CommandPaletteHost platform={platform} keyOverrides={keyOverrides} shell={shellOn} readOnly={readOnly}
-        runMenu={runMenu} openPreferences={openPreferences} />
+        history={paletteHistory} loaded={paletteLoaded}
+        runMenu={runMenu} runOldLayout={runOldLayout} setShell={setShell} openPreferences={openPreferences} />
       {duplicatePrompt ? (
         <DuplicateTracksDialog playlist={duplicatePrompt.playlist} duplicates={duplicatePrompt.duplicates}
           total={duplicatePrompt.total} onAnswer={duplicatePrompt.settle} />

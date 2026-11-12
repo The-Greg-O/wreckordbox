@@ -22,10 +22,12 @@
  *    `handled: "window"` means the webview or the window's key handler
  *    already does, and the registry only names it.
  */
+import type { BrowserSide } from "./browserFocus";
+import type { CommandScope } from "./commands";
 import { menuBarItem } from "./menuBar";
 import { SHELL_VIEWS, shellViewChord } from "./shellViews";
 import {
-  BINDINGS, chordMatches, type Action, type KeyChord, type KeyOverrides, type Platform,
+  BINDINGS, chordMatches, type Action, type Binding, type KeyChord, type KeyOverrides, type Platform,
 } from "./shortcuts";
 
 /** The items the shell does itself (`SHELL_ITEMS` in `menu.rs`). */
@@ -37,8 +39,14 @@ export type PaletteRun =
   | { kind: "menu"; id: string }
   /** The shell, for an item the window never heard of. */
   | { kind: "shell"; id: ShellItem }
-  /** A registered command (`commands.ts`). */
-  | { kind: "command"; action: Action }
+  /**
+   * A registered command (`commands.ts`), asked of the scope it was
+   * registered for: a deck's, the list or tree the DJ was on (`browser`),
+   * or the window's (none).
+   */
+  | { kind: "command"; action: Action; scope?: "a" | "b" | "browser" }
+  /** Show the view shell, or upstream's old layout. */
+  | { kind: "layout"; to: "shell" | "old" }
   /** The Preferences window at a pane (`PreferencesTarget`). */
   | { kind: "preferences"; pane: string }
   /** A text field's own clipboard and selection, as the Edit menu's were. */
@@ -62,15 +70,30 @@ export interface PaletteEntry {
   key?: PaletteKey;
   /** The native menu item it stands for: the item's id, or `predefined:<kind>`. */
   menu?: string;
+  /** The command it runs by another way (a menu item), so the key map's row for it is this entry. */
+  action?: Action;
   /** Changes the Library: unavailable while it is locked. */
   writes?: boolean;
-  /** Acts on a part of upstream's layout the view shell does not draw. */
+  /**
+   * Acts on a part of upstream's layout the view shell does not draw: run
+   * from the shell, it switches to the old layout first.
+   */
   oldLayoutOnly?: boolean;
+  /** What must be true for it to do anything: history to undo or redo, a loaded track. */
+  needs?: "undo" | "redo" | "loaded";
 }
 
 const menu = (id: string): PaletteRun => ({ kind: "menu", id });
 const binding = (id: string, handled: "window" | "palette" = "window"): PaletteKey => ({ from: "binding", id, handled });
 const chord = (value: KeyChord, handled: "window" | "palette"): PaletteKey => ({ from: "chord", chord: value, handled });
+
+/**
+ * The attribute on the palette's own surface. A part of the window that
+ * gives up the keyboard when the focus or a press goes elsewhere (the
+ * compact player's arming) ignores the palette, which is only passing
+ * through: closing it gives the keyboard back as it was.
+ */
+export const PALETTE_SURFACE = "data-command-palette";
 
 /** The key that opens the palette, on every platform. */
 export const PALETTE_OPEN_CHORD: KeyChord = { key: "p", metaKey: true, shiftKey: true };
@@ -100,17 +123,22 @@ const PLAYLIST_ITEMS: readonly [string, string][] = [
 
 /** The entry a Track or Playlist item gets: its key, if the key map gives its command one. */
 function barEntry(group: string, [id, label]: readonly [string, string]): PaletteEntry {
-  const action = id === "analyze-track" ? "analyseSelection" : menuBarItem(id)?.action;
+  const bar = menuBarItem(id);
+  // Analyze Track writes the analysis to the Library; the command refuses a
+  // locked Library itself, so the menu item does not, but the palette greys it.
+  const action: Action | undefined = id === "analyze-track" ? "analyseSelection" : bar?.action;
+  const writes = id === "analyze-track" ? true : bar?.writes === true;
   const row = BINDINGS.find((candidate) => candidate.action !== undefined && candidate.action === action);
-  return { id, label, group, run: menu(id), menu: id, ...(row ? { key: binding(row.id) } : {}) };
+  return {
+    id, label, group, run: menu(id), menu: id,
+    ...(action === undefined ? {} : { action }),
+    ...(writes ? { writes: true } : {}),
+    ...(row ? { key: binding(row.id) } : {}),
+  };
 }
 
-/**
- * Every entry, in the order the palette lists them before anything is
- * typed: the views, then the native menus in their order, then the parts of
- * Preferences the four views do not show.
- */
-export const PALETTE_ENTRIES: readonly PaletteEntry[] = [
+/** The entries written out: the views, the native menus' items, and the panes of Preferences. */
+const EXPLICIT_ENTRIES: readonly PaletteEntry[] = [
   ...SHELL_VIEWS.map((view): PaletteEntry => ({
     id: `view-${view.id}`,
     label: `Show ${view.label}`,
@@ -169,11 +197,11 @@ export const PALETTE_ENTRIES: readonly PaletteEntry[] = [
 
   // Edit.
   {
-    id: "undo", label: "Undo", group: "Edit", run: menu("undo"), menu: "undo",
+    id: "undo", label: "Undo", group: "Edit", run: menu("undo"), menu: "undo", needs: "undo",
     key: chord({ key: "z", metaKey: true }, "window"),
   },
   {
-    id: "redo", label: "Redo", group: "Edit", run: menu("redo"), menu: "redo",
+    id: "redo", label: "Redo", group: "Edit", run: menu("redo"), menu: "redo", needs: "redo",
     key: chord({ key: "z", metaKey: true, shiftKey: true }, "window"),
   },
   {
@@ -190,14 +218,15 @@ export const PALETTE_ENTRIES: readonly PaletteEntry[] = [
   },
   {
     id: "select-all", label: "Select All", group: "Edit", run: { kind: "edit", edit: "selectAll" },
-    menu: "predefined:select_all", key: binding("selectAll"),
+    menu: "predefined:select_all", key: binding("selectAll"), action: "selectAll",
   },
 
   // Track and Playlist.
   ...TRACK_ITEMS.map((item) => barEntry("Track", item)),
   {
     id: "locate-loaded", label: "Locate track loaded on deck", group: "Track",
-    run: menu("locate-loaded"), menu: "locate-loaded", key: binding("locateLoaded"),
+    run: menu("locate-loaded"), menu: "locate-loaded", key: binding("locateLoaded"), action: "locateLoaded",
+    needs: "loaded",
   },
   ...PLAYLIST_ITEMS.map((item) => barEntry("Playlist", item)),
 
@@ -235,6 +264,15 @@ export const PALETTE_ENTRIES: readonly PaletteEntry[] = [
     run: menu("layout-browser"), menu: "layout-browser", key: binding("menu.layout-browser"), oldLayoutOnly: true,
   },
   {
+    id: "use-view-shell", label: "Use the view shell", group: "View", keywords: ["layout", "views", "new"],
+    run: { kind: "layout", to: "shell" },
+  },
+  {
+    id: "use-old-layout", label: "Use the old layout", group: "View",
+    keywords: ["layout", "two-deck", "decks", "classic", "back"],
+    run: { kind: "layout", to: "old" },
+  },
+  {
     id: "ui-scale-smaller", label: "Smaller Interface", group: "View", keywords: ["scale", "zoom"],
     run: { kind: "command", action: "uiScaleSmaller" }, key: binding("uiScaleSmaller"),
   },
@@ -270,6 +308,54 @@ export const PALETTE_ENTRIES: readonly PaletteEntry[] = [
   },
 ];
 
+/** The commands the explicit entries already run, so the key map's rows for them are not listed twice. */
+const COVERED: ReadonlySet<Action> = new Set(EXPLICIT_ENTRIES.flatMap((entry) => [
+  ...(entry.run.kind === "command" ? [entry.run.action] : []),
+  ...(entry.action === undefined ? [] : [entry.action]),
+]));
+
+/** Which registration a key map row's command is asked of (see `useCommands` in each part). */
+function rowScope(row: Binding): "a" | "b" | "browser" | undefined {
+  if (row.deck !== undefined) return row.deck;
+  // The decks register the load commands, each its own (`Player.tsx`).
+  if (row.action === "loadPlayer1") return "a";
+  if (row.action === "loadPlayer2") return "b";
+  // The lists register their movement and selection per browser side
+  // (`TrackTable.tsx`); Clear Search is the window's.
+  if (row.group === "Browse" && row.action !== "clearSearch") return "browser";
+  return undefined;
+}
+
+/**
+ * Every other command the window registers, one entry per row of the key
+ * map: the decks' (Play/Pause, Cue, the jumps, the pads...), the lists'
+ * movement, the master's volume and Mute. They are the very rows the key
+ * handlers dispatch (`BINDINGS`), asked of the same registry (`runCommand`),
+ * so a key and its palette entry cannot drift apart.
+ */
+const KEY_MAP_ENTRIES: readonly PaletteEntry[] = BINDINGS.flatMap((row): PaletteEntry[] => {
+  const action = row.action;
+  if (action === undefined || row.alias === true) return [];
+  const scope = rowScope(row);
+  if (row.deck === undefined && COVERED.has(action)) return [];
+  const deckWords = row.deck === undefined ? [] : ["deck", "player", row.deck === "a" ? "player 1" : "player 2"];
+  return [{
+    id: `key-${row.id}`,
+    label: row.label,
+    group: row.group,
+    ...(deckWords.length > 0 ? { keywords: deckWords } : {}),
+    run: scope === undefined ? { kind: "command", action } : { kind: "command", action, scope },
+    key: binding(row.id),
+  }];
+});
+
+/**
+ * Every entry, in the order the palette lists them before anything is
+ * typed: the views, then the native menus in their order, then the parts of
+ * Preferences the four views do not show, then the rest of the key map.
+ */
+export const PALETTE_ENTRIES: readonly PaletteEntry[] = [...EXPLICIT_ENTRIES, ...KEY_MAP_ENTRIES];
+
 /** The entry with an id, or null. */
 export function paletteEntry(id: string): PaletteEntry | null {
   return PALETTE_ENTRIES.find((entry) => entry.id === id) ?? null;
@@ -291,10 +377,63 @@ export function paletteChord(entry: PaletteEntry, overrides: KeyOverrides = {}):
   return found === undefined || found.key === "" ? null : found;
 }
 
+/** An entry's searchable text, lower-cased once per language. */
+interface Prepared {
+  /** Its name, translated and in English. */
+  names: readonly string[];
+  /** Its menu or group and its other words. */
+  others: readonly string[];
+}
+
+const prepared = new WeakMap<(text: string) => string, Map<PaletteEntry, Prepared>>();
+
+function prepare(entry: PaletteEntry, translate: (text: string) => string): Prepared {
+  let cache = prepared.get(translate);
+  if (cache === undefined) {
+    cache = new Map();
+    prepared.set(translate, cache);
+  }
+  let found = cache.get(entry);
+  if (found === undefined) {
+    const lower = (texts: readonly string[]) => [...new Set(texts.map((text) => text.toLowerCase()))];
+    found = {
+      names: lower([translate(entry.label), entry.label]),
+      others: lower([translate(entry.group), entry.group, ...(entry.keywords ?? [])]),
+    };
+    cache.set(entry, found);
+  }
+  return found;
+}
+
 /**
- * The entries a query finds: every word typed must appear in the entry's
- * name, its menu or one of its other words. Names that start with what was
- * typed come first; otherwise the registry's order is kept.
+ * How well one typed word matches a text: the start of it, the start of one
+ * of its words, anywhere in it, or its letters in order with gaps (fuzzy,
+ * so "prefs" finds Preferences). Zero when it does not match.
+ */
+export function wordScore(word: string, text: string): number {
+  if (text.startsWith(word)) return 100;
+  const at = text.indexOf(word);
+  if (at > 0) return /[\s\-/(.]/.test(text[at - 1] ?? "") ? 80 : 60;
+  // Letters in order: fewer and shorter gaps, and a first letter that
+  // starts a word, rank higher.
+  let from = 0;
+  let gaps = 0;
+  let first = -1;
+  for (const letter of word) {
+    const next = text.indexOf(letter, from);
+    if (next < 0) return 0;
+    if (first < 0) first = next;
+    else if (next > from) gaps += 1;
+    from = next + 1;
+  }
+  const startsWord = first === 0 || /[\s\-/(.]/.test(text[first - 1] ?? "");
+  return Math.max(1, 40 - gaps * 4 + (startsWord ? 5 : 0));
+}
+
+/**
+ * The entries a query finds, best first: every word typed must match the
+ * entry's name (fuzzily) or its menu or other words (as a word or part of
+ * one). Ties keep the registry's order.
  */
 export function filterPalette(
   entries: readonly PaletteEntry[],
@@ -303,16 +442,25 @@ export function filterPalette(
 ): PaletteEntry[] {
   const words = query.toLowerCase().split(/\s+/).filter((word) => word !== "");
   if (words.length === 0) return [...entries];
-  const found = entries.filter((entry) => {
-    const haystack = [
-      translate(entry.label), entry.label, translate(entry.group), entry.group, ...(entry.keywords ?? []),
-    ].join(" ").toLowerCase();
-    return words.every((word) => haystack.includes(word));
+  const scored: { entry: PaletteEntry; score: number; index: number }[] = [];
+  entries.forEach((entry, index) => {
+    const { names, others } = prepare(entry, translate);
+    let score = 0;
+    for (const word of words) {
+      let best = 0;
+      for (const name of names) best = Math.max(best, wordScore(word, name));
+      // A menu's or another word's letters scattered are too loose a match.
+      for (const other of others) {
+        const found = wordScore(word, other);
+        if (found >= 60) best = Math.max(best, found / 2);
+      }
+      if (best === 0) return;
+      score += best;
+    }
+    scored.push({ entry, score, index });
   });
-  const first = words.join(" ");
-  const starts = (entry: PaletteEntry) =>
-    translate(entry.label).toLowerCase().startsWith(first) || entry.label.toLowerCase().startsWith(first);
-  return [...found.filter(starts), ...found.filter((entry) => !starts(entry))];
+  scored.sort((a, b) => b.score - a.score || a.index - b.index);
+  return scored.map((found) => found.entry);
 }
 
 /** What the palette knows about the window when it opens. */
@@ -323,35 +471,67 @@ export interface PaletteContext {
   readOnly: boolean;
   /** The Track and Playlist items' states, as `menuBarEnabled` works them out. */
   enabled: Readonly<Record<string, boolean>>;
-  /** Whether something on screen answers a command (`hasCommand`). */
-  has: (action: Action) => boolean;
+  /** Whether something on screen answers a command (`hasCommand`), for a scope. */
+  has: (action: Action, scope?: CommandScope) => boolean;
+  /** The browser side the DJ was on (the list or tree commands' scope). */
+  side: BrowserSide;
+  /** Whether Undo and Redo have anything to act on (a text field's own history counts). */
+  history: { undo: boolean; redo: boolean };
+  /** Whether each deck holds a track. */
+  loaded: { a: boolean; b: boolean };
 }
 
 /** Whether an entry can run now, and if not, why, in words for the DJ. */
-export type PaletteAvailability = { available: true } | { available: false; why: string };
+export type PaletteAvailability =
+  | { available: true; note?: string }
+  | { available: false; why: string };
+
+/** A deck's commands that do something with no track loaded. */
+const DECK_IDLE: ReadonlySet<Action> = new Set<Action>([
+  "loadPlayer1", "loadPlayer2", "metronomeSound", "showMemory", "showHotCues", "showInfo",
+  "eqKillLow", "eqKillMid", "eqKillHigh",
+]);
 
 const BAR_MENUS = new Set(["Track", "Playlist"]);
 
 export function paletteAvailability(entry: PaletteEntry, context: PaletteContext): PaletteAvailability {
-  if (entry.oldLayoutOnly === true && context.shell) {
-    return { available: false, why: "Not in the view shell yet" };
+  const run = entry.run;
+  if (run.kind === "layout") {
+    const here = run.to === "shell" ? context.shell : !context.shell;
+    return here
+      ? { available: false, why: run.to === "shell" ? "Already showing the view shell" : "Already showing the old layout" }
+      : { available: true };
   }
   if (entry.writes === true && context.readOnly) {
     return { available: false, why: "The Library is locked for editing" };
   }
-  if (entry.run.kind === "menu" && BAR_MENUS.has(entry.group) && entry.id !== "locate-loaded") {
-    if (context.enabled[entry.run.id] !== true) {
+  if (run.kind === "menu" && BAR_MENUS.has(entry.group) && entry.id !== "locate-loaded") {
+    if (context.enabled[run.id] !== true) {
       return {
         available: false,
         why: entry.group === "Track" ? "Select tracks in a list first" : "Select a playlist in the tree first",
       };
     }
   }
-  if (entry.run.kind === "command" && !context.has(entry.run.action)) {
-    return {
-      available: false,
-      why: entry.group === "Views" ? "Only in the view shell" : "Not on screen now",
-    };
+  if (entry.needs === "undo" && !context.history.undo) return { available: false, why: "Nothing to undo" };
+  if (entry.needs === "redo" && !context.history.redo) return { available: false, why: "Nothing to redo" };
+  if (entry.needs === "loaded" && !context.loaded.a && !context.loaded.b) {
+    return { available: false, why: "No track is loaded on a deck" };
+  }
+  if (run.kind === "command") {
+    const scope = run.scope === "browser" ? context.side : run.scope;
+    if (!context.has(run.action, scope)) {
+      return {
+        available: false,
+        why: entry.group === "Views" ? "Only in the view shell" : run.scope === "b" ? "Only with two players" : "Not on screen now",
+      };
+    }
+    if ((run.scope === "a" || run.scope === "b") && !context.loaded[run.scope] && !DECK_IDLE.has(run.action)) {
+      return { available: false, why: `Load a track on Player ${run.scope.toUpperCase()} first` };
+    }
+  }
+  if (entry.oldLayoutOnly === true && context.shell) {
+    return { available: true, note: "Switches to the old layout" };
   }
   return { available: true };
 }
