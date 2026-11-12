@@ -360,3 +360,76 @@ fn undo_refuses_a_value_changed_outside_the_history_and_drops_only_that_entry() 
     core.step_history(&NoHost, true).unwrap();
     assert_eq!(rating_of(&core, &first), 0, "the entry before it still runs");
 }
+
+/// What a Ledger is told, in order: the step, the label, what it reverses,
+/// and the identifier it answered.
+#[derive(Default)]
+struct LedgerTape {
+    changes: parking_lot::Mutex<Vec<(rbl_library::ledger::Step, String, Option<i64>, i64)>>,
+}
+
+impl rbl_library::ledger::Ledger for LedgerTape {
+    fn record(
+        &self,
+        step: rbl_library::ledger::Step,
+        edit: &rbl_library::history::LibraryEdit,
+        label: &str,
+        reverses: Option<i64>,
+    ) -> Option<i64> {
+        assert!(!edit.is_empty(), "only a change is recorded");
+        let mut changes = self.changes.lock();
+        let id = i64::try_from(changes.len()).unwrap() + 100;
+        changes.push((step, label.to_owned(), reverses, id));
+        Some(id)
+    }
+}
+
+#[test]
+fn a_ledger_given_to_the_history_is_told_of_each_edit_undo_and_redo_with_what_it_reverses() {
+    use rbl_library::history::{LibraryEdit, TRACK_EDIT};
+    use rbl_library::ledger::Step;
+
+    let dir = tempfile::tempdir().unwrap();
+    let core = core_in(dir.path());
+    let tape = std::sync::Arc::new(LedgerTape::default());
+    core.history().lock().keep_ledger(Some(tape.clone()));
+    let track = rbl_db::fixture::track_id(2);
+
+    core.recorded_edit(&NoHost, Touched::Metadata(vec![track.clone()]), TRACK_EDIT, |w| {
+        let (_, recorded) = w.set_rating_with_undo(&track, 3)?;
+        Ok(((), LibraryEdit::Track(vec![recorded])))
+    })
+    .unwrap();
+    // An edit that changed nothing is neither in the history nor told.
+    core.recorded_edit(&NoHost, Touched::Metadata(vec![track.clone()]), TRACK_EDIT, |w| {
+        let (_, recorded) = w.set_rating_with_undo(&track, 3)?;
+        Ok(((), LibraryEdit::Track(vec![recorded])))
+    })
+    .unwrap();
+    core.step_history(&NoHost, true).unwrap();
+    core.step_history(&NoHost, false).unwrap();
+    core.step_history(&NoHost, true).unwrap();
+    // An outside write is not the history's to tell.
+    core.edit(&NoHost, History::Outside, Touched::Metadata(vec![track.clone()]), |w| w.set_rating(&track, 1))
+        .unwrap();
+
+    let label = TRACK_EDIT.to_owned();
+    assert_eq!(
+        *tape.changes.lock(),
+        vec![
+            (Step::Edit, label.clone(), None, 100),
+            (Step::Undo, label.clone(), Some(100), 101),
+            (Step::Redo, label.clone(), Some(101), 102),
+            (Step::Undo, label, Some(102), 103),
+        ]
+    );
+
+    // Taken away, it is told nothing more.
+    core.history().lock().keep_ledger(None);
+    core.recorded_edit(&NoHost, Touched::Metadata(vec![track.clone()]), TRACK_EDIT, |w| {
+        let (_, recorded) = w.set_rating_with_undo(&track, 5)?;
+        Ok(((), LibraryEdit::Track(vec![recorded])))
+    })
+    .unwrap();
+    assert_eq!(tape.changes.lock().len(), 4);
+}

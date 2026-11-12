@@ -5,7 +5,6 @@
 //! ```text
 //! ledger(id, run_id, at, source_kind, source_name, action, kind, label,
 //!        command, reverses, reversible, format, payload)
-//! ledger_pending(id, at, source_kind, source_name, command)
 //! ```
 //!
 //! A `ledger` row is one edit to the Library: which Run, which source,
@@ -21,12 +20,10 @@
 //! before it is kept, so [`Sidecar::run_entries`] reads a Run's Facts
 //! beside its Library edits as entries of one list.
 //!
-//! `ledger_pending` is the write-ahead half. A row is written before a
-//! write to the Library begins and leaves, in the transaction that appends
-//! the entry, once the write is on record. One left behind by a service
-//! that died is turned into an entry saying so when the Ledger is next
-//! used ([`Sidecar::settle_pending`]), so the Library is never changed with
-//! nothing on record.
+//! An entry is appended once the write it records has been made, so a
+//! process that dies between the two leaves a write with no entry. Closing
+//! that gap, and recording the writes that are not edits (analysis,
+//! imports), is a later step; the `write` action is kept for it.
 
 use rusqlite::{params, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
@@ -60,14 +57,6 @@ BEGIN SELECT RAISE(ABORT, 'the Ledger is append-only: an entry is never changed'
 
 CREATE TRIGGER ledger_is_never_removed BEFORE DELETE ON ledger
 BEGIN SELECT RAISE(ABORT, 'the Ledger is append-only: an entry is never removed'); END;
-
-CREATE TABLE ledger_pending (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    at          INTEGER NOT NULL,
-    source_kind TEXT,
-    source_name TEXT,
-    command     TEXT
-) STRICT;
 ";
 
 /// What an entry was.
@@ -180,115 +169,14 @@ pub struct RunSummary {
     pub counts: Vec<Count>,
 }
 
-/// A write to the Library that began and was never put on record.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Pending {
-    pub id: i64,
-    pub at: i64,
-    pub source: Option<Source>,
-    pub command: Option<String>,
-}
-
 impl Sidecar {
-    /// Says a write to the Library is about to begin, durably, and answers
-    /// the note's identifier. `clear` is an earlier note to remove with it.
-    /// When this fails the write must not be made.
-    pub fn begin_write(
-        &self,
-        source: Option<&Source>,
-        command: Option<&str>,
-        clear: Option<i64>,
-    ) -> Result<i64> {
-        let mut db = self.db();
-        let tx = db.transaction()?;
-        if let Some(earlier) = clear {
-            tx.execute("DELETE FROM ledger_pending WHERE id = ?1", [earlier])?;
-        }
-        tx.execute(
-            "INSERT INTO ledger_pending (at, source_kind, source_name, command) VALUES (?1, ?2, ?3, ?4)",
-            params![
-                now(),
-                source.map(|source| source.kind.as_str()),
-                source.map(|source| source.name.as_str()),
-                command
-            ],
-        )?;
-        let id = tx.last_insert_rowid();
-        tx.commit()?;
-        Ok(id)
-    }
-
-    /// Removes a note of a write that changed nothing, or whose entry is
-    /// not this Ledger's to write.
-    pub fn end_write(&self, pending: i64) -> Result<()> {
-        self.db()
-            .execute("DELETE FROM ledger_pending WHERE id = ?1", [pending])?;
-        Ok(())
-    }
-
-    /// Appends one entry and, in the same transaction, removes the note of
-    /// the write it records. Answers the entry's identifier.
-    pub fn append(&self, entry: &NewEntry, pending: Option<i64>) -> Result<i64> {
+    /// Appends one entry and answers its identifier.
+    pub fn append(&self, entry: &NewEntry) -> Result<i64> {
         let mut db = self.db();
         let tx = db.transaction()?;
         let id = append_in(&tx, entry)?;
-        if let Some(pending) = pending {
-            tx.execute("DELETE FROM ledger_pending WHERE id = ?1", [pending])?;
-        }
         tx.commit()?;
         Ok(id)
-    }
-
-    /// The notes of writes that began and are not on record, oldest first.
-    pub fn pending_writes(&self) -> Result<Vec<Pending>> {
-        let db = self.db();
-        let mut statement = db.prepare(
-            "SELECT id, at, source_kind, source_name, command FROM ledger_pending ORDER BY id",
-        )?;
-        let pending = statement
-            .query_map([], |row| {
-                let kind: Option<String> = row.get(2)?;
-                let name: Option<String> = row.get(3)?;
-                Ok(Pending {
-                    id: row.get(0)?,
-                    at: row.get(1)?,
-                    source: kind
-                        .zip(name)
-                        .map(|(kind, name)| Source::new(SourceKind::from_stored(&kind), name)),
-                    command: row.get(4)?,
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<Pending>>>()?;
-        Ok(pending)
-    }
-
-    /// Turns every note of a write that never reached the record, other
-    /// than `keep`, into an entry of `run` saying so (`entry` builds it),
-    /// all in one transaction. Answers how many there were.
-    pub fn settle_pending(
-        &self,
-        keep: Option<i64>,
-        run: impl FnOnce() -> Result<RunId>,
-        entry: impl Fn(&Pending, RunId) -> OwnedEntry,
-    ) -> Result<usize> {
-        let left: Vec<Pending> = self
-            .pending_writes()?
-            .into_iter()
-            .filter(|pending| Some(pending.id) != keep)
-            .collect();
-        if left.is_empty() {
-            return Ok(0);
-        }
-        let run = run()?;
-        let mut db = self.db();
-        let tx = db.transaction()?;
-        for pending in &left {
-            let owned = entry(pending, run);
-            append_in(&tx, &owned.borrowed())?;
-            tx.execute("DELETE FROM ledger_pending WHERE id = ?1", [pending.id])?;
-        }
-        tx.commit()?;
-        Ok(left.len())
     }
 
     /// Ends every Run of `source` called `description` that was never
@@ -410,34 +298,6 @@ impl Sidecar {
                 read_entry,
             )
             .optional()?)
-    }
-}
-
-/// A [`NewEntry`] that owns what it holds.
-#[derive(Debug, Clone)]
-pub struct OwnedEntry {
-    pub run: RunId,
-    pub source: Source,
-    pub action: Action,
-    pub kind: String,
-    pub label: String,
-    pub command: Option<Value>,
-}
-
-impl OwnedEntry {
-    fn borrowed(&self) -> NewEntry<'_> {
-        NewEntry {
-            run: self.run,
-            source: &self.source,
-            action: self.action,
-            kind: &self.kind,
-            label: &self.label,
-            command: self.command.as_ref(),
-            reverses: None,
-            reversible: false,
-            format: 0,
-            payload: None,
-        }
     }
 }
 
