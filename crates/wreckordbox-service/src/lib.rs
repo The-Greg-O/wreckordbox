@@ -13,6 +13,7 @@
 mod client;
 pub mod facts;
 pub mod intake;
+pub mod ledger;
 mod library;
 pub mod mytag_edits;
 pub mod protocol;

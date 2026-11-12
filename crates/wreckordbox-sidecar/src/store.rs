@@ -490,18 +490,63 @@ impl Sidecar {
     /// identifiers are answered. Judgements are left alone; they follow the
     /// music. A stale Fact is kept, not removed.
     pub fn mark_stale(&self, track_id: &str, current: &Fingerprint) -> Result<Vec<i64>> {
-        let db = self.db();
-        let mut statement = db.prepare(
-            "UPDATE fact SET stale_at = ?1
-             WHERE track_id = ?2 AND stale_at IS NULL
-               AND fingerprint IS NOT NULL AND fingerprint <> ?3
-               AND kind IN (SELECT name FROM kind WHERE nature = 'measurement')
-             RETURNING id",
-        )?;
-        let mut ids = statement
-            .query_map(params![now(), track_id, current.as_str()], |row| row.get(0))?
-            .collect::<rusqlite::Result<Vec<i64>>>()?;
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let mut ids = {
+            let mut statement = tx.prepare(
+                "UPDATE fact SET stale_at = ?1
+                 WHERE track_id = ?2 AND stale_at IS NULL
+                   AND fingerprint IS NOT NULL AND fingerprint <> ?3
+                   AND kind IN (SELECT name FROM kind WHERE nature = 'measurement')
+                 RETURNING id",
+            )?;
+            let ids = statement
+                .query_map(params![now(), track_id, current.as_str()], |row| row.get(0))?
+                .collect::<rusqlite::Result<Vec<i64>>>()?;
+            ids
+        };
         ids.sort_unstable();
+        if !ids.is_empty() {
+            // The Ledger's entry for it, in a Run of wreckordbox's own:
+            // marked and recorded together or not at all.
+            let source = Source::new(SourceKind::Tool, crate::ledger::HOUSEKEEPING);
+            let at = now();
+            tx.execute(
+                "INSERT INTO run (source_kind, source_name, description, started_at, finished_at, outcome)
+                 VALUES (?1, ?2, ?3, ?4, ?4, ?5)",
+                params![
+                    source.kind.as_str(),
+                    source.name,
+                    format!("The audio of track {track_id} changed"),
+                    at,
+                    format!("marked {} stale", ids.len()),
+                ],
+            )?;
+            let run = RunId(tx.last_insert_rowid());
+            let payload = serde_json::json!({
+                "track": track_id,
+                "fingerprint": current.as_str(),
+                "facts": ids,
+            });
+            crate::ledger::append_in(
+                &tx,
+                &crate::ledger::NewEntry {
+                    run,
+                    store: crate::ledger::Store::Sidecar,
+                    source: &source,
+                    at: Some(at),
+                    action: crate::ledger::Action::Edit,
+                    kind: crate::ledger::STALE,
+                    label: "Mark Measurements stale",
+                    command: None,
+                    reverses: None,
+                    reversible: true,
+                    format: 1,
+                    payload: Some(&payload),
+                },
+            )?;
+        }
+        tx.commit()?;
         Ok(ids)
     }
 

@@ -128,10 +128,32 @@ pub enum RunCommands {
         #[arg(long, value_name = "TEXT")]
         outcome: Option<String>,
     },
+    /// List Runs, newest first: who made each, when, and how many changes
+    /// of each kind it made to the Library and to the Sidecar.
+    List {
+        /// How many Runs to list.
+        #[arg(long, value_name = "ROWS")]
+        limit: Option<usize>,
+        /// How many of the newest Runs to skip.
+        #[arg(long, value_name = "ROWS")]
+        offset: Option<usize>,
+    },
+    /// Show one Run and everything it changed, in the order it changed
+    /// it, with the value before and after.
+    Show {
+        #[arg(value_name = "RUN_ID")]
+        id: i64,
+        /// How many entries to show.
+        #[arg(long, value_name = "ROWS")]
+        limit: Option<usize>,
+        /// How many of the Run's first entries to skip.
+        #[arg(long, value_name = "ROWS")]
+        offset: Option<usize>,
+    },
 }
 
 /// `dj`, `agent:NAME`, `tool:NAME`, `web:ADDRESS`.
-fn parse_source(text: &str) -> Result<SourceArg, String> {
+pub(crate) fn parse_source(text: &str) -> Result<SourceArg, String> {
     let (kind, name) = text.split_once(':').unwrap_or((text, ""));
     let kind = match kind {
         "dj" => SourceKind::Dj,
@@ -247,6 +269,12 @@ pub fn runs(
             )?,
             "Finished",
         ),
+        RunCommands::List { limit, offset } => {
+            return crate::ledger::list(client, as_json, *limit, *offset)
+        }
+        RunCommands::Show { id, limit, offset } => {
+            return crate::ledger::show(client, as_json, *id, *limit, *offset)
+        }
     };
     Ok(if as_json {
         json!(run).to_string()
@@ -345,7 +373,7 @@ fn bad(message: String) -> ServiceError {
     ServiceError::new(wreckordbox_service::codes::BAD_REQUEST, message)
 }
 
-fn source_text(source: &Source) -> String {
+pub(crate) fn source_text(source: &Source) -> String {
     let kind = match source.kind {
         SourceKind::Dj => return "dj".to_owned(),
         SourceKind::Agent => "agent",
@@ -474,7 +502,7 @@ fn kinds_text(kinds: &DeclaredKinds) -> String {
 
 /// Rows as a table: columns two spaces apart, as wide as their longest
 /// cell.
-fn table<const N: usize>(rows: &[[String; N]]) -> String {
+pub(crate) fn table<const N: usize>(rows: &[[String; N]]) -> String {
     let widths: [usize; N] = std::array::from_fn(|column| {
         rows.iter()
             .map(|row| row[column].chars().count())
@@ -495,7 +523,7 @@ fn table<const N: usize>(rows: &[[String; N]]) -> String {
 }
 
 /// Milliseconds since the Unix epoch as `2026-11-11 14:03:22Z`.
-fn time_text(millis: i64) -> String {
+pub(crate) fn time_text(millis: i64) -> String {
     let seconds = millis.div_euclid(1000);
     let (days, of_day) = (seconds.div_euclid(86_400), seconds.rem_euclid(86_400));
     // Days to a civil date, in the proleptic Gregorian calendar.

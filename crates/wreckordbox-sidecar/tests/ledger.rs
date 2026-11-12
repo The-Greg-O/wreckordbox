@@ -24,7 +24,9 @@ fn entry<'a>(
 ) -> NewEntry<'a> {
     NewEntry {
         run,
+        store: Store::Library,
         source,
+        at: None,
         action: Action::Edit,
         kind: "track",
         label: "Track Edit",
@@ -213,4 +215,56 @@ fn runs_left_open_by_a_process_that_died_are_ended() {
         Some("the window closed")
     );
     assert!(!sidecar.run(other).unwrap().unwrap().is_finished());
+}
+
+#[test]
+fn marking_measurements_stale_is_an_entry_in_a_run_of_its_own() {
+    let dir = tempfile::tempdir().unwrap();
+    let sidecar = Sidecar::open(dir.path()).unwrap();
+    let source = agent();
+    let run = sidecar.begin_run(&source, "Measure").unwrap();
+    let audio = dir.path().join("a.bin");
+    std::fs::write(&audio, b"one").unwrap();
+    let before = wreckordbox_sidecar::fingerprint_file(&audio).unwrap();
+    std::fs::write(&audio, b"another").unwrap();
+    let after = wreckordbox_sidecar::fingerprint_file(&audio).unwrap();
+    let fact = sidecar
+        .record(&NewFact {
+            track_id: "10004",
+            fingerprint: Some(&before),
+            kind: Kind::measurement("loudness"),
+            value: json!(0.5),
+            source: &source,
+            confidence: 1.0,
+            run,
+        })
+        .unwrap();
+    let (_, runs_before) = sidecar.runs(10, 0).unwrap();
+
+    // The same audio marks nothing, and so records nothing.
+    assert!(sidecar.mark_stale("10004", &before).unwrap().is_empty());
+    assert_eq!(sidecar.runs(10, 0).unwrap().1, runs_before);
+
+    assert_eq!(sidecar.mark_stale("10004", &after).unwrap(), vec![fact.id]);
+    let (runs, total) = sidecar.runs(10, 0).unwrap();
+    assert_eq!(total, runs_before + 1);
+    let made = &runs[0];
+    assert!(made.run.is_finished());
+    assert_eq!(made.run.source, Source::new(SourceKind::Tool, "wreckordbox"));
+    assert_eq!(
+        made.counts,
+        vec![Count {
+            store: Store::Sidecar,
+            kind: "stale".into(),
+            count: 1
+        }]
+    );
+    let (entries, _) = sidecar.run_entries(made.run.id, 10, 0).unwrap();
+    assert_eq!(entries[0].store, Store::Sidecar);
+    assert_eq!(entries[0].action, Action::Edit);
+    assert_eq!(
+        entries[0].payload,
+        Some(json!({"track": "10004", "fingerprint": after.as_str(), "facts": [fact.id]}))
+    );
+    sidecar.ledger_ready().unwrap();
 }

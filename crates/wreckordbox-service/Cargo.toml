@@ -22,6 +22,7 @@ rbl-backup = { path = "../rbl-backup" }
 # as it owns the Library.
 wreckordbox-sidecar = { path = "../wreckordbox-sidecar" }
 serde = { workspace = true }
+tracing = { workspace = true }
 serde_json = { workspace = true }
 dirs = "5"
 # Only to tell a locked Library from a damaged one by SQLite's result code.

@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use rbl_db::DbError;
 
-use crate::ledger::{Ledger, Step};
+use crate::ledger::{Ledger, Step, Unkept};
 use crate::Touched;
 
 /// The history label of an Info panel, rating, colour or comment edit.
@@ -404,8 +404,34 @@ impl EditHistory {
         self.ledger = ledger;
     }
 
+    /// The [`Ledger`] the history tells, when it has one. Take it out and
+    /// let the history go before asking it anything.
+    pub fn ledger(&self) -> Option<Arc<dyn Ledger>> {
+        self.ledger.clone()
+    }
+
     pub fn clear_redo(&mut self) {
         self.redo.clear();
+    }
+
+    /// An edit the history records nothing for was made: the Redo branch
+    /// ends ([`Self::clear_redo`]) and the [`Ledger`] is told, by `name`
+    /// when the caller has one for it. Call it once the write is made.
+    pub fn unrecorded(&mut self, name: Option<&str>) {
+        self.redo.clear();
+        if let Some(ledger) = &self.ledger {
+            ledger.note(Unkept::Unrecorded, name);
+        }
+    }
+
+    /// An edit that removed rows for good was made: both stacks are
+    /// emptied ([`Self::clear`]) and the [`Ledger`] is told, by `name` when
+    /// the caller has one for it. Call it once the write is made.
+    pub fn permanent(&mut self, name: Option<&str>) {
+        self.clear();
+        if let Some(ledger) = &self.ledger {
+            ledger.note(Unkept::Permanent, name);
+        }
     }
 
     /// Takes the next Undo (`undo`) or Redo entry off its stack and leaves
@@ -520,7 +546,7 @@ impl crate::LibraryCore {
         let had = {
             let mut history = self.history.lock();
             let had = history.undo_label().is_some() || history.redo_label().is_some();
-            history.clear();
+            history.permanent(None);
             had
         };
         if had {

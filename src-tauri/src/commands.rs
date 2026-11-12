@@ -657,7 +657,8 @@ where
         let generation = state.write_history_then(action, |db, ()| refresh_after_edit(&state, db, touched)).map_err(write_error)?;
         // Any non-recorded edit after an undo starts a new branch.
         let mut history = state.edit_history().lock();
-        history.clear_redo();
+        // The Ledger is told which command it was; the history keeps nothing.
+        history.unrecorded(Some(name));
         Ok((generation, history_dto(generation, &history)))
     }).await?;
     let _ = tauri::Emitter::emit(&app, event, generation);
@@ -684,7 +685,8 @@ where
         let generation = state.write_history_then(action, |db, ()| refresh_after_edit(&state, db, touched))
             .map_err(write_error)?;
         let mut history = state.edit_history().lock();
-        history.clear();
+        // The Ledger is told which command it was; the history is emptied.
+        history.permanent(Some(name));
         Ok((generation, history_dto(generation, &history)))
     }).await?;
     let _ = tauri::Emitter::emit(&app, event, generation);

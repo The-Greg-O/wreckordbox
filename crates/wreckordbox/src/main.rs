@@ -6,6 +6,7 @@
 
 mod facts;
 mod intake;
+mod ledger;
 mod mytag_edits;
 mod reading;
 mod stems;
@@ -46,12 +47,16 @@ enum Commands {
     Status,
     /// Find tracks in the Library.
     Tracks {
+        #[command(flatten)]
+        run: ledger::RunOptions,
         #[command(subcommand)]
         command: TrackCommands,
     },
     /// Read and edit the My Tag categories and tags, and which tracks carry
     /// them.
     Mytags {
+        #[command(flatten)]
+        run: ledger::RunOptions,
         #[command(subcommand)]
         command: reading::MyTagCommands,
     },
@@ -84,6 +89,8 @@ enum Commands {
     /// The Intake and Problems queues: tracks with no Prep colour, tracks
     /// marked Problem, and what each still needs.
     Intake {
+        #[command(flatten)]
+        run: ledger::RunOptions,
         #[command(subcommand)]
         command: intake::IntakeCommands,
     },
@@ -160,6 +167,13 @@ fn main() -> ExitCode {
 
 fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
     let config = Config::from_env()?;
+    // The Run a command that edits the Library was given, sent with it.
+    if let Commands::Tracks { run, .. }
+    | Commands::Mytags { run, .. }
+    | Commands::Intake { run, .. } = &cli.command
+    {
+        ledger::begin(run, cli.json);
+    }
     match &cli.command {
         Commands::Status => {
             let status = connect(&config)?.status()?;
@@ -171,6 +185,7 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
         }
         Commands::Tracks {
             command: TrackCommands::List { filter, limit },
+            ..
         } => {
             let list = connect(&config)?.tracks(&TrackQuery {
                 filter: filter.clone(),
@@ -184,6 +199,7 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
         }
         Commands::Tracks {
             command: TrackCommands::Rate { id, stars },
+            ..
         } => {
             let rated = connect(&config)?.rate_track(id, *stars)?;
             if cli.json {
@@ -192,7 +208,7 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
                 print(&rated_text(&rated));
             }
         }
-        Commands::Mytags { command } => {
+        Commands::Mytags { command, .. } => {
             print(&reading::my_tags(
                 &mut connect(&config)?,
                 cli.json,
@@ -215,9 +231,11 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
         }
         Commands::Tracks {
             command: TrackCommands::Show(args),
+            ..
         } => print(&tracks::show(&mut connect(&config)?, args, cli.json)?),
         Commands::Tracks {
             command: TrackCommands::Query(args),
+            ..
         } => print(&tracks::query(&mut connect(&config)?, args, cli.json)?),
         Commands::Stems { command } => {
             print(&stems::run(&mut connect(&config)?, cli.json, command)?);
@@ -228,7 +246,7 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
         Commands::Runs { command } => {
             print(&facts::runs(&mut connect(&config)?, cli.json, command)?);
         }
-        Commands::Intake { command } => {
+        Commands::Intake { command, .. } => {
             print(&intake::run(&mut connect(&config)?, cli.json, command)?);
         }
         Commands::Serve { spawned: true } => {
@@ -266,7 +284,9 @@ fn connect(config: &Config) -> Result<Client, ServiceError> {
         program,
         args: vec!["serve".into(), "--spawned".into()],
     };
-    Client::connect_or_start(config, &library, &launcher)
+    let mut client = Client::connect_or_start(config, &library, &launcher)?;
+    ledger::attribute(&mut client);
+    Ok(client)
 }
 
 fn status_text(status: &Status) -> String {
@@ -365,6 +385,6 @@ fn or_dash(text: &str) -> String {
 
 fn print(text: &str) {
     let mut stdout = std::io::stdout();
-    let _ = writeln!(stdout, "{text}");
+    let _ = writeln!(stdout, "{}", ledger::with_run(text));
     let _ = stdout.flush();
 }

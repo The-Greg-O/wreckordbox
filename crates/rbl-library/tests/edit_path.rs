@@ -366,9 +366,21 @@ fn undo_refuses_a_value_changed_outside_the_history_and_drops_only_that_entry() 
 #[derive(Default)]
 struct LedgerTape {
     changes: parking_lot::Mutex<Vec<(rbl_library::ledger::Step, String, Option<i64>, i64)>>,
+    /// The edits the history keeps no entry for, as they were named.
+    notes: parking_lot::Mutex<Vec<(rbl_library::ledger::Unkept, Option<String>)>>,
+    /// Why it cannot record, when it cannot.
+    broken: parking_lot::Mutex<Option<String>>,
 }
 
 impl rbl_library::ledger::Ledger for LedgerTape {
+    fn ready(&self) -> Result<(), String> {
+        self.broken.lock().clone().map_or(Ok(()), Err)
+    }
+
+    fn note(&self, kept: rbl_library::ledger::Unkept, name: Option<&str>) {
+        self.notes.lock().push((kept, name.map(str::to_owned)));
+    }
+
     fn record(
         &self,
         step: rbl_library::ledger::Step,
@@ -409,9 +421,13 @@ fn a_ledger_given_to_the_history_is_told_of_each_edit_undo_and_redo_with_what_it
     core.step_history(&NoHost, true).unwrap();
     core.step_history(&NoHost, false).unwrap();
     core.step_history(&NoHost, true).unwrap();
-    // An outside write is not the history's to tell.
+    // An outside write is no entry of the history's: it is named as an
+    // edit the history does not keep. One that changed no row is not.
+    assert!(tape.notes.lock().is_empty());
     core.edit(&NoHost, History::Outside, Touched::Metadata(vec![track.clone()]), |w| w.set_rating(&track, 1))
         .unwrap();
+    core.edit(&NoHost, History::Outside, Touched::Metadata(vec![track.clone()]), |_| Ok(())).unwrap();
+    assert_eq!(*tape.notes.lock(), vec![(rbl_library::ledger::Unkept::Unrecorded, None)]);
 
     let label = TRACK_EDIT.to_owned();
     assert_eq!(
@@ -432,4 +448,71 @@ fn a_ledger_given_to_the_history_is_told_of_each_edit_undo_and_redo_with_what_it
     })
     .unwrap();
     assert_eq!(tape.changes.lock().len(), 4);
+}
+
+#[test]
+fn a_ledger_is_told_of_an_edit_that_empties_the_history() {
+    use rbl_library::ledger::Unkept;
+
+    let dir = tempfile::tempdir().unwrap();
+    let core = core_in(dir.path());
+    let tape = std::sync::Arc::new(LedgerTape::default());
+    core.history().lock().keep_ledger(Some(tape.clone()));
+    let track = rbl_db::fixture::track_id(1);
+
+    core.permanent_edit(&NoHost, Touched::Metadata(vec![track.clone()]), |w| w.set_rating(&track, 2)).unwrap();
+    // The window's own wrappers name what they did.
+    core.history().lock().permanent(Some("delete_my_tag"));
+    core.history().lock().unrecorded(Some("create_my_tag"));
+
+    assert_eq!(
+        *tape.notes.lock(),
+        vec![
+            (Unkept::Permanent, None),
+            (Unkept::Permanent, Some("delete_my_tag".to_owned())),
+            (Unkept::Unrecorded, Some("create_my_tag".to_owned())),
+        ]
+    );
+    assert!(tape.changes.lock().is_empty());
+}
+
+#[test]
+fn nothing_is_written_while_the_ledger_cannot_record() {
+    use rbl_library::history::{LibraryEdit, TRACK_EDIT};
+
+    let dir = tempfile::tempdir().unwrap();
+    let core = core_in(dir.path());
+    let tape = std::sync::Arc::new(LedgerTape::default());
+    core.history().lock().keep_ledger(Some(tape.clone()));
+    let track = rbl_db::fixture::track_id(2);
+    let rate = |stars: u8| {
+        core.recorded_edit(&NoHost, Touched::Metadata(vec![track.clone()]), TRACK_EDIT, |w| {
+            let (_, recorded) = w.set_rating_with_undo(&track, stars)?;
+            Ok(((), LibraryEdit::Track(vec![recorded])))
+        })
+    };
+    rate(3).unwrap();
+    let generation = core.generation();
+
+    *tape.broken.lock() = Some("the disk is full".to_owned());
+    let refused = rate(5).unwrap_err();
+    assert!(
+        matches!(&refused, rbl_db::DbError::WriteRefused(why) if why.contains("the disk is full")),
+        "{refused:?}"
+    );
+    let outside = core
+        .edit(&NoHost, History::Outside, Touched::Metadata(vec![track.clone()]), |w| w.set_rating(&track, 1))
+        .unwrap_err();
+    assert!(matches!(outside, rbl_db::DbError::WriteRefused(_)));
+    // Undo is a write too: the entry stays to be tried again.
+    assert!(matches!(core.step_history(&NoHost, true), Err(rbl_library::history::StepError::Write(_))));
+
+    assert_eq!(rating_of(&core, &track), 3, "nothing changed");
+    assert_eq!(core.generation(), generation);
+    assert_eq!(tape.changes.lock().len(), 1, "and nothing was recorded");
+    assert!(tape.notes.lock().is_empty());
+
+    *tape.broken.lock() = None;
+    core.step_history(&NoHost, true).unwrap();
+    assert_eq!(rating_of(&core, &track), 0);
 }

@@ -1,29 +1,34 @@
-//! The Ledger (ADR 0004): the durable, append-only record of every edit to
-//! the Library, kept in the Sidecar's database beside the Facts, and the
-//! reading of a Run's changes to both.
+//! The Ledger (ADR 0004): the durable, append-only record of every change
+//! to the Library and to the Sidecar, kept in the Sidecar's database beside
+//! the Facts, and the reading of a Run's changes to both.
 //!
 //! ```text
-//! ledger(id, run_id, at, source_kind, source_name, action, kind, label,
-//!        command, reverses, reversible, format, payload)
+//! ledger(id, run_id, at, store, source_kind, source_name, action, kind,
+//!        label, command, reverses, reversible, format, payload)
 //! ```
 //!
-//! A `ledger` row is one edit to the Library: which Run, which source,
-//! what it was (`action`, `kind`, `label`, and the service `command` that
-//! made it when one did), and in `payload` the exact before and after
-//! values, as JSON whose shape `format` versions. The Sidecar does not look
-//! inside a payload; whoever writes Library edits owns its shape. Rows are
-//! never changed or removed: two triggers refuse it. An Undo, a Redo or an
-//! Unwind is a new row whose `reverses` names the row it steps.
+//! A `ledger` row is one change: which Run, which source, which `store`
+//! (`library` or `sidecar`), what it was (`action`, `kind`, `label`, and
+//! the service `command` that made it when one did), and in `payload` the
+//! exact before and after values, as JSON whose shape `format` versions.
+//! The Sidecar does not look inside a Library payload; whoever writes
+//! Library edits owns its shape. Rows are never changed or removed: two
+//! triggers refuse it. An Undo, a Redo or an Unwind is a new row whose
+//! `reverses` names the row it steps.
 //!
-//! Changes to the Sidecar itself are not copied here. A Fact already
-//! carries its Run, its source and its time, and the Fact its source had
-//! before it is kept, so [`Sidecar::run_entries`] reads a Run's Facts
-//! beside its Library edits as entries of one list.
+//! A Fact recorded in the Sidecar is not copied here: the `fact` row is
+//! its own entry. It is written once, carries its Run, its source and its
+//! time, and the Fact its source had before it is kept and points at it,
+//! so [`Sidecar::run_entries`] reads a Run's Facts beside its `ledger`
+//! rows as entries of one list. The one other change the Sidecar makes to
+//! a Fact, marking a Measurement stale, is a `ledger` row of kind
+//! [`STALE`], written in the transaction that marks it.
 //!
-//! An entry is appended once the write it records has been made, so a
-//! process that dies between the two leaves a write with no entry. Closing
-//! that gap, and recording the writes that are not edits (analysis,
-//! imports), is a later step; the `write` action is kept for it.
+//! An entry for a Library edit is appended once the write it records has
+//! been made (the two are different databases), so a process that dies
+//! between the two leaves a write with no entry. Recording the writes
+//! that are not edits (analysis, imports) is a later step; the `write`
+//! action is kept for it.
 
 use rusqlite::{params, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
@@ -37,6 +42,7 @@ CREATE TABLE ledger (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id      INTEGER NOT NULL REFERENCES run (id),
     at          INTEGER NOT NULL,
+    store       TEXT NOT NULL CHECK (store IN ('library', 'sidecar')),
     source_kind TEXT NOT NULL CHECK (source_kind IN ('dj', 'agent', 'tool', 'web')),
     source_name TEXT NOT NULL,
     action      TEXT NOT NULL CHECK (action IN ('edit', 'undo', 'redo', 'write')),
@@ -106,11 +112,33 @@ pub enum Store {
     Sidecar,
 }
 
-/// An edit to the Library, to append.
+impl Store {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Library => "library",
+            Self::Sidecar => "sidecar",
+        }
+    }
+}
+
+/// The kind of the entry that says Measurements were marked stale. Its
+/// payload (format 1) is `{"track", "fingerprint", "facts": [ids]}`: the
+/// track, the fingerprint its audio has now, and the Facts marked.
+pub const STALE: &str = "stale";
+
+/// Who marks Measurements stale: wreckordbox itself, having found a
+/// track's audio changed.
+pub const HOUSEKEEPING: &str = "wreckordbox";
+
+/// A change, to append.
 #[derive(Debug, Clone)]
 pub struct NewEntry<'a> {
     pub run: RunId,
+    pub store: Store,
     pub source: &'a Source,
+    /// When the change was made, in milliseconds since the Unix epoch;
+    /// `None` for now.
+    pub at: Option<i64>,
     pub action: Action,
     /// What kind of edit, in a stable word: `track`, `track_tags`, ...
     pub kind: &'a str,
@@ -132,8 +160,9 @@ pub struct NewEntry<'a> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Entry {
     pub store: Store,
-    /// The `ledger` row for the Library, the Fact's identifier for the
-    /// Sidecar: unique within its store.
+    /// The `ledger` row's identifier, or for a recorded Fact
+    /// ([`Action::Record`]) the Fact's: unique among entries of its store
+    /// and action.
     pub id: i64,
     pub run: RunId,
     /// Milliseconds since the Unix epoch.
@@ -170,6 +199,16 @@ pub struct RunSummary {
 }
 
 impl Sidecar {
+    /// Whether an entry appended now would be kept: a write to the
+    /// database, of nothing, made and committed.
+    pub fn ledger_ready(&self) -> Result<()> {
+        self.db().execute(
+            "UPDATE meta SET value = value WHERE key = 'schema_version'",
+            [],
+        )?;
+        Ok(())
+    }
+
     /// Appends one entry and answers its identifier.
     pub fn append(&self, entry: &NewEntry) -> Result<i64> {
         let mut db = self.db();
@@ -239,7 +278,7 @@ impl Sidecar {
             |row| row.get(0),
         )?;
         let mut keys = db.prepare(
-            "SELECT 0 AS store, id, at FROM ledger WHERE run_id = ?1
+            "SELECT 0 AS source, id, at FROM ledger WHERE run_id = ?1
              UNION ALL
              SELECT 1, id, recorded_at FROM fact WHERE run_id = ?1
              ORDER BY 3, 1, 2 LIMIT ?2 OFFSET ?3",
@@ -303,19 +342,16 @@ impl Sidecar {
 
 fn counts_of(db: &rusqlite::Connection, run: RunId) -> Result<Vec<Count>> {
     let mut counts = db.prepare(
-        "SELECT 0, kind, COUNT(*) FROM ledger WHERE run_id = ?1 GROUP BY kind
-         UNION ALL
-         SELECT 1, kind, COUNT(*) FROM fact WHERE run_id = ?1 GROUP BY kind
-         ORDER BY 1, 2",
+        "SELECT store, kind, SUM(count) FROM (
+             SELECT store, kind, COUNT(*) AS count FROM ledger WHERE run_id = ?1 GROUP BY store, kind
+             UNION ALL
+             SELECT 'sidecar', kind, COUNT(*) FROM fact WHERE run_id = ?1 GROUP BY kind)
+         GROUP BY store, kind ORDER BY store, kind",
     )?;
     let counts = counts
         .query_map([run.0], |row| {
             Ok(Count {
-                store: if row.get::<_, i64>(0)? == 0 {
-                    Store::Library
-                } else {
-                    Store::Sidecar
-                },
+                store: store_from(&row.get::<_, String>(0)?),
                 kind: row.get(1)?,
                 count: u64::try_from(row.get::<_, i64>(2)?).unwrap_or(0),
             })
@@ -324,14 +360,22 @@ fn counts_of(db: &rusqlite::Connection, run: RunId) -> Result<Vec<Count>> {
     Ok(counts)
 }
 
-fn append_in(tx: &rusqlite::Transaction, entry: &NewEntry) -> Result<i64> {
+fn store_from(text: &str) -> Store {
+    if text == "sidecar" {
+        Store::Sidecar
+    } else {
+        Store::Library
+    }
+}
+
+pub(crate) fn append_in(tx: &rusqlite::Transaction, entry: &NewEntry) -> Result<i64> {
     tx.execute(
         "INSERT INTO ledger (run_id, at, source_kind, source_name, action, kind, label, command,
-                             reverses, reversible, format, payload)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                             reverses, reversible, format, payload, store)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![
             entry.run.0,
-            now(),
+            entry.at.unwrap_or_else(now),
             entry.source.kind.as_str(),
             entry.source.name,
             entry.action.as_str(),
@@ -342,6 +386,7 @@ fn append_in(tx: &rusqlite::Transaction, entry: &NewEntry) -> Result<i64> {
             entry.reversible,
             entry.format,
             entry.payload.map(Value::to_string),
+            entry.store.as_str(),
         ],
     )?;
     Ok(tx.last_insert_rowid())
@@ -365,12 +410,12 @@ fn read_run(row: &Row) -> rusqlite::Result<Run> {
 }
 
 const ENTRY_COLUMNS: &str = "SELECT id, run_id, at, source_kind, source_name, action, kind, label,
-                                    command, reverses, reversible, format, payload";
+                                    command, reverses, reversible, format, payload, store";
 
 fn read_entry(row: &Row) -> rusqlite::Result<Entry> {
     let json = |text: Option<String>| text.and_then(|text| serde_json::from_str(&text).ok());
     Ok(Entry {
-        store: Store::Library,
+        store: store_from(&row.get::<_, String>(13)?),
         id: row.get(0)?,
         run: RunId(row.get(1)?),
         at: row.get(2)?,

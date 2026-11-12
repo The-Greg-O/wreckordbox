@@ -70,6 +70,8 @@ struct Shared {
     idle_since: Mutex<Option<Instant>>,
     /// The Sidecar and the separation engine (`stems.*` commands).
     stems: Arc<crate::stems::Stems>,
+    /// Keeps the Ledger: told of every edit by the Library core.
+    ledger: Arc<crate::ledger::Keeper>,
 }
 
 struct Owned {
@@ -166,6 +168,8 @@ impl Service {
         let listener = listen(&config.runtime_dir, &socket)?;
         let (queue, queued) = std::sync::mpsc::channel();
         let (sidecar_events, sidecar_queued) = std::sync::mpsc::channel();
+        let stems = crate::stems::Stems::from_env(&master_db, sidecar_events);
+        let ledger = crate::ledger::Keeper::new(Arc::clone(&stems));
 
         let shared = Arc::new(Shared {
             library: Mutex::new(Some(Owned {
@@ -182,7 +186,8 @@ impl Service {
             listeners: Mutex::new(Vec::new()),
             changes: Mutex::new(Some(queue)),
             idle_since: Mutex::new(Some(Instant::now())),
-            stems: crate::stems::Stems::from_env(&master_db, sidecar_events),
+            stems,
+            ledger,
         });
         // What the Stems commands have to say (progress, a change to the
         // Sidecar), sent off the thread that said it. Ends with the service.
@@ -229,6 +234,11 @@ impl Service {
             let shared = Arc::clone(&shared);
             std::thread::spawn(move || accept_clients(&shared, &listener));
         }
+        // From here on every edit through the core, a client's or the
+        // hosting front end's, is recorded in the Ledger.
+        core.history()
+            .lock()
+            .keep_ledger(Some(shared.ledger.clone()));
         Ok(Self { shared })
     }
 
@@ -253,8 +263,9 @@ impl Service {
             id: 0,
             command: command.to_owned(),
             args,
+            run: None,
         };
-        self.shared.dispatch(None, &request)
+        self.shared.answer(None, &request).0
     }
 
     /// What the process hosting the service has not seen for itself, from
@@ -362,6 +373,21 @@ impl Shared {
         }
     }
 
+    /// Answers one request with its edits attributed in the Ledger: the
+    /// result, and the Run the command's changes are in.
+    fn answer(
+        &self,
+        connection: Option<&Connection>,
+        request: &Request,
+    ) -> (Result<Value, ServiceError>, Option<Value>) {
+        let (result, run) = self
+            .ledger
+            .attributed(connection.is_some(), request, || {
+                self.dispatch(connection, request)
+            });
+        (result, run.and_then(|run| serde_json::to_value(run).ok()))
+    }
+
     /// The one place a command name becomes behaviour.
     fn dispatch(
         &self,
@@ -426,6 +452,7 @@ impl Shared {
                     self.with_library(|library| crate::stems::parent(library, id))?
                 })
             }
+            runs if crate::ledger::answers(runs) => crate::ledger::answer(&self.stems, request),
             facts if crate::facts::answers(facts) => {
                 // The Sidecar's, not the Library's: the Library is only
                 // read, to find the track.
@@ -497,8 +524,12 @@ impl Shared {
         // No more changes to send; the sending thread ends.
         drop(lock(&self.changes).take());
         // Waits for a command in progress, then closes the Library before
-        // letting another service have it.
-        drop(lock(&self.library).take());
+        // letting another service have it. The core, which a hosting front
+        // end keeps, is no longer this service's to record.
+        if let Some(owned) = lock(&self.library).take() {
+            owned.library.core().history().lock().keep_ledger(None);
+        }
+        self.ledger.close();
         *lock(&self.stopped.0) = true;
         self.stopped.1.notify_all();
     }
@@ -552,13 +583,17 @@ fn serve_client(shared: &Shared, connection: &Connection, stream: UnixStream) {
             continue;
         }
         let response = match serde_json::from_str::<Request>(&line) {
-            Ok(request) => Response {
-                id: request.id,
-                outcome: match shared.dispatch(Some(connection), &request) {
-                    Ok(result) => Outcome::Result(result),
-                    Err(error) => Outcome::Error(error),
-                },
-            },
+            Ok(request) => {
+                let (result, run) = shared.answer(Some(connection), &request);
+                Response {
+                    id: request.id,
+                    outcome: match result {
+                        Ok(result) => Outcome::Result(result),
+                        Err(error) => Outcome::Error(error),
+                    },
+                    run,
+                }
+            }
             // Nothing to answer to by id; 0 is never a client's id.
             Err(e) => Response {
                 id: 0,
@@ -566,6 +601,7 @@ fn serve_client(shared: &Shared, connection: &Connection, stream: UnixStream) {
                     codes::BAD_REQUEST,
                     format!("not a request: {e}"),
                 )),
+                run: None,
             },
         };
         let Ok(line) = serde_json::to_string(&response) else {

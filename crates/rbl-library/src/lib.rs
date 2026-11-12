@@ -361,6 +361,14 @@ impl LibraryCore {
         if let Some(_files) = self.analysis_write.try_lock() {
             host.recover_interrupted_files(&location).map_err(rbl_db::DbError::WriteRefused)?;
         }
+        // Nothing is changed that the Ledger could not record. Asked with
+        // the history let go: the Ledger may block to write.
+        let ledger = self.history.lock().ledger();
+        if let Some(ledger) = ledger {
+            ledger.ready().map_err(|why| {
+                rbl_db::DbError::WriteRefused(format!("The Ledger cannot record a change, so nothing was changed: {why}"))
+            })?;
+        }
         let gate_ms = started.elapsed().as_millis();
         let mut writer = rbl_db::write::Writer::open(location.clone(), self.recovery_dir.clone())?;
         writer.disable_automatic_backups();
@@ -382,7 +390,7 @@ impl LibraryCore {
             let ended = {
                 let mut history = self.history.lock();
                 let had = history.redo_label().is_some();
-                history.clear_redo();
+                history.unrecorded(None);
                 had
             };
             host.wrote_outside_history();

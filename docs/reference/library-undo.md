@@ -53,6 +53,20 @@ the code or observed, `[ASSUME]` is inferred, `[UNKNOWN]` is open.
   Playlist joins the entry its first slice recorded there
   (`EditHistory::record_addition`). Undo and Redo move an entry between the
   stacks (`LibraryCore::step_history`); they do not record.
+- **The Ledger attaches at the recording point** (wreckordbox #21). The
+  history can be given a Ledger (`EditHistory::keep_ledger`,
+  `crates/rbl-library/src/ledger.rs`); the Library service gives it one
+  while it runs, hosted by the window or by itself. `record` hands it each
+  edit with the payload the history keeps, and each later slice of an Add
+  Tracks to Playlist; `LibraryCore::step_history` hands it each Undo and
+  Redo as a new entry naming the entry it steps. An edit the history does
+  not keep is named to it: `EditHistory::unrecorded` (what `edit` and an
+  outside write call in place of `clear_redo`) and `EditHistory::permanent`
+  (in place of `clear`). Before any write the core asks the Ledger whether
+  it can record (`Ledger::ready`); when it cannot, the write is refused and
+  nothing changes. Undo and Redo themselves are unchanged: the Ledger is
+  only told. What it keeps, and which writes it does not yet see, is in
+  `crates/wreckordbox-service/src/ledger.rs`.
 - **A client's edit.** The service records through
   `LibraryCore::recorded_edit` (gate, guarded write, refresh, `record`),
   then tells its host the history changed (`Host::history_changed`). The
