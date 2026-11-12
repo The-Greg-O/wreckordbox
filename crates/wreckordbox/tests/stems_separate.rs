@@ -471,7 +471,8 @@ fn library_shape(sandbox: &Sandbox) -> Vec<(String, String, i64)> {
 }
 
 #[test]
-fn stems_and_facts_add_no_table_column_or_row_to_the_library_and_live_in_a_folder_beside_it() {
+fn stems_facts_and_mutants_add_no_table_column_or_row_to_the_library_and_live_in_a_folder_beside_it(
+) {
     let sandbox = Sandbox::new();
     let track = import(&sandbox, "Night Bus.wav", 4_410);
     let before = library_shape(&sandbox);
@@ -520,6 +521,32 @@ fn stems_and_facts_add_no_table_column_or_row_to_the_library_and_live_in_a_folde
         .map(|fact| fact["kind"].as_str().unwrap().to_owned())
         .collect();
     assert_eq!(kinds, ["genre", "stems"]);
+
+    // So does a Mutant: the playlist entry it is made for stays, in the
+    // Library, the track it was.
+    let entries = |sandbox: &Sandbox| {
+        let run = sandbox.cli(&["--json", "playlists", "tracks", "900000"]);
+        assert!(run.status.success(), "{}", run.stderr);
+        run.json()["tracks"].clone()
+    };
+    let entries_before = entries(&sandbox);
+    let mutant = sandbox.cli(&[
+        "--json",
+        "mutants",
+        "create",
+        "--playlist",
+        "900000",
+        "--position",
+        "1",
+        "--source",
+        "agent:preparer",
+    ]);
+    assert!(mutant.status.success(), "{}", mutant.stderr);
+    assert_eq!(
+        mutant.json()["mutant"]["parent"]["id"],
+        entries_before[0]["id"]
+    );
+    assert_eq!(entries(&sandbox), entries_before);
 
     assert!(!sandbox.sidecar_dir().exists());
     assert_eq!(library_shape(&sandbox), before);

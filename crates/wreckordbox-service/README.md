@@ -18,6 +18,7 @@ Read the crate docs in [`src/lib.rs`](src/lib.rs), then [`src/protocol.rs`](src/
 | [`server.rs`](src/server.rs) | `Service`: the Library's lock, the open Library, the socket, command dispatch, events. |
 | [`client.rs`](src/client.rs) | `Client`: connect, call, subscribe; starting a service on demand. |
 | [`stems.rs`](src/stems.rs) | The `stems.*` commands: the service's Sidecar, and the one separation that may be running. |
+| [`native_stems.rs`](src/native_stems.rs) | `stems.write`: a track's current Stems written to a Spare stick as Native stems. |
 | [`facts.rs`](src/facts.rs) | The `facts.*` and `runs.*` commands: recording Facts in a Run, reading a track's Facts, the declared kinds. |
 | [`separation.rs`](src/separation.rs) | The separation engine as a child process, spoken to over its JSON-lines protocol. |
 
@@ -36,6 +37,7 @@ Read the crate docs in [`src/lib.rs`](src/lib.rs), then [`src/protocol.rs`](src/
 - The service owns the Sidecar (`wreckordbox-sidecar`) as it owns the Library, by itself or hosted: `wreckordbox-sidecar/` beside `master.db` unless `WRECKORDBOX_SIDECAR_DIR` names another folder. It is opened by the first `stems.*`, `facts.*` or `runs.*` command. Recording Stems or any other Fact never writes to the Library and sends no `library_changed`; it sends `sidecar_changed`.
 - `facts.record` takes one Fact or many and records all of them or none, in a Run it is given or one it makes. A Fact's kind must be declared (built in, or in `kinds.toml` in the Sidecar's folder, read on every command) and its value must be of the kind's type; otherwise `kind_not_declared` or `wrong_value_type`. Facts from different sources about one track and kind stand side by side; nothing here chooses between them.
 - `stems.separate` runs the separation engine (`WRECKORDBOX_SEPARATION_COMMAND`, else the checkout's `separation-engine/.venv`) on a thread of its own, holding no lock on the Library. The command answers when the separation is done, `stems_progress` events go to subscribed clients meanwhile, a client that leaves stops nothing, a second request for the same track joins the wait, and one for another track answers `separation_busy`. Nothing reaches the Sidecar until the finished Stems are checked and recorded in one step; a service that stops kills the engine and keeps nothing.
+- `stems.write` writes a track's Stems to a Stick as Native stems through `wreckordbox-native-stems`. In order, and before anything is written: the track must be in the Library (`track_not_found`), the Stick must be there (`stick_not_found`) and carry the Spare stick marker `.rbxport-disposable` (`not_a_spare_stick`), the track must have Stems made from the audio it has now (`no_current_stems`), and the Stick's exported library must hold an export of it (`track_not_on_stick`). A file name the layout cannot represent is answered with outcome `skipped`, not an error. It is not a Library edit: no edit path, no Library Protection, no `library_changed`. Encoding runs with the Library free, one write at a time.
 - Add a command in one place: a name in `protocol::commands` and an arm in `Shared::dispatch`.
 
 ## Run focused checks

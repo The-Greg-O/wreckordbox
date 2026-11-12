@@ -148,6 +148,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "aotuv_lancer_vorbis_sys"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5bc4fd1a61860d2f1198b60bedd30910eaffa978f1ee6214dfb24ac70d589225"
+dependencies = [
+ "cc",
+ "ogg_next_sys",
+]
+
+[[package]]
 name = "arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2628,6 +2638,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
+name = "lewton"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "777b48df9aaab155475a83a7df3070395ea1ac6902f5cd062b8f2b028075c030"
+dependencies = [
+ "byteorder",
+ "ogg",
+ "tinyvec",
+]
+
+[[package]]
 name = "libappindicator"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3342,6 +3363,24 @@ dependencies = [
  "objc2-app-kit",
  "objc2-core-foundation",
  "objc2-foundation",
+]
+
+[[package]]
+name = "ogg"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6951b4e8bf21c8193da321bcce9c9dd2e13c858fe078bf9054a288b419ae5d6e"
+dependencies = [
+ "byteorder",
+]
+
+[[package]]
+name = "ogg_next_sys"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed2d7a48e247c2bb07e633aefb65a38648ea58c7eedd4e4408a5861721ab049b"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
@@ -4145,6 +4184,7 @@ dependencies = [
  "windows-core 0.61.2",
  "windows-sys 0.61.2",
  "wreckordbox-service",
+ "wreckordbox-stick-outline",
  "zip",
 ]
 
@@ -6067,6 +6107,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
+name = "vorbis_rs"
+version = "0.5.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49c5da94d280f7a27e8c937e9b73df2da3e23a2583f48471fd8fb4c72f9c1933"
+dependencies = [
+ "aotuv_lancer_vorbis_sys",
+ "errno",
+ "getrandom 0.4.3",
+ "ogg_next_sys",
+ "thiserror 2.0.20",
+ "tinyvec",
+]
+
+[[package]]
 name = "vswhom"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7036,10 +7090,41 @@ name = "wreckordbox"
 version = "1.10.0"
 dependencies = [
  "clap",
+ "lewton",
  "rbl-db",
+ "rbl-export",
+ "rbl-onelibrary",
+ "rusqlite",
  "serde_json",
  "tempfile",
  "wreckordbox-service",
+ "wreckordbox-sidecar",
+]
+
+[[package]]
+name = "wreckordbox-native-stems"
+version = "1.10.0"
+dependencies = [
+ "crc32fast",
+ "lewton",
+ "rbl-export",
+ "rbl-onelibrary",
+ "serde_json",
+ "symphonia",
+ "tempfile",
+ "thiserror 2.0.20",
+ "vorbis_rs",
+]
+
+[[package]]
+name = "wreckordbox-render"
+version = "1.10.0"
+dependencies = [
+ "rbl-audio",
+ "rbl-deck",
+ "rustix",
+ "tempfile",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -7055,6 +7140,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "wreckordbox-native-stems",
  "wreckordbox-sidecar",
 ]
 
@@ -7070,6 +7156,21 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "toml 0.8.2",
+]
+
+[[package]]
+name = "wreckordbox-stick-outline"
+version = "1.10.0"
+dependencies = [
+ "rbl-anlz",
+ "rbl-core",
+ "rbl-export",
+ "rbl-onelibrary",
+ "rbl-pdb",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]
