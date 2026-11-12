@@ -101,3 +101,76 @@ test("it shows title, BPM, key and Energy, with the target's track count and len
   await expect(first.locator('[data-cell="key"]')).toContainText("8A");
   await expect(first.getByRole("img", { name: "Energy 1 of 5" })).toBeVisible();
 });
+
+test("Enter adds the selected track to the target, as one Undo step, and the main list still loads without the second list", async ({ page }) => {
+  await open(page);
+  await allTracks(page);
+  await showTarget(page, "Eurodance");
+  await expect(target(page).getByText(/Empty\./)).toBeVisible();
+
+  await mainRow(page, "Bar 05").locator('[data-col="title"]').click();
+  await page.keyboard.press("Enter");
+  await expect(status(page)).toContainText("Added 1 track to Eurodance.");
+  await expect.poll(() => targetTitles(page)).toEqual(bars(5));
+  await expect(target(page).getByRole("heading")).toContainText("1 tracks");
+  // Enter added: it did not also load the track on the deck.
+  await expect(page.getByTestId("shell-player")).not.toContainText("Bar 05");
+
+  await mainRow(page, "Bar 09").locator('[data-col="title"]').click();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => targetTitles(page)).toEqual(bars(5, 9));
+
+  // The Library holds it: the playlist opened in the main list lists both.
+  expect(await playlistAsListed(page, "Eurodance")).toEqual(bars(5, 9));
+
+  // One Undo takes back the last add, and only it.
+  await menu(page, "undo");
+  await expect(status(page)).toContainText("Edit undone.");
+  await expect.poll(() => targetTitles(page)).toEqual(bars(5));
+
+  // With the second list hidden, Enter is not an add: it is left to the
+  // window's own handlers (Load on Player 1), and the target is unchanged.
+  await allTracks(page);
+  await mainRow(page, "Bar 11").locator('[data-col="title"]').click();
+  await page.keyboard.press("Control+Backslash");
+  await expect(target(page)).toHaveCount(0);
+  const prevented = await page.evaluate(() => {
+    const press = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    document.body.dispatchEvent(press);
+    return press.defaultPrevented;
+  });
+  expect(prevented).toBe(false);
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Control+Backslash");
+  await expect.poll(() => targetTitles(page)).toEqual(bars(5));
+  expect(await playlistAsListed(page, "Eurodance")).toEqual(bars(5));
+});
+
+test("dragging tracks from the main list onto the second list adds them", async ({ page }) => {
+  await open(page);
+  await allTracks(page);
+  await showTarget(page, "Eurodance");
+
+  await mainRow(page, "Bar 02").locator('[data-col="title"]').click();
+  await mainRow(page, "Bar 04").locator('[data-col="title"]').click({ modifiers: ["Shift"] });
+  await mainRow(page, "Bar 03").dragTo(targetGrid(page));
+  await expect(status(page)).toContainText("Added 3 tracks to Eurodance.");
+  await expect.poll(() => targetTitles(page)).toEqual(bars(2, 3, 4));
+  expect(await playlistAsListed(page, "Eurodance")).toEqual(bars(2, 3, 4));
+});
+
+test("under Library Protection an add is refused, saying why, and the target is unchanged", async ({ page }) => {
+  await open(page);
+  await allTracks(page);
+  await showTarget(page, "Melodic Vox");
+  await expect.poll(() => targetTitles(page)).toEqual(bars(...range(3, 20)));
+  await page.evaluate(() => (window as unknown as { __turnLibraryProtection: (on: boolean) => void }).__turnLibraryProtection(true));
+
+  await mainRow(page, "Bar 25").locator('[data-col="title"]').click();
+  await page.keyboard.press("Enter");
+  await expect(status(page)).toContainText("Editing is locked by Library Protection");
+  await mainRow(page, "Bar 26").dragTo(targetGrid(page));
+  await expect(status(page)).toContainText("Editing is locked by Library Protection");
+  await expect.poll(() => targetTitles(page)).toEqual(bars(...range(3, 20)));
+  expect(await playlistAsListed(page, "Melodic Vox")).toEqual(bars(...range(3, 20)));
+});
