@@ -29,9 +29,11 @@ import { applyEditFrom, validateEdit, isDynamicFrom, tempoX100, type EditableBea
 import { fromCamelot, toCamelot } from "@/lib/camelot";
 import { COLOR_NAMES, wholeBpm } from "@/lib/trackFilter";
 import { MY_TAG_LIMIT, newMyTagName } from "@/lib/myTags";
+import { fromServicePanel, fromServiceTagsSet } from "@/lib/tagPanel";
 import { referenceDeviceSettings } from "./mock-device-settings";
 import { createMockDeviceLibraries, type MockImportEntry } from "./mock-device-library";
 import { createMockIntake } from "./mock-intake";
+import { createMockTagPanel } from "./mock-tag-panel";
 import { keyLightRows } from "./mock-key-lights";
 import { FILTER_FIXTURE_SIZE, filterFixtureColors, filterFixtureMembers, filterFixtureRows, filterFixtureTags } from "./mock-filter-fixture";
 
@@ -1613,6 +1615,18 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       membership.set(history, membersOf(history).filter((t) => !tracks.includes(t)));
       return bump();
     },
+    // The mock has no Sidecar: a test lists Mutants in
+    // `window.__mockMutants` (a `trackId` of "*" stands for any track asked
+    // about), or a reason in `window.__mockMutantsFail` to refuse.
+    collectionRemovalMutants: (tracks) => {
+      const page = window as unknown as {
+        __mockMutants?: import("@/lib/collectionRemoval").RemovalMutant[];
+        __mockMutantsFail?: string;
+      };
+      if (page.__mockMutantsFail) return Promise.reject(new Error(page.__mockMutantsFail));
+      const named = (page.__mockMutants ?? []).filter((m) => m.trackId === "*" || tracks.includes(m.trackId));
+      return wait(named);
+    },
     // The mock's rows are addressed by index, so a removal only takes the
     // tracks out of every playlist; the collection keeps its count.
     removeFromCollection: async (tracks) => {
@@ -2456,6 +2470,13 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     gridLocked: (id) => gridStore.get(id)?.locked ?? false, wait, ready: () => ready,
     setColour: (id, colour) => edits.setTrackColor([id], colour === null ? null : String(colour)),
   });
+  // The Intake tag panel (wbx-65): `mock-tag-panel.ts`.
+  const tagPanel = createMockTagPanel({
+    all, categories: myTagCategories, wait, ready: () => ready,
+    tagsOf: (id) => { const row = all.find((r) => r.id === id); return row ? detailsOf(row).myTags : []; },
+    setTags: (id, tags) => { const row = all.find((r) => r.id === id); if (row) detailsOf(row).myTags = [...tags]; },
+    recordEdit: (label, apply, undo) => { apply(); return recordEdit({ label, undo, redo: apply }); },
+  });
   if (typeof window !== "undefined") {
     // `__setPrepColour(id, colourId)` (0 for none): an edit as the Library list makes it.
     (window as unknown as { __setPrepColour: (id: string, colour: number) => Promise<unknown> }).__setPrepColour =
@@ -2475,6 +2496,10 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     intakeCounts: intake.intakeCounts,
     intakeColours: intake.intakeColours,
     intakeSetPrepColour: intake.intakeSetPrepColour,
+    intakeTagPanel: async (track) => fromServicePanel(await tagPanel.intakeTagPanel(track)),
+    intakeSetTags: async (track, dimension, terms, version, dropUnmapped) =>
+      fromServiceTagsSet(await tagPanel.intakeSetTags(track, dimension, terms, version, dropUnmapped)),
+    onSidecarChanged: tagPanel.onSidecarChanged,
     rekordboxBrowseSettings: () => Promise.resolve(null),
     librarySummary: () =>
       ready

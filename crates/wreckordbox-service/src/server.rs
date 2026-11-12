@@ -504,6 +504,16 @@ impl Shared {
                 self.tell_host(&changed.event());
                 Ok(result)
             }
+            edit if crate::playlist_edits::answers(edit) => {
+                let (changed, result) = self.with_library(|library| {
+                    crate::playlist_edits::answer(library, &self.stems, request)
+                })??;
+                // A change made is told even when its answer then failed.
+                if let Some(changed) = changed {
+                    self.tell_host(&changed.event());
+                }
+                result
+            }
             crate::tracks::TRACKS_GET | crate::tracks::TRACKS_QUERY => {
                 self.with_library(|library| crate::tracks::answer(library, request))?
             }
@@ -573,6 +583,17 @@ impl Shared {
                     &|| self.with_library(crate::schema::my_tags)?,
                     &|id| self.with_library(|library| crate::stems::parent(library, id))?,
                 )
+            }
+            panel if crate::tag_panel::answers(panel) => {
+                let (result, changed) = self.with_library(|library| {
+                    crate::tag_panel::answer(library, &self.stems, request)
+                })??;
+                // `intake.set_tags` changes the Library (or the history):
+                // the hosting process is told, as of any edit.
+                if let Some(changed) = changed {
+                    self.tell_host(&changed.event());
+                }
+                Ok(result)
             }
             intake if crate::intake::answers(intake) => {
                 let (result, changed) = self.with_library(|library| {

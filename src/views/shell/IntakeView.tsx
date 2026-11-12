@@ -39,11 +39,14 @@ import type { RowDto } from "@/ipc/types";
 import { energyOf, intakeActionForKey, intakeChord, nextQueuedIndex, type IntakeAction, type PrepColour } from "@/lib/intakeEdits";
 import { needsLine, queuePosition, type IntakeCounts, type IntakeQueueName, type IntakeQueuePage, type QueuedTrack } from "@/lib/intakeQueue";
 import { refusal } from "@/lib/menu";
+import type { TagsSet } from "@/lib/tagPanel";
+import { TagStore, tagError } from "@/lib/tagStore";
 import { formatKey } from "@/lib/preferences";
 import type { KeyOverrides, Platform } from "@/lib/shortcuts";
 import { useCommands } from "@/store/useCommands";
 import { useEventCallback } from "@/store/useEventCallback";
 import { usePreferences } from "@/store/usePreferences";
+import { IntakeTagPanel, TagFailures, TagPicker } from "./IntakeTagPanel";
 import { IntakeTrackPanel } from "./IntakeTrackPanel";
 import styles from "./IntakeView.module.css";
 import { useIntakeColours } from "./useIntakeColours";
@@ -258,6 +261,44 @@ export function IntakeView(props: IntakeViewProps) {
     return track.id;
   }, [loadQueued, t]);
 
+  // The tag panel's state and writes (wbx-65), kept here so they outlive
+  // the panel of any one track: a mark waits for its track's tag writes,
+  // and a failure stays listed after the DJ has moved on. Every click goes
+  // through `onEdit` (Library Protection, the status line) to the
+  // service's `intake.set_tags`: one step of the shared Undo.
+  const myTagComments = usePreferences().advanced.myTagComments;
+  const tagEdit = useRef({ onEdit, protectLibrary, myTagComments, t });
+  tagEdit.current = { onEdit, protectLibrary, myTagComments, t };
+  const [picking, setPicking] = useState(false);
+  const [tagStore] = useState(() => new TagStore({
+    read: async (track) => (await getBackend()).intakeTagPanel(track),
+    write: async (write) => {
+      const { onEdit: writeEdit, protectLibrary: locked, myTagComments: comments, t: tr } = tagEdit.current;
+      let answer: TagsSet | null = null;
+      let reason: unknown = null;
+      const written = await writeEdit(tr("Tags saved."), async (backend) => {
+        try {
+          answer = await backend.intakeSetTags(write.track, write.dimension, write.terms, write.version, write.dropUnmapped, comments);
+          return answer;
+        } catch (error) {
+          reason = error;
+          throw error;
+        }
+      });
+      if (!written || answer === null) {
+        throw reason instanceof Error ? reason : Object.assign(new Error(reason === null ? refusal(locked) : tagError(reason).message), { detail: reason === null ? "library_protected" : tagError(reason).code });
+      }
+      return answer;
+    },
+  }));
+  /** Waits for `id`'s tag writes; says why any failed and answers whether the mark may go on. */
+  const tagsWritten = useEventCallback(async (op: IntakeOperation): Promise<boolean> => {
+    const why = await tagStore.settled(op.id);
+    if (why === null) return true;
+    if (owns(op)) setEditFailure(`${t("Not saved")}: ${t("tags")}: ${why}`);
+    return false;
+  });
+
   // Saves of the title and artist on their way: a mark waits for them, and
   // is not made if one was refused.
   const savesOnTheirWay = useRef(new Set<Promise<boolean>>());
@@ -275,6 +316,7 @@ export function IntakeView(props: IntakeViewProps) {
   const colourThenNext = useCallback(async (op: IntakeOperation, colour: PrepColour | null): Promise<void> => {
     setNote(null);
     if (!(await savesWritten()) || !owns(op)) return;
+    if (!(await tagsWritten(op)) || !owns(op)) return;
     const what = colour === null ? t("Prep colour cleared.") : `${t("Prep colour")}: ${colour.label}.`;
     const written = await edit(what, (backend) => backend.intakeSetPrepColour(op.id, colour?.id ?? null));
     const stays = (colour?.id ?? null) === (queueColour?.id ?? null);
@@ -282,7 +324,7 @@ export function IntakeView(props: IntakeViewProps) {
     const position = op.page.offset + op.index;
     const to = await advance(op, true);
     if (to !== null) marks.current.push({ id: op.id, position, queue: op.queue, advancedTo: to });
-  }, [edit, queueColour, advance, t]);
+  }, [edit, queueColour, advance, t, tagsWritten]);
 
   const setPrepColour = useEventCallback((colour: PrepColour | null) => {
     const op = begin();
@@ -312,7 +354,7 @@ export function IntakeView(props: IntakeViewProps) {
     const problem = colours?.problem ?? null;
     if (problem && queueColour?.id === problem.id) {
       // Already Problem (the Problems queue): only move on.
-      void exclusive(async () => { await advance(op, false); });
+      void exclusive(async () => { if (await tagsWritten(op)) await advance(op, false); });
     } else if (problem) {
       void exclusive(() => colourThenNext(op, problem));
     } else if (colours) {
@@ -324,7 +366,7 @@ export function IntakeView(props: IntakeViewProps) {
     if (!op) return;
     setEditFailure(null);
     setNote(null);
-    void exclusive(async () => { await advance(op, false); });
+    void exclusive(async () => { if (await tagsWritten(op)) await advance(op, false); });
   });
 
   // An Undo that put a marked track back in its queue takes the whole step
@@ -384,7 +426,8 @@ export function IntakeView(props: IntakeViewProps) {
     if (!selected) return false;
     const level = energyOf(action);
     if (level !== null) { void setEnergy(level); return true; }
-    if (action === "intakeMarkClean") markClean();
+    if (action === "intakeTag") setPicking(true);
+    else if (action === "intakeMarkClean") markClean();
     else if (action === "intakeMarkProblem") markProblem();
     else skip();
     return true;
@@ -398,6 +441,7 @@ export function IntakeView(props: IntakeViewProps) {
     intakeEnergy3: () => run("intakeEnergy3"),
     intakeEnergy4: () => run("intakeEnergy4"),
     intakeEnergy5: () => run("intakeEnergy5"),
+    intakeTag: () => run("intakeTag"),
   });
 
   // Their keys: heard on the way down, ahead of the deck (P and Shift with
@@ -414,6 +458,10 @@ export function IntakeView(props: IntakeViewProps) {
     window.addEventListener("keydown", onWindowKey, true);
     return () => window.removeEventListener("keydown", onWindowKey, true);
   }, [onWindowKey]);
+
+  const picker = picking && selected ? <TagPicker store={tagStore} trackId={selected.id} onClose={() => setPicking(false)} /> : null;
+  const titleOf = (id: string) => page?.tracks.find((track) => track.id === id)?.title ?? id;
+  const tagFailures = <TagFailures store={tagStore} titleOf={titleOf} shownTrack={shownId} />;
 
   // Nothing read yet: still reading, or the first read failed (the Library
   // still loading, no service). `library:ready` and Retry read again.
@@ -449,6 +497,7 @@ export function IntakeView(props: IntakeViewProps) {
       <div className={styles.emptyState} data-testid="intake-empty" data-own-activation="">
         <h2>{title}</h2>
         {stale}
+        <TagFailures store={tagStore} titleOf={titleOf} shownTrack={null} />
         {queue === "intake" ? (
           <>
             <p>{t("Intake is empty: every track has a Prep colour.")}</p>
@@ -486,6 +535,8 @@ export function IntakeView(props: IntakeViewProps) {
           </span>
         </header>
         {stale}
+        {tagFailures}
+        {picker}
         {loadFailed !== null ? (
           <p className={styles.loadFailed} data-testid="intake-load-failed" role="status">
             {t("Could not load")} “{loadFailed.wanted}”{loadFailed.kept !== null ? <>; {t("the player still has")} “{loadFailed.kept}”</> : null}.
@@ -545,6 +596,7 @@ export function IntakeView(props: IntakeViewProps) {
           }}
           platform={platform}
           suggestionsUnavailable={page.suggestionsUnavailable}
+          tags={<IntakeTagPanel store={tagStore} trackId={selected.id} />}
         />
       ) : (
         <section className={styles.panel} aria-label={t("Track")} data-testid="intake-panel">

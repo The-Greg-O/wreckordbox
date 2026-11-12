@@ -10,8 +10,10 @@
 //! opens an [`rbl_db::write::Writer`], which refuses while rekordbox is
 //! running and, under `RBXPORT_TEST`, for a detected real Library.
 
+pub mod entry_copy;
 pub mod entry_order;
 pub mod history;
+pub mod judgements;
 pub mod ledger;
 pub mod my_tags;
 pub mod protection;

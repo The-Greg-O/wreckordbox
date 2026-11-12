@@ -67,6 +67,9 @@ pub enum LibraryEdit {
     /// One reorder of a playlist by entry (wbx-59): each row of a track
     /// that is in the playlist twice moves on its own.
     ReorderEntries(crate::entry_order::EntryReorder),
+    /// A playlist copied with its entries, in one write (wbx-80): Undo
+    /// tombstones the copy and its entries, Redo brings them back.
+    CopyPlaylist(crate::entry_copy::PlaylistCopy),
     Track(Vec<rbl_db::write::TrackEdit>),
     /// A key edit that also wrote the key into audio files, with "Write the
     /// value to the ID3 tag" on (#507): the library's steps, as `Track`, and
@@ -103,6 +106,10 @@ pub enum LibraryEdit {
     /// One Remove from Tag List, Clear Tag List or Remove from History
     /// (#508): the rows taken off the list and its order before and after.
     ListRemoval(rbl_db::write::ListRemoval),
+    /// The DJ's judgements of kinds the Library cannot hold (wbx-65): no
+    /// row is written, Undo and Redo write none; the Ledger records,
+    /// withdraws and records again the Facts (`crate::judgements`).
+    Judgements(crate::judgements::Judgements),
 }
 
 impl LibraryEdit {
@@ -122,12 +129,14 @@ impl LibraryEdit {
                     && comments.iter().all(rbl_db::write::TrackEdit::is_empty)
             }
             Self::MyTagOrder(edit) => edit.is_empty(),
-            Self::RenamePlaylist(_) | Self::MovePlaylist(_) | Self::ReplacePlaylist(_) | Self::CreatePlaylist(_) => false,
+            Self::RenamePlaylist(_) | Self::MovePlaylist(_) | Self::ReplacePlaylist(_) | Self::CreatePlaylist(_)
+            | Self::CopyPlaylist(_) => false,
             Self::SortPlaylists(edit) => edit.is_empty(),
             Self::Cues(edit) => edit.is_empty(),
             Self::PlaylistEdit(edit) => edit.is_empty(),
             Self::Relocate(edit) => edit.is_empty(),
             Self::ListRemoval(edit) => edit.is_empty(),
+            Self::Judgements(judgements) => judgements.is_empty(),
         }
     }
 
@@ -138,6 +147,7 @@ impl LibraryEdit {
             Self::MovePlaylist(_) | Self::SortPlaylists(_) | Self::RemovePlaylistTracks(_) |
             Self::CreatePlaylist(_) | Self::PlaylistEdit(_) |
             Self::AddPlaylistTracks { .. } | Self::ReorderPlaylist(_) | Self::ReorderEntries(_) |
+            Self::CopyPlaylist(_) |
             // The tracks a replacement imported stay in the collection.
             Self::ReplacePlaylist(_) | Self::ReplacePlaylistContents(_) => Touched::Playlists,
             // Tokens keep their database row ids private; a full reload after an
@@ -150,6 +160,9 @@ impl LibraryEdit {
                 rbl_db::write::RemovalList::TagList => Touched::TagList,
                 rbl_db::write::RemovalList::History(_) => Touched::Histories(Vec::new()),
             },
+            // No row changes: the cheapest refresh, which still tells the
+            // clients (and the window) that something changed.
+            Self::Judgements(_) => Touched::Metadata(Vec::new()),
         }
     }
 
@@ -173,13 +186,16 @@ impl LibraryEdit {
             Self::DeletePlaylist(_) | Self::RenamePlaylist(_) | Self::MovePlaylist(_)
             | Self::ReplacePlaylist(_) | Self::SortPlaylists(_) | Self::RemovePlaylistTracks(_)
             | Self::AddPlaylistTracks { .. } | Self::ReorderPlaylist(_) | Self::ReorderEntries(_)
+            | Self::CopyPlaylist(_)
             // Checked in the one transaction that writes it (#508).
             | Self::ListRemoval(_)
             // Checked in the transaction that writes it.
             | Self::MyTagOrder(_)
             // Every playlist of a replacement is checked in the one transaction
             // that writes them.
-            | Self::ReplacePlaylistContents(_) => Ok(()),
+            | Self::ReplacePlaylistContents(_)
+            // Nothing of the Library's to find changed.
+            | Self::Judgements(_) => Ok(()),
             // One transaction, but the pad check reads rows the entry does not
             // name, so it is done here as well as in the writer (#504).
             Self::Cues(revision) => match writer.cue_revision_conflict(revision, undo)? {
@@ -217,6 +233,7 @@ impl LibraryEdit {
             Self::AddPlaylistTracks { addition, .. } => if undo { writer.undo_track_addition(addition) } else { writer.redo_track_addition(addition) }.map(|_| ()),
             Self::ReorderPlaylist(value) => if undo { writer.undo_reorder(value) } else { writer.redo_reorder(value) }.map(|_| ()),
             Self::ReorderEntries(value) => crate::entry_order::step(writer, value, undo),
+            Self::CopyPlaylist(value) => crate::entry_copy::step(writer, value, undo),
             Self::Track(values) => {
                 let ordered: Box<dyn Iterator<Item = _>> = if undo {
                     Box::new(values.iter().rev())
@@ -253,6 +270,7 @@ impl LibraryEdit {
             Self::PlaylistEdit(value) => if undo { writer.undo_playlist_edit(value) } else { writer.redo_playlist_edit(value) }.map(|_| ()),
             Self::Relocate(value) => if undo { writer.undo_relocation(value) } else { writer.redo_relocation(value) }.map(|_| ()),
             Self::ListRemoval(value) => if undo { writer.undo_list_removal(value) } else { writer.redo_list_removal(value) }.map(|_| ()),
+            Self::Judgements(_) => Ok(()),
         }
     }
 }
@@ -459,6 +477,13 @@ impl EditHistory {
     }
 
     /// The label of the edit Undo would take back, when there is one.
+    /// What the Ledger called the latest entry Undo would take back, when
+    /// there is one and the Ledger recorded it.
+    #[must_use]
+    pub fn latest_ledger_entry(&self) -> Option<i64> {
+        self.undo.last().and_then(|entry| entry.ledger)
+    }
+
     pub fn undo_label(&self) -> Option<&'static str> {
         self.undo.last().map(|entry| entry.label)
     }
