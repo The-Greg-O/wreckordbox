@@ -44,12 +44,23 @@ export type ThemeRoles = {
   tabTo: string;
 };
 
+/** A mistake in the DJ's theme file, left out of what is shown. */
+export type ThemeProblem = { line: number; message: string };
+
 /** What the app shell reports: `theme_roles` and the `theme:changed` event. */
 export type Theme = {
   /** Null when no usable theme is present. */
   roles: ThemeRoles | null;
-  /** The system monospace family; null when the system names none. */
+  /** The face for upstream's layout: the theme file's, else the system monospace family; null when neither names one. */
   font: string | null;
+  /** The theme file's interface face and base size (px), for the view shell; absent without a file. */
+  interfaceFont?: string | null;
+  interfaceFontSize?: number | null;
+  /** The theme file's face and size (px) for text whose digits line up. */
+  monoFont?: string | null;
+  monoFontSize?: number | null;
+  /** The theme file's mistakes. */
+  problems?: ThemeProblem[];
 };
 
 const COLOUR_PROPERTIES: Record<Exclude<keyof ThemeRoles, "mode">, string> = {
@@ -70,6 +81,14 @@ const COLOUR_PROPERTIES: Record<Exclude<keyof ThemeRoles, "mode">, string> = {
 const CONTROL_PROPERTY = "--role-control";
 const ACCENT_HOVER_PROPERTY = "--role-accent-hover";
 const FONT_PROPERTY = "--role-font";
+/** Set only by the DJ's theme file (`src-tauri/src/theme_file.rs`); read in `styles/tokens-shell.css`. */
+const INTERFACE_FONT_PROPERTY = "--role-font-interface";
+const INTERFACE_SIZE_PROPERTY = "--role-font-size";
+const MONO_FONT_PROPERTY = "--role-font-mono";
+const MONO_SIZE_PROPERTY = "--role-font-mono-size";
+/** The sizes the theme file may give, in CSS pixels at 100% scale. */
+const SMALLEST = 8;
+const LARGEST = 24;
 
 const COLOUR = /^#[0-9a-f]{6}$/i;
 
@@ -93,6 +112,11 @@ function accentHover(accent: string, onAccent: string): string {
 }
 const FAMILY = /^[\p{L}\p{N} ._+()-]{1,100}$/u;
 
+const face = (family: string | null | undefined): string | null =>
+  family && FAMILY.test(family) ? `"${family}", ui-monospace, monospace` : null;
+const pixels = (size: number | null | undefined): string | null =>
+  typeof size === "number" && Number.isFinite(size) && size >= SMALLEST && size <= LARGEST ? `${size}px` : null;
+
 /**
  * Each role's custom property and the value a theme gives it; null where the
  * theme gives none and the stylesheet's fallback is to stand.
@@ -109,7 +133,11 @@ export function themeProperties(theme: Theme): Record<string, string | null> {
   const accent = properties[COLOUR_PROPERTIES.accent];
   const onAccent = properties[COLOUR_PROPERTIES.onAccent];
   properties[ACCENT_HOVER_PROPERTY] = accent && onAccent ? accentHover(accent, onAccent) : null;
-  properties[FONT_PROPERTY] = theme.font && FAMILY.test(theme.font) ? `"${theme.font}", ui-monospace, monospace` : null;
+  properties[FONT_PROPERTY] = face(theme.font);
+  properties[INTERFACE_FONT_PROPERTY] = face(theme.interfaceFont);
+  properties[INTERFACE_SIZE_PROPERTY] = pixels(theme.interfaceFontSize);
+  properties[MONO_FONT_PROPERTY] = face(theme.monoFont);
+  properties[MONO_SIZE_PROPERTY] = pixels(theme.monoFontSize);
   return properties;
 }
 
@@ -146,8 +174,29 @@ export type ThemeSource = {
  * asking, so a switch between the two is not lost.
  */
 export async function followThemeFrom(source: ThemeSource, root?: Root): Promise<void> {
-  await source.onChange((theme) => applyTheme(theme, root));
-  applyTheme(await source.current(), root);
+  await source.onChange((theme) => show(theme, root));
+  show(await source.current(), root);
+}
+
+function show(theme: Theme, root?: Root): void {
+  applyTheme(theme, root);
+  shown = theme;
+  for (const listener of [...listeners]) listener();
+}
+
+/** The theme this window last showed, for what React draws from it (the theme file's problems). */
+let shown: Theme = { roles: null, font: null };
+const listeners = new Set<() => void>();
+
+/** For `useSyncExternalStore`: calls `listener` whenever another theme is shown. */
+export function subscribeShownTheme(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => void listeners.delete(listener);
+}
+
+/** The theme this window last showed. */
+export function shownTheme(): Theme {
+  return shown;
 }
 
 /** The app shell: the `theme_roles` command and the `theme:changed` event. */

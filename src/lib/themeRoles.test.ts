@@ -55,12 +55,38 @@ describe("themeProperties", () => {
       "--role-tab-from": "#bb9af7",
       "--role-tab-to": "#ff9e64",
       "--role-font": '"JetBrainsMono Nerd Font", ui-monospace, monospace',
+      "--role-font-interface": null,
+      "--role-font-size": null,
+      "--role-font-mono": null,
+      "--role-font-mono-size": null,
     });
+  });
+
+  it("sets the theme file's faces and sizes, and only those it gives", () => {
+    const properties = themeProperties({
+      roles: null, font: "Inter", interfaceFont: "Inter", interfaceFontSize: 14, monoFont: "Iosevka", monoFontSize: 11.5,
+    });
+    expect(properties["--role-font"]).toBe('"Inter", ui-monospace, monospace');
+    expect(properties["--role-font-interface"]).toBe('"Inter", ui-monospace, monospace');
+    expect(properties["--role-font-size"]).toBe("14px");
+    expect(properties["--role-font-mono"]).toBe('"Iosevka", ui-monospace, monospace');
+    expect(properties["--role-font-mono-size"]).toBe("11.5px");
+    const sizeOnly = themeProperties({ roles: null, font: null, interfaceFontSize: 13 });
+    expect(sizeOnly["--role-font-size"]).toBe("13px");
+    expect(sizeOnly["--role-font-interface"]).toBeNull();
+    expect(sizeOnly["--role-font-mono-size"]).toBeNull();
+  });
+
+  it("passes over a size that is not a sensible number and a face that could not be quoted", () => {
+    for (const size of [Number.NaN, 0, 3, 200, Number.POSITIVE_INFINITY]) {
+      expect(themeProperties({ roles: null, font: null, interfaceFontSize: size, monoFontSize: size })["--role-font-size"], String(size)).toBeNull();
+    }
+    expect(themeProperties({ roles: null, font: null, monoFont: 'Mono"; } body { display: none' })["--role-font-mono"]).toBeNull();
   });
 
   it("leaves every role to the stylesheet's fallback when there is no theme and no font", () => {
     const properties = themeProperties({ roles: null, font: null });
-    expect(Object.keys(properties)).toHaveLength(16);
+    expect(Object.keys(properties)).toHaveLength(20);
     expect(Object.values(properties).every((value) => value === null)).toBe(true);
   });
 

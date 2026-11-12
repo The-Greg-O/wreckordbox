@@ -26,10 +26,17 @@
      and `SHELL_NARROW_MAX_PX` in src/lib/shellViews.ts names it for tests;
      change all three together. */
   --s-shell-narrow-max: 800px;
-  --f-shell: ui-monospace, "JetBrainsMono Nerd Font", "JetBrains Mono", monospace; /* docs/design/tokens.md, Type: the system monospace font; ticket #47 reads the DJ's own from Omarchy */
-  --f-size-shell: 12px; /* docs/design/tokens.md, Type: lists and controls */
-  --f-size-shell-title: 13px; /* docs/design/tokens.md, Type: a list's title, bold */
-  --f-size-shell-label: 10.5px; /* docs/design/tokens.md, Type: labels and column headings, uppercase */
-  --f-size-shell-status: 11px; /* docs/design/tokens.md, Type: status line */
+  /* The type below follows the DJ's theme file where it names a face or a
+     size (wbx-45.6: --role-font-interface, --role-font-size,
+     --role-font-mono, --role-font-mono-size, set by src/lib/themeRoles.ts);
+     without one, the values after the comma stand. The title, label and
+     status sizes keep their proportion to the base. */
+  --f-shell: var(--role-font-interface, ui-monospace, "JetBrainsMono Nerd Font", "JetBrains Mono", monospace); /* docs/design/tokens.md, Type: the system monospace font */
+  --f-size-shell: var(--role-font-size, 12px); /* docs/design/tokens.md, Type: lists and controls */
+  --f-size-shell-title: calc(var(--f-size-shell) * 13 / 12); /* docs/design/tokens.md, Type: a list's title, bold (13px at the base) */
+  --f-size-shell-label: calc(var(--f-size-shell) * 0.875); /* docs/design/tokens.md, Type: labels and column headings, uppercase (10.5px at the base) */
+  --f-size-shell-status: calc(var(--f-size-shell) * 11 / 12); /* docs/design/tokens.md, Type: status line (11px at the base) */
+  --f-shell-mono: var(--role-font-mono, var(--f-shell)); /* text whose digits line up: BPM, key, times, dates */
+  --f-size-shell-mono: var(--role-font-mono-size, var(--f-size-shell));
   --f-tracking-shell-label: 0.08em; /* docs/design/tokens.md, Type: label tracking */
 }

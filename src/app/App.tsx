@@ -1,4 +1,5 @@
 import { ConfirmHost } from "@/components/ConfirmDialog";
+import { ThemeFileNotice } from "@/components/ThemeFileNotice";
 import type { DuplicateAnswer } from "@/components/DuplicateTracksDialog";
 import type { FolderClashAnswer } from "@/lib/folderDrop";
 import { JobQueue, slices, type JobView } from "@/lib/jobQueue";
@@ -3545,6 +3546,8 @@ function AppBody() {
   );
   const dialogs = (
       <Suspense fallback={null}>
+      {/* The theme file's mistakes (wbx-45.6), in both layouts. */}
+      <ThemeFileNotice />
       {/* The command palette (#54): in both layouts, since Linux has no menu row. */}
       <CommandPaletteHost platform={platform} keyOverrides={keyOverrides} shell={shellOn} readOnly={readOnly}
         history={paletteHistory} loaded={paletteLoaded}
