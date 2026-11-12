@@ -5,6 +5,9 @@
   --c-key-text: #0e0e14;
   display: inline-flex;
   align-items: center;
+  /* Its own line, not the row's: the cell's line-height is the row height,
+     and the badge's padding on top of it would leave the row (wbx-45.10). */
+  line-height: 1.2;
   gap: 2px;
   padding: 1px 2px;
   border-radius: 2px;
