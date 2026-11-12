@@ -188,3 +188,33 @@ export function setShellFolderOpen(expansion: TreeExpansion, id: string, open: b
     : { collapsed: isClosed ? expansion.collapsed : [...expansion.collapsed, id], expanded: expansion.expanded.filter((e) => e !== id) };
 }
 
+
+const count = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
+
+/**
+ * The question asked before a Library playlist or folder is deleted from
+ * the shell's tree (wbx-45.4 review, finding 8): what goes, with every
+ * playlist and folder under a folder and how many tracks they list.
+ */
+export function deleteQuestion(nodes: readonly TreeNode[], node: TreeNode): string {
+  const keep = "The tracks stay in the Library, and Undo brings";
+  if (node.kind !== "folder") {
+    return `Delete the playlist “${node.name}”? It lists ${count(node.childCount ?? 0, "track")}. ${keep} the playlist back.`;
+  }
+  const inside = subtreeIds(nodes, node);
+  let playlists = 0;
+  let folders = 0;
+  let tracks = 0;
+  for (const n of nodes) {
+    if (n.id === node.id || !inside.has(n.id)) continue;
+    if (n.kind === "folder") folders += 1;
+    else {
+      playlists += 1;
+      tracks += n.childCount ?? 0;
+    }
+  }
+  if (playlists + folders === 0) return `Delete the empty folder “${node.name}”? Undo brings it back.`;
+  const what = [playlists > 0 ? count(playlists, "playlist") : null, folders > 0 ? count(folders, "folder") : null]
+    .filter((part) => part !== null).join(" and ");
+  return `Delete the folder “${node.name}” and the ${what} in it? They list ${count(tracks, "track")}. ${keep} the folder back.`;
+}

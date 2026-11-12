@@ -1009,6 +1009,24 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       heldOutlines.delete(path);
     };
   }
+  // Read-only views for the shell tree's specs (wbx-45.4): what a Library
+  // playlist and a Stick playlist hold, in order, and the Library's tree.
+  if (typeof window !== "undefined") {
+    const hooks = window as unknown as {
+      __libraryPlaylistTitles: (name: string) => string[];
+      __libraryTree: () => { name: string; kind: string; depth: number }[];
+      __stickPlaylistTitles: (path: string, format: "deviceLibrary" | "oneLibrary", name: string) => string[];
+    };
+    hooks.__libraryPlaylistTitles = (name) => {
+      const node = tree.find((n) => n.name === name && (n.kind === "playlist" || n.kind === "smartPlaylist"));
+      return node ? membersOf(node.id).map((id) => all.find((t) => t.id === id)?.title ?? id) : [];
+    };
+    hooks.__libraryTree = () => tree.map((n) => ({ name: n.name, kind: n.kind, depth: n.depth }));
+    hooks.__stickPlaylistTitles = (path, format, name) => {
+      const node = stickLibraries.libraries(path).find((l) => l.format === format)?.nodes.find((n) => n.name === name && !n.folder);
+      return node ? stickLibraries.rows(path, format, node.id).map((row) => row.title) : [];
+    };
+  }
   const stickOutline = async (path: string): Promise<StickOutline> => {
     outlineReads.set(path, (outlineReads.get(path) ?? 0) + 1);
     // What the stick holds when it is asked, not when the answer comes.

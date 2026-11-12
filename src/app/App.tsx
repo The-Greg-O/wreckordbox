@@ -3499,7 +3499,7 @@ function AppBody() {
     view: shellView, onViewChange: changeShellView,
     // The old tree's handlers (wbx-45.4); a Stick's own tracks may go on its playlists, as in the main tree.
     actions: subTree, fromStick: draggedTracks !== null, expansion: treeExpansion, onExpansionChange: setTreeExpansion,
-    stickGate, stickHandlers: shellStickHandlers,
+    stickGate, stickHandlers: shellStickHandlers, confirmDelete: confirmRemoval,
   });
   const library = (
         selectedDevice ? (

@@ -11,7 +11,7 @@
  * decided in `shellTreeActions.ts`; this turns that into events and menus
  * for `ShellTree` to put on its rows.
  */
-import { useEffect, useState, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
 
 import { ContextMenu } from "@/components/ContextMenu";
 import { EjectIcon } from "@/components/icons";
@@ -58,10 +58,19 @@ export interface ShellRowActions {
   onDrop: (event: DragEvent<HTMLElement>) => void;
   "data-over"?: true;
   "data-move"?: Edge;
+  /** Where a file dropped from the desktop lands: the window's native drop finds it by this (as the old tree's rows). */
+  "data-file-drop-playlist"?: string;
 }
+
+/** What each Playlist command acts on, as the menu bar enables them (`menuBar.ts`). */
+const CREATE_ON: ReadonlySet<TreeNode["kind"]> = new Set(["allTracks", "collection", "folder", "playlist", "smartPlaylist"]);
+const DELETE_ON: ReadonlySet<TreeNode["kind"]> = new Set(["folder", "playlist", "smartPlaylist"]);
+const EXPORT_FILE_ON: ReadonlySet<TreeNode["kind"]> = new Set(["playlist", "smartPlaylist"]);
 
 export interface ShellTreeActionsApi {
   row: (row: ShellTreeRow) => ShellRowActions;
+  /** Not a place, but the keyboard stops on it to open its menu (the Playlists heading, a Stick library's label). */
+  stop: (row: ShellTreeRow) => boolean;
   /** A key on a row the actions answer (F2, the menu key); true when taken. */
   key: (event: KeyboardEvent<HTMLElement>, row: ShellTreeRow) => boolean;
   /** The rename field, while this row is being renamed. */
@@ -69,7 +78,13 @@ export interface ShellTreeActionsApi {
   /** Drawn at the end of a row: a Stick's Eject. */
   end: (row: ShellTreeRow) => ReactNode;
   /** Spread onto the Playlists heading. */
-  heading: (groupId: string) => { onContextMenu?: (event: React.MouseEvent<HTMLElement>) => void; onDragOver?: (event: DragEvent<HTMLElement>) => void; onDrop?: (event: DragEvent<HTMLElement>) => void; "data-testid"?: string };
+  heading: (groupId: string) => {
+    onContextMenu?: (event: React.MouseEvent<HTMLElement>) => void;
+    onDragOver?: (event: DragEvent<HTMLElement>) => void;
+    onDrop?: (event: DragEvent<HTMLElement>) => void;
+    "data-testid"?: string;
+    "data-file-drop-playlist"?: string;
+  };
   menu: ReactNode;
 }
 
@@ -88,7 +103,7 @@ export function useShellTreeActions({ actions, library, sticks, selectedNode, st
   const {
     readOnly = false, deviceBusy = false, dragging = false, draggingToDevice = false, canDropToDevicePlaylists = false,
   } = actions;
-  const [menu, setMenu] = useState<{ x: number; y: number; menu: ShellTreeMenu } | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; menu: ShellTreeMenu; returnTo: HTMLElement | null } | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [moving, setMoving] = useState<TreeNode | null>(null);
   const [moveTo, setMoveTo] = useState<{ id: string; edge: Edge } | null>(null);
@@ -104,19 +119,20 @@ export function useShellTreeActions({ actions, library, sticks, selectedNode, st
 
   // The Playlist menu's commands on the selected list, as the old tree
   // registers them; the old tree is not drawn while the shell is.
-  const onSelected = (run: ((node: TreeNode) => void) | undefined) => () => {
-    if (!run || selectedNode === null) return false;
-    if (!["playlist", "smartPlaylist", "folder", "collection"].includes(selectedNode.kind)) return false;
+  // Each acts on the kinds the menu bar enables it for: creating from All
+  // Tracks puts the new one at the top, as the old tree's does.
+  const onSelected = (kinds: ReadonlySet<TreeNode["kind"]>, run: ((node: TreeNode) => void) | undefined) => () => {
+    if (!run || selectedNode === null || !kinds.has(selectedNode.kind)) return false;
     run(selectedNode);
     return true;
   };
   useCommands({
-    createPlaylist: onSelected(actions.onCreatePlaylist),
-    createIntelligentPlaylist: onSelected(actions.onCreateSmartPlaylist),
-    createFolder: onSelected(actions.onCreateFolder),
-    deletePlaylist: onSelected(actions.onDeleteNode),
-    exportPlaylistTxt: onSelected(actions.onExportFile && ((node) => actions.onExportFile?.(node, "txt"))),
-    exportPlaylistM3u8: onSelected(actions.onExportFile && ((node) => actions.onExportFile?.(node, "m3u8"))),
+    createPlaylist: onSelected(CREATE_ON, actions.onCreatePlaylist),
+    createIntelligentPlaylist: onSelected(CREATE_ON, actions.onCreateSmartPlaylist),
+    createFolder: onSelected(CREATE_ON, actions.onCreateFolder),
+    deletePlaylist: onSelected(DELETE_ON, actions.onDeleteNode),
+    exportPlaylistTxt: onSelected(EXPORT_FILE_ON, actions.onExportFile && ((node) => actions.onExportFile?.(node, "txt"))),
+    exportPlaylistM3u8: onSelected(EXPORT_FILE_ON, actions.onExportFile && ((node) => actions.onExportFile?.(node, "m3u8"))),
   }, "main");
   useEffect(() => {
     const parent = selectedNode?.kind === "collection" ? TREE_ROOT : selectedNode?.id;
@@ -131,14 +147,30 @@ export function useShellTreeActions({ actions, library, sticks, selectedNode, st
     if (readOnly || !shellRowRenamable(row)) return;
     const stick = row.kind === "stickPlaylist" || row.kind === "stickFolder";
     if (stick ? deviceBusy || !actions.onDeviceRename : !actions.onRenameNode) return;
+    renameFrom.current = row.id;
     setRenamingId(row.id);
   };
+  // The row being renamed has the keyboard back once the name is done.
+  const renameFrom = useRef<string | null>(null);
+  const endRename = () => {
+    setRenamingId(null);
+    const id = renameFrom.current;
+    renameFrom.current = null;
+    // After the field is gone and the row's name is back.
+    window.requestAnimationFrame(() => {
+      if (id === null) return;
+      document.querySelector<HTMLElement>(`[role="tree"] [data-row-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
+    });
+  };
 
-  const openMenu = (row: ShellTreeRow | null, x: number, y: number) => {
-    const found = row === null ? playlistsMenu(library) : shellRowMenu(row, sticks);
-    if (found) setMenu({ x, y, menu: found });
+  const openMenu = (row: ShellTreeRow | null, x: number, y: number, returnTo: HTMLElement | null) => {
+    const found = row === null || row.id === PLAYLISTS_HEADING ? playlistsMenu(library) : shellRowMenu(row, sticks);
+    if (found) setMenu({ x, y, menu: found, returnTo });
     return found !== null;
   };
+  const stop = (row: ShellTreeRow) =>
+    (row.kind === "stickLibrary" && shellRowMenu(row, sticks) !== null) ||
+    (row.id === PLAYLISTS_HEADING && playlistsMenu(library) !== null);
 
   /** What is in hand, read from the drag and the window's own drag state. */
   const dragOf = (event: DragEvent<HTMLElement>): ShellDrag => {
@@ -237,7 +269,7 @@ export function useShellTreeActions({ actions, library, sticks, selectedNode, st
     return {
       draggable: movable,
       onContextMenu: (event) => {
-        if (openMenu(row, event.clientX, event.clientY)) event.preventDefault();
+        if (openMenu(row, event.clientX, event.clientY, event.currentTarget)) event.preventDefault();
       },
       onDoubleClick: (event) => {
         if (doubleClickToEdit && !event.shiftKey && !event.metaKey && !event.ctrlKey) beginRename(row);
@@ -261,6 +293,9 @@ export function useShellTreeActions({ actions, library, sticks, selectedNode, st
       },
       onDrop: dropped(row),
       ...(overId === row.id ? { "data-over": true as const } : {}),
+      ...(actions.onDropFiles && row.node && (row.kind === "allTracks" || row.kind === "playlist" || row.kind === "folder")
+        ? { "data-file-drop-playlist": row.node.id }
+        : {}),
       ...(moveTo?.id === row.id ? { "data-move": moveTo.edge } : {}),
     };
   };
@@ -270,9 +305,12 @@ export function useShellTreeActions({ actions, library, sticks, selectedNode, st
       beginRename(row);
       return true;
     }
-    if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
+    const opensMenu = event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey) ||
+      // Enter or Space on what is not a place opens its menu: there is nothing else to open.
+      ((event.key === "Enter" || event.key === " ") && stop(row));
+    if (opensMenu) {
       const box = event.currentTarget.getBoundingClientRect();
-      return openMenu(row, box.left + 16, box.bottom);
+      return openMenu(row, box.left + 16, box.bottom, event.currentTarget);
     }
     return false;
   };
@@ -291,9 +329,9 @@ export function useShellTreeActions({ actions, library, sticks, selectedNode, st
               if (node.kind === "devicePlaylist" || node.kind === "deviceFolder") actions.onDeviceRename?.(node, next);
               else actions.onRenameNode?.(node, next);
             }
-            setRenamingId(null);
+            endRename();
           }}
-          onCancel={() => { setRenamingId(null); }}
+          onCancel={endRename}
         />
       </span>
     );
@@ -326,8 +364,9 @@ export function useShellTreeActions({ actions, library, sticks, selectedNode, st
     const target: ShellTreeRow = { id: "playlists", kind: "folder", name: "Playlists", depth: 0 };
     return {
       "data-testid": "shell-tree-playlists-heading",
+      ...(actions.onDropFiles ? { "data-file-drop-playlist": "playlists" } : {}),
       onContextMenu: (event: React.MouseEvent<HTMLElement>) => {
-        if (openMenu(null, event.clientX, event.clientY)) event.preventDefault();
+        if (openMenu(null, event.clientX, event.clientY, event.currentTarget)) event.preventDefault();
       },
       // Files dropped on the heading become playlists at the top, as on the old tree's Playlists root.
       onDragOver: (event: DragEvent<HTMLElement>) => {
@@ -356,7 +395,16 @@ export function useShellTreeActions({ actions, library, sticks, selectedNode, st
 
   const renderMenu = (): ReactNode => {
     if (menu === null) return null;
-    const close = () => { setMenu(null); };
+    const returnTo = menu.returnTo;
+    const close = () => {
+      setMenu(null);
+      // Back to where the menu was opened from, unless what was chosen took the focus (a dialog).
+      window.requestAnimationFrame(() => {
+        const now = document.activeElement;
+        const lost = now === null || now === document.body || now.closest('[role="menu"]') !== null;
+        if (lost && returnTo?.isConnected) returnTo.focus({ preventScroll: true });
+      });
+    };
     const found = menu.menu;
     if (found.kind === "tree") {
       const { node } = found;
@@ -393,6 +441,7 @@ export function useShellTreeActions({ actions, library, sticks, selectedNode, st
           context={{ inPlaylist: true, hasFile: true, readOnly }}
           onChoose={run}
           onClose={close}
+          keyboard
         />
       );
     }
@@ -430,9 +479,10 @@ export function useShellTreeActions({ actions, library, sticks, selectedNode, st
           }
         }}
         onClose={close}
+        keyboard
       />
     );
   };
 
-  return { row, key, rename, end, heading, menu: renderMenu() };
+  return { row, stop, key, rename, end, heading, menu: renderMenu() };
 }

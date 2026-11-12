@@ -32,6 +32,7 @@ import { isShellTreePlace, shellTreeRows, type ShellSetPlan, type ShellStick, ty
 import { keyTarget, treeLayout, visibleRange, type TreeSizes } from "@/lib/shellTreeNav";
 import styles from "./ShellTree.module.css";
 import { useShellTreeActions, type ShellTreeActionProps } from "./ShellTreeActions";
+import { setBrowserFocus } from "@/lib/browserFocus";
 
 export interface ShellTreeProps {
   /** The Library's tree, as the backend sends it. */
@@ -78,6 +79,8 @@ interface Group {
   label: string;
   /** The heading line, when the group has one that is not a row. */
   heading?: string;
+  /** The heading's own row, for a heading the keyboard can reach. */
+  headingRow?: ShellTreeRow;
   rows: ShellTreeRow[];
 }
 
@@ -86,7 +89,7 @@ function groupRows(rows: readonly ShellTreeRow[], t: (text: string) => string): 
   const groups: Group[] = [];
   for (const row of rows) {
     if (row.kind === "heading") {
-      groups.push({ id: row.id, label: t(row.name), heading: t(row.name), rows: [] });
+      groups.push({ id: row.id, label: t(row.name), heading: t(row.name), headingRow: row, rows: [] });
     } else if (row.kind === "stick") {
       groups.push({ id: row.id, label: `${t("Stick")} ${row.name}`, rows: [row] });
     } else {
@@ -154,6 +157,9 @@ export function ShellTree({
   // The row with the keyboard's focus, apart from the selected one.
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const isPlace = useCallback((id: string | null) => id !== null && treeRows.some((row) => row.id === id && isShellTreePlace(row.kind)), [treeRows]);
+  // Where the keyboard may land: the places, and what opens a menu without
+  // being one (the Playlists heading, a Stick library's label; wbx-45.4).
+  const isStop = (row: ShellTreeRow) => isShellTreePlace(row.kind) || act.stop(row);
   const tabStop = isPlace(focusedId) ? focusedId : isPlace(selectedId) ? selectedId : treeRows.find((row) => isShellTreePlace(row.kind))?.id ?? null;
 
   // A row the keyboard moved to may not be drawn yet: scroll it into view,
@@ -207,7 +213,7 @@ export function ShellTree({
     if (event.key === "Enter" || event.key === " ") {
       onOpen(row);
     } else {
-      const target = keyTarget(treeRows, row.id, event.key);
+      const target = keyTarget(treeRows, row.id, event.key, isStop);
       if (target === null) return;
       if ("focus" in target) moveFocus(target.focus);
       else if ("toggle" in target) toggle(target.toggle, target.open);
@@ -219,6 +225,26 @@ export function ShellTree({
 
   const drawRow = (row: ShellTreeRow) => {
     const name = rowName(row, t);
+    if (!isShellTreePlace(row.kind) && act.stop(row)) {
+      // Not a place, but its menu is the way to make a playlist in that library.
+      return (
+        <div
+          key={row.id}
+          role="treeitem"
+          aria-label={name}
+          aria-level={1}
+          data-kind={row.kind}
+          data-row-id={row.id}
+          tabIndex={-1}
+          className={styles.library}
+          {...act.row(row)}
+          onFocus={() => { setFocusedId(row.id); }}
+          onKeyDown={(event) => { onKeyDown(event, row); }}
+        >
+          {name}
+        </div>
+      );
+    }
     if (!isShellTreePlace(row.kind)) {
       return <div key={row.id} className={row.kind === "stickLibrary" ? styles.library : styles.empty}>{name}</div>;
     }
@@ -270,6 +296,12 @@ export function ShellTree({
       role="tree"
       aria-label={t("Tree")}
       ref={root}
+      // The window's browser focus (the palette and the menus answer the
+      // tree it is in): a click is followed by the window; a key-only
+      // arrival is told here.
+      data-browser-pane="tree"
+      data-browser-side="main"
+      onFocus={() => { setBrowserFocus({ pane: "tree", side: "main" }); }}
       onScroll={(event) => { setView({ scroll: event.currentTarget.scrollTop, height: event.currentTarget.clientHeight }); }}
     >
       <div className={styles.content} style={{ height: layout.height }}>
@@ -289,7 +321,23 @@ export function ShellTree({
               className={styles.group}
               style={{ top: box.top, height: box.height }}
             >
-              {group.heading !== undefined ? <div className={styles.heading} aria-hidden {...act.heading(group.id)}>{group.heading}</div> : null}
+              {group.heading !== undefined && group.headingRow !== undefined && act.stop(group.headingRow) ? (
+                <div
+                  className={styles.heading}
+                  role="treeitem"
+                  aria-label={group.heading}
+                  aria-level={1}
+                  aria-haspopup="menu"
+                  data-kind="collection"
+                  data-row-id={group.headingRow.id}
+                  tabIndex={-1}
+                  {...act.heading(group.id)}
+                  onFocus={() => { if (group.headingRow) setFocusedId(group.headingRow.id); }}
+                  onKeyDown={(event) => { if (group.headingRow) onKeyDown(event, group.headingRow); }}
+                >
+                  {group.heading}
+                </div>
+              ) : group.heading !== undefined ? <div className={styles.heading} aria-hidden>{group.heading}</div> : null}
               <div style={{ height: first * sizes.row }} aria-hidden />
               {group.rows.slice(first, end).map(drawRow)}
             </div>

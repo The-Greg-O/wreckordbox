@@ -178,3 +178,22 @@ describe("folder open and closed, kept in the session's treeExpansion", () => {
     expect(setShellFolderOpen(start, "f1", false)).toBe(start);
   });
 });
+
+describe("deleteQuestion", () => {
+  it("names a playlist and how many tracks it lists", async () => {
+    const { deleteQuestion } = await import("./shellTreeActions");
+    expect(deleteQuestion(library, library.find((n) => n.id === "p1") as TreeNode)).toBe(
+      "Delete the playlist “Warmup”? It lists 3 tracks. The tracks stay in the Library, and Undo brings the playlist back.",
+    );
+  });
+  it("names a folder with every playlist and folder under it and the tracks they list", async () => {
+    const { deleteQuestion } = await import("./shellTreeActions");
+    const nested: TreeNode[] = [...library.slice(0, 5), { id: "f2", name: "Inner", kind: "folder", depth: 2 }, { id: "p9", name: "Deep", kind: "playlist", depth: 3, childCount: 1 }, ...library.slice(5)];
+    expect(deleteQuestion(nested, nested.find((n) => n.id === "f1") as TreeNode)).toBe(
+      "Delete the folder “Crate” and the 3 playlists and 1 folder in it? They list 8 tracks. The tracks stay in the Library, and Undo brings the folder back.",
+    );
+    expect(deleteQuestion(nested, nested.find((n) => n.id === "f2") as TreeNode)).toBe(
+      "Delete the folder “Inner” and the 1 playlist in it? They list 1 track. The tracks stay in the Library, and Undo brings the folder back.",
+    );
+  });
+});

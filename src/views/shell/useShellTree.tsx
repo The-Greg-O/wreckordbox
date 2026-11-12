@@ -19,7 +19,7 @@ import { useCallback, useMemo, useState, type ReactNode } from "react";
 import type { TreeNode } from "@/ipc/types";
 import { shellTreeQueueId, shellViewForRow, type IntakeQueue, type ShellStick, type ShellTreeRow } from "@/lib/shellTree";
 import type { TreeExpansion } from "@/lib/session";
-import { setShellFolderOpen, shellCollapsed } from "@/lib/shellTreeActions";
+import { deleteQuestion, setShellFolderOpen, shellCollapsed } from "@/lib/shellTreeActions";
 import type { ShellView } from "@/lib/shellViews";
 import { ShellTree } from "./ShellTree";
 import type { ShellTreeActionProps } from "./ShellTreeActions";
@@ -28,7 +28,7 @@ import type { StickWriteGate } from "./StickWriteGate";
 
 export function useShellTree({
   library, sticks, selectedNode, onSelectNode, view, onViewChange, actions, fromStick = false, expansion, onExpansionChange,
-  stickGate, stickHandlers,
+  stickGate, stickHandlers, confirmDelete,
 }: {
   /** The Library's tree, as the backend sends it. */
   library: readonly TreeNode[];
@@ -48,6 +48,8 @@ export function useShellTree({
   /** Every Stick write staged and confirmed first (wbx-45.4 review, finding 5). Without it the tree offers no Stick writes. */
   stickGate?: StickWriteGate;
   stickHandlers?: ShellStickHandlers;
+  /** Asks before a Library playlist or folder is deleted (wbx-45.4 review, finding 8). Without it nothing is deleted from the tree. */
+  confirmDelete?: (question: string) => Promise<boolean>;
 }): { tree: ReactNode; intakeQueue: IntakeQueue } {
   const [intakeQueue, setIntakeQueue] = useState<IntakeQueue>("intake");
   const [queueChosen, setQueueChosen] = useState(false);
@@ -62,12 +64,21 @@ export function useShellTree({
   const selectedId = view === "intake" && queueChosen ? shellTreeQueueId(intakeQueue) : selectedNode?.id ?? null;
   const treeActions = useMemo(() => {
     if (!actions) return undefined;
-    const base = { ...actions, canDropToDevicePlaylists: fromStick };
+    const { onDeleteNode: remove, ...kept } = actions;
+    const base: ShellTreeActionProps = {
+      ...kept,
+      canDropToDevicePlaylists: fromStick,
+      ...(remove && confirmDelete
+        ? { onDeleteNode: (node: TreeNode) => {
+          void confirmDelete(deleteQuestion(library, node)).then((yes) => { if (yes) remove(node); });
+        } }
+        : {}),
+    };
     if (stickGate && stickHandlers) return stagedStickActions(base, stickGate, sticks, stickHandlers);
     // No gate: nothing in the tree may write to a Stick.
     const { onExport: _e, onDropTracksOnDevice: _t, onDropDeviceTracks: _d, onDeviceCreate: _c, onDeviceRename: _r, onDeviceDelete: _x, onDeviceImport: _i, ...rest } = base;
     return rest;
-  }, [actions, fromStick, stickGate, stickHandlers, sticks]);
+  }, [actions, fromStick, stickGate, stickHandlers, sticks, confirmDelete, library]);
   const collapsed = useMemo(() => (expansion ? shellCollapsed(expansion) : undefined), [expansion]);
   const folderOpen = useCallback((id: string, isOpen: boolean) => {
     if (expansion && onExpansionChange) onExpansionChange(setShellFolderOpen(expansion, id, isOpen));

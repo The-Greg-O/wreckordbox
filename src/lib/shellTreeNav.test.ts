@@ -52,6 +52,13 @@ describe("the shell tree's keys", () => {
     expect(go("ArrowRight", "device:/s")).toEqual({ focus: at("Main") });
   });
 
+  it("lands on the Playlists heading and a Stick library's label when they are stops, as with actions (wbx-45.4)", () => {
+    const stops = (row: { kind: string; id: string }) =>
+      row.kind !== "heading" && row.kind !== "empty" || row.id === "shell:heading:playlists";
+    expect(keyTarget(rows, "f1", "ArrowUp", stops as never)).toEqual({ focus: "shell:heading:playlists" });
+    expect(keyTarget(rows, "shell:heading:playlists", "ArrowDown", stops as never)).toEqual({ focus: "f1" });
+    expect(keyTarget(rows, "shell:heading:playlists", "ArrowUp", stops as never)).toEqual({ focus: at("Problems") });
+  });
   it("leaves every other key alone", () => {
     expect(go("a", "p1")).toBeNull();
     expect(go("Enter", "p1")).toBeNull();
