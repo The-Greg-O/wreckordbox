@@ -1,13 +1,14 @@
 import { expect, test, type Page } from "@playwright/test";
 import { seedShell, player, playButton } from "./compactPlayer";
+import { BROWSER_THEME_EVENT, type Theme } from "../src/lib/themeRoles";
 
 const row = (page: Page, n: number) => page.getByRole("tabpanel").getByRole("row").filter({
   has: page.getByRole("gridcell", { name: `Key light ${String(n).padStart(2, "0")}`, exact: true }),
 });
 const key = (page: Page, n: number) => row(page, n).locator('[data-col="key"]');
 
-async function open(page: Page, protect = false) {
-  await seedShell(page);
+async function open(page: Page, protect = false, view: Record<string, unknown> = {}) {
+  await seedShell(page, view);
   if (protect) await page.addInitScript(() => {
     const prefs = JSON.parse(localStorage.getItem("rbl.preferences") ?? "{}");
     prefs.advanced = { protectLibrary: true };
@@ -86,3 +87,59 @@ test("Library Protection refuses a key edit while notation and lights still work
   await light(page, 5, "yellow");
   await expect(page.getByRole("combobox", { name: "Key", exact: true })).toHaveCount(0);
 });
+
+test("editing a displayed Camelot key saves the stored key through the existing edit and Undo", async ({ page }) => {
+  await open(page);
+  await load(page, 1);
+  await key(page, 6).dblclick();
+  const editor = page.getByRole("combobox", { name: "Key", exact: true });
+  await editor.selectOption({ label: "10A" });
+  await expect(key(page, 6)).toHaveText("10A");
+  await light(page, 6, "yellow");
+  await expect(player(page).getByTestId("compact-player-key")).toHaveText("8A");
+  await expect(playButton(page)).toBeVisible();
+  await page.evaluate(() => (window as unknown as { __menu: (id: string) => void }).__menu("undo"));
+  await expect(key(page, 6)).toHaveText("6A");
+  await light(page, 6, "none");
+});
+
+const LIGHT: Theme = {
+  font: null,
+  roles: {
+    mode: "light", ground: "#d7d8dc", panel: "#e3e4e8", working: "#eff1f5", hairline: "#dce0e8",
+    selection: "#ccd0da", border: "#acb0be", text: "#4c4f69", textDim: "#9ca0b0", textBright: "#4c4f69",
+    accent: "#1e66f5", onAccent: "#ffffff", tabFrom: "#8839ef", tabTo: "#df8e1d",
+  },
+};
+
+for (const width of [1280, 640, 436]) {
+  for (const uiScale of [4, 6]) {
+    test(`key lights stay legible at ${width}px, scale ${uiScale}, and in a light theme`, async ({ page }, info) => {
+      await open(page, false, { uiScale });
+      await load(page, 1);
+      // Choose All Tracks while the tree is on screen, then tile the window.
+      await page.setViewportSize({ width, height: 900 });
+      // wbx-60 owns dropping columns at narrow widths. Until then the
+      // existing list scrolls sideways; check our labels once in view.
+      await key(page, 5).scrollIntoViewIfNeeded();
+      for (const theme of ["dark", "light"]) {
+        if (theme === "light") await page.evaluate(([event, detail]) => {
+          window.dispatchEvent(new CustomEvent(event, { detail }));
+        }, [BROWSER_THEME_EVENT, LIGHT] as const);
+        if (theme === "light") await expect(page.locator("html")).toHaveAttribute("data-theme-mode", "light");
+        await light(page, 1, "green");
+        await light(page, 5, "yellow");
+        for (const n of [1, 5]) {
+          const badge = key(page, n).locator("span").first();
+          await expect(badge).toHaveCSS("color", "rgb(14, 14, 20)");
+          const box = await badge.boundingBox();
+          const cell = await key(page, n).boundingBox();
+          expect(box).not.toBeNull();
+          expect(box!.x).toBeGreaterThanOrEqual(cell!.x);
+          expect(box!.x + box!.width).toBeLessThanOrEqual(Math.min(width, cell!.x + cell!.width));
+        }
+        await page.screenshot({ path: info.outputPath(`keys-${theme}.png`) });
+      }
+    });
+  }
+}

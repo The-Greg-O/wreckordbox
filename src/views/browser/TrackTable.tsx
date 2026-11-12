@@ -361,6 +361,7 @@ const EditableCell = memo(function EditableCell({
       >
         <select
           className={styles.editor}
+          data-own-activation=""
           value={value}
           aria-label={label}
           autoFocus

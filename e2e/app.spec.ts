@@ -979,22 +979,21 @@ test("preferences are kept, and the key column follows the display format", asyn
   await page.goto("/");
   await expect(page.getByTestId("browser-title")).toContainText("Tracks)");
   const cell = page.locator('[role="gridcell"][data-col="key"]').first();
-  const classic = (await cell.innerText()).trim();
+  const camelot = (await cell.innerText()).trim();
 
   await page.getByRole("banner").getByRole("button", { name: "Settings" }).click();
   const dialog = page.getByRole("dialog", { name: "Preferences" });
-  await dialog.getByRole("radio", { name: "Alphanumeric" }).click();
-  // A Camelot code: a number and A or B.
-  await expect(cell).toHaveText(/^\d{1,2}[AB]$/);
-  await expect(cell).not.toHaveText(classic);
+  await dialog.getByRole("radio", { name: "Classic", exact: true }).click();
+  await expect(cell).toHaveText(/^[A-G][#b]?m?$/);
+  await expect(cell).not.toHaveText(camelot);
 
   // Kept across a reload, and Reset to defaults puts it back.
   await page.reload();
   await expect(page.getByTestId("browser-title")).toContainText("Tracks)");
-  await expect(page.locator('[role="gridcell"][data-col="key"]').first()).toHaveText(/^\d{1,2}[AB]$/);
+  await expect(page.locator('[role="gridcell"][data-col="key"]').first()).toHaveText(/^[A-G][#b]?m?$/);
   await page.getByRole("banner").getByRole("button", { name: "Settings" }).click();
   await page.getByRole("dialog", { name: "Preferences" }).getByRole("button", { name: "Reset to defaults" }).click();
-  await expect(page.locator('[role="gridcell"][data-col="key"]').first()).toHaveText(classic);
+  await expect(page.locator('[role="gridcell"][data-col="key"]').first()).toHaveText(camelot);
 });
 
 test("Library Protection refuses edits the way a running rekordbox does", async ({ page }) => {
