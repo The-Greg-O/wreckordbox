@@ -72,5 +72,5 @@ fn approve(app: &tauri::App<tauri::test::MockRuntime>, stick: &std::path::Path, 
     std::fs::write(stick.join(wreckordbox_stick_protection::STAND_IN_MARKER), b"").unwrap();
     let name = wreckordbox_stick_protection::name_of(&stick.canonicalize().unwrap());
     wreckordbox_stick_protection::unlock(state.backup_dir(), stick, Some(&name)).unwrap();
-    rbxport_lib::stick_write_plan::plan(state.inner(), &request).unwrap().plan.map(|plan| rbxport_lib::stick_approval::approve(&plan).unwrap())
+    rbxport_lib::stick_write_plan::plan(state.inner(), &request).unwrap().plan.map(|plan| rbxport_lib::stick_approval::approve(state.backup_dir(), &plan).unwrap())
 }

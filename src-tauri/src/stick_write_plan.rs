@@ -195,11 +195,12 @@ pub async fn stick_write_plan(
 /// The DJ held to confirm the plan `plan`: answers the token its write
 /// carries. Refused when the Stick changed or was replaced since the plan.
 #[tauri::command]
-pub async fn stick_write_approve(plan: String) -> AppResult<String> {
-    blocking("stick_write_approve", move || {
-        stick_approval::approve(&plan)
-    })
-    .await
+pub async fn stick_write_approve(
+    state: tauri::State<'_, Arc<AppState>>,
+    plan: String,
+) -> AppResult<String> {
+    let state_dir = state.backup_dir().to_path_buf();
+    blocking("stick_write_approve", move || stick_approval::approve(&state_dir, &plan)).await
 }
 
 /// The DJ cancelled the plan `plan`: it can no longer be confirmed.
@@ -247,8 +248,11 @@ pub fn plan(state: &AppState, request: &StickWriteRequest) -> AppResult<StickWri
         spare,
         ..found
     };
-    // As the writes do: nothing of ours writes to the Stick while it is planned.
-    let _lock = stick_approval::lock(&root);
+    // As the writes do, in the one lock order (`stick_guard`): the Library
+    // edit gate, then the Stick's execution lock; nothing writes to the
+    // Stick, or edits the Library, while it is planned.
+    let _gate = state.edit_gate().lock();
+    let _lock = stick_approval::lock(state.backup_dir(), &root)?;
     let _lease = rbl_core::durable::read_lease(destination)
         .map_err(|e| AppError::internal(e.to_string()))?;
     let pending = rbl_export::recovery_pending(destination);

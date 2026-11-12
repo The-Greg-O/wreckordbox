@@ -351,6 +351,17 @@ pub fn stick_root(path: &Path) -> Option<PathBuf> {
     }
 }
 
+/// The root of the Stick `path` is on, or of the removable or media volume
+/// it is on: a blank Stick, with no player export yet, is still a device
+/// the Stick-only writes (a library put on it, a format) need unlocked.
+#[must_use]
+pub fn device_root(path: &Path) -> Option<PathBuf> {
+    stick_root(path).or_else(|| {
+        let facts = facts_of(&resolve(path)?)?;
+        (facts.media || facts.removable == Some(true)).then_some(facts.root)
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Identity
 
@@ -392,7 +403,7 @@ fn read_stored(state_dir: &Path) -> Stored {
 #[must_use]
 pub fn status(state_dir: &Path, path: &Path) -> Status {
     let stored = read_stored(state_dir);
-    let root = stick_root(path).unwrap_or_else(|| path.to_path_buf());
+    let root = device_root(path).unwrap_or_else(|| path.to_path_buf());
     let unlocked = identity(&root).is_some_and(|now| stored.unlocked.contains(&now));
     Status { protected: !unlocked, spare: is_spare(&root), name: name_of(&root), revision: stored.revision }
 }
@@ -415,7 +426,7 @@ pub fn refusal(root: &Path) -> String {
 ///
 /// See [`UnlockError`]; the Stick stays protected.
 pub fn unlock(state_dir: &Path, path: &Path, typed: Option<&str>) -> Result<Status, UnlockError> {
-    let root = stick_root(path).ok_or(UnlockError::NotAStick)?;
+    let root = device_root(path).ok_or(UnlockError::NotAStick)?;
     let name = name_of(&root);
     if !is_spare(&root) {
         match typed.map(str::trim) {
@@ -442,10 +453,27 @@ pub fn unlock(state_dir: &Path, path: &Path, typed: Option<&str>) -> Result<Stat
 /// When the record cannot be written. A Stick whose unlock cannot be
 /// written away is still protected once it is removed or put back.
 pub fn lock(state_dir: &Path, path: &Path) -> std::io::Result<Status> {
-    let root = stick_root(path).unwrap_or_else(|| path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
-    let _drained = exec_lock(state_dir, &root)?;
+    let root = root_of(path);
+    let drained = exec_lock(state_dir, &root)?;
+    lock_held(state_dir, &root, &drained)
+}
+
+/// The root [`lock`] and [`exec_lock`] callers use for `path`: its Stick's
+/// (or removable volume's), else the folder itself.
+#[must_use]
+pub fn root_of(path: &Path) -> PathBuf {
+    device_root(path).unwrap_or_else(|| path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
+}
+
+/// [`lock`] by a caller already holding the Stick's execution lock (an
+/// eject, which keeps it until the volume is gone).
+///
+/// # Errors
+///
+/// When the record cannot be written.
+pub fn lock_held(state_dir: &Path, root: &Path, _held: &ExecLock) -> std::io::Result<Status> {
     change(state_dir, |stored| stored.unlocked.retain(|m| m.root != root))?;
-    Ok(status(state_dir, &root))
+    Ok(status(state_dir, root))
 }
 
 /// One change of the record, under the lock, with a higher revision;
@@ -542,6 +570,18 @@ impl Authorization {
         self.stick.as_ref().map(|(identity, _)| identity.root.as_path())
     }
 
+    /// Ends the unlock of the Stick this holds, as [`lock`] does, without
+    /// taking its execution lock again (this already holds it): a write
+    /// that ejects the Stick when it is done.
+    ///
+    /// # Errors
+    ///
+    /// When the record cannot be written.
+    pub fn relock(&self) -> std::io::Result<()> {
+        let Some((held, _)) = &self.stick else { return Ok(()) };
+        change(&self.state_dir, |stored| stored.unlocked.retain(|m| m.root != held.root))
+    }
+
     /// Whether the write may go on: the same mount of the Stick is still
     /// there, and still unlocked. Call before each step of a long write.
     ///
@@ -581,7 +621,7 @@ pub fn authorize(state_dir: &Path, path: &Path) -> Result<Authorization, Refused
 ///
 /// [`Refused`]: nothing may be written.
 pub fn authorize_stick(state_dir: &Path, root: &Path) -> Result<Authorization, Refused> {
-    let root = stick_root(root).unwrap_or_else(|| root.canonicalize().unwrap_or_else(|_| root.to_path_buf()));
+    let root = device_root(root).unwrap_or_else(|| root.canonicalize().unwrap_or_else(|_| root.to_path_buf()));
     let held = exec_lock(state_dir, &root).map_err(|e| Refused::Io { root: root.clone(), why: e.to_string() })?;
     let Some(now) = identity(&root) else {
         return Err(Refused::Protected { root });

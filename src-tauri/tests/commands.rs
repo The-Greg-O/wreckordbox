@@ -4279,7 +4279,7 @@ fn approve(s: &Shell, stick: &Path, operation: serde_json::Value) -> Option<Stri
     rbxport_lib::stick_write_plan::plan(s.state().inner(), &request)
         .ok()
         .and_then(|plan| plan.plan)
-        .map(|plan| rbxport_lib::stick_approval::approve(&plan).unwrap())
+        .map(|plan| rbxport_lib::stick_approval::approve(s.state().backup_dir(), &plan).unwrap())
 }
 
 /// A sync's approvals, one per Stick that is there to plan.

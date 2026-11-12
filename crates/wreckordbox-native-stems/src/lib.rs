@@ -156,6 +156,13 @@ pub enum NativeStemsError {
     /// The Stick's exported library could not be read.
     #[error("the exported library on {} cannot be read: {message}", stick.display())]
     LibraryUnreadable { stick: PathBuf, message: String },
+    /// The Stick's last export did not finish: nothing is read or written
+    /// until the DJ settles it (wbx-45.5), which this never does.
+    #[error(
+        "the last write to {} did not finish: settle it from the Stick's panel first. Nothing was read or written",
+        stick.display()
+    )]
+    UnfinishedWrite { stick: PathBuf },
     /// The Stick's exported library holds no export of the track.
     #[error("the Stick holds no export of track {track_id}: export the track to it first")]
     TrackNotOnStick { track_id: u64 },

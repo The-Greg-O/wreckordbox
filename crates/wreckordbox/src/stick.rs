@@ -3,7 +3,14 @@
 //!
 //! Kept in the state folder the window and the Library service share, so
 //! an unlock here is the window's too, and the reverse. It needs no running
-//! service.
+//! service. Every path names the Stick that holds it: a folder inside a
+//! Stick is that Stick, never unlocked on its own. `lock` waits for any
+//! write to the Stick to finish before it answers.
+//!
+//! An agent can run `wreckordbox stick unlock` like anyone else; a Gig
+//! stick (no Spare stick marker) needs its name. Agents must never unlock
+//! a Stick unless the DJ asked for that Stick, by name, in the conversation
+//! (AGENTS.md, "Safety").
 
 use std::path::{Path, PathBuf};
 
@@ -92,7 +99,8 @@ pub fn stick(
                 .map(|status| said(&status, as_json))
                 .map_err(|error| {
                     let code = match error {
-                        UnlockError::NotFound => STICK_NOT_FOUND,
+                        UnlockError::NotAStick => STICK_NOT_FOUND,
+                        UnlockError::NoIdentity => codes::STICK_PROTECTED,
                         UnlockError::NameRequired { .. } | UnlockError::NameMismatch { .. } => {
                             codes::BAD_REQUEST
                         }

@@ -23,9 +23,9 @@
 //! is refused with a message that asks for a fresh plan, and is gone
 //! afterwards either way.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Condvar, LazyLock, Mutex, MutexGuard};
+use std::sync::{LazyLock, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -138,49 +138,25 @@ struct Approval {
 
 static APPROVALS: LazyLock<Mutex<HashMap<String, Approval>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
-/// The Sticks being written to now, and the signal that one is free again.
-static LOCKS: LazyLock<(Mutex<HashSet<PathBuf>>, Condvar)> =
-    LazyLock::new(|| (Mutex::new(HashSet::new()), Condvar::new()));
-
 fn approvals() -> MutexGuard<'static, HashMap<String, Approval>> {
     APPROVALS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// The Stick's execution lock: every approved write holds it from checking
-/// its token to the end of the write, so nothing this app does to the Stick
-/// can come between the check and the write. Released when dropped.
-pub struct StickLock {
-    stick: PathBuf,
-}
-
-impl Drop for StickLock {
-    fn drop(&mut self) {
-        let (held, freed) = &*LOCKS;
-        held.lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&self.stick);
-        freed.notify_all();
-    }
-}
+/// The Stick's execution lock (`wreckordbox_stick_protection::exec_lock`,
+/// shared across processes with every writer, a lock and an eject), for a
+/// read before a write: planning, confirming, inspecting. Released when
+/// dropped. Take the Library edit gate first, if at all.
+pub type StickLock = wreckordbox_stick_protection::ExecLock;
 
 /// Takes the execution lock of the Stick at `stick`, waiting for a write
 /// already holding it.
-pub fn lock(stick: &Path) -> StickLock {
-    let (held, freed) = &*LOCKS;
-    let mut busy = held
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    while busy.contains(stick) {
-        busy = freed
-            .wait(busy)
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-    }
-    busy.insert(stick.to_path_buf());
-    StickLock {
-        stick: stick.to_path_buf(),
-    }
+pub fn lock(state_dir: &Path, stick: &Path) -> AppResult<StickLock> {
+    let root = wreckordbox_stick_protection::device_root(stick)
+        .unwrap_or_else(|| stick.canonicalize().unwrap_or_else(|_| stick.to_path_buf()));
+    wreckordbox_stick_protection::exec_lock(state_dir, &root)
+        .map_err(|e| AppError::internal("The Stick could not be reserved.").with_detail(e.to_string()))
 }
 
 /// The mounted directory's identity: another volume at the same path differs.
@@ -296,7 +272,7 @@ pub(crate) fn propose(
 /// The DJ confirmed the plan `plan` (the window's hold): answers the token
 /// its writer needs, bound as the plan was. The plan id is used up; a
 /// Stick moved, replaced or changed since the plan is refused.
-pub fn approve(plan: &str) -> AppResult<String> {
+pub fn approve(state_dir: &Path, plan: &str) -> AppResult<String> {
     let Some(mut approval) = approvals().remove(plan).filter(|a| !a.approved) else {
         return Err(refused(
             "This plan was already confirmed, cancelled, or is unknown.",
@@ -305,7 +281,7 @@ pub fn approve(plan: &str) -> AppResult<String> {
     if approval.issued.elapsed() >= APPROVAL_LIFETIME {
         return Err(refused("This plan has expired."));
     }
-    let _lock = lock(&approval.stick);
+    let _lock = lock(state_dir, &approval.stick)?;
     if volume_identity(&approval.stick)? != approval.volume {
         return Err(refused(
             "The Stick at this place is not the one the plan was made for.",
@@ -423,7 +399,7 @@ mod tests {
         }
     }
     fn token(stick: &Path, op: &StickOperation, generation: u64) -> String {
-        approve(&propose(stick, op.clone(), Some(generation)).unwrap()).unwrap()
+        approve(&std::env::temp_dir(), &propose(stick, op.clone(), Some(generation)).unwrap()).unwrap()
     }
 
     #[test]
@@ -438,8 +414,8 @@ mod tests {
             "{unconfirmed}"
         );
         let plan = propose(dir.path(), op.clone(), Some(0)).unwrap();
-        let token = approve(&plan).unwrap();
-        assert!(approve(&plan).is_err(), "a plan is confirmed once");
+        let token = approve(&std::env::temp_dir(), &plan).unwrap();
+        assert!(approve(&std::env::temp_dir(), &plan).is_err(), "a plan is confirmed once");
         consume(Some(&token), &op, dir.path(), 0).unwrap();
         let again = consume(Some(&token), &op, dir.path(), 0).err().unwrap();
         assert!(again.to_string().contains("already used"), "{again}");
@@ -450,7 +426,7 @@ mod tests {
         let dir = stick();
         let plan = propose(dir.path(), export(&["1"]), Some(0)).unwrap();
         revoke(&plan);
-        assert!(approve(&plan).is_err());
+        assert!(approve(&std::env::temp_dir(), &plan).is_err());
     }
 
     #[test]
@@ -514,7 +490,7 @@ mod tests {
         let dir = stick();
         let plan = propose(dir.path(), export(&["1"]), Some(0)).unwrap();
         std::fs::write(dir.path().join("PIONEER/rekordbox/export.pdb"), b"changed").unwrap();
-        assert!(approve(&plan).is_err());
+        assert!(approve(&std::env::temp_dir(), &plan).is_err());
     }
 
     #[test]

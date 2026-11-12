@@ -38,8 +38,11 @@ pub async fn device_playlist_add_library_tracks<R: tauri::Runtime>(
     let state = Arc::clone(&state);
     blocking("device_playlist_add_library_tracks", move || {
         let stick = Path::new(&path);
-        let _access = crate::stick_guard::enter_stick(state.backup_dir(), stick)?;
+        // The lock order (`stick_guard`): the Library edit gate first, held
+        // while the Library is read; then the Stick, protected or not.
+        let gate = state.edit_gate().lock();
         let (library, generation) = state.library_at_generation()?;
+        let access = crate::stick_guard::enter_stick(state.backup_dir(), stick)?;
         crate::stick_approval::consume(
             approval.as_deref(),
             &StickOperation::AddLibraryTracks {
@@ -65,6 +68,7 @@ pub async fn device_playlist_add_library_tracks<R: tauri::Runtime>(
                 stick,
                 &resolved.missing,
             )?;
+            drop(gate);
             let report = write_export_registered(
                 &app,
                 stick,
@@ -72,12 +76,11 @@ pub async fn device_playlist_add_library_tracks<R: tauri::Runtime>(
                 defaults.as_ref(),
                 compatibility_format,
                 &reservation,
+                &access,
             )?;
             let _ = tauri::Emitter::emit(&app, "export:done", &report);
         }
-        crate::device_library::add_library_rows(
-            &state, stick, &format, &playlist, &tracks, duplicates,
-        )
+        crate::device_library::add_library_rows(&access, &state, stick, &format, &playlist, &tracks, duplicates)
     })
     .await
 }

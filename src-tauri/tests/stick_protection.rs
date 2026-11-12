@@ -91,7 +91,7 @@ impl Rig {
     fn token(&self, operation: &serde_json::Value) -> Option<String> {
         let plan = plan(self, &self.stick, operation);
         plan.plan
-            .map(|id| rbxport_lib::stick_approval::approve(&id).unwrap())
+            .map(|id| rbxport_lib::stick_approval::approve(&self.state_dir(), &id).unwrap())
     }
 }
 
@@ -180,7 +180,10 @@ fn every_writer_is_refused_on_a_protected_stick_and_writes_nothing() {
     // While unlocked: the backup folder on the Stick, and a key edit that
     // wrote the file's tag, for Undo and Redo below.
     rig.unlock();
-    rig.state().set_backup_destination(&rig.stick).unwrap();
+    {
+        let access = rbxport_lib::stick_guard::enter(&rig.state_dir(), &rig.stick).unwrap();
+        rig.state().set_backup_destination(&access, &rig.stick).unwrap();
+    }
     run(details::set_track_field(
         handle.clone(),
         rig.app.state(),
@@ -510,7 +513,7 @@ fn a_spare_stick_unlocked_takes_a_confirmed_export_and_an_unconfirmed_one_is_sti
         not_yet.to_string().contains("not confirmed"),
         "a plan id is not a token: {not_yet}"
     );
-    let token = rbxport_lib::stick_write_plan::plan(&rig.state(), &serde_json::from_value(serde_json::json!({ "destination": rig.path(), "operation": { "kind": "exportPlaylist", "playlist": playlist_id(0) } })).unwrap()).unwrap().plan.map(|p| rbxport_lib::stick_approval::approve(&p).unwrap());
+    let token = rbxport_lib::stick_write_plan::plan(&rig.state(), &serde_json::from_value(serde_json::json!({ "destination": rig.path(), "operation": { "kind": "exportPlaylist", "playlist": playlist_id(0) } })).unwrap()).unwrap().plan.map(|p| rbxport_lib::stick_approval::approve(&rig.state_dir(), &p).unwrap());
     run(commands::export_playlist(
         handle,
         rig.app.state(),
@@ -636,35 +639,28 @@ fn a_sync_to_two_sticks_takes_their_locks_in_one_order_and_refuses_the_same_stic
     assert!(error.full_message().contains("more than once"), "{error:?}");
 }
 
-/// Free functions called by name in `body`: `name(`, not `.name(`.
-fn calls(body: &str) -> BTreeSet<String> {
-    let mut out = BTreeSet::new();
+/// Functions called by name in `body`, with where, and whether the call is
+/// qualified: a method call `.name(` or a path `Type::name(` (followed only
+/// when one function of the sources has that name), or a free call `name(`.
+fn calls(body: &str) -> Vec<(String, usize, bool)> {
+    let mut out = Vec::new();
     let bytes = body.as_bytes();
     for (at, _) in body.match_indices('(') {
         let mut start = at;
         while start > 0 && (bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_') {
             start -= 1;
         }
-        if start == at || (start > 0 && bytes[start - 1] == b'.') {
+        if start == at || bytes[start].is_ascii_digit() {
             continue;
         }
-        // `Type::new(`, `Self::open(`: a type's own function, not a free one.
-        if body[..start].ends_with("::") {
-            let path = &body[..start - 2];
-            let segment = path
-                .rsplit(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-                .next()
-                .unwrap_or_default();
-            if segment.starts_with(|c: char| c.is_ascii_uppercase()) {
-                continue;
-            }
-        }
-        out.insert(body[start..at].to_owned());
+        let qualified = body[..start].ends_with('.') || body[..start].ends_with("::");
+        out.push((body[start..at].to_owned(), start, qualified));
     }
     out
 }
 
-/// What writes to a Stick, or to a file the DJ placed: the guard must come first.
+/// What writes to a Stick: a function reaching one must hold the guard's
+/// capability ([`StickAccess`](rbxport_lib::stick_guard::StickAccess)).
 const PRIMITIVES: &[&str] = &[
     "write_export_registered(",
     "write_export_with_phase(",
@@ -679,71 +675,169 @@ const PRIMITIVES: &[&str] = &[
     "write_range_wav(",
     "swap_key(",
     "write_key(",
-    "write_atomically(Path::new(&path)",
-    "write_atomically(std::path::Path::new(&path)",
-    "std::fs::write(&path",
     "set_backup_destination(",
-    "backups::create(",
-    "backups::start(",
-    "backups::delete(",
+    // Backups (`backups::create`, `start`, `delete`) enter the guard inside,
+    // after the Library edit gate: followed by the file-write analysis below.
 ];
 
-/// Each function in `sources` (name → its text), split at every `fn `.
-fn functions(sources: &[(PathBuf, String)]) -> Vec<(String, String, bool)> {
+/// Any file written, renamed or removed: wherever it is. A registered
+/// command reaching one without the guard must be one that writes only the
+/// app's own files (`APP_FILE_WRITERS`), decided one by one.
+const FILE_PRIMITIVES: &[&str] = &[
+    "fs::write(",
+    "fs::rename(",
+    "fs::copy(",
+    "fs::remove_file(",
+    "fs::remove_dir(",
+    "fs::remove_dir_all(",
+    "fs::create_dir(",
+    "fs::create_dir_all(",
+    "File::create(",
+    "File::create_new(",
+    "OpenOptions::new().write(",
+    "OpenOptions::new().create(",
+    "OpenOptions::new().append(",
+    "write_atomically(",
+    "persist_new(",
+    "persist(",
+];
+
+/// One function of the app's sources: its name, its text (signature and
+/// body), and whether it is a registered command's.
+struct Function {
+    name: String,
+    text: String,
+    command: bool,
+}
+
+/// Each function in `sources`, free functions and methods alike, split at
+/// every `fn `.
+fn functions(sources: &[(PathBuf, String)]) -> Vec<Function> {
     let mut out = Vec::new();
     for (_, text) in sources {
         let pieces: Vec<&str> = text.split("fn ").collect();
         for (i, piece) in pieces.iter().enumerate().skip(1) {
-            let name: String = piece
-                .chars()
-                .take_while(|c| c.is_alphanumeric() || *c == '_')
-                .collect();
-            // Free functions only, at the left margin: methods are reached
-            // as `.name(` or `Type::name(`, which `calls` leaves out.
-            let line = pieces[i - 1].rsplit('\n').next().unwrap_or_default();
-            if name.is_empty() || line.starts_with(char::is_whitespace) {
+            let before = pieces[i - 1];
+            // `fn ` as a word: after a space, a newline or the start.
+            if !before.is_empty() && !before.ends_with([' ', '\n', '\t']) {
+                continue;
+            }
+            let name: String = piece.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+            if name.is_empty() {
                 continue;
             }
             // `#[tauri::command]` after the previous item ended.
-            let before = pieces[i - 1];
             let tail = before.rfind(['}', ';']).map_or(before, |at| &before[at..]);
             let command = tail.contains("#[tauri::command]");
-            out.push((name, (*piece).to_owned(), command));
+            out.push(Function { name, text: (*piece).to_owned(), command });
         }
     }
     out
 }
 
-/// The functions that reach a primitive without passing the guard: a
-/// function that enters `stick_guard` is safe, and so is what it calls.
-fn unguarded_writers(functions: &[(String, String, bool)]) -> BTreeMap<String, String> {
-    let guarded = |body: &str| body.contains("stick_guard::enter");
-    let mut writers: BTreeMap<String, String> = functions
+/// Where in `text` the guard is held: from each `stick_guard::enter…` bound
+/// to a name (not `_`, not inside `drop(`) to that name's `drop(`, or to
+/// the end. A guard dropped before a write does not cover it.
+fn held(text: &str) -> Vec<std::ops::Range<usize>> {
+    let mut out = Vec::new();
+    for (at, _) in text.match_indices("stick_guard::enter") {
+        let start = text[..at].rfind([';', '{', '}']).map_or(0, |s| s + 1);
+        let statement = text[start..at].trim_start();
+        if statement.contains("drop(") {
+            continue;
+        }
+        let Some(binding) = statement.strip_prefix("let ") else {
+            // `match stick_guard::enter(..) { Ok(access) => .. }`: held in its arms.
+            out.push(at..text.len());
+            continue;
+        };
+        let binding = binding.trim_start_matches("mut ");
+        let name: String = binding.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+        if name.is_empty() || name == "_" {
+            continue;
+        }
+        let end = text[at..].find(&format!("drop({name})")).map_or(text.len(), |d| at + d);
+        out.push(at..end);
+    }
+    out
+}
+
+/// Whether the function takes the guard's capability as a parameter: its
+/// caller had to pass the guard to have one.
+fn capable(text: &str) -> bool {
+    text.split_once('{').is_some_and(|(signature, _)| signature.contains("StickAccess"))
+}
+
+/// The places in `text` that write: a primitive, or a call to a writer (a
+/// qualified call only when its name is one of `unique`).
+fn writes(
+    text: &str,
+    primitives: &[&str],
+    writers: &BTreeMap<String, String>,
+    unique: &BTreeSet<String>,
+) -> Vec<(usize, String)> {
+    let mut out: Vec<(usize, String)> = primitives
         .iter()
-        .filter(|(_, body, _)| !guarded(body))
-        .filter_map(|(name, body, _)| {
-            PRIMITIVES
-                .iter()
-                .find(|p| body.contains(*p))
-                .map(|p| (name.clone(), (*p).to_owned()))
-        })
+        .flat_map(|p| text.match_indices(*p).map(|(at, _)| (at, (*p).to_owned())))
         .collect();
+    out.extend(calls(text).into_iter().filter(|(name, _, qualified)| !qualified || unique.contains(name)).filter_map(
+        |(name, at, _)| writers.get(&name).map(|why| (at, format!("{name}() → {why}"))),
+    ));
+    out
+}
+
+/// The names only one function of the sources has.
+fn unique_names(functions: &[Function]) -> BTreeSet<String> {
+    let mut seen: BTreeMap<&str, usize> = BTreeMap::new();
+    for f in functions {
+        *seen.entry(f.name.as_str()).or_default() += 1;
+    }
+    seen.into_iter().filter(|(_, n)| *n == 1).map(|(name, _)| name.to_owned()).collect()
+}
+
+/// The functions that reach a primitive at a place the guard does not
+/// cover: a function taking the capability is covered throughout; so is
+/// what follows a held guard, until it is dropped.
+fn unguarded_writers_of(functions: &[Function], primitives: &[&str]) -> BTreeMap<String, String> {
+    let unique = unique_names(functions);
+    let mut writers: BTreeMap<String, String> = BTreeMap::new();
     loop {
-        let more: Vec<(String, String)> = functions
-            .iter()
-            .filter(|(name, body, _)| !writers.contains_key(name) && !guarded(body))
-            .filter_map(|(name, body, _)| {
-                calls(body)
-                    .into_iter()
-                    .find(|c| writers.contains_key(c))
-                    .map(|c| (name.clone(), format!("{c}() → {}", writers[&c])))
-            })
-            .collect();
+        let mut more = Vec::new();
+        for f in functions {
+            if writers.contains_key(&f.name) || capable(&f.text) {
+                continue;
+            }
+            let cover = held(&f.text);
+            if let Some((_, why)) =
+                writes(&f.text, primitives, &writers, &unique).into_iter().find(|(at, _)| !cover.iter().any(|r| r.contains(at)))
+            {
+                more.push((f.name.clone(), why));
+            }
+        }
         if more.is_empty() {
             return writers;
         }
         writers.extend(more);
     }
+}
+
+fn unguarded_writers(functions: &[Function]) -> BTreeMap<String, String> {
+    unguarded_writers_of(functions, PRIMITIVES)
+}
+
+/// The functions that write a Stick directly without holding the guard or
+/// its capability: each must take `StickAccess` (only `stick_guard` makes
+/// one) or enter the guard itself.
+fn uncapable_helpers(functions: &[Function]) -> Vec<String> {
+    functions
+        .iter()
+        .filter(|f| !capable(&f.text))
+        .filter(|f| {
+            let cover = held(&f.text);
+            writes(&f.text, PRIMITIVES, &BTreeMap::new(), &BTreeSet::new()).iter().any(|(at, _)| !cover.iter().any(|r| r.contains(at)))
+        })
+        .map(|f| f.name.clone())
+        .collect()
 }
 
 fn sources() -> Vec<(PathBuf, String)> {
@@ -801,6 +895,57 @@ fn registered() -> BTreeSet<String> {
         .filter(|name| !name.is_empty())
         .collect()
 }
+
+/// Registered commands that write files without passing `stick_guard`,
+/// each checked to write only the app's own files (its state folder,
+/// caches, the Library under Library Protection), never a place the DJ
+/// chooses: a new file-writing command fails the guard until it is guarded
+/// or added here after that check.
+const APP_FILE_WRITERS: &[&str] = &[
+    // The Library, its analysis files and caches, under Library Protection
+    // (and, on a Stick-classified volume, Stick Protection at the Library's
+    // own edit boundary); the app's state folder (stick_unlock's record).
+    "add_artwork",
+    "add_cue",
+    "add_loop",
+    "add_to_tag_list",
+    "analyse_track",
+    "auto_relocate",
+    "backup_sizes",
+    "clear_artwork",
+    "convert_memory_cues_to_hot",
+    "create_library",
+    "create_my_tag",
+    "deck_tempo",
+    "delete_cue",
+    "device_playlist_import",
+    "grid_edit",
+    "grid_lock",
+    "grid_redo",
+    "grid_undo",
+    "import_files",
+    "import_files_slice",
+    "import_folder_playlist",
+    "import_itunes",
+    "import_itunes_selected",
+    "import_usb",
+    "import_xml",
+    "move_cue",
+    "move_hot_cue",
+    "record_play",
+    "reload_library",
+    "relocate_by_location",
+    "rename_my_tag",
+    "set_active_loop",
+    "set_cue_colour",
+    "set_cue_comment",
+    "set_track_color",
+    "set_track_comment",
+    "set_track_field",
+    "set_track_rating",
+    "stick_unlock",
+    "use_default_library",
+];
 
 /// Every registered command that cannot write to a Stick: a new command
 /// must be added here or to `STICK_WRITERS`, after deciding which it is.
@@ -1032,9 +1177,28 @@ fn every_registered_command_is_classified_and_every_stick_writer_passes_the_guar
     let unguarded = unguarded_writers(&functions);
     let commands: BTreeMap<&str, &str> = functions
         .iter()
-        .filter(|(_, _, c)| *c)
-        .map(|(n, b, _)| (n.as_str(), b.as_str()))
+        .filter(|f| f.command)
+        .map(|f| (f.name.as_str(), f.text.as_str()))
         .collect();
+    // Every helper that writes a Stick holds the guard or takes its capability.
+    let uncapable = uncapable_helpers(&functions);
+    assert!(uncapable.is_empty(), "these write a Stick without taking StickAccess or entering stick_guard: {uncapable:?}");
+    // Any other command that writes a file without the guard writes only the
+    // app's own files, decided one by one: a new one must be looked at.
+    let every_primitive: Vec<&str> = PRIMITIVES.iter().chain(FILE_PRIMITIVES).copied().collect();
+    let file_writers = unguarded_writers_of(&functions, &every_primitive);
+    let unguarded_files: BTreeMap<&str, &str> = registered
+        .iter()
+        .filter_map(|name| file_writers.get(name).map(|why| (name.as_str(), why.as_str())))
+        .collect();
+    let decided: BTreeSet<&str> = APP_FILE_WRITERS.iter().copied().collect();
+    let found: BTreeSet<&str> = unguarded_files.keys().copied().collect();
+    assert_eq!(
+        found.difference(&decided).collect::<Vec<_>>(),
+        Vec::<&&str>::new(),
+        "commands writing files without stick_guard: guard them, or add them to APP_FILE_WRITERS after checking they write only the app's own files: {unguarded_files:#?}"
+    );
+    assert_eq!(decided.difference(&found).collect::<Vec<_>>(), Vec::<&&str>::new(), "APP_FILE_WRITERS lists commands that no longer write");
     for name in &registered {
         assert!(
             !unguarded.contains_key(name),
@@ -1046,7 +1210,9 @@ fn every_registered_command_is_classified_and_every_stick_writer_passes_the_guar
         let body = commands
             .get(name)
             .unwrap_or_else(|| panic!("`{name}` has no #[tauri::command] body"));
-        let indirect = ["set_track_field", "undo_edit", "redo_edit", "analyse_track"];
+        // Guarded inside, after the Library edit gate (key tags; backups),
+        // and followed there by the analyses above.
+        let indirect = ["set_track_field", "undo_edit", "redo_edit", "analyse_track", "back_up_library", "delete_backup"];
         assert!(
             body.contains("stick_guard::enter") || indirect.contains(name),
             "`{name}` must enter stick_guard before it writes"
@@ -1074,11 +1240,86 @@ fn the_source_guard_catches_a_writer_behind_a_helper() {
     assert!(found.contains_key("sneaky"), "{found:?}");
     let guarded = indirect.replace(
         "    helper(&path);",
-        "    let _a = crate::stick_guard::enter(dir, Path::new(&path))?;\n    helper(&path);",
+        "    let access = crate::stick_guard::enter(dir, Path::new(&path))?;\n    helper(&path);",
     );
     let found = unguarded_writers(&functions(&source(&guarded)));
     assert!(!found.contains_key("sneaky"), "{found:?}");
-    assert!(functions(&source(indirect))
-        .iter()
-        .any(|(n, _, c)| n == "sneaky" && *c));
+    assert!(uncapable_helpers(&functions(&source(&guarded))).contains(&"deeper".to_owned()), "a helper writing without the capability");
+    let capable = guarded.replace("fn deeper(path: &str)", "fn deeper(access: &StickAccess, path: &str)");
+    assert!(!uncapable_helpers(&functions(&source(&capable))).contains(&"deeper".to_owned()));
+    assert!(functions(&source(indirect)).iter().any(|f| f.name == "sneaky" && f.command));
+}
+
+/// Round 4, B: a guard dropped before the write, or bound to `_`, covers
+/// nothing; a write through a method is followed; a plain `std::fs::write`
+/// is a file write the command must be classified for.
+#[test]
+fn the_source_guard_catches_a_dropped_guard_a_method_and_a_plain_file_write() {
+    let source = |text: &str| vec![(PathBuf::from("x.rs"), text.to_owned())];
+    let found = |text: &str| unguarded_writers(&functions(&source(text)));
+    let dropped = "#[tauri::command]\npub fn early(path: String) {\n    drop(crate::stick_guard::enter(dir, Path::new(&path))?);\n    write_range_wav(a, b, c, Path::new(&path));\n}\n";
+    assert!(found(dropped).contains_key("early"), "dropped at once");
+    let named = "#[tauri::command]\npub fn early(path: String) {\n    let access = crate::stick_guard::enter(dir, Path::new(&path))?;\n    drop(access);\n    write_range_wav(a, b, c, Path::new(&path));\n}\n";
+    assert!(found(named).contains_key("early"), "dropped by name before the write");
+    let underscore = "#[tauri::command]\npub fn early(path: String) {\n    let _ = crate::stick_guard::enter(dir, Path::new(&path))?;\n    write_range_wav(a, b, c, Path::new(&path));\n}\n";
+    assert!(found(underscore).contains_key("early"), "bound to _");
+    let after = "#[tauri::command]\npub fn late(path: String) {\n    write_range_wav(a, b, c, Path::new(&path));\n    let access = crate::stick_guard::enter(dir, Path::new(&path))?;\n}\n";
+    assert!(found(after).contains_key("late"), "a guard after the write");
+    let method = "#[tauri::command]\npub fn through(path: String) {\n    Saver.save(&path);\n}\n\nimpl Saver {\n    fn save(&self, path: &str) {\n        write_range_wav(a, b, c, Path::new(path));\n    }\n}\n";
+    assert!(found(method).contains_key("through"), "{:?}", found(method));
+    let plain = "#[tauri::command]\npub fn plain(destination: String) {\n    std::fs::write(destination, b\"x\").unwrap();\n}\n";
+    let every: Vec<&str> = PRIMITIVES.iter().chain(FILE_PRIMITIVES).copied().collect();
+    assert!(unguarded_writers_of(&functions(&source(plain)), &every).contains_key("plain"));
+}
+
+/// Round 4, D: one lock order everywhere, the Library edit gate before a
+/// Stick's execution lock. An export to a Stick waits for the gate without
+/// holding the Stick, so the Undo of a key edit on a file on that Stick
+/// (which holds the gate, then takes the Stick) can never wait on it in a
+/// circle. Controlled: this test holds the gate while both start.
+#[test]
+fn an_export_and_the_undo_of_a_key_edit_on_that_stick_never_wait_on_each_other() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    let rig = rig();
+    let handle = rig.app.handle().clone();
+    let (audio, track) = track_on_stick(&rig);
+    rig.unlock();
+    run(details::set_track_field(handle.clone(), rig.app.state(), vec![track], "key".into(), "Fm".into(), Some(true))).unwrap();
+    let token = rig.token(&serde_json::json!({ "kind": "exportPlaylist", "playlist": playlist_id(0) }));
+    let state = rig.state();
+    let (done, finished) = mpsc::channel();
+
+    let gate = state.core().edit_gate().lock();
+    let exporting = {
+        let (handle, done, path) = (handle.clone(), done.clone(), rig.path());
+        std::thread::spawn(move || {
+            let result = run(commands::export_playlist(handle.clone(), handle.state(), playlist_id(0), path, None, None, None, token));
+            done.send(("export", result.map(|_| ()).map_err(|e| e.to_string()))).unwrap();
+        })
+    };
+    std::thread::sleep(Duration::from_millis(500));
+    let free = wreckordbox_stick_protection::try_exec_lock(&rig.state_dir(), &rig.stick).unwrap();
+    assert!(free.is_some(), "an export waiting for the Library holds no Stick");
+    drop(free);
+    let undoing = {
+        let (handle, done) = (handle.clone(), done.clone());
+        std::thread::spawn(move || {
+            let result = run(commands::undo_edit(handle.clone(), handle.state()));
+            done.send(("undo", result.map(|_| ()).map_err(|e| e.to_string()))).unwrap();
+        })
+    };
+    std::thread::sleep(Duration::from_millis(200));
+    drop(gate);
+
+    let mut outcomes = BTreeMap::new();
+    for _ in 0..2 {
+        let (what, result) = finished.recv_timeout(Duration::from_secs(60)).expect("both finish: no deadlock");
+        outcomes.insert(what, result);
+    }
+    exporting.join().unwrap();
+    undoing.join().unwrap();
+    assert_eq!(outcomes["export"], Ok(()), "{outcomes:?}");
+    assert_eq!(outcomes["undo"], Ok(()), "{outcomes:?}");
+    assert_eq!(rbl_db::key_tag::read_key(&audio).unwrap().as_deref(), Some("Am"), "the Undo put the tag back");
 }

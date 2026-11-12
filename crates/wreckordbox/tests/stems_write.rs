@@ -71,9 +71,13 @@ struct Rig {
 
 impl Rig {
     fn new() -> Self {
+        let stick = tempfile::tempdir().unwrap();
+        // A temporary folder standing in for a mounted Stick (the sandbox
+        // runs everything with RBXPORT_TEST=1; wbx-45.11).
+        std::fs::write(stick.path().join(wreckordbox_stick_protection::STAND_IN_MARKER), b"").unwrap();
         Self {
             sandbox: Sandbox::new(),
-            stick: tempfile::tempdir().unwrap(),
+            stick,
         }
     }
 
@@ -659,4 +663,27 @@ fn a_protected_stick_is_not_written_to_until_it_is_unlocked() {
     let after = deck::snapshot(rig.stick());
     assert_eq!(rig.write(&track, true).error_json()["error"]["code"], "stick_protected");
     assert_eq!(deck::snapshot(rig.stick()), after);
+}
+
+/// wbx-45.11, round 4 A1: a protected Spare stick whose last export did not
+/// finish is refused before anything reads it through the path that would
+/// settle that export: not a byte changes. Unlocked, it is refused as an
+/// unfinished write, still without settling it.
+#[test]
+fn a_protected_stick_with_an_unfinished_export_is_not_settled_or_written() {
+    let (rig, track) = Rig::ready("Half Done.wav");
+    let stick = rig.stick().to_str().unwrap().to_owned();
+    assert!(rig.sandbox.cli(&["stick", "lock", &stick]).status.success());
+    // The journal an interrupted publication leaves.
+    std::fs::write(rig.stick().join(".rbxport-publication"), b"{\"interrupted\":true}").unwrap();
+    let before = deck::snapshot(rig.stick());
+
+    let run = rig.write(&track, true);
+    assert_eq!(run.error_json()["error"]["code"], "stick_protected");
+    assert_eq!(deck::snapshot(rig.stick()), before, "nothing settled, nothing written");
+
+    assert!(rig.sandbox.cli(&["stick", "unlock", &stick]).status.success());
+    let run = rig.write(&track, true);
+    assert_eq!(run.error_json()["error"]["code"], "unfinished_write", "{}", run.stdout);
+    assert_eq!(deck::snapshot(rig.stick()), before, "still not settled");
 }

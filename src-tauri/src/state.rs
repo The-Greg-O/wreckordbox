@@ -228,7 +228,14 @@ impl AppState {
 
     /// Persist the destination before publishing it to the running app.
     /// Recovery journals stay local even when snapshots go to a removable drive.
-    pub fn set_backup_destination(&self, directory: &std::path::Path) -> AppResult<String> {
+    ///
+    /// `_access`: Stick Protection's leave to write to `directory` (wbx-45.11):
+    /// choosing it writes a probe file there.
+    pub fn set_backup_destination(
+        &self,
+        _access: &crate::stick_guard::StickAccess,
+        directory: &std::path::Path,
+    ) -> AppResult<String> {
         let _gate = self.edit_gate().lock();
         let progress = self.backup_progress.lock();
         if progress.running {

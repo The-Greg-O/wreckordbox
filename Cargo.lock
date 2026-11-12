@@ -7155,6 +7155,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "vorbis_rs",
+ "wreckordbox-stick-outline",
 ]
 
 [[package]]
