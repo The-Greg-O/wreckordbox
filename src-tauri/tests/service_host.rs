@@ -1118,3 +1118,57 @@ fn a_restore_from_the_command_is_refused_while_the_window_owns_the_library() {
     window.cli(&["tracks", "rate", &track_id(1), "3"]).succeeded();
     assert_eq!(window.rating(&track_id(1)), 3);
 }
+
+/// wbx-89 review 2, finding 1: a window started while a restore owns the
+/// Library waits. It neither recovers the restore's journal (which is the
+/// restore's own, mid-way) nor reads the Library, until the restore lets
+/// go; then it owns the Library and recovers what is left.
+#[test]
+fn a_window_started_while_a_restore_owns_the_library_waits_and_recovers_nothing_until_it_lets_go() {
+    let window = window();
+    let config = window.config();
+    let location = window.location.clone();
+    rbl_backup::testing::set_rating(&location, 4);
+    let archive = window.dir.path().join("rbexport-20261112-1200.zip");
+    rbl_backup::testing::archive(&location, &archive, None);
+    rbl_backup::testing::set_rating(&location, 1);
+
+    // The restore: owns the Library, and has replaced the database.
+    let restoring = wreckordbox_service::backup::Owned::take(&location).unwrap();
+    assert!(wreckordbox_service::backup::restoring(&location));
+    rbl_backup::testing::stop_before_swap(3, true);
+    let stopped = rbl_backup::restore::restore(
+        &rbl_backup::restore::Request { archive: &archive, parts: rbl_backup::restore::Parts::ALL, location: &location, state_dir: &config.recovery_dir, sizes: None },
+        &|| Ok(()),
+        &mut |_, _, _, _| Ok(()),
+    );
+    assert!(stopped.is_err());
+    assert!(rbl_backup::journal::pending(&config.recovery_dir));
+    assert_eq!(rbl_backup::testing::rating(&location), 4);
+
+    // Out of time while it runs: refused, nothing touched.
+    let refused = service_host::own_library(window.app.handle(), &location, &config, Duration::ZERO);
+    assert!(matches!(&refused, service_host::Ownership::Refused(message) if message.contains("being restored")), "{refused:?}");
+    assert!(rbl_backup::journal::pending(&config.recovery_dir));
+
+    let (sender, answer) = std::sync::mpsc::channel();
+    let handle = window.app.handle().clone();
+    let (waiting_location, waiting_config) = (location.clone(), config.clone());
+    std::thread::spawn(move || {
+        let _ = sender.send(service_host::own_library(&handle, &waiting_location, &waiting_config, Duration::from_secs(60)));
+    });
+    std::thread::sleep(Duration::from_millis(1500));
+    assert!(answer.try_recv().is_err(), "the window did not wait for the restore");
+    assert!(rbl_backup::journal::pending(&config.recovery_dir));
+    assert_eq!(rbl_backup::testing::rating(&location), 4);
+    assert!(window.state().service_problem().is_none());
+
+    drop(restoring);
+    let owned = answer.recv_timeout(Duration::from_secs(30)).unwrap();
+    assert_eq!(owned, service_host::Ownership::Owner);
+    // Recovered under its own lock: the restore stopped uncommitted, so it
+    // is rolled back.
+    assert!(!rbl_backup::journal::pending(&config.recovery_dir));
+    assert_eq!(rbl_backup::testing::rating(&location), 1);
+    window.cli(&["tracks", "rate", &track_id(1), "3"]).succeeded();
+}

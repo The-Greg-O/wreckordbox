@@ -213,3 +213,42 @@ fn stems_whose_audio_files_are_gone_are_not_the_tracks_current_stems() {
     assert_eq!(kept.len(), 1);
     assert!(kept[0].is_current() && !kept[0].audio_present());
 }
+
+/// Overwrites `path` in place with `value` samples, keeping its length,
+/// inode and modification time: a change only reading it again can see.
+fn rewrite_unseen(path: &std::path::Path, value: u8) {
+    use std::io::{Seek, Write};
+    let modified = std::fs::metadata(path).unwrap().modified().unwrap();
+    let mut file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+    file.seek(std::io::SeekFrom::Start(44)).unwrap();
+    file.write_all(&[value; 16]).unwrap();
+    file.set_modified(modified).unwrap();
+}
+
+#[test]
+fn stem_audio_is_checked_against_its_recorded_hash_once_until_the_file_changes_and_always_before_a_stick_write() {
+    let made = made();
+    let (run, files) = made.separation(500);
+    let set = made.record(run, &files).unwrap();
+    assert!(set.audio_present());
+    assert!(set.audio_verified());
+
+    // Rewritten with other audio of the same length (a later separation at
+    // the same path): a new modification time, so it is read again.
+    let vocals = set.stems.iter().find(|stem| stem.role == Role::Vocals).unwrap().path.clone();
+    let original = std::fs::read(&vocals).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let mut other = original.clone();
+    other[44..60].fill(9);
+    std::fs::write(&vocals, &other).unwrap();
+    assert!(!set.audio_present());
+    std::fs::write(&vocals, &original).unwrap();
+    assert!(set.audio_present());
+
+    // Changed with nothing a look can see: the kept verdict stands for a
+    // look, and a Stick write's check reads the file again.
+    rewrite_unseen(&vocals, 7);
+    assert!(set.audio_present());
+    assert!(!set.audio_verified());
+    assert!(!set.audio_present());
+}

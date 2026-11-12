@@ -317,8 +317,26 @@ hosted by the window, holds for as long as it has the Library) before it
 reads anything and keeps it until the restore has finished or been put
 back, so it is refused while either runs and neither can start during it.
 Every owner of the Library recovers a pending journal under that lock before
-it opens the Library or the Sidecar (`Service::begin`). After a restore it
-appends a Ledger entry of kind `restore` to the Sidecar the Library now has.
+it opens the Library or the Sidecar (`Service::begin`), and before it
+requires `master.db` to exist: `wreckordbox_service::locate_library` finds
+a Library whose `master.db` a stopped restore set aside when the pending
+journal names it. A window that cannot host the service never recovers: it
+waits while a restore holds the lock (`backup::restoring`, the lock file's
+second line is `restoring a backup`), then hosts, and reads without owning
+only when another window or service owns the Library and nothing is left
+to recover (`service_host::own_library`). The restore checks Library
+Protection (`library-protection.json`; on unless it says off) under the
+lock before staging and again before replacing.
+
+The restore owes a Ledger entry of kind `restore`, written to the Sidecar
+the Library now has. It is saved in the journal (`owed`, through
+`rbl_backup::restore::restore_owing`) before the first file is replaced;
+once the files are committed the journal is kept, with no swaps, until the
+entry is written under an identifier reserved by an intent and saved back
+into the journal (so writing it again changes nothing), then discharged. A
+stop after the files are in place is recorded by the next owner; a failure
+to write it is `restore_unrecorded` and keeps the journal, and while it is
+kept no new restore starts.
 The separate RBXport Restore app does not know about the Sidecar and must
 not be used for a backup holding one. The logic is `rbl_backup::restore`. A
 restore:
@@ -371,7 +389,12 @@ A restore:
    whatever its first bytes, pass `quick_check` and hold a Sidecar schema
    version; every database `sidecar.json` lists (at any depth) must be there
    and pass `quick_check`; and any other unpacked file that starts as a
-   database must pass it too.
+   database must pass it too. A `sidecar.db` whose `meta.schema_version` is
+   newer than this build reads (`sidecar_part::SCHEMA_SUPPORTED`, held to
+   `wreckordbox_sidecar::SCHEMA_VERSION` by a test) is refused, and so is any
+   database's `-wal`, `-shm` or `-journal` in the Sidecar's part, at any
+   depth: databases travel as whole snapshots, and a companion would change
+   one after it was checked.
 8. Checks again that rekordbox and RBXport are not running, then saves the
    restore journal (`backup-restore.json` in the local state folder).
 9. For each target: renames the current file or folder aside to

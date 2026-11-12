@@ -23,6 +23,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
+use std::time::Duration;
 
 use rbl_db::LibraryLocation;
 use rbl_library::Host;
@@ -224,23 +225,82 @@ impl<R: tauri::Runtime> FrontEnd for Interface<R> {
     }
 }
 
-/// Hosts the service for the Library the app is about to read. A Library
-/// that is not there yet has nothing to host; the next load tries again.
-///
-/// Returns whether this window now hosts the service: owns the Library,
-/// and so may recover an interrupted restore.
-pub(crate) fn host<R: tauri::Runtime>(app: &tauri::AppHandle<R>, location: &LibraryLocation) -> bool {
-    if !location.master_db.is_file() {
-        return false;
-    }
+/// How long a window that starts while a backup is being restored waits
+/// for the restore to finish before it gives up.
+pub const RESTORE_WAIT: Duration = Duration::from_secs(30 * 60);
+
+/// What a window may do with the Library it is about to read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Ownership {
+    /// It hosts the service: it owns the Library, any interrupted restore
+    /// has been recovered under its lock, and it may write.
+    Owner,
+    /// Another window or service owns the Library and nothing is left to
+    /// recover: it may read, and cannot write.
+    Reader,
+    /// It must not read the Library: a restore is running, or one stopped
+    /// midway and this window does not own the Library to recover it.
+    Refused(String),
+}
+
+/// Hosts the service for the Library the app is about to read, using the
+/// environment's configuration. See [`own_library`].
+pub(crate) fn host<R: tauri::Runtime>(app: &tauri::AppHandle<R>, location: &LibraryLocation) -> Ownership {
     match Config::from_env() {
-        Ok(config) => host_with(app, location, &config).is_ok(),
+        Ok(config) => own_library(app, location, &config, RESTORE_WAIT),
         Err(error) => {
             let message = cannot_host(&error);
             tracing::error!(error = %error.message, "the window is not hosting the Library service");
             app.state::<Arc<AppState>>().core().refuse_writes(Some(message.clone()));
             Interface(app.clone()).cannot_write(&message);
-            false
+            if rbl_backup::journal::pending(app.state::<Arc<AppState>>().backup_dir()) {
+                Ownership::Refused(UNFINISHED.to_owned())
+            } else {
+                Ownership::Reader
+            }
+        }
+    }
+}
+
+const UNFINISHED: &str = "A restore of the Library is unfinished, and another program owns the Library. Quit it, then open wreckordbox again.";
+const RESTORING: &str = "A backup is being restored into the Library. Open wreckordbox again when the restore has finished.";
+
+/// Makes the window the Library's owner before anything reads it: hosts
+/// the service, which recovers an interrupted restore under the Library's
+/// lock. Never recovers anything without that lock.
+///
+/// While a restore owns the Library the window waits, up to `wait`, then
+/// hosts; past it, it is refused. When another window or service owns the
+/// Library it may only read, and only if no restore is left to recover.
+/// A Library whose `master.db` is missing with no restore to recover has
+/// nothing to host; the next load tries again.
+pub fn own_library<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    location: &LibraryLocation,
+    config: &Config,
+    wait: Duration,
+) -> Ownership {
+    let deadline = std::time::Instant::now() + wait;
+    loop {
+        if wreckordbox_service::backup::restoring(location) {
+            if std::time::Instant::now() >= deadline {
+                return Ownership::Refused(RESTORING.to_owned());
+            }
+            std::thread::sleep(Duration::from_millis(200));
+            continue;
+        }
+        let pending = rbl_backup::journal::pending(&config.recovery_dir);
+        if !location.master_db.is_file() && !pending {
+            return Ownership::Reader;
+        }
+        match host_with(app, location, config) {
+            Ok(()) => return Ownership::Owner,
+            // A restore took the Library between the look and the try.
+            Err(_) if wreckordbox_service::backup::restoring(location) => {}
+            Err(_) if rbl_backup::journal::pending(&config.recovery_dir) => {
+                return Ownership::Refused(UNFINISHED.to_owned());
+            }
+            Err(_) => return Ownership::Reader,
         }
     }
 }

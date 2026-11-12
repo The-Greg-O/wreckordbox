@@ -69,14 +69,22 @@ the Sidecar, so what wreckordbox knows always matches the Library it is
 about. Without `--yes` it only says what it would replace. It is refused,
 with nothing changed, while the wreckordbox window or a Library service has
 the Library (quit the window, or run `wreckordbox stop`), while rekordbox
-runs, and for a damaged backup or another Library's. The Library is locked
-for the whole restore, so neither the window nor a service can start part
-way through. The restore is recorded in the Ledger.
+runs, while Library Protection is on (or has never been set: it counts as
+on until it is turned off), for a damaged backup or another Library's, and
+for a backup made by a newer wreckordbox whose Sidecar this one cannot read.
+`--yes` confirms the replacement; it never turns protection off (run
+`wreckordbox protection off` first). The Library is locked for the whole
+restore: a wreckordbox window opened meanwhile waits until the restore has
+finished before it reads the Library. The restore is recorded in the
+Ledger; if that record cannot be written, the command fails and says so,
+and the Library stays closed to edits until wreckordbox writes it the next
+time it opens the Library.
 
-If a restore is interrupted, the next program to open the Library (the
-window, or a service a `wreckordbox` command starts) rolls it back, or
-completes it when the new files were already in place, before it reads the
-Library or the Sidecar.
+If a restore is interrupted, even with the library database moved aside,
+the next program to open the Library (the window, or a service a
+`wreckordbox` command starts) rolls it back, or completes it and records
+it when the new files were already in place, before it reads the Library
+or the Sidecar.
 
 A backup made before backups carried the Sidecar restores the Library and
 leaves the Sidecar on the machine as it is; the Ledger entry for that

@@ -136,18 +136,92 @@ impl StemSet {
     /// not come back. Such a set is not the track's Stems; the track needs
     /// separating again.
     ///
-    /// The files must also be the ones recorded: each is hashed and checked
-    /// against the hash recorded with the set, since a later separation can
-    /// have written other audio at the same path. A set without recorded
-    /// hashes cannot be checked and is not present.
+    /// The files must also be the ones recorded: each is checked against
+    /// the hash recorded with the set, since a later separation can have
+    /// written other audio at the same path. A set without recorded hashes
+    /// cannot be checked and is not present.
+    ///
+    /// A file's hash is computed once and kept, for this process, with the
+    /// file's size, modification time and (on Unix) inode: it is computed
+    /// again only when one of those changes. Four lossless Stems of a
+    /// five-minute track are about 215 MB: hashing them took 0.34 to 0.41 s
+    /// on the M2 (release build, files in the page cache; more from a cold
+    /// disk), against about 4 µs to read a file's metadata. Use
+    /// [`Self::audio_verified`] where a stale verdict would do harm.
     #[must_use]
     pub fn audio_present(&self) -> bool {
         self.stems.iter().all(|stem| {
-            stem.hash.as_deref().is_some_and(|recorded| {
-                stem.path.is_file() && content_hash(&stem.path).is_ok_and(|found| found == recorded)
-            })
+            stem.hash
+                .as_deref()
+                .is_some_and(|recorded| cached_hash(&stem.path).is_ok_and(|found| found == recorded))
         })
     }
+
+    /// [`Self::audio_present`], with every file hashed now whatever was
+    /// kept: what a Stick write checks before it copies the audio.
+    #[must_use]
+    pub fn audio_verified(&self) -> bool {
+        self.stems.iter().all(|stem| {
+            stem.hash
+                .as_deref()
+                .is_some_and(|recorded| fresh_hash(&stem.path).is_ok_and(|found| found == recorded))
+        })
+    }
+}
+
+/// What identifies a file's contents cheaply: if any of these changes, the
+/// kept hash is not trusted.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Seen {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+    inode: u64,
+}
+
+fn seen(path: &Path) -> Option<Seen> {
+    let meta = std::fs::metadata(path).ok().filter(std::fs::Metadata::is_file)?;
+    #[cfg(unix)]
+    let inode = std::os::unix::fs::MetadataExt::ino(&meta);
+    #[cfg(not(unix))]
+    let inode = 0;
+    Some(Seen { len: meta.len(), modified: meta.modified().ok(), inode })
+}
+
+type Kept = std::collections::HashMap<PathBuf, (Seen, String)>;
+
+fn kept() -> std::sync::MutexGuard<'static, Kept> {
+    static KEPT: std::sync::OnceLock<std::sync::Mutex<Kept>> = std::sync::OnceLock::new();
+    KEPT.get_or_init(Default::default).lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The file's hash, from what was kept when the file is as it was then.
+fn cached_hash(path: &Path) -> Result<String> {
+    let Some(now) = seen(path) else {
+        kept().remove(path);
+        return Err(SidecarError::Invalid(format!("{} is not a file", path.display())));
+    };
+    if let Some((then, hash)) = kept().get(path) {
+        if *then == now {
+            return Ok(hash.clone());
+        }
+    }
+    fresh_hash(path)
+}
+
+/// The file's hash, read now, and kept for [`cached_hash`]. Kept only when
+/// the file did not change while it was read.
+fn fresh_hash(path: &Path) -> Result<String> {
+    let before = seen(path);
+    let hash = content_hash(path)?;
+    match (before, seen(path)) {
+        (Some(before), Some(after)) if before == after => {
+            kept().insert(path.to_path_buf(), (after, hash.clone()));
+        }
+        _ => {
+            kept().remove(path);
+        }
+    }
+    Ok(hash)
 }
 
 /// One Stem: its role and its audio file.
