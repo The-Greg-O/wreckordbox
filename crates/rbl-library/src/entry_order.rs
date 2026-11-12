@@ -36,6 +36,9 @@ pub struct Entry {
     pub track_id: String,
 }
 
+/// Entries with their numbers (`TrackNo`), as a reorder keeps them.
+pub type Numbers = [(String, i64)];
+
 /// A reorder by entry, as the edit history keeps it: every live row of the
 /// playlist with its number, before and after.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -48,8 +51,16 @@ pub struct EntryReorder {
 impl EntryReorder {
     /// Rebuilds one from its parts (a stored payload, a test).
     #[must_use]
-    pub fn from_parts(playlist: String, before: Vec<(String, i64)>, after: Vec<(String, i64)>) -> Self {
-        Self { playlist, before, after }
+    pub fn from_parts(
+        playlist: String,
+        before: Vec<(String, i64)>,
+        after: Vec<(String, i64)>,
+    ) -> Self {
+        Self {
+            playlist,
+            before,
+            after,
+        }
     }
 
     /// The reorder left every row where it was.
@@ -60,7 +71,7 @@ impl EntryReorder {
 
     /// The playlist, and every row's number before and after.
     #[must_use]
-    pub fn parts(&self) -> (&str, &[(String, i64)], &[(String, i64)]) {
+    pub fn parts(&self) -> (&str, &Numbers, &Numbers) {
         (&self.playlist, &self.before, &self.after)
     }
 }
@@ -79,7 +90,12 @@ pub fn entries(conn: &Connection, playlist: &str) -> Result<Vec<Entry>, DbError>
          WHERE PlaylistID = ?1 AND rb_local_deleted = 0 ORDER BY TrackNo, rowid",
     )?;
     let rows = stmt
-        .query_map(params![playlist], |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?)))?
+        .query_map(params![playlist], |r| {
+            Ok((
+                r.get::<_, Option<String>>(0)?,
+                r.get::<_, Option<String>>(1)?,
+            ))
+        })?
         .filter_map(|row| match row {
             Ok((Some(id), Some(track_id))) => Some(Ok(Entry { id, track_id })),
             Ok(_) => None,
@@ -98,12 +114,18 @@ pub fn entries(conn: &Connection, playlist: &str) -> Result<Vec<Entry>, DbError>
 /// # Errors
 /// Not a plain playlist, a stale order, rekordbox holding a real install,
 /// or a failed write.
-pub fn reorder(writer: &mut rbl_db::write::Writer, playlist: &str, order: &[String]) -> Result<EntryReorder, DbError> {
+pub fn reorder(
+    writer: &mut rbl_db::write::Writer,
+    playlist: &str,
+    order: &[String],
+) -> Result<EntryReorder, DbError> {
     refuse_while_rekordbox_runs(writer)?;
     let conn = writer.library().connection();
     let tx = Immediate::begin(conn)?;
     if !is_plain_playlist(conn, playlist)? {
-        return Err(DbError::WriteRefused("only a playlist's own entries can be put in order".into()));
+        return Err(DbError::WriteRefused(
+            "only a playlist's own entries can be put in order".into(),
+        ));
     }
     let before = numbered(conn, playlist)?;
     let mut named: Vec<&str> = order.iter().map(String::as_str).collect();
@@ -111,7 +133,9 @@ pub fn reorder(writer: &mut rbl_db::write::Writer, playlist: &str, order: &[Stri
     named.sort_unstable();
     live.sort_unstable();
     if named != live {
-        return Err(DbError::Conflict("the playlist's tracks have changed since".into()));
+        return Err(DbError::Conflict(
+            "the playlist's tracks have changed since".into(),
+        ));
     }
     let after: Vec<(String, i64)> = order
         .iter()
@@ -122,7 +146,11 @@ pub fn reorder(writer: &mut rbl_db::write::Writer, playlist: &str, order: &[Stri
     tx.commit()?;
     let mut sorted_after = after;
     sorted_after.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
-    Ok(EntryReorder { playlist: playlist.to_owned(), before, after: sorted_after })
+    Ok(EntryReorder {
+        playlist: playlist.to_owned(),
+        before,
+        after: sorted_after,
+    })
 }
 
 /// Undoes (`undo`) or redoes a reorder: refused with nothing written unless
@@ -130,13 +158,23 @@ pub fn reorder(writer: &mut rbl_db::write::Writer, playlist: &str, order: &[Stri
 ///
 /// # Errors
 /// [`DbError::Conflict`] when the playlist changed since; a failed write.
-pub fn step(writer: &mut rbl_db::write::Writer, edit: &EntryReorder, undo: bool) -> Result<(), DbError> {
+pub fn step(
+    writer: &mut rbl_db::write::Writer,
+    edit: &EntryReorder,
+    undo: bool,
+) -> Result<(), DbError> {
     refuse_while_rekordbox_runs(writer)?;
-    let (expected, target) = if undo { (&edit.after, &edit.before) } else { (&edit.before, &edit.after) };
+    let (expected, target) = if undo {
+        (&edit.after, &edit.before)
+    } else {
+        (&edit.before, &edit.after)
+    };
     let conn = writer.library().connection();
     let tx = Immediate::begin(conn)?;
     if &numbered(conn, &edit.playlist)? != expected {
-        return Err(DbError::Conflict("the playlist's tracks have changed since".into()));
+        return Err(DbError::Conflict(
+            "the playlist's tracks have changed since".into(),
+        ));
     }
     write_numbers(conn, &edit.playlist, expected, target)?;
     tx.commit()?;
@@ -158,8 +196,14 @@ fn numbered(conn: &Connection, playlist: &str) -> Result<Vec<(String, i64)>, DbE
 
 /// Writes `target`'s numbers over `current`'s; only rows whose number moves
 /// are written, each with its own fresh USN.
-fn write_numbers(conn: &Connection, playlist: &str, current: &[(String, i64)], target: &[(String, i64)]) -> Result<(), DbError> {
-    let now: std::collections::HashMap<&str, i64> = current.iter().map(|(id, no)| (id.as_str(), *no)).collect();
+fn write_numbers(
+    conn: &Connection,
+    playlist: &str,
+    current: &[(String, i64)],
+    target: &[(String, i64)],
+) -> Result<(), DbError> {
+    let now: std::collections::HashMap<&str, i64> =
+        current.iter().map(|(id, no)| (id.as_str(), *no)).collect();
     let stamp = rbl_core::time::now();
     let mut usn = next_usn(conn)? - 1;
     let mut rows = 0;
@@ -180,7 +224,9 @@ fn write_numbers(conn: &Connection, playlist: &str, current: &[(String, i64)], t
             params![usn, stamp],
         )?;
         if counted != 1 {
-            return Err(DbError::WriteRefused("missing or duplicate local update counter".into()));
+            return Err(DbError::WriteRefused(
+                "missing or duplicate local update counter".into(),
+            ));
         }
     }
     Ok(())
@@ -203,13 +249,21 @@ fn next_usn(conn: &Connection) -> Result<i64, DbError> {
         "SELECT m.name FROM sqlite_master m JOIN pragma_table_info(m.name) c
          WHERE m.type = 'table' AND c.name = 'rb_local_usn'",
     )?;
-    let names = tables.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let names = tables
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut highest = counter;
     for table in names {
-        let max: i64 = conn.query_row(&format!("SELECT COALESCE(MAX(rb_local_usn), 0) FROM \"{table}\""), [], |r| r.get(0))?;
+        let max: i64 = conn.query_row(
+            &format!("SELECT COALESCE(MAX(rb_local_usn), 0) FROM \"{table}\""),
+            [],
+            |r| r.get(0),
+        )?;
         highest = highest.max(max);
     }
-    highest.checked_add(1).ok_or_else(|| DbError::WriteRefused("local update counter overflow".into()))
+    highest
+        .checked_add(1)
+        .ok_or_else(|| DbError::WriteRefused("local update counter overflow".into()))
 }
 
 fn is_plain_playlist(conn: &Connection, playlist: &str) -> Result<bool, DbError> {
@@ -226,7 +280,9 @@ fn is_plain_playlist(conn: &Connection, playlist: &str) -> Result<bool, DbError>
 
 fn refuse_while_rekordbox_runs(writer: &rbl_db::write::Writer) -> Result<(), DbError> {
     if writer.library().location().is_real_install && rbl_db::is_rekordbox_running() {
-        return Err(DbError::WriteRefused("rekordbox is running. Quit it before making changes.".to_owned()));
+        return Err(DbError::WriteRefused(
+            "rekordbox is running. Quit it before making changes.".to_owned(),
+        ));
     }
     Ok(())
 }

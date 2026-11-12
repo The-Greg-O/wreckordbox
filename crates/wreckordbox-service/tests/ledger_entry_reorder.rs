@@ -1,6 +1,6 @@
 //! A reorder by playlist entry (wbx-59) is stored in the Ledger with its
 //! entries and their numbers, and comes back from the stored form whole.
-#![allow(clippy::unwrap_used)]
+#![allow(clippy::unwrap_used, clippy::panic)]
 
 use rbl_library::entry_order::EntryReorder;
 use rbl_library::history::LibraryEdit;
@@ -11,8 +11,16 @@ use wreckordbox_service::ledger::stored;
 fn an_entry_reorder_is_stored_by_entry_and_restored_whole() {
     let reorder = EntryReorder::from_parts(
         "900001".into(),
-        vec![("entry-a".into(), 1), ("entry-b".into(), 2), ("entry-c".into(), 3)],
-        vec![("entry-c".into(), 1), ("entry-a".into(), 2), ("entry-b".into(), 3)],
+        vec![
+            ("entry-a".into(), 1),
+            ("entry-b".into(), 2),
+            ("entry-c".into(), 3),
+        ],
+        vec![
+            ("entry-c".into(), 1),
+            ("entry-a".into(), 2),
+            ("entry-b".into(), 3),
+        ],
     );
     let edit = LibraryEdit::ReorderEntries(reorder.clone());
     assert_eq!(stored::kind_of(&edit), "reorder_playlist_entries");

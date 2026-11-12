@@ -30,7 +30,10 @@ pub struct PlaylistEntryDto {
 /// out, as the list leaves it out. Read under the edit gate, so no edit
 /// lands between the index and the rows. Any other id answers none.
 #[tauri::command]
-pub async fn playlist_entries(state: State<'_, Arc<AppState>>, playlist: String) -> AppResult<Vec<PlaylistEntryDto>> {
+pub async fn playlist_entries(
+    state: State<'_, Arc<AppState>>,
+    playlist: String,
+) -> AppResult<Vec<PlaylistEntryDto>> {
     let state = Arc::clone(&state);
     blocking("playlist_entries", move || {
         let _gate = state.edit_gate().lock();
@@ -41,7 +44,10 @@ pub async fn playlist_entries(state: State<'_, Arc<AppState>>, playlist: String)
         Ok(entries
             .into_iter()
             .filter(|entry| library.row_of(&entry.track_id).is_some())
-            .map(|entry| PlaylistEntryDto { entry_id: entry.id, track_id: entry.track_id })
+            .map(|entry| PlaylistEntryDto {
+                entry_id: entry.id,
+                track_id: entry.track_id,
+            })
             .collect())
     })
     .await
@@ -57,9 +63,17 @@ pub async fn reorder_playlist_entries<R: tauri::Runtime>(
     playlist: String,
     entries: Vec<String>,
 ) -> AppResult<u32> {
-    recorded_edit(app, state, "reorder_playlist_entries", Touched::Playlists, "Reorder Playlist", move |w| {
-        rbl_library::entry_order::reorder(w, &playlist, &entries).map(LibraryEdit::ReorderEntries)
-    })
+    recorded_edit(
+        app,
+        state,
+        "reorder_playlist_entries",
+        Touched::Playlists,
+        "Reorder Playlist",
+        move |w| {
+            rbl_library::entry_order::reorder(w, &playlist, &entries)
+                .map(LibraryEdit::ReorderEntries)
+        },
+    )
     .await
     .map(|dto| dto.generation)
 }
