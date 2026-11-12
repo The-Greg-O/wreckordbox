@@ -514,33 +514,79 @@ impl Sources {
     /// The theme as these sources give it now.
     #[must_use]
     pub fn read(&self) -> Theme {
-        let file = self.theme_file.as_deref().and_then(crate::theme_file::read);
-        if let (Some(file), Some(path)) = (&file, &self.theme_file) {
-            for problem in &file.problems {
-                tracing::warn!(file = %path.display(), line = problem.line, "theme file: {}", problem.message);
-            }
-        }
-        let omarchy = self.colors.as_deref().and_then(palette_text);
-        layered(omarchy.as_deref(), file.as_ref(), system_monospace_font)
+        self.read_following().0
     }
 
-    /// The folders whose entries change on a switch. They need not exist.
-    fn folders(&self) -> Vec<PathBuf> {
-        // The folder the colour file is in, for a file rewritten where it
-        // is; and for an Omarchy theme also the folder holding that one,
-        // where a switch removes the theme folder and puts another in.
-        let theme = self.colors.as_deref().and_then(Path::parent);
-        let holding = theme
-            .filter(|_| self.theme_folder_is_replaced)
-            .and_then(Path::parent);
-        holding
-            .into_iter()
-            .chain(theme)
-            .chain(self.font_folder.as_deref())
-            .chain(self.theme_file.as_deref().and_then(Path::parent))
-            .filter(|folder| folder.is_absolute())
-            .map(Path::to_path_buf)
-            .collect()
+    /// The theme, and whether it follows the Omarchy theme (the theme
+    /// file's `follow`). Under `follow = "none"` neither the Omarchy palette
+    /// nor the system font is read.
+    fn read_following(&self) -> (Theme, bool) {
+        let file = self.theme_file.as_deref().and_then(crate::theme_file::read);
+        let follows = file.as_ref().is_none_or(|file| file.follow == Follow::Omarchy);
+        let omarchy = self
+            .colors
+            .as_deref()
+            .filter(|_| follows)
+            .and_then(palette_text);
+        let theme = layered(omarchy.as_deref(), file.as_ref(), system_monospace_font);
+        (theme, follows)
+    }
+
+    /// What to watch for a change of the theme. While the look follows
+    /// Omarchy: the folders an Omarchy switch or `omarchy font set` writes
+    /// into, whole. Always: the theme file, by name, in its folder, and, if
+    /// it is a link (a dotfiles repository), the file it leads to, by name,
+    /// in that file's folder. None of them need exist.
+    #[must_use]
+    pub fn watches(&self, follows: bool) -> Vec<Watch> {
+        let whole = |folder: &Path| Watch {
+            folder: folder.to_path_buf(),
+            entry: None,
+        };
+        let named = |file: &Path| {
+            Some(Watch {
+                folder: file.parent()?.to_path_buf(),
+                entry: Some(file.file_name()?.to_os_string()),
+            })
+        };
+        let mut watches = Vec::new();
+        if follows {
+            // The folder the colour file is in, for a file rewritten where
+            // it is; and for an Omarchy theme also the folder holding that
+            // one, where a switch removes the theme folder and puts another
+            // in.
+            let theme = self.colors.as_deref().and_then(Path::parent);
+            let holding = theme
+                .filter(|_| self.theme_folder_is_replaced)
+                .and_then(Path::parent);
+            watches.extend(holding.into_iter().chain(theme).chain(self.font_folder.as_deref()).map(whole));
+        }
+        if let Some(file) = self.theme_file.as_deref() {
+            watches.extend(named(file));
+            let target = std::fs::canonicalize(file).ok().filter(|target| {
+                file.parent().and_then(|folder| std::fs::canonicalize(folder).ok())
+                    != target.parent().map(Path::to_path_buf)
+            });
+            watches.extend(target.as_deref().and_then(named));
+        }
+        watches.retain(|watch| watch.folder.is_absolute());
+        watches
+    }
+}
+
+/// One thing the theme watcher waits on: a folder, whole or for one entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Watch {
+    pub folder: PathBuf,
+    /// The one entry of `folder` that matters; `None` for all of them.
+    pub entry: Option<std::ffi::OsString>,
+}
+
+/// Writes the theme file's mistakes to the log.
+fn log_problems(sources: &Sources, theme: &Theme) {
+    let file = sources.theme_file.as_deref().unwrap_or(Path::new(""));
+    for problem in &theme.problems {
+        tracing::warn!(file = %file.display(), line = problem.line, "theme file: {}", problem.message);
     }
 }
 
@@ -577,9 +623,13 @@ pub fn follow_sources<R: tauri::Runtime>(app: &tauri::AppHandle<R>, sources: Sou
             .name("theme-watch".into())
             .spawn(move || {
                 watch::run(
-                    &sources.folders(),
-                    || sources.read(),
-                    |theme| {
+                    |follows| sources.watches(follows),
+                    || sources.read_following(),
+                    |theme, announce| {
+                        log_problems(&sources, theme);
+                        if !announce {
+                            return;
+                        }
                         tracing::info!(themed = theme.roles.is_some(), font = ?theme.font, "theme changed");
                         let _ = tauri::Emitter::emit(&app, CHANGED_EVENT, theme);
                     },
@@ -602,14 +652,14 @@ mod watch {
 
     use inotify::{Event, EventMask, Inotify, WatchDescriptor, WatchMask};
 
-    use super::Theme;
+    use super::{Theme, Watch};
 
     /// A switch is several writes over a moment; read once they stop.
     const SETTLE: Duration = Duration::from_millis(250);
 
     /// One mask for every watch: a folder can be watched both for itself and
     /// as the nearest existing folder above another, and inotify keeps one
-    /// mask per folder.
+    /// mask per folder. `ATTRIB`: a file or folder made readable again.
     fn mask() -> WatchMask {
         WatchMask::CREATE
             | WatchMask::CLOSE_WRITE
@@ -618,6 +668,7 @@ mod watch {
             | WatchMask::DELETE
             | WatchMask::DELETE_SELF
             | WatchMask::MOVE_SELF
+            | WatchMask::ATTRIB
     }
 
     /// What a watched folder is watched for.
@@ -625,8 +676,8 @@ mod watch {
     struct Interest {
         /// Anything in it: it is one of the folders a switch writes into.
         everything: bool,
-        /// Entries of these names: the next step down to a folder that does
-        /// not exist yet.
+        /// Entries of these names: a file that matters, or the next step
+        /// down to a folder that does not exist yet.
         names: Vec<OsString>,
     }
 
@@ -641,47 +692,66 @@ mod watch {
             Some(self.interests.entry(watch).or_default())
         }
 
-        /// Watches `folder`, or while it does not exist the nearest folder
-        /// above it that does, for the entry that leads down to it.
-        fn reach(&mut self, folder: &Path) {
-            // Each pass watches one level; a path is not deeper than this.
+        fn want(&mut self, folder: &Path, name: &OsString) -> bool {
+            let Some(interest) = self.interest(folder) else {
+                return false;
+            };
+            if !interest.names.contains(name) {
+                interest.names.push(name.clone());
+            }
+            true
+        }
+
+        /// Watches `watch.folder` for what `watch` asks, or while it does
+        /// not exist (or cannot be watched: no permission) the nearest
+        /// folder above it that can be, for the entry that leads down to it.
+        fn reach(&mut self, watch: &Watch) {
+            let mut folder = watch.folder.clone();
+            // Each pass goes one level down; a path is not deeper than this.
             for _ in 0..64 {
                 if folder.is_dir() {
-                    if let Some(interest) = self.interest(folder) {
-                        interest.everything = true;
+                    let watched = match &watch.entry {
+                        None => self.interest(&folder).map(|interest| interest.everything = true).is_some(),
+                        Some(name) => self.want(&folder, name),
+                    };
+                    if watched {
                         return;
                     }
+                    // There, but not to be watched: wait in the folder above
+                    // for it to change.
+                    if let (Some(above), Some(name)) = (folder.parent(), folder.file_name()) {
+                        self.want(above, &name.to_os_string());
+                    }
+                    return;
                 }
-                let Some((above, name)) = nearest_existing(folder) else {
+                let Some((above, name)) = nearest_existing(&folder) else {
                     return;
                 };
-                let Some(interest) = self.interest(&above) else {
+                if !self.want(&above, &name) {
                     return;
-                };
-                if !interest.names.contains(&name) {
-                    interest.names.push(name.clone());
                 }
                 // It may have appeared between the look and the watch; if
                 // so go round again and step down into it.
                 if !above.join(&name).is_dir() {
                     return;
                 }
+                folder.clone_from(&watch.folder);
             }
         }
 
         /// Starts again from nothing: folders come and go, and a watch on a
         /// removed folder is dead.
-        fn register(&mut self, folders: &[PathBuf]) {
+        fn register(&mut self, watches: &[Watch]) {
             for (watch, _) in self.interests.drain() {
                 let _ = self.inotify.watches().remove(watch);
             }
-            for folder in folders {
-                self.reach(folder);
+            for watch in watches {
+                self.reach(watch);
             }
         }
 
-        /// Whether `event` could mean a switch. An event for a watch that
-        /// has since been dropped is not one.
+        /// Whether `event` could mean a change of the theme. An event for a
+        /// watch that has since been dropped is not one.
         fn concerns(&self, event: &Event<&std::ffi::OsStr>) -> bool {
             let Some(interest) = self.interests.get(&event.wd) else {
                 return false;
@@ -689,6 +759,8 @@ mod watch {
             let gone = EventMask::DELETE_SELF | EventMask::MOVE_SELF | EventMask::IGNORED;
             interest.everything
                 || event.mask.intersects(gone)
+                // About the watched folder itself: its permissions changed.
+                || event.name.is_none()
                 || event
                     .name
                     .is_some_and(|name| interest.names.iter().any(|wanted| wanted == name))
@@ -708,19 +780,42 @@ mod watch {
         }
     }
 
-    /// Calls `tell` with the theme each time what `read` returns changes
-    /// after something happened in `folders`. Returns only if inotify fails.
-    pub(super) fn run(folders: &[PathBuf], read: impl Fn() -> Theme, mut tell: impl FnMut(&Theme)) {
-        if folders.is_empty() {
-            return;
+    /// Watches what `plan` names for the look's current `follow`, then
+    /// reads; if the read finds `follow` changed, plans and reads again.
+    /// Watch first, read second: a write that lands after the read is then
+    /// already watched for.
+    fn refresh(
+        watches: &mut Watches,
+        plan: &impl Fn(bool) -> Vec<Watch>,
+        read: &impl Fn() -> (Theme, bool),
+        mut follows: bool,
+    ) -> (Theme, bool) {
+        for _ in 0..3 {
+            watches.register(&plan(follows));
+            let (theme, now) = read();
+            if now == follows {
+                return (theme, now);
+            }
+            follows = now;
         }
+        read()
+    }
+
+    /// Calls `tell` with the theme each time what `read` returns changes
+    /// after something happened in what `plan` names, with `true`; once at
+    /// the start with `false`. Returns only if inotify fails.
+    pub(super) fn run(
+        plan: impl Fn(bool) -> Vec<Watch>,
+        read: impl Fn() -> (Theme, bool),
+        mut tell: impl FnMut(&Theme, bool),
+    ) {
         let Ok(inotify) = Inotify::init() else { return };
         let mut watches = Watches {
             inotify,
             interests: HashMap::new(),
         };
-        watches.register(folders);
-        let mut shown = read();
+        let (mut shown, mut follows) = refresh(&mut watches, &plan, &read, true);
+        tell(&shown, false);
         let mut buffer = [0_u8; 4096];
         loop {
             if watches.interests.is_empty() {
@@ -744,12 +839,10 @@ mod watch {
                     break;
                 }
             }
-            // Watch first, read second: a write that lands after the read is
-            // then already watched for.
-            watches.register(folders);
-            let now = read();
+            let now;
+            (now, follows) = refresh(&mut watches, &plan, &read, follows);
             if now != shown {
-                tell(&now);
+                tell(&now, true);
                 shown = now;
             }
         }

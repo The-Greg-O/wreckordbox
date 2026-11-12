@@ -15,7 +15,9 @@ use std::path::Path;
 use std::sync::mpsc::{channel, Receiver};
 use std::time::Duration;
 
-use rbxport_lib::omarchy_theme::{follow, follow_sources, Sources, CHANGED_EVENT, COLORS_FILE_ENV};
+use rbxport_lib::omarchy_theme::{
+    follow, follow_sources, Sources, Watch, CHANGED_EVENT, COLORS_FILE_ENV,
+};
 use rbxport_lib::theme_file::THEME_FILE_ENV;
 use tauri::Listener;
 
@@ -187,4 +189,130 @@ fn the_override_variable_names_the_theme_file_the_app_follows() {
     assert_eq!(theme["interfaceFontSize"], 14.0);
     assert_eq!(theme["font"], "DejaVu Sans");
     assert_eq!(accent(&theme), Some("#7aa2f7"));
+}
+
+#[test]
+fn a_theme_file_linked_into_a_dotfiles_folder_follows_saves_of_its_target() {
+    let root = tempfile::tempdir().unwrap();
+    let sources = sources(root.path(), "#7aa2f7");
+    let link = sources.theme_file.clone().unwrap();
+    let dotfiles = root.path().join("dotfiles/wreckordbox");
+    std::fs::create_dir_all(&dotfiles).unwrap();
+    std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+    let target = dotfiles.join("theme.toml");
+    std::fs::write(&target, "accent = \"#ff8800\"\n").unwrap();
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    let app = tauri::test::mock_app();
+    let themes = announced(&app);
+    follow_sources(app.handle(), sources);
+    started();
+
+    // Saved in place, in the dotfiles folder.
+    std::fs::write(&target, "accent = \"#00cc66\"\n").unwrap();
+    assert_eq!(accent(&next(&themes)), Some("#00cc66"));
+
+    // Saved as editors do, a new file renamed over the target.
+    let swap = dotfiles.join(".theme.toml.swp");
+    std::fs::write(&swap, "accent = \"#cc00cc\"\n").unwrap();
+    std::fs::rename(&swap, &target).unwrap();
+    assert_eq!(accent(&next(&themes)), Some("#cc00cc"));
+
+    // The link pointed at another file, and that file then saved.
+    let other = root.path().join("dotfiles/other.toml");
+    std::fs::write(&other, "accent = \"#123456\"\n").unwrap();
+    std::fs::remove_file(&link).unwrap();
+    std::os::unix::fs::symlink(&other, &link).unwrap();
+    assert_eq!(accent(&next(&themes)), Some("#123456"));
+    std::fs::write(&other, "accent = \"#654321\"\n").unwrap();
+    assert_eq!(accent(&next(&themes)), Some("#654321"));
+}
+
+/// Sets `path`'s permission bits.
+fn chmod(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+}
+
+#[test]
+fn a_file_that_may_not_be_read_is_reported_and_reloaded_when_it_may_again() {
+    let root = tempfile::tempdir().unwrap();
+    let sources = sources(root.path(), "#7aa2f7");
+    let file = sources.theme_file.clone().unwrap();
+    let folder = file.parent().unwrap().to_path_buf();
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(&file, "accent = \"#ff8800\"\n").unwrap();
+    chmod(&file, 0o000);
+    if std::fs::read(&file).is_ok() {
+        chmod(&file, 0o644);
+        return; // Permissions do not stop this user (root): nothing to test.
+    }
+    chmod(&file, 0o644);
+    let app = tauri::test::mock_app();
+    let themes = announced(&app);
+    follow_sources(app.handle(), sources);
+    started();
+
+    chmod(&file, 0o000);
+    let theme = next(&themes);
+    assert_eq!(accent(&theme), Some("#7aa2f7"));
+    assert!(
+        theme["problems"][0]["message"].as_str().unwrap().contains("ermission"),
+        "{theme}"
+    );
+    chmod(&file, 0o644);
+    let theme = next(&themes);
+    assert_eq!(accent(&theme), Some("#ff8800"));
+    assert_eq!(theme["problems"], serde_json::json!([]));
+
+    // The folder itself closed and opened again.
+    chmod(&folder, 0o000);
+    let theme = next(&themes);
+    assert_eq!(accent(&theme), Some("#7aa2f7"));
+    chmod(&folder, 0o755);
+    assert_eq!(accent(&next(&themes)), Some("#ff8800"));
+}
+
+#[test]
+fn only_the_theme_file_is_watched_in_its_folder_and_omarchy_not_at_all_under_follow_none() {
+    let root = tempfile::tempdir().unwrap();
+    let sources = sources(root.path(), "#7aa2f7");
+    let file = sources.theme_file.clone().unwrap();
+    let folder = file.parent().unwrap().to_path_buf();
+    let entry = |name: &str| Some(std::ffi::OsString::from(name));
+    // Following Omarchy: its folders whole, and the theme file by name.
+    let following = sources.watches(true);
+    assert!(following.contains(&Watch {
+        folder: folder.clone(),
+        entry: entry("theme.toml"),
+    }));
+    assert!(following.iter().any(|watch| watch.folder == root.path().join("state/current") && watch.entry.is_none()));
+    // Under follow = "none": only the theme file.
+    assert_eq!(
+        sources.watches(false),
+        [Watch {
+            folder,
+            entry: entry("theme.toml"),
+        }]
+    );
+}
+
+#[test]
+fn other_files_beside_the_theme_file_are_not_followed() {
+    let root = tempfile::tempdir().unwrap();
+    let sources = sources(root.path(), "#7aa2f7");
+    let file = sources.theme_file.clone().unwrap();
+    let folder = file.parent().unwrap().to_path_buf();
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(&file, "follow = \"none\"\nacent = \"#00ff00\"\n").unwrap();
+    let app = tauri::test::mock_app();
+    let themes = announced(&app);
+    follow_sources(app.handle(), sources);
+    started();
+    // Nothing to announce: another file in the folder, and an Omarchy switch
+    // while not following it.
+    std::fs::write(folder.join("notes.txt"), "hello").unwrap();
+    std::fs::write(root.path().join("state/current/theme/colors.toml"), palette("#b9f24b")).unwrap();
+    assert!(themes.recv_timeout(Duration::from_secs(2)).is_err());
+    std::fs::write(&file, "follow = \"none\"\n").unwrap();
+    assert_eq!(next(&themes)["problems"], serde_json::json!([]));
 }
