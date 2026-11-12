@@ -269,3 +269,127 @@ fn an_edit_queued_behind_the_gate_is_refused_when_protection_was_turned_on_first
     assert!(refused(&queued.join().unwrap()));
     assert_eq!(rating_of(&core, &track), 0);
 }
+
+/// Review B: first-use adoption decides "nothing was ever recorded" under
+/// the file lock, immediately before it writes. Another process that holds
+/// the lock and records "on" while the adoption waits for it keeps the
+/// last word.
+#[test]
+fn first_use_adoption_never_overwrites_a_turn_recorded_while_it_waited_for_the_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = Arc::new(core_in(dir.path()));
+    let state_dir = dir.path().join("recovery");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    assert_eq!(core.protection().recorded, Recorded::Never);
+    // Another process is part-way through a turn: it holds the lock.
+    let other = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(state_dir.join(protection::LOCK_FILE))
+        .unwrap();
+    other.lock().unwrap();
+
+    let adopting = {
+        let core = Arc::clone(&core);
+        std::thread::spawn(move || core.adopt_protection(false))
+    };
+    // The adoption has found nothing recorded and waits for the lock.
+    std::thread::sleep(Duration::from_millis(300));
+    // The other process records "on" and lets go.
+    std::fs::write(protection::file(&state_dir), br#"{"protect_library":true,"revision":7}"#).unwrap();
+    other.unlock().unwrap();
+
+    let adopted = adopting.join().unwrap().unwrap();
+    assert!(adopted.protect_library);
+    let recorded = protection::read(&state_dir);
+    assert!(recorded.protect_library);
+    assert_eq!(recorded.revision, 7);
+    assert!(core.protection().protect_library);
+}
+
+/// Review D: a core keeps the highest revision it has ever seen, read or
+/// written, and a turn after the record was damaged goes beyond it, so a
+/// window that already shows that revision does not drop the turn as stale.
+#[test]
+fn a_restarted_core_turns_beyond_the_revision_it_read_after_the_record_is_damaged() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = dir.path().join("recovery");
+    for _ in 0..20 {
+        protection::store(&state_dir, true).unwrap();
+    }
+    // The app again: it has only read the record.
+    let core = core_in(dir.path());
+    assert_eq!(core.protection().revision, 20);
+    std::fs::write(protection::file(&state_dir), b"{damaged").unwrap();
+    let damaged = core.protection();
+    assert!(damaged.protect_library);
+    assert_eq!(damaged.recorded, Recorded::Unreadable);
+    assert!(damaged.revision >= 20, "{damaged:?}");
+
+    let turned = core.set_protection(false).unwrap();
+
+    assert!(turned.now.revision > 20, "{turned:?}");
+    assert_eq!(protection::read(&state_dir).revision, turned.now.revision);
+    assert!(!core.protection().protect_library);
+}
+
+/// Review D, across processes: a core that never read the record before it
+/// was damaged still turns beyond every revision any writer gave out.
+#[test]
+fn a_core_that_never_read_the_record_still_turns_beyond_every_revision_given_out() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = dir.path().join("recovery");
+    for _ in 0..20 {
+        protection::store(&state_dir, true).unwrap();
+    }
+    std::fs::write(protection::file(&state_dir), b"{damaged").unwrap();
+    let core = core_in(dir.path());
+
+    let turned = core.set_protection(false).unwrap();
+
+    assert!(turned.now.revision > 20, "{turned:?}");
+}
+
+/// Review A: the one guarded start of an edit that writes the Library's
+/// files. It is refused before anything is written while protection is
+/// on, and it holds the edit gate while it runs, so protection cannot be
+/// turned on half-way through.
+#[test]
+fn a_file_edit_is_refused_while_protection_is_on_and_holds_the_gate_while_it_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = Arc::new(core_in(dir.path()));
+    core.set_protection(true).unwrap();
+
+    let refusal = core.file_edit().map(|_| ()).unwrap_err();
+    assert!(protection::refused(&refusal), "{refusal:?}");
+
+    core.set_protection(false).unwrap();
+    let edit = core.file_edit().unwrap();
+    let turning = {
+        let core = Arc::clone(&core);
+        std::thread::spawn(move || core.set_protection(true))
+    };
+    std::thread::sleep(Duration::from_millis(200));
+    // The turn waits for the edit, and the edit still holds the files' lock.
+    assert!(!core.protection().protect_library);
+    assert!(core.analysis_write().try_lock().is_none());
+    drop(edit);
+    turning.join().unwrap().unwrap();
+    assert!(core.protection().protect_library);
+    assert!(core.analysis_write().try_lock().is_some());
+}
+
+/// A file edit is refused, as every write is, by a holder that is not the
+/// Library's writer.
+#[test]
+fn a_file_edit_is_refused_by_a_core_that_is_not_the_writer() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = core_in(dir.path());
+    core.set_protection(false).unwrap();
+    core.refuse_writes(Some("not the writer".to_owned()));
+
+    let refusal = core.file_edit().map(|_| ()).unwrap_err();
+
+    assert!(matches!(refusal, rbl_db::DbError::WriteRefused(ref why) if why == "not the writer"), "{refusal:?}");
+}

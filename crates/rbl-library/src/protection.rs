@@ -127,9 +127,11 @@ pub fn refused(error: &rbl_db::DbError) -> bool {
 /// test, or a tool with no Library loaded. Takes its turn with every other
 /// writer, as [`LibraryCore::set_protection`] does.
 pub fn store(state_dir: &Path, protect_library: bool) -> std::io::Result<ProtectionState> {
-    let _turn = Turn::take(state_dir)?;
-    let revision = read(state_dir).revision + 1;
-    write(state_dir, protect_library, revision)
+    let turn = Turn::take(state_dir)?;
+    let revision = read(state_dir).revision.max(turn.highest()) + 1;
+    let now = write(state_dir, protect_library, revision)?;
+    turn.keep_highest(revision);
+    Ok(now)
 }
 
 /// The switch as a core holds it: the highest revision this process has
@@ -142,6 +144,8 @@ pub(crate) struct Switch {
 
 #[derive(Default)]
 struct Held {
+    /// The highest revision this core has seen, read or written: a later
+    /// turn goes beyond it even if the file has since been damaged.
     highest: u64,
     /// Turned on, not recorded: on until a change is.
     unsaved_on: bool,
@@ -158,9 +162,10 @@ impl Switch {
         }
     }
 
-    fn current_with(&self, held: &Held) -> ProtectionState {
+    fn current_with(&self, held: &mut Held) -> ProtectionState {
         let mut state = read(&self.dir);
-        state.revision = state.revision.max(held.highest);
+        held.highest = held.highest.max(state.revision);
+        state.revision = held.highest;
         if held.unsaved_on {
             state.protect_library = true;
             state.recorded = Recorded::Unsaved;
@@ -169,7 +174,7 @@ impl Switch {
     }
 
     pub(crate) fn current(&self) -> ProtectionState {
-        self.current_with(&self.held.lock())
+        self.current_with(&mut self.held.lock())
     }
 
     fn tell(&self, state: ProtectionState) {
@@ -177,38 +182,44 @@ impl Switch {
     }
 
     /// Records `on`; with `only_if_never`, only when nothing has ever been
-    /// recorded. Call under the core's edit gate.
+    /// recorded, decided under the file lock immediately before writing.
+    /// Call under the core's edit gate.
     fn turn(&self, on: bool, only_if_never: bool) -> std::io::Result<Turned> {
         let mut held = self.held.lock();
-        let before = self.current_with(&held);
+        let before = self.current_with(&mut held);
+        let unchanged = |now: ProtectionState| Turned {
+            previous: now.protect_library,
+            now,
+        };
         if only_if_never && before.recorded != Recorded::Never {
-            return Ok(Turned {
-                previous: before.protect_library,
-                now: before,
-            });
+            return Ok(unchanged(before));
         }
-        let revision = before.revision + 1;
-        let written = Turn::take(&self.dir).and_then(|_turn| {
-            // Another process may have written since `before` was read.
-            let revision = revision.max(read(&self.dir).revision + 1);
-            write(&self.dir, on, revision)
+        let written = Turn::take(&self.dir).and_then(|turn| {
+            // Read again under the lock: another process may have written
+            // since `before` was read.
+            let standing = self.current_with(&mut held);
+            if only_if_never && standing.recorded != Recorded::Never {
+                return Ok(Err(standing));
+            }
+            let revision = standing.revision.max(turn.highest()) + 1;
+            let now = write(&self.dir, on, revision)?;
+            turn.keep_highest(revision);
+            Ok(Ok((standing.protect_library, now)))
         });
         match written {
-            Ok(now) => {
-                held.highest = now.revision;
+            Ok(Err(standing)) => Ok(unchanged(standing)),
+            Ok(Ok((previous, now))) => {
+                held.highest = held.highest.max(now.revision);
                 held.unsaved_on = false;
                 self.tell(now);
-                Ok(Turned {
-                    previous: before.protect_library,
-                    now,
-                })
+                Ok(Turned { previous, now })
             }
             Err(error) => {
                 if on && !before.protect_library {
                     // Asked for on and could not record it: on here anyway.
-                    held.highest = revision;
+                    held.highest += 1;
                     held.unsaved_on = true;
-                    let now = self.current_with(&held);
+                    let now = self.current_with(&mut held);
                     self.tell(now);
                 }
                 Err(error)
@@ -226,10 +237,40 @@ impl Turn {
         let lock = std::fs::OpenOptions::new()
             .create(true)
             .truncate(false)
+            .read(true)
             .write(true)
             .open(dir.join(LOCK_FILE))?;
         lock.lock()?;
         Ok(Self(lock))
+    }
+
+    /// The highest revision any writer has given out, as kept in the lock
+    /// file beside the record; 0 when it says nothing. Survives damage to
+    /// the record itself, so a turn after it still goes beyond every
+    /// revision a window may be showing.
+    fn highest(&self) -> u64 {
+        use std::io::{Read as _, Seek as _};
+        let mut text = String::new();
+        let mut file = &self.0;
+        if file.rewind().and_then(|()| file.read_to_string(&mut text)).is_err() {
+            return 0;
+        }
+        text.trim().parse().unwrap_or(0)
+    }
+
+    /// Keeps `revision` as the highest given out. Best effort: the record
+    /// itself is already written.
+    fn keep_highest(&self, revision: u64) {
+        use std::io::Seek as _;
+        let mut file = &self.0;
+        let kept = file
+            .set_len(0)
+            .and_then(|()| file.rewind())
+            .and_then(|()| file.write_all(revision.to_string().as_bytes()))
+            .and_then(|()| file.sync_data());
+        if let Err(error) = kept {
+            tracing::warn!(%error, "the highest Library Protection revision could not be kept beside the record");
+        }
     }
 }
 
