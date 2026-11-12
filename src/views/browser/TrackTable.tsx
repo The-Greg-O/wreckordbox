@@ -6,14 +6,14 @@
  * tokens. Rows are virtualized and keyed by row id so a re-sort moves DOM nodes
  * instead of rewriting every cell.
  */
-import { useFontScales } from "@/lib/themeRoles";
+import { shownTheme, subscribeShownTheme, useFontScales } from "@/lib/themeRoles";
 import { dragTracksToDesktop, getBackend, nativeTrackDragging } from "@/ipc/client";
 import { SearchField } from "@/components/SearchField";
 import { reportStartupPaint } from "@/lib/startup";
 import { useEventCallback } from "@/store/useEventCallback";
 import { TRACK_SEARCH_OPTIONS, type TrackSearchField } from "@/lib/search";
 
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { defaultRangeExtractor, useVirtualizer, type Range } from "@tanstack/react-virtual";
 import type { DeckId, ListTotals, RowDto, SortColumn, TrackField, ViewSpec } from "@/ipc/types";
@@ -99,12 +99,18 @@ export type Column = ColumnSpec;
  */
 /**
  * The columns as drawn: each stored width times how much larger the theme
- * file makes that column's text. Artwork is sized from the row already.
+ * file makes that column's text, and never below the look's floor for it
+ * (wbx-45.10). Artwork is sized from the row already.
  */
-function scaledColumns(columns: readonly ColumnSpec[], scale: (key: ColumnKey) => number): readonly ColumnSpec[] {
+function scaledColumns(
+  columns: readonly ColumnSpec[],
+  scale: (key: ColumnKey) => number,
+  floor?: (key: ColumnKey) => number | undefined,
+): readonly ColumnSpec[] {
   return columns.map((column) => {
     const by = column.key === "artwork" ? 1 : scale(column.key);
-    return by === 1 ? column : { ...column, width: Math.round(column.width * by) };
+    const width = Math.max(Math.round(column.width * by), floor?.(column.key) ?? 0);
+    return width === column.width ? column : { ...column, width };
   });
 }
 
@@ -1171,9 +1177,13 @@ export const TrackTable = memo(function TrackTable({
     (key: ColumnKey) => (numberColumns?.includes(key) ? scales.numbers : scales.text),
     [numberColumns, scales],
   );
+  // A look's column floors are measured in the faces the theme shows.
+  const theme = useSyncExternalStore(subscribeShownTheme, shownTheme);
+  const columnFloor = look?.columnFloor;
   const columns = useMemo(
-    () => scaledColumns(columnsForArtworkMode(layoutColumns, artworkMode, rowH), columnScale),
-    [layoutColumns, artworkMode, rowH, columnScale],
+    () => scaledColumns(columnsForArtworkMode(layoutColumns, artworkMode, rowH), columnScale, columnFloor),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `theme` changes what the floor measures
+    [layoutColumns, artworkMode, rowH, columnScale, columnFloor, theme],
   );
   const band = previewBand(rowH);
   const extraColumns = useMemo(() => {

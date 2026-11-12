@@ -38,6 +38,12 @@ export interface ListLook {
   cell?: (key: ColumnKey, row: RowDto, rate: ((stars: number) => void) | undefined) => ReactNode | undefined;
   /** Key display inside the existing editable cell; replaces the old traffic light. */
   keyCell?: (stored: string, loaded: string | null, text: string) => ReactNode;
+  /**
+   * The narrowest a column may be drawn, in px, measured from what its cells
+   * hold in the faces shown now, or undefined for no floor. Read again when
+   * the theme changes (wbx-45.10).
+   */
+  columnFloor?: (key: ColumnKey) => number | undefined;
   /** Drawn first in every row, over its left edge. */
   edge?: (row: RowDto) => ReactNode;
 }
