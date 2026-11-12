@@ -46,6 +46,7 @@ pub use health::AudioHealth;
 mod sink;
 mod smooth;
 mod stretch;
+mod xrun;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -54,7 +55,7 @@ use std::sync::Arc;
 use rtrb::Consumer;
 
 pub use clock::{DeckClock, DeckSnapshot};
-pub use fade::FADE_FRAMES;
+pub use fade::{FADE_FRAMES, TRANSPORT_FADE_FRAMES};
 pub use sink::{
     default_output_device, output_devices, AudioDevice, CpalSink, NullSink, Render, Sink, StreamWish,
 };
@@ -324,7 +325,7 @@ impl Engine {
                 clock: Arc::clone(clock),
                 current: None,
                 offset: 0,
-                ramp: Ramp::silent(),
+                ramp: Ramp::silent_over(fade::TRANSPORT_FADE_FRAMES),
                 last: (0.0, 0.0),
                 generation: 0,
             });
@@ -1017,6 +1018,19 @@ impl DeckReader {
             // Down for a stop, for a seek that has not landed yet, and for the
             // last frames of a track; up for anything else.
             let open = sounding && !changing && !self.ending();
+            // A stop or a seek whose next step down is silence: the frame it
+            // would be applied to is not heard, so it is not taken either.
+            // With no transport fade that is the very first frame after the
+            // press — the stop is immediate and the playhead stays on the last
+            // frame played — and a seek goes straight on to its new position.
+            if !open && (changing || !sounding) && self.ramp.closing_now() {
+                self.ramp.step(false);
+                if changing {
+                    self.adopt(target);
+                    continue;
+                }
+                break;
+            }
             // Mid-changeover the ring holds where the deck is *going*, so only
             // what is already in hand may be faded out; taking a new block
             // would fade out audio from the seek target and lose it.
@@ -1139,7 +1153,9 @@ impl DeckReader {
     }
 
     /// Whether what is left in hand is the last of the track, and short enough
-    /// that the fade has to start now to reach zero by the end of it.
+    /// that the fade has to start now to reach zero just after it. With no
+    /// transport fade that is never: the last frame is played at full level
+    /// and the silence after it is the end.
     ///
     /// The end of a file is a cut like any other: the last sample is wherever
     /// the music was, and the silence after it is a step down from there.
@@ -1151,7 +1167,7 @@ impl DeckReader {
             .current
             .as_ref()
             .map_or(0, |block| (block.frames as usize).saturating_sub(self.offset));
-        left <= usize::from(FADE_FRAMES)
+        left <= self.ramp.tail()
     }
 }
 

@@ -598,7 +598,13 @@ fn the_two_decks_are_independent_and_sum() {
 
     h.engine.play(Deck::A);
     let only_a = h.play_until(Deck::A, 4_096);
-    let a_peak = only_a.iter().fold(0.0_f32, |acc, s| acc.max(s.abs()));
+    // Past the start, where the strip's crossovers overshoot the immediate
+    // step from silence: this is about the level, not the onset.
+    let a_peak = only_a
+        .iter()
+        .skip_while(|s| s.abs() < INAUDIBLE)
+        .skip(STRIP_TAIL * 2)
+        .fold(0.0_f32, |acc, s| acc.max(s.abs()));
     assert!((a_peak - 0.4).abs() < 0.02, "one deck peaked at {a_peak}");
 
     h.engine.play(Deck::B);
@@ -943,16 +949,16 @@ fn tone_hz(left: &[f32], rate: u32) -> f32 {
 /// Frames of the deck's own audio in the output, for timing what it played.
 ///
 /// An underrun on a busy machine leaves output that is not the deck playing
-/// slower, and none of it moves the playhead. Running dry, the mixer holds
-/// the last frame and fades it down over its `FADE_FRAMES` ramp rather than
-/// cutting it, and the silence after that is not exact zeros but the decaying
+/// slower, and none of it moves the playhead. Running dry, the mixer fades
+/// the last frame down over `TRANSPORT_FADE_FRAMES` (none, since wbx-45.16),
+/// and the silence after that is not exact zeros but the decaying
 /// tail of the output stage, around 1e-5. Counting every frame that was not
 /// exactly 0.0 took both for the deck: a busy Linux runner read 2.58 seconds
 /// for two seconds of track, and pulling as fast as possible here reads half
 /// as much again. So only frames loud enough to be the tone count, less one
 /// fade for every gap the deck ran dry into.
 fn deck_frames(out: &[f32]) -> usize {
-    let fade = usize::from(rbl_deck::FADE_FRAMES);
+    let fade = usize::from(rbl_deck::TRANSPORT_FADE_FRAMES);
     let audible: Vec<bool> = out.chunks_exact(2).map(|f| f[0].abs() > 1e-3 || f[1].abs() > 1e-3).collect();
     let frames = audible.iter().filter(|&&on| on).count();
     // Two quiet frames in a row is a gap. The tone itself is never below the
@@ -1083,11 +1089,34 @@ fn a_seek_is_honoured_at_once_even_while_the_decoder_runs_flat_out() {
     assert!(stale < u64::from(RATE) / 2, "played {stale} frames from the old position");
 }
 
+// Play, pause, cue, a seek and a beat jump are immediate: the DJ's decision of
+// 2026-11-12 (wbx-45.16), "I don't want a short fade in and out, I want an
+// immediate start and stop". Until then each was faded over two milliseconds;
+// that fade is gone, and these tests hold the transport to the sample. The
+// harness's output stage still delays everything by the limiter's lookahead
+// (`LIMITER_TAIL`) and its crossovers still ring (`STRIP_TAIL`): both are a
+// fixed latency of the mixer, the same with or without any transport move.
+
+/// Pulls in callbacks of 512 until the deck has been heard, and returns all
+/// of it with the index of the first audible frame.
+fn pull_until_heard(h: &Harness) -> (Vec<f32>, usize) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut out = Vec::new();
+    loop {
+        out.extend(h.sink.pull(512));
+        // Two callbacks past the first sound, so the frames after it are here too.
+        if let Some(first) = out.chunks_exact(2).position(|f| f[0].abs() > INAUDIBLE) {
+            if out.len() / 2 >= first + 1_024 {
+                return (out, first);
+            }
+        }
+        assert!(Instant::now() < deadline, "the deck was never heard");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
 #[test]
-fn starting_opens_from_silence_rather_than_stepping_into_the_music() {
-    // Press play on a loud passage and the first sample handed to the device
-    // is whatever the waveform was doing. Straight from silence, that is a
-    // click; this is the fade that makes it a start.
+fn play_is_sample_immediate_and_emits_nothing_before_the_track() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("flat.wav");
     flat(&path, RATE as usize);
@@ -1095,23 +1124,25 @@ fn starting_opens_from_silence_rather_than_stepping_into_the_music() {
     let h = harness();
     h.engine.load(Deck::A, &path);
     h.wait_for_load(1);
+    assert!(h.sink.pull(64).iter().all(|s| *s == 0.0), "a stopped deck must be silent");
 
-    // The silence the device was putting out before play was pressed. Without
-    // it the measurement starts at the first sample of music and has nothing
-    // to compare it to, which is the one thing this test is about.
-    let mut audio = h.sink.pull(64);
-    assert!(audio.iter().all(|s| *s == 0.0), "a stopped deck must be silent");
     h.engine.play(Deck::A);
-    audio.extend(h.play_until(Deck::A, 4_096));
-
-    let peak = audio.iter().fold(0.0_f32, |acc, s| acc.max(s.abs()));
-    assert!(peak > FLAT - 0.05, "the deck never reached full level: {peak}");
-    let worst = worst_step(&audio);
-    assert!(worst <= step_limit(), "starting stepped by {worst}");
+    let (out, first) = pull_until_heard(&h);
+    // Nothing at all before the track: no left-over buffer, no offset.
+    assert!(out[..first * 2].iter().all(|s| *s == 0.0), "samples before the track's own");
+    // The track enters on the first frame of a callback, delayed only by the
+    // output stage's fixed lookahead: no frame of added latency.
+    assert_eq!(first % 512, LIMITER_TAIL, "the first sound was {first} frames into the output");
+    // And at the track's level on that very frame, as far as the strip lets
+    // it: its crossovers answer a step from silence with 0.34 of it on the
+    // first frame (measured), where a two-millisecond fade opens at
+    // 0.8 / 88 = 0.009.
+    let opened = out[first * 2].abs();
+    assert!(opened > 0.2, "the first frame of the track came out at {opened}, faded in");
 }
 
 #[test]
-fn stopping_closes_to_silence_rather_than_cutting_the_waveform() {
+fn pause_is_sample_immediate_and_plays_nothing_after_it() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("flat.wav");
     flat(&path, RATE as usize * 2);
@@ -1120,22 +1151,59 @@ fn stopping_closes_to_silence_rather_than_cutting_the_waveform() {
     h.engine.load(Deck::A, &path);
     h.wait_for_load(1);
     h.engine.play(Deck::A);
-    let mut audio = h.play_until(Deck::A, 8_192);
+    h.play_until(Deck::A, 8_192);
 
     h.engine.pause(Deck::A);
-    audio.extend(h.sink.pull(2_048));
-
-    let worst = worst_step(&audio);
-    assert!(worst <= step_limit(), "stopping stepped by {worst}");
-    // And it ends at zero, which is the only place silence can start from.
-    assert_eq!(audio.last().copied(), Some(0.0));
+    let at = h.position(Deck::A);
+    let tail = h.sink.pull(2_048);
+    // Not one frame of the track was played after the press.
+    assert_eq!(h.position(Deck::A), at, "the playhead ran on after the pause");
+    // The last frame before the press is at full level, and the first after it
+    // is the start of the silence: no fade down between them.
+    let before = tail[(LIMITER_TAIL - 1) * 2].abs();
+    let after = tail[LIMITER_TAIL * 2].abs();
+    assert!(before > FLAT - 0.05, "the frame before the pause was {before}, faded down");
+    // The strip rings on the step (0.46 measured on the first frame), but the
+    // level falls at once: a fade would take it down by 0.009 a frame.
+    assert!(before - after > 0.2, "the first frame after the pause was {after}, still sounding");
+    assert!(
+        tail[(LIMITER_TAIL + STRIP_TAIL) * 2..].iter().all(|s| s.abs() < INAUDIBLE),
+        "the deck was still sounding after the pause"
+    );
 }
 
 #[test]
-fn a_seek_neither_cuts_what_was_playing_nor_opens_on_the_new_position() {
-    // Cueing, jumping a beat and dragging the overview are all this seek. Both
-    // ends of it are a step in the waveform without the fade: the old position
-    // is cut wherever it was, and the new one opens wherever it starts.
+fn resuming_plays_only_the_new_position_and_nothing_left_from_before() {
+    // Play, pause, cue somewhere else, play: whatever was in hand before the
+    // pause must not be heard at the restart.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ramp.wav");
+    ramp(&path, RATE as usize * 4);
+
+    let h = harness();
+    h.engine.load(Deck::A, &path);
+    h.wait_for_load(1);
+    h.engine.play(Deck::A);
+    h.play_until(Deck::A, 8_192);
+    h.engine.pause(Deck::A);
+    let _ = h.sink.pull(4_096);
+
+    // Three seconds into a four-second ramp is 0.875; where it paused, 0.52.
+    h.engine.seek_frames(Deck::A, u64::from(RATE) * 3);
+    std::thread::sleep(Duration::from_millis(50));
+    h.engine.play(Deck::A);
+    let (out, first) = pull_until_heard(&h);
+    assert!(out[..first * 2].iter().all(|s| *s == 0.0), "samples before the restart");
+    assert_eq!(first % 512, LIMITER_TAIL, "the restart was {first} frames into the output");
+    // Once the strip has settled every frame is from the new position.
+    let stale = out.chunks_exact(2).skip(first + STRIP_TAIL).filter(|f| f[0] < 0.85).count();
+    assert_eq!(stale, 0, "{stale} frames that were not from the new position");
+}
+
+#[test]
+fn a_seek_while_playing_lands_and_plays_on() {
+    // Cueing, jumping a beat and dropping the overview are all this seek, and
+    // all immediate now. What must still hold: the deck lands and plays on.
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("flat.wav");
     flat(&path, RATE as usize * 8);
@@ -1144,70 +1212,16 @@ fn a_seek_neither_cuts_what_was_playing_nor_opens_on_the_new_position() {
     h.engine.load(Deck::A, &path);
     h.wait_for_load(1);
     h.engine.play(Deck::A);
-    let mut audio = h.play_until(Deck::A, 8_192);
-
-    // Far past anything the ring holds, so the deck really does jump.
-    h.engine.seek_frames(Deck::A, u64::from(RATE) * 5);
-    let landed = h.play_until(Deck::A, u64::from(RATE) * 5 + 8_192);
-    audio.extend(landed);
-
-    let worst = worst_step(&audio);
-    assert!(worst <= step_limit(), "the seek stepped by {worst}");
-    // The music did come back, rather than the deck simply going quiet.
-    let peak = audio
-        .chunks_exact(2)
-        .skip(8_192)
-        .map(|frame| frame[0].abs())
-        .fold(0.0_f32, f32::max);
-    assert!(peak > FLAT - 0.05, "nothing was heard after the seek: {peak}");
-}
-
-#[test]
-fn several_seeks_in_a_row_still_do_not_click() {
-    // A beat jump held down is a seek every few milliseconds, arriving while
-    // the last one is still fading. Each one has to wait its turn rather than
-    // cutting the fade in front of it.
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("flat.wav");
-    flat(&path, RATE as usize * 8);
-
-    let h = harness();
-    h.engine.load(Deck::A, &path);
-    h.wait_for_load(1);
-    h.engine.play(Deck::A);
-    let mut audio = h.play_until(Deck::A, 4_096);
+    h.play_until(Deck::A, 4_096);
 
     for beat in 1..=6_u64 {
         h.engine.seek_frames(Deck::A, u64::from(RATE) * beat / 2);
-        audio.extend(h.sink.pull(256));
+        let _ = h.sink.pull(256);
     }
-    audio.extend(h.play_until(Deck::A, u64::from(RATE) * 3 + 4_096));
-
-    let worst = worst_step(&audio);
-    assert!(worst <= step_limit(), "a run of seeks stepped by {worst}");
-}
-
-#[test]
-fn the_end_of_a_track_fades_rather_than_being_cut_off() {
-    // The last sample of a file is wherever the music was, and the silence
-    // after it is a step down from there.
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("short.wav");
-    flat(&path, 8_000);
-
-    let h = harness();
-    h.engine.load(Deck::A, &path);
-    h.wait_for_load(1);
-    h.engine.play(Deck::A);
-
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut audio = Vec::new();
-    while h.engine.snapshot().a.playing && Instant::now() < deadline {
-        audio.extend(h.sink.pull(512));
-    }
-    assert!(!h.engine.snapshot().a.playing, "the deck never stopped at the end");
-    let worst = worst_step(&audio);
-    assert!(worst <= step_limit(), "the end of the track stepped by {worst}");
+    let audio = h.play_until(Deck::A, u64::from(RATE) * 3 + 8_192);
+    let peak = audio.chunks_exact(2).map(|f| f[0].abs()).fold(0.0_f32, f32::max);
+    assert!(peak > FLAT - 0.05, "nothing was heard after the seeks: {peak}");
+    assert!(h.position(Deck::A) >= u64::from(RATE) * 3 + 8_192);
 }
 
 /// A 220 Hz sine, which steps between neighbouring samples all by itself.
@@ -1249,34 +1263,6 @@ fn clicks(out: &[f32]) -> usize {
         }
     }
     found
-}
-
-#[test]
-fn no_transport_move_stands_out_from_the_music_around_it() {
-    // The flat-track tests measure the step exactly; this one asks the
-    // question the way an ear does, on a signal that is stepping anyway.
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("tone.wav");
-    tone(&path, RATE as usize * 8);
-
-    let h = harness();
-    h.engine.load(Deck::A, &path);
-    h.wait_for_load(1);
-
-    let mut audio = h.sink.pull(64);
-    h.engine.play(Deck::A);
-    audio.extend(h.play_until(Deck::A, 8_192));
-    // A cue, then a beat jump, then the overview dropped somewhere else.
-    for at in [u64::from(RATE) * 4, u64::from(RATE) * 2, u64::from(RATE) * 6] {
-        h.engine.seek_frames(Deck::A, at);
-        audio.extend(h.play_until(Deck::A, at + 8_192));
-    }
-    h.engine.pause(Deck::A);
-    audio.extend(h.sink.pull(2_048));
-
-    let found = clicks(&audio);
-    assert_eq!(found, 0, "{found} steps stood out from the music");
-    assert_eq!(audio.last().copied(), Some(0.0), "the stream must end at silence");
 }
 
 #[test]
