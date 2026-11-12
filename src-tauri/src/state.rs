@@ -29,9 +29,10 @@ pub struct AppState {
     /// The Library service this window hosts, once it does. Never taken
     /// with the edit gate or the core's lock held.
     pub(crate) service: parking_lot::Mutex<Option<crate::service_host::Hosted>>,
-    pub(crate) edit_history: parking_lot::Mutex<EditHistory>,
-    /// Told when a write outside the library history ended its Redo branch,
-    /// so the window's Edit menu stops offering it. Set once by the app;
+    /// Told when the library history changed without a command of the
+    /// window's doing it (a write outside it ended its Redo branch, a
+    /// client of the service made an edit), so the window's Edit menu
+    /// follows. Set once by the app;
     /// tests run without one.
     history_changed: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>>,
     pub(crate) backup_progress: parking_lot::Mutex<crate::backups::BackupProgress>,
@@ -91,161 +92,10 @@ struct PlayedMarks {
     deck: parking_lot::Mutex<std::collections::HashSet<String>>,
 }
 
-/// One reversible library operation. Grid edits keep their own history because
-/// they also rewrite analysis files; text fields keep `WebKit`'s native history.
-#[derive(Clone)]
-pub(crate) enum LibraryEdit {
-    DeletePlaylist(rbl_db::write::PlaylistDeletion),
-    RenamePlaylist(rbl_db::write::PlaylistRename),
-    MovePlaylist(rbl_db::write::PlaylistMove),
-    /// A folder drop's Replace existing (#426): the replaced list and the
-    /// playlist made in its place, undone and redone as one step.
-    ReplacePlaylist(rbl_db::write::ListReplacement),
-    /// An XML or iTunes import's Replace existing (#501): the members of
-    /// every playlist it replaced, undone and redone as one step. The tracks
-    /// and lists the import added are not part of it.
-    ReplacePlaylistContents(Vec<rbl_db::write::MembershipReplacement>),
-    SortPlaylists(rbl_db::write::PlaylistSort),
-    RemovePlaylistTracks(rbl_db::write::PlaylistTrackRemoval),
-    /// One Add Tracks to Playlist (#499): every slice of one drop or menu
-    /// choice, joined while they share `transaction`.
-    AddPlaylistTracks {
-        addition: rbl_db::write::PlaylistTrackAddition,
-        transaction: Option<String>,
-    },
-    /// One reorder or Renumber Track Order of a playlist (#499).
-    ReorderPlaylist(rbl_db::write::PlaylistReorder),
-    Track(Vec<rbl_db::write::TrackEdit>),
-    /// A key edit that also wrote the key into audio files, with "Write the
-    /// value to the ID3 tag" on (#507): the library's steps, as `Track`, and
-    /// each file written with the key its tag held. Undo and Redo put both
-    /// back or neither. A key edit that wrote no file is a `Track` entry.
-    KeyEdit {
-        tracks: Vec<rbl_db::write::TrackEdit>,
-        files: Vec<crate::key_tag::KeyTagWrite>,
-    },
-    /// One My Tag set per track: the Info tab's toggles edit one track,
-    /// a tick in the My Tag panel every selected track. `comments` are the
-    /// comments Add "My Tag" to the "Comments" rewrote with it (#605), put
-    /// back and written again with the tags. Turning that setting on or off
-    /// is an entry with comments and no tags.
-    TrackTags {
-        tags: Vec<rbl_db::write::TrackTagEdit>,
-        comments: Vec<rbl_db::write::TrackEdit>,
-    },
-    /// The categories, or one category's tags, put in a new order (#584).
-    MyTagOrder(rbl_db::write::MyTagOrder),
-    /// One cue or loop command on one track (#504): an add, move, slot,
-    /// colour, comment, Active Loop or delete, or a whole Convert Memory
-    /// Cues to Hot Cues.
-    Cues(rbl_db::write::CueRevision),
-    /// A playlist, folder or intelligent playlist made (#500). Undo
-    /// tombstones the same row unless something has been put in it since.
-    CreatePlaylist(rbl_db::write::PlaylistCreation),
-    /// An intelligent playlist's rule saved, or a playlist's or folder's
-    /// artwork reference changed (#500).
-    PlaylistEdit(rbl_db::write::PlaylistEdit),
-    /// One Relocate, Relocate by location or Auto Relocate run (#502):
-    /// every track's file link before and after, put back in one step.
-    Relocate(rbl_db::write::TrackRelocation),
-    /// One Remove from Tag List, Clear Tag List or Remove from History
-    /// (#508): the rows taken off the list and its order before and after.
-    ListRemoval(rbl_db::write::ListRemoval),
-}
-
-impl LibraryEdit {
-    pub(crate) fn is_empty(&self) -> bool {
-        match self {
-            Self::DeletePlaylist(edit) => edit.is_empty(),
-            Self::RemovePlaylistTracks(edit) => edit.is_empty(),
-            Self::ReplacePlaylistContents(edits) => edits.is_empty(),
-            Self::AddPlaylistTracks { addition, .. } => addition.is_empty(),
-            Self::ReorderPlaylist(edit) => edit.is_empty(),
-            Self::Track(edits) | Self::KeyEdit { tracks: edits, .. } => {
-                edits.is_empty() || edits.iter().all(rbl_db::write::TrackEdit::is_empty)
-            }
-            Self::TrackTags { tags, comments } => {
-                tags.iter().all(rbl_db::write::TrackTagEdit::is_empty)
-                    && comments.iter().all(rbl_db::write::TrackEdit::is_empty)
-            }
-            Self::MyTagOrder(edit) => edit.is_empty(),
-            Self::RenamePlaylist(_) | Self::MovePlaylist(_) | Self::ReplacePlaylist(_) | Self::CreatePlaylist(_) => false,
-            Self::SortPlaylists(edit) => edit.is_empty(),
-            Self::Cues(edit) => edit.is_empty(),
-            Self::PlaylistEdit(edit) => edit.is_empty(),
-            Self::Relocate(edit) => edit.is_empty(),
-            Self::ListRemoval(edit) => edit.is_empty(),
-        }
-    }
-}
-
-#[derive(Clone)]
-pub(crate) struct HistoryEntry {
-    pub(crate) edit: LibraryEdit,
-    pub(crate) label: &'static str,
-}
-
-/// Bounded session history for reversible library edits. The payloads retain
-/// exact database values or row ids, rather than reconstructing state from the
-/// interface when an action is undone.
-#[derive(Default)]
-pub(crate) struct EditHistory {
-    pub(crate) undo: Vec<HistoryEntry>,
-    pub(crate) redo: Vec<HistoryEntry>,
-}
-
-impl EditHistory {
-    const LIMIT: usize = 50;
-
-    pub(crate) fn record(&mut self, edit: LibraryEdit, label: &'static str) {
-        self.undo.push(HistoryEntry { edit, label });
-        if self.undo.len() > Self::LIMIT {
-            self.undo.remove(0);
-        }
-        self.redo.clear();
-    }
-
-    /// Records one slice of an Add Tracks to Playlist (#499). A slice of the
-    /// same add (the same `transaction`) that carries on from the entry on
-    /// top of Undo joins it, so a drop of thousands, sent a hundred at a
-    /// time, is still one Undo. Anything else is an entry of its own.
-    pub(crate) fn record_addition(
-        &mut self,
-        addition: rbl_db::write::PlaylistTrackAddition,
-        transaction: Option<String>,
-        label: &'static str,
-    ) {
-        if addition.is_empty() {
-            return;
-        }
-        if let (Some(id), Some(HistoryEntry { edit: LibraryEdit::AddPlaylistTracks { addition: open, transaction: Some(open_id) }, .. }))
-            = (&transaction, self.undo.last_mut())
-        {
-            if open_id == id && open.absorb(&addition) {
-                self.redo.clear();
-                return;
-            }
-        }
-        self.record(LibraryEdit::AddPlaylistTracks { addition, transaction }, label);
-    }
-
-    pub(crate) fn clear_redo(&mut self) {
-        self.redo.clear();
-    }
-
-    /// Takes the next Undo (`undo`) or Redo entry off its stack and leaves
-    /// every other entry where it is: what a refused, conflicting entry
-    /// comes to (#506). Each remaining entry checks its own rows when it
-    /// runs, so keeping them cannot overwrite anything either.
-    pub(crate) fn drop_next(&mut self, undo: bool) -> Option<HistoryEntry> {
-        if undo { self.undo.pop() } else { self.redo.pop() }
-    }
-
-    pub(crate) fn clear(&mut self) {
-        self.undo.clear();
-        self.redo.clear();
-    }
-}
+/// The edit history's types. The history itself lives in the Library core
+/// (`rbl_library::history`), where a client of the service records into it
+/// too; see [`AppState::edit_history`].
+pub(crate) use rbl_library::history::{EditHistory, LibraryEdit};
 
 /// What the window keeps beside the Library core.
 #[derive(Default)]
@@ -278,7 +128,6 @@ impl AppState {
         Self {
             core: Arc::new(LibraryCore::new(backup_dir.clone())),
             service: parking_lot::Mutex::new(None),
-            edit_history: parking_lot::Mutex::new(EditHistory::default()),
             history_changed: std::sync::OnceLock::new(),
             backup_progress: parking_lot::Mutex::new(crate::backups::BackupProgress::default()),
             backup_sizes: parking_lot::Mutex::new(crate::backup_sizes::SizeCache::default()),
@@ -454,26 +303,19 @@ impl AppState {
         self.core.write_then(self, History::Caller, edit, refresh)
     }
 
-    /// Who to tell when a write outside the history ended its Redo branch.
+    /// The library history (Undo and Redo), which the Library core keeps
+    /// beside the edit path. A leaf lock: take it under the edit gate and
+    /// hold it for the bookkeeping alone.
+    pub(crate) fn edit_history(&self) -> &parking_lot::Mutex<EditHistory> {
+        self.core.history()
+    }
+
+    /// Who to tell when the history changed without a command of the
+    /// window's doing it: a write outside the history ended its Redo
+    /// branch, or a client of the service made an edit.
     /// The first call wins; the app makes it once, at start.
     pub fn on_history_changed(&self, listener: impl Fn() + Send + Sync + 'static) {
         let _ = self.history_changed.set(Box::new(listener));
-    }
-
-    /// Ends the Redo branch after a write the history does not record, and
-    /// tells the window when there was one to end.
-    fn end_redo_branch(&self) {
-        let ended = {
-            let mut history = self.edit_history.lock();
-            let had = !history.redo.is_empty();
-            history.clear_redo();
-            had
-        };
-        if ended {
-            if let Some(listener) = self.history_changed.get() {
-                listener();
-            }
-        }
     }
 
     /// Runs one read against the database, opening the handle if needed.
@@ -735,8 +577,10 @@ impl rbl_library::Host for AppState {
         crate::file_journal::recover(self.backup_dir(), location).map_err(|e| e.to_string())
     }
 
-    fn wrote_outside_history(&self) {
-        self.end_redo_branch();
+    fn history_changed(&self) {
+        if let Some(listener) = self.history_changed.get() {
+            listener();
+        }
     }
 
     fn library_replacing(&self, library: &Library) {

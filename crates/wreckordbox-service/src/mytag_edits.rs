@@ -13,6 +13,7 @@ use rbl_db::export_info::MyTagRow;
 use rbl_db::write::MY_TAG_LIMIT;
 use rbl_index::smart::my_tag_key;
 use rbl_library::read::my_tag_catalogue;
+use rbl_library::history::{LibraryEdit, TRACK_EDIT};
 use rbl_library::{my_tags, Touched};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -446,8 +447,10 @@ fn reorder(
     }
     let wanted = order.to_vec();
     // The write the window's scripting bridge makes for the same edit.
-    let (_recorded, changed) = library.edit(Touched::Tracks, move |writer| {
-        writer.reorder_my_tags_with_undo(&wanted)
+    // Recorded as the bridge records it, so Undo puts the order back.
+    let ((), changed) = library.recorded_edit(Touched::Tracks, REORDER, move |writer| {
+        let (_, order) = writer.reorder_my_tags_with_undo(&wanted)?;
+        Ok(((), LibraryEdit::MyTagOrder(order)))
     })?;
     let category = vocabulary.rows.iter().find(|row| row.id == first.parent);
     let reordered = Reordered {
@@ -485,7 +488,9 @@ fn merge(
     let carriers = carriers(library, &from.id)?;
     let (tracks, gone, kept) = (carriers.clone(), from.id.clone(), into.id.clone());
     let comments = request.comments;
-    let ((), changed) = library.edit(Touched::Tracks, move |writer| {
+    // The tag is gone for good, as after a delete: no older entry may
+    // name it.
+    let ((), changed) = library.permanent_edit(Touched::Tracks, move |writer| {
         let moved = my_tags::put_on_tracks(writer, &tracks, &kept, true)?;
         if let Err(error) = writer.delete_my_tag(&gone) {
             my_tags::undo_tag_edits(writer, &moved);
@@ -518,7 +523,8 @@ fn delete(
     } else {
         Vec::new()
     };
-    let ((), changed) = library.edit(Touched::Tracks, move |writer| {
+    // As the window's delete: an older entry could name the tag.
+    let ((), changed) = library.permanent_edit(Touched::Tracks, move |writer| {
         writer.delete_my_tag(&id)?;
         my_tags::rewrite_comments(writer, &rewritten)
     })?;
@@ -569,14 +575,16 @@ fn assign(
     let ids: Vec<String> = tracks.iter().map(|named| named.id.clone()).collect();
     let tag = my_tag.id.clone();
     let comments = request.comments;
-    let (_recorded, changed) = library.edit(Touched::Tracks, move |writer| {
+    // One entry for every track, as the window's My Tag panel records a
+    // tick: one Undo takes the tag off them all (or puts it back).
+    let ((), changed) = library.recorded_edit(Touched::Tracks, TRACK_EDIT, move |writer| {
         let tags = my_tags::put_on_tracks(writer, &ids, &tag, on)?;
         let comments = if comments {
             my_tags::refresh_comments(writer, &ids, &tags)?
         } else {
             Vec::new()
         };
-        Ok((tags, comments))
+        Ok(((), LibraryEdit::TrackTags { tags, comments }))
     })?;
     let assigned = Assigned {
         my_tag,
@@ -605,6 +613,10 @@ fn kind_of(row: &MyTagRow) -> Kind {
         Kind::Tag
     }
 }
+
+/// The edit history's label for a new order, the one the window's
+/// scripting bridge records.
+const REORDER: &str = "Reorder My Tags";
 
 /// What a category has for a parent.
 const ROOT: &str = "root";

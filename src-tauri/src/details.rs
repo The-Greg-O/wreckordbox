@@ -540,15 +540,9 @@ pub async fn set_track_field<R: tauri::Runtime>(
         let _ = tauri::Emitter::emit(&app, "grid:changed", reported);
         let generation = crate::commands::reload(app.clone(), state.clone()).await?;
         let dto = {
-            let mut history = state.edit_history.lock();
+            let mut history = state.edit_history().lock();
             history.clear_redo();
-            crate::dto::EditHistoryDto {
-                generation,
-                can_undo: !history.undo.is_empty(),
-                can_redo: !history.redo.is_empty(),
-                undo_label: history.undo.last().map(|entry| entry.label.to_owned()),
-                redo_label: history.redo.last().map(|entry| entry.label.to_owned()),
-            }
+            crate::commands::history_dto(generation, &history)
         };
         let _ = tauri::Emitter::emit(&app, "edit-history:changed", dto.clone());
         return Ok(dto);
@@ -583,7 +577,7 @@ pub async fn set_track_field<R: tauri::Runtime>(
             return Ok(edit);
         }
         let LibraryEdit::Track(tracks) = edit else { return Ok(edit) };
-        Ok(LibraryEdit::KeyEdit { tracks, files })
+        Ok(LibraryEdit::KeyEdit { tracks, files: Arc::new(crate::key_tag::KeyTagWrites(files)) })
     })
     .await
 }
