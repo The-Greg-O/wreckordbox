@@ -281,7 +281,10 @@ pub fn dev_defaults(dto: &StickDefaultsDto) -> AppResult<DevSetting> {
 /// Gives a stick that has no `DEVSETTING.DAT` the defaults. A stick that
 /// has one keeps it. Called from inside a `blocking` closure, which is
 /// `spawn_blocking` with a name; never from the async thread.
-pub fn write_dev_defaults(mount: &Path, dto: &StickDefaultsDto) -> AppResult<()> {
+///
+/// `access`: Stick Protection's leave to write to the Stick (wbx-45.11).
+pub fn write_dev_defaults(access: &crate::stick_guard::StickAccess, mount: &Path, dto: &StickDefaultsDto) -> AppResult<()> {
+    access.recheck()?;
     let current = rbl_devices::settings::read(mount);
     if current.dev.is_some() {
         return Ok(());
@@ -323,10 +326,22 @@ pub async fn ensure_device_library(
     state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
     path: String,
     defaults: Option<StickDefaultsDto>,
+    // The DJ's approval of this exact write (`stick_write_plan`, wbx-45.4).
+    approval: Option<String>,
 ) -> AppResult<DeviceSettingsDto> {
     let state = std::sync::Arc::clone(&state);
     crate::commands::blocking("ensure_device_library", move || {
         let mount = Path::new(&path);
+        let access = crate::stick_guard::enter_stick(state.backup_dir(), mount)?;
+        let (_, generation) = state.library_at_generation()?;
+        crate::stick_approval::consume(
+            approval.as_deref(),
+            &crate::stick_approval::StickOperation::EnsureLibrary {
+                defaults: crate::stick_approval::bound(defaults.as_ref()),
+            },
+            mount,
+            generation,
+        )?;
         if !mount.is_dir() {
             return Err(AppError::new(
                 ErrorKind::NotFound,
@@ -352,7 +367,7 @@ pub async fn ensure_device_library(
         rbl_export::create_library_with_root(mount, library.as_ref(), &my_tags, Some(&sync), preferred_root)
             .map_err(|e| AppError::new(ErrorKind::Internal, e.to_string()))?;
         if let Some(defaults) = &defaults {
-            write_dev_defaults(mount, defaults)?;
+            write_dev_defaults(&access, mount, defaults)?;
         }
         Ok(to_dto(&rbl_devices::settings::read(mount)))
     })
@@ -384,16 +399,30 @@ pub async fn device_settings(path: String) -> AppResult<DeviceSettingsDto> {
 /// Writes a stick's settings back, and returns what the stick now holds.
 #[tauri::command]
 pub async fn save_device_settings(
+    state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
     path: String,
     settings: DeviceSettingsDto,
+    // The DJ's approval of this exact write (`stick_write_plan`, wbx-45.4).
+    approval: Option<String>,
 ) -> AppResult<DeviceSettingsDto> {
+    let state = std::sync::Arc::clone(&state);
     crate::commands::blocking("save_device_settings", move || {
         let mount = Path::new(&path);
+        let access = crate::stick_guard::enter_stick(state.backup_dir(), mount)?;
+        crate::stick_approval::consume(
+            approval.as_deref(),
+            &crate::stick_approval::StickOperation::SaveSettings {
+                settings: serde_json::to_value(&settings).map_err(|e| AppError::new(ErrorKind::Internal, e.to_string()))?,
+            },
+            mount,
+            0,
+        )?;
         if !mount.is_dir() {
             return Err(AppError::new(ErrorKind::NotFound, "That device is no longer connected."));
         }
         let current = rbl_devices::settings::read(mount);
         let next = apply(&current, &settings)?;
+        access.recheck()?;
         rbl_devices::settings::write_changes(mount, &current, &next)
             .map_err(|e| AppError::new(ErrorKind::Internal, e.to_string()))?;
         Ok(to_dto(&rbl_devices::settings::read(mount)))
@@ -522,7 +551,7 @@ mod tests {
         // perf-ok: a test's fixture, not a command.
         std::fs::create_dir_all(stick.path().join("PIONEER")).unwrap();
 
-        write_dev_defaults(stick.path(), &defaults()).unwrap();
+        write_dev_defaults(&crate::stick_guard::testing::ordinary(), stick.path(), &defaults()).unwrap();
         let read = rbl_devices::settings::read(stick.path());
         let dev = read.dev.expect("the file was written");
         assert_eq!(dev.color, WaveformColor::Rgb);
@@ -533,7 +562,7 @@ mod tests {
         // A second export with other choices leaves the stick's own file alone.
         let mut other = defaults();
         other.waveform_color = "blue".to_owned();
-        write_dev_defaults(stick.path(), &other).unwrap();
+        write_dev_defaults(&crate::stick_guard::testing::ordinary(), stick.path(), &other).unwrap();
         assert_eq!(rbl_devices::settings::read(stick.path()).dev.unwrap().color, WaveformColor::Rgb);
     }
 

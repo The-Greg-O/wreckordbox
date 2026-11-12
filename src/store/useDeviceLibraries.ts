@@ -27,7 +27,7 @@ export interface DeviceLibraries {
    * Changes one library's playlists on a stick, then reads the stick again.
    * Rejects with the backend's reason, having changed nothing.
    */
-  edit: (path: string, format: DeviceFormat, edit: DevicePlaylistEdit) => Promise<DevicePlaylistEditResult>;
+  edit: (path: string, format: DeviceFormat, edit: DevicePlaylistEdit, approval: string) => Promise<DevicePlaylistEditResult>;
   refresh: (path: string) => Promise<void>;
   /** Bumped after every edit, so a view of a stick's library opens again. */
   revision: number;
@@ -35,10 +35,16 @@ export interface DeviceLibraries {
    * Settles the stick's unfinished write (writes to it: only for the action
    * the DJ chose), then reads it again. Rejects with the backend's reason.
    */
-  settle: (path: string) => Promise<void>;
+  settle: (path: string, approval: string) => Promise<void>;
 }
 
-export function useDeviceLibraries(devices: readonly Device[]): DeviceLibraries {
+/**
+ * `readBack.current` false (the view shell, wbx-45.4): an edit or refresh
+ * only bumps `revision` and does not read the Stick's libraries again, since
+ * that read settles an unfinished export (wbx-45.5); the shell's tree reads
+ * its Sticks with the read-only outline, which follows `revision`.
+ */
+export function useDeviceLibraries(devices: readonly Device[], readBack?: { readonly current: boolean }): DeviceLibraries {
   const [loaded, setLoaded] = useState<ReadonlyMap<string, readonly DeviceLibrary[]>>(() => new Map());
   const [revision, setRevision] = useState(0);
   const [unfinished, setUnfinished] = useState<ReadonlySet<string>>(() => new Set());
@@ -87,10 +93,11 @@ export function useDeviceLibraries(devices: readonly Device[]): DeviceLibraries 
   const expand = useCallback(
     (node: TreeNode) => {
       const path = devicePath(node.id);
+      if (readBack?.current === false) return;
       if (path === null || known.current.has(path) || pending.current.has(path)) return;
       void read(path);
     },
-    [read],
+    [read, readBack],
   );
 
   // A stick that left is forgotten; one still here is read again, since the
@@ -120,32 +127,38 @@ export function useDeviceLibraries(devices: readonly Device[]): DeviceLibraries 
       const next = new Set([...current].filter(kept));
       return next.size === current.size ? current : next;
     });
+    // Not in the view shell: a Stick opened in the old layout is not read
+    // again behind the DJ's back, since this read settles an unfinished
+    // export (wbx-45.4 review, finding 6).
+    if (readBack?.current === false) return;
     for (const path of known.current.keys()) {
       if (kept(path) && !pending.current.has(path)) void read(path);
     }
-  }, [devices, read]);
+  }, [devices, read, readBack]);
 
   const edit = useCallback(
-    async (path: string, format: DeviceFormat, change: DevicePlaylistEdit) => {
+    async (path: string, format: DeviceFormat, change: DevicePlaylistEdit, approval: string) => {
       const backend = await getBackend();
-      const result = await backend.devicePlaylistEdit(path, format, change);
+      const result = await backend.devicePlaylistEdit(path, format, change, approval);
       if (result.changed > 0) {
-        await read(path);
+        if (readBack?.current !== false) await read(path);
         setRevision((r) => r + 1);
       }
       return result;
     },
-    [read],
+    [read, readBack],
   );
 
   const refresh = useCallback(async (path: string) => {
-    await read(path);
+    if (readBack?.current !== false) await read(path);
     setRevision((revision) => revision + 1);
-  }, [read]);
+  }, [read, readBack]);
 
-  const settle = useCallback(async (path: string) => {
+  // `approval`: the DJ's, from the staged write (wbx-45.4). Settling is
+  // asked for whatever `readBack` says, and the Stick read again after.
+  const settle = useCallback(async (path: string, approval: string) => {
     const backend = await getBackend();
-    await backend.settleStick(path);
+    await backend.settleStick(path, approval);
     await refresh(path);
   }, [refresh]);
 

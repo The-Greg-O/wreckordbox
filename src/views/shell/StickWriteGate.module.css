@@ -1,0 +1,75 @@
+/* The staged Stick write (wbx-45.4): which Stick, what changes, and the hold. */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  background: rgb(0 0 0 / 0.45);
+}
+
+.dialog {
+  width: min(520px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  padding: var(--s-shell-space-6, 14px);
+  border: var(--s-shell-border, 1px) solid var(--c-raised);
+  background: var(--c-panel);
+  color: var(--c-text);
+  font-family: var(--f-shell, monospace);
+  font-size: 12px;
+}
+
+.title { margin: 0 0 var(--s-shell-space-3, 6px); font-size: 14px; font-weight: 600; }
+.stick { margin: 0 0 var(--s-shell-space-4, 8px); color: var(--c-text-dim); }
+.stick[data-stick-kind="gig"] { color: var(--c-accent); font-weight: 600; }
+.what { margin: 0 0 var(--s-shell-space-2, 4px); }
+.lines { margin: 0 0 var(--s-shell-space-4, 8px); padding-left: 18px; }
+.note { margin: 0 0 var(--s-shell-space-5, 10px); color: var(--c-text-dim); }
+
+.buttons { display: flex; justify-content: flex-end; gap: var(--s-shell-space-4, 8px); }
+.buttons button { font: inherit; padding: 6px 12px; }
+
+.hold {
+  position: relative;
+  overflow: hidden;
+  min-width: 180px;
+  border: var(--s-shell-border, 1px) solid var(--c-accent);
+  background: var(--c-black);
+  color: var(--c-text);
+  touch-action: none;
+  user-select: none;
+}
+.fill {
+  position: absolute;
+  inset: 0;
+  transform: scaleX(0);
+  transform-origin: left;
+  background: var(--c-accent);
+  opacity: 0.35;
+}
+.hold[data-holding] .fill { transform: scaleX(1); transition: transform var(--hold-ms) linear; }
+.holdLabel { position: relative; }
+
+/* Stick Protection (wbx-45.11): the unlock and lock control. */
+.protection {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin: 8px 0;
+}
+
+.protection > span {
+  flex: 1 1 100%;
+}
+
+.protection input {
+  flex: 1 1 8em;
+  min-width: 0;
+}
+
+.unlockError {
+  flex: 1 1 100%;
+  color: var(--danger, #e5484d);
+}

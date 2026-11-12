@@ -275,7 +275,7 @@ export interface AppErrorDto {
    * report this instead of settling it; `settleStick` is the action that
    * does (wbx-45.5).
    */
-  kind: "readOnly" | "notFound" | "malformed" | "cancelled" | "conflict" | "unfinishedWrite" | "internal";
+  kind: "readOnly" | "notFound" | "malformed" | "cancelled" | "conflict" | "unfinishedWrite" | "stickProtected" | "internal";
   message: string;
   detail?: string;
 }
@@ -623,6 +623,8 @@ export interface Backend {
     deleteUnlistedMusic?: boolean,
     /** Convert incompatible USB copies; undefined preserves the source format. */
     compatibilityFormat?: "wav" | "aiff" | "mp3",
+    /** The DJ's approval of this exact write, from `stickWritePlan` (wbx-45.4); without it the backend refuses. */
+    approval?: string,
   ): Promise<ExportReport>;
 
   /**
@@ -630,7 +632,7 @@ export interface Backend {
    * beside what the stick already holds. A later sync keeps them unless
    * deleteUnlistedMusic is enabled.
    */
-  exportTracksToDevice(tracks: string[], destination: string, defaults?: StickDefaults, compatibilityFormat?: "wav" | "aiff" | "mp3"): Promise<ExportReport>;
+  exportTracksToDevice(tracks: string[], destination: string, defaults?: StickDefaults, compatibilityFormat?: "wav" | "aiff" | "mp3", approval?: string): Promise<ExportReport>;
 
   /**
    * rekordbox's reference browse categories and sort options: what a
@@ -1018,6 +1020,22 @@ export interface Backend {
    * What `syncDevices` would use and give back on each stick, from the record
    * the stick holds. Writes nothing.
    */
+  /**
+   * What an Export Playlist or Export Track to one Stick would write, worked
+   * out without writing or settling anything (wbx-45.4): the shell's tree
+   * shows it before the DJ confirms the write.
+   */
+  stickWritePlan(request: StickWriteRequest): Promise<StickWritePlan>;
+  /** The DJ held to confirm the plan: the token its write carries. Refused when the Stick changed since. */
+  stickWriteApprove(plan: string): Promise<string>;
+  /** The DJ cancelled the plan: it can no longer be confirmed. */
+  stickWriteRevoke(plan: string): Promise<void>;
+  /** Stick Protection (wbx-45.11) of the Stick at `path`. */
+  stickProtection(path: string): Promise<StickProtection>;
+  /** Unlocks the Stick until it is ejected, removed or locked; a Gig stick needs its `name` typed. */
+  stickUnlock(path: string, name?: string): Promise<StickProtection>;
+  stickLock(path: string): Promise<StickProtection>;
+
   estimateSync(
     playlists: string[],
     destinations: string[],
@@ -1047,6 +1065,8 @@ export interface Backend {
     compatibilityFormat?: "wav" | "aiff" | "mp3",
     /** Read every exported asset instead of trusting unchanged receipts. */
     verifyAll?: boolean,
+    /** Each Stick's approval, by mount path, from `stickWritePlan` (wbx-45.4); a Stick without one is refused. */
+    approvals?: Readonly<Record<string, string>>,
   ): Promise<SyncDeviceReport[]>;
 
   /** Missing source audio in the exact playlists selected for USB export. */
@@ -1060,7 +1080,7 @@ export interface Backend {
    * partition, or a FAT32 and an HFS+ one, keeping its name. Fails if it is
    * in use.
    */
-  formatDevice(path: string, layout: FormatLayout): Promise<void>;
+  formatDevice(path: string, layout: FormatLayout, approval?: string): Promise<void>;
 
   /** What a stick was last synced with, and what it holds now. */
   deviceSyncState(path: string): Promise<DeviceSyncState>;
@@ -1100,13 +1120,13 @@ export interface Backend {
    */
   deviceSettings(path: string): Promise<DeviceSettings>;
   /** Writes them back and resolves to what the stick now holds. */
-  saveDeviceSettings(path: string, settings: DeviceSettings): Promise<DeviceSettings>;
+  saveDeviceSettings(path: string, settings: DeviceSettings, approval?: string): Promise<DeviceSettings>;
   /**
    * Gives a stick with no database the folders rekordbox creates on connect
    * (an empty database from `defaults`), and reads its settings back. A
    * stick that has one is only read.
    */
-  ensureDeviceLibrary(path: string, defaults: StickDefaults | undefined): Promise<DeviceSettings>;
+  ensureDeviceLibrary(path: string, defaults: StickDefaults | undefined, approval?: string): Promise<DeviceSettings>;
 
   /**
    * The Explorer.
@@ -1137,7 +1157,7 @@ export interface Backend {
    * the action the DJ chose. Every read of such a Stick rejects with
    * `unfinishedWrite` instead.
    */
-  settleStick(path: string): Promise<void>;
+  settleStick(path: string, approval?: string): Promise<void>;
   /**
    * A page of the Intake or Problems queue (wbx-62), from the Library
    * service the window hosts: each track with what it still needs, and the
@@ -1161,9 +1181,24 @@ export interface Backend {
    * does: that library only, never the other. Resolves to the playlist or
    * folder the edit was about (the new one for a create).
    */
-  devicePlaylistEdit(path: string, format: DeviceFormat, edit: DevicePlaylistEdit): Promise<DevicePlaylistEditResult>;
+  devicePlaylistEdit(path: string, format: DeviceFormat, edit: DevicePlaylistEdit, approval?: string): Promise<DevicePlaylistEditResult>;
   /** Analyse files already on this stick and add them to an existing device playlist in one publication. */
-  devicePlaylistAddFiles(path: string, format: DeviceFormat, playlist: string, tracks: string[]): Promise<DevicePlaylistEditResult>;
+  devicePlaylistAddFiles(path: string, format: DeviceFormat, playlist: string, tracks: string[], approval?: string): Promise<DevicePlaylistEditResult>;
+  /**
+   * Library tracks, in this order, into a Stick playlist as one approved
+   * write: those the Stick lacks exported first, each resolved to the
+   * Stick's own row by the backend, those it holds left out unless `duplicates`.
+   */
+  devicePlaylistAddLibraryTracks(
+    path: string,
+    format: DeviceFormat,
+    playlist: string,
+    tracks: string[],
+    duplicates: boolean,
+    defaults?: StickDefaults,
+    compatibilityFormat?: StickCompat,
+    approval?: string,
+  ): Promise<DevicePlaylistEditResult>;
   /**
    * The rows of `tracks` whose track a stick playlist already holds, each
    * once: what rekordbox asks Add or Skip about before adding. Only reads.
@@ -1428,6 +1463,12 @@ export interface DeviceLibrary {
 export interface StickOutline {
   /** An earlier write to the stick did not finish; nothing is listed until it is. */
   pending: boolean;
+  /**
+   * The Stick carries the Spare stick marker (`.rbxport-disposable` at its
+   * root): the DJ declared it safe to overwrite. Otherwise it is treated as
+   * a Gig stick.
+   */
+  spare?: boolean;
   libraries: { format: DeviceFormat; nodes: DeviceLibraryNode[] }[];
 }
 
@@ -1561,6 +1602,71 @@ export interface MissingExportFile {
 }
 
 /** One playlist a stick was last synced with. */
+type StickCompat = "wav" | "aiff" | "mp3";
+
+/** A Stick write the window asks to plan (`stickWritePlan`); each matches one Stick-writing call. */
+export type StickWriteOperation =
+  | { kind: "exportPlaylist"; playlist: string; deleteUnlistedMusic?: boolean; defaults?: StickDefaults; compatibilityFormat?: StickCompat }
+  | { kind: "exportTracks"; tracks: string[]; defaults?: StickDefaults; compatibilityFormat?: StickCompat }
+  | { kind: "sync"; playlists: string[]; deleteUnlistedMusic?: boolean; automatic?: boolean; defaults?: StickDefaults; compatibilityFormat?: StickCompat }
+  /** Library tracks, in this order, into a Stick playlist; those the Stick lacks are exported to it first. */
+  | { kind: "addLibraryTracks"; format: DeviceFormat; playlist: string; tracks: string[]; duplicates: boolean; defaults?: StickDefaults; compatibilityFormat?: StickCompat }
+  | { kind: "playlistEdit"; format: DeviceFormat; edit: DevicePlaylistEdit }
+  | { kind: "addFiles"; format: DeviceFormat; playlist: string; files: string[] }
+  | { kind: "saveSettings"; settings: DeviceSettings }
+  | { kind: "settle" }
+  | { kind: "ensureLibrary"; defaults?: StickDefaults }
+  | { kind: "format"; layout: FormatLayout };
+
+/** Stick Protection (wbx-45.11): whether a Stick may be written to now. */
+export interface StickProtection {
+  protected: boolean;
+  /** Carries the Spare stick marker: unlocks with a confirmation. */
+  spare: boolean;
+  /** The Stick's name, typed to unlock a Gig stick. */
+  name: string;
+  revision: number;
+}
+
+export interface StickWriteRequest {
+  destination: string;
+  operation: StickWriteOperation;
+}
+
+/**
+ * What a Stick write would do, and the id of the plan the DJ confirms
+ * (`stickWriteApprove` turns it into the write's token after the hold).
+ * `pending`: the Stick holds an unfinished write; nothing is planned.
+ * `onStick` false: an ordinary folder, which needs no plan or unlock.
+ */
+export interface StickWritePlan {
+  onStick: boolean;
+  /** The Stick's name, typed to unlock a Gig stick. */
+  stickName: string;
+  /** Stick Protection refuses any write now: the DJ must unlock it first. */
+  protected: boolean;
+  spare: boolean;
+  pending: boolean;
+  /** Whether the audio counts were worked out (not on a Stick whose library could not be read for them without writing). */
+  audioEstimated: boolean;
+  /** Tracks whose audio is copied (new, or changed at the source). */
+  tracksNew: number;
+  tracksChanged: number;
+  /** Tracks whose audio is on the Stick already and reused; their data is still written. */
+  audioReused: number;
+  tracksRemoved: number;
+  tracksMissing: number;
+  /** Tracks on the Stick whose exported data differs from the Library's, by field. */
+  trackChanges: { title: string; fields: string[] }[];
+  /** Tracks whose cues and analysis are written from the Library (not itemised). */
+  analysisWritten: number;
+  playlists: { name: string; folder: boolean; change: "created" | "resynchronised"; added: number | null; removed: number | null; reordered: boolean | null }[];
+  netAdditionalBytes: number;
+  /** Library tracks added to a Stick playlist: how many entries go in. */
+  adding: number | null;
+  plan: string | null;
+}
+
 export interface SyncPlaylist {
   /** The tree's node id for the playlist, so it can be ticked again. */
   libraryId: string;

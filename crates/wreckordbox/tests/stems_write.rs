@@ -71,9 +71,13 @@ struct Rig {
 
 impl Rig {
     fn new() -> Self {
+        let stick = tempfile::tempdir().unwrap();
+        // A temporary folder standing in for a mounted Stick (the sandbox
+        // runs everything with RBXPORT_TEST=1; wbx-45.11).
+        std::fs::write(stick.path().join(wreckordbox_stick_protection::STAND_IN_MARKER), b"").unwrap();
         Self {
             sandbox: Sandbox::new(),
-            stick: tempfile::tempdir().unwrap(),
+            stick,
         }
     }
 
@@ -151,8 +155,13 @@ impl Rig {
         rbl_export::export(self.stick(), &[source], &[playlist]).unwrap();
     }
 
+    /// Marks the Stick a Spare stick, and unlocks it as the DJ does: every
+    /// Stick is protected until then (wbx-45.11).
     fn mark_spare(&self) {
         std::fs::write(self.stick().join(MARKER), b"").unwrap();
+        let stick = self.stick().to_str().unwrap();
+        let unlocked = self.sandbox.cli(&["stick", "unlock", stick]);
+        assert!(unlocked.status.success(), "{}", unlocked.stderr);
     }
 
     /// A track in the Library with current Stems, exported to a Spare stick.
@@ -316,6 +325,12 @@ fn a_stick_without_the_spare_stick_marker_is_refused_and_not_written_to() {
     rig.record_stems(&track, "Night Bus.wav", FRAMES);
     rig.export(&track, "Night Bus.wav");
     let before = deck::snapshot(rig.stick());
+    // Protected, it is refused as protected before anything on it is read.
+    assert_eq!(rig.write(&track, true).error_json()["error"]["code"], "stick_protected");
+    // A Gig stick unlocked by its name is still not a Spare stick.
+    let name = rig.stick().file_name().unwrap().to_str().unwrap().to_owned();
+    let unlocked = rig.sandbox.cli(&["stick", "unlock", rig.stick().to_str().unwrap(), "--name", &name]);
+    assert!(unlocked.status.success(), "{}", unlocked.stderr);
 
     let run = rig.write(&track, true);
 
@@ -626,4 +641,55 @@ fn a_stems_folder_that_leads_off_the_stick_is_refused_with_its_own_code() {
     assert!(!run.status.success());
     assert_eq!(run.error_json()["error"]["code"], "stick_unsafe");
     assert_eq!(deck::snapshot(elsewhere.path()), before);
+}
+
+/// wbx-45.11: a Spare stick that is still protected is not written to;
+/// once unlocked it is, and locked again it is not.
+#[test]
+fn a_protected_stick_is_not_written_to_until_it_is_unlocked() {
+    let rig = Rig::new();
+    let track = rig.import("Locked Door.wav");
+    rig.record_stems(&track, "Locked Door.wav", FRAMES);
+    rig.export(&track, "Locked Door.wav");
+    std::fs::write(rig.stick().join(MARKER), b"").unwrap();
+    let before = deck::snapshot(rig.stick());
+
+    let run = rig.write(&track, true);
+    assert!(!run.status.success());
+    let error = run.error_json();
+    assert_eq!(error["error"]["code"], "stick_protected");
+    let message = error["error"]["message"].as_str().unwrap();
+    assert!(message.contains("wreckordbox stick unlock"), "{message}");
+    assert_eq!(deck::snapshot(rig.stick()), before);
+
+    let stick = rig.stick().to_str().unwrap();
+    assert!(rig.sandbox.cli(&["stick", "unlock", stick]).status.success());
+    assert!(rig.write(&track, true).status.success());
+    assert!(rig.sandbox.cli(&["stick", "lock", stick]).status.success());
+    let after = deck::snapshot(rig.stick());
+    assert_eq!(rig.write(&track, true).error_json()["error"]["code"], "stick_protected");
+    assert_eq!(deck::snapshot(rig.stick()), after);
+}
+
+/// wbx-45.11, round 4 A1: a protected Spare stick whose last export did not
+/// finish is refused before anything reads it through the path that would
+/// settle that export: not a byte changes. Unlocked, it is refused as an
+/// unfinished write, still without settling it.
+#[test]
+fn a_protected_stick_with_an_unfinished_export_is_not_settled_or_written() {
+    let (rig, track) = Rig::ready("Half Done.wav");
+    let stick = rig.stick().to_str().unwrap().to_owned();
+    assert!(rig.sandbox.cli(&["stick", "lock", &stick]).status.success());
+    // The journal an interrupted publication leaves.
+    std::fs::write(rig.stick().join(".rbxport-publication"), b"{\"interrupted\":true}").unwrap();
+    let before = deck::snapshot(rig.stick());
+
+    let run = rig.write(&track, true);
+    assert_eq!(run.error_json()["error"]["code"], "stick_protected");
+    assert_eq!(deck::snapshot(rig.stick()), before, "nothing settled, nothing written");
+
+    assert!(rig.sandbox.cli(&["stick", "unlock", &stick]).status.success());
+    let run = rig.write(&track, true);
+    assert_eq!(run.error_json()["error"]["code"], "unfinished_write", "{}", run.stdout);
+    assert_eq!(deck::snapshot(rig.stick()), before, "still not settled");
 }

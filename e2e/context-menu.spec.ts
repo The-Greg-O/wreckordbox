@@ -1,3 +1,4 @@
+import { confirmStickWrite } from "./helpers";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 /**
@@ -158,6 +159,8 @@ test("Export Playlist lists the connected sticks and writes to the one chosen", 
   await expect(sticks).toBeVisible();
   await expect(page.getByRole("menuitem", { name: "TEST", exact: true })).toBeVisible();
   await sticks.click();
+  // Staged and held for, as every Stick write is (wbx-45.4).
+  await confirmStickWrite(page);
   await expect(page.getByRole("contentinfo")).toContainText(/DJ STICK: Updated \d+ tracks/);
 });
 

@@ -343,6 +343,10 @@ pub(crate) fn track(index: &rbl_index::Library, row: rbl_index::Row) -> Track {
 fn edit_error(error: &DbError) -> ServiceError {
     match error {
         refused if rbl_library::protection::refused(refused) => protection::refusal(),
+        // A Library on a protected Stick (wbx-45.11): the Stick's own words.
+        DbError::WriteRefused(why) if rbl_library::stick::refused(error) => {
+            ServiceError::new(codes::STICK_PROTECTED, why.clone())
+        }
         DbError::WriteRefused(why) => ServiceError::new(codes::WRITE_REFUSED, why.clone()),
         // The core has no Library yet: a hosting window is still reading it.
         DbError::NotInstalled(why) if why == rbl_library::NOT_LOADED => {

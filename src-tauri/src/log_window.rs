@@ -90,8 +90,15 @@ pub async fn open_log_folder<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> App
 
 /// Writes the lines the window shows to the file the save dialog picked.
 #[tauri::command]
-pub async fn save_log_text(path: String, text: String) -> AppResult<()> {
+pub async fn save_log_text(
+    state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
+    path: String,
+    text: String,
+) -> AppResult<()> {
+    let state = std::sync::Arc::clone(&state);
     crate::commands::blocking("save_log_text", move || {
+        // A file saved onto a Stick is a Stick write (wbx-45.11).
+        let _access = crate::stick_guard::enter(state.backup_dir(), std::path::Path::new(&path))?;
         crate::grid::write_atomically(std::path::Path::new(&path), text.as_bytes()).map_err(|e| {
             AppError::internal("The log could not be saved.").with_detail(e.to_string())
         })

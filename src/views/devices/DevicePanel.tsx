@@ -15,7 +15,10 @@
  * it): the panel says so, names the stick and what settling does, and
  * settles it only when the DJ presses that button (wbx-45.5).
  */
-import { useCallback, useEffect, useState } from "react";
+import { useStickWriteGateContext } from "@/views/shell/StickWriteGate";
+import { StickUnlock } from "@/views/shell/StickUnlock";
+import { useStickProtection } from "@/store/useStickProtection";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { getBackend } from "@/ipc/client";
 import type { Device, DeviceSettings, TreeNode } from "@/ipc/types";
@@ -69,6 +72,10 @@ export function DevicePanel({
   busy = false,
 }: DevicePanelProps) {
   const [tab, setTab] = useState<DeviceTab>("general");
+  // Stick Protection (wbx-45.11): shown, unlocked and locked here.
+  const sticks = useMemo(() => [device], [device]);
+  const protection = useStickProtection(sticks).get(device.path);
+  const protectionRow = protection === undefined ? null : <StickUnlock path={device.path} protection={protection} />;
   const [settings, setSettings] = useState<DeviceSettings | null>(null);
   // The stick's last write did not finish; nothing is read until it is settled.
   const [unfinished, setUnfinished] = useState(false);
@@ -85,6 +92,7 @@ export function DevicePanel({
   // or by an export, both writes the DJ asked for.
   const stickDefaults = usePreferences().djSystem;
   const hasExport = device.export !== null;
+  const gate = useStickWriteGateContext();
   useEffect(() => {
     let cancelled = false;
     setSettings(null);
@@ -127,24 +135,40 @@ export function DevicePanel({
       .finally(() => setSettling(false));
   }, [device.path, onError, onSettle]);
 
-  // Every change is written at once and the panel shows what came back.
+  // Every change is a write to the Stick: staged, held for, then written,
+  // and the panel shows what came back (wbx-45.4). Cancelled, it shows what
+  // the Stick still holds.
   const save = useCallback(
     (next: DeviceSettings) => {
+      if (gate === null) {
+        onError?.("Settings on a Stick can only be changed from the main window.");
+        return;
+      }
+      const before = settings;
       setSettings(next);
-      void getBackend()
-        .then((backend) => backend.saveDeviceSettings(device.path, next))
-        .then(setSettings)
-        .catch((e: unknown) => {
-          onError?.(errorMessage(e));
-        });
+      void gate.stage({
+        path: device.path,
+        title: `Change the settings on ${device.name}`,
+        lines: ["The Stick's own settings (what a player shows and sorts by) are written with this change."],
+        plan: { kind: "saveSettings", settings: next },
+        run: (approval) => getBackend()
+          .then((backend) => backend.saveDeviceSettings(device.path, next, approval))
+          .then(setSettings)
+          .catch((e: unknown) => {
+            onError?.(errorMessage(e));
+          }),
+      }).then((written) => {
+        if (!written) setSettings(before);
+      });
     },
-    [device.path, onError],
+    [device.path, device.name, gate, settings, onError],
   );
 
   if (unfinished) {
     const wording = unfinishedWriteWording(device.name);
     return (
       <section className={styles.panel} aria-label={`Device ${device.name}`}>
+        {protectionRow}
         <div className={styles.body}>
           <div role="group" aria-label={wording.label} className={styles.unfinished}>
             <p className={styles.unfinishedTitle}>{UNFINISHED_WRITE}</p>
@@ -162,6 +186,7 @@ export function DevicePanel({
 
   return (
     <section className={styles.panel} aria-label={`Device ${device.name}`}>
+      {protectionRow}
       <div className={styles.strip} role="tablist" aria-label="Device settings">
         {TABS.map((t) => (
           <button

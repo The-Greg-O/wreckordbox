@@ -1,0 +1,18 @@
+[package]
+name = "wreckordbox-stick-protection"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Stick Protection: no write to a Stick unless the DJ has unlocked that Stick."
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+rustix = { version = "1", features = ["fs"] }
+
+[dev-dependencies]
+tempfile = "3"

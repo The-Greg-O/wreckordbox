@@ -13,6 +13,9 @@ workspace = true
 # Only its readers of a Stick's exported library: the path the library holds
 # for a track is where a Native stems folder gets its name.
 rbl-export = { path = "../rbl-export" }
+# The Stick's library read without ever settling an unfinished export
+# (wbx-45.5's reader; wbx-45.11).
+wreckordbox-stick-outline = { path = "../wreckordbox-stick-outline" }
 thiserror = { workspace = true }
 # Only to read the `source.json` of a folder already on the Stick.
 serde_json = { workspace = true }

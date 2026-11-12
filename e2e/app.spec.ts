@@ -1,3 +1,4 @@
+import { confirmStickWrite } from "./helpers";
 import { expect, test } from "@playwright/test";
 
 /** Presses that take the detail waveform from any step out to the widest. */
@@ -855,11 +856,14 @@ test("a device shows what is on it, and a second write only syncs the difference
   // First write: everything goes.
   await expect(panel.getByRole("button", { name: "Export" })).toBeVisible();
   await panel.getByRole("button", { name: "Export" }).click();
+  // Staged and held for, as every Stick write is (wbx-45.4).
+  await confirmStickWrite(page);
   await expect(page.getByRole("contentinfo")).toContainText(/DJ STICK: Updated \d+ tracks/);
   await expect(panel).toContainText("Only what changed will be copied.");
 
   // Second write to the same stick: nothing changed, so nothing is copied.
   await panel.getByRole("button", { name: "Sync" }).click();
+  await confirmStickWrite(page);
   await expect(page.getByRole("contentinfo")).toContainText(/DJ STICK: Updated 0 tracks\. Skipped \d+ tracks \(no change\)/);
 });
 

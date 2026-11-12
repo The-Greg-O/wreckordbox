@@ -45,6 +45,10 @@ export interface StatusBarProps {
   analysisFailures?: number;
   /** Which tracks failed and why, listed in the failure badge's tooltip. */
   analysisFailed?: readonly { title: string; reason: string }[];
+  /** Each mounted Stick and whether Stick Protection holds it (wbx-45.11; the view shell's line). */
+  sticks?: readonly { path: string; name: string; protected: boolean }[];
+  /** Opens Stick Protection, to unlock or lock a Stick. */
+  onStickProtection?: (() => void) | undefined;
 }
 
 export function StatusBar({

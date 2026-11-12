@@ -102,6 +102,36 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/** Waits for the staged write's dialog and holds its button to the end. */
+async function holdToWrite() {
+  let button: HTMLButtonElement | undefined;
+  for (let i = 0; i < 100 && button === undefined; i += 1) {
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    button = [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
+      .find((b) => b.textContent?.includes("Hold to write"));
+  }
+  expect(button).toBeDefined();
+  // A Gig stick is protected until its name is typed (wbx-45.11): the hold waits for it.
+  const typed = document.querySelector<HTMLInputElement>('[role="alertdialog"] input[aria-label^="Type"]');
+  if (typed !== null) {
+    await act(async () => {
+      // React's own value setter, so the change is heard as typing.
+      Reflect.set(HTMLInputElement.prototype, "value", "TEST", typed);
+      typed.dispatchEvent(new Event("input", { bubbles: true }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      typed.form?.requestSubmit();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+  }
+  expect(button?.disabled).toBe(false);
+  await act(async () => {
+    button?.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+    await new Promise((resolve) => setTimeout(resolve, 2200));
+  });
+}
+
 async function mountAndOpenMenu() {
   await act(async () => { root.render(<App />); await Promise.resolve(); });
   await act(async () => { await Promise.resolve(); });
@@ -129,6 +159,9 @@ it("exports the clicked playlist to a current destination and reports translated
   await mountAndOpenMenu();
 
   await act(async () => { held.menuChoice?.(); await Promise.resolve(); });
+  // Staged and held for, as every Stick write is (wbx-45.4).
+  expect(held.exportPlaylist).not.toHaveBeenCalled();
+  await holdToWrite();
   expect(held.exportPlaylist).toHaveBeenCalledTimes(1);
   expect(held.exportPlaylist.mock.calls[0]?.slice(0, 2)).toEqual(["playlist-clicked", device.path]);
   expect(host.querySelector('[data-testid="activity"]')?.textContent).toBe("Ich schreibe an USB Test…");

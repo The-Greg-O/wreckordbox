@@ -32,6 +32,8 @@ import type { TreeNode } from "@/ipc/types";
 import { isShellTreePlace, shellTreeRows, type ShellSetPlan, type ShellStick, type ShellTreeRow } from "@/lib/shellTree";
 import { keyTarget, treeLayout, visibleRange, type TreeSizes } from "@/lib/shellTreeNav";
 import styles from "./ShellTree.module.css";
+import { useShellTreeActions, type ShellTreeActionProps } from "./ShellTreeActions";
+import { setBrowserFocus } from "@/lib/browserFocus";
 
 export interface ShellTreeProps {
   /** The Library's tree, as the backend sends it. */
@@ -44,11 +46,24 @@ export interface ShellTreeProps {
   selectedId: string | null;
   /** A row was chosen. */
   onOpen: (row: ShellTreeRow) => void;
+  /** The old tree's actions (wbx-45.4): menus, rename, drops, moves, Eject. None without. */
+  actions?: ShellTreeActionProps | undefined;
+  /** The Library node selected, which the Playlist menu's commands act on. */
+  selectedNode?: TreeNode | null | undefined;
+  /** The folders closed, when the window keeps them (the session); kept here otherwise. */
+  collapsed?: ReadonlySet<string> | undefined;
+  /** A folder was opened or closed. */
+  onFolderOpen?: ((id: string, open: boolean) => void) | undefined;
+  /** Why a Stick may not be written to now (the Stick write gate), or null. */
+  stickRefusal?: ((path: string) => string | null) | undefined;
   /** What waits in Intake and Problems, drawn beside them (wbx-62). */
   queueCounts?: { intake: number | null; problems: number | null } | null | undefined;
   /** The second list's target playlist, marked in orange (wbx-59). */
   targetId?: string | null;
 }
+
+/** No actions: a tree that only opens rows. */
+const NO_ACTIONS: ShellTreeActionProps = {};
 
 /** Nothing produces Set plans yet; one empty list, so the rows are not remade each render. */
 const NO_SET_PLANS: readonly ShellSetPlan[] = [];
@@ -69,6 +84,8 @@ interface Group {
   label: string;
   /** The heading line, when the group has one that is not a row. */
   heading?: string;
+  /** The heading's own row, for a heading the keyboard can reach. */
+  headingRow?: ShellTreeRow;
   rows: ShellTreeRow[];
 }
 
@@ -77,7 +94,7 @@ function groupRows(rows: readonly ShellTreeRow[], t: (text: string) => string): 
   const groups: Group[] = [];
   for (const row of rows) {
     if (row.kind === "heading") {
-      groups.push({ id: row.id, label: t(row.name), heading: t(row.name), rows: [] });
+      groups.push({ id: row.id, label: t(row.name), heading: t(row.name), headingRow: row, rows: [] });
     } else if (row.kind === "stick") {
       groups.push({ id: row.id, label: `${t("Stick")} ${row.name}`, rows: [row] });
     } else {
@@ -110,9 +127,14 @@ function readSizes(element: HTMLElement | null): TreeSizes {
   };
 }
 
-export function ShellTree({ library, sticks, setPlans = NO_SET_PLANS, selectedId, onOpen, queueCounts, targetId = null }: ShellTreeProps) {
+export function ShellTree({
+  library, sticks, setPlans = NO_SET_PLANS, selectedId, onOpen, queueCounts, actions = NO_ACTIONS, selectedNode = null,
+  collapsed: keptCollapsed, onFolderOpen, stickRefusal, targetId = null,
+}: ShellTreeProps) {
   const t = useTranslation();
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
+  const [ownCollapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
+  const collapsed = keptCollapsed ?? ownCollapsed;
+  const act = useShellTreeActions({ actions, library, sticks, selectedNode, stickRefusal });
   const treeRows = useMemo(
     () => shellTreeRows({ library, sticks, setPlans, collapsed, queueCounts }),
     [library, sticks, setPlans, collapsed, queueCounts],
@@ -145,6 +167,9 @@ export function ShellTree({ library, sticks, setPlans = NO_SET_PLANS, selectedId
   // The row with the keyboard's focus, apart from the selected one.
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const isPlace = useCallback((id: string | null) => id !== null && treeRows.some((row) => row.id === id && isShellTreePlace(row.kind)), [treeRows]);
+  // Where the keyboard may land: the places, and what opens a menu without
+  // being one (the Playlists heading, a Stick library's label; wbx-45.4).
+  const isStop = (row: ShellTreeRow) => isShellTreePlace(row.kind) || act.stop(row);
   const tabStop = isPlace(focusedId) ? focusedId : isPlace(selectedId) ? selectedId : treeRows.find((row) => isShellTreePlace(row.kind))?.id ?? null;
 
   // A row the keyboard moved to may not be drawn yet: scroll it into view,
@@ -176,6 +201,8 @@ export function ShellTree({ library, sticks, setPlans = NO_SET_PLANS, selectedId
   });
 
   const toggle = (id: string, open: boolean) => {
+    onFolderOpen?.(id, open);
+    if (keptCollapsed !== undefined) return;
     setCollapsed((current) => {
       const next = new Set(current);
       if (open) next.delete(id);
@@ -185,11 +212,18 @@ export function ShellTree({ library, sticks, setPlans = NO_SET_PLANS, selectedId
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLElement>, row: ShellTreeRow) => {
+    // Keys typed into the rename field are the field's.
+    if (event.target !== event.currentTarget) return;
+    if (act.key(event, row)) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     if (event.altKey || event.ctrlKey || event.metaKey) return;
     if (event.key === "Enter" || event.key === " ") {
       onOpen(row);
     } else {
-      const target = keyTarget(treeRows, row.id, event.key);
+      const target = keyTarget(treeRows, row.id, event.key, isStop);
       if (target === null) return;
       if ("focus" in target) moveFocus(target.focus);
       else if ("toggle" in target) toggle(target.toggle, target.open);
@@ -201,6 +235,26 @@ export function ShellTree({ library, sticks, setPlans = NO_SET_PLANS, selectedId
 
   const drawRow = (row: ShellTreeRow) => {
     const name = rowName(row, t);
+    if (!isShellTreePlace(row.kind) && act.stop(row)) {
+      // Not a place, but its menu is the way to make a playlist in that library.
+      return (
+        <div
+          key={row.id}
+          role="treeitem"
+          aria-label={name}
+          aria-level={1}
+          data-kind={row.kind}
+          data-row-id={row.id}
+          tabIndex={-1}
+          className={styles.library}
+          {...act.row(row)}
+          onFocus={() => { setFocusedId(row.id); }}
+          onKeyDown={(event) => { onKeyDown(event, row); }}
+        >
+          {name}
+        </div>
+      );
+    }
     if (!isShellTreePlace(row.kind)) {
       return <div key={row.id} className={row.kind === "stickLibrary" ? styles.library : styles.empty}>{name}</div>;
     }
@@ -221,6 +275,7 @@ export function ShellTree({ library, sticks, setPlans = NO_SET_PLANS, selectedId
         title={name}
         className={row.kind === "stick" ? styles.stick : styles.row}
         style={{ "--depth": Math.min(row.depth, MAX_INDENT) } as CSSProperties}
+        {...act.row(row)}
         onClick={() => { onOpen(row); }}
         onFocus={() => { setFocusedId(row.id); }}
         onKeyDown={(event) => { onKeyDown(event, row); }}
@@ -240,8 +295,15 @@ export function ShellTree({ library, sticks, setPlans = NO_SET_PLANS, selectedId
           </button>
         ) : null}
         {row.kind === "stick" ? <span className={styles.stickLabel} aria-hidden>{t("Stick")} ·</span> : null}
-        <span className={styles.name} data-name>{name}</span>
+        {act.rename(row, name) ?? <span className={styles.name} data-name>{name}</span>}
         {row.count !== undefined ? <span className={styles.count} aria-hidden>{row.count}</span> : null}
+        {row.protection === undefined ? null : (
+          <span className={styles.protection} data-stick-protection={row.protection}
+            title={row.protection === "protected" ? t("Protected: nothing is written to it until it is unlocked") : t("Unlocked until it is ejected or removed")}>
+            {row.protection === "protected" ? t("Protected") : t("Unlocked")}
+          </span>
+        )}
+        {act.end(row)}
       </div>
     );
   };
@@ -252,6 +314,12 @@ export function ShellTree({ library, sticks, setPlans = NO_SET_PLANS, selectedId
       role="tree"
       aria-label={t("Tree")}
       ref={root}
+      // The window's browser focus (the palette and the menus answer the
+      // tree it is in): a click is followed by the window; a key-only
+      // arrival is told here.
+      data-browser-pane="tree"
+      data-browser-side="main"
+      onFocus={() => { setBrowserFocus({ pane: "tree", side: "main" }); }}
       onScroll={(event) => { setView({ scroll: event.currentTarget.scrollTop, height: event.currentTarget.clientHeight }); }}
     >
       <div className={styles.content} style={{ height: layout.height }}>
@@ -271,13 +339,30 @@ export function ShellTree({ library, sticks, setPlans = NO_SET_PLANS, selectedId
               className={styles.group}
               style={{ top: box.top, height: box.height }}
             >
-              {group.heading !== undefined ? <div className={styles.heading} aria-hidden>{group.heading}</div> : null}
+              {group.heading !== undefined && group.headingRow !== undefined && act.stop(group.headingRow) ? (
+                <div
+                  className={styles.heading}
+                  role="treeitem"
+                  aria-label={group.heading}
+                  aria-level={1}
+                  aria-haspopup="menu"
+                  data-kind="collection"
+                  data-row-id={group.headingRow.id}
+                  tabIndex={-1}
+                  {...act.heading(group.id)}
+                  onFocus={() => { if (group.headingRow) setFocusedId(group.headingRow.id); }}
+                  onKeyDown={(event) => { if (group.headingRow) onKeyDown(event, group.headingRow); }}
+                >
+                  {group.heading}
+                </div>
+              ) : group.heading !== undefined ? <div className={styles.heading} aria-hidden>{group.heading}</div> : null}
               <div style={{ height: first * sizes.row }} aria-hidden />
               {group.rows.slice(first, end).map(drawRow)}
             </div>
           );
         })}
       </div>
+      {act.menu}
     </div>
   );
 }

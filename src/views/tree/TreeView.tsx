@@ -30,7 +30,7 @@ import { deviceDropPath } from "@/lib/deviceLibrary";
  * The drag type a playlist or folder carries its id in while it is picked up,
  * so a stick in either browser's tree can tell it from tracks and take it.
  */
-const TREE_NODE_DRAG = "application/x-rbx-tree-node";
+export const TREE_NODE_DRAG = "application/x-rbx-tree-node";
 
 /**
  * The name, while it is being typed over.
@@ -39,10 +39,12 @@ const TREE_NODE_DRAG = "application/x-rbx-tree-node";
  * typing replaces it and a click puts the caret somewhere instead. Enter and
  * a click elsewhere commit; Escape puts the old name back.
  */
-function RenameField({ name, onCommit, onCancel }: {
+export function RenameField({ name, onCommit, onCancel, className = styles.rename }: {
   name: string;
   onCommit: (name: string) => void;
   onCancel: () => void;
+  /** The shell's tree draws it in its own look. */
+  className?: string | undefined;
 }) {
   const [text, setText] = useState(name);
   // Committed once: Enter moves the focus away, and the blur that follows
@@ -56,7 +58,7 @@ function RenameField({ name, onCommit, onCancel }: {
   };
   return (
     <input
-      className={styles.rename}
+      className={className}
       aria-label={`Rename ${name}`}
       value={text}
       autoFocus

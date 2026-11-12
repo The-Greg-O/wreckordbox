@@ -245,6 +245,45 @@ refused.
 The app uses Symphonia, Rubato, built-in PCM WAV/AIFF writing, and bundled LAME. Running
 export does not require a separate FFmpeg installation.
 
+## Stick Protection
+
+Every Stick is protected until you unlock it. While it is protected nothing
+is written to it, by the window, the Library service, the `wreckordbox`
+command or a script: exports and syncs, its playlists and settings, a
+format, settling an unfinished write, Native stems, files you save there
+(playlist files, XML, loop WAVs, logs, backups), the audio tags of tracks
+whose file is on it, and a Library or Sidecar kept on it. A refused write
+answers `stick_protected` (`stickProtected` in the window), names the Stick
+and says how to unlock it, and leaves every byte as it was. An ordinary
+folder, or an external disk with no player export on it, is never refused.
+
+What counts as a Stick is decided from the volume itself: one with a player
+export (a `PIONEER` folder or the Spare stick marker) at its root, or a
+removable volume whose root cannot be read. A folder inside a Stick is that
+Stick: it is never unlocked on its own.
+
+- **Unlock** it from its panel, the command palette, or
+  `wreckordbox stick unlock <path>`. A Spare stick (one carrying the
+  `.rbxport-disposable` marker) unlocks with a confirmation; any other Stick
+  needs its name typed (`--name <NAME>` on the command line), checked by the
+  app.
+- **An unlock ends** when you lock it (`wreckordbox stick lock <path>`),
+  eject it, pull it out or put it back, or restart the machine. Locking and
+  ejecting wait for any write to it to finish first, from every program,
+  and a write that finds its Stick replaced stops. When the app cannot tell
+  this mount of the Stick from another, it stays protected.
+- `wreckordbox stick status <path>` says whether it is protected.
+
+The plan and the hold-to-confirm button before a Stick write are an
+interface confirmation: they show what will change and ask you to mean it.
+Stick Protection is the guarantee underneath: it is enforced by the app's
+backend at the point of writing, whoever asks.
+
+**Agents.** An agent can run `wreckordbox stick unlock` like any other
+client; a Stick without the Spare stick marker needs its name. An agent must
+never unlock a Stick unless the DJ asked for that Stick, by name, to be
+unlocked.
+
 ## Code and tests
 
 `crates/rbl-export/` owns export and publication, working with `rbl-pdb`,

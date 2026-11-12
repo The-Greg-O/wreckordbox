@@ -69,14 +69,35 @@ pub fn read_error(mount: &Path, error: ReadError) -> AppError {
 /// before; files another program wrote since are kept. Only for the action
 /// the DJ chose in the Stick's panel.
 #[tauri::command]
-pub async fn stick_settle(path: String) -> AppResult<()> {
+pub async fn stick_settle(
+    state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
+    path: String,
+    // The DJ's approval of this exact write (`stick_write_plan`, wbx-45.4).
+    approval: Option<String>,
+) -> AppResult<()> {
+    let state = std::sync::Arc::clone(&state);
     blocking("stick_settle", move || {
-        settle(&PathBuf::from(path), rbl_db::is_rekordbox_app_running())
+        let mount = PathBuf::from(path);
+        // Settling writes to the Stick: Stick Protection first (wbx-45.11).
+        let access = crate::stick_guard::enter_stick(state.backup_dir(), &mount)?;
+        crate::stick_approval::consume(
+            approval.as_deref(),
+            &crate::stick_approval::StickOperation::Settle,
+            &mount,
+            0,
+        )?;
+        settle(&access, &mount, rbl_db::is_rekordbox_app_running())
     })
     .await
 }
 
-fn settle(mount: &Path, rekordbox_running: bool) -> AppResult<()> {
+/// `access`: the capability, Stick Protection's leave (wbx-45.11).
+fn settle(
+    access: &crate::stick_guard::StickAccess,
+    mount: &Path,
+    rekordbox_running: bool,
+) -> AppResult<()> {
+    access.recheck()?;
     if !mount.is_dir() {
         return Err(AppError::new(
             ErrorKind::NotFound,
@@ -213,6 +234,7 @@ mod tests {
                 refused(
                     "duplicates",
                     run(crate::device_library::device_playlist_duplicates(
+                        state.clone(),
                         path.clone(),
                         format.into(),
                         "1".into(),
@@ -375,7 +397,22 @@ mod tests {
                 without_lock(mount);
             }
 
-            run(stick_settle(mount.to_string_lossy().into_owned())).unwrap();
+            // The DJ's approval, as the staged write gets it from the plan (wbx-45.4).
+            let state = crate::state::AppState::unprotected(dest.path().with_extension("state"));
+            crate::stick_guard::testing::unlock(&state, mount);
+            let app = crate::stick_guard::testing::app(state);
+            let held = tauri::Manager::state::<std::sync::Arc<crate::state::AppState>>(&app);
+            let approval = crate::stick_guard::testing::token(
+                &held,
+                mount,
+                crate::stick_approval::StickOperation::Settle,
+            );
+            run(stick_settle(
+                tauri::Manager::state(&app),
+                mount.to_string_lossy().into_owned(),
+                approval,
+            ))
+            .unwrap();
 
             assert_eq!(std::fs::read(mount.join(PDB)).unwrap(), next.pdb);
             assert_eq!(std::fs::read(mount.join(ONE)).unwrap(), next.one);
@@ -406,7 +443,8 @@ mod tests {
         stick(dest.path());
         interrupt(dest.path());
         let before = snapshot(dest.path());
-        let refused = settle(dest.path(), true).unwrap_err();
+        let refused =
+            settle(&crate::stick_guard::testing::ordinary(), dest.path(), true).unwrap_err();
         assert_eq!(refused.kind, ErrorKind::ReadOnly);
         assert_eq!(snapshot(dest.path()), before);
     }
@@ -457,6 +495,7 @@ mod tests {
                         check("open_view");
                     }
                     let _ = run(crate::device_library::device_playlist_duplicates(
+                        state.clone(),
                         path.clone(),
                         format.into(),
                         "1".into(),

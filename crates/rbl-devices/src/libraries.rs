@@ -143,7 +143,7 @@ pub fn on_volume(volume: &Path) -> Vec<PathBuf> {
 /// mount can make a look here slow; callers run it off the interface thread.
 fn volumes() -> Vec<PathBuf> {
     let mut volumes = crate::mounts::mounts();
-    if std::env::var_os(crate::FAKE_VOLUMES).is_none() {
+    if crate::fake_volumes().is_none() {
         volumes.extend(linux_mount_folders());
     }
     volumes.sort();

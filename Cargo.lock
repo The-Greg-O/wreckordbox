@@ -4082,6 +4082,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tracing",
+ "wreckordbox-stick-protection",
 ]
 
 [[package]]
@@ -4213,6 +4214,7 @@ dependencies = [
  "wreckordbox-service",
  "wreckordbox-sidecar",
  "wreckordbox-stick-outline",
+ "wreckordbox-stick-protection",
  "zip",
 ]
 
@@ -7130,6 +7132,7 @@ dependencies = [
  "wreckordbox-render",
  "wreckordbox-service",
  "wreckordbox-sidecar",
+ "wreckordbox-stick-protection",
 ]
 
 [[package]]
@@ -7157,6 +7160,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "vorbis_rs",
+ "wreckordbox-stick-outline",
 ]
 
 [[package]]
@@ -7190,6 +7194,7 @@ dependencies = [
  "wreckordbox-native-stems",
  "wreckordbox-render",
  "wreckordbox-sidecar",
+ "wreckordbox-stick-protection",
 ]
 
 [[package]]
@@ -7222,6 +7227,16 @@ dependencies = [
  "thiserror 2.0.20",
  "tracing",
  "wreckordbox-stick-outline",
+]
+
+[[package]]
+name = "wreckordbox-stick-protection"
+version = "1.10.0"
+dependencies = [
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

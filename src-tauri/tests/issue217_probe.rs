@@ -48,6 +48,7 @@ fn export_issue217_controlled_mp3_fixtures() {
         std::fs::create_dir_all(&destination).unwrap();
         let result = tauri::async_runtime::block_on(commands::export_tracks_to_device(
             app.handle().clone(), app.state::<Arc<AppState>>(), ids.clone(), destination.to_string_lossy().into_owned(), None, conversion,
+            approve(&app, &destination, &serde_json::json!({ "kind": "exportTracks", "tracks": ids })),
         )).unwrap();
         println!("{name}: tracks={} failed={:?}", result.tracks, result.failed);
         let snapshot = rbl_export::snapshot::Snapshot::read(&destination).unwrap();
@@ -61,4 +62,15 @@ fn export_issue217_controlled_mp3_fixtures() {
                 track.title, track.path, row.sample_rate, row.bitrate, row.duration_sec, std::fs::metadata(&audio).unwrap().len(), audio.display());
         }
     }
+}
+
+/// The approval the window's staged write gets from the plan (wbx-45.4).
+fn approve(app: &tauri::App<tauri::test::MockRuntime>, stick: &std::path::Path, operation: &serde_json::Value) -> Option<String> {
+    let request = serde_json::from_value(serde_json::json!({ "destination": stick.to_string_lossy(), "operation": operation })).unwrap();
+    let state = app.state::<Arc<AppState>>();
+    // A temporary folder standing in for a Stick, unlocked as the DJ would (wbx-45.11).
+    std::fs::write(stick.join(wreckordbox_stick_protection::STAND_IN_MARKER), b"").unwrap();
+    let name = wreckordbox_stick_protection::name_of(&stick.canonicalize().unwrap());
+    wreckordbox_stick_protection::unlock(state.backup_dir(), stick, Some(&name)).unwrap();
+    rbxport_lib::stick_write_plan::plan(state.inner(), &request).unwrap().plan.map(|plan| rbxport_lib::stick_approval::approve(state.backup_dir(), &plan).unwrap())
 }

@@ -73,8 +73,15 @@ pub fn exported(
         if !formats.contains(&format) {
             continue;
         }
-        let library = match device_library::read(stick, format) {
+        // Read without settling anything (wbx-45.5's reader): a Stick whose
+        // last export did not finish is refused, never recovered here.
+        let library = match wreckordbox_stick_outline::library(stick, format) {
             Ok(library) => library,
+            Err(wreckordbox_stick_outline::ReadError::UnfinishedWrite) => {
+                return Err(NativeStemsError::UnfinishedWrite {
+                    stick: stick.to_path_buf(),
+                });
+            }
             Err(error) => {
                 unreadable = Some(error.to_string());
                 continue;
