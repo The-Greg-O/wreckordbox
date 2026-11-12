@@ -317,3 +317,23 @@ fn an_unreadable_store_is_not_reported_as_an_empty_answer() {
     );
     assert_eq!(result.error_json()["error"]["code"], "sidecar_failed");
 }
+
+#[test]
+fn a_missing_rules_symlink_target_is_an_error_not_default_precedence() {
+    let s = Sandbox::new();
+    ok(&s, &["status"]);
+    std::fs::create_dir_all(s.sidecar_dir()).unwrap();
+    let rules = s.sidecar_dir().join("source-precedence.toml");
+    std::os::unix::fs::symlink("missing-rules.toml", &rules).unwrap();
+    let result = s.cli(&["--json", "facts", "standing", "10003", "energy"]);
+    assert!(
+        !result.status.success(),
+        "broken source rules were ignored: {}",
+        result.stdout
+    );
+    assert_eq!(
+        result.error_json()["error"]["code"],
+        "source_precedence_invalid"
+    );
+    assert!(!s.sidecar_dir().join("sidecar.db").exists());
+}

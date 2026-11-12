@@ -59,7 +59,10 @@ impl Rules {
         let path = dir.join(RULES_FILE);
         let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && path.symlink_metadata().is_err() =>
+            {
                 return Ok(Self::default())
             }
             Err(error) => return Err(format!("cannot read {}: {error}", path.display())),
