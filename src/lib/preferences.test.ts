@@ -379,3 +379,19 @@ describe("the compact player's beat jump size", () => {
     }
   });
 });
+
+describe("the transport edge (wbx-45.16)", () => {
+  it("starts immediate, the DJ's decision, and keeps a stored immediate, 1 ms or 2 ms", () => {
+    expect(DEFAULT_PREFERENCES.audio.transportEdge).toBe("immediate");
+    expect(sanitisePreferences({ audio: {} }).audio.transportEdge).toBe("immediate");
+    for (const edge of ["immediate", "1ms", "2ms"]) {
+      expect(sanitisePreferences({ audio: { transportEdge: edge } }).audio.transportEdge).toBe(edge);
+    }
+  });
+
+  it("reads anything else as immediate", () => {
+    for (const stored of ["3ms", 2, "", null, "2 ms"]) {
+      expect(sanitisePreferences({ audio: { transportEdge: stored } }).audio.transportEdge, String(stored)).toBe("immediate");
+    }
+  });
+});

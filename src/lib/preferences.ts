@@ -53,6 +53,14 @@ export const BUFFER_SIZES: readonly number[] = [64, 128, 256, 512, 1024, 2048];
 export type MetronomeSound = 1 | 2 | 3;
 export type MetronomeVolume = "small" | "middle" | "large";
 
+/**
+ * How play, pause, cue, a seek and a beat jump meet the music (wbx-45.16):
+ * cut immediately, or faded over one or two milliseconds. Immediate is the
+ * DJ's decision and the default; the other two are there to compare by ear.
+ */
+export type TransportEdge = "immediate" | "1ms" | "2ms";
+export const TRANSPORT_EDGES: readonly TransportEdge[] = ["immediate", "1ms", "2ms"];
+
 /** The fraction of a beat the quantized cue snaps to. */
 export type QuantizeBeat = "1/1" | "1/2" | "1/4" | "1/8";
 
@@ -222,6 +230,8 @@ export interface AudioPreferences {
   bufferSize: number;
   metronomeSound: MetronomeSound;
   metronomeVolume: MetronomeVolume;
+  /** Start and stop: immediate, or a 1 or 2 ms fade. Applies live. */
+  transportEdge: TransportEdge;
 }
 
 export type AnalysisMode = "rekordbox" | "rbxport";
@@ -448,6 +458,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
     bufferSize: 512,
     metronomeSound: 2,
     metronomeVolume: "large",
+    transportEdge: "immediate",
   },
   analysis: {
     mode: "rbxport",
@@ -636,6 +647,7 @@ export function sanitisePreferences(value: unknown): Preferences {
       bufferSize: oneOfNumber(audio.bufferSize, BUFFER_SIZES, d.audio.bufferSize),
       metronomeSound: oneOfNumber(audio.metronomeSound, METRONOME_SOUNDS, d.audio.metronomeSound),
       metronomeVolume: oneOf(audio.metronomeVolume, METRONOME_VOLUMES, d.audio.metronomeVolume),
+      transportEdge: oneOf(audio.transportEdge, TRANSPORT_EDGES, d.audio.transportEdge),
     },
     analysis: {
       mode: oneOf(analysis.mode, ["rekordbox", "rbxport"], d.analysis.mode),

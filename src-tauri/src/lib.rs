@@ -667,6 +667,7 @@ pub fn run() {
             commands::deck_metronome_grid,
             commands::deck_key_shift,
             commands::set_metronome,
+            commands::set_transport_edge,
             commands::set_audio_config,
             commands::deck_master_tempo,
             commands::set_channel_band,

@@ -1,4 +1,13 @@
-//! The two milliseconds at either end of a sound.
+//! The ramp at either end of a sound.
+//!
+//! **Transport moves use it only if the DJ asks** (wbx-45.16). Play, pause,
+//! cue, a seek, a beat jump and the end of a track ramp over the engine's
+//! `TransportEdge`: Immediate by default (the DJ's decision of 2026-11-12, "I
+//! want an immediate start and stop"), or 1 ms or 2 ms, chosen in
+//! Preferences › Audio and changed live. Immediate means the first frame of
+//! the track is heard at its own level and the frame after a stop is silence.
+//! A drag always ramps over `FADE_FRAMES`. What follows explains why a fade
+//! exists at all, which is what the DJ is choosing between.
 //!
 //! Audio does not start and stop at zero of its own accord. Press play and the
 //! first sample handed to the device is wherever the waveform happened to be —
@@ -20,6 +29,49 @@
 /// is 1.8 ms, which is the same thing.
 pub const FADE_FRAMES: u16 = 88;
 
+/// How a deck's start and stop meet the music: Preferences › Audio ›
+/// Transport edge. Applies to play, pause, cue, a seek, a beat jump and the
+/// end of a track; never to a drag, which keeps `FADE_FRAMES`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TransportEdge {
+    /// No fade: the DJ's decision, and the default.
+    #[default]
+    Immediate,
+    /// A one-millisecond fade, what hardware players do.
+    OneMs,
+    /// A two-millisecond fade, what the engine did before wbx-45.16.
+    TwoMs,
+}
+
+impl TransportEdge {
+    /// Frames the edge is faded over at `rate`: 0, 44 or 88 at 44.1 kHz.
+    #[must_use]
+    pub fn frames(self, rate: u32) -> u16 {
+        let ms = match self {
+            Self::Immediate => 0,
+            Self::OneMs => 1,
+            Self::TwoMs => 2,
+        };
+        u16::try_from(rate.saturating_mul(ms) / 1000).unwrap_or(u16::MAX)
+    }
+
+    pub(crate) fn to_u8(self) -> u8 {
+        match self {
+            Self::Immediate => 0,
+            Self::OneMs => 1,
+            Self::TwoMs => 2,
+        }
+    }
+
+    pub(crate) fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::OneMs,
+            2 => Self::TwoMs,
+            _ => Self::Immediate,
+        }
+    }
+}
+
 /// A gain that moves towards what it is asked for, one step a frame.
 ///
 /// Not a filter and not a curve: a straight line, because it is short enough
@@ -31,21 +83,66 @@ pub const FADE_FRAMES: u16 = 88;
 /// additions of one eighty-eighth land six ten-millionths short of zero, and
 /// six ten-millionths of a kick drum multiplied back in at the end of a fade
 /// is the click, quieter. A count divides exactly.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct Ramp {
-    /// Frames into the fade, from 0 (silent) to `FADE_FRAMES` (open).
+    /// Frames into the fade, from 0 (silent) to `len` (open).
     at: u16,
+    /// Steps from silent to open: at least one. One is no fade at all: the
+    /// first step up is full level and the first step down is silence.
+    len: u16,
+}
+
+impl Default for Ramp {
+    fn default() -> Self {
+        Self::silent()
+    }
 }
 
 impl Ramp {
-    /// A ramp at zero, which is where everything that is not sounding sits.
+    /// A ramp at zero, which is where everything that is not sounding sits,
+    /// fading over `FADE_FRAMES`.
     pub const fn silent() -> Self {
-        Self { at: 0 }
+        Self::silent_over(FADE_FRAMES)
+    }
+
+    /// A ramp at zero that fades over `frames`; zero is no fade.
+    pub const fn silent_over(frames: u16) -> Self {
+        Self { at: 0, len: if frames == 0 { 1 } else { frames } }
+    }
+
+    /// Fades over `frames` from now on, zero being no fade. A ramp that is
+    /// open stays open and one that is silent stays silent; one caught
+    /// mid-fade keeps its gain as nearly as the new length allows, so a
+    /// change of length is never itself a step.
+    pub fn set_len(&mut self, frames: u16) {
+        let len = if frames == 0 { 1 } else { frames };
+        if len == self.len {
+            return;
+        }
+        self.at = if self.at >= self.len {
+            len
+        } else {
+            let scaled = (u32::from(self.at) * u32::from(len) + u32::from(self.len) / 2) / u32::from(self.len);
+            u16::try_from(scaled).unwrap_or(len).min(len)
+        };
+        self.len = len;
+    }
+
+    /// Frames from the last of the sound to silence, after which nothing is
+    /// heard: 0 for a ramp that does not fade.
+    pub fn tail(self) -> usize {
+        usize::from(self.len - 1)
+    }
+
+    /// Whether the next step down reaches silence, so the frame it would be
+    /// applied to would not be heard at all and need not be taken.
+    pub fn closing_now(self) -> bool {
+        self.at <= 1
     }
 
     /// Exactly 0 while silent and exactly 1 while open, by construction.
     pub fn gain(self) -> f32 {
-        f32::from(self.at) / f32::from(FADE_FRAMES)
+        f32::from(self.at) / f32::from(self.len)
     }
 
     /// Whether the sound has gone: nothing is being heard through this.
@@ -56,14 +153,14 @@ impl Ramp {
     /// Whether the sound is all the way up, so nothing is being faded.
     #[cfg_attr(not(test), allow(dead_code, reason = "read by the fade tests"))]
     pub fn open(self) -> bool {
-        self.at >= FADE_FRAMES
+        self.at >= self.len
     }
 
     /// Moves one frame, up if `open` and down if not, and returns the gain to
     /// multiply that frame by.
     pub fn step(&mut self, open: bool) -> f32 {
         if open {
-            self.at = self.at.saturating_add(1).min(FADE_FRAMES);
+            self.at = self.at.saturating_add(1).min(self.len);
         } else {
             self.at = self.at.saturating_sub(1);
         }
@@ -120,6 +217,32 @@ mod tests {
             assert!(frames <= FADE_FRAMES, "still fading after {frames} frames");
         }
         assert_eq!(frames, FADE_FRAMES);
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp, reason = "no fade means exactly full and exactly silent")]
+    fn a_ramp_over_no_frames_opens_and_closes_in_one_step() {
+        let mut ramp = Ramp::silent_over(TransportEdge::Immediate.frames(44_100));
+        assert_eq!(ramp.step(true), 1.0, "the first frame is at full level");
+        assert!(ramp.closing_now());
+        assert_eq!(ramp.step(false), 0.0, "the first frame after a stop is silence");
+        assert_eq!(ramp.tail(), 0);
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp, reason = "open is exactly 1 and silent exactly 0")]
+    fn a_change_of_length_keeps_open_open_and_silent_silent() {
+        let mut open = after(200, true);
+        open.set_len(44);
+        assert!(open.open());
+        assert_eq!(open.gain(), 1.0);
+        let mut silent = Ramp::silent();
+        silent.set_len(1);
+        assert!(silent.silent_now());
+        // Mid-fade, the gain carries across.
+        let mut half = after(44, true);
+        half.set_len(44);
+        assert!((half.gain() - 0.5).abs() < 0.03, "{}", half.gain());
     }
 
     #[test]

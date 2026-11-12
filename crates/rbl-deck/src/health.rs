@@ -9,12 +9,19 @@ pub struct AudioHealth {
     pub load: f32,
     /// Callbacks whose processing exceeded the duration of their audio.
     pub xruns: u64,
+    /// Underruns or overruns the device itself reported since the stream
+    /// opened: the audio that was actually lost, whatever the cause.
+    pub underruns: u64,
+    /// How far ahead of playback the last callback was asked to write, as the
+    /// device reports it: the output's buffered latency.
+    pub latency: Duration,
 }
 
 #[derive(Default)]
 pub(crate) struct HealthMeter {
     load: AtomicU32,
     xruns: AtomicU64,
+    latency_micros: AtomicU64,
 }
 
 impl HealthMeter {
@@ -30,10 +37,18 @@ impl HealthMeter {
         if instant > 1.0 { self.xruns.fetch_add(1, Ordering::Relaxed); }
     }
 
+    /// One writer: the device callback.
+    pub fn record_latency(&self, latency: Duration) {
+        let micros = u64::try_from(latency.as_micros()).unwrap_or(u64::MAX);
+        self.latency_micros.store(micros, Ordering::Relaxed);
+    }
+
     pub fn snapshot(&self, running: bool) -> AudioHealth {
         AudioHealth {
             load: if running { f32::from_bits(self.load.load(Ordering::Relaxed)) } else { 0.0 },
             xruns: self.xruns.load(Ordering::Relaxed),
+            underruns: 0,
+            latency: Duration::from_micros(self.latency_micros.load(Ordering::Relaxed)),
         }
     }
 }

@@ -429,6 +429,7 @@ async function realBackend(): Promise<Backend> {
     setMetronome: (sound, volume) => invoke<void>("set_metronome", { sound, volume }),
     setAudioConfig: (sampleRate, bufferFrames) =>
       invoke<void>("set_audio_config", { sampleRate, bufferFrames }),
+    setTransportEdge: (edge) => invoke<void>("set_transport_edge", { edge }),
     setChannelBand: (deck, band, position) =>
       invoke<void>("set_channel_band", { deck, band, position }),
     setChannelKill: (deck, band, killed) =>
