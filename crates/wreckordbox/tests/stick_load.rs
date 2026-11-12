@@ -1086,7 +1086,7 @@ fn the_stem_set_written_is_the_one_approved_even_if_another_is_made_after_it_was
     let separated = rig.json(&["stems", "separate", &rig.a]);
     let approved = separated["marked_stale"][0]
         .as_i64()
-        .expect(&separated.to_string());
+        .unwrap_or_else(|| panic!("no stale set: {separated}"));
     let replacement = separated["stems"]["fact_id"].as_i64().unwrap();
     assert_ne!(approved, replacement);
     release_pause(&rig);
@@ -1114,7 +1114,7 @@ fn a_stem_file_changed_once_staged_publishes_nothing() {
     let vocals = stems["stems"]["stems"]
         .as_array()
         .or_else(|| stems["stems"].as_array())
-        .expect(&stems.to_string())
+        .unwrap_or_else(|| panic!("no Stems: {stems}"))
         .iter()
         .find(|s| s["role"] == "vocals")
         .unwrap()["path"]

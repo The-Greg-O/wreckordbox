@@ -1585,7 +1585,7 @@ fn the_shared_stick_write_crate_never_writes() {
     assert_ne!(mutated, plan, "the mutation applies");
     let caught = writing_functions(&[(path, mutated)]);
     assert!(
-        caught.iter().any(|(name, _)| name == "export_plan"),
+        caught.iter().any(|(name, _)| name == "export_plan_of"),
         "{caught:?}"
     );
 }
