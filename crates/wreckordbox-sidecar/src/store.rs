@@ -25,7 +25,7 @@ use crate::{io, Fingerprint, Result, SidecarError};
 /// The version of the stored shape this crate reads and writes. A store from
 /// a newer wreckordbox is refused rather than guessed at; an older one is
 /// brought up to date by [`MIGRATIONS`] when it is opened.
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// What each version after the first adds, in order: the version a store is
 /// at once the statements have run, and the statements. A new store is made
@@ -37,6 +37,7 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (3, crate::decisions::SCHEMA),
     (4, crate::ledger::SCHEMA),
     (5, crate::attachments::SCHEMA),
+    (6, crate::active_runs::SCHEMA),
 ];
 
 // A migration added without raising `SCHEMA_VERSION`, or the reverse,
@@ -294,7 +295,7 @@ impl Fact {
 /// An open Sidecar. One process owns it: the Library service.
 pub struct Sidecar {
     dir: PathBuf,
-    db: Mutex<Connection>,
+    pub(crate) db: Mutex<Connection>,
 }
 
 impl std::fmt::Debug for Sidecar {
@@ -463,6 +464,21 @@ impl Sidecar {
         ))?;
         let facts = statement
             .query_map([track_id], read_fact)?
+            .collect::<rusqlite::Result<Vec<Fact>>>()?;
+        Ok(facts)
+    }
+
+    /// Every Fact of `kind` recorded from the audio `fingerprint` names, on
+    /// any track, newest first: what is known of that audio wherever it is
+    /// in the Library. Superseded and stale ones included; a Fact stale on
+    /// its own track still describes the audio it was made from.
+    pub fn facts_of_audio(&self, fingerprint: &Fingerprint, kind: &str) -> Result<Vec<Fact>> {
+        let db = self.db();
+        let mut statement = db.prepare(&select(
+            "WHERE fact.fingerprint = ?1 AND fact.kind = ?2 ORDER BY fact.id DESC",
+        ))?;
+        let facts = statement
+            .query_map(params![fingerprint.as_str(), kind], read_fact)?
             .collect::<rusqlite::Result<Vec<Fact>>>()?;
         Ok(facts)
     }

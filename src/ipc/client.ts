@@ -465,6 +465,7 @@ async function realBackend(): Promise<Backend> {
     libraryProblem: () => invoke<LibraryProblem | null>("library_problem"),
     onServiceStopped: (listener) => subscribe<string>("service:stopped", listener),
     serviceProblem: () => invoke<string | null>("service_problem"),
+    serviceActivity: () => invoke<import("./serviceActivity").ServiceActivity>("service_activity"),
     libraryProtection: () => invoke<LibraryProtection>("library_protection"),
     adoptLibraryProtection: (windowPreference) => invoke<LibraryProtection>("adopt_library_protection", { windowPreference }),
     setLibraryProtection: (protectLibrary) => invoke<LibraryProtection>("set_library_protection", { protectLibrary }),

@@ -12,6 +12,7 @@
 import { mockStickPending, mockStickSpare, withStickSafetyLog } from "./mock-stick-safety";
 import { TRACK_SEARCH_OPTIONS, type TrackSearchField } from "@/lib/search";
 import theme from "@/styles/theme";
+import { mockServiceActivity } from "./mock-service-activity";
 import { rowMemoryCueColours } from "@/lib/memoryCueColours";
 import { shiftByGridBeats } from "@/lib/player";
 
@@ -3084,9 +3085,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       return () => problemListeners.delete(listener);
     },
     libraryProblem: () => wait<LibraryProblem | null>(problem),
-    // The mock has no Library service to lose.
-    onServiceStopped: () => () => {},
-    serviceProblem: () => wait<string | null>(null),
+    ...mockServiceActivity(),
     // The switch the backend owns, kept for this page's life: nothing is
     // recorded before the window's first start, so its preference is taken up.
     libraryProtection: () => wait(protection ?? { protectLibrary: true, revision: 0 }),

@@ -1695,5 +1695,15 @@
   "Problems": "Problems",
   "Set plans": "Set plans",
   "Tracks marked Problem will queue here to be fixed. Nothing is here yet.": "Tracks marked Problem will queue here to be fixed. Nothing is here yet.",
-  "A write to this Stick did not finish": "A write to this Stick did not finish"
+  "A write to this Stick did not finish": "A write to this Stick did not finish",
+  "{count} Runs in progress": "{count} körningar pågår",
+  "Library service": "Bibliotekstjänst",
+  "Service status unavailable": "Tjänststatus inte tillgänglig",
+  "Service connected": "Tjänsten är ansluten",
+  "Service not connected": "Tjänsten är inte ansluten",
+  "Connecting to service…": "Ansluter till tjänsten…",
+  "Runs unavailable": "Körningar inte tillgängliga",
+  "{count} Stick loads in progress": "{count} USB-överföringar pågår",
+  "Analyzing {done}/{total} tracks": "Analyserar {done}/{total} spår",
+  "{count} failed": "{count} misslyckades"
 }

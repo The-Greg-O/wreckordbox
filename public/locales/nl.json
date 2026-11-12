@@ -1696,5 +1696,15 @@
   "Problems": "Problems",
   "Set plans": "Set plans",
   "Tracks marked Problem will queue here to be fixed. Nothing is here yet.": "Tracks marked Problem will queue here to be fixed. Nothing is here yet.",
-  "A write to this Stick did not finish": "A write to this Stick did not finish"
+  "A write to this Stick did not finish": "A write to this Stick did not finish",
+  "{count} Runs in progress": "{count} uitvoeringen bezig",
+  "Library service": "Bibliotheekservice",
+  "Service status unavailable": "Servicestatus niet beschikbaar",
+  "Service connected": "Service verbonden",
+  "Service not connected": "Service niet verbonden",
+  "Connecting to service…": "Verbinden met service…",
+  "Runs unavailable": "Uitvoeringen niet beschikbaar",
+  "{count} Stick loads in progress": "{count} USB-overdrachten bezig",
+  "Analyzing {done}/{total} tracks": "{done}/{total} tracks analyseren",
+  "{count} failed": "{count} mislukt"
 }

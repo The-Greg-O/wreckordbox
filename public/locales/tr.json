@@ -1698,5 +1698,15 @@
   "Problems": "Problems",
   "Set plans": "Set plans",
   "Tracks marked Problem will queue here to be fixed. Nothing is here yet.": "Tracks marked Problem will queue here to be fixed. Nothing is here yet.",
-  "A write to this Stick did not finish": "A write to this Stick did not finish"
+  "A write to this Stick did not finish": "A write to this Stick did not finish",
+  "{count} Runs in progress": "{count} çalışma sürüyor",
+  "Library service": "Arşiv hizmeti",
+  "Service status unavailable": "Hizmet durumu kullanılamıyor",
+  "Service connected": "Hizmete bağlı",
+  "Service not connected": "Hizmete bağlı değil",
+  "Connecting to service…": "Hizmete bağlanılıyor…",
+  "Runs unavailable": "Çalışmalar kullanılamıyor",
+  "{count} Stick loads in progress": "{count} USB yüklemesi sürüyor",
+  "Analyzing {done}/{total} tracks": "{done}/{total} parça analiz ediliyor",
+  "{count} failed": "{count} başarısız"
 }

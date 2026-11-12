@@ -1702,5 +1702,15 @@
   "Problems": "Problems",
   "Set plans": "Set plans",
   "Tracks marked Problem will queue here to be fixed. Nothing is here yet.": "Tracks marked Problem will queue here to be fixed. Nothing is here yet.",
-  "A write to this Stick did not finish": "A write to this Stick did not finish"
+  "A write to this Stick did not finish": "A write to this Stick did not finish",
+  "{count} Runs in progress": "Выполняется запусков: {count}",
+  "Library service": "Служба библиотеки",
+  "Service status unavailable": "Состояние службы недоступно",
+  "Service connected": "Служба подключена",
+  "Service not connected": "Служба не подключена",
+  "Connecting to service…": "Подключение к службе…",
+  "Runs unavailable": "Запуски недоступны",
+  "{count} Stick loads in progress": "Загрузок на USB в процессе: {count}",
+  "Analyzing {done}/{total} tracks": "Анализ треков: {done}/{total}",
+  "{count} failed": "Ошибок: {count}"
 }

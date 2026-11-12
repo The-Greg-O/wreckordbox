@@ -1696,5 +1696,15 @@
   "Problems": "Problems",
   "Set plans": "Set plans",
   "Tracks marked Problem will queue here to be fixed. Nothing is here yet.": "Tracks marked Problem will queue here to be fixed. Nothing is here yet.",
-  "A write to this Stick did not finish": "A write to this Stick did not finish"
+  "A write to this Stick did not finish": "A write to this Stick did not finish",
+  "{count} Runs in progress": "{count} Läufe aktiv",
+  "Library service": "Bibliotheksdienst",
+  "Service status unavailable": "Dienststatus nicht verfügbar",
+  "Service connected": "Dienst verbunden",
+  "Service not connected": "Dienst nicht verbunden",
+  "Connecting to service…": "Verbindung zum Dienst wird hergestellt…",
+  "Runs unavailable": "Läufe nicht verfügbar",
+  "{count} Stick loads in progress": "{count} Stick-Übertragungen aktiv",
+  "Analyzing {done}/{total} tracks": "Analysiere {done}/{total} Tracks",
+  "{count} failed": "{count} fehlgeschlagen"
 }

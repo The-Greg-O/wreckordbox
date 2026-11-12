@@ -272,6 +272,143 @@ fn the_command_works_on_the_open_windows_library() {
 }
 
 #[test]
+fn unreadable_run_status_does_not_mean_the_service_stopped() {
+    for kind in ["corrupt", "newer", "locked"] {
+        let window = window();
+        window.host().unwrap();
+        let dir = window
+            .location
+            .master_db
+            .parent()
+            .unwrap()
+            .join("wreckordbox-sidecar");
+        std::fs::create_dir_all(dir.join("work")).unwrap();
+        std::fs::write(dir.join("work/keep"), b"keep").unwrap();
+        let lock = if kind == "corrupt" {
+            std::fs::write(dir.join("sidecar.db"), b"corrupt fixture").unwrap();
+            None
+        } else {
+            let db = rusqlite::Connection::open(dir.join("sidecar.db")).unwrap();
+            db.execute_batch("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT); INSERT INTO meta VALUES ('schema_version', '999');").unwrap();
+            if kind == "locked" {
+                db.execute_batch("UPDATE meta SET value = '6'; CREATE TABLE run (id INTEGER PRIMARY KEY, description TEXT, finished_at INTEGER); CREATE INDEX run_unfinished ON run (id) WHERE finished_at IS NULL; INSERT INTO run VALUES (1, 'Existing', NULL); BEGIN EXCLUSIVE; UPDATE run SET description = 'Uncommitted';").unwrap();
+            }
+            Some(db)
+        };
+        let start = Instant::now();
+        let status = tauri::async_runtime::block_on(rbxport_lib::service_status::service_activity(
+            window.app.state(),
+        ))
+        .unwrap();
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "{kind}: status waited behind a writer"
+        );
+        let status = serde_json::to_value(status).unwrap();
+        assert_eq!(status["connected"], true, "{kind}");
+        assert_eq!(status["runsUnavailable"], true, "{kind}");
+        assert_eq!(status["problem"], serde_json::Value::Null);
+        assert!(dir.join("work/keep").exists());
+        assert!(window.cli(&["--json", "tracks", "list"]).ok);
+        drop(lock);
+    }
+}
+
+#[test]
+fn active_runs_follow_cli_work_in_the_host_and_a_second_client() {
+    let window = window();
+    let snapshot = || {
+        tauri::async_runtime::block_on(rbxport_lib::service_status::service_activity(
+            window.app.state(),
+        ))
+        .unwrap()
+    };
+    assert!(!snapshot().connected);
+    window.host().unwrap();
+    let generation = window.generation();
+    let active = || {
+        let snapshot = snapshot();
+        assert!(snapshot.connected);
+        assert!(snapshot.problem.is_none());
+        serde_json::to_value(snapshot.runs).unwrap()
+    };
+    assert_eq!(active(), serde_json::json!([]));
+    assert!(
+        !window
+            .location
+            .master_db
+            .parent()
+            .unwrap()
+            .join("wreckordbox-sidecar")
+            .exists(),
+        "reading status must not create a Sidecar"
+    );
+    let mut client = window.client();
+    client.subscribe().unwrap();
+    let first = window
+        .cli(&[
+            "--json",
+            "runs",
+            "start",
+            "--source",
+            "agent:tagger",
+            "--description",
+            "Tag the backlog",
+        ])
+        .json();
+    let second = window
+        .cli(&[
+            "--json",
+            "runs",
+            "start",
+            "--source",
+            "tool:meter",
+            "--description",
+            "Measure Intensity",
+        ])
+        .json();
+    let expected = serde_json::json!([
+        { "id": first["id"], "description": "Tag the backlog" },
+        { "id": second["id"], "description": "Measure Intensity" }
+    ]);
+    assert_eq!(active(), expected);
+    assert_eq!(
+        client
+            .call::<serde_json::Value>("runs.active", serde_json::json!({}))
+            .unwrap(),
+        expected
+    );
+    window
+        .cli(&["--json", "runs", "finish", &first["id"].to_string()])
+        .json();
+    assert_eq!(
+        active(),
+        serde_json::json!([{ "id": second["id"], "description": "Measure Intensity" }])
+    );
+    window
+        .cli(&["--json", "runs", "finish", &second["id"].to_string()])
+        .json();
+    assert_eq!(active(), serde_json::json!([]));
+    assert_eq!(window.generation(), generation);
+    assert!(window.changes.lock().unwrap().is_empty());
+    window.state().with_service(Service::stop).unwrap();
+    eventually("service:stopped", || {
+        !window.stopped.lock().unwrap().is_empty()
+    });
+    let stopped = snapshot();
+    assert!(!stopped.connected);
+    assert_eq!(
+        stopped.problem.as_deref(),
+        Some(service_host::STOPPED_MESSAGE)
+    );
+    assert!(stopped.runs.is_empty());
+    window.state().stop_service();
+    window.host().unwrap();
+    assert!(snapshot().connected);
+    assert!(snapshot().problem.is_none());
+}
+
+#[test]
 fn a_rating_set_from_the_command_shows_in_the_window_as_a_library_change() {
     let window = window();
     window.host().unwrap();
