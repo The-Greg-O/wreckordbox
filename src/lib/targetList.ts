@@ -12,6 +12,7 @@
  * apply to them exactly as they do anywhere else.
  */
 import type { TreeNode } from "@/ipc/types";
+import type { BrowserFocus } from "./browserFocus";
 import { chordMatches, isTyping, OWN_ACTIVATION, type Action, type FocusTarget, type KeyChord, type Platform } from "./shortcuts";
 
 /** The second list's commands, their names in the command palette, and their keys. */
@@ -136,4 +137,45 @@ export function swapLists(
   const refused = targetRefusal(source);
   if (refused !== null) return { refusal: `Cannot swap: ${refused}` };
   return { open: target, target: source! };
+}
+
+/**
+ * Whether the main list holds the keyboard, so Enter is its "add to the
+ * target": the last press in the browser was in the main list, and the
+ * keyboard is with the page itself (a click on a row focuses nothing) or
+ * inside that list. Never the tree, the second list or a control.
+ */
+export function sourceOwnsKeyboard(focus: FocusTarget | null | undefined, browser: BrowserFocus): boolean {
+  if (browser?.pane !== "list" || browser.side !== "main") return false;
+  if (focus === null || focus === undefined) return true;
+  const tag = focus.tagName?.toUpperCase();
+  if (tag === "BODY" || tag === "HTML") return true;
+  return focus.closest?.('[data-browser-pane="list"]') != null;
+}
+
+/** The list commands the second list answers itself while it has the keyboard. */
+const NAVIGATION: ReadonlySet<Action> = new Set<Action>([
+  "moveUp", "moveDown", "pageUp", "pageDown", "toTop", "toBottom", "extendUp", "extendDown", "selectAll",
+]);
+
+/**
+ * Where a list command moves the second list's cursor: its new place,
+ * `null` with nothing to move to (an empty list), or `undefined` when the
+ * command is not one of the list's. The second list holds one selected
+ * row, so extending moves it and Select All keeps it.
+ */
+export function navigateTarget(action: Action, at: number | null, count: number, page: number): number | null | undefined {
+  if (!NAVIGATION.has(action)) return undefined;
+  if (count === 0) return null;
+  const last = count - 1;
+  const step = Math.max(1, page);
+  switch (action) {
+    case "moveDown": case "extendDown": return at === null ? 0 : Math.min(last, at + 1);
+    case "moveUp": case "extendUp": return at === null ? last : Math.max(0, at - 1);
+    case "pageDown": return Math.min(last, (at ?? -1) + step);
+    case "pageUp": return Math.max(0, (at ?? count) - step);
+    case "toTop": return 0;
+    case "toBottom": return last;
+    default: return at ?? 0;
+  }
 }

@@ -12,6 +12,7 @@
 import { TRACK_SEARCH_OPTIONS, type TrackSearchField } from "@/lib/search";
 import theme from "@/styles/theme";
 import { mockServiceActivity } from "./mock-service-activity";
+import { createMockEntries, type MockEntry } from "./mock-playlist-entries";
 import { rowMemoryCueColours } from "@/lib/memoryCueColours";
 import { shiftByGridBeats } from "@/lib/player";
 
@@ -803,6 +804,64 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     membership.set(playlist, [...next]);
   };
 
+  /**
+   * Playlist entries (wbx-59), beside the membership; see
+   * `mock-playlist-entries.ts`. Hooks for tests: `__playlistEntries(name)`
+   * (each entry's id and track title, in order), `__holdEntryReorders()` /
+   * `__releaseEntryReorders()` (writes wait, then land in the order asked),
+   * `__failNextEntryReorder = true`, `__entryReorders` (every order asked),
+   * `__failPlaylistEntries = true` (entry reads fail), and
+   * `__renamePlaylistOutside(name, to)` / `__deletePlaylistOutside(name)`
+   * (another client's edit: the tree changes and the Library is announced
+   * changed).
+   */
+  const entries = createMockEntries({ membersOf, setMembers: (playlist, tracks) => { membership.set(playlist, tracks); } });
+  const entryHooks = (typeof window === "undefined" ? {} : window) as unknown as {
+    __playlistEntries?: (name: string) => { entryId: string; title: string }[];
+    __holdEntryReorders?: () => void;
+    __releaseEntryReorders?: () => void;
+    __failNextEntryReorder?: boolean;
+    __entryReorders?: string[][];
+    __failPlaylistEntries?: boolean;
+    __renamePlaylistOutside?: (name: string, to: string) => void;
+    __deletePlaylistOutside?: (name: string) => void;
+  };
+  let holdingReorders = false;
+  const heldReorders: (() => void)[] = [];
+  entryHooks.__entryReorders = [];
+  entryHooks.__holdEntryReorders = () => { holdingReorders = true; };
+  entryHooks.__releaseEntryReorders = () => {
+    holdingReorders = false;
+    for (const go of heldReorders.splice(0)) go();
+  };
+  const playlistNamed = (name: string) => tree.find((node) => node.kind === "playlist" && node.name === name);
+  entryHooks.__playlistEntries = (name) => {
+    const id = playlistNamed(name)?.id;
+    if (id === undefined) return [];
+    return entries.entriesOf(id).map((entry) => ({ entryId: entry.id, title: all.find((row) => row.id === entry.track)?.title ?? "" }));
+  };
+  entryHooks.__renamePlaylistOutside = (name, to) => {
+    const node = playlistNamed(name);
+    if (node) node.name = to;
+    void bump(false);
+  };
+  entryHooks.__deletePlaylistOutside = (name) => {
+    const at = tree.findIndex((node) => node.kind === "playlist" && node.name === name);
+    if (at >= 0) {
+      const [gone] = tree.splice(at, 1);
+      if (gone) membership.delete(gone.id);
+    }
+    void bump(false);
+  };
+  /** Undo and Redo of a reorder: refused when the entries are not as the step left them. */
+  const entryStep = (playlist: string, expected: readonly MockEntry[], next: readonly MockEntry[]) => {
+    const now = entries.entriesOf(playlist);
+    if (now.length !== expected.length || now.some((entry, i) => entry.id !== expected[i]!.id)) {
+      throw new Error("the playlist's tracks have changed since");
+    }
+    entries.setEntries(playlist, next);
+  };
+
   const recordEdit = async (edit: MockEdit): Promise<EditHistoryState> => {
     await bump(false);
     editUndo.push(edit);
@@ -1518,18 +1577,33 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       return next;
     },
     reorderPlaylist: (playlist, tracks) => {
-      const current = membersOf(playlist);
-      // Mirrors the backend: tracks not named keep their place after the rest,
-      // so a partial order cannot silently drop any.
-      const named = tracks.filter((t) => current.includes(t));
-      const after = [...named, ...current.filter((t) => !named.includes(t))];
-      const before = [...current];
-      membership.set(playlist, after);
-      if (after.join() === before.join()) return bump();
+      // Mirrors the backend's writer, which reorders by track: tracks not
+      // named keep their place after the rest, and every entry of a track
+      // in the playlist twice takes that track's one number (wbx-59).
+      const before = [...entries.entriesOf(playlist)];
+      const after = entries.reorderByTrack(playlist, tracks);
+      if (after.every((entry, i) => entry.id === before[i]!.id)) return bump();
       return recordEdit({
         label: "Reorder Playlist",
-        undo: () => setMembersFrom(playlist, after, before),
-        redo: () => setMembersFrom(playlist, before, after),
+        undo: () => entryStep(playlist, after, before),
+        redo: () => entryStep(playlist, before, after),
+      }).then((history) => history.generation);
+    },
+    reorderPlaylistEntries: async (playlist, ids) => {
+      entryHooks.__entryReorders?.push([...ids]);
+      if (holdingReorders) await new Promise<void>((go) => { heldReorders.push(go); });
+      if (entryHooks.__failNextEntryReorder) {
+        entryHooks.__failNextEntryReorder = false;
+        throw new Error("That could not be saved: the Library could not be written.");
+      }
+      const before = [...entries.entriesOf(playlist)];
+      const after = entries.orderByEntry(playlist, ids);
+      entries.setEntries(playlist, after);
+      if (after.every((entry, i) => entry.id === before[i]!.id)) return bump();
+      return recordEdit({
+        label: "Reorder Playlist",
+        undo: () => entryStep(playlist, after, before),
+        redo: () => entryStep(playlist, before, after),
       }).then((history) => history.generation);
     },
     setTrackRating: (tracks, stars) => {
@@ -2333,6 +2407,11 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     // caller mutate the backend's own state, and makes a list captured before
     // an edit appear to have changed by itself.
     playlistTree: () => (ready ? wait(tree.map((node) => ({ ...node }))) : notReady()),
+    playlistEntries: (playlist) => {
+      if (entryHooks.__failPlaylistEntries) return Promise.reject(new Error("The playlist's entries could not be read."));
+      const node = tree.find((candidate) => candidate.id === playlist);
+      return wait(node?.kind === "playlist" ? entries.wire(playlist) : []);
+    },
 
     openView: (spec: ViewSpec) => {
       // Every real command goes through `state.library()?`, so none of them

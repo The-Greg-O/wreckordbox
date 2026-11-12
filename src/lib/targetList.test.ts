@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { TreeNode } from "@/ipc/types";
 import {
-  dropInOrder, formatTargetLength, moveInOrder, swapLists, targetCandidates, targetKeyAction, targetRefusal,
+  dropInOrder, formatTargetLength, moveInOrder, navigateTarget, sourceOwnsKeyboard, swapLists, targetCandidates, targetKeyAction, targetRefusal,
 } from "./targetList";
 
 const linux = { mac: false, windows: false, linux: true };
@@ -114,5 +114,46 @@ describe("targetKeyAction", () => {
     expect(targetKeyAction(key({ key: "Enter" }), linux, inside("[data-own-activation]"))).toBeNull();
     // Only Enter is a control's own: the second list's other keys still reach it.
     expect(targetKeyAction(key({ key: "ArrowUp", altKey: true }), linux, inside("[data-own-activation]"))).toBe("moveTargetUp");
+  });
+});
+
+describe("sourceOwnsKeyboard", () => {
+  const body = { tagName: "BODY", closest: () => null };
+  const inList = { tagName: "DIV", closest: (s: string) => (s.includes('data-browser-pane="list"') ? {} : null) };
+  const treeItem = { tagName: "DIV", closest: () => null };
+  const mainList = { pane: "list", side: "main" } as const;
+  it("is the main list's after a press in it, with the page or the list holding the keyboard", () => {
+    expect(sourceOwnsKeyboard(body, mainList)).toBe(true);
+    expect(sourceOwnsKeyboard(inList, mainList)).toBe(true);
+    expect(sourceOwnsKeyboard(null, mainList)).toBe(true);
+  });
+  it("is not when the tree, the second list or a control holds the keyboard", () => {
+    expect(sourceOwnsKeyboard(treeItem, mainList)).toBe(false);
+    expect(sourceOwnsKeyboard(body, { pane: "tree", side: "main" })).toBe(false);
+    expect(sourceOwnsKeyboard(body, null)).toBe(false);
+    expect(sourceOwnsKeyboard(body, { pane: "list", side: "sub" })).toBe(false);
+  });
+});
+
+describe("navigateTarget", () => {
+  it("moves the cursor by the list's own commands, staying inside the list", () => {
+    expect(navigateTarget("moveDown", null, 5, 3)).toBe(0);
+    expect(navigateTarget("moveDown", 1, 5, 3)).toBe(2);
+    expect(navigateTarget("moveDown", 4, 5, 3)).toBe(4);
+    expect(navigateTarget("moveUp", 0, 5, 3)).toBe(0);
+    expect(navigateTarget("moveUp", null, 5, 3)).toBe(4);
+    expect(navigateTarget("pageDown", 1, 10, 3)).toBe(4);
+    expect(navigateTarget("pageDown", 8, 10, 3)).toBe(9);
+    expect(navigateTarget("pageUp", 2, 10, 3)).toBe(0);
+    expect(navigateTarget("toTop", 6, 10, 3)).toBe(0);
+    expect(navigateTarget("toBottom", 0, 10, 3)).toBe(9);
+    expect(navigateTarget("extendDown", 1, 5, 3)).toBe(2);
+  });
+  it("is nothing in an empty list, and Select All keeps the one row", () => {
+    expect(navigateTarget("moveDown", null, 0, 3)).toBeNull();
+    expect(navigateTarget("selectAll", 2, 5, 3)).toBe(2);
+  });
+  it("is not the list's for any other command", () => {
+    expect(navigateTarget("playPause", 1, 5, 3)).toBeUndefined();
   });
 });

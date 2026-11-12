@@ -128,19 +128,16 @@ test("Enter adds the selected track to the target, as one Undo step, and the mai
   await expect(status(page)).toContainText("Edit undone.");
   await expect.poll(() => targetTitles(page)).toEqual(bars(5));
 
-  // With the second list hidden, Enter is not an add: it is left to the
-  // window's own handlers (Load on Player 1), and the target is unchanged.
+  // With the second list hidden, Enter is the deck's again: Load on Player 1
+  // loads the row selected in the main list, which showing and hiding the
+  // second list left selected.
   await allTracks(page);
   await mainRow(page, "Bar 11").locator('[data-col="title"]').click();
   await page.keyboard.press("Control+Backslash");
   await expect(target(page)).toHaveCount(0);
-  const prevented = await page.evaluate(() => {
-    const press = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
-    document.body.dispatchEvent(press);
-    return press.defaultPrevented;
-  });
-  expect(prevented).toBe(false);
+  await expect(mainRow(page, "Bar 11")).toHaveAttribute("aria-selected", "true");
   await page.keyboard.press("Enter");
+  await expect(page.getByTestId("compact-player-title")).toHaveText("Bar 11");
   await page.keyboard.press("Control+Backslash");
   await expect.poll(() => targetTitles(page)).toEqual(bars(5));
   expect(await playlistAsListed(page, "Eurodance")).toEqual(bars(5));
@@ -287,4 +284,246 @@ test("at half width the second list gives way, and comes back when the window is
   await page.setViewportSize({ width: 1280, height: 800 });
   await expect(target(page)).toBeVisible();
   await expect.poll(() => targetTitles(page)).toEqual(bars(...range(3, 20)));
+});
+
+type Hooks = {
+  __playlistEntries: (name: string) => { entryId: string; title: string }[];
+  __holdEntryReorders: () => void;
+  __releaseEntryReorders: () => void;
+  __failNextEntryReorder: boolean;
+  __entryReorders: string[][];
+  __failPlaylistEntries: boolean;
+  __renamePlaylistOutside: (name: string, to: string) => void;
+  __deletePlaylistOutside: (name: string) => void;
+  __turnLibraryProtection: (on: boolean) => void;
+};
+/** The playlist's entries as the Library holds them: identity and track, in order. */
+const entries = (page: Page, name: string) =>
+  page.evaluate((playlist) => (window as unknown as Hooks).__playlistEntries(playlist), name);
+const entryTitles = async (page: Page, name: string) => (await entries(page, name)).map((entry) => entry.title);
+/** Runs `run` on the page's window, where the mock's test hooks are. */
+const hooks = <T,>(page: Page, run: (h: Hooks) => T) => page.evaluate<T>(`(${run.toString()})(window)`);
+
+test("showing, hiding and the narrow breakpoint keep the main list's selection, its filtered selection and its scroll", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 520 });
+  await open(page);
+  await allTracks(page);
+  await mainRow(page, "Bar 02").locator('[data-col="title"]').click();
+  await mainRow(page, "Bar 04").locator('[data-col="title"]').click({ modifiers: ["Shift"] });
+  await main(page).evaluate((scroller) => { scroller.scrollTop = 120; });
+  const scrolled = await main(page).evaluate((scroller) => scroller.scrollTop);
+  expect(scrolled).toBeGreaterThan(0);
+
+  await page.keyboard.press("Control+Backslash");
+  await expect(target(page)).toBeVisible();
+  for (const title of bars(2, 3, 4)) await expect(mainRow(page, title)).toHaveAttribute("aria-selected", "true");
+  expect(await main(page).evaluate((scroller) => scroller.scrollTop)).toBe(scrolled);
+  await page.keyboard.press("Control+Backslash");
+  await expect(target(page)).toHaveCount(0);
+  for (const title of bars(2, 3, 4)) await expect(mainRow(page, title)).toHaveAttribute("aria-selected", "true");
+  expect(await main(page).evaluate((scroller) => scroller.scrollTop)).toBe(scrolled);
+
+  // Across the breakpoint and back, the second list shown.
+  await page.keyboard.press("Control+Backslash");
+  await page.setViewportSize({ width: 640, height: 520 });
+  await expect(target(page)).toHaveCount(0);
+  await page.setViewportSize({ width: 1280, height: 520 });
+  await expect(target(page)).toBeVisible();
+  for (const title of bars(2, 3, 4)) await expect(mainRow(page, title)).toHaveAttribute("aria-selected", "true");
+
+  // The filter narrows the selection to what it shows; a toggle keeps that,
+  // and Enter adds exactly what is selected and shown.
+  await picker(page).selectOption({ label: (await picker(page).locator("option").filter({ hasText: /Eurodance$/ }).innerText()).trim() });
+  await page.getByRole("search", { name: "Track Filter" }).getByRole("textbox", { name: "Filter text" }).fill("Bar 03");
+  await expect(mainRows(page)).toHaveCount(1);
+  // The keyboard back to the page, the main list still the browser's focus.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press("Control+Backslash");
+  await page.keyboard.press("Control+Backslash");
+  await page.keyboard.press("Enter");
+  await expect.poll(() => entryTitles(page, "Eurodance")).toEqual(bars(3));
+});
+
+test("Enter in the tree opens the focused playlist, and adds nothing", async ({ page }) => {
+  await open(page);
+  await allTracks(page);
+  await showTarget(page, "Eurodance");
+  await mainRow(page, "Bar 02").locator('[data-col="title"]').click();
+  await shellPlaylist(page, "Hardstyle").focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("browser-title")).toContainText("Hardstyle");
+  await expect.poll(() => targetTitles(page)).toEqual([]);
+  expect(await entryTitles(page, "Eurodance")).toEqual([]);
+});
+
+test("two reorders asked before the Library answers make the order both describe, by entry, and the selection follows its entry", async ({ page }) => {
+  await voxTarget(page);
+  const before = await entries(page, "Melodic Vox");
+  await hooks(page, (h) => h.__holdEntryReorders());
+  await targetRows(page).nth(0).click();
+  await page.keyboard.press("Alt+ArrowDown");
+  await page.keyboard.press("Alt+ArrowDown");
+  // Shown at once, before any write has landed.
+  await expect.poll(() => targetTitles(page)).toEqual(bars(4, 5, 3, ...range(6, 20)));
+  await expect(targetRows(page).nth(2)).toHaveAttribute("aria-selected", "true");
+  await hooks(page, (h) => h.__releaseEntryReorders());
+  const [a, b, c] = before;
+  await expect.poll(async () => (await entries(page, "Melodic Vox")).map((e) => e.entryId).slice(0, 3)).toEqual([b!.entryId, c!.entryId, a!.entryId]);
+  // Each write named every entry, the second on top of the first.
+  const asked = await hooks(page, (h) => h.__entryReorders);
+  expect(asked.map((order) => order.slice(0, 3))).toEqual([[b!.entryId, a!.entryId, c!.entryId], [b!.entryId, c!.entryId, a!.entryId]]);
+  await expect.poll(() => targetTitles(page)).toEqual(bars(4, 5, 3, ...range(6, 20)));
+  await expect(targetRows(page).nth(2)).toHaveAttribute("aria-selected", "true");
+
+  // A held key's repeats each move it once more.
+  await page.keyboard.down("Alt");
+  await page.keyboard.down("ArrowDown");
+  await page.keyboard.down("ArrowDown");
+  await page.keyboard.down("ArrowDown");
+  await page.keyboard.up("ArrowDown");
+  await page.keyboard.up("Alt");
+  await expect.poll(() => entryTitles(page, "Melodic Vox")).toEqual(bars(4, 5, 6, 7, 8, 3, ...range(9, 20)));
+  await expect(targetRows(page).nth(5)).toHaveAttribute("aria-selected", "true");
+});
+
+test("a reorder the Library refuses puts back its order, says so, and keeps the selection on its entry", async ({ page }) => {
+  await voxTarget(page);
+  await targetRows(page).nth(1).click();
+  await hooks(page, (h) => { h.__failNextEntryReorder = true; });
+  await page.keyboard.press("Alt+ArrowDown");
+  await expect(status(page)).toContainText("could not be saved");
+  await expect.poll(() => targetTitles(page)).toEqual(bars(...range(3, 20)));
+  await expect(targetRows(page).nth(1)).toHaveAttribute("aria-selected", "true");
+  await expect(targetRows(page).nth(1)).toContainText("Bar 04");
+  expect(await entryTitles(page, "Melodic Vox")).toEqual(bars(...range(3, 20)));
+  // And the next one is written.
+  await page.keyboard.press("Alt+ArrowDown");
+  await expect.poll(() => entryTitles(page, "Melodic Vox")).toEqual(bars(3, 5, 4, ...range(6, 20)));
+});
+
+test("under Library Protection a reorder is refused and the target's order is unchanged", async ({ page }) => {
+  await voxTarget(page);
+  await hooks(page, (h) => h.__turnLibraryProtection(true));
+  await targetRows(page).nth(0).click();
+  await page.keyboard.press("Alt+ArrowDown");
+  await expect(status(page)).toContainText("Editing is locked by Library Protection");
+  await expect.poll(() => targetTitles(page)).toEqual(bars(...range(3, 20)));
+  expect(await entryTitles(page, "Melodic Vox")).toEqual(bars(...range(3, 20)));
+  expect(await hooks(page, (h) => h.__entryReorders)).toEqual([]);
+});
+
+test("a track added twice is two entries, and moving one moves exactly that entry", async ({ page }) => {
+  await open(page);
+  await allTracks(page);
+  await showTarget(page, "Eurodance");
+  const add = async (title: string) => {
+    await mainRow(page, title).locator('[data-col="title"]').click();
+    await page.keyboard.press("Enter");
+  };
+  await add("Bar 05");
+  await expect.poll(() => entryTitles(page, "Eurodance")).toEqual(bars(5));
+  // Again: the duplicate question. Skip adds nothing; Add duplicates adds it.
+  await add("Bar 05");
+  const question = page.getByRole("alertdialog", { name: "Duplicate tracks" });
+  await question.getByRole("button", { name: "Skip duplicates" }).click();
+  await expect(status(page)).toContainText("Already in Eurodance.");
+  expect(await entryTitles(page, "Eurodance")).toEqual(bars(5));
+  await add("Bar 05");
+  await question.getByRole("button", { name: "Add duplicates" }).click();
+  await expect.poll(() => entryTitles(page, "Eurodance")).toEqual(bars(5, 5));
+  await add("Bar 06");
+  await expect.poll(() => targetTitles(page)).toEqual(bars(5, 5, 6));
+  const [first, second, six] = await entries(page, "Eurodance");
+  expect(first!.entryId).not.toBe(second!.entryId);
+
+  // The second entry of Bar 05 to the end: only it moves.
+  await targetRows(page).nth(1).click();
+  await page.keyboard.press("Alt+ArrowDown");
+  await expect.poll(async () => (await entries(page, "Eurodance")).map((e) => e.entryId)).toEqual([first!.entryId, six!.entryId, second!.entryId]);
+  await expect(targetRows(page).nth(2)).toHaveAttribute("aria-selected", "true");
+  await menu(page, "undo");
+  await expect.poll(async () => (await entries(page, "Eurodance")).map((e) => e.entryId)).toEqual([first!.entryId, second!.entryId, six!.entryId]);
+  await menu(page, "redo");
+  await expect.poll(async () => (await entries(page, "Eurodance")).map((e) => e.entryId)).toEqual([first!.entryId, six!.entryId, second!.entryId]);
+});
+
+test("with the target focused, the list's keys move only the target, also when it is empty, and the active row is in view and named", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 520 });
+  await voxTarget(page);
+  await mainRow(page, "Bar 00").locator('[data-col="title"]').click();
+  const selectedInMain = () => mainRows(page).and(page.locator('[aria-selected="true"]')).count();
+  await targetRows(page).nth(0).click();
+  for (const key of ["PageDown", "End", "Control+a", "Home", "ArrowDown", "PageUp", "Delete"]) {
+    await page.keyboard.press(key);
+    expect(await selectedInMain()).toBe(1);
+    await expect(mainRow(page, "Bar 00")).toHaveAttribute("aria-selected", "true");
+  }
+  // End: the last row is selected, scrolled into view, and is the grid's active descendant.
+  await page.keyboard.press("End");
+  const last = targetRows(page).last();
+  await expect(last).toHaveAttribute("aria-selected", "true");
+  await expect(last).toBeInViewport();
+  await expect(targetGrid(page)).toHaveAttribute("aria-activedescendant", (await last.getAttribute("id"))!);
+  await page.keyboard.press("PageUp");
+  const active = await targetGrid(page).getAttribute("aria-activedescendant");
+  await expect(targetGrid(page).locator(`[id="${active}"]`)).toBeInViewport();
+  // Nothing was removed from the open list by Delete in the target.
+  expect(await entryTitles(page, "Melodic Vox")).toEqual(bars(...range(3, 20)));
+
+  // An empty target keeps the keys too.
+  await picker(page).selectOption({ label: (await picker(page).locator("option").filter({ hasText: /Eurodance$/ }).innerText()).trim() });
+  await targetGrid(page).click();
+  for (const key of ["ArrowDown", "PageDown", "End", "Control+a"]) {
+    await page.keyboard.press(key);
+    expect(await selectedInMain()).toBe(1);
+  }
+});
+
+test("the target renamed or deleted by another client: the list follows the new name, then says it is gone", async ({ page }) => {
+  await open(page);
+  await allTracks(page);
+  await showTarget(page, "Melodic Vox");
+  await hooks(page, (h) => h.__renamePlaylistOutside("Melodic Vox", "Vox Renamed"));
+  await expect(target(page).getByRole("heading")).toContainText("Vox Renamed");
+  await expect(shellPlaylist(page, "Vox Renamed")).toHaveAccessibleDescription("Target playlist");
+  await hooks(page, (h) => h.__deletePlaylistOutside("Vox Renamed"));
+  await expect(target(page).getByRole("status")).toContainText("no longer in the Library");
+  await expect(target(page).getByRole("heading")).toContainText("No target");
+  await expect(tree(page).locator("[aria-description]")).toHaveCount(0);
+  await mainRow(page, "Bar 01").locator('[data-col="title"]').click();
+  await page.keyboard.press("Enter");
+  await expect(target(page).getByRole("status")).toContainText("Choose a target playlist first.");
+});
+
+test("a target that cannot be read again is shown as not current, is not reordered, and reads again on Try again", async ({ page }) => {
+  await voxTarget(page);
+  await hooks(page, (h) => { h.__failPlaylistEntries = true; });
+  // Another client's change makes the list read again; the read fails.
+  await hooks(page, (h) => h.__renamePlaylistOutside("Hardstyle", "Hardstyle 2"));
+  await expect(target(page).getByRole("alert")).toContainText("Not current");
+  await expect.poll(() => targetTitles(page)).toEqual(bars(...range(3, 20)));
+  await targetRows(page).nth(0).click();
+  await page.keyboard.press("Alt+ArrowDown");
+  await expect(target(page).getByRole("status")).toContainText("could not be read");
+  expect(await hooks(page, (h) => h.__entryReorders)).toEqual([]);
+  await hooks(page, (h) => { h.__failPlaylistEntries = false; });
+  await target(page).getByRole("button", { name: "Try again" }).click();
+  await expect(target(page).getByRole("alert")).toHaveCount(0);
+});
+
+test("a swap clears the target's selection and swaps back to where it started", async ({ page }) => {
+  await open(page);
+  await openInMain(page, "Melodic Vox");
+  await mainRows(page).first().click();
+  await page.keyboard.press("Control+Backslash");
+  await picker(page).selectOption({ label: (await picker(page).locator("option").filter({ hasText: /Hardstyle$/ }).innerText()).trim() });
+  await targetRows(page).nth(1).click();
+  await page.keyboard.press("Control+Shift+Backslash");
+  await expect(page.getByTestId("browser-title")).toContainText("Hardstyle");
+  await expect(target(page).getByRole("heading")).toContainText("Melodic Vox");
+  await expect(targetGrid(page).locator('[aria-selected="true"]')).toHaveCount(0);
+  await expect(picker(page)).toHaveValue(await shellPlaylist(page, "Melodic Vox").getAttribute("data-row-id") ?? "");
+  await page.keyboard.press("Control+Shift+Backslash");
+  await expect(page.getByTestId("browser-title")).toContainText("Melodic Vox");
+  await expect(target(page).getByRole("heading")).toContainText("Hardstyle");
 });

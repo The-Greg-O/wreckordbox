@@ -132,6 +132,12 @@ export interface ViewSpec {
   filter?: TrackFilter;
 }
 
+/** One entry of a playlist: its own identity, and the track it is (wbx-59). */
+export interface PlaylistEntry {
+  entryId: string;
+  trackId: string;
+}
+
 export interface ViewHandle {
   viewId: number;
   /** Row count for this view. */
@@ -304,6 +310,8 @@ export interface Backend {
   disableReadOnly(): Promise<void>;
   rememberScreenAssets(ids: string[], waveformKind: WaveformKind): Promise<void>;
   playlistTree(): Promise<TreeNode[]>;
+  /** A plain playlist's entries in its order, each with its own identity (wbx-59); none for anything else. */
+  playlistEntries(playlist: string): Promise<PlaylistEntry[]>;
   openView(spec: ViewSpec): Promise<ViewHandle>;
   fetchRows(viewId: number, offset: number, len: number, extraColumns?: readonly string[]): Promise<RowDto[]>;
   /** Ids between two row indices inclusive; used for shift-click across unfetched rows. */
@@ -2021,6 +2029,12 @@ export interface Edits {
   removeFromCollection(tracks: string[]): Promise<number>;
   /** A new order, or Renumber Track Order: one step of Edit › Undo (#499). */
   reorderPlaylist(playlist: string, tracks: string[]): Promise<number>;
+  /**
+   * Puts a playlist's entries in exactly this order (wbx-59): every entry
+   * once, by its own identity, so one of two entries of a track moves
+   * alone. A stale order is refused with nothing written. One Undo step.
+   */
+  reorderPlaylistEntries(playlist: string, entries: string[]): Promise<number>;
   /**
    * The edits below take every track they apply to — one from the list, or
    * the information panel's whole selection — and record them as one step

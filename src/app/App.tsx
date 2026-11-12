@@ -1947,6 +1947,15 @@ function AppBody() {
     },
     [write],
   );
+  // The second list's reorder (wbx-59): by entry, so one of two entries of
+  // a track moves alone. Resolves whether it was written.
+  const reorderPlaylistEntries = useCallback(
+    (playlist: string, entries: readonly string[]) => writeNow(async (backend) => {
+      await backend.edits.reorderPlaylistEntries(playlist, [...entries]);
+      return "Playlist reordered.";
+    }),
+    [writeNow],
+  );
   const reorderPlaylistTracks = useCallback(
     (order: readonly string[]) => {
       if (spec.source.kind === "playlist") reorderPlaylist(spec.source.id, order);
@@ -3509,7 +3518,8 @@ function AppBody() {
   const targetList = useTargetList({
     active: shellOn && shellView === "library", platform, tree, source: selectedNode, sourceKind: spec.source.kind,
     onOpen: setSelectedNode, selection: selectedTracks, locked: readOnly, explainLock: explainEditLock, refuse,
-    add: addToPlaylist, reorder: reorderPlaylist, dragged: draggedTracks, endDrag: () => setDraggedTracks(null),
+    add: addToPlaylist, reorderEntries: reorderPlaylistEntries, keyOverrides,
+    dragged: draggedTracks, endDrag: () => setDraggedTracks(null),
     keyDisplay: viewPrefs.keyDisplay, loadedKey: trafficKey || null,
   });
   const shellTree = useShellTree({

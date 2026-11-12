@@ -3,43 +3,50 @@
  * `docs/design/screens/library/`). Title, BPM, key and Energy, with the
  * target's track count and length in its heading.
  *
- * It draws and reports; it holds no Library state. The target, its rows,
- * the selected row and every edit belong to `useTargetList`, which hands
+ * It draws and reports; it holds no Library state. The target, its entries,
+ * the selected entry and every edit belong to `useTargetList`, which hands
  * them in. A drop of tracks dragged from the main list adds them; a row
- * dragged within the list reorders it.
+ * dragged within the list reorders it, by entry.
  *
- * Every key pressed inside the list stays inside it: the region owns its
- * activation (`data-own-activation`), and the keys it answers are stopped
- * before the list and the deck, which listen on the window, can hear them.
+ * The keyboard: the grid keeps the focus and names the selected row as its
+ * active descendant, which is scrolled into view whenever it changes or
+ * moves. The list's own commands (the cursor keys, Page Up / Down, Home /
+ * End, Select All, as the DJ has bound them) move the second list's cursor
+ * and stop there, as do Enter, Space and Delete, so neither the main list
+ * nor the deck (which listen on the window) hears them, whether the list is
+ * full, empty or still being read. A press in the list also takes the
+ * browser's focus from the main list, so its focus-gated actions do not act
+ * on a selection the DJ is not looking at.
  */
-import { useRef, useState, type DragEvent, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type DragEvent, type KeyboardEvent } from "react";
 
 import { useTranslation } from "@/i18n";
-import type { RowDto } from "@/ipc/types";
-import { formatBpm } from "@/lib/format";
 import type { KeyDisplay } from "@/ipc/types";
+import { setBrowserFocus } from "@/lib/browserFocus";
+import { formatBpm } from "@/lib/format";
 import { formatKey } from "@/lib/preferences";
-import { describeChord, OWN_ACTIVATION, type Platform } from "@/lib/shortcuts";
-import { dropInOrder, formatTargetLength, TARGET_ACTIONS, type TargetCandidate } from "@/lib/targetList";
+import { describeChord, dispatch, OWN_ACTIVATION, type KeyOverrides, type Platform } from "@/lib/shortcuts";
+import { dropInOrder, formatTargetLength, navigateTarget, TARGET_ACTIONS, type TargetCandidate } from "@/lib/targetList";
 import { EnergyPips } from "./libraryLook";
 import { LibraryKey } from "./LibraryKey";
 import styles from "./TargetList.module.css";
+import type { TargetRow } from "./useTargetRows";
 
 export interface TargetListProps {
   /** The playlists that can be the target. */
   candidates: readonly TargetCandidate[];
   targetId: string | null;
   onChoose: (id: string | null) => void;
-  /** The target's rows, in its order; `null` before the first read. */
-  rows: readonly RowDto[] | null;
+  /** The target's entries, in its order (as shown); `null` before the first read. */
+  rows: readonly TargetRow[] | null;
   /** Why the latest read failed: the rows shown are stale. */
   failed: string | null;
   onRetry: () => void;
-  /** The selected row's place in the target. */
-  selected: number | null;
-  onSelect: (index: number | null) => void;
-  /** A new order for the whole target, and where the moved row now is. */
-  onReorder: (order: string[], index: number) => void;
+  /** The selected entry. */
+  selected: string | null;
+  onSelect: (entry: string | null) => void;
+  /** A new order for the whole target, by entry, and the entry that moved. */
+  onReorder: (order: string[], entry: string) => void;
   /** Tracks are being dragged from the main list. */
   dragging: boolean;
   onDropTracks: () => void;
@@ -49,42 +56,75 @@ export interface TargetListProps {
   /** The loaded track's key, which the key cells light against. */
   loadedKey: string | null;
   platform: Platform;
+  keyOverrides?: KeyOverrides | undefined;
 }
 
 const ROW_DRAG = "application/x-wreckordbox-target-row";
 
+/** Keys the second list keeps from the window whatever they are bound to. */
+const KEPT = new Set(["Enter", " ", "Delete", "Backspace"]);
+
 export function TargetList({
   candidates, targetId, onChoose, rows, failed, onRetry, selected, onSelect, onReorder, dragging, onDropTracks, notice,
-  keyDisplay, loadedKey, platform,
+  keyDisplay, loadedKey, platform, keyOverrides,
 }: TargetListProps) {
   const t = useTranslation();
+  const prefix = useId();
+  const rowId = (entry: string) => `${prefix}-entry-${entry.replace(/[^A-Za-z0-9_-]/g, "_")}`;
   const name = candidates.find((candidate) => candidate.id === targetId)?.name ?? null;
-  const seconds = rows?.reduce((sum, row) => sum + row.durationSec, 0) ?? 0;
+  const seconds = rows?.reduce((sum, row) => sum + row.row.durationSec, 0) ?? 0;
   const count = rows?.length ?? 0;
-  // The row being dragged within the list, and the row a drop would land before.
+  const selectedIndex = selected === null || rows === null ? -1 : rows.findIndex((row) => row.entryId === selected);
+  // The entry being dragged within the list, and the place a drop would land before.
   const carrying = useRef<number | null>(null);
   const [dropBefore, setDropBefore] = useState<number | null>(null);
   const grid = useRef<HTMLDivElement>(null);
+
+  // The active row in view whenever it changes or moves.
+  const order = rows?.map((row) => row.entryId).join(" ") ?? "";
+  useEffect(() => {
+    if (selected === null) return;
+    const row = grid.current?.querySelector(`#${CSS.escape(rowId(selected))}`);
+    row?.scrollIntoView?.({ block: "nearest" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- rowId is a pure function of `prefix`
+  }, [selected, order]);
 
   const keyOf = (action: string) => {
     const entry = TARGET_ACTIONS.find((candidate) => candidate.action === action);
     return entry ? describeChord(entry.chord, platform) : "";
   };
 
-  const onGridKey = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (rows === null || rows.length === 0) return;
-    const last = rows.length - 1;
-    const at = selected ?? -1;
-    let next: number | null = null;
-    if (event.altKey) return; // Alt + Up / Down is the reorder, heard on the window.
-    if (event.key === "ArrowDown") next = Math.min(last, at + 1);
-    else if (event.key === "ArrowUp") next = Math.max(0, at < 0 ? 0 : at - 1);
-    else if (event.key === "Home") next = 0;
-    else if (event.key === "End") next = last;
-    if (next === null) return;
+  const pageRows = () => {
+    const height = grid.current?.clientHeight ?? 0;
+    const first = grid.current?.querySelector<HTMLElement>('[role="row"][aria-rowindex]');
+    const rowHeight = first?.offsetHeight ?? 24;
+    return Math.max(1, Math.floor(height / Math.max(1, rowHeight)) - 1);
+  };
+
+  const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    const target = event.target as HTMLElement;
+    // The target picker keeps its own keys; the main list ignores a field's.
+    if (target.tagName === "SELECT") {
+      if (event.key === "Enter" || event.key === " ") event.stopPropagation();
+      return;
+    }
+    // A button in the list (Try again) presses itself.
+    if (target.tagName === "BUTTON") {
+      if (KEPT.has(event.key)) event.stopPropagation();
+      return;
+    }
+    if (KEPT.has(event.key)) {
+      event.stopPropagation();
+      if (event.key !== "Enter") event.preventDefault();
+      return;
+    }
+    const action = dispatch(event.nativeEvent, platform, null, keyOverrides);
+    if (action === null) return;
+    const next = navigateTarget(action, selectedIndex < 0 ? null : selectedIndex, count, pageRows());
+    if (next === undefined) return;
     event.preventDefault();
     event.stopPropagation();
-    onSelect(next);
+    if (next !== null && rows !== null) onSelect(rows[next]!.entryId);
   };
 
   const placeFrom = (event: DragEvent<HTMLElement>, index: number) => {
@@ -102,6 +142,12 @@ export function TargetList({
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
   };
+  const reorderTo = (from: number, before: number) => {
+    if (rows === null) return;
+    const moved = rows[from]!.entryId;
+    const next = dropInOrder(rows.map((row) => row.entryId), from, before);
+    if (next) onReorder(next, moved);
+  };
   const onListDrop = (event: DragEvent<HTMLElement>) => {
     if (carrying.current !== null && rows !== null) {
       // Below every row: the end of the target.
@@ -109,8 +155,7 @@ export function TargetList({
       const from = carrying.current;
       carrying.current = null;
       setDropBefore(null);
-      const order = dropInOrder(rows.map((row) => row.id), from, rows.length);
-      if (order) onReorder(order, order.length - 1);
+      reorderTo(from, rows.length);
       return;
     }
     if (!dragging || targetId === null) return;
@@ -124,10 +169,9 @@ export function TargetList({
       aria-label={t("Second list")}
       {...{ [OWN_ACTIVATION]: "" }}
       data-testid="target-list"
-      onKeyDown={(event) => {
-        // Enter and Space inside the list are its own, never the deck's or the main list's.
-        if (event.key === "Enter" || event.key === " ") event.stopPropagation();
-      }}
+      onKeyDown={onKeyDown}
+      // A press here is not a press in the main list.
+      onMouseDown={() => { setBrowserFocus(null); }}
     >
       <h2 className={styles.heading}>
         <span className={styles.mark}>▸ {t("target")}</span>
@@ -165,10 +209,10 @@ export function TargetList({
         aria-label={t("Target")}
         aria-rowcount={count + 1}
         aria-busy={targetId !== null && rows === null && failed === null}
+        aria-activedescendant={selected !== null && selectedIndex >= 0 ? rowId(selected) : undefined}
         data-stale={failed !== null || undefined}
         data-dropping={dragging || undefined}
         tabIndex={0}
-        onKeyDown={onGridKey}
         onDragOver={onListDragOver}
         onDrop={onListDrop}
       >
@@ -183,21 +227,22 @@ export function TargetList({
         ) : rows !== null && rows.length === 0 ? (
           <p className={styles.empty}>{t("Empty. Drag tracks here, or select them and press {key}.", { key: keyOf("addToTarget") })}</p>
         ) : null}
-        {rows?.map((row, index) => (
+        {rows?.map(({ entryId, row }, index) => (
           <div
-            // A playlist can hold one track twice: its place is the key.
-            key={`${index}:${row.id}`}
+            key={entryId}
+            id={rowId(entryId)}
             role="row"
             aria-rowindex={index + 2}
-            aria-selected={index === selected}
+            aria-selected={entryId === selected}
             className={styles.row}
+            data-entry={entryId}
             data-drop={dropBefore === index ? "before" : dropBefore === index + 1 && index === rows.length - 1 ? "after" : undefined}
             draggable
-            onClick={() => { onSelect(index); grid.current?.focus(); }}
+            onClick={() => { onSelect(entryId); grid.current?.focus(); }}
             onDragStart={(event) => {
               carrying.current = index;
               event.dataTransfer.effectAllowed = "move";
-              event.dataTransfer.setData(ROW_DRAG, row.id);
+              event.dataTransfer.setData(ROW_DRAG, entryId);
               event.dataTransfer.setData("text/plain", row.id);
               event.stopPropagation();
             }}
@@ -216,9 +261,7 @@ export function TargetList({
               const from = carrying.current;
               carrying.current = null;
               setDropBefore(null);
-              const before = placeFrom(event, index);
-              const order = dropInOrder(rows.map((each) => each.id), from, before);
-              if (order) onReorder(order, before > from ? before - 1 : before);
+              reorderTo(from, placeFrom(event, index));
             }}
           >
             <span role="gridcell" className={styles.title} data-cell="title" title={row.title}>{row.title}</span>
