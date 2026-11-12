@@ -110,7 +110,8 @@ pub fn restore(request: &Request<'_>, guard: &dyn Fn() -> Result<()>, progress: 
     };
     if let Some(contents) = &sidecar {
         if request.sizes.is_some() || summary.is_some() {
-            plan.bytes += contents.bytes;
+            // The record is the archive's word, so it may be any number.
+            plan.bytes = plan.bytes.saturating_add(contents.bytes);
         }
         let sidecar_dir = crate::sidecar_part::dir(location);
         crate::sidecar_part::check_space(&sidecar_dir, contents)?;
@@ -271,7 +272,7 @@ impl Plan {
     fn check_space(&self, location: &rbl_db::LibraryLocation) -> Result<()> {
         let Some(root) = location.master_db.parent() else { return Ok(()) };
         let Ok(free) = fs2::available_space(root) else { return Ok(()) };
-        let needed = self.bytes + 64 * 1024 * 1024;
+        let needed = self.bytes.saturating_add(64 * 1024 * 1024);
         if needed > free {
             return Err(refused(format!(
                 "There is not enough free disk space to restore. It needs {}, and {} is free.",

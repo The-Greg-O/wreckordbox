@@ -427,6 +427,10 @@ fn a_damaged_or_newer_sidecar_in_a_backup_is_refused_before_anything_is_replaced
     let bad = rewritten(&fixture, "sidecar.json", br#"{"version":2,"bytes":1,"stems":false}"#);
     assert!(refused(&fixture, &bad, &changed).contains("newer version of wreckordbox"));
 
+    // The record's size is the archive's word: an absurd one is refused, not trusted.
+    let bad = rewritten(&fixture, "sidecar.json", br#"{"version":1,"bytes":18446744073709551615,"stems":false}"#);
+    assert!(refused(&fixture, &bad, &changed).contains("not enough free disk space to restore the Sidecar"));
+
     let bad = rewritten(&fixture, "sidecar.json", b"not a record");
     assert_eq!(refused(&fixture, &bad, &changed), "The backup's Sidecar record cannot be read.");
 }

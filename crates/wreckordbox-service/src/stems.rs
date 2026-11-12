@@ -475,7 +475,7 @@ impl Stems {
             // Stems recorded without their audio files, as after restoring
             // a backup that left Stem audio out, are not Stems: the track
             // reads as needing separation.
-            stems: current.into_iter().next(), //RED
+            stems: current.into_iter().next().filter(StemSet::audio_present),
             previous,
         })
     }
