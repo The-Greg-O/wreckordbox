@@ -30,16 +30,33 @@
 //!   is reported and the rest carry on;
 //! - a client that goes away stops nothing, as with Stems: the measuring
 //!   finishes and asking again answers from the Sidecar. One measuring
-//!   runs at a time; a second is answered [`codes::INTENSITY_BUSY`].
+//!   runs at a time; a second is answered [`codes::INTENSITY_BUSY`];
+//! - audio measured once is not decoded again on any track: a Measurement
+//!   of the same audio (by fingerprint) by this version of the method,
+//!   recorded for another track, is recorded for this one too;
+//! - the per-bar curve follows the track's beat grid as it is now: when
+//!   the grid differs from the one the stored bars were made for (added or
+//!   corrected since), the bars are made again from the stored value and
+//!   recorded, without decoding;
+//! - the fingerprint is taken again after decoding, and the Measurement is
+//!   recorded only if the file still holds the audio that was fingerprinted
+//!   first; otherwise the track is measured again from what it holds now;
+//! - a value is recorded, and a stored one reused, only if it is a whole
+//!   and valid Intensity ([`Intensity::check`]);
+//! - a service that stops cancels the measuring and waits for it before it
+//!   lets go of the Library, so nothing is recorded once another service
+//!   may own the Sidecar.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 pub use wreckordbox_intensity::{
-    BarCurve, Features, Intensity, Method, Scale, Summary, TimeCurve, METHOD_NAME, METHOD_VERSION,
+    grid_of, BarCurve, Cells, Features, Intensity, Method, Scale, Summary, TimeCurve, METHOD_NAME,
+    METHOD_VERSION,
 };
 use wreckordbox_sidecar::{Fact, Kind, Kinds, NewFact, Sidecar, SidecarError};
 
@@ -56,6 +73,15 @@ pub const SOURCE_NAME: &str = METHOD_NAME;
 /// How many tracks are measured at once, when set to a whole number above
 /// zero. Unset, half the machine's cores, at most four.
 pub const JOBS_ENV: &str = "WRECKORDBOX_INTENSITY_JOBS";
+/// For tests only, and only with `RBXPORT_TEST=1`: a folder of pauses. A
+/// file `<track id>.<point>` made there beforehand stops a measuring of
+/// that track at that point: `decode`, after the first fingerprint and
+/// before decoding; `commit`, after measuring and before recording. On
+/// getting there the measuring makes `<track id>.<point>.reached`, and goes
+/// on once the first file is removed (or after a minute), cancelled or
+/// not.
+#[doc(hidden)]
+pub const PAUSE_ENV: &str = "WRECKORDBOX_INTENSITY_TEST_PAUSE";
 
 /// The names of the Intensity commands.
 pub mod commands {
@@ -83,7 +109,8 @@ pub mod events {
 /// The error codes of the Intensity commands, beside the service's own and
 /// `track_file_missing` and `sidecar_failed` of the Stems commands.
 pub mod codes {
-    /// A measuring is already running; one at a time.
+    /// A measuring is already running; one at a time. Also the answer of
+    /// a service that has begun to stop.
     pub const INTENSITY_BUSY: &str = "intensity_busy";
     /// The track's audio could not be decoded.
     pub const INTENSITY_FAILED: &str = "intensity_failed";
@@ -113,7 +140,8 @@ pub struct Measure {
 pub enum Status {
     /// Decoded, measured and recorded.
     Measured,
-    /// Already measured from this audio; nothing was decoded.
+    /// Already measured from this audio, on this track or another;
+    /// nothing was decoded.
     Reused,
     /// Could not be measured; `error` says why. Nothing was recorded.
     Failed,
@@ -141,6 +169,12 @@ pub struct TrackOutcome {
     /// Facts found stale because the track's audio is no longer the audio
     /// they were made from. They are kept, marked.
     pub marked_stale: Vec<i64>,
+    /// For a `reused` track whose Fact is new: the Fact whose measurement
+    /// of this audio it was made from, with no decoding. That Fact is of
+    /// another track with the same audio, or of this track with bars made
+    /// for a beat grid it no longer has.
+    #[serde(default)]
+    pub reused_from: Option<i64>,
     pub error: Option<ServiceError>,
 }
 
@@ -347,66 +381,124 @@ pub(crate) fn answer(
     answer.map_err(|e| ServiceError::new(service_codes::SERVICE_FAILED, e.to_string()))
 }
 
-/// The measuring in progress for each Sidecar, by its folder. Kept here
-/// and not on the service so nothing else has to carry it.
-static RUNNING: Mutex<Vec<(PathBuf, Arc<AtomicBool>)>> = Mutex::new(Vec::new());
-
-/// Stops the measuring in progress on this service's Sidecar, if there is
-/// one: tracks already recorded are kept, the one being decoded is
-/// abandoned. Answers whether there was one.
-pub(crate) fn cancel(stems: &Stems) -> bool {
-    // A service that never opened a Sidecar never measured.
-    let Ok(Some(sidecar)) = stems.sidecar_if_made() else {
-        return false;
-    };
-    let running = lock(&RUNNING);
-    running
-        .iter()
-        .filter(|(dir, _)| dir == sidecar.dir())
-        .map(|(_, stop)| stop.store(true, Ordering::Release))
-        .count()
-        > 0
+/// The Intensity side of a service's Sidecar: the one measuring that may
+/// be running, the commands at work on it, and whether the service has
+/// closed it. Lives on the service's [`Stems`].
+#[derive(Default)]
+pub(crate) struct Lifecycle {
+    state: Mutex<LifeState>,
+    idle: Condvar,
 }
 
-/// The claim on a Sidecar's one measuring; let go when dropped.
-struct Claim {
-    dir: PathBuf,
+#[derive(Default)]
+struct LifeState {
+    /// The service has stopped, or is stopping: nothing more is begun.
+    closed: bool,
+    /// The stop flag of the measuring in progress.
+    measuring: Option<Arc<AtomicBool>>,
+    /// Commands that may still record something.
+    active: usize,
+}
+
+/// A command at work on the Sidecar's Intensity; let go when dropped.
+struct Activity<'a> {
+    lifecycle: &'a Lifecycle,
+    /// Set when the command is to stop.
     stop: Arc<AtomicBool>,
+    measuring: bool,
 }
 
-impl Claim {
-    fn take(dir: &Path) -> Result<Self, ServiceError> {
-        let mut running = lock(&RUNNING);
-        if running.iter().any(|(claimed, _)| claimed == dir) {
+impl Lifecycle {
+    /// Begins a command that may record. `measuring` claims the one
+    /// measuring.
+    fn begin(&self, measuring: bool) -> Result<Activity<'_>, ServiceError> {
+        let mut state = lock(&self.state);
+        if state.closed {
+            return Err(ServiceError::new(
+                codes::INTENSITY_BUSY,
+                "the service is stopping; ask again of the next one",
+            ));
+        }
+        if measuring && state.measuring.is_some() {
             return Err(ServiceError::new(
                 codes::INTENSITY_BUSY,
                 "Intensity is already being measured; one measuring at a time. Try again when it is done, or stop it with `intensity cancel`.",
             ));
         }
         let stop = Arc::new(AtomicBool::new(false));
-        running.push((dir.to_path_buf(), Arc::clone(&stop)));
-        Ok(Self {
-            dir: dir.to_path_buf(),
+        if measuring {
+            state.measuring = Some(Arc::clone(&stop));
+        }
+        state.active += 1;
+        Ok(Activity {
+            lifecycle: self,
             stop,
+            measuring,
         })
     }
 
+    /// Stops the measuring in progress; answers whether there was one.
+    fn cancel(&self) -> bool {
+        let state = lock(&self.state);
+        state
+            .measuring
+            .as_ref()
+            .map(|stop| stop.store(true, Ordering::Release))
+            .is_some()
+    }
+
+    /// Closes: nothing more begins, the measuring is cancelled, and this
+    /// waits until every command at work has finished.
+    fn shut(&self) {
+        let mut state = lock(&self.state);
+        state.closed = true;
+        if let Some(stop) = &state.measuring {
+            stop.store(true, Ordering::Release);
+        }
+        while state.active > 0 {
+            state = self
+                .idle
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+}
+
+impl Activity<'_> {
     fn stopped(&self) -> bool {
         self.stop.load(Ordering::Acquire)
     }
 }
 
-impl Drop for Claim {
+impl Drop for Activity<'_> {
     fn drop(&mut self) {
-        lock(&RUNNING).retain(|(dir, _)| *dir != self.dir);
+        let mut state = lock(&self.lifecycle.state);
+        state.active -= 1;
+        if self.measuring {
+            state.measuring = None;
+        }
+        self.lifecycle.idle.notify_all();
     }
+}
+
+/// Stops the measuring in progress on this service's Sidecar, if there is
+/// one: tracks already recorded are kept, the one being decoded is
+/// abandoned. Answers whether there was one.
+pub(crate) fn cancel(stems: &Stems) -> bool {
+    stems.intensity.cancel()
+}
+
+/// For a service that is stopping: cancels the measuring, refuses any
+/// more, and returns once nothing more can be recorded.
+pub(crate) fn shut(stems: &Stems) {
+    stems.intensity.shut();
 }
 
 /// One measuring, start to finish.
 struct Measuring<'a> {
     stems: &'a Stems,
     sidecar: &'a Sidecar,
-    claim: &'a Claim,
+    claim: &'a Activity<'a>,
     source: Source,
     force: bool,
     total: usize,
@@ -431,8 +523,8 @@ fn measure(stems: &Arc<Stems>, targets: &[Target], force: bool) -> Result<Measur
             tracks: Vec::new(),
         });
     }
+    let claim = stems.intensity.begin(true)?;
     let sidecar = stems.sidecar()?;
-    let claim = Claim::take(sidecar.dir())?;
     let measuring = Measuring {
         stems,
         sidecar: &sidecar,
@@ -534,83 +626,141 @@ impl Measuring<'_> {
 
     fn one(&self, target: &Target) -> TrackOutcome {
         let parent = &target.parent;
-        let fingerprint = match stems::fingerprint(parent, &target.path) {
-            Ok(fingerprint) => fingerprint,
-            Err(error) => return TrackOutcome::failed(parent, None, Vec::new(), error),
-        };
-        let failed = |marked_stale: Vec<i64>, error: ServiceError| {
-            TrackOutcome::failed(parent, Some(fingerprint.clone()), marked_stale, error)
-        };
-        // Measurements made from other audio are found out first, so one
-        // of them is never taken for current.
-        let marked_stale = match mark_stale(self.stems, self.sidecar, &parent.id, &fingerprint) {
-            Ok(marked_stale) => marked_stale,
-            Err(error) => return failed(Vec::new(), error),
-        };
-        if !self.force {
-            match current(self.sidecar, &parent.id, Some(&fingerprint)) {
-                Ok(Some(fact)) => {
-                    return TrackOutcome::recorded(parent, Status::Reused, &fact, marked_stale)
-                }
-                Ok(None) => {}
-                Err(error) => return failed(marked_stale, error),
+        let mut marked: Vec<i64> = Vec::new();
+        // A file that changes while it is measured is measured again from
+        // what it holds now, a few times at most.
+        for _ in 0..ATTEMPTS {
+            let fingerprint = match stems::fingerprint(parent, &target.path) {
+                Ok(fingerprint) => fingerprint,
+                Err(error) => return TrackOutcome::failed(parent, None, marked, error),
+            };
+            let failed = |marked_stale: Vec<i64>, error: ServiceError| {
+                TrackOutcome::failed(parent, Some(fingerprint.clone()), marked_stale, error)
+            };
+            // Measurements made from other audio are found out first, so
+            // one of them is never taken for current.
+            match mark_stale(self.stems, self.sidecar, &parent.id, &fingerprint) {
+                Ok(stale) => marked.extend(stale),
+                Err(error) => return failed(marked, error),
             }
-        }
+            let bars = bar_starts(target.analysis.as_deref());
+            if !self.force {
+                match self.reuse(parent, &fingerprint, &bars, &mut marked) {
+                    Ok(Some(outcome)) => return outcome,
+                    Ok(None) => {}
+                    Err(error) => return failed(marked, error),
+                }
+            }
 
-        self.progress(parent, "measuring", self.done.load(Ordering::Acquire));
-        self.decoded.fetch_add(1, Ordering::AcqRel);
-        let bars = bar_starts(target.analysis.as_deref());
-        let intensity = match wreckordbox_intensity::measure_file(&target.path, &bars, &|| {
-            self.claim.stopped()
-        }) {
-            Ok(Some(intensity)) => intensity,
-            Ok(None) => {
-                return TrackOutcome {
-                    fingerprint: Some(fingerprint),
-                    marked_stale,
-                    ..TrackOutcome::cancelled(parent)
+            pause("decode", &parent.id);
+            self.progress(parent, "measuring", self.done.load(Ordering::Acquire));
+            self.decoded.fetch_add(1, Ordering::AcqRel);
+            let intensity = match wreckordbox_intensity::measure_file(&target.path, &bars, &|| {
+                self.claim.stopped()
+            }) {
+                Ok(Some(intensity)) => intensity,
+                Ok(None) => {
+                    return TrackOutcome {
+                        fingerprint: Some(fingerprint),
+                        marked_stale: marked,
+                        ..TrackOutcome::cancelled(parent)
+                    }
                 }
-            }
-            Err(error) => {
-                return failed(
-                    marked_stale,
-                    ServiceError::new(
-                        codes::INTENSITY_FAILED,
-                        format!(
-                            "the audio of track {} \"{}\" could not be measured: {error}",
-                            parent.id, parent.title
+                Err(error) => {
+                    return failed(
+                        marked,
+                        ServiceError::new(
+                            codes::INTENSITY_FAILED,
+                            format!(
+                                "the audio of track {} \"{}\" could not be measured: {error}",
+                                parent.id, parent.title
+                            ),
                         ),
-                    ),
-                )
+                    )
+                }
+            };
+            // Recorded only against the audio that was decoded: the file
+            // is fingerprinted again, and if it is not what it was, the
+            // track is measured afresh.
+            match stems::fingerprint(parent, &target.path) {
+                Ok(after) if after == fingerprint => {}
+                Ok(_) => continue,
+                Err(error) => return failed(marked, error),
             }
-        };
-        match self.record(parent, &fingerprint, &intensity) {
-            Ok(fact) => {
-                changed(self.stems, &parent.id, Some(fact.id), &[]);
-                TrackOutcome::recorded(parent, Status::Measured, &fact, marked_stale)
-            }
-            Err(error) => failed(marked_stale, error),
+            pause("commit", &parent.id);
+            return match self.record(parent, &fingerprint, &intensity) {
+                Ok(Some(fact)) => {
+                    changed(self.stems, &parent.id, Some(fact.id), &[]);
+                    TrackOutcome::recorded(parent, Status::Measured, &fact, marked)
+                }
+                Ok(None) => TrackOutcome {
+                    fingerprint: Some(fingerprint),
+                    marked_stale: marked,
+                    ..TrackOutcome::cancelled(parent)
+                },
+                Err(error) => failed(marked, error),
+            };
         }
+        TrackOutcome::failed(
+            parent,
+            None,
+            marked,
+            ServiceError::new(
+                codes::INTENSITY_FAILED,
+                format!(
+                    "the audio file of track {} \"{}\" kept changing while it was measured; try again when it is still",
+                    parent.id, parent.title
+                ),
+            ),
+        )
     }
 
-    /// Records one track's Intensity, in the command's Run.
+    /// The track's answer from what is already measured of this audio, if
+    /// anything is: this track's own Measurement when its bars are for the
+    /// grid the track has now; otherwise a new Fact for this track made
+    /// from a Measurement of the same audio (this track's with other bars,
+    /// or another track's), without decoding.
+    fn reuse(
+        &self,
+        parent: &Parent,
+        fingerprint: &Fingerprint,
+        bars: &[f64],
+        marked: &mut Vec<i64>,
+    ) -> Result<Option<TrackOutcome>, ServiceError> {
+        let Some((fact, value)) = reusable(self.sidecar, &parent.id, fingerprint)? else {
+            return Ok(None);
+        };
+        let grid = grid_of(bars);
+        if fact.track_id == parent.id && fact.is_live() && !fact.is_stale() && value.grid == grid {
+            return Ok(Some(TrackOutcome::recorded(
+                parent,
+                Status::Reused,
+                &fact,
+                std::mem::take(marked),
+            )));
+        }
+        let Ok(value) = value.with_bars(bars) else {
+            return Ok(None);
+        };
+        Ok(self.record(parent, fingerprint, &value)?.map(|recorded| {
+            changed(self.stems, &parent.id, Some(recorded.id), &[]);
+            TrackOutcome {
+                reused_from: Some(fact.id),
+                ..TrackOutcome::recorded(parent, Status::Reused, &recorded, std::mem::take(marked))
+            }
+        }))
+    }
+
+    /// Records one track's Intensity, in the command's Run. `None` when the
+    /// measuring has been cancelled meanwhile: nothing is recorded then.
     fn record(
         &self,
         parent: &Parent,
         fingerprint: &Fingerprint,
         intensity: &Intensity,
-    ) -> Result<Fact, ServiceError> {
-        let value = serde_json::to_value(intensity)
-            .map_err(|e| ServiceError::new(service_codes::SERVICE_FAILED, e.to_string()))?;
-        // The store takes any value; the kind's declaration is what says
-        // an Intensity is an object.
-        if let Some(declared) = Kinds::built_in()
-            .iter()
-            .find(|declared| declared.name == INTENSITY.name)
-        {
-            declared
-                .check(&value)
-                .map_err(|message| ServiceError::new(service_codes::SERVICE_FAILED, message))?;
+    ) -> Result<Option<Fact>, ServiceError> {
+        if self.claim.stopped() {
+            return Ok(None);
         }
         let run = {
             let mut run = lock(&self.run);
@@ -625,17 +775,7 @@ impl Measuring<'_> {
                 begun
             }
         };
-        self.sidecar
-            .record(&NewFact {
-                track_id: &parent.id,
-                fingerprint: Some(fingerprint),
-                kind: INTENSITY,
-                value,
-                source: &self.source,
-                confidence: 1.0,
-                run,
-            })
-            .map_err(|e| sidecar_error(&e))
+        record(self.sidecar, &self.source, run, parent, fingerprint, intensity).map(Some)
     }
 
     fn progress(&self, parent: &Parent, status: &str, done: usize) {
@@ -674,6 +814,7 @@ impl TrackOutcome {
             points: None,
             bars: None,
             marked_stale: Vec::new(),
+            reused_from: None,
             error: None,
         }
     }
@@ -714,14 +855,22 @@ impl TrackOutcome {
 }
 
 fn show(stems: &Stems, target: Target) -> Result<TrackIntensity, ServiceError> {
-    let Target { parent, path, .. } = target;
+    let Target {
+        parent,
+        path,
+        analysis,
+    } = target;
+    let activity = stems.intensity.begin(false)?;
     let sidecar = stems.sidecar()?;
     // With the audio at hand, a Measurement made from other audio is
-    // found out here too, so nothing reads a stale one as current.
+    // found out here too, so nothing reads a stale one as current; and
+    // bars made for a beat grid the track no longer has are made again.
     if path.is_file() {
         let fingerprint = stems::fingerprint(&parent, &path)?;
         mark_stale(stems, &sidecar, &parent.id, &fingerprint)?;
+        realign(stems, &sidecar, &activity, &parent, &fingerprint, analysis.as_deref())?;
     }
+    drop(activity);
     let (current, previous): (Vec<Fact>, Vec<Fact>) = ours(&sidecar, &parent.id)?
         .into_iter()
         .partition(|fact| fact.is_live() && !fact.is_stale());
@@ -732,6 +881,98 @@ fn show(stems: &Stems, target: Target) -> Result<TrackIntensity, ServiceError> {
     })
 }
 
+/// When the track's current Intensity has bars for another beat grid than
+/// the one it has now, records it again with bars for this one, made from
+/// the stored value in a Run of its own.
+fn realign(
+    stems: &Stems,
+    sidecar: &Sidecar,
+    activity: &Activity,
+    parent: &Parent,
+    fingerprint: &Fingerprint,
+    analysis: Option<&Path>,
+) -> Result<(), ServiceError> {
+    let Some(fact) = ours(sidecar, &parent.id)?
+        .into_iter()
+        .find(|fact| fact.is_live() && !fact.is_stale())
+    else {
+        return Ok(());
+    };
+    let Some(value) = valid(&fact).filter(|_| fact.fingerprint.as_ref() == Some(fingerprint))
+    else {
+        return Ok(());
+    };
+    let bars = bar_starts(analysis);
+    if value.grid == grid_of(&bars) || activity.stopped() {
+        return Ok(());
+    }
+    let Ok(value) = value.with_bars(&bars) else {
+        return Ok(());
+    };
+    let source = Source::new(SourceKind::Tool, SOURCE_NAME);
+    let run = sidecar
+        .begin_run(
+            &source,
+            &format!(
+                "Align the Intensity of track {} \"{}\" to its beat grid",
+                parent.id, parent.title
+            ),
+        )
+        .map_err(|e| sidecar_error(&e))?;
+    let recorded = record(sidecar, &source, run, parent, fingerprint, &value);
+    let _ = sidecar.finish_run(
+        run,
+        if recorded.is_ok() {
+            "bars made again for the beat grid"
+        } else {
+            "failed"
+        },
+    );
+    changed(stems, &parent.id, Some(recorded?.id), &[]);
+    Ok(())
+}
+
+/// Records an Intensity for a track, once it has passed its check.
+fn record(
+    sidecar: &Sidecar,
+    source: &Source,
+    run: RunId,
+    parent: &Parent,
+    fingerprint: &Fingerprint,
+    intensity: &Intensity,
+) -> Result<Fact, ServiceError> {
+    let invalid = |message: String| {
+        ServiceError::new(
+            codes::INTENSITY_FAILED,
+            format!(
+                "the Intensity of track {} \"{}\" was not recorded: {message}",
+                parent.id, parent.title
+            ),
+        )
+    };
+    intensity.check().map_err(|e| invalid(e.to_string()))?;
+    let value = serde_json::to_value(intensity).map_err(|e| invalid(e.to_string()))?;
+    // The store takes any value; the kind's declaration is what says an
+    // Intensity is an object.
+    if let Some(declared) = Kinds::built_in()
+        .iter()
+        .find(|declared| declared.name == INTENSITY.name)
+    {
+        declared.check(&value).map_err(invalid)?;
+    }
+    sidecar
+        .record(&NewFact {
+            track_id: &parent.id,
+            fingerprint: Some(fingerprint),
+            kind: INTENSITY,
+            value,
+            source,
+            confidence: 1.0,
+            run,
+        })
+        .map_err(|e| sidecar_error(&e))
+}
+
 /// Every Intensity this tool recorded for a track, newest first. Another
 /// source's Fact of the same kind is its own affair.
 fn ours(sidecar: &Sidecar, track_id: &str) -> Result<Vec<Fact>, ServiceError> {
@@ -739,23 +980,62 @@ fn ours(sidecar: &Sidecar, track_id: &str) -> Result<Vec<Fact>, ServiceError> {
         .facts(track_id, INTENSITY.name)
         .map_err(|e| sidecar_error(&e))?
         .into_iter()
-        .filter(|fact| fact.source.kind == SourceKind::Tool && fact.source.name == SOURCE_NAME)
+        .filter(is_ours)
         .collect())
 }
 
-/// The track's Intensity that can stand for a new measuring: not replaced,
-/// not stale, made from this audio by this version of the method.
-fn current(
+fn is_ours(fact: &Fact) -> bool {
+    fact.source.kind == SourceKind::Tool && fact.source.name == SOURCE_NAME
+}
+
+/// The value of a Fact when it can stand for a measuring now: a whole,
+/// valid Intensity by this version of the method.
+fn valid(fact: &Fact) -> Option<Intensity> {
+    serde_json::from_value::<Intensity>(fact.value.clone())
+        .ok()
+        .filter(|value| value.method.version == METHOD_VERSION && value.check().is_ok())
+}
+
+/// A measurement of the audio `fingerprint` names that can stand for a new
+/// measuring: the track's own current one first, then the newest of any
+/// track's. Only a valid value by this version of the method.
+fn reusable(
     sidecar: &Sidecar,
     track_id: &str,
-    fingerprint: Option<&Fingerprint>,
-) -> Result<Option<Fact>, ServiceError> {
-    Ok(ours(sidecar, track_id)?.into_iter().find(|fact| {
-        fact.is_live()
-            && !fact.is_stale()
-            && fact.fingerprint.as_ref() == fingerprint
-            && fact.value["method"]["version"] == json!(METHOD_VERSION)
-    }))
+    fingerprint: &Fingerprint,
+) -> Result<Option<(Fact, Intensity)>, ServiceError> {
+    let own = ours(sidecar, track_id)?.into_iter().filter(|fact| {
+        fact.is_live() && !fact.is_stale() && fact.fingerprint.as_ref() == Some(fingerprint)
+    });
+    let anywhere = sidecar
+        .facts_of_audio(fingerprint, INTENSITY.name)
+        .map_err(|e| sidecar_error(&e))?
+        .into_iter()
+        .filter(is_ours);
+    Ok(own
+        .chain(anywhere)
+        .find_map(|fact| valid(&fact).map(|value| (fact, value))))
+}
+
+/// How many times a track whose file changes under the measuring is tried.
+const ATTEMPTS: usize = 3;
+
+/// The pause [`PAUSE_ENV`] asks for, if it does.
+fn pause(point: &str, track_id: &str) {
+    if std::env::var("RBXPORT_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let Some(dir) = std::env::var_os(PAUSE_ENV).filter(|dir| !dir.is_empty()) else {
+        return;
+    };
+    let marker = Path::new(&dir).join(format!("{track_id}.{point}"));
+    if !marker.exists() || std::fs::write(marker.with_extension(format!("{point}.reached")), b"").is_err() {
+        return;
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while marker.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 /// Where each bar of the track's beat grid begins, in seconds; empty when

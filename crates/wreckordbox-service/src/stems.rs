@@ -232,6 +232,9 @@ pub(crate) struct Stems {
     running: Mutex<Option<Arc<Job>>>,
     /// Where events go to reach clients and the host.
     events: Mutex<Sender<Event>>,
+    /// The Intensity measuring on this Sidecar, and whether the service has
+    /// closed it.
+    pub(crate) intensity: crate::intensity::Lifecycle,
 }
 
 struct Job {
@@ -262,6 +265,7 @@ impl Stems {
             sidecar: Mutex::new(None),
             running: Mutex::new(None),
             events: Mutex::new(events),
+            intensity: crate::intensity::Lifecycle::default(),
         })
     }
 

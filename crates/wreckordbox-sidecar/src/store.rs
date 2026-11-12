@@ -458,6 +458,21 @@ impl Sidecar {
         Ok(facts)
     }
 
+    /// Every Fact of `kind` recorded from the audio `fingerprint` names, on
+    /// any track, newest first: what is known of that audio wherever it is
+    /// in the Library. Superseded and stale ones included; a Fact stale on
+    /// its own track still describes the audio it was made from.
+    pub fn facts_of_audio(&self, fingerprint: &Fingerprint, kind: &str) -> Result<Vec<Fact>> {
+        let db = self.db();
+        let mut statement = db.prepare(&select(
+            "WHERE fact.fingerprint = ?1 AND fact.kind = ?2 ORDER BY fact.id DESC",
+        ))?;
+        let facts = statement
+            .query_map(params![fingerprint.as_str(), kind], read_fact)?
+            .collect::<rusqlite::Result<Vec<Fact>>>()?;
+        Ok(facts)
+    }
+
     /// One Fact by its identifier.
     pub fn fact(&self, id: i64) -> Result<Option<Fact>> {
         Ok(self
