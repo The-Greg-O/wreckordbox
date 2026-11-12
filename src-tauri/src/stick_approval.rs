@@ -5,6 +5,11 @@
 //! Stick is safe. That is Stick Protection (`stick_guard`, wbx-45.11),
 //! which every writer checks first, under the Stick's lock.
 //!
+//! The hold itself is an interface confirmation: the window times it, and
+//! the backend does not. A client that plans and approves at once gets a
+//! token (wbx-45.4 review round 4, C1); what it cannot do is write to a
+//! Stick the DJ has not unlocked.
+//!
 //! 1. `stick_write_plan` works out what the write would do without writing
 //!    or settling anything, and answers a **plan id**: not usable to write.
 //! 2. The DJ looks at the plan and holds to confirm; the window then calls
