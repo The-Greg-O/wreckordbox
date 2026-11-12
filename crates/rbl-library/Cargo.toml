@@ -14,6 +14,8 @@ rbl-db = { path = "../rbl-db" }
 rbl-index = { path = "../rbl-index" }
 rbl-backup = { path = "../rbl-backup" }
 parking_lot = "0.12"
+serde = { workspace = true }
+serde_json = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]

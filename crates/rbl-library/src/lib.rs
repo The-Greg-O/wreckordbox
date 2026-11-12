@@ -12,6 +12,7 @@
 
 pub mod history;
 pub mod my_tags;
+pub mod protection;
 pub mod read;
 
 use std::collections::HashMap;
@@ -217,6 +218,9 @@ pub struct LibraryCore {
     /// Undo and Redo of the edits made through this core, whoever made
     /// them. A leaf lock; see [`Self::history`].
     history: parking_lot::Mutex<history::EditHistory>,
+    /// Library Protection, kept in the recovery folder; checked under the
+    /// edit gate before every write. See [`protection`].
+    protection: protection::Switch,
 }
 
 type Watcher = Box<dyn FnMut(Change) -> bool + Send>;
@@ -226,10 +230,12 @@ impl LibraryCore {
     /// under `recovery_dir`. The location arrives with the Library, in
     /// [`Self::set_library`].
     pub fn new(recovery_dir: impl Into<PathBuf>) -> Self {
+        let recovery_dir = recovery_dir.into();
         Self {
             edit_gate: parking_lot::ReentrantMutex::new(()),
             analysis_write: parking_lot::Mutex::new(()),
-            recovery_dir: recovery_dir.into(),
+            protection: protection::Switch::new(recovery_dir.clone()),
+            recovery_dir,
             inner: RwLock::new(Inner { next_view_id: 1, generation: 1, ..Inner::default() }),
             watchers: parking_lot::Mutex::new(Vec::new()),
             refusal: parking_lot::Mutex::new(None),
@@ -319,7 +325,8 @@ impl LibraryCore {
 
     /// Opens the Library for writing, runs one edit against it, then
     /// `refresh` on the same connection, and closes it. Refused while
-    /// rekordbox is running.
+    /// rekordbox is running, and while Library Protection is on
+    /// ([`protection::refusal`]).
     ///
     /// Opened per edit rather than held: holding it would keep the database
     /// open read-write for the life of the process, and rekordbox launching
@@ -350,6 +357,11 @@ impl LibraryCore {
         let _gate = self.edit_gate.lock();
         if let Some(reason) = self.write_refusal() {
             return Err(rbl_db::DbError::WriteRefused(reason));
+        }
+        // Under the gate, so an edit that was waiting for it when the DJ
+        // turned protection on is refused too.
+        if self.protection().protect_library {
+            return Err(protection::refusal());
         }
         if rbl_backup::journal::pending(&self.recovery_dir) {
             return Err(rbl_db::DbError::WriteRefused("A library restore is unfinished. Restart the app to recover it before editing.".into()));

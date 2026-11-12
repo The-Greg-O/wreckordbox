@@ -13,6 +13,8 @@ fn core_in(dir: &std::path::Path) -> LibraryCore {
     let (library, _) = rbl_index::load(&db).unwrap();
     let core = LibraryCore::new(dir.join("recovery"));
     core.set_library(&NoHost, library, false, db.schema().db_version, 0, location);
+    // As on the machine of a DJ who edits.
+    core.set_protection(false).unwrap();
     core
 }
 
@@ -227,6 +229,7 @@ fn a_detected_real_library_is_not_written_under_the_test_variable() {
     let (library, _) = rbl_index::load(&db).unwrap();
     location.is_real_install = true;
     let core = LibraryCore::new(dir.path().join("recovery"));
+    core.set_protection(false).unwrap();
     core.set_library(&NoHost, library, false, db.schema().db_version, 0, location);
     let track = rbl_db::fixture::track_id(1);
     let was = rating_of(&core, &track);

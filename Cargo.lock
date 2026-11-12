@@ -4015,6 +4015,8 @@ dependencies = [
  "rbl-backup",
  "rbl-db",
  "rbl-index",
+ "serde",
+ "serde_json",
  "tempfile",
  "tracing",
 ]
