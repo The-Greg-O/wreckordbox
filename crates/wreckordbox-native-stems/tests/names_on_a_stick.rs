@@ -154,6 +154,26 @@ fn a_name_another_tool_put_on_the_stick_follows_the_same_rules() {
 }
 
 #[test]
+fn a_backslash_in_a_file_name_is_a_character_not_a_folder_separator() {
+    // The Stick's library spells paths with forward slashes. A backslash
+    // is part of the file name, and one of the characters "FAT and exFAT
+    // cannot store": the track is skipped, not given the stems folder of
+    // whatever follows the backslash.
+    let rig = Rig::spare(&[("Slash.wav", 3)]);
+    rig.hold_in_library(3, "/Contents/Artist 3/Single/AC\\DC.wav");
+    let stems = rig.stems("set", 20_000);
+
+    let outcome = write(&rig.request(3, &stems)).unwrap();
+
+    let Outcome::Skipped(skipped) = outcome else {
+        panic!("{outcome:?}")
+    };
+    assert_eq!(skipped.reason, Unnameable::Character('\\'));
+    assert_eq!(skipped.file_name, "AC\\DC.wav");
+    assert!(!rig.root().join("STEMS").exists());
+}
+
+#[test]
 fn an_existing_stems_folder_in_another_case_is_used_not_doubled() {
     // "`STEMS`: a directory at the root of the USB, name matched ignoring
     // ASCII case." On FAT a second folder differing only in case cannot

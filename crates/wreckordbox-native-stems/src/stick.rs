@@ -78,8 +78,10 @@ pub(crate) fn exported(
             }
         }
         if let Some(track) = found {
-            let path = track.path.replace('\\', "/");
-            let path = path.trim_start_matches('/').to_owned();
+            // As the library spells it: a backslash is a character of a
+            // name here, never a separator (the layout's `file` and CRC
+            // are over forward slashes, which is what the library holds).
+            let path = track.path.trim_start_matches('/').to_owned();
             let file = StickFiles::new(stick).locate(&path);
             return Ok(Exported { path, file });
         }

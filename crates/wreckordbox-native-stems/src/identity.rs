@@ -80,6 +80,8 @@ impl Origin {
     /// `file` is left out when it would be too long for the deck, which
     /// would otherwise ignore the size and fingerprint with it.
     pub(crate) fn record(&self) -> String {
+        const OPENING: &str = "{\"file\": \"";
+        const CLOSING: &str = "\", ";
         let mut file = String::new();
         for character in self.file.chars() {
             match character {
@@ -99,9 +101,9 @@ impl Origin {
         );
         let fits = self.file.len() < FILE_BYTES
             && !self.file.contains('\0')
-            && file.len() + rest.len() + 12 <= RECORD_BYTES;
+            && OPENING.len() + file.len() + CLOSING.len() + rest.len() <= RECORD_BYTES;
         if fits {
-            format!("{{\"file\": \"{file}\", {rest}")
+            format!("{OPENING}{file}{CLOSING}{rest}")
         } else {
             format!("{{{rest}")
         }
