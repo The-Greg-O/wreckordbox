@@ -476,12 +476,24 @@ impl Facts<'_> {
         lookup: &dyn Fn(&str) -> Result<ParentAudio, ServiceError>,
     ) -> Result<TrackFacts, ServiceError> {
         let found = lookup(&wanted.id)?;
+        let kinds = self.kinds();
         if let Some(kind) = &wanted.kind {
-            let kinds = self.kinds()?;
-            if kinds.get(kind).is_none() {
-                return Err(not_declared(kind, &kinds));
+            let kinds = kinds.as_ref().map_err(Clone::clone)?;
+            // While the Tag schema has a mistake its dimensions are not
+            // declared, and their Facts are still to be read.
+            if kinds.get(kind).is_none() && !kinds.schema_is_broken() {
+                return Err(not_declared(kind, kinds));
             }
         }
+        // What is stored is read whatever state the files are in; a value
+        // from when its kind took another shape is given as the kind takes
+        // it now.
+        let as_now = |mut fact: Fact| {
+            if let Some(kind) = kinds.as_ref().ok().and_then(|kinds| kinds.get(&fact.kind)) {
+                fact.value = kind.normalise(std::mem::take(&mut fact.value));
+            }
+            fact
+        };
         let track = found.parent().clone();
         if wanted.check_audio {
             let fingerprint = stems::fingerprint(&track, found.path())?;
@@ -498,6 +510,7 @@ impl Facts<'_> {
                 .into_iter()
                 .filter(|fact| wanted.all || fact.is_live())
                 .map(Fact::from)
+                .map(as_now)
                 .collect(),
         })
     }
@@ -552,9 +565,16 @@ fn check(
     tracks: &mut HashMap<String, (Parent, Option<Fingerprint>)>,
     lookup: &dyn Fn(&str) -> Result<ParentAudio, ServiceError>,
 ) -> Result<Checked, ServiceError> {
+    // A Tag schema with a mistake holds back the kinds it governs, and
+    // only those.
+    if let Some(error) = kinds.refused_by_schema(&fact.kind) {
+        return Err(sidecar_error(&error));
+    }
     let Some(kind) = kinds.get(&fact.kind) else {
         return Err(not_declared(&fact.kind, kinds));
     };
+    let mut fact = fact;
+    fact.value = kind.normalise(std::mem::take(&mut fact.value));
     if kind.reserved {
         return Err(ServiceError::new(
             codes::KIND_RESERVED,

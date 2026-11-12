@@ -624,6 +624,24 @@ const HEADING: &str = "\
 # A dimension's name is the kind of its Facts.
 ";
 
+/// The names of the dimensions a Tag schema's text has, the genre tree's
+/// among them, whether or not the schema is one that can be used. `None`
+/// when the text cannot be read even that far.
+#[must_use]
+pub fn dimension_names(text: &str) -> Option<Vec<String>> {
+    let table: toml::Table = toml::from_str(text).ok()?;
+    let mut names = Vec::new();
+    if table.contains_key(GENRE) {
+        names.push(GENRE.to_owned());
+    }
+    match table.get("dimensions") {
+        None => {}
+        Some(toml::Value::Table(dimensions)) => names.extend(dimensions.keys().cloned()),
+        Some(_) => return None,
+    }
+    Some(names)
+}
+
 /// A dimension's name, or a kind's: lower-case letters, digits and
 /// underscores, starting with a letter.
 #[must_use]

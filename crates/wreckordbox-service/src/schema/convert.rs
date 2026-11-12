@@ -36,6 +36,8 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, PoisonError};
 
 use rbl_index::smart::my_tag_key;
 use rbl_library::read::my_tag_catalogue;
@@ -45,7 +47,7 @@ use wreckordbox_sidecar::tag_schema::{
     is_dimension_name, is_term_id, Deck, DeckCategory, Dimension, Term, DEFAULT_CHILD_PREFIX, GENRE,
 };
 use wreckordbox_sidecar::{
-    Kinds, Nature, NewFact, Run, RunId, Sidecar, Source, SourceKind, TagSchema, ValueType,
+    Declaration, Kinds, NewFact, Run, RunId, Sidecar, Source, SourceKind, TagSchema, ValueType,
 };
 
 use super::{codes, declared_kinds, file, sidecar_error};
@@ -77,6 +79,11 @@ pub struct Convert {
     /// Write the Tag schema even where there is another one already.
     #[serde(default)]
     pub replace: bool,
+    /// Make the Library's MyTags the DJ's word again where a Fact from the
+    /// DJ says otherwise: such Facts are superseded. Without it they are
+    /// left as they are and reported.
+    #[serde(default)]
+    pub reimport: bool,
     /// Work everything out and answer it, the file's text included, but
     /// write no file and record no Fact.
     #[serde(default)]
@@ -162,6 +169,19 @@ pub struct ImpliedParents {
     pub tag_parents: bool,
 }
 
+/// A Fact from the DJ that does not say what the Library's MyTags say.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Conflict {
+    pub track_id: String,
+    /// The dimension, which is the Fact's kind.
+    pub dimension: String,
+    /// What the DJ's Fact says.
+    pub fact: Value,
+    /// What the track's MyTags say: the terms' identifiers, none when the
+    /// track has no tag of the dimension.
+    pub library: Value,
+}
+
 /// What `schema.convert` answers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Converted {
@@ -183,6 +203,13 @@ pub struct Converted {
     pub facts_recorded: usize,
     /// Facts that were already there with the same value.
     pub facts_unchanged: usize,
+    /// Facts from the DJ that say otherwise than the Library's MyTags and
+    /// were left as they are: how many, and each. Recorded over only when
+    /// the command says `reimport`.
+    #[serde(default)]
+    pub facts_conflicting: usize,
+    #[serde(default)]
+    pub conflicts: Vec<Conflict>,
     /// The Run the Facts were recorded in; `null` when none was.
     pub run: Option<Run>,
     /// The file's text, in a dry run.
@@ -250,46 +277,41 @@ struct Plan {
     terms: HashMap<i32, (usize, String)>,
 }
 
+/// One conversion at a time in this process: what a conversion finds (the
+/// schema there is, the Facts there are) is still so when it writes.
+static CONVERTING: Mutex<()> = Mutex::new(());
+
+/// Numbers the working files, so no two are ever the same one.
+static WORKING_FILES: AtomicU64 = AtomicU64::new(0);
+
 pub(super) fn convert(
     stems: &Stems,
     convert: &Convert,
     read: &dyn Fn() -> Result<MyTags, ServiceError>,
 ) -> Result<Converted, ServiceError> {
+    let _one_at_a_time = CONVERTING.lock().unwrap_or_else(PoisonError::into_inner);
     let declared = declared_kinds(stems)?;
     let library = read()?;
     let mut plan = plan(&library, convert, &declared)?;
-
-    // What each track's tags say, dimension by dimension.
-    let mut implied = ImpliedParents::default();
-    let mut track_tags = 0;
-    let mut wanted: Vec<(&str, usize, Vec<String>)> = Vec::new();
-    for (track, keys) in &library.tracks {
-        let mut by_dimension: Vec<Vec<&str>> = vec![Vec::new(); plan.schema.dimensions.len()];
-        for key in keys {
-            if let Some((dimension, term)) = plan.terms.get(key) {
-                by_dimension[*dimension].push(term);
-                track_tags += 1;
-            }
-        }
-        for (at, carried) in by_dimension.into_iter().enumerate() {
-            if carried.is_empty() {
-                continue;
-            }
-            let dimension = &plan.schema.dimensions[at];
-            let value = most_specific(dimension, &carried, &mut implied);
-            wanted.push((track, at, value));
-        }
-    }
-    implied.tag_parents = implied.with_parent >= implied.without_parent;
+    let (wanted, implied, track_tags) = wanted(&plan, &library);
     plan.schema.deck.tag_parents = implied.tag_parents;
 
+    // Everything that could be wrong is found before anything is written,
+    // in a dry run as in a real one: the schema, then every Fact.
     let text = checked_text(&plan.schema, &library, &declared)?;
+    let kinds = declared.with_schema(&plan.schema).map_err(invalid)?;
+    for (_, at, value) in &wanted {
+        let kind = kind_of(&kinds, &plan.schema, *at)?;
+        kind.check(&json!(value))
+            .map_err(|why| ServiceError::new(service_codes::SERVICE_FAILED, why))?;
+    }
+
     let path = file(stems)?;
-    let existing = std::fs::read_to_string(&path).ok();
+    let existing = existing(&path)?;
     let file_state = match &existing {
         _ if convert.dry_run => FileState::NotWritten,
         None => FileState::Written,
-        Some(existing) if *existing == text => FileState::Unchanged,
+        Some(existing) if existing == text.as_bytes() => FileState::Unchanged,
         Some(_) if convert.replace => FileState::Replaced,
         Some(_) => {
             return Err(ServiceError::new(
@@ -302,44 +324,15 @@ pub(super) fn convert(
         }
     };
 
-    // Only what the DJ's Facts do not already say.
     let sidecar = stems.sidecar()?;
-    let dj = Source::new(SourceKind::Dj, "dj");
-    let said = |track: &str, kind: &str| -> Result<Option<Value>, ServiceError> {
-        Ok(sidecar
-            .facts(track, kind)
-            .map_err(|e| sidecar_error(&e))?
-            .into_iter()
-            .find(|fact| fact.is_live() && fact.source == dj)
-            .map(|fact| fact.value))
-    };
-    let mut to_record: Vec<(&str, usize, Value)> = Vec::new();
-    let mut facts_unchanged = 0;
-    let mut covered: HashSet<(&str, usize)> = HashSet::new();
-    for (track, at, value) in &wanted {
-        covered.insert((track, *at));
-        let value = json!(value);
-        if said(track, &plan.schema.dimensions[*at].name)?.as_ref() == Some(&value) {
-            facts_unchanged += 1;
-        } else {
-            to_record.push((track, *at, value));
-        }
-    }
-    // A track the DJ's Fact gives terms to and the Library now gives none.
-    for (track, _) in &library.tracks {
-        for (at, dimension) in plan.schema.dimensions.iter().enumerate() {
-            if covered.contains(&(track.as_str(), at)) {
-                continue;
-            }
-            match said(track, &dimension.name)? {
-                Some(Value::Array(terms)) if !terms.is_empty() => {
-                    to_record.push((track, at, json!([])));
-                }
-                _ => {}
-            }
-        }
-    }
-
+    let sorted = sort_out(
+        &sidecar,
+        &kinds,
+        &plan.schema,
+        &library,
+        &wanted,
+        convert.reimport,
+    )?;
     let mut converted = Converted {
         file: path.clone(),
         file_state,
@@ -354,8 +347,10 @@ pub(super) fn convert(
             .filter(|(_, keys)| !keys.is_empty())
             .count(),
         track_tags,
-        facts_recorded: to_record.len(),
-        facts_unchanged,
+        facts_recorded: sorted.to_record.len(),
+        facts_unchanged: sorted.unchanged,
+        facts_conflicting: sorted.conflicts.len(),
+        conflicts: sorted.conflicts,
         run: None,
         text: None,
     };
@@ -364,20 +359,172 @@ pub(super) fn convert(
         return Ok(converted);
     }
 
-    if matches!(file_state, FileState::Written | FileState::Replaced) {
-        write_whole(&path, &text)?;
+    let installed = matches!(file_state, FileState::Written | FileState::Replaced);
+    if installed {
+        write_whole(&path, text.as_bytes())?;
     }
-    if to_record.is_empty() {
+    if sorted.to_record.is_empty() {
         return Ok(converted);
     }
-    let kinds = declared.with_schema(&plan.schema).map_err(invalid)?;
-    let run = record(stems, &sidecar, &kinds, &plan.schema, &to_record)?;
-    converted.run = sidecar.run(run).map_err(|e| sidecar_error(&e))?;
-    Ok(converted)
+    match record(stems, &sidecar, &kinds, &plan.schema, &sorted.to_record) {
+        Ok(run) => {
+            converted.run = sidecar.run(run).map_err(|e| sidecar_error(&e))?;
+            Ok(converted)
+        }
+        // The schema and its Facts go together: without the Facts, the
+        // file is put back as it was.
+        Err(error) if installed => {
+            let file = match put_back(&path, existing.as_deref()) {
+                Ok(()) if existing.is_some() => "the Tag schema is as it was".to_owned(),
+                Ok(()) => "no Tag schema was written".to_owned(),
+                Err(e) => format!(
+                    "the Tag schema {} could not be put back as it was ({e}): it is the conversion's, without its Facts",
+                    path.display()
+                ),
+            };
+            Err(ServiceError::new(
+                &error.code,
+                format!(
+                    "{}. No Fact was recorded, and {file}",
+                    error.message.trim_end_matches('.')
+                ),
+            ))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// What each track's tags say, dimension by dimension: `(track, dimension
+/// by position, the terms' identifiers)`. With it, how parents put on by
+/// hand stand, and how many tags on tracks there are.
+fn wanted<'a>(
+    plan: &Plan,
+    library: &'a MyTags,
+) -> (Vec<(&'a str, usize, Vec<String>)>, ImpliedParents, usize) {
+    let mut implied = ImpliedParents::default();
+    let mut track_tags = 0;
+    let mut wanted = Vec::new();
+    for (track, keys) in &library.tracks {
+        let mut by_dimension: Vec<Vec<&str>> = vec![Vec::new(); plan.schema.dimensions.len()];
+        for key in keys {
+            if let Some((dimension, term)) = plan.terms.get(key) {
+                by_dimension[*dimension].push(term);
+                track_tags += 1;
+            }
+        }
+        for (at, carried) in by_dimension.into_iter().enumerate() {
+            if carried.is_empty() {
+                continue;
+            }
+            let dimension = &plan.schema.dimensions[at];
+            let value = most_specific(dimension, &carried, &mut implied);
+            wanted.push((track.as_str(), at, value));
+        }
+    }
+    implied.tag_parents = implied.with_parent >= implied.without_parent;
+    (wanted, implied, track_tags)
+}
+
+/// The kind of the Facts of the schema's dimension at `at`.
+fn kind_of<'a>(
+    kinds: &'a Kinds,
+    schema: &TagSchema,
+    at: usize,
+) -> Result<&'a Declaration, ServiceError> {
+    let name = &schema.dimensions[at].name;
+    kinds.get(name).ok_or_else(|| {
+        ServiceError::new(
+            service_codes::SERVICE_FAILED,
+            format!("the dimension {name} has no kind"),
+        )
+    })
+}
+
+/// The Tag schema there is: `None` only when there is no such file. A file
+/// that is there and cannot be read is said to be so, and is never taken
+/// for an absent one.
+fn existing(path: &std::path::Path) -> Result<Option<Vec<u8>>, ServiceError> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(ServiceError::new(
+            codes::TAG_SCHEMA_UNREADABLE,
+            format!(
+                "there is a Tag schema at {} and it cannot be read: {e}. It was left as it is, nothing was written and no Fact was recorded",
+                path.display()
+            ),
+        )),
+    }
+}
+
+/// What the conversion's Facts come to beside the Facts the DJ has.
+struct Sorted<'a> {
+    /// `(track, dimension by position, value)` to record.
+    to_record: Vec<(&'a str, usize, Value)>,
+    /// How many are there already, saying the same.
+    unchanged: usize,
+    /// The DJ's Facts that say otherwise and are left alone.
+    conflicts: Vec<Conflict>,
+}
+
+/// Sorts what the tags say against what the DJ's live Facts say. A Fact
+/// from the DJ is never recorded over unless `reimport`: where it says
+/// otherwise than the tags (other terms, or terms where the track has no
+/// tag), it stands and is a conflict.
+fn sort_out<'a>(
+    sidecar: &Sidecar,
+    kinds: &Kinds,
+    schema: &TagSchema,
+    library: &'a MyTags,
+    wanted: &[(&'a str, usize, Vec<String>)],
+    reimport: bool,
+) -> Result<Sorted<'a>, ServiceError> {
+    let dj = Source::new(SourceKind::Dj, "dj");
+    let said = |track: &str, at: usize| -> Result<Option<Value>, ServiceError> {
+        let kind = kind_of(kinds, schema, at)?;
+        Ok(sidecar
+            .facts(track, &kind.name)
+            .map_err(|e| sidecar_error(&e))?
+            .into_iter()
+            .find(|fact| fact.is_live() && fact.source == dj)
+            .map(|fact| kind.normalise(fact.value)))
+    };
+    let mut sorted = Sorted {
+        to_record: Vec::new(),
+        unchanged: 0,
+        conflicts: Vec::new(),
+    };
+    let mut by_place: HashMap<(&str, usize), &Vec<String>> = HashMap::new();
+    for (track, at, value) in wanted {
+        by_place.insert((track, *at), value);
+    }
+    let none = Vec::new();
+    for (track, _) in &library.tracks {
+        for at in 0..schema.dimensions.len() {
+            let tags = by_place.get(&(track.as_str(), at)).copied();
+            let value = json!(tags.unwrap_or(&none));
+            match (said(track, at)?, tags) {
+                (None, Some(_)) => sorted.to_record.push((track, at, value)),
+                (None, None) => {}
+                (Some(fact), Some(_)) if fact == value => sorted.unchanged += 1,
+                // Nothing said of a track with no tag is nothing to say.
+                (Some(fact), None) if fact == value => {}
+                (Some(_), _) if reimport => sorted.to_record.push((track, at, value)),
+                (Some(fact), _) => sorted.conflicts.push(Conflict {
+                    track_id: track.clone(),
+                    dimension: schema.dimensions[at].name.clone(),
+                    fact,
+                    library: value,
+                }),
+            }
+        }
+    }
+    Ok(sorted)
 }
 
 /// Records `to_record` (track, dimension by position, value) as Facts from
-/// the DJ in one Run, tells of each, and answers the Run.
+/// the DJ in one Run, tells of each, and answers the Run. A Run that was
+/// begun is finished whether or not its Facts were recorded.
 fn record(
     stems: &Stems,
     sidecar: &Sidecar,
@@ -386,21 +533,17 @@ fn record(
     to_record: &[(&str, usize, Value)],
 ) -> Result<RunId, ServiceError> {
     let dj = Source::new(SourceKind::Dj, "dj");
-    let mut new = Vec::with_capacity(to_record.len());
+    let mut of_kind = Vec::with_capacity(to_record.len());
+    for (_, at, _) in to_record {
+        of_kind.push(kind_of(kinds, schema, *at)?);
+    }
     let run = sidecar
         .begin_run(&dj, RUN_DESCRIPTION)
         .map_err(|e| sidecar_error(&e))?;
-    for (track, at, value) in to_record {
-        let name = &schema.dimensions[*at].name;
-        let kind = kinds.get(name).ok_or_else(|| {
-            ServiceError::new(
-                service_codes::SERVICE_FAILED,
-                format!("the dimension {name} has no kind"),
-            )
-        })?;
-        kind.check(value)
-            .map_err(|why| ServiceError::new(service_codes::SERVICE_FAILED, why))?;
-        new.push(NewFact {
+    let new: Vec<NewFact> = to_record
+        .iter()
+        .zip(&of_kind)
+        .map(|((track, _, value), kind)| NewFact {
             track_id: track,
             // A Judgement follows the music; the audio is not read, so a
             // whole Library converts without opening one audio file.
@@ -410,8 +553,8 @@ fn record(
             source: &dj,
             confidence: 1.0,
             run,
-        });
-    }
+        })
+        .collect();
     let written = sidecar.record_many(&new);
     let outcome = match &written {
         Ok(facts) if facts.len() == 1 => "recorded 1 Fact".to_owned(),
@@ -522,10 +665,23 @@ fn invalid(problems: Vec<wreckordbox_sidecar::tag_schema::Problem>) -> ServiceEr
     )
 }
 
-/// Writes the file whole: beside it first, then in its place.
-fn write_whole(path: &std::path::Path, text: &str) -> Result<(), ServiceError> {
-    let beside = path.with_extension("toml.writing");
-    std::fs::write(&beside, text)
+/// Writes the file whole: a working file of its own beside it first, then
+/// in its place.
+fn write_whole(path: &std::path::Path, bytes: &[u8]) -> Result<(), ServiceError> {
+    use std::io::Write as _;
+    let beside = path.with_extension(format!(
+        "toml.{}-{}.writing",
+        std::process::id(),
+        WORKING_FILES.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&beside)
+        .and_then(|mut file| {
+            file.write_all(bytes)?;
+            file.sync_all()
+        })
         .and_then(|()| std::fs::rename(&beside, path))
         .map_err(|e| {
             let _ = std::fs::remove_file(&beside);
@@ -537,6 +693,18 @@ fn write_whole(path: &std::path::Path, text: &str) -> Result<(), ServiceError> {
                 ),
             )
         })
+}
+
+/// Puts the Tag schema back as it was before the conversion wrote it: its
+/// earlier bytes, or no file.
+fn put_back(path: &std::path::Path, earlier: Option<&[u8]>) -> Result<(), String> {
+    match earlier {
+        Some(bytes) => write_whole(path, bytes).map_err(|error| error.message),
+        None => match std::fs::remove_file(path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+            _ => Ok(()),
+        },
+    }
 }
 
 /// A tag's text as a child would be written: how many levels down its `>`s
@@ -724,6 +892,20 @@ fn dimension_names(
                 },
             ));
         }
+        // The Facts of a category are lists: a track can carry several of
+        // its tags.
+        if let Some(kind) = declared.get(name).filter(|_| !tree) {
+            if !holds_a_category(kind) {
+                return Err(ServiceError::new(
+                    service_codes::BAD_REQUEST,
+                    format!(
+                        "{name} is already a kind of Fact, a {} taking {}, and cannot hold a MyTag category: a track can carry several of a category's tags, so its dimension's kind takes a list of texts. Call the dimension something else, such as {name}_tags",
+                        kind.nature,
+                        kind.takes()
+                    ),
+                ));
+            }
+        }
         names[at] = Some(name.clone());
     }
     let mut taken: HashSet<String> = HashSet::from([GENRE.to_owned()]);
@@ -757,11 +939,7 @@ fn dimension_names(
 /// kind that could not hold a track's several tags.
 fn dimension_name(label: &str, at: usize, declared: &Kinds, taken: &HashSet<String>) -> String {
     let slug = slug(label, '_');
-    let usable = |name: &str| {
-        declared.get(name).is_none_or(|kind| {
-            kind.nature == Nature::Judgement && kind.value == ValueType::Texts && !kind.reserved
-        })
-    };
+    let usable = |name: &str| declared.get(name).is_none_or(holds_a_category);
     let first = slug.split('_').next().unwrap_or_default();
     let built_in = declared
         .get(first)
@@ -782,6 +960,12 @@ fn dimension_name(label: &str, at: usize, declared: &Kinds, taken: &HashSet<Stri
         n += 1;
     }
     name
+}
+
+/// Whether a kind declared already can be the kind of a MyTag category's
+/// dimension: one the Tag schema may govern, taking a list of texts.
+fn holds_a_category(kind: &Declaration) -> bool {
+    kind.may_be_dimension() && kind.value == ValueType::Texts
 }
 
 /// Text as part of an identifier: lower-case letters and digits, anything

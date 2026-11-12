@@ -29,8 +29,8 @@ use wreckordbox_sidecar::{Kinds, SidecarError, TagSchema, TAG_SCHEMA_FILE};
 
 pub(crate) use self::convert::my_tags;
 pub use self::convert::{
-    Convert, Converted, ConvertedCategory, Disambiguated, FileState, ImpliedParents, OddEntry,
-    Tree, RUN_DESCRIPTION,
+    Conflict, Convert, Converted, ConvertedCategory, Disambiguated, FileState, ImpliedParents,
+    OddEntry, Tree, RUN_DESCRIPTION,
 };
 use crate::protocol::{codes as service_codes, Request, ServiceError};
 use crate::stems::{self, Stems};
@@ -57,6 +57,9 @@ pub mod codes {
     /// There is already a Tag schema, and the conversion was not told to
     /// replace it.
     pub const TAG_SCHEMA_EXISTS: &str = "tag_schema_exists";
+    /// There is a Tag schema file and it cannot be read; it is left as it
+    /// is.
+    pub const TAG_SCHEMA_UNREADABLE: &str = "tag_schema_unreadable";
     /// The conversion was told of a MyTag category the Library does not
     /// have.
     pub const MY_TAG_CATEGORY_NOT_FOUND: &str = "my_tag_category_not_found";

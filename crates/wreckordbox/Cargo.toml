@@ -16,5 +16,6 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 rbl-db = { path = "../rbl-db" }
+wreckordbox-sidecar = { path = "../wreckordbox-sidecar" }
 serde_json = { workspace = true }
 tempfile = "3"

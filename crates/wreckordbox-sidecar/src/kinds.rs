@@ -86,6 +86,11 @@ pub struct Declaration {
     /// For text and texts: the only values allowed. Empty allows any.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub choices: Vec<String>,
+    /// The choices are the whole vocabulary even when there are none: a
+    /// dimension of the Tag schema, whose values are its terms and nothing
+    /// else. A dimension with no terms takes no term.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub closed: bool,
     /// For a number: the least and the most it may be.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min: Option<f64>,
@@ -157,6 +162,30 @@ impl Declaration {
         }
     }
 
+    /// `value` as this kind holds it now. A kind that takes a list of texts
+    /// may have Facts from when it took one text (genre did): that text is
+    /// a list of one. Anything else is as it is.
+    #[must_use]
+    pub fn normalise(&self, value: Value) -> Value {
+        match value {
+            Value::String(text) if self.value == ValueType::Texts => {
+                Value::Array(vec![Value::String(text)])
+            }
+            value => value,
+        }
+    }
+
+    /// Whether the Tag schema may make this kind one of its dimensions: a
+    /// Judgement that takes text or a list of texts and has no fixed
+    /// values of its own.
+    #[must_use]
+    pub fn may_be_dimension(&self) -> bool {
+        self.nature == Nature::Judgement
+            && matches!(self.value, ValueType::Text | ValueType::Texts)
+            && !self.reserved
+            && (self.closed || self.choices.is_empty())
+    }
+
     /// What a value of this kind is, in words: `text`, `a whole number
     /// from 1 to 5`.
     #[must_use]
@@ -167,7 +196,9 @@ impl Declaration {
             (None, Some(max)) => format!(" of at most {max}"),
             (None, None) => String::new(),
         };
-        let choices = if self.choices.is_empty() {
+        let choices = if self.choices.is_empty() && self.closed {
+            " (the Tag schema gives it no terms)".to_owned()
+        } else if self.choices.is_empty() {
             String::new()
         } else {
             format!(" (one of: {})", self.choices.join(", "))
@@ -186,6 +217,11 @@ impl Declaration {
         let name = &self.name;
         if text.trim().is_empty() {
             return Err(format!("{name} takes text, and this is empty"));
+        }
+        if self.closed && self.choices.is_empty() {
+            return Err(format!(
+                "{name} has no terms in the Tag schema, so it takes none; not \"{text}\""
+            ));
         }
         if !self.choices.is_empty() && !self.choices.iter().any(|choice| choice == text) {
             return Err(format!(
@@ -227,6 +263,17 @@ fn describe(value: &Value) -> &'static str {
 pub struct Kinds {
     declared: Vec<Declaration>,
     file: PathBuf,
+    /// The Tag schema, when it is there and cannot be used.
+    broken_schema: Option<BrokenSchema>,
+}
+
+/// A Tag schema that has a mistake.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BrokenSchema {
+    path: PathBuf,
+    why: String,
+    /// The dimensions it names, when it can be read that far.
+    dimensions: Option<Vec<String>>,
 }
 
 impl Kinds {
@@ -241,6 +288,7 @@ impl Kinds {
             nature,
             value,
             choices: Vec::new(),
+            closed: false,
             min: None,
             max: None,
             description: description.to_owned(),
@@ -310,24 +358,74 @@ impl Kinds {
     /// Every declared kind: the built-in ones, those of the Sidecar
     /// folder's [`KINDS_FILE`], and the dimensions of its Tag schema
     /// ([`TAG_SCHEMA_FILE`](crate::TAG_SCHEMA_FILE)), if there are such
-    /// files. Either file is refused whole when it has a mistake
-    /// ([`SidecarError::KindsFile`], [`SidecarError::TagSchema`]).
+    /// files.
+    ///
+    /// A kinds file with a mistake is refused whole
+    /// ([`SidecarError::KindsFile`]). A Tag schema with a mistake is not an
+    /// error here: its dimensions are left out, and
+    /// [`refused_by_schema`](Self::refused_by_schema) says which kinds may
+    /// not be recorded until it is fixed. What is stored stays readable.
     pub fn load(sidecar_dir: &Path) -> Result<Self> {
-        let declared = Self::load_declared(sidecar_dir)?;
+        let mut declared = Self::load_declared(sidecar_dir)?;
         let file = sidecar_dir.join(crate::TAG_SCHEMA_FILE);
-        if !file.is_file() {
-            return Ok(declared);
-        }
-        TagSchema::load(&file)
-            .and_then(|schema| declared.with_schema(&schema))
-            .map_err(|problems| SidecarError::TagSchema {
-                path: file,
-                why: problems
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join("; "),
-            })
+        let text = match std::fs::read_to_string(&file) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(declared),
+            Err(e) => {
+                declared.broken_schema = Some(BrokenSchema {
+                    path: file,
+                    why: format!("cannot be read: {e}"),
+                    dimensions: None,
+                });
+                return Ok(declared);
+            }
+        };
+        let read = TagSchema::parse(&text).and_then(|schema| declared.clone().with_schema(&schema));
+        Ok(match read {
+            Ok(kinds) => kinds,
+            Err(problems) => {
+                declared.broken_schema = Some(BrokenSchema {
+                    path: file,
+                    why: problems
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                    dimensions: crate::tag_schema::dimension_names(&text),
+                });
+                declared
+            }
+        })
+    }
+
+    /// Why a Fact of the kind called `name` may not be recorded just now:
+    /// the Tag schema has a mistake and governs that kind. `None` when the
+    /// schema is sound or has nothing to say of the kind.
+    ///
+    /// A schema that can be read as far as its dimensions governs those. A
+    /// file that cannot be read that far might govern any kind a schema
+    /// could: one not declared elsewhere, or a text Judgement with no fixed
+    /// values of its own.
+    #[must_use]
+    pub fn refused_by_schema(&self, name: &str) -> Option<SidecarError> {
+        let broken = self.broken_schema.as_ref()?;
+        let governed = match &broken.dimensions {
+            Some(dimensions) => dimensions.iter().any(|dimension| dimension == name),
+            None => self.get(name).is_none_or(Declaration::may_be_dimension),
+        };
+        governed.then(|| SidecarError::TagSchema {
+            path: broken.path.clone(),
+            why: format!(
+                "{}. Until it is fixed, no Fact of the kind {name} can be recorded",
+                broken.why
+            ),
+        })
+    }
+
+    /// Whether there is a Tag schema that cannot be used.
+    #[must_use]
+    pub fn schema_is_broken(&self) -> bool {
+        self.broken_schema.is_some()
     }
 
     /// These kinds with the Tag schema's dimensions bound to theirs. A
@@ -335,12 +433,14 @@ impl Kinds {
     ///
     /// - a dimension named after a kind already declared (`genre`, `mood`)
     ///   uses it, and that kind must be a Judgement whose value is text or
-    ///   a list of texts;
+    ///   a list of texts, with no fixed values of its own (Prep colour has
+    ///   its colours, Energy its range: neither can be a dimension);
     /// - any other dimension declares its kind: a Judgement, a list of
     ///   texts.
     ///
     /// Either way the kind's values are then the identifiers of the
-    /// dimension's terms and nothing else.
+    /// dimension's terms and nothing else; a dimension with no terms takes
+    /// none.
     pub fn with_schema(mut self, schema: &TagSchema) -> std::result::Result<Self, Vec<Problem>> {
         let mut problems = Vec::new();
         for dimension in &schema.dimensions {
@@ -355,6 +455,7 @@ impl Kinds {
                     nature: Nature::Judgement,
                     value: ValueType::Texts,
                     choices,
+                    closed: true,
                     min: None,
                     max: None,
                     description: if dimension.description.is_empty() {
@@ -367,12 +468,11 @@ impl Kinds {
                 });
                 continue;
             };
-            let texts = matches!(kind.value, ValueType::Text | ValueType::Texts);
-            if kind.nature != Nature::Judgement || !texts || kind.reserved {
+            if !kind.may_be_dimension() {
                 problems.push(Problem {
                     line: dimension.line,
                     message: format!(
-                        "the dimension {name} would hold Facts of the kind {name}, which is declared a {} taking {}; a dimension's kind is a Judgement taking text or a list of texts. Call the dimension something else",
+                        "the dimension {name} would hold Facts of the kind {name}, which is declared a {} taking {}; a dimension's kind is a Judgement taking text or a list of texts, with no fixed values of its own. Call the dimension something else",
                         kind.nature,
                         kind.takes(),
                         name = dimension.name
@@ -381,10 +481,13 @@ impl Kinds {
                 continue;
             }
             kind.choices = choices;
+            kind.closed = true;
         }
         if problems.is_empty() {
             Ok(self)
         } else {
+            // In the file's order, as the schema's own problems are.
+            problems.sort_by_key(|problem| problem.line);
             Err(problems)
         }
     }
@@ -444,6 +547,7 @@ impl Kinds {
                 nature: entry.nature,
                 value: entry.value,
                 choices: entry.choices,
+                closed: false,
                 min: entry.min,
                 max: entry.max,
                 description: entry.description,
@@ -451,7 +555,11 @@ impl Kinds {
                 reserved: false,
             });
         }
-        Ok(Self { declared, file })
+        Ok(Self {
+            declared,
+            file,
+            broken_schema: None,
+        })
     }
 
     /// The declaration of the kind called `name`, if it is declared.

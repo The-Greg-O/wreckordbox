@@ -7038,6 +7038,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "wreckordbox-service",
+ "wreckordbox-sidecar",
 ]
 
 [[package]]

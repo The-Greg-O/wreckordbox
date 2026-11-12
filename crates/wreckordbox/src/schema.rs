@@ -50,6 +50,12 @@ pub enum SchemaCommands {
         /// Write over a Tag schema that is already there.
         #[arg(long)]
         replace: bool,
+        /// Make the Library's MyTags the DJ's word again where a Fact from
+        /// the DJ says otherwise. Without this such Facts are left as they
+        /// are and listed; with it they are superseded (kept, no longer
+        /// current).
+        #[arg(long)]
+        reimport: bool,
         /// Show what would be written and recorded; write and record
         /// nothing.
         #[arg(long)]
@@ -80,6 +86,7 @@ pub fn run(
             tree,
             names,
             replace,
+            reimport,
             dry_run,
         } => {
             let mut named = BTreeMap::new();
@@ -98,6 +105,7 @@ pub fn run(
                     tree: tree.clone(),
                     names: named,
                     replace: *replace,
+                    reimport: *reimport,
                     dry_run: *dry_run,
                 }),
             )?;
@@ -279,6 +287,23 @@ fn converted_text(converted: &Converted) -> String {
         text.push('.');
         if converted.facts_unchanged > 0 {
             let _ = write!(text, " {} already there.", converted.facts_unchanged);
+        }
+    }
+    if !converted.conflicts.is_empty() {
+        let _ = write!(
+            text,
+            "\n\n{} from the DJ {} otherwise than the Library's MyTags and {} left as {}. To make the MyTags the DJ's word again, ask with --reimport:",
+            plural(converted.facts_conflicting, "Fact", "Facts"),
+            if converted.facts_conflicting == 1 { "says" } else { "say" },
+            if converted.facts_conflicting == 1 { "was" } else { "were" },
+            if converted.facts_conflicting == 1 { "it is" } else { "they are" },
+        );
+        for conflict in &converted.conflicts {
+            let _ = write!(
+                text,
+                "\n  {}  {}  the Fact says {}, the MyTags say {}",
+                conflict.track_id, conflict.dimension, conflict.fact, conflict.library
+            );
         }
     }
     if let Some(schema) = &converted.text {
