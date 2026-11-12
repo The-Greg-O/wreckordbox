@@ -462,3 +462,47 @@ fn live_ids(hosted: &Hosted) -> Vec<i64> {
         .map(|m| m["id"].as_i64().unwrap())
         .collect()
 }
+
+#[test]
+fn a_clients_copy_and_removal_are_undone_and_redone_in_the_window_with_their_mutants() {
+    use wreckordbox_service::playlist_edits::commands as edits;
+    let _turn = turn();
+    let hosted = hosted();
+    let entries = hosted.entries(&hosted.playlist);
+    let source = hosted.mutate(&entries[1], json!({}));
+
+    let copied = hosted
+        .service
+        .call(
+            edits::PLAYLISTS_COPY,
+            json!({ "playlist": hosted.playlist, "name": "Friday again" }),
+        )
+        .unwrap();
+    let copy = copied["playlist"].as_str().unwrap().to_owned();
+    let copy_entries = hosted.entries(&copy);
+    let copied_id = copied["mutants"][0]["id"].as_i64().unwrap();
+    assert_eq!(copied["mutants"][0]["entry_id"], copy_entries[1].as_str());
+    assert_eq!(hosted.history(copied_id), ["copied"]);
+
+    // Undo takes the copy's tracks out, and its Mutant with them; Redo
+    // puts both back.
+    hosted.undo();
+    assert_eq!(hosted.mutant(copied_id)["mutant"]["removed"], true);
+    assert_eq!(hosted.mutant(source)["mutant"]["removed"], false);
+    hosted.redo();
+    assert_eq!(hosted.mutant(copied_id)["mutant"]["removed"], false);
+    assert_eq!(hosted.mutant(copied_id)["mutant"]["position"], 2);
+
+    // A client's removal, undone in the window.
+    hosted
+        .service
+        .call(
+            edits::PLAYLISTS_REMOVE,
+            json!({ "playlist": hosted.playlist, "tracks": [hosted.tracks[1]] }),
+        )
+        .unwrap();
+    assert_eq!(hosted.mutant(source)["mutant"]["removed"], true);
+    hosted.undo();
+    assert_eq!(hosted.mutant(source)["mutant"]["removed"], false);
+    assert_eq!(hosted.mutant(source)["mutant"]["position"], 2);
+}
