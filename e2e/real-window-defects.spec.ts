@@ -145,3 +145,30 @@ test("a Stick's name is not cut short in the tree while there is room, and its f
   await expect(name).toHaveText("DJ STICK");
   await page.screenshot({ path: test.info().outputPath("stick-name.png") });
 });
+
+test("a Mark Clean with no Clean to mark is drawn unlit, and says why", async ({ page }) => {
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem("defects-seeded")) return;
+    sessionStorage.setItem("defects-seeded", "1");
+    localStorage.setItem("rbl.preferences", JSON.stringify({ advanced: { protectLibrary: false }, view: { viewShell: true } }));
+  });
+  await page.goto("/?noCleanColour");
+  await expect(page.getByTestId("browser-title")).toContainText("Tracks)");
+  await page.getByRole("tablist", { name: "Views" }).getByRole("tab", { name: "Intake" }).click();
+  await page.getByRole("listbox", { name: "Intake queue" }).getByRole("option").first().click();
+  const panel = page.getByRole("region", { name: "Track" });
+  const markClean = panel.getByRole("button", { name: "Mark Clean and next" });
+  await expect(markClean).toBeDisabled();
+  // Drawn as the ordinary controls beside it are, not as a lit green button.
+  const look = (locator: typeof markClean) => locator.evaluate((el) => {
+    const style = getComputedStyle(el);
+    return { background: style.backgroundColor, border: style.borderTopColor };
+  });
+  const skip = panel.getByRole("button", { name: "Skip", exact: true });
+  const [disabled, plain] = [await look(markClean), await look(skip)];
+  expect(disabled.background).toBe(plain.background);
+  expect(disabled.border).not.toBe("rgb(0, 128, 0)");
+  // The reason is on the panel, not only in a tooltip.
+  await expect(panel.getByTestId("intake-no-clean")).toHaveText("No colour label is named Clean, so there is no Clean to mark.");
+  await page.screenshot({ path: test.info().outputPath("mark-clean-disabled.png") });
+});
