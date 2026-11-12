@@ -49,13 +49,13 @@ mod stretch;
 mod xrun;
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 use std::sync::Arc;
 
 use rtrb::Consumer;
 
 pub use clock::{DeckClock, DeckSnapshot};
-pub use fade::{FADE_FRAMES, TRANSPORT_FADE_FRAMES};
+pub use fade::{TransportEdge, FADE_FRAMES};
 pub use sink::{
     default_output_device, output_devices, AudioDevice, CpalSink, NullSink, Render, Sink, StreamWish,
 };
@@ -285,6 +285,7 @@ pub struct Engine {
     limiter: Arc<LimiterSettings>,
     metronome: Arc<MetronomeSettings>,
     metronomes: [Arc<Metronome>; 2],
+    edge: Arc<AtomicU8>,
 }
 
 impl Engine {
@@ -315,6 +316,9 @@ impl Engine {
         let clocks: [Arc<DeckClock>; 2] =
             [Arc::new(DeckClock::default()), Arc::new(DeckClock::default())];
 
+        // Preferences › Audio › Transport edge, read by each deck's reader at
+        // the top of every callback, so a change is live.
+        let edge = Arc::new(AtomicU8::new(TransportEdge::default().to_u8()));
         let mut producers = Vec::with_capacity(2);
         let mut readers = Vec::with_capacity(2);
         for clock in &clocks {
@@ -325,7 +329,8 @@ impl Engine {
                 clock: Arc::clone(clock),
                 current: None,
                 offset: 0,
-                ramp: Ramp::silent_over(fade::TRANSPORT_FADE_FRAMES),
+                ramp: Ramp::silent_over(0),
+                edge: Arc::clone(&edge),
                 last: (0.0, 0.0),
                 generation: 0,
             });
@@ -466,11 +471,21 @@ impl Engine {
         let decks: [deck::DeckHandle; 2] = handles
             .try_into()
             .map_err(|_| DeckError::Device("could not start both decks".to_owned()))?;
-        Ok(Self { decks, sink, sample_rate, master, mixer, limiter, metronome, metronomes })
+        Ok(Self { decks, sink, sample_rate, master, mixer, limiter, metronome, metronomes, edge })
     }
 
     /// Device callback deadlines, without opening or polling the device.
     pub fn audio_health(&self) -> AudioHealth { self.sink.health() }
+
+    /// How starts and stops meet the music, for both decks, from the next
+    /// callback: see `TransportEdge`. Playback carries on through the change.
+    pub fn set_transport_edge(&self, edge: TransportEdge) {
+        self.edge.store(edge.to_u8(), Ordering::Relaxed);
+    }
+
+    pub fn transport_edge(&self) -> TransportEdge {
+        TransportEdge::from_u8(self.edge.load(Ordering::Relaxed))
+    }
 
     /// The metronome's click and volume, shared by both decks.
     pub fn metronome(&self) -> &Arc<MetronomeSettings> {
@@ -935,10 +950,12 @@ struct DeckReader {
     offset: usize,
     /// The envelope every frame this deck contributes goes through.
     ///
-    /// Sound is only ever started or cut where this reads zero, which is what
-    /// makes play, pause, cue, a beat jump and a seek silent at the join
-    /// rather than a click. See `fade`.
+    /// Sound is only ever started or cut where this reads zero. Its length is
+    /// the transport edge: one frame (no fade) by default, 1 or 2 ms if the
+    /// DJ chose one. See `fade`.
     ramp: Ramp,
+    /// The engine's transport edge, read at the top of each callback.
+    edge: Arc<AtomicU8>,
     /// The last frame actually played, held so that running dry can be faded
     /// rather than cut. See the underrun in `mix_into`.
     last: (f32, f32),
@@ -953,6 +970,8 @@ struct DeckReader {
 
 impl DeckReader {
     fn mix_into(&mut self, out: &mut [f32]) {
+        let edge = TransportEdge::from_u8(self.edge.load(Ordering::Relaxed));
+        self.ramp.set_len(edge.frames(self.clock.sample_rate()));
         // A start held for the beat: the frames of the wait pass in silence
         // — nothing is added to `out` — and the rest of the callback, if
         // any, is played as usual. The wait is counted here, in the output's

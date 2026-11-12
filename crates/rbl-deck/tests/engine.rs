@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use rbl_deck::{Deck, DeckEvent, Engine, NullSink, Sink, FADE_FRAMES};
+use rbl_deck::{Deck, DeckEvent, Engine, NullSink, Sink, TransportEdge, FADE_FRAMES};
 
 const RATE: u32 = 44_100;
 
@@ -950,7 +950,7 @@ fn tone_hz(left: &[f32], rate: u32) -> f32 {
 ///
 /// An underrun on a busy machine leaves output that is not the deck playing
 /// slower, and none of it moves the playhead. Running dry, the mixer fades
-/// the last frame down over `TRANSPORT_FADE_FRAMES` (none, since wbx-45.16),
+/// the last frame down over the transport edge (none by default, since wbx-45.16),
 /// and the silence after that is not exact zeros but the decaying
 /// tail of the output stage, around 1e-5. Counting every frame that was not
 /// exactly 0.0 took both for the deck: a busy Linux runner read 2.58 seconds
@@ -958,7 +958,7 @@ fn tone_hz(left: &[f32], rate: u32) -> f32 {
 /// as much again. So only frames loud enough to be the tone count, less one
 /// fade for every gap the deck ran dry into.
 fn deck_frames(out: &[f32]) -> usize {
-    let fade = usize::from(rbl_deck::TRANSPORT_FADE_FRAMES);
+    let fade = usize::from(TransportEdge::default().frames(RATE));
     let audible: Vec<bool> = out.chunks_exact(2).map(|f| f[0].abs() > 1e-3 || f[1].abs() > 1e-3).collect();
     let frames = audible.iter().filter(|&&on| on).count();
     // Two quiet frames in a row is a gap. The tone itself is never below the
@@ -1089,10 +1089,11 @@ fn a_seek_is_honoured_at_once_even_while_the_decoder_runs_flat_out() {
     assert!(stale < u64::from(RATE) / 2, "played {stale} frames from the old position");
 }
 
-// Play, pause, cue, a seek and a beat jump are immediate: the DJ's decision of
-// 2026-11-12 (wbx-45.16), "I don't want a short fade in and out, I want an
-// immediate start and stop". Until then each was faded over two milliseconds;
-// that fade is gone, and these tests hold the transport to the sample. The
+// Play, pause, cue, a seek and a beat jump are immediate by default: the DJ's
+// decision of 2026-11-12 (wbx-45.16), "I want an immediate start and stop".
+// Until then each was faded over two milliseconds; that fade is now a choice
+// (`TransportEdge`, Preferences › Audio), and at the default these tests hold
+// the transport to the sample. The
 // harness's output stage still delays everything by the limiter's lookahead
 // (`LIMITER_TAIL`) and its crossovers still ring (`STRIP_TAIL`): both are a
 // fixed latency of the mixer, the same with or without any transport move.
@@ -1170,6 +1171,82 @@ fn pause_is_sample_immediate_and_plays_nothing_after_it() {
         tail[(LIMITER_TAIL + STRIP_TAIL) * 2..].iter().all(|s| s.abs() < INAUDIBLE),
         "the deck was still sounding after the pause"
     );
+}
+
+/// The bound a transport edge of `frames` is held to: twice its own slope on
+/// full-level audio, with the same room for the strip `step_limit` gives the
+/// drag's fade.
+fn edge_limit(frames: u16) -> f32 {
+    FLAT / f32::from(frames) * 2.0 + 0.005
+}
+
+/// Play then pause on a full-level track at `edge`, and the worst step of all
+/// of it: the start, the music, the stop and the silence after.
+fn edges_at(edge: TransportEdge) -> f32 {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("flat.wav");
+    flat(&path, RATE as usize * 2);
+    let h = harness();
+    h.engine.set_transport_edge(edge);
+    h.engine.load(Deck::A, &path);
+    h.wait_for_load(1);
+    let mut audio = h.sink.pull(64);
+    h.engine.play(Deck::A);
+    audio.extend(h.play_until(Deck::A, 8_192));
+    h.engine.pause(Deck::A);
+    audio.extend(h.sink.pull(2_048));
+    assert_eq!(audio.last().copied(), Some(0.0), "the stream must end at silence");
+    worst_step(&audio)
+}
+
+#[test]
+fn a_new_engine_starts_and_stops_immediately() {
+    // The DJ's stated decision is the default.
+    assert_eq!(TransportEdge::default(), TransportEdge::Immediate);
+    assert_eq!(harness().engine.transport_edge(), TransportEdge::Immediate);
+}
+
+#[test]
+fn a_one_or_two_millisecond_edge_keeps_start_and_stop_under_its_bound() {
+    for (edge, frames) in [(TransportEdge::OneMs, 44_u16), (TransportEdge::TwoMs, 88)] {
+        assert_eq!(edge.frames(RATE), frames);
+        let worst = edges_at(edge);
+        eprintln!("transport edge {edge:?}: worst step {worst:.4}");
+        assert!(worst <= edge_limit(frames), "{edge:?} stepped by {worst}, over {}", edge_limit(frames));
+    }
+    // And immediate is a real step, for the DJ's table: the cut itself.
+    let worst = edges_at(TransportEdge::Immediate);
+    eprintln!("transport edge Immediate: worst step {worst:.4}");
+    assert!(worst > edge_limit(44), "an immediate edge stepped by only {worst}");
+}
+
+#[test]
+fn the_edge_changes_while_a_deck_is_playing() {
+    // Set live, without stopping anything: the next stop uses it.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("flat.wav");
+    flat(&path, RATE as usize * 2);
+    let h = harness();
+    h.engine.load(Deck::A, &path);
+    h.wait_for_load(1);
+    h.engine.play(Deck::A);
+    h.play_until(Deck::A, 8_192);
+
+    h.engine.set_transport_edge(TransportEdge::TwoMs);
+    assert_eq!(h.engine.transport_edge(), TransportEdge::TwoMs);
+    let mut audio = h.sink.pull(512);
+    assert!(h.engine.snapshot().a.playing, "changing the edge must not stop the deck");
+    h.engine.pause(Deck::A);
+    audio.extend(h.sink.pull(2_048));
+    let worst = worst_step(&audio);
+    assert!(worst <= edge_limit(88), "the stop after the change stepped by {worst}");
+
+    // And back to immediate, live: the next start is sample-immediate again.
+    h.engine.set_transport_edge(TransportEdge::Immediate);
+    h.engine.play(Deck::A);
+    let (out, first) = pull_until_heard(&h);
+    assert_eq!(first % 512, LIMITER_TAIL);
+    assert!(out[first * 2].abs() > 0.2, "faded in after going back to immediate");
 }
 
 #[test]

@@ -857,6 +857,11 @@ export interface Backend {
    */
   setAudioConfig(sampleRate: number | null, bufferFrames: number | null): Promise<void>;
   /**
+   * Preferences › Audio › Transport edge, applied live to both players: the
+   * next start or stop uses it. Refused for anything but the three values.
+   */
+  setTransportEdge(edge: "immediate" | "1ms" | "2ms"): Promise<void>;
+  /**
    * One deck's channel strip.
    *
    * Knob positions rather than decibels: what a position means is the mixer's

@@ -178,6 +178,8 @@ pub struct Player {
     /// and rebuilt on a device change, and a setting that only lived in it
     /// would go back to the default every time.
     limiter: Mutex<LimiterDto>,
+    /// Preferences › Audio › Transport edge, held for the same reason.
+    transport_edge: Mutex<rbl_deck::TransportEdge>,
     master_level: Mutex<f32>,
     /// Whether the engine's load events go to the interface as `deck:*`.
     /// The browser's preview player is a second engine and keeps quiet: its
@@ -212,6 +214,7 @@ impl Player {
                 ceiling_db: rbl_deck::DEFAULT_CEILING_DB,
                 release_ms: rbl_deck::DEFAULT_RELEASE_MS,
             }),
+            transport_edge: Mutex::new(rbl_deck::TransportEdge::default()),
             emits_deck_events: true,
         }
     }
@@ -265,6 +268,7 @@ impl Player {
         let (sound, volume) = *self.metronome.lock();
         engine.metronome().set_sound(sound);
         engine.metronome().set_volume(volume);
+        engine.set_transport_edge(*self.transport_edge.lock());
         let engine = Arc::new(engine);
         *held = Some(Arc::clone(&engine));
         Ok(engine)
@@ -356,6 +360,15 @@ impl Player {
         if let Some(engine) = self.opened() {
             engine.metronome().set_sound(sound);
             engine.metronome().set_volume(volume);
+        }
+    }
+
+    /// How starts and stops meet the music, now if the engine is up (live,
+    /// while it plays) and at its build if not.
+    pub fn set_transport_edge(&self, edge: rbl_deck::TransportEdge) {
+        *self.transport_edge.lock() = edge;
+        if let Some(engine) = self.opened() {
+            engine.set_transport_edge(edge);
         }
     }
 
