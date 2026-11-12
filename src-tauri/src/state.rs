@@ -746,25 +746,17 @@ pub fn spec_from_wire(library: &Library, dto: &ViewSpecDto) -> ViewSpec {
 /// A My Tag column's names resolve within its category to the ids tracks carry.
 pub fn filter_from_wire(library: &Library, dto: &TrackFilterDto) -> TrackFilter {
     TrackFilter {
-        bpm: dto.bpm.as_ref().map(|b| BpmFilter {
-            values: b.values.clone(),
-            tolerance_pct: b.tolerance_pct.min(6),
-            master_bpm_x100: b.master_bpm_x100.filter(|&bpm| bpm > 0),
-            ranges_x100: Vec::new(),
-        }),
-        keys: dto.keys.as_ref().map(|names| library.key_ids_named(names)),
+        bpm: dto.bpm.as_ref().map(bpm_from_wire),
+        keys: match (&dto.keys, &dto.key_identities) {
+            (None, None) => None,
+            (names, identities) => {
+                let mut ids = names.as_ref().map(|names| library.key_ids_named(names)).unwrap_or_default();
+                ids.extend(identities.as_ref().map(|wanted| library.key_ids_identified(wanted)).unwrap_or_default());
+                Some(ids)
+            }
+        },
         ratings: dto.ratings.clone(),
-        colors: dto.colors.as_ref().map(|names| {
-            names
-                .iter()
-                .filter_map(|name| {
-                    COLOR_NAMES
-                        .iter()
-                        .position(|&c| c == name)
-                        .and_then(|at| u8::try_from(at + 1).ok())
-                })
-                .collect()
-        }),
+        colors: dto.colors.as_ref().map(|names| colour_ids(names)),
         tags: dto
             .tags
             .iter()
@@ -776,6 +768,30 @@ pub fn filter_from_wire(library: &Library, dto: &TrackFilterDto) -> TrackFilter 
             })
             .collect(),
     }
+}
+
+/// The BPM column off the wire.
+pub fn bpm_from_wire(b: &crate::dto::BpmFilterDto) -> BpmFilter {
+    BpmFilter {
+        values: b.values.clone(),
+        tolerance_pct: b.tolerance_pct.min(6),
+        master_bpm_x100: b.master_bpm_x100.filter(|&bpm| bpm > 0),
+        ranges_x100: b.ranges_x100.iter().map(|[lo, hi]| (*lo, *hi)).collect(),
+    }
+}
+
+/// Colour names as ids: Pink to Purple are 1 to 8 and `none` (the view
+/// shell's "no Prep colour", wbx-57) is 0. Any other name is dropped.
+pub fn colour_ids(names: &[String]) -> Vec<u8> {
+    names
+        .iter()
+        .filter_map(|name| {
+            if name == "none" {
+                return Some(0);
+            }
+            COLOR_NAMES.iter().position(|&c| c == name).and_then(|at| u8::try_from(at + 1).ok())
+        })
+        .collect()
 }
 
 /// A row's hot cues in slot order, A to P, which is the order the badges are
