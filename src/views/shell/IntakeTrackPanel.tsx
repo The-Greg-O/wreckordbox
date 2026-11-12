@@ -37,6 +37,8 @@ export interface IntakeTrackPanelProps {
   onEnergy: (level: number) => Promise<boolean>;
   onPrepColour: (colour: PrepColour | null) => void;
   onMarkClean: () => void;
+  /** Ctrl+Enter in a field: its save, then (only if it saved, and still on this track) the mark. */
+  onSaveThenMark: (save: () => Promise<boolean>) => void;
   onMarkProblem: () => void;
   onSkip: () => void;
   /** An edit is being written: the actions wait for it. */
@@ -72,8 +74,8 @@ export function IntakeTrackPanel(props: IntakeTrackPanelProps) {
   return (
     <section className={styles.panel} aria-label={t("Track")} data-testid="intake-panel">
       <div className={styles.fields}>
-        <InPlaceField key={`title:${track.id}`} label={t("Title")} value={track.title} onCommit={props.onTitle} onMarkClean={props.onMarkClean} />
-        <InPlaceField key={`artist:${track.id}`} label={t("Artist")} value={track.artist} onCommit={props.onArtist} onMarkClean={props.onMarkClean} />
+        <InPlaceField key={`title:${track.id}`} label={t("Title")} value={track.title} onCommit={props.onTitle} onSaveThenMark={props.onSaveThenMark} />
+        <InPlaceField key={`artist:${track.id}`} label={t("Artist")} value={track.artist} onCommit={props.onArtist} onSaveThenMark={props.onSaveThenMark} />
       </div>
       {track.suggestions.length > 0 ? (
         <ul className={styles.suggestions} aria-label={t("Proposed")}>
@@ -176,70 +178,91 @@ export function IntakeTrackPanel(props: IntakeTrackPanelProps) {
 }
 
 /**
- * A field edited in place. Typing is a draft; Enter or leaving the field
- * saves it, Escape puts back what the Library holds. Ctrl+Enter saves and
- * then marks the track Clean. A value that arrives while the DJ has not
- * changed anything (an agent's edit) replaces what is shown; a draft the
- * DJ has typed is never overwritten. A draft still unsaved when the track
- * changes (another row chosen) is saved for the track it was typed for.
+ * A field edited in place. What the DJ types is a draft; Enter or leaving
+ * the field saves it, Escape drops it and shows the latest saved value.
+ * The baseline a draft is compared with is the latest saved value: the
+ * Library's (a value arriving from an agent or the CLI moves it) or the
+ * DJ's own last save, so consecutive saves without leaving the field each
+ * write. A draft the DJ has typed is never overwritten by a value from
+ * elsewhere; with nothing typed, the field shows the new value.
+ *
+ * One save at a time: a second asks after the first. Ctrl+Enter saves and
+ * then marks the track Clean (`onSaveThenMark`, which guards the whole
+ * operation); a held key's repeats do nothing. A draft still unsaved when
+ * the track changes (another row chosen) is saved for the track it was
+ * typed for.
  */
-function InPlaceField({ label, value, onCommit, onMarkClean }: {
+function InPlaceField({ label, value, onCommit, onSaveThenMark }: {
   label: string;
   value: string;
   onCommit: (value: string) => Promise<boolean>;
-  onMarkClean: () => void;
+  onSaveThenMark: (save: () => Promise<boolean>) => void;
 }) {
-  // `draft` while focused; `base` is the value it started from.
+  // The DJ's own text; `null` when they have typed nothing of their own.
   const [draft, setDraft] = useState<string | null>(null);
-  const [base, setBase] = useState(value);
-  // Saved and waiting for the read that carries it.
-  const [pending, setPending] = useState<string | null>(null);
-  const latest = useRef<{ draft: string | null; base: string; commit: typeof onCommit }>({ draft, base, commit: onCommit });
-  latest.current = { draft, base, commit: onCommit };
+  // The latest saved value: what a draft is compared with, and what Escape shows.
+  const [saved, setSaved] = useState(value);
+  const [saving, setSaving] = useState(false);
+  const latest = useRef({ draft, saved, commit: onCommit });
+  latest.current = { ...latest.current, draft, commit: onCommit };
+  const inFlight = useRef<Promise<boolean> | null>(null);
 
-  // A new value from the Library: it ends a pending save, and replaces what
-  // is shown unless the DJ has typed something of their own.
+  // A new value from the Library moves the baseline.
   useEffect(() => {
-    setPending(null);
-    const { draft: typed, base: from } = latest.current;
-    if (typed === null) return;
-    if (typed === from) {
-      setDraft(value);
-      setBase(value);
-    }
+    latest.current.saved = value;
+    setSaved(value);
   }, [value]);
+
+  const save = async (): Promise<boolean> => {
+    // After any save already on its way.
+    if (inFlight.current) await inFlight.current;
+    const typed = latest.current.draft;
+    if (typed === null || typed === latest.current.saved) {
+      if (typed !== null) { latest.current.draft = null; setDraft(null); }
+      return true;
+    }
+    const writing = (async () => {
+      setSaving(true);
+      const written = await latest.current.commit(typed);
+      if (written) {
+        latest.current.saved = typed;
+        setSaved(typed);
+      }
+      // Unless the DJ has typed on since, the draft is done with (saved, or
+      // refused and back to the saved value).
+      if (latest.current.draft === typed) {
+        latest.current.draft = null;
+        setDraft(null);
+      }
+      setSaving(false);
+      return written;
+    })();
+    inFlight.current = writing;
+    try {
+      return await writing;
+    } finally {
+      if (inFlight.current === writing) inFlight.current = null;
+    }
+  };
 
   // Unmounted with a change typed (another track chosen): save it for this one.
   useEffect(() => () => {
     const left = latest.current;
-    if (left.draft !== null && left.draft !== left.base) void left.commit(left.draft);
+    if (left.draft !== null && left.draft !== left.saved) void left.commit(left.draft);
   }, []);
-
-  const commit = async (): Promise<boolean> => {
-    if (draft === null) return true;
-    const typed = draft;
-    // Taken now, so an unmount in the same moment does not save it twice.
-    latest.current = { ...latest.current, draft: null };
-    setDraft(null);
-    if (typed === base) return true;
-    setPending(typed);
-    const written = await onCommit(typed);
-    if (!written) setPending(null);
-    return written;
-  };
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     // Every key typed here is the field's: never the deck's, the list's or the view's.
     event.stopPropagation();
-    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+    if (event.key === "Enter") {
       event.preventDefault();
-      void commit().then((written) => { if (written) onMarkClean(); });
-    } else if (event.key === "Enter") {
-      event.preventDefault();
-      void commit();
+      if (event.repeat) return;
+      if (event.ctrlKey || event.metaKey) onSaveThenMark(save);
+      else void save();
     } else if (event.key === "Escape") {
       event.preventDefault();
-      setDraft(base);
+      latest.current.draft = null;
+      setDraft(null);
     }
   };
 
@@ -252,11 +275,13 @@ function InPlaceField({ label, value, onCommit, onMarkClean }: {
         className={styles.input}
         type="text"
         spellCheck={false}
-        value={draft ?? pending ?? value}
-        data-pending={pending !== null && draft === null ? "" : undefined}
-        onFocus={() => { setDraft(pending ?? value); setBase(pending ?? value); }}
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={() => { void commit(); }}
+        value={draft ?? saved}
+        data-pending={saving ? "" : undefined}
+        onChange={(event) => {
+          latest.current.draft = event.target.value;
+          setDraft(event.target.value);
+        }}
+        onBlur={() => { void save(); }}
         onKeyDown={onKeyDown}
       />
     </label>

@@ -37,7 +37,7 @@ import { useTranslation } from "@/i18n";
 import { getBackend } from "@/ipc/client";
 import type { RowDto } from "@/ipc/types";
 import { energyOf, intakeActionForKey, intakeChord, nextQueuedIndex, type IntakeAction, type PrepColour } from "@/lib/intakeEdits";
-import { needsLine, queuePosition, type IntakeCounts, type IntakeQueueName, type QueuedTrack } from "@/lib/intakeQueue";
+import { needsLine, queuePosition, type IntakeCounts, type IntakeQueueName, type IntakeQueuePage, type QueuedTrack } from "@/lib/intakeQueue";
 import { refusal } from "@/lib/menu";
 import type { KeyOverrides, Platform } from "@/lib/shortcuts";
 import { useCommands } from "@/store/useCommands";
@@ -48,6 +48,23 @@ import { useIntakeColours } from "./useIntakeColours";
 import { useIntakeQueue } from "./useIntakeQueue";
 
 type Backend = Awaited<ReturnType<typeof getBackend>>;
+
+/** What an edit-and-move started on: the track, where it stood, and the load request it began under. */
+interface IntakeOperation {
+  gen: number;
+  id: string;
+  page: IntakeQueuePage;
+  index: number;
+  queue: IntakeQueueName;
+}
+
+/** A "mark and next" step: the marked track, its place in its queue, and where the view went. */
+interface IntakeMark {
+  id: string;
+  position: number;
+  queue: IntakeQueueName;
+  advancedTo: string;
+}
 
 /** How many queued tracks one page holds: the most a refresh ever reads. */
 export const INTAKE_PAGE = 200;
@@ -182,74 +199,169 @@ export function IntakeView(props: IntakeViewProps) {
     return written;
   }, [onEdit, protectLibrary, t]);
 
-  /**
-   * Moves to the queued track after the chosen one. `left` says the chosen
-   * track has just left the queue (it was given a Prep colour), so a next
-   * page starts one earlier than it did.
-   */
-  const advance = useCallback(async (from: number, left: boolean) => {
-    if (!page) return;
-    const next = nextQueuedIndex(page.tracks.length, from);
-    if (next !== null) {
-      const track = page.tracks[next];
-      const row = page.rows[next];
-      if (track && row) await loadQueued(track, row);
-      return;
-    }
-    if (page.nextOffset === null) {
-      setNote(t("That was the last track in the queue."));
-      return;
-    }
-    // The next track is on the next page: show that page and load its first.
-    const start = page.nextOffset - (left ? 1 : 0);
-    setOffset(start);
-    const backend = await getBackend();
-    const following = await backend.intakeQueue(queue, start, 1).catch(() => null);
-    const track = following?.tracks[0];
-    const row = following?.rows[0];
-    if (track && row) await loadQueued(track, row);
-  }, [page, loadQueued, queue, t]);
+  // What async work checks before it moves anything: the shown track and
+  // the load request it started under. A DJ who chose another track since
+  // owns the selection; nothing started before may move it.
+  const shownRef = useRef(shownId);
+  shownRef.current = shownId;
+  const queueRef = useRef(queue);
+  queueRef.current = queue;
+  const begin = (): IntakeOperation | null => {
+    if (!selected || !page) return null;
+    return { gen: request.current, id: selected.id, page, index, queue };
+  };
+  const owns = (op: IntakeOperation) => request.current === op.gen && shownRef.current === op.id;
 
-  /** Gives the chosen track a Prep colour (or none) and, when that takes it out of this queue, moves on. */
-  const setPrepColour = useCallback(async (colour: PrepColour | null): Promise<void> => {
-    if (!selected || busyRef.current) return;
-    const at = index;
-    const id = selected.id;
+  /** One operation at a time (a mark, a save then a mark, a skip): the rest wait for it or are ignored. */
+  const exclusive = useCallback(async (work: () => Promise<void>) => {
+    if (busyRef.current) return;
     busyRef.current = true;
     setBusy(true);
-    setNote(null);
     try {
-      const what = colour === null ? t("Prep colour cleared.") : `${t("Prep colour")}: ${colour.label}.`;
-      const written = await edit(what, (backend) => backend.intakeSetPrepColour(id, colour?.id ?? null));
-      const stays = (colour?.id ?? null) === (queueColour?.id ?? null);
-      if (written && !stays) await advance(at, true);
+      await work();
     } finally {
       busyRef.current = false;
       setBusy(false);
     }
-  }, [selected, index, edit, queueColour, advance, t]);
+  }, []);
 
-  const markClean = useCallback(() => {
-    if (colours?.clean) void setPrepColour(colours.clean);
+  /**
+   * Moves on from the track `op` started on, if the DJ has not chosen
+   * another since: the next row of its page, else the first of the next
+   * page (`left`: the track has just left the queue, so that page starts
+   * one earlier). Answers the track it loaded.
+   */
+  const advance = useCallback(async (op: IntakeOperation, left: boolean): Promise<string | null> => {
+    const next = nextQueuedIndex(op.page.tracks.length, op.index);
+    if (next !== null) {
+      const track = op.page.tracks[next];
+      const row = op.page.rows[next];
+      if (!track || !row || !owns(op)) return null;
+      await loadQueued(track, row);
+      return track.id;
+    }
+    if (op.page.nextOffset === null) {
+      if (owns(op)) setNote(t("That was the last track in the queue."));
+      return null;
+    }
+    const start = op.page.nextOffset - (left ? 1 : 0);
+    const backend = await getBackend();
+    const following = await backend.intakeQueue(op.queue, start, 1).catch(() => null);
+    const track = following?.tracks[0];
+    const row = following?.rows[0];
+    // The read took a while: the DJ may have moved on meanwhile.
+    if (!track || !row || !owns(op)) return null;
+    setOffset(start);
+    await loadQueued(track, row);
+    return track.id;
+  }, [loadQueued, t]);
+
+  // Saves of the title and artist on their way: a mark waits for them, and
+  // is not made if one was refused.
+  const savesOnTheirWay = useRef(new Set<Promise<boolean>>());
+  const savesWritten = async () => (await Promise.all([...savesOnTheirWay.current])).every(Boolean);
+
+  // "Mark and next" steps Undo can take back whole: the track, where it
+  // stood in its queue, and the track the view moved to.
+  const marks = useRef<IntakeMark[]>([]);
+
+  /**
+   * Gives `op`'s track a Prep colour (or none). When that takes it out of
+   * the queue and the DJ is still on it, moves on, and remembers the step
+   * so that its Undo brings the track back.
+   */
+  const colourThenNext = useCallback(async (op: IntakeOperation, colour: PrepColour | null): Promise<void> => {
+    setNote(null);
+    if (!(await savesWritten()) || !owns(op)) return;
+    const what = colour === null ? t("Prep colour cleared.") : `${t("Prep colour")}: ${colour.label}.`;
+    const written = await edit(what, (backend) => backend.intakeSetPrepColour(op.id, colour?.id ?? null));
+    const stays = (colour?.id ?? null) === (queueColour?.id ?? null);
+    if (!written || stays || !owns(op)) return;
+    const position = op.page.offset + op.index;
+    const to = await advance(op, true);
+    if (to !== null) marks.current.push({ id: op.id, position, queue: op.queue, advancedTo: to });
+  }, [edit, queueColour, advance, t]);
+
+  const setPrepColour = useEventCallback((colour: PrepColour | null) => {
+    const op = begin();
+    if (op) void exclusive(() => colourThenNext(op, colour));
+  });
+  const markClean = useEventCallback(() => {
+    const op = begin();
+    if (!op) return;
+    if (colours?.clean) { const clean = colours.clean; void exclusive(() => colourThenNext(op, clean)); }
     else if (colours) setEditFailure(t("No colour label is named Clean, so there is no Clean to mark."));
-  }, [colours, setPrepColour, t]);
-  const markProblem = useCallback(() => {
-    if (!selected) return;
-    if (colours?.problem && queueColour?.id === colours.problem.id) {
+  });
+  /** Ctrl+Enter in a field: its save, and only if it was written and the DJ is still on the track, the mark. */
+  const saveThenMark = useEventCallback((save: () => Promise<boolean>) => {
+    const op = begin();
+    if (!op) return;
+    const clean = colours?.clean ?? null;
+    void exclusive(async () => {
+      const saved = await save();
+      if (!saved || !owns(op)) return;
+      if (clean) await colourThenNext(op, clean);
+      else setEditFailure(t("No colour label is named Clean, so there is no Clean to mark."));
+    });
+  });
+  const markProblem = useEventCallback(() => {
+    const op = begin();
+    if (!op) return;
+    const problem = colours?.problem ?? null;
+    if (problem && queueColour?.id === problem.id) {
       // Already Problem (the Problems queue): only move on.
-      void advance(index, false);
-    } else if (colours?.problem) {
-      void setPrepColour(colours.problem);
+      void exclusive(async () => { await advance(op, false); });
+    } else if (problem) {
+      void exclusive(() => colourThenNext(op, problem));
     } else if (colours) {
       setEditFailure(t("No colour label is named Problem, so there is no Problem to mark."));
     }
-  }, [selected, colours, queueColour, advance, index, setPrepColour, t]);
-  const skip = useCallback(() => {
-    if (busyRef.current) return;
+  });
+  const skip = useEventCallback(() => {
+    const op = begin();
+    if (!op) return;
     setEditFailure(null);
     setNote(null);
-    void advance(index, false);
-  }, [advance, index]);
+    void exclusive(async () => { await advance(op, false); });
+  });
+
+  // An Undo that put a marked track back in its queue takes the whole step
+  // back: the track is chosen and loaded again, on its page. Only while the
+  // DJ is still where that step left them; otherwise the chain is broken
+  // and nothing moves.
+  const restoreAfterUndo = useEventCallback(async () => {
+    const top = marks.current.at(-1);
+    if (!top) return;
+    if (top.queue !== queueRef.current || shownRef.current !== top.advancedTo) {
+      marks.current = [];
+      return;
+    }
+    const gen = request.current;
+    const backend = await getBackend();
+    const back = await backend.intakeQueue(top.queue, top.position, 1).catch(() => null);
+    const track = back?.tracks[0];
+    const row = back?.rows[0];
+    // This Undo was of something else, or the DJ moved meanwhile.
+    if (!track || !row || track.id !== top.id) return;
+    if (request.current !== gen || shownRef.current !== top.advancedTo) return;
+    marks.current.pop();
+    setOffset(Math.floor(top.position / INTAKE_PAGE) * INTAKE_PAGE);
+    setEditFailure(null);
+    setNote(null);
+    await loadQueued(track, row);
+  });
+  useEffect(() => {
+    let live = true;
+    let stop: (() => void) | null = null;
+    void getBackend().then((backend) => {
+      if (!live) return;
+      stop = backend.onEditHistory((history) => {
+        // A step back leaves something to redo.
+        if (history.canRedo) void restoreAfterUndo();
+      });
+    });
+    return () => { live = false; stop?.(); };
+  }, [restoreAfterUndo]);
 
   const setEnergy = useCallback((level: number) => {
     if (!selected) return Promise.resolve(false);
@@ -259,7 +371,10 @@ export function IntakeView(props: IntakeViewProps) {
   const setField = useCallback((field: "title" | "artist", value: string) => {
     if (!selected) return Promise.resolve(false);
     const id = selected.id;
-    return edit(field === "title" ? t("Title saved.") : t("Artist saved."), (backend) => backend.edits.setTrackField([id], field, value));
+    const saving = edit(field === "title" ? t("Title saved.") : t("Artist saved."), (backend) => backend.edits.setTrackField([id], field, value));
+    savesOnTheirWay.current.add(saving);
+    void saving.finally(() => savesOnTheirWay.current.delete(saving));
+    return saving;
   }, [selected, edit, t]);
 
   // The view's actions, for the palette and the keys: live while a track is chosen.
@@ -413,7 +528,8 @@ export function IntakeView(props: IntakeViewProps) {
           onTitle={(value) => setField("title", value)}
           onArtist={(value) => setField("artist", value)}
           onEnergy={setEnergy}
-          onPrepColour={(colour) => { void setPrepColour(colour); }}
+          onPrepColour={setPrepColour}
+          onSaveThenMark={saveThenMark}
           onMarkClean={markClean}
           onMarkProblem={markProblem}
           onSkip={skip}

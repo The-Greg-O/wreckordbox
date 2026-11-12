@@ -157,8 +157,12 @@ export function createMockIntake(source: MockIntakeSource) {
   });
   /** Every Prep colour edit asked of the "service", in order: what a test checks really landed. */
   const prepWrites: { id: string; colour: number | null }[] = [];
+  // `__holdPrepWrites()` holds every Prep colour write from then on until `__releasePrepWrites()`.
+  let holdingPrep = false;
+  let heldPrep: (() => void)[] = [];
   const intakeSetPrepColour = async (id: string, colour: number | null): Promise<void> => {
     prepWrites.push({ id, colour });
+    if (holdingPrep) await new Promise<void>((resolve) => { heldPrep.push(resolve); });
     if (colour !== null && (colour < 1 || colour > 8)) throw new Error(`There is no colour label ${colour}.`);
     if (!source.all.some((row) => row.id === id)) throw new Error(`no track ${id}`);
     await source.setColour(id, colour);
@@ -167,6 +171,15 @@ export function createMockIntake(source: MockIntakeSource) {
     const hooks = window as unknown as {
       __prepWrites: () => { id: string; colour: number | null }[];
       __prepColourOf: (id: string) => number;
+      __holdPrepWrites: () => void;
+      __releasePrepWrites: () => void;
+    };
+    hooks.__holdPrepWrites = () => { holdingPrep = true; };
+    hooks.__releasePrepWrites = () => {
+      holdingPrep = false;
+      const waiting = heldPrep;
+      heldPrep = [];
+      for (const release of waiting) release();
     };
     hooks.__prepWrites = () => prepWrites.map((write) => ({ ...write }));
     hooks.__prepColourOf = (id) => {
