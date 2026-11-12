@@ -574,6 +574,12 @@ impl Shared {
                     &|id| self.with_library(|library| crate::stems::parent(library, id))?,
                 )
             }
+            panel if crate::tag_panel::answers(panel) => {
+                // Reads only: the Library, the Tag schema, the DJ's Facts.
+                self.with_library(|library| {
+                    crate::tag_panel::answer(library, &self.stems, request)
+                })?
+            }
             intake if crate::intake::answers(intake) => {
                 let (result, changed) = self.with_library(|library| {
                     crate::intake::answer(library, &self.stems, request)

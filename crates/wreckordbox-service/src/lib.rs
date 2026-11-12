@@ -36,6 +36,7 @@ mod separation;
 mod server;
 pub mod standing;
 pub mod stems;
+pub mod tag_panel;
 pub mod track_filter;
 pub mod tracks;
 
