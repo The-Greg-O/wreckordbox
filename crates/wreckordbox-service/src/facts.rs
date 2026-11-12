@@ -666,6 +666,9 @@ fn sidecar_error(error: &SidecarError) -> ServiceError {
         SidecarError::KindsFile { .. } => {
             ServiceError::new(codes::KINDS_FILE_INVALID, error.to_string())
         }
+        SidecarError::TagSchema { .. } => {
+            ServiceError::new(crate::schema::codes::TAG_SCHEMA_INVALID, error.to_string())
+        }
         _ => ServiceError::new(
             stems::codes::SIDECAR_FAILED,
             format!("the Sidecar failed: {error}"),
