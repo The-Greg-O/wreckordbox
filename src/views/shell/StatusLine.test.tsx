@@ -1,4 +1,5 @@
 /** @vitest-environment jsdom */
+/* eslint-disable @typescript-eslint/require-await -- Async act flushes effects and their promise continuations. */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";

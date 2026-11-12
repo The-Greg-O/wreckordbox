@@ -46,8 +46,8 @@ pub mod tag_schema;
 
 use std::path::{Path, PathBuf};
 
-pub use audio::{audio_info, AudioInfo};
 pub use active_runs::ActiveRun;
+pub use audio::{audio_info, AudioInfo};
 pub use fingerprint::{fingerprint_file, Fingerprint};
 pub use kinds::{Declaration, Kinds, ValueType, KINDS_FILE};
 pub use store::{Fact, Kind, Nature, NewFact, Run, RunId, Sidecar, Source, SourceKind};
