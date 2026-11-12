@@ -5208,7 +5208,7 @@ mod tests {
         let request = StickWriteRequest::Playlist { playlist: rbl_db::fixture::playlist_id(1), destination: stick.to_string_lossy().into_owned(), delete_unlisted_music: None, compatibility_format: None };
         let found = plan(&state, &request).unwrap();
         assert!(found.pending);
-        assert!(found.playlists.is_empty());
+        assert_eq!(found.playlists, Vec::new(), "nothing planned");
         assert_eq!(stick_bytes(&stick), before);
         assert!(rbl_export::recovery_pending(&stick));
     }

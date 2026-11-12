@@ -253,5 +253,8 @@ fn the_spare_stick_marker_is_reported_without_writing() {
 
     interrupted_publication(dest.path());
     let pending = outline(dest.path());
-    assert!(pending.pending && pending.spare, "an unfinished write does not hide the marker");
+    assert!(
+        pending.pending && pending.spare,
+        "an unfinished write does not hide the marker"
+    );
 }

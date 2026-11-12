@@ -99,7 +99,10 @@ pub fn outline(mount: &Path) -> Outline {
     let spare = mount.join(SPARE_MARKER).is_file();
     // Wait out a writer that holds the lock, without creating the lock.
     let Ok(_lease) = rbl_core::durable::read_lease(mount) else {
-        return Outline { spare, ..Outline::default() };
+        return Outline {
+            spare,
+            ..Outline::default()
+        };
     };
     if rbl_export::recovery_pending(mount) {
         return Outline {
@@ -109,7 +112,10 @@ pub fn outline(mount: &Path) -> Outline {
         };
     }
     let Ok(root) = rbl_export::export_root_name(mount) else {
-        return Outline { spare, ..Outline::default() };
+        return Outline {
+            spare,
+            ..Outline::default()
+        };
     };
     let dir = mount.join(root).join("rekordbox");
     let libraries = device::formats(mount)

@@ -50,10 +50,10 @@ export interface StickWriteGate {
   /**
    * A flow that reads first and writes later (a drop on a Stick playlist
    * asks about duplicates before anything is written): `body` is run once
-   * the Stick may be used, and asks `confirm` right before its first write.
+   * the Stick may be used, and asks `approve` right before its first write.
    * The Stick is read again afterwards whenever a write was confirmed.
    */
-  guarded: (path: string, body: (confirm: (question: StickWriteQuestion) => Promise<boolean>) => Promise<unknown>) => Promise<void>;
+  guarded: (path: string, body: (approve: (question: StickWriteQuestion) => Promise<boolean>) => Promise<unknown>) => Promise<void>;
   /** The dialog, while a write is being staged. */
   element: ReactNode;
 }
@@ -138,7 +138,7 @@ export function useStickWriteGate({ sticks, refresh, refuse }: {
 
   const guarded = useCallback(async (
     path: string,
-    body: (confirm: (question: StickWriteQuestion) => Promise<boolean>) => Promise<unknown>,
+    body: (approve: (question: StickWriteQuestion) => Promise<boolean>) => Promise<unknown>,
   ) => {
     const stopped = live.current.refusal(path);
     if (stopped !== null) {
@@ -159,8 +159,8 @@ export function useStickWriteGate({ sticks, refresh, refuse }: {
 
   const stage = useCallback(async (write: StagedStickWrite) => {
     let done = false;
-    await guarded(write.path, async (confirm) => {
-      if (!(await confirm(write))) return;
+    await guarded(write.path, async (approve) => {
+      if (!(await approve(write))) return;
       await write.run();
       done = true;
     });

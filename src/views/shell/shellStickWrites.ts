@@ -17,10 +17,10 @@ type Maybe = Promise<void> | undefined;
 
 /** The window's Stick handlers, in the forms that take the shell's confirmation. */
 export interface ShellStickHandlers {
-  exportDraggedTo: (path: string, confirm?: (ids: readonly string[], run: () => Promise<unknown>) => void) => void;
+  exportDraggedTo: (path: string, approve?: (ids: readonly string[], run: () => Promise<unknown>) => void) => void;
   addDraggedToDevice: (
     node: TreeNode,
-    confirm?: (change: { adding: number; exportFirst: readonly string[]; files: boolean }) => Promise<boolean>,
+    approve?: (change: { adding: number; exportFirst: readonly string[]; files: boolean }) => Promise<boolean>,
   ) => Maybe;
   createOnDevice: (parent: TreeNode, folder: boolean) => Maybe;
   renameOnDevice: (node: TreeNode, name: string) => Maybe;
@@ -95,7 +95,7 @@ export function stagedStickActions(
     onDropDeviceTracks: (node) => {
       const at = where(node);
       if (!at) return;
-      void gate.guarded(at.path, (confirm) => done(handlers.addDraggedToDevice(node, (change) => confirm({
+      void gate.guarded(at.path, (approve) => done(handlers.addDraggedToDevice(node, (change) => approve({
         title: `Add ${tracks(change.adding)} to “${node.name}” on ${stickName(at.path)}`,
         lines: [
           `${at.library}: ${tracks(change.adding)} added at the end of “${node.name}”`,
@@ -148,7 +148,10 @@ export function stagedStickActions(
       const at = where(node);
       if (!at) return;
       // No Stick write and no hold, but refused as a write would be.
-      void gate.guarded(at.path, async () => { handlers.importFromDevice(node); });
+      void gate.guarded(at.path, () => {
+        handlers.importFromDevice(node);
+        return Promise.resolve();
+      });
     },
   };
 }

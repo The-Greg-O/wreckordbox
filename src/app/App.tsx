@@ -2202,8 +2202,9 @@ function AppBody() {
   );
 
   // Export Track: onto a connected stick, in no playlist.
-  const exportTrackTo = useCallback(
-    (path: string, ids: readonly string[]) => {
+  // Returns when the write is over, for the shell's staged write (wbx-45.4).
+  const exportTrackToNow = useCallback(
+    (path: string, ids: readonly string[]): Promise<void> | undefined => {
       if (ids.length === 0) return;
       const device = devices.find((d) => d.path === path);
       const name = device?.name ?? "the device";
@@ -2226,20 +2227,23 @@ function AppBody() {
     },
     [devices, report, refuse, stickDefaults, compatibilityFormat, t],
   );
+  const exportTrackTo = useCallback((path: string, ids: readonly string[]) => {
+    void exportTrackToNow(path, ids);
+  }, [exportTrackToNow]);
 
   // Tracks dropped on a stick in the Devices tree: Export Track to it, as
   // rekordbox exports what is dragged there (manual 7.2.18 p. 108).
   const exportDraggedTo = useCallback(
     // `confirm`: the shell's staged write (wbx-45.4), given the tracks in
     // hand before anything is written; the old tree passes none.
-    (path: string, confirm?: (ids: readonly string[], run: () => Promise<unknown>) => void) => {
+    (path: string, approve?: (ids: readonly string[], run: () => Promise<unknown>) => void) => {
       const ids = draggedTracks?.ids;
       setDraggedTracks(null);
       if (!ids || hasLooseId(ids)) return;
-      if (confirm) confirm(ids, async () => { await exportTrackTo(path, ids); });
+      if (approve) approve(ids, () => exportTrackToNow(path, ids) ?? Promise.resolve());
       else exportTrackTo(path, ids);
     },
-    [draggedTracks, exportTrackTo],
+    [draggedTracks, exportTrackTo, exportTrackToNow],
   );
 
   // Export Loop As WAV: where to, then the loop's stretch of the track.
@@ -2882,10 +2886,10 @@ function AppBody() {
   // `confirm`: the shell's staged write (wbx-45.4), asked after the
   // duplicate question and before anything is written; the old tree passes
   // none. The returned promise settles when the drop is over.
-  const addDraggedToDevice = useCallback((
+  const addDraggedToDeviceNow = useCallback((
     node: TreeNode,
-    confirm?: (change: { adding: number; exportFirst: readonly string[]; files: boolean }) => Promise<boolean>,
-  ) => {
+    approve?: (change: { adding: number; exportFirst: readonly string[]; files: boolean }) => Promise<boolean>,
+  ): Promise<void> | undefined => {
     const drag = draggedTracks;
     setDraggedTracks(null);
     const ref = parseDeviceNodeId(node.id);
@@ -2899,7 +2903,7 @@ function AppBody() {
       try {
         const backend = await getBackend();
         if (drag.sourceKind === "folder" && drag.ids.some((id) => id.startsWith("file:"))) {
-          if (confirm && !(await confirm({ adding: drag.ids.length, exportFirst: [], files: true }))) return;
+          if (approve && !(await approve({ adding: drag.ids.length, exportFirst: [], files: true }))) return;
           const result = await backend.devicePlaylistAddFiles(ref.path, ref.format, ref.id, [...drag.ids]);
           if (result.changed > 0) report(t("Added to {name}.", { name: node.name }));
           await deviceLibraries.refresh(ref.path);
@@ -2913,13 +2917,13 @@ function AppBody() {
             const duplicates = await askDuplicates(held.length, tracks.length, node.name);
             if (duplicates === null) return null;
             const adding = duplicates ? tracks.length : tracks.length - new Set(held).size;
-            if (confirm && !(await confirm({ adding, exportFirst: [], files: false }))) return null;
+            if (approve && !(await approve({ adding, exportFirst: [], files: false }))) return null;
             return { kind: "add" as const, playlist: ref.id, tracks, duplicates };
           })()
           : await prepareDevicePlaylistDrop(
             backend, ref.path, ref.format, ref.id, drag.ids, stickDefaults, compatibilityFormat,
             askDuplicates, node.name,
-            confirm && ((missing, adding) => confirm({ adding, exportFirst: missing, files: false })),
+            approve && ((missing, adding) => approve({ adding, exportFirst: missing, files: false })),
           );
         if (edit === null) return;
         if (edit.tracks.length === 0) return;
@@ -2935,7 +2939,8 @@ function AppBody() {
       }
     })();
   }, [draggedTracks, deviceBusy, stickDefaults, compatibilityFormat, askDuplicates, deviceLibraries, report, refuse, t]);
-  const createOnDevice = useCallback(
+  const addDraggedToDevice = useCallback((node: TreeNode) => { void addDraggedToDeviceNow(node); }, [addDraggedToDeviceNow]);
+  const createOnDeviceNow = useCallback(
     (parent: TreeNode, folder: boolean) => {
       const at = deviceParentFor(parent);
       if (at === null) return;
@@ -2946,18 +2951,20 @@ function AppBody() {
     },
     [editDevice, t],
   );
-  const renameOnDevice = useCallback(
+  const createOnDevice = useCallback((parent: TreeNode, folder: boolean) => { void createOnDeviceNow(parent, folder); }, [createOnDeviceNow]);
+  const renameOnDeviceNow = useCallback(
     (node: TreeNode, name: string) => {
       const ref = parseDeviceNodeId(node.id);
       return ref ? editDevice(node, { kind: "rename", id: ref.id, name }, () => t("Renamed to {name}.", { name })) : undefined;
     },
     [editDevice, t],
   );
+  const renameOnDevice = useCallback((node: TreeNode, name: string) => { void renameOnDeviceNow(node, name); }, [renameOnDeviceNow]);
   // Asked first, in rekordbox's own words [OBS 7.2.14, `rekordbox-19`]: a
   // stick's playlists have no undo here. The tracks stay on the stick.
-  const deleteOnDevice = useCallback(
+  const deleteOnDeviceNow = useCallback(
     // `confirmed`: the shell has asked already, with its staged write (wbx-45.4).
-    (node: TreeNode, confirmed = false) => {
+    (node: TreeNode, confirmed = false): Promise<void> | undefined => {
       const ref = parseDeviceNodeId(node.id);
       if (!ref) return undefined;
       return (async () => {
@@ -2975,6 +2982,7 @@ function AppBody() {
     },
     [editDevice, selectedNode, treeNodes, t, confirmRemoval],
   );
+  const deleteOnDevice = useCallback((node: TreeNode) => { void deleteOnDeviceNow(node); }, [deleteOnDeviceNow]);
   // Import Playlist over a stick's playlist: a playlist at the end of the
   // collection's top level with the stick's entries, as rekordbox's Devices
   // tree imports one. The stick is only read. A track the collection does
@@ -3227,7 +3235,7 @@ function AppBody() {
 
   // Export Playlist / Export Folder › a stick: the tree menu lists the
   // connected sticks, so the export goes straight to the one chosen.
-  const exportPlaylist = useCallback((node: TreeNode, path: string) => {
+  const exportPlaylistNow = useCallback((node: TreeNode, path: string): Promise<void> | undefined => {
     const device = devices.find((d) => d.path === path);
     if (!device) {
       refuse(t("That device is no longer connected."));
@@ -3237,6 +3245,7 @@ function AppBody() {
     // so the shell's staged write knows when it is over.
     return writeToDevice(node.id, device).then(() => undefined, () => undefined);
   }, [devices, refuse, t, writeToDevice]);
+  const exportPlaylist = useCallback((node: TreeNode, path: string) => { void exportPlaylistNow(node, path); }, [exportPlaylistNow]);
 
   // The top of the current view, kept only to write the next start's opening
   // screen. The library itself still lives entirely in Rust.
@@ -3491,9 +3500,10 @@ function AppBody() {
     artworkMode, onArtworkMode: setArtworkMode,
   };
   const shellStickHandlers = useMemo(() => ({
-    exportDraggedTo, addDraggedToDevice, createOnDevice, renameOnDevice, deleteOnDevice, exportPlaylist, importFromDevice,
+    exportDraggedTo, addDraggedToDevice: addDraggedToDeviceNow, createOnDevice: createOnDeviceNow,
+    renameOnDevice: renameOnDeviceNow, deleteOnDevice: deleteOnDeviceNow, exportPlaylist: exportPlaylistNow, importFromDevice,
     deleteUnlistedMusic, compatibilityFormat, untitled: { playlist: t("Untitled Playlist"), folder: t("Untitled Folder") },
-  }), [exportDraggedTo, addDraggedToDevice, createOnDevice, renameOnDevice, deleteOnDevice, exportPlaylist, importFromDevice, deleteUnlistedMusic, compatibilityFormat, t]);
+  }), [exportDraggedTo, addDraggedToDeviceNow, createOnDeviceNow, renameOnDeviceNow, deleteOnDeviceNow, exportPlaylistNow, importFromDevice, deleteUnlistedMusic, compatibilityFormat, t]);
   const shellTree = useShellTree({
     library: tree, sticks: shellSticks, selectedNode, onSelectNode: setSelectedNode,
     view: shellView, onViewChange: changeShellView,

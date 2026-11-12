@@ -17,13 +17,19 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::commands::{blocking, held_on_stick, track_export_selection, ExportSelection, EXPORT_CACHE};
+use crate::commands::{
+    blocking, held_on_stick, track_export_selection, ExportSelection, EXPORT_CACHE,
+};
 use crate::error::{AppError, AppResult, ErrorKind};
 use crate::state::AppState;
 
 /// The write being staged.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum StickWriteRequest {
     /// Export Playlist (or Export Folder) to the Stick.
     Playlist {
@@ -88,35 +94,72 @@ pub async fn stick_write_plan(
 /// The plan for `request`, writing nothing.
 pub(crate) fn plan(state: &AppState, request: &StickWriteRequest) -> AppResult<StickWritePlan> {
     let (destination, compatibility) = match request {
-        StickWriteRequest::Playlist { destination, compatibility_format, .. }
-        | StickWriteRequest::Tracks { destination, compatibility_format, .. } => (Path::new(destination), *compatibility_format),
+        StickWriteRequest::Playlist {
+            destination,
+            compatibility_format,
+            ..
+        }
+        | StickWriteRequest::Tracks {
+            destination,
+            compatibility_format,
+            ..
+        } => (Path::new(destination), *compatibility_format),
     };
     if !destination.is_dir() {
-        return Err(AppError::new(ErrorKind::NotFound, "That device is no longer connected."));
+        return Err(AppError::new(
+            ErrorKind::NotFound,
+            "That device is no longer connected.",
+        ));
     }
-    let spare = destination.join(wreckordbox_stick_outline::SPARE_MARKER).is_file();
-    let _lease = rbl_core::durable::read_lease(destination).map_err(|e| AppError::internal(e.to_string()))?;
+    let spare = destination
+        .join(wreckordbox_stick_outline::SPARE_MARKER)
+        .is_file();
+    let _lease = rbl_core::durable::read_lease(destination)
+        .map_err(|e| AppError::internal(e.to_string()))?;
     if rbl_export::recovery_pending(destination) {
-        return Ok(StickWritePlan { spare, pending: true, ..StickWritePlan::default() });
+        return Ok(StickWritePlan {
+            spare,
+            pending: true,
+            ..StickWritePlan::default()
+        });
     }
     let library = state.library()?;
-    let share = state.share_root();
+    let share_root = state.share_root();
     let (held, _) = held_on_stick(state, &library, destination);
     let selection = match request {
-        StickWriteRequest::Playlist { playlist, delete_unlisted_music, .. } => {
+        StickWriteRequest::Playlist {
+            playlist,
+            delete_unlisted_music,
+            ..
+        } => {
             // As Export Playlist builds it, without settling anything first.
             let (mut playlists, automatic) = held_on_stick(state, &library, destination);
             if !playlists.iter().any(|id| id == playlist) {
                 playlists.push(playlist.clone());
             }
-            let mut selection = ExportSelection::from_playlists(state, &library, &share, &playlists, automatic)?;
+            let mut selection = ExportSelection::from_playlists(
+                state,
+                &library,
+                &share_root,
+                &playlists,
+                automatic,
+            )?;
             selection.keep_unlisted = true;
-            match selection.for_stick_inspected(state, &library, &share, destination, delete_unlisted_music.unwrap_or(false), false)? {
+            match selection.for_stick_inspected(
+                state,
+                &library,
+                &share_root,
+                destination,
+                delete_unlisted_music.unwrap_or(false),
+                false,
+            )? {
                 std::borrow::Cow::Owned(kept) => kept,
                 std::borrow::Cow::Borrowed(_) => selection,
             }
         }
-        StickWriteRequest::Tracks { tracks, .. } => track_export_selection(state, &library, &share, destination, tracks)?,
+        StickWriteRequest::Tracks { tracks, .. } => {
+            track_export_selection(state, &library, &share_root, destination, tracks)?
+        }
     };
     let options = rbl_export::ExportOptions {
         sync: Some(&selection.sync),
@@ -125,15 +168,25 @@ pub(crate) fn plan(state: &AppState, request: &StickWriteRequest) -> AppResult<S
         cache: Some(&EXPORT_CACHE),
         ..Default::default()
     };
-    let found = rbl_export::plan::preview(destination, &selection.tracks, &selection.playlists, &selection.my_tags, &options)
-        .map_err(|e| AppError::internal(e.to_string()))?;
+    let found = rbl_export::plan::preview(
+        destination,
+        &selection.tracks,
+        &selection.playlists,
+        &selection.my_tags,
+        &options,
+    )
+    .map_err(|e| AppError::internal(e.to_string()))?;
     let playlists = selection
         .playlists
         .iter()
         .map(|p| PlannedPlaylist {
             name: p.name.clone(),
             folder: p.folder,
-            change: if held.iter().any(|id| *id == p.id.to_string()) { PlaylistChange::Resynchronised } else { PlaylistChange::Created },
+            change: if held.iter().any(|id| *id == p.id.to_string()) {
+                PlaylistChange::Resynchronised
+            } else {
+                PlaylistChange::Created
+            },
         })
         .collect();
     Ok(StickWritePlan {
