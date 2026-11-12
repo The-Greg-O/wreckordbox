@@ -94,19 +94,20 @@ fn line_of(text: &str, offset: usize) -> usize {
         + 1
 }
 
-/// `text` with line `line` (1-based) emptied, the other lines where they
-/// were; `None` if it was already empty.
+/// `text` with line `line` (1-based) blanked: its characters replaced by as
+/// many bytes of spaces, so every other byte stays where it was and a span
+/// in the result is a span in `text`. `None` if it was already blank.
 fn without_line(text: &str, line: usize) -> Option<String> {
     let mut changed = false;
-    let kept: Vec<&str> = text
+    let kept: Vec<String> = text
         .split('\n')
         .enumerate()
         .map(|(at, content)| {
             if at + 1 == line && !content.trim().is_empty() {
                 changed = true;
-                ""
+                " ".repeat(content.len())
             } else {
-                content
+                content.to_owned()
             }
         })
         .collect();
@@ -375,6 +376,14 @@ mod tests {
             file.colours.get("background").map(String::as_str),
             Some("#1a1b26")
         );
+    }
+
+    #[test]
+    fn a_mistake_after_a_line_that_is_not_toml_keeps_its_own_line() {
+        let file = parse("this is not toml\nmuted = \"grey\"\nnot toml either\nacent = \"#ffffff\"\n");
+        assert_eq!(lines(&file), [1, 2, 3, 4]);
+        assert!(file.problems[1].message.contains("muted"), "{:?}", file.problems);
+        assert!(file.problems[3].message.contains("acent"), "{:?}", file.problems);
     }
 
     #[test]

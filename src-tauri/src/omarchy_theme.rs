@@ -64,6 +64,18 @@ pub struct ThemeRoles {
     /// The two ends of the active view tab's line.
     pub tab_from: String,
     pub tab_to: String,
+    /// A control's fill, where it is not the hairline colour: only the
+    /// built-in look tells the two apart.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub control: Option<String>,
+    /// A lit control under the pointer, where the look gives its own rather
+    /// than the one the window derives from the accent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accent_hover: Option<String>,
+    /// The built-in look (with the theme file's keys over it), not a theme:
+    /// upstream's layout keeps its own lit colours.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub built_in: bool,
 }
 
 /// What the interface is told: the roles, if a usable theme is present, and
@@ -87,12 +99,14 @@ pub struct Theme {
     pub problems: Vec<ThemeProblem>,
 }
 
-/// The theme the window shows: the theme file's keys over the Omarchy
-/// palette `omarchy` (or over the built-in one, where the file says
-/// `follow = "none"` or there is no usable Omarchy palette), key by key,
-/// then the roles derived from the result as for any palette. With no file
-/// this is exactly the Omarchy theme. `system_font` is asked only when the
-/// look follows Omarchy and the file names no face.
+/// The theme the window shows. The base roles are resolved first: the
+/// Omarchy theme's (where the file follows it and its palette is usable), or
+/// the built-in look's. The theme file's keys then replace the roles they
+/// name, and only those; what depends on contrast with a replaced role (the
+/// label on the accent, a selection the text could not be read on) is
+/// chosen again. With no file this is exactly the Omarchy theme.
+/// `system_font` is asked only when the look follows Omarchy and the file
+/// names no face.
 #[must_use]
 pub fn layered(
     omarchy: Option<&str>,
@@ -100,22 +114,13 @@ pub fn layered(
     system_font: impl FnOnce() -> Option<String>,
 ) -> Theme {
     let follows = file.is_none_or(|file| file.follow == Follow::Omarchy);
-    // Only a usable Omarchy palette is a base; an unusable one would mix
-    // into the built-in palette.
-    let base = omarchy
-        .filter(|_| follows)
-        .map(parse_colors)
-        .filter(|palette| roles_from_palette(palette).is_some());
+    let base = omarchy.filter(|_| follows).and_then(roles_from_colors);
     let over = file
         .map(|file| &file.colours)
         .filter(|colours| !colours.is_empty());
-    let roles = match (base, over) {
-        (base, None) => base.as_ref().and_then(roles_from_palette),
-        (base, Some(over)) => {
-            let mut palette = base.unwrap_or_else(built_in_palette);
-            palette.extend(over.iter().map(|(key, value)| (key.clone(), value.clone())));
-            roles_from_palette(&palette)
-        }
+    let roles = match over {
+        None => base,
+        Some(over) => Some(overlay(base.unwrap_or_else(built_in_roles), over)),
     };
     let interface_font = file.and_then(|file| file.font.clone());
     let font = match &interface_font {
@@ -134,26 +139,109 @@ pub fn layered(
     }
 }
 
-/// The built-in look as a palette: the fallbacks of the `--role-*`
-/// properties in `src/styles/tokens.css`, upstream's colours. The view tab's
-/// two ends are left to the accent, as there.
-fn built_in_palette() -> BTreeMap<String, String> {
-    [
-        ("mode", "dark"),
-        ("darker_background", "#000000"),
-        ("dark_background", "#0f0f0f"),
-        ("background", "#1e1e1e"),
-        ("lighter_background", "#323232"),
-        ("selection", "#314b67"),
-        ("muted", "#646464"),
-        ("foreground", "#e6e6e6"),
-        ("dark_foreground", "#9a9a9a"),
-        ("bright_foreground", "#ffffff"),
-        ("accent", "#1373eb"),
-    ]
-    .into_iter()
-    .map(|(key, value)| (key.to_owned(), value.to_owned()))
-    .collect()
+/// The built-in look as roles: exactly the fallbacks of the `--role-*`
+/// properties in `src/styles/tokens.css`, upstream's colours.
+fn built_in_roles() -> ThemeRoles {
+    let colour = |value: &str| value.to_owned();
+    ThemeRoles {
+        mode: colour("dark"),
+        ground: colour("#000000"),
+        panel: colour("#0f0f0f"),
+        working: colour("#1e1e1e"),
+        hairline: colour("#323232"),
+        selection: colour("#314b67"),
+        border: colour("#646464"),
+        text: colour("#e6e6e6"),
+        text_dim: colour("#9a9a9a"),
+        text_bright: colour("#ffffff"),
+        accent: colour("#1373eb"),
+        on_accent: colour("#f0f0f0"),
+        tab_from: colour("#1373eb"),
+        tab_to: colour("#1373eb"),
+        control: Some(colour("#2b2b2b")),
+        accent_hover: Some(colour("#4a82ed")),
+        built_in: true,
+    }
+}
+
+/// The theme file's keys that name each role, first wins: the key itself,
+/// then the ones that stand in for it in an Omarchy palette.
+pub(crate) const ROLE_KEYS: &[(&str, &[&str])] = &[
+    ("ground", &["darker_background"]),
+    ("panel", &["dark_background"]),
+    ("working", &["background"]),
+    ("hairline", &["lighter_background"]),
+    ("selection", &["selection"]),
+    ("border", &["muted"]),
+    ("text", &["foreground"]),
+    ("text_dim", &["dark_foreground"]),
+    ("text_bright", &["bright_foreground", "color15"]),
+    ("accent", &["accent", "blue", "color4"]),
+    ("tab_from", &["bright_magenta", "color13", "magenta", "color5"]),
+    ("tab_to", &["bright_yellow", "color11", "yellow", "color3"]),
+];
+
+/// `base` with the roles `file` names replaced (see `layered`).
+fn overlay(base: ThemeRoles, file: &BTreeMap<String, String>) -> ThemeRoles {
+    let given = |role: &str| {
+        ROLE_KEYS
+            .iter()
+            .find(|(name, _)| *name == role)
+            .and_then(|(_, keys)| keys.iter().find_map(|key| file.get(*key)))
+            .filter(|value| rgb(value).is_some())
+            .cloned()
+    };
+    let mut roles = base.clone();
+    let set = |role: &str, slot: &mut String| {
+        if let Some(value) = given(role) {
+            *slot = value;
+        }
+    };
+    set("ground", &mut roles.ground);
+    set("panel", &mut roles.panel);
+    set("working", &mut roles.working);
+    set("selection", &mut roles.selection);
+    set("border", &mut roles.border);
+    set("text", &mut roles.text);
+    set("text_dim", &mut roles.text_dim);
+    set("text_bright", &mut roles.text_bright);
+    set("accent", &mut roles.accent);
+    set("tab_from", &mut roles.tab_from);
+    set("tab_to", &mut roles.tab_to);
+    if let Some(hairline) = given("hairline") {
+        // A control's fill is the hairline colour in a theme.
+        roles.hairline = hairline;
+        roles.control = None;
+    }
+    if let Some(mode) = file.get("mode").filter(|mode| matches!(mode.as_str(), "dark" | "light")) {
+        roles.mode.clone_from(mode);
+    }
+    // A tab end the base took from its accent (it had none of its own)
+    // stays the accent's colour.
+    if roles.accent != base.accent {
+        for (role, slot) in [("tab_from", &mut roles.tab_from), ("tab_to", &mut roles.tab_to)] {
+            if given(role).is_none() && *slot == base.accent {
+                slot.clone_from(&roles.accent);
+            }
+        }
+    }
+    let colour = |value: &str| rgb(value).unwrap_or_default();
+    // The label on the accent is chosen from the accent, the deepest ground
+    // and the brightest text; choose again only if one of them changed.
+    if (roles.accent.as_str(), roles.ground.as_str(), roles.text_bright.as_str())
+        != (base.accent.as_str(), base.ground.as_str(), base.text_bright.as_str())
+    {
+        let label = on_accent(colour(&roles.accent), [colour(&roles.ground), colour(&roles.text_bright)]);
+        roles.on_accent = hex(label);
+        roles.accent_hover = None;
+    }
+    // A selection the text cannot be read on is replaced, as for a theme.
+    if given("selection").is_none()
+        && contrast(colour(&roles.selection), colour(&roles.text)) < SELECTION_CONTRAST
+    {
+        roles.selection = hex(mix(colour(&roles.working), colour(&roles.text), 0.18));
+    }
+    roles
 }
 
 type Rgb = [u8; 3];
@@ -324,6 +412,9 @@ fn roles_from_palette(colours: &BTreeMap<String, String>) -> Option<ThemeRoles> 
         on_accent: hex(on_accent(accent, [ground, text_bright])),
         tab_from: hex(get(&["bright_magenta", "color13", "magenta", "color5"]).unwrap_or(accent)),
         tab_to: hex(get(&["bright_yellow", "color11", "yellow", "color3"]).unwrap_or(accent)),
+        control: None,
+        accent_hover: None,
+        built_in: false,
     })
 }
 
@@ -724,6 +815,9 @@ bright_magenta = "#bb9af7"
                 on_accent: "#0e0e14".into(),
                 tab_from: "#bb9af7".into(),
                 tab_to: "#ff9e64".into(),
+                control: None,
+                accent_hover: None,
+                built_in: false,
             }
         );
     }
@@ -932,10 +1026,81 @@ color15 = "#ddc7a1"
             text_dim: "#9a9a9a".into(),
             text_bright: "#ffffff".into(),
             accent: "#1373eb".into(),
-            on_accent: "#000000".into(),
+            on_accent: "#f0f0f0".into(),
             tab_from: "#1373eb".into(),
             tab_to: "#1373eb".into(),
+            control: Some("#2b2b2b".into()),
+            accent_hover: Some("#4a82ed".into()),
+            built_in: true,
         }
+    }
+
+    /// Everything but the on-accent colour and the hover derived from it,
+    /// which follow a changed accent.
+    fn apart_from_the_accents_label(roles: &ThemeRoles) -> ThemeRoles {
+        ThemeRoles {
+            on_accent: String::new(),
+            accent_hover: None,
+            ..roles.clone()
+        }
+    }
+
+    /// What wbx-45.6's review asked for: one key in the file, one role
+    /// changed, over full, partial, light and built-in bases.
+    #[test]
+    fn an_override_changes_only_the_role_it_names_over_any_base() {
+        let partial = "background = \"#282828\"\nforeground = \"#d4be98\"\n";
+        let light = "background = \"#eff1f5\"\nforeground = \"#4c4f69\"\n";
+        let base = |omarchy: Option<&str>| -> ThemeRoles {
+            omarchy.and_then(roles_from_colors).unwrap_or_else(built_in)
+        };
+        for omarchy in [Some(TOKYO_NIGHT), Some(partial), Some(light), None] {
+            let before = base(omarchy);
+            let dark = before.mode == "dark";
+            for (key, value, role) in [
+                ("foreground", if dark { "#ebdbb2" } else { "#202020" }, "text"),
+                ("muted", "#ff00ff", "border"),
+                ("background", if dark { "#202020" } else { "#f8f8f8" }, "working"),
+                ("dark_foreground", "#777777", "text_dim"),
+                ("darker_background", if dark { "#050505" } else { "#d0d0d0" }, "ground"),
+            ] {
+                let theme = layered(omarchy, Some(&file(&format!("{key} = \"{value}\"\n"))), no_font);
+                let mut expected = before.clone();
+                match role {
+                    "text" => expected.text = value.into(),
+                    "border" => expected.border = value.into(),
+                    "working" => expected.working = value.into(),
+                    "text_dim" => expected.text_dim = value.into(),
+                    _ => expected.ground = value.into(),
+                }
+                let got = theme.roles.unwrap();
+                if role == "ground" {
+                    // The label on the accent is chosen from the ground; it
+                    // may change, nothing else may.
+                    assert_eq!(apart_from_the_accents_label(&got), apart_from_the_accents_label(&expected), "{key} over {omarchy:?}");
+                } else {
+                    assert_eq!(got, expected, "{key} over {omarchy:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn over_the_built_in_look_the_stylesheets_own_fallbacks_stand() {
+        // Only `muted`: the control fill, the accent's label and its hover
+        // stay the built-in look's, not values derived from the palette.
+        let theme = layered(None, Some(&file("muted = \"#ff00ff\"\n")), no_font);
+        assert_eq!(
+            theme.roles,
+            Some(ThemeRoles {
+                border: "#ff00ff".into(),
+                ..built_in()
+            })
+        );
+        // `lighter_background` is both the hairline and the control fill.
+        let theme = layered(None, Some(&file("lighter_background = \"#3a3a3a\"\n")), no_font);
+        let roles = theme.roles.unwrap();
+        assert_eq!((roles.hairline.as_str(), roles.control), ("#3a3a3a", None));
     }
 
     #[test]
@@ -953,8 +1118,13 @@ color15 = "#ddc7a1"
             theme.roles,
             Some(ThemeRoles {
                 accent: "#ff8800".into(),
+                // The built-in tab line is the accent's colour.
                 tab_from: "#ff8800".into(),
                 tab_to: "#ff8800".into(),
+                // A new accent gets a label chosen for it, and the window
+                // derives its hover.
+                on_accent: "#000000".into(),
+                accent_hover: None,
                 ..built_in()
             })
         );
