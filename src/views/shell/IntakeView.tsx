@@ -112,7 +112,7 @@ export function IntakeView(props: IntakeViewProps) {
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (!page || page.tracks.length === 0) return;
     const last = page.tracks.length - 1;
-    let to: number | null = null;
+    let to: number;
     switch (event.key) {
       case "ArrowDown": to = index < 0 ? 0 : Math.min(last, index + 1); break;
       case "ArrowUp": to = index < 0 ? 0 : Math.max(0, index - 1); break;
