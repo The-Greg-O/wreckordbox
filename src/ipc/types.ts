@@ -393,8 +393,12 @@ export interface Backend {
   adoptLibraryProtection(windowPreference: boolean): Promise<LibraryProtection>;
   /** Turns Library Protection on or off; resolves once it is recorded. */
   setLibraryProtection(protectLibrary: boolean): Promise<LibraryProtection>;
-  /** Library Protection was turned, by whoever; in order of `revision`. */
-  onLibraryProtectionChanged(listener: (now: LibraryProtection) => void): () => void;
+  /**
+   * Library Protection was turned, by whoever; in order of `revision`.
+   * Resolves, with the unsubscribe, once the listener is in place: a turn
+   * made before that is not heard, so ask for the state only after it.
+   */
+  onLibraryProtectionChanged(listener: (now: LibraryProtection) => void): Promise<() => void>;
 
   /**
    * Makes a new, empty library where rekordbox keeps one and loads it;

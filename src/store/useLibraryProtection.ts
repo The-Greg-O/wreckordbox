@@ -17,6 +17,7 @@ export type ProtectionBackend = Pick<
  * - At start the window offers its stored preference, which the backend
  *   takes up only the first time, while it has never recorded the switch,
  *   and shows what the backend answers.
+ * - It listens for changes before it asks, so none made in between is lost.
  * - Every change, from Preferences (which turns it through the backend and
  *   shows it once recorded) or the command line, arrives as a notification
  *   with a revision; one older than what is shown is ignored.
@@ -53,9 +54,22 @@ export function useLibraryProtection(
       const backend = await connect();
       if (!live) return;
       backendRef.current = backend;
-      stop = backend.onLibraryProtectionChanged((now) => {
-        if (live) apply.current(now);
-      });
+      // Listening first, and only then asking: a turn made between the
+      // answer and the listener would otherwise never be heard.
+      try {
+        const unlisten = await backend.onLibraryProtectionChanged((now) => {
+          if (live) apply.current(now);
+        });
+        if (!live) {
+          unlisten();
+          return;
+        }
+        stop = unlisten;
+      } catch {
+        // Cannot hear turns: shown on, as when the backend cannot be asked.
+        if (live && !current.current) set.current(true);
+        return;
+      }
       try {
         const now = await backend.adoptLibraryProtection(stored);
         if (live) apply.current(now);

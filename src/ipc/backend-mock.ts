@@ -3023,7 +3023,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     setLibraryProtection: (protectLibrary) => wait(recordProtection(protectLibrary)),
     onLibraryProtectionChanged: (listener) => {
       protectionListeners.add(listener);
-      return () => { protectionListeners.delete(listener); };
+      return Promise.resolve(() => { protectionListeners.delete(listener); });
     },
     createLibrary: async () => {
       await wait(undefined);

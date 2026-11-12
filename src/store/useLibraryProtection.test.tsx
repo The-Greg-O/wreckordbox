@@ -20,7 +20,7 @@ function deferred<T>() {
  * The backend's side: it owns the switch. Every call is held until the
  * test answers it, so the order things arrive in is the test's to choose.
  */
-function backend() {
+function backend(registration: Promise<void> = Promise.resolve()) {
   const calls = {
     adopt: [] as { preference: boolean; answer: ReturnType<typeof deferred<LibraryProtection>> }[],
     read: [] as ReturnType<typeof deferred<LibraryProtection>>[],
@@ -42,10 +42,13 @@ function backend() {
       calls.set.push(on);
       return Promise.resolve({ protectLibrary: on, revision: 99 });
     },
-    onLibraryProtectionChanged: (heard) => {
+    // Listening starts once `registration` settles, as the real event
+    // listener is in place only once Tauri's `listen` resolves.
+    onLibraryProtectionChanged: async (heard) => {
+      await registration;
       listener = heard;
       return () => {
-        listener = null;
+        if (listener === heard) listener = null;
       };
     },
   };
@@ -55,7 +58,8 @@ function backend() {
       await Promise.resolve();
     });
   };
-  return { calls, api, notify };
+  const listening = () => listener !== null;
+  return { calls, api, notify, listening };
 }
 
 let host: HTMLDivElement;
@@ -196,4 +200,34 @@ it("keeps a change Preferences made once the backend recorded it", async () => {
   await answer(calls.read[0]!, { protectLibrary: false, revision: 3 });
 
   expect(preference).toBe(false);
+});
+
+it("asks for its start-up state only once it is listening, so a turn made meanwhile is not lost", async () => {
+  const registered = deferred<void>();
+  const { calls, api, notify } = backend(registered.promise);
+  await mount(true, api);
+  // Still registering: nothing asked yet, and a turn made from the command
+  // line now reaches no listener.
+  expect(calls.adopt).toEqual([]);
+  await notify({ protectLibrary: false, revision: 2 });
+
+  await answer(registered, undefined);
+
+  // Asked now, it answers what stands: the turn made while registering.
+  expect(calls.adopt.map((call) => call.preference)).toEqual([true]);
+  await answer(calls.adopt[0]!.answer, { protectLibrary: false, revision: 2 });
+  expect(preference).toBe(false);
+});
+
+it("stops listening when it goes away while still registering", async () => {
+  const registered = deferred<void>();
+  const { calls, api, listening } = backend(registered.promise);
+  await mount(true, api);
+
+  act(() => root.unmount());
+  root = createRoot(host);
+  await answer(registered, undefined);
+
+  expect(listening()).toBe(false);
+  expect(calls.adopt).toEqual([]);
 });

@@ -178,6 +178,16 @@ function subscribe<T>(event: string, listener: (payload: T) => void): () => void
   };
 }
 
+/**
+ * [`subscribe`], resolving with the unsubscribe once the listener is in
+ * place, for a caller that must not ask for a state before it can hear
+ * every change after it.
+ */
+async function subscribeListening<T>(event: string, listener: (payload: T) => void): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<T>(event, (e) => listener(e.payload));
+}
+
 async function realBackend(): Promise<Backend> {
   const invoke = await tauriInvoke();
   return {
@@ -456,7 +466,7 @@ async function realBackend(): Promise<Backend> {
     libraryProtection: () => invoke<LibraryProtection>("library_protection"),
     adoptLibraryProtection: (windowPreference) => invoke<LibraryProtection>("adopt_library_protection", { windowPreference }),
     setLibraryProtection: (protectLibrary) => invoke<LibraryProtection>("set_library_protection", { protectLibrary }),
-    onLibraryProtectionChanged: (listener) => subscribe<LibraryProtection>("library-protection:changed", listener),
+    onLibraryProtectionChanged: (listener) => subscribeListening<LibraryProtection>("library-protection:changed", listener),
     createLibrary: () => invoke<void>("create_library"),
     useDefaultLibrary: () => invoke<void>("use_default_library"),
     databaseDrives: () => invoke<DatabaseDrive[]>("database_drives"),
