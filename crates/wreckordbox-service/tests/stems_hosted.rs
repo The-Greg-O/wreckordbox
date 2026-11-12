@@ -92,6 +92,15 @@ fn a_hosted_service_separates_into_its_sidecar_and_tells_the_host_without_a_libr
     let host: Arc<dyn rbl_library::Host + Send + Sync> = Arc::new(NoHost);
     let service = Service::host(&location, &config, &core, &host).unwrap();
     let heard = service.events();
+    // A hosted lookup must use its snapshot, even if the Library file is
+    // temporarily unavailable. Opening another connection here would fail.
+    drop(db);
+    let master = library.join("master.db");
+    let hidden = library.join("master.hidden");
+    std::fs::rename(&master, &hidden).unwrap();
+    let found = service.call("facts.of_track", json!({"id": track}));
+    std::fs::rename(&hidden, &master).unwrap();
+    assert!(found.is_ok(), "{found:?}");
 
     let separated = service
         .call(commands::STEMS_SEPARATE, json!({ "id": track }))
@@ -123,13 +132,12 @@ fn a_hosted_service_separates_into_its_sidecar_and_tells_the_host_without_a_libr
         .unwrap();
     assert_eq!(shown["stems"], separated["stems"]);
 
-    // An ordinary Fact read detects changed audio and tells the host once,
-    // without a Library edit or an explicit check-audio request.
+    // Explicit verification detects changed audio and tells the host once.
     let mut bytes = std::fs::read(&audio).unwrap();
     bytes[44] ^= 0x55;
     std::fs::write(&audio, bytes).unwrap();
     let facts = service
-        .call("facts.of_track", json!({"id": track}))
+        .call("facts.of_track", json!({"id": track, "check_audio": true}))
         .unwrap();
     assert_eq!(facts["facts"], json!([]));
     assert_eq!(facts["stale"][0]["id"], separated["stems"]["fact_id"]);
@@ -141,7 +149,7 @@ fn a_hosted_service_separates_into_its_sidecar_and_tells_the_host_without_a_libr
     );
     assert_eq!(core.generation(), generation);
     service
-        .call("facts.of_track", json!({"id": track}))
+        .call("facts.of_track", json!({"id": track, "check_audio": true}))
         .unwrap();
     assert!(heard.recv_timeout(Duration::from_millis(150)).is_err());
 }

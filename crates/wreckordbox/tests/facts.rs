@@ -893,7 +893,7 @@ fn a_measurement_is_tied_to_the_audio_it_was_made_from_and_a_judgement_is_not() 
     assert_eq!(genre["facts"][0]["fingerprint"], fingerprint.as_str());
     assert_eq!(genre["marked_stale"], json!([]));
 
-    // Every read now checks audio, marks stale and leaves Judgements standing.
+    // Explicit checking marks stale and leaves Judgements standing.
     let mut watcher = sandbox.client();
     watcher.subscribe().unwrap();
     change_audio(&audio);

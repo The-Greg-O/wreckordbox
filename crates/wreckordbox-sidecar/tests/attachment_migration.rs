@@ -74,3 +74,37 @@ fn old_facts_can_reattach_after_migration_but_known_stale_audio_is_not_an_identi
         );
     }
 }
+
+#[test]
+fn failed_attachment_migration_keeps_the_frozen_store_retryable() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = rusqlite::Connection::open(dir.path().join("sidecar.db")).unwrap();
+    db.execute_batch(include_str!("fixtures/sidecar-v1.sql"))
+        .unwrap();
+    db.execute_batch(include_str!("fixtures/sidecar-v2.sql"))
+        .unwrap();
+    db.execute_batch(include_str!("fixtures/sidecar-v3.sql"))
+        .unwrap();
+    db.execute_batch("CREATE TABLE attachment_review (obstruction TEXT);")
+        .unwrap();
+    assert!(Sidecar::open(dir.path()).is_err());
+    let version: String = db
+        .query_row(
+            "SELECT value FROM meta WHERE key='schema_version'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(version, "3");
+    let partial: i64 = db.query_row("SELECT count(*) FROM sqlite_master WHERE name IN ('track_identity','fact_track','fact_initial_track')", [], |r| r.get(0)).unwrap();
+    assert_eq!(partial, 0);
+    db.execute_batch("DROP TABLE attachment_review;").unwrap();
+    assert_eq!(
+        Sidecar::open(dir.path())
+            .unwrap()
+            .facts_of_track("10003")
+            .unwrap()
+            .len(),
+        2
+    );
+}

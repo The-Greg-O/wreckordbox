@@ -283,6 +283,10 @@ impl Stems {
         }
     }
 
+    pub(crate) fn sidecar_dir(&self) -> &Path {
+        &self.sidecar_dir
+    }
+
     /// The Sidecar, opened on first use.
     pub(crate) fn sidecar(&self) -> Result<Arc<Sidecar>, ServiceError> {
         let mut sidecar = lock(&self.sidecar);
@@ -314,7 +318,7 @@ impl Stems {
     fn separate(self: &Arc<Self>, found: ParentAudio) -> Result<Separated, ServiceError> {
         let fingerprint = fingerprint(found.parent(), found.path())?;
         let (_, marked_stale) = self.before_record(&found, Some(&fingerprint), None)?;
-        let ParentAudio { parent, path, .. } = found;
+        let parent = found.parent().clone();
         let job = {
             // Held while deciding, so two requests for one track cannot
             // both decide to separate it.
@@ -354,8 +358,7 @@ impl Stems {
                 *running = Some(Arc::clone(&job));
                 let (stems, work) = (Arc::clone(self), Arc::clone(&job));
                 std::thread::spawn(move || {
-                    let outcome =
-                        stems.run(&sidecar, &work, parent, &path, &fingerprint, marked_stale);
+                    let outcome = stems.run(&sidecar, &work, found, &fingerprint, marked_stale);
                     *lock(&stems.running) = None;
                     *lock(&work.outcome) = Some(outcome);
                     work.done.notify_all();
@@ -381,11 +384,12 @@ impl Stems {
         &self,
         sidecar: &Sidecar,
         job: &Job,
-        parent: Parent,
-        path: &Path,
+        found: ParentAudio,
         fingerprint: &Fingerprint,
         marked_stale: Vec<i64>,
     ) -> Result<Separated, ServiceError> {
+        let parent = found.parent().clone();
+        let path = found.path();
         let source = Source::new(SourceKind::Tool, "separation-engine");
         let run = sidecar
             .begin_run(
@@ -418,6 +422,7 @@ impl Stems {
                     .iter()
                     .filter_map(|(name, file)| Some((Role::named(name)?, file.clone())))
                     .collect();
+                self.before_record(&found, Some(fingerprint), Some(run))?;
                 sidecar
                     .record_stems(&NewStems {
                         track_id: &parent.id,

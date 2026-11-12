@@ -259,6 +259,27 @@ pub(crate) fn answer(
     request: &Request,
     lookup: &dyn Fn(&str) -> Result<ParentAudio, ServiceError>,
 ) -> Result<Value, ServiceError> {
+    if request.command == commands::FACTS_OF_TRACK {
+        let wanted: FactsOfTrack = arguments(request)?;
+        if !wanted.check_audio && stems.sidecar_if_made()?.is_none() {
+            let found = lookup(&wanted.id)?;
+            let kinds = Kinds::load(stems.sidecar_dir()).map_err(|e| sidecar_error(&e))?;
+            if let Some(kind) = &wanted.kind {
+                if kinds.get(kind).is_none() && !kinds.schema_is_broken() {
+                    return Err(not_declared(kind, &kinds));
+                }
+            }
+            return serde_json::to_value(TrackFacts {
+                track: found.parent().clone(),
+                facts: Vec::new(),
+                stale: Vec::new(),
+                unverified: Vec::new(),
+                reattached: Vec::new(),
+                review: Vec::new(),
+            })
+            .map_err(|e| ServiceError::new(service_codes::SERVICE_FAILED, e.to_string()));
+        }
+    }
     let facts = Facts {
         sidecar: stems.sidecar()?,
         stems,

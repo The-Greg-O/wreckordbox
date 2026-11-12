@@ -786,11 +786,6 @@ impl Library {
     /// `djmdContent.Analysed` is 0 for these. A track with the analysis lock
     /// has bit 0x80 set there, so it never counts as unanalysed, and a row
     /// with no file path has nothing to analyse. The rows are yielded lazily
-    /// The mix name already loaded with this snapshot (djmdContent.Subtitle).
-    pub fn mix_name(&self, row: Row) -> &str {
-        self.sort_text(row, SortColumn::MixName)
-    }
-
     /// so a caller paging through them reads each row once.
     pub fn unanalysed_rows(&self, from: Row) -> impl Iterator<Item = Row> + '_ {
         (from as usize..self.count)
@@ -798,6 +793,11 @@ impl Library {
                 self.analysed.get(index).copied() == Some(0) && !self.folder_path.get(index).is_empty()
             })
             .filter_map(|index| Row::try_from(index).ok())
+    }
+
+    /// The mix name already loaded with this snapshot (djmdContent.Subtitle).
+    pub fn mix_name(&self, row: Row) -> &str {
+        self.sort_text(row, SortColumn::MixName)
     }
 
     #[inline]

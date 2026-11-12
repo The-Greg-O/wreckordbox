@@ -326,7 +326,7 @@ pub(super) fn convert(
     };
 
     let sidecar = stems.sidecar()?;
-    let sorted = sort_out(
+    let mut sorted = sort_out(
         &sidecar,
         &kinds,
         &plan.schema,
@@ -334,6 +334,41 @@ pub(super) fn convert(
         &wanted,
         convert.reimport,
     )?;
+    // Attach before comparing the DJ's earlier word with the MyTags. The
+    // first comparison only identifies work; attachment can reveal conflicts.
+    let run = if !convert.dry_run && !sorted.to_record.is_empty() {
+        let run = sidecar
+            .begin_run(&Source::new(SourceKind::Dj, "dj"), RUN_DESCRIPTION)
+            .map_err(|e| sidecar_error(&e))?;
+        let observed = (|| {
+            let mut seen = HashSet::new();
+            for (track, _, _) in &sorted.to_record {
+                if seen.insert(*track) {
+                    let found = lookup(track)?;
+                    let fingerprint = stems::fingerprint(found.parent(), found.path()).ok();
+                    stems.before_record(&found, fingerprint.as_ref(), Some(run))?;
+                }
+            }
+            sort_out(
+                &sidecar,
+                &kinds,
+                &plan.schema,
+                &library,
+                &wanted,
+                convert.reimport,
+            )
+        })();
+        match observed {
+            Ok(updated) => sorted = updated,
+            Err(error) => {
+                let _ = sidecar.finish_run(run, &format!("nothing recorded: {error}"));
+                return Err(error);
+            }
+        }
+        Some(run)
+    } else {
+        None
+    };
     let mut converted = Converted {
         file: path.clone(),
         file_state,
@@ -362,18 +397,29 @@ pub(super) fn convert(
 
     let installed = matches!(file_state, FileState::Written | FileState::Replaced);
     if installed {
-        write_whole(&path, text.as_bytes())?;
+        if let Err(error) = write_whole(&path, text.as_bytes()) {
+            if let Some(run) = run {
+                let _ = sidecar.finish_run(run, &format!("nothing recorded: {error}"));
+            }
+            return Err(error);
+        }
     }
     if sorted.to_record.is_empty() {
+        if let Some(run) = run {
+            let _ = sidecar.finish_run(run, "recorded 0 Facts; attachment review completed");
+            converted.run = sidecar.run(run).map_err(|e| sidecar_error(&e))?;
+        }
         return Ok(converted);
     }
+    let run = run
+        .ok_or_else(|| ServiceError::new(service_codes::SERVICE_FAILED, "conversion has no Run"))?;
     match record(
         stems,
         &sidecar,
         &kinds,
         &plan.schema,
         &sorted.to_record,
-        lookup,
+        run,
     ) {
         Ok(run) => {
             converted.run = sidecar.run(run).map_err(|e| sidecar_error(&e))?;
@@ -540,23 +586,12 @@ fn record(
     kinds: &Kinds,
     schema: &TagSchema,
     to_record: &[(&str, usize, Value)],
-    lookup: &dyn Fn(&str) -> Result<stems::ParentAudio, ServiceError>,
+    run: RunId,
 ) -> Result<RunId, ServiceError> {
     let dj = Source::new(SourceKind::Dj, "dj");
     let mut of_kind = Vec::with_capacity(to_record.len());
     for (_, at, _) in to_record {
         of_kind.push(kind_of(kinds, schema, *at)?);
-    }
-    let run = sidecar
-        .begin_run(&dj, RUN_DESCRIPTION)
-        .map_err(|e| sidecar_error(&e))?;
-    let mut observed = HashSet::new();
-    for (track, _, _) in to_record {
-        if observed.insert(*track) {
-            let found = lookup(track)?;
-            let fingerprint = stems::fingerprint(found.parent(), found.path()).ok();
-            stems.before_record(&found, fingerprint.as_ref(), Some(run))?;
-        }
     }
     let new: Vec<NewFact> = to_record
         .iter()

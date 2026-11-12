@@ -505,3 +505,118 @@ fn ordinary_fact_reads_do_not_observe_audio_or_write_sidecar() {
     let checked = ok(&s, &["facts", "show", &id, "--check-audio"]);
     assert_eq!(checked["stale"][0]["id"], old[1]["id"]);
 }
+
+#[test]
+fn a_fact_recorded_while_audio_is_missing_does_not_hide_the_removed_source() {
+    let s = Sandbox::new();
+    let id = s.import_track("Track.wav", 1);
+    describe(&s, &id);
+    let mut service = s.serve();
+    record(&s, &id);
+    service.kill().unwrap();
+    service.wait().unwrap();
+    let next = readd(&s, &id);
+    let path = s.path().join("audio/Track.wav");
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    ok(
+        &s,
+        &["facts", "record", &next, "mood", "Dark", "--source", "dj"],
+    );
+    std::fs::write(&path, bytes).unwrap();
+    let checked = ok(&s, &["facts", "show", &next, "--check-audio"]);
+    assert_eq!(
+        checked["review"],
+        json!([{"from_track":id,"reason":"target_has_facts"}])
+    );
+    let db = rusqlite::Connection::open(s.sidecar_dir().join("sidecar.db")).unwrap();
+    let version = || {
+        db.query_row("PRAGMA data_version", [], |r| r.get::<_, i64>(0))
+            .unwrap()
+    };
+    let before = version();
+    let shown = s.cli(&["--json", "facts", "show", &next]).json();
+    assert_eq!(shown["review"], checked["review"]);
+    assert_eq!(version(), before);
+}
+
+#[test]
+fn attachment_belongs_to_the_supplied_run() {
+    let s = Sandbox::new();
+    let id = s.import_track("Track.wav", 1);
+    let mut service = s.serve();
+    record(&s, &id);
+    service.kill().unwrap();
+    service.wait().unwrap();
+    let next = readd(&s, &id);
+    let run = ok(
+        &s,
+        &[
+            "runs",
+            "start",
+            "--source",
+            "dj",
+            "--description",
+            "Reattach and tag",
+        ],
+    );
+    ok(
+        &s,
+        &[
+            "facts",
+            "record",
+            &next,
+            "mood",
+            "Dark",
+            "--run",
+            &run["id"].to_string(),
+        ],
+    );
+    let db = rusqlite::Connection::open(s.sidecar_dir().join("sidecar.db")).unwrap();
+    let attached_run: i64 = db
+        .query_row(
+            "SELECT run_id FROM attachment_change WHERE to_track = ?1",
+            [&next],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(json!(attached_run), run["id"]);
+}
+
+#[test]
+fn a_plain_read_does_not_create_a_sidecar() {
+    let s = Sandbox::new();
+    let shown = s.cli(&["--json", "facts", "show", "10003"]).json();
+    assert_eq!(shown["facts"], json!([]));
+    assert!(!s.sidecar_dir().join("sidecar.db").exists());
+}
+
+#[test]
+fn conversion_compares_reattached_dj_facts_before_deciding_what_to_record() {
+    let s = Sandbox::new();
+    let id = s.import_track("Track.wav", 1);
+    let mut service = s.serve();
+    let old = ok(
+        &s,
+        &[
+            "facts",
+            "record",
+            &id,
+            "situation",
+            "Private judgement",
+            "--source",
+            "dj",
+        ],
+    );
+    service.kill().unwrap();
+    service.wait().unwrap();
+    let next = readd(&s, &id);
+    s.edit(|w| {
+        w.set_my_tags(&next, &[rbl_db::fixture::MY_TAG_PEAK.to_string()])
+            .unwrap();
+    });
+    let converted = ok(&s, &["schema", "convert"]);
+    assert_eq!(converted["facts_conflicting"], 1);
+    let shown = ok(&s, &["facts", "show", &next]);
+    assert_eq!(shown["facts"][0]["id"], old["facts"][0]["id"]);
+}
