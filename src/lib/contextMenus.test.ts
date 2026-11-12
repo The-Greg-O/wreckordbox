@@ -399,7 +399,10 @@ describe("deckMenu", () => {
     const rows = deckMenu({ ...state, waveformColor: "rgb", beatCount: "toMemoryBeats", waveformClick: false });
     const items = (label: string) => entriesOf(rows).find((e) => e.label === label)?.items ?? [];
     expect(entriesOf(items("Change waveform color")).map((e) => [e.label, e.checked ?? false]))
-      .toEqual([["BLUE", false], ["RGB", true], ["3Band", false]]);
+      .toEqual([["BLUE", false], ["RGB", true], ["3Band", false], ["Theme", false]]);
+    const themed = entriesOf(deckMenu({ ...state, waveformColor: "theme" })).find((e) => e.label === "Change waveform color");
+    expect(entriesOf(themed?.items ?? []).filter((e) => e.checked).map((e) => [e.label, e.action]))
+      .toEqual([["Theme", "waveformTheme"]]);
     expect(entriesOf(items("Beat Count Display")).filter((e) => e.checked).map((e) => e.label))
       .toEqual(["Count to the next MEMORY CUE (Beats)"]);
     expect(entriesOf(items("Click on the waveform for PLAY and CUE")).filter((e) => e.checked).map((e) => e.label))

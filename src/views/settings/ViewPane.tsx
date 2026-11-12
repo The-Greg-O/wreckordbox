@@ -60,7 +60,8 @@ export function ViewPane({ tab, onResetColumns, onResetLayout }: ViewPaneProps) 
         <Section title="Waveform color">
           {/* The three palettes rekordbox 7 draws, from the analysis files
               it wrote: BLUE from the mono waveforms, RGB from the colour
-              ones, 3Band from the three-band ones. */}
+              ones, 3Band from the three-band ones. Theme is ours: 3Band's
+              shape in the desktop theme's colours (`waveTheme.ts`). */}
           <Radios
             label="Waveform color"
             value={view.waveformColor}
@@ -68,6 +69,7 @@ export function ViewPane({ tab, onResetColumns, onResetLayout }: ViewPaneProps) 
               { value: "blue", label: "BLUE" },
               { value: "rgb", label: "RGB" },
               { value: "3band", label: "3Band" },
+              { value: "theme", label: "Theme" },
             ]}
             onChange={(waveformColor) => set({ waveformColor })}
           />

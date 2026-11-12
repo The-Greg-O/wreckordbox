@@ -57,6 +57,7 @@ export type DeckAction =
   | "waveformBlue"
   | "waveformRgb"
   | "waveform3band"
+  | "waveformTheme"
   | "analyse"
   | "exportLoopWav"
   | `exportTrack:${string}`
@@ -444,7 +445,7 @@ export interface MenuContext {
 
 /** What the deck's menu shows, so it can tick what is in force. */
 export interface DeckMenuState {
-  waveformColor: "blue" | "rgb" | "3band";
+  waveformColor: "blue" | "rgb" | "3band" | "theme";
   beatCount: "position" | "toMemoryBars" | "toMemoryBeats";
   waveformClick: boolean;
   /** The deck has a loop set, so there is one to export. */
@@ -475,6 +476,8 @@ export function deckMenu(state: DeckMenuState): readonly MenuRow<DeckAction>[] {
         { label: "BLUE", action: "waveformBlue", ...tick(state.waveformColor === "blue") },
         { label: "RGB", action: "waveformRgb", ...tick(state.waveformColor === "rgb") },
         { label: "3Band", action: "waveform3band", ...tick(state.waveformColor === "3band") },
+        // Not rekordbox's: the desktop theme's colours (`waveTheme.ts`).
+        { label: "Theme", action: "waveformTheme", ...tick(state.waveformColor === "theme") },
       ],
     },
     { label: "Analyze Track", action: "analyse" },

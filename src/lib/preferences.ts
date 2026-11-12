@@ -18,6 +18,13 @@ import type {
   KeyDisplay, MenuSlot, OverviewWaveform, WaveformColor, WaveformPosition,
 } from "@/ipc/types";
 
+/**
+ * The window's waveform colour theme: rekordbox's three palettes, which a
+ * device also takes, and Theme, drawn in the desktop theme's colours, which
+ * only the window has (`waveTheme.ts`).
+ */
+export type WaveformTheme = WaveformColor | "theme";
+
 /** BEAT SYNC matches the tempo and the bar; BPM SYNC the tempo alone. */
 export type SyncType = "beat" | "bpm";
 
@@ -178,8 +185,8 @@ export interface ViewPreferences {
   vocalFull: boolean;
   /** Traffic Light: how far around the loaded track's key the browser lights. */
   trafficLight: TrafficLightReach;
-  /** Color › Waveform color: the deck's palette — BLUE, RGB or 3Band. */
-  waveformColor: WaveformColor;
+  /** Color › Waveform color: the deck's palette — BLUE, RGB, 3Band or Theme. */
+  waveformColor: WaveformTheme;
   /** Color › HOT CUE color. */
   hotCueColor: HotCueColor;
   /** Display Type › Beat Count Display. */
@@ -536,6 +543,7 @@ function slots(value: unknown): MenuSlot[] | null {
 const KEY_DISPLAYS: readonly KeyDisplay[] = ["classic", "alphanumeric"];
 const OVERVIEWS: readonly OverviewWaveform[] = ["half", "full"];
 const WAVEFORM_COLORS: readonly WaveformColor[] = ["blue", "rgb", "3band"];
+const WAVEFORM_THEMES: readonly WaveformTheme[] = [...WAVEFORM_COLORS, "theme"];
 const POSITIONS: readonly WaveformPosition[] = ["center", "left"];
 const SYNC_TYPES: readonly SyncType[] = ["beat", "bpm"];
 const HOT_CUE_COLORS: readonly HotCueColor[] = ["cdj", "cold1", "cold2", "colorful"];
@@ -600,7 +608,7 @@ export function sanitisePreferences(value: unknown): Preferences {
       phraseLabels: bool(view.phraseLabels, d.view.phraseLabels),
       vocalFull: bool(view.vocalFull, d.view.vocalFull),
       trafficLight: oneOf(view.trafficLight, REACHES, d.view.trafficLight),
-      waveformColor: oneOf(view.waveformColor, WAVEFORM_COLORS, d.view.waveformColor),
+      waveformColor: oneOf(view.waveformColor, WAVEFORM_THEMES, d.view.waveformColor),
       hotCueColor: oneOf(view.hotCueColor, HOT_CUE_COLORS, d.view.hotCueColor),
       beatCount: oneOf(view.beatCount, BEAT_COUNTS, d.view.beatCount),
       waveformClick: bool(view.waveformClick, d.view.waveformClick),

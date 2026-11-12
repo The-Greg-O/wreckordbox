@@ -1028,6 +1028,7 @@ export const Player = memo(function Player({
         case "waveformBlue": updatePreferences("view", { waveformColor: "blue" }); break;
         case "waveformRgb": updatePreferences("view", { waveformColor: "rgb" }); break;
         case "waveform3band": updatePreferences("view", { waveformColor: "3band" }); break;
+        case "waveformTheme": updatePreferences("view", { waveformColor: "theme" }); break;
         case "beatPosition": updatePreferences("view", { beatCount: "position" }); break;
         case "beatToMemoryBars": updatePreferences("view", { beatCount: "toMemoryBars" }); break;
         case "beatToMemoryBeats": updatePreferences("view", { beatCount: "toMemoryBeats" }); break;

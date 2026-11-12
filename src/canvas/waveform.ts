@@ -35,12 +35,12 @@ export type HalfWaveform = boolean | "overlaid";
  * its own tags, so the bytes a palette is handed are in that palette's
  * layout — see `strideOf`.
  */
-export type WavePalette = "blue" | "rgb" | "3band";
+export type WavePalette = "blue" | "rgb" | "3band" | "theme";
 
 /** Bytes per column of the tag a palette reads, at either resolution. */
 export function strideOf(palette: WavePalette, detail: boolean): number {
   switch (palette) {
-    case "3band": return 3;
+    case "3band": case "theme": return 3;
     case "blue": return 1;
     case "rgb": return detail ? 2 : 6;
   }
@@ -50,7 +50,7 @@ export function strideOf(palette: WavePalette, detail: boolean): number {
 export function waveformKindOf(palette: WavePalette, detail: boolean):
   "bands" | "bandsDetail" | "mono" | "monoDetail" | "colour" | "colourDetail" {
   switch (palette) {
-    case "3band": return detail ? "bandsDetail" : "bands";
+    case "3band": case "theme": return detail ? "bandsDetail" : "bands";
     case "blue": return detail ? "monoDetail" : "mono";
     case "rgb": return detail ? "colourDetail" : "colour";
   }
@@ -78,16 +78,40 @@ const LOW_HIGH = rgbTuple(theme.color.waveLowHigh.value);
 const MID_HIGH = rgbTuple(theme.color.waveMidHigh.value);
 const ALL = rgbTuple(theme.color.waveAll.value);
 
+/**
+ * The colours a waveform's bands are drawn in: one per combination of bands,
+ * indexed by the combination's bits (`BAND_LOW | BAND_MID` is 3). The drawing
+ * below takes one of these and is otherwise the same under every waveform
+ * theme, so cue, playhead, beat and phrase colours, which are not in it,
+ * cannot move with the theme.
+ */
+export type WaveColours = readonly (readonly [number, number, number])[];
+
+/** rekordbox's measured seven: 3Band, and the ramp BLUE shades through. */
+export const MEASURED_COLOURS: WaveColours = [LOW, LOW, MID, LOW_MID, HIGH, LOW_HIGH, MID_HIGH, ALL];
+
+/**
+ * The Theme palette: 3Band's shape in three colours of the desktop theme,
+ * given as `#rrggbb`. A stretch takes the colour of the highest band that
+ * reaches it, so the low band is the outer envelope, the mid rides inside it
+ * and the bright core is on top, with no fourth colour mixed where two
+ * overlap: a theme gives three, and a mix of them would be nobody's colour.
+ */
+export function themeWaveColours(low: string, mid: string, high: string): WaveColours {
+  const l = rgbTuple(low);
+  const m = rgbTuple(mid);
+  const h = rgbTuple(high);
+  return [l, l, m, m, h, h, h, h];
+}
+
 /** The bit each band sets in a combination. */
 export const BAND_LOW = 1;
 export const BAND_MID = 2;
 export const BAND_HIGH = 4;
 
 /** The colour rekordbox paints where this combination of bands reaches. */
-export function bandColour(combination: number): string {
-  const c = [
-    LOW, LOW, MID, LOW_MID, HIGH, LOW_HIGH, MID_HIGH, ALL,
-  ][combination & 7] ?? LOW;
+export function bandColour(combination: number, colours: WaveColours = MEASURED_COLOURS): string {
+  const c = colours[combination & 7] ?? LOW;
   return `rgb(${c[0]},${c[1]},${c[2]})`;
 }
 
@@ -97,8 +121,11 @@ export function bandColour(combination: number): string {
  * slabs, and any caller that wants "how bright is this column" as a colour.
  * The same palette for the overview and the detail.
  */
-export function bandStops(_band: WaveBand = "overview"): readonly (readonly number[])[] {
-  return [LOW, MID, ALL];
+export function bandStops(
+  _band: WaveBand = "overview",
+  colours: WaveColours = MEASURED_COLOURS,
+): readonly (readonly number[])[] {
+  return [colours[BAND_LOW] ?? LOW, colours[BAND_MID] ?? MID, colours[BAND_LOW | BAND_MID | BAND_HIGH] ?? ALL];
 }
 
 /** Colour at `t` (0..1) along a ramp through every stop in turn. */
@@ -182,12 +209,14 @@ export function drawBands(
    * above and 2pt below.
    */
   inset: { top: number; bottom: number } = { top: 0, bottom: 0 },
+  /** The waveform theme's colours; rekordbox's measured ones by default. */
+  colours: WaveColours = MEASURED_COLOURS,
 ): void {
   ctx.clearRect(0, 0, width, height);
   const columns = Math.floor(data.length / 3);
   if (columns === 0 || width <= 0 || height <= 0) return;
 
-  const stops = bandStops(band);
+  const stops = bandStops(band, colours);
   // The band the waveform actually draws into. Clamped so a large inset on a
   // short strip leaves something rather than inverting it.
   const top = Math.max(0, Math.min(inset.top, height / 2 - 1));
@@ -240,7 +269,7 @@ export function drawBands(
     // signal. Draw its reference line here, inside the data span only; the
     // caller has already clipped that span at the file's start and end.
     if (low === 0 && mid === 0 && high === 0) {
-      ctx.fillStyle = bandColour(BAND_LOW | BAND_HIGH);
+      ctx.fillStyle = bandColour(BAND_LOW | BAND_HIGH, colours);
       ctx.fillRect(x, half ? floor : centre, 1, 1);
       continue;
     }
@@ -250,7 +279,7 @@ export function drawBands(
       // centred waveform reaches half of it each way; each stretch of the
       // column in the colour of the bands that reach it.
       for (const [reach, combination] of segments(low, mid, high, usable)) {
-        ctx.fillStyle = bandColour(combination);
+        ctx.fillStyle = bandColour(combination, colours);
         ctx.fillRect(x, floor - reach, 1, reach);
       }
       continue;
@@ -274,7 +303,7 @@ export function drawBands(
     // envelope, then each nearer stretch over it in the colour of every band
     // that reaches that far, the core last.
     for (const [reach, combination] of segments(low, mid, high, usable / 2)) {
-      ctx.fillStyle = bandColour(combination);
+      ctx.fillStyle = bandColour(combination, colours);
       ctx.fillRect(x, centre - reach, 1, reach * 2);
     }
   }
@@ -440,9 +469,15 @@ export function drawWave(
   detail: boolean,
   half: HalfWaveform = false,
   inset: { top: number; bottom: number } = { top: 0, bottom: 0 },
+  /** The waveform theme's colours, for the palettes that take them (Theme). */
+  colours: WaveColours = MEASURED_COLOURS,
 ): void {
-  if (palette === "3band") {
-    drawBands(ctx, data, width, height, detail ? "detail" : "overview", half, inset);
+  if (palette === "3band" || palette === "theme") {
+    // 3Band is always the measured colours, whatever it is handed.
+    drawBands(
+      ctx, data, width, height, detail ? "detail" : "overview", half, inset,
+      palette === "theme" ? colours : MEASURED_COLOURS,
+    );
   } else {
     drawColumns(ctx, data, width, height, palette, detail, half, inset);
   }
@@ -456,6 +491,7 @@ export function drawPcmWave(
   height: number,
   palette: WavePalette,
   visible: { from: number; to: number } = { from: 0, to: 1 },
+  colours: WaveColours = MEASURED_COLOURS,
 ): void {
   ctx.clearRect(0, 0, width, height);
   const lanes = [height * 0.25 + 0.5, height * 0.75 + 0.5] as const;
@@ -464,7 +500,7 @@ export function drawPcmWave(
   // Silence has a visible zero-amplitude line in each stereo lane, rather
   // than disappearing into the background. Do not clamp its endpoints: at a
   // file edge, the canvas deliberately has empty overhang beyond the source.
-  const colour = pcmColour(palette);
+  const colour = pcmColour(palette, colours);
   ctx.strokeStyle = colour;
   ctx.fillStyle = colour;
   ctx.globalAlpha = 0.65;
@@ -555,8 +591,10 @@ export function drawPcmWave(
  * `--c-beat` is #4C4C4C. Each is light/saturated enough to remain separable
  * from both that grid and the white downbeat line on the black detail band.
  */
-function pcmColour(palette: WavePalette): string {
+function pcmColour(palette: WavePalette, colours: WaveColours): string {
   switch (palette) {
+    // Theme's middle band, as 3Band's trace is its amber one.
+    case "theme": return bandColour(BAND_MID, colours);
     // Blue's familiar low-band hue, raised so it does not merge into #4C4C4C.
     case "blue": return theme.color.pcmBlue.value;
     // 3Band's amber middle band: distinct from its white high-band/downbeat.
@@ -744,6 +782,7 @@ export async function renderPreview(
   dpr: number,
   palette: WavePalette = "3band",
   half = true,
+  colours: WaveColours = MEASURED_COLOURS,
 ): Promise<RenderedWaveform | null> {
   const w = Math.max(1, Math.round(width * dpr));
   const h = Math.max(1, Math.round(height * dpr));
@@ -754,7 +793,7 @@ export async function renderPreview(
   if (!ctx) return null;
   // The row preview: by default half height from the baseline, bands
   // stacked; centred when Full/Preview Waveform is set to Full.
-  drawWave(ctx, data, w, h, palette, false, half);
+  drawWave(ctx, data, w, h, palette, false, half, undefined, colours);
 
   // An ImageBitmap blits faster than a canvas element; fall back where the
   // browser lacks it rather than failing to draw at all.

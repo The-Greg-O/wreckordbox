@@ -1207,6 +1207,7 @@
   "The sync finished, but these tracks could not be written and were left out:",
   "The track could not be previewed.",
   "The written library did not read back correctly.",
+  "Theme",
   "There are no playlists to write yet.",
   "There is no library edit to redo.",
   "There is no library edit to undo.",

@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   BAND_HIGH, BAND_LOW, BAND_MID, bandColour, bandStops, drawBands, drawColumns, drawPreviewCues, drawPreviewMemoryCues, PREVIEW_BADGE, previewClickMs, ramp, segments,
-  strideOf, waveformKindOf,
+  drawWave, strideOf, themeWaveColours, waveformKindOf,
 } from "./waveform";
 
 describe("the three-band colours", () => {
@@ -498,5 +498,44 @@ describe("a click on a row preview", () => {
 
   it("is the top for a track with no length", () => {
     expect(previewClickMs(50, 1, 200, 0, [])).toBe(0);
+  });
+});
+
+describe("the Theme palette", () => {
+  function recorder() {
+    const fills: { style: string; h: number }[] = [];
+    const ctx = {
+      fillStyle: "",
+      clearRect: () => undefined,
+      fillRect(_x: number, _y: number, _w: number, h: number) {
+        fills.push({ style: String(this.fillStyle), h });
+      },
+    };
+    return { ctx: ctx as unknown as CanvasRenderingContext2D, fills };
+  }
+  // Tokyo Night's blue, magenta and bright foreground.
+  const tokyo = themeWaveColours("#7aa2f7", "#bb9af7", "#c0caf5");
+
+  it("reads the three-band tags", () => {
+    expect([waveformKindOf("theme", false), waveformKindOf("theme", true)]).toEqual(["bands", "bandsDetail"]);
+    expect([strideOf("theme", false), strideOf("theme", true)]).toEqual([3, 3]);
+  });
+
+  it("draws the three-band shape in the colours it is handed: blue outside, magenta, the bright core", () => {
+    // The same column the 3Band test draws: low 60, mid 30, high 10.
+    const { ctx, fills } = recorder();
+    drawWave(ctx, new Uint8Array([60, 30, 10]), 1, 100, "theme", false, false, { top: 0, bottom: 0 }, tokyo);
+    expect(fills.map((f) => f.style)).toEqual(["rgb(122,162,247)", "rgb(187,154,247)", "rgb(192,202,245)"]);
+    // The shape is 3Band's own: only the colours differ.
+    const { ctx: measured, fills: bands } = recorder();
+    drawWave(measured, new Uint8Array([60, 30, 10]), 1, 100, "3band", false);
+    expect(fills.map((f) => f.h)).toEqual(bands.map((f) => f.h));
+    expect(bands.map((f) => f.style)).toEqual(["rgb(0,85,225)", "rgb(180,105,10)", "rgb(245,235,215)"]);
+  });
+
+  it("stacks a row preview in the same three colours", () => {
+    const { ctx, fills } = recorder();
+    drawWave(ctx, new Uint8Array([60, 30, 10]), 1, 100, "theme", false, true, { top: 0, bottom: 0 }, tokyo);
+    expect(fills.map((f) => f.style)).toEqual(["rgb(122,162,247)", "rgb(187,154,247)", "rgb(192,202,245)"]);
   });
 });

@@ -17,6 +17,7 @@ import { getBackend } from "@/ipc/client";
 import type { WaveformKind } from "@/ipc/types";
 import { exactBackingSize } from "@/lib/canvasSize";
 import { detailWaveOriginMs, detailWaveWindow, waveSlice } from "@/lib/player";
+import { useWaveColours } from "@/lib/waveTheme";
 import { usePreferences } from "@/store/usePreferences";
 
 /** Raw waveform bytes per track. Small — a few hundred bytes each. */
@@ -134,6 +135,8 @@ export const WaveformDetail = memo(function WaveformDetail({
   const [revision, setRevision] = useState(0);
   // View › Color › Waveform color: each palette reads its own tags.
   const palette = usePreferences().view.waveformColor;
+  // That palette's colours: the measured ones, or the desktop theme's.
+  const colours = useWaveColours(palette);
   const pcmFromMs = requestedPcmWindow?.fromMs;
   const pcmToMs = requestedPcmWindow?.toMs;
   const pcmDrawFromMs = requestedPcmWindow?.drawFromMs;
@@ -244,7 +247,7 @@ export const WaveformDetail = memo(function WaveformDetail({
       drawPcmWave(ctx, loaded?.bytes ?? new Uint8Array(), w, h, palette, {
         from: (pcmWindow.drawFromMs - fromMs) / duration,
         to: (pcmWindow.drawToMs - fromMs) / duration,
-      });
+      }, colours);
       return;
     }
     if (!data || data.trackId !== trackId) {
@@ -272,9 +275,9 @@ export const WaveformDetail = memo(function WaveformDetail({
     drawWave(ctx, data.bytes.subarray(first, last), span_, h, data.palette, detail, half, {
       top: inset.top * scale,
       bottom: inset.bottom * scale,
-    });
+    }, colours);
     ctx.restore();
-  }, [data, pcmData, trackId, revision, progress, span, durationMs, firstBeatMs, width, height, half, detail, palette, inset.top, inset.bottom, pcmWindow]);
+  }, [data, pcmData, trackId, revision, progress, span, durationMs, firstBeatMs, width, height, half, detail, palette, colours, inset.top, inset.bottom, pcmWindow]);
 
   return <canvas ref={ref} style={{ width: "100%", height: "100%", display: "block" }} />;
 });

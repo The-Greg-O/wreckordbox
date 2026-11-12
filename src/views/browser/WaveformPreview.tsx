@@ -10,11 +10,12 @@ import { getBackend } from "@/ipc/client";
 import type { RowCue } from "@/ipc/types";
 import {
   drawPreviewMemoryCues, drawPreviewCues, previewClickMs, renderPreview, waveformKindOf, WaveformCache,
-  type RenderedWaveform, type WavePalette,
+  type RenderedWaveform, type WaveColours, type WavePalette,
 } from "@/canvas";
 import { useTranslation } from "@/i18n";
 import { hotCueColour } from "@/lib/hotCueColours";
 import { onPixelRatioChange, pixelRatio } from "@/lib/pixelRatio";
+import { useWaveColours, waveColoursKey } from "@/lib/waveTheme";
 import { usePreferences } from "@/store/usePreferences";
 import { previewPositionMs, startPreview, stopPreview, usePreview } from "@/store/usePreview";
 import styles from "./TrackTable.module.css";
@@ -96,6 +97,7 @@ async function load(
   dpr: number,
   palette: WavePalette,
   half: boolean,
+  colours: WaveColours,
 ): Promise<RenderedWaveform | null> {
   const existing = inFlight.get(key);
   if (existing) return existing;
@@ -106,7 +108,7 @@ async function load(
       const backend = await getBackend();
       const data = await backend.trackWaveform(trackId, waveformKindOf(palette, false));
       if (data.length === 0) return null;
-      const rendered = await renderPreview(data, width, height, dpr, palette, half);
+      const rendered = await renderPreview(data, width, height, dpr, palette, half, colours);
       if (rendered) cache.set(key, rendered);
       return rendered;
     } catch {
@@ -161,6 +163,8 @@ export const WaveformPreview = memo(function WaveformPreview({
   // in rekordbox.
   const { waveformColor: palette, hotCueColor, overviewWaveform } = usePreferences().view;
   const half = overviewWaveform !== "full";
+  // The waveform theme's colours: the measured ones, or the desktop theme's.
+  const colours = useWaveColours(palette);
   // The device pixels a CSS pixel covers, whole-interface scale included. The
   // row keeps its CSS size when the scale changes, so nothing else would
   // resize the canvas below and repaint it: `dpr` is one of the effect's keys.
@@ -168,7 +172,7 @@ export const WaveformPreview = memo(function WaveformPreview({
 
   useEffect(() => {
     let cancelled = false;
-    const key = `${startupCache ? "startup" : "live"}:${palette}:${half ? "half" : "full"}:${WaveformCache.key(trackId, width, dpr)}`;
+    const key = `${startupCache ? "startup" : "live"}:${palette}:${waveColoursKey(colours)}:${half ? "half" : "full"}:${WaveformCache.key(trackId, width, dpr)}`;
 
     const paint = (entry: { bitmap: CanvasImageSource }) => {
       const canvas = ref.current;
@@ -194,7 +198,7 @@ export const WaveformPreview = memo(function WaveformPreview({
     // Nothing is asked for until the row has settled. A row a flick goes past
     // is unmounted before this fires, and the request is never made.
     const timer = window.setTimeout(() => {
-      void load(trackId, key, width, height, dpr, palette, half).then((rendered) => {
+      void load(trackId, key, width, height, dpr, palette, half, colours).then((rendered) => {
         if (rendered) paint(rendered);
       });
     }, SETTLE_MS);
@@ -203,7 +207,7 @@ export const WaveformPreview = memo(function WaveformPreview({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [trackId, width, height, hotCues, memoryCues, memoryCueColours, durationSec, palette, half, hotCueColor, startupCache, dpr]);
+  }, [trackId, width, height, hotCues, memoryCues, memoryCueColours, durationSec, palette, colours, half, hotCueColor, startupCache, dpr]);
 
   return (
     <span className={styles.previewWave} style={{ width: `${width}px`, height: `${height}px` }}>
