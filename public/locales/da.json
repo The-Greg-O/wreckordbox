@@ -1710,5 +1710,10 @@
   "Theme": "Theme",
   "Set by the theme file (waveform).": "Set by the theme file (waveform).",
   "Turning Library Protection off lets wreckordbox write to your Library. No backup of it was found, so an edit could only be put back with Undo while the window is open.": "Turning Library Protection off lets wreckordbox write to your Library. No backup of it was found, so an edit could only be put back with Undo while the window is open.",
-  "Make one under Preferences › Backups first, or unlock anyway.": "Make one under Preferences › Backups first, or unlock anyway."
+  "Make one under Preferences › Backups first, or unlock anyway.": "Make one under Preferences › Backups first, or unlock anyway.",
+  "Transport edge": "Transport edge",
+  "Immediate": "Immediate",
+  "1 ms": "1 ms",
+  "2 ms": "2 ms",
+  "How play, pause, cue and beat jumps start and stop the sound. Immediate cuts the music where it is; 1 ms and 2 ms fade it in and out. Takes effect at once, while playing.": "How play, pause, cue and beat jumps start and stop the sound. Immediate cuts the music where it is; 1 ms and 2 ms fade it in and out. Takes effect at once, while playing."
 }

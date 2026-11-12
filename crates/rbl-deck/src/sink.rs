@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use crate::health::{AudioHealth, HealthMeter, SignalProbe, SignalReport};
+use crate::xrun::{Underruns, REPORT_EVERY};
 use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -56,6 +57,7 @@ enum Ask {
 /// `Sync` to sit in Tauri's state. The thread owns it and takes instructions.
 pub struct CpalSink {
     health: Arc<HealthMeter>,
+    underruns: Arc<Underruns>,
     ask: Sender<Ask>,
     sample_rate: u32,
     running: AtomicBool,
@@ -90,10 +92,12 @@ impl CpalSink {
 
         let health = Arc::new(HealthMeter::default());
         let callback_health = Arc::clone(&health);
+        let underruns = Arc::new(Underruns::default());
+        let counting = Arc::clone(&underruns);
         std::thread::Builder::new()
             .name("rbl-deck-device".to_owned())
             .spawn(move || {
-                device_thread(render, wanted.as_deref(), wish, &ask_rx, &ready_tx, callback_health);
+                device_thread(render, wanted.as_deref(), wish, &ask_rx, &ready_tx, callback_health, &counting);
             })
             .map_err(DeckError::Io)?;
 
@@ -103,12 +107,17 @@ impl CpalSink {
             .recv()
             .map_err(|_| DeckError::Device("the audio thread stopped while starting".to_owned()))??;
 
-        Ok(Self { health, ask: ask_tx, sample_rate, running: AtomicBool::new(false) })
+        Ok(Self { health, underruns, ask: ask_tx, sample_rate, running: AtomicBool::new(false) })
     }
 }
 
 impl Sink for CpalSink {
-    fn health(&self) -> AudioHealth { self.health.snapshot(self.running.load(Ordering::Relaxed)) }
+    fn health(&self) -> AudioHealth {
+        AudioHealth {
+            underruns: self.underruns.total(),
+            ..self.health.snapshot(self.running.load(Ordering::Relaxed))
+        }
+    }
     fn sample_rate(&self) -> u32 {
         self.sample_rate
     }
@@ -146,9 +155,10 @@ fn device_thread(
     ask: &Receiver<Ask>,
     ready: &Sender<Result<u32>>,
     health: Arc<HealthMeter>,
+    underruns: &Arc<Underruns>,
 ) {
     let probe = Arc::new(SignalProbe::default());
-    let stream = match build_stream(render, wanted, wish, health, Arc::clone(&probe)) {
+    let stream = match build_stream(render, wanted, wish, health, Arc::clone(&probe), Arc::clone(underruns)) {
         Ok((stream, rate)) => {
             if ready.send(Ok(rate)).is_err() {
                 return;
@@ -165,16 +175,28 @@ fn device_thread(
     // waits on the channel rather than on the clock, so a start that arrives
     // in the meantime simply cancels it.
     let mut due: Option<Instant> = None;
+    // While the stream runs the thread also wakes once a `REPORT_EVERY` to
+    // log the underruns the callback counted: see `xrun`.
+    let mut running = false;
     loop {
-        let next = match due {
+        let wake = match (due, running) {
+            (Some(at), _) => Some(at.min(Instant::now() + REPORT_EVERY)),
+            (None, true) => Some(Instant::now() + REPORT_EVERY),
+            (None, false) => None,
+        };
+        let next = match wake {
             Some(at) => match ask.recv_timeout(at.saturating_duration_since(Instant::now())) {
                 Ok(next) => next,
                 Err(RecvTimeoutError::Timeout) => {
-                    due = None;
-                    if let Err(e) = stream.pause() {
-                        tracing::error!(error = %e, "the audio device would not stop");
+                    underruns.report(Instant::now());
+                    if due.is_some_and(|at| Instant::now() >= at) {
+                        due = None;
+                        running = false;
+                        if let Err(e) = stream.pause() {
+                            tracing::error!(error = %e, "the audio device would not stop");
+                        }
+                        log_signal("audio output stopped", probe.take());
                     }
-                    log_signal("audio output stopped", probe.take());
                     continue;
                 }
                 Err(RecvTimeoutError::Disconnected) => break,
@@ -187,6 +209,7 @@ fn device_thread(
         match next {
             Ask::Start => {
                 due = None;
+                running = true;
                 probe.take();
                 if let Err(e) = stream.play() {
                     tracing::error!(error = %e, "the audio device would not start");
@@ -196,6 +219,7 @@ fn device_thread(
             Ask::Quit => break,
         }
     }
+    underruns.report(Instant::now() + REPORT_EVERY);
     // Dropping the stream here, on the thread that built it.
     drop(stream);
 }
@@ -302,6 +326,7 @@ fn build_stream(
     wish: StreamWish,
     health: Arc<HealthMeter>,
     probe: Arc<SignalProbe>,
+    underruns: Arc<Underruns>,
 ) -> Result<(cpal::Stream, u32)> {
     let host = cpal::default_host();
     // The named one if it is there, and the default if it is not: a device
@@ -335,8 +360,10 @@ fn build_stream(
         "audio output negotiated"
     );
 
-    let error = |e: cpal::Error| match e.kind() {
-        cpal::ErrorKind::Xrun => tracing::warn!(error = %e, "audio buffer underrun or overrun"),
+    // Counted, not logged: an underrun can come several times a second, and
+    // this runs on the device's own thread. See `xrun`.
+    let error = move |e: cpal::Error| match e.kind() {
+        cpal::ErrorKind::Xrun => underruns.note(),
         cpal::ErrorKind::DeviceChanged => tracing::info!(error = %e, "audio output changed"),
         _ => tracing::error!(error = %e, "audio device error"),
     };
@@ -347,6 +374,12 @@ fn build_stream(
         cpal::SampleFormat::I32 => build::<i32>(&device, config, channels, render, error, health, probe),
         other => Err(DeckError::Device(format!("this device wants {other} samples, which we do not write"))),
     }?;
+    // The period the device actually took: `BufferSize::Default` is the
+    // device's choice and the negotiated log above cannot say what it was.
+    match stream.buffer_size() {
+        Ok(period) => tracing::info!(period, rate, "audio output period"),
+        Err(e) => tracing::debug!(error = %e, "the audio device would not say its period"),
+    }
     Ok((stream, rate))
 }
 
@@ -359,7 +392,7 @@ fn build<T>(
     config: cpal::StreamConfig,
     channels: u16,
     mut render: Render,
-    error: fn(cpal::Error),
+    error: impl FnMut(cpal::Error) + Send + 'static,
     health: Arc<HealthMeter>,
     probe: Arc<SignalProbe>,
 ) -> Result<cpal::Stream>
@@ -375,8 +408,13 @@ where
     device
         .build_output_stream(
             config,
-            move |out: &mut [T], _: &cpal::OutputCallbackInfo| {
+            move |out: &mut [T], info: &cpal::OutputCallbackInfo| {
                 let started = Instant::now();
+                // How far ahead of the speaker this buffer is written: the
+                // depth of the device's buffer, which is how late a pause is
+                // heard and how much is still queued when the stream stops.
+                let stamp = info.timestamp();
+                health.record_latency(stamp.playback.duration_since(stamp.callback));
                 for chunk in out.chunks_mut(SCRATCH_FRAMES * lanes) {
                     let frames = chunk.len() / lanes;
                     // The chunk is bounded by the scratch, so this cannot be

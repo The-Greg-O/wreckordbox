@@ -58,6 +58,17 @@ strip = "symbols"
 # SQLCipher, symphonia and the DSP crates are unusable in a debug build otherwise.
 opt-level = 2
 
+# The audio engine and its decoder are workspace crates, which "*" does not
+# cover: unoptimised, a debug build's audio thread spent half its deadline
+# mixing and the device ran dry under load (wbx-45.16). Also builds the
+# vendored Rubber Band optimised, which rbl-deck's build script compiles at
+# this package's level.
+[profile.dev.package.rbl-deck]
+opt-level = 3
+
+[profile.dev.package.rbl-audio]
+opt-level = 3
+
 [profile.perf]
 inherits = "release"
 debug = 1

@@ -3328,6 +3328,12 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     },
     setMetronome: () => wait(undefined),
     setAudioConfig: () => wait(undefined),
+    // The engine's transport edge as the window last set it, for a spec to
+    // read: `window.__transportEdge`.
+    setTransportEdge: (edge) => {
+      (window as unknown as { __transportEdge?: string }).__transportEdge = edge;
+      return wait(undefined);
+    },
     setChannelBand: () => wait(undefined),
     setChannelKill: () => wait(undefined),
     setChannelTrim: () => wait(undefined),

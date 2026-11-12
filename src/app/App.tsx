@@ -653,6 +653,19 @@ function AppBody() {
       }
     })();
   }, [audioPrefs]);
+  // The transport edge on its own: live, so a change must not also re-send
+  // the device settings. Both layouts and both players share the engine's.
+  const transportEdge = audioPrefs.transportEdge;
+  useEffect(() => {
+    void (async () => {
+      try {
+        const backend = await getBackend();
+        await backend.setTransportEdge(transportEdge);
+      } catch (e) {
+        console.warn("the transport edge did not reach the engine", e);
+      }
+    })();
+  }, [transportEdge]);
   useEffect(() => {
     let live = true;
     void getBackend()

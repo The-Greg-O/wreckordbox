@@ -2290,6 +2290,29 @@ pub async fn set_metronome(
     Ok(())
 }
 
+/// Preferences › Audio › Transport edge: `immediate`, `1ms` or `2ms`. Live:
+/// the next start or stop on either player uses it, nothing is restarted.
+/// Anything else is refused and changes nothing.
+#[tauri::command]
+pub async fn set_transport_edge(
+    player: State<'_, Arc<crate::player::Player>>,
+    preview: State<'_, Arc<crate::preview::Preview>>,
+    edge: String,
+) -> AppResult<()> {
+    let edge = match edge.as_str() {
+        "immediate" => rbl_deck::TransportEdge::Immediate,
+        "1ms" => rbl_deck::TransportEdge::OneMs,
+        "2ms" => rbl_deck::TransportEdge::TwoMs,
+        _ => {
+            return Err(AppError::new(ErrorKind::Malformed, "That transport edge is not one of Immediate, 1 ms or 2 ms.")
+                .with_detail(edge))
+        }
+    };
+    player.set_transport_edge(edge);
+    preview.set_transport_edge(edge);
+    Ok(())
+}
+
 /// Preferences › Audio › Sample Rate and Buffer size. Takes effect the next
 /// time a deck plays, as a device change does: a stream has the rate it was
 /// opened at.
