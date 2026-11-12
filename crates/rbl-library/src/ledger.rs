@@ -122,6 +122,24 @@ pub trait Ledger: Send + Sync {
     /// with its text and nothing is changed.
     fn begin(&self) -> Result<(), String>;
 
+    /// A file-only change, after the file-edit guards and before publication.
+    /// Keep the kind and track with the intent for crash recovery. No audio,
+    /// file snapshots or database scans belong here.
+    fn begin_file(
+        &self,
+        _kind: &str,
+        _track: &str,
+        _values: &serde_json::Value,
+    ) -> Result<(), String> {
+        self.begin()
+    }
+
+    /// A file-only change was published. Recording is infallible to the
+    /// caller, just like recording a committed row edit.
+    fn file_written(&self, kind: &str, track: &str) {
+        self.note(Unkept::Unrecorded, Some(&format!("{kind}: track {track}")));
+    }
+
     /// The write [`Self::begin`] announced is over: `wrote` is whether it
     /// changed any row. Called before the core re-reads what it touched.
     fn written(&self, wrote: bool);

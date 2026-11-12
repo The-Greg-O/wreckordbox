@@ -18,17 +18,15 @@ use tauri::test::MockRuntime;
 use tauri::{Listener, Manager, State};
 use wreckordbox_service::{codes, Client, Config, Service};
 
-/// The `wreckordbox` binary of this build, built once if it is not there.
+/// The prebuilt `wreckordbox` binary. Build it before this suite: a nested
+/// Cargo invocation would bypass (or deadlock) the machine-wide build queue.
 fn wreckordbox() -> &'static PathBuf {
     static BINARY: OnceLock<PathBuf> = OnceLock::new();
     BINARY.get_or_init(|| {
-        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        let built = Command::new(cargo).args(["build", "-p", "wreckordbox"]).status().expect("run cargo");
-        assert!(built.success(), "could not build the wreckordbox command");
         // target/<profile>/deps/<this test> -> target/<profile>/wreckordbox
         let deps = std::env::current_exe().unwrap();
         let binary = deps.parent().unwrap().parent().unwrap().join("wreckordbox");
-        assert!(binary.is_file(), "no {}", binary.display());
+        assert!(binary.is_file(), "build the CLI first: cargo build -p wreckordbox (no {})", binary.display());
         binary
     })
 }
@@ -1466,3 +1464,6 @@ fn undo_restores_the_previous_dj_fact_and_clear_withdraws_an_opinion() {
         "Green"
     );
 }
+
+#[path = "service_host/file_ledger.rs"]
+mod file_ledger;
