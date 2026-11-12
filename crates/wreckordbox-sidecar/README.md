@@ -8,12 +8,13 @@ The Library service owns it and is its only writer.
 
 ## Start here
 
-[`src/lib.rs`](src/lib.rs) describes the whole interface. [`src/store.rs`](src/store.rs) is the database: Runs, kinds and Facts. [`src/stems.rs`](src/stems.rs) is the first kind of Fact. [`src/fingerprint.rs`](src/fingerprint.rs) explains the fingerprint.
+[`src/lib.rs`](src/lib.rs) describes the whole interface. [`src/store.rs`](src/store.rs) is the database: Runs, kinds and Facts. [`src/kinds.rs`](src/kinds.rs) is the declared kinds and the kinds file. [`src/stems.rs`](src/stems.rs) is the first kind of Fact. [`src/fingerprint.rs`](src/fingerprint.rs) explains the fingerprint.
 
 ## Contracts and safety
 
 - A Fact attaches to the Library's track, with the fingerprint of the track's audio recorded alongside, and has a kind, a value (JSON), a source, a confidence from 0 to 1, the Run that made it and a time.
 - Each kind is declared a Judgement or a Measurement, once. The first Fact of a kind writes the declaration into the store; recording the same name the other way is refused.
+- The declared kinds are the built-in ones (`Kinds::built_in`: stems, genre, mood, situation, sound, vocals, version, energy, prep_colour, intensity) and those in `kinds.toml` in the Sidecar's folder, which the DJ edits and versions. Each has a nature and a value type (`text`, `texts`, `integer`, `number`, `boolean`, `object`), optionally narrowed by `choices` or `min`/`max`. The file cannot redeclare a built-in kind, and a file with a mistake is refused whole. `Sidecar::record` takes any kind; the Library service checks a Fact against `Kinds` before recording it.
 - A Fact row is written once. Afterwards it is only ever marked stale (a Measurement whose audio changed) or superseded (the same source recorded a newer Fact of the same kind for the track). Nothing is deleted, so a Ledger can be added over what is stored.
 - A Stem set is one file each for vocals, other, bass and drums, and every one must be exactly as long in samples as its parent. The length is read from each file; a set that breaks the rule is refused and nothing is recorded.
 - Stem audio is kept as the tool wrote it (16-bit PCM WAV from the separation engine). Conversion for a Stick happens when the Stick is written.
