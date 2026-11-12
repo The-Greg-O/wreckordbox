@@ -8,4 +8,6 @@ export interface ServiceActivity {
   connected: boolean;
   problem: string | null;
   runs: ActiveRun[];
+  /** The service works, but its Sidecar cannot currently supply Runs. */
+  runsUnavailable?: boolean;
 }

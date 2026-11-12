@@ -2,40 +2,70 @@ import { useEffect, useState } from "react";
 import { getBackend } from "@/ipc/client";
 import type { ServiceActivity } from "@/ipc/serviceActivity";
 
-/** Only mounted in the shell. Serial polling includes Runs begun before mount
- * and by any client/tool; a slow read never builds up overlapping requests. */
-export function useServiceActivity(): ServiceActivity | null {
-  const [activity, setActivity] = useState<ServiceActivity | null>(null);
+type Snapshot = ServiceActivity & { statusUnavailable?: boolean };
+const POLL_MS = 1000;
+const RETRY_MS = 10000;
+const TIMEOUT_MS = 5000;
+
+/** Serial reads while visible. A deadline abandons a stuck IPC response;
+ * stop events invalidate older snapshots without preventing a later re-host. */
+export function useServiceActivity(): Snapshot | null {
+  const [activity, setActivity] = useState<Snapshot | null>(null);
   useEffect(() => {
     let live = true;
-    let stopped: string | null = null;
+    let generation = 0;
+    let reading = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
     let unsubscribe: (() => void) | undefined;
-    void getBackend().then((backend) => {
+    let refresh = () => {};
+    const publish = (next: Snapshot) => {
+      if (live) setActivity(previous => JSON.stringify(previous) === JSON.stringify(next) ? previous : next);
+    };
+    const schedule = (delay: number) => {
+      clearTimeout(timer);
+      if (live && !document.hidden) timer = setTimeout(refresh, delay);
+    };
+    const visibility = () => {
+      clearTimeout(timer);
+      if (!document.hidden) refresh();
+    };
+    document.addEventListener("visibilitychange", visibility);
+    void getBackend().then(backend => {
       if (!live) return;
-      unsubscribe = backend.onServiceStopped((problem) => {
-        stopped = problem;
-        if (live) setActivity({ connected: false, problem, runs: [] });
+      unsubscribe = backend.onServiceStopped(problem => {
+        generation++;
+        publish({ connected: false, problem, runs: [] });
+        if (!reading) schedule(POLL_MS);
       });
-      const refresh = async () => {
-        try {
-          const next = await backend.serviceActivity();
-          // A snapshot requested before the stop must never undo that event.
-          if (live && !stopped) setActivity(next);
-        } catch {
-          if (live && !stopped) setActivity({ connected: false, problem: "Service status unavailable", runs: [] });
-        } finally {
-          if (live && !stopped) timer = setTimeout(() => { void refresh(); }, 1000);
-        }
+      refresh = () => {
+        if (!live || document.hidden || reading) return;
+        reading = true;
+        const requested = generation;
+        let delay = POLL_MS;
+        const timeout = new Promise<never>((_, reject) => {
+          deadline = setTimeout(() => reject(new Error("Service snapshot timed out")), TIMEOUT_MS);
+        });
+        void Promise.race([backend.serviceActivity(), timeout]).then(next => {
+          if (requested === generation) publish(next);
+          if (next.runsUnavailable) delay = RETRY_MS;
+        }).catch(() => {
+          delay = RETRY_MS;
+          if (requested === generation) publish({ connected: false, problem: null, runs: [], statusUnavailable: true });
+        }).finally(() => {
+          clearTimeout(deadline);
+          reading = false;
+          schedule(delay);
+        });
       };
-      void refresh();
-    }).catch(() => {
-      if (live) setActivity({ connected: false, problem: "Service status unavailable", runs: [] });
-    });
+      refresh();
+    }).catch(() => publish({ connected: false, problem: null, runs: [], statusUnavailable: true }));
     return () => {
       live = false;
       clearTimeout(timer);
+      clearTimeout(deadline);
       unsubscribe?.();
+      document.removeEventListener("visibilitychange", visibility);
     };
   }, []);
   return activity;

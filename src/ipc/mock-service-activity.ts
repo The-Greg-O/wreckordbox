@@ -4,14 +4,22 @@ import type { ActiveRun, ServiceActivity } from "./serviceActivity";
 export function mockServiceActivity() {
   let runs: ActiveRun[] = [];
   let problem: string | null = null;
+  let runsUnavailable = false;
+  let hung = false;
   const listeners = new Set<(message: string) => void>();
   if (typeof window !== "undefined") {
     const hooks = window as unknown as {
       __setActiveRuns: (active: ActiveRun[]) => void;
       __stopService: (message: string) => void;
+      __setRunsUnavailable: (value: boolean) => void;
+      __hangServiceReads: (value: boolean) => void;
+      __rehostService: () => void;
       __initialActiveRuns?: ActiveRun[];
       __initialServiceProblem?: string;
     };
+    hooks.__setRunsUnavailable = value => { runsUnavailable = value; };
+    hooks.__hangServiceReads = value => { hung = value; };
+    hooks.__rehostService = () => { problem = null; hung = false; };
     runs = hooks.__initialActiveRuns ?? [];
     problem = hooks.__initialServiceProblem ?? null;
     hooks.__setActiveRuns = (active) => { runs = active; };
@@ -21,7 +29,11 @@ export function mockServiceActivity() {
     };
   }
   return {
-    serviceActivity: (): Promise<ServiceActivity> => Promise.resolve({ connected: problem === null, problem, runs: problem ? [] : runs }),
+    serviceActivity: (): Promise<ServiceActivity> => {
+      const hooks = window as unknown as { __serviceActivityReads?: number };
+      hooks.__serviceActivityReads = (hooks.__serviceActivityReads ?? 0) + 1;
+      return hung ? new Promise(() => {}) : Promise.resolve({ connected: problem === null, problem, runs: problem || runsUnavailable ? [] : runs, runsUnavailable });
+    },
     serviceProblem: () => Promise.resolve(problem),
     onServiceStopped: (listener: (message: string) => void) => {
       listeners.add(listener);

@@ -3307,7 +3307,7 @@ function AppBody() {
   // log as it appears, so the Log window still has it once the bar moves on;
   // a running job's changing progress text is left out.
   const statusActivity = note !== null && !note.failed ? note.text : "";
-  const statusError = playerError ?? loadError ?? serviceProblem ?? [...exportJobs.values()].find(job => job.state === "failed")?.title
+  const statusError = playerError ?? loadError ?? (shellOn ? null : serviceProblem) ?? [...exportJobs.values()].find(job => job.state === "failed")?.title
     ?? (note?.failed === true ? note.text : null);
   const loggedActivity = note?.busy === true ? "" : statusActivity;
   useEffect(() => {
@@ -3636,7 +3636,6 @@ function AppBody() {
   const Status = shellOn ? StatusLine : StatusBar;
   const statusBar = (
       <Status
-        serviceProblem={serviceProblem}
         jobs={jobList}
         onStopJob={stopJob}
         exports={(exportRunning ? exportBatch : []).map(job => ({
