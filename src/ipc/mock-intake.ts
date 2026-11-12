@@ -18,6 +18,7 @@
  * both commands fail as the real ones do while the Library loads.
  */
 import type { RowDto } from "./types";
+import type { IntakeColours, PrepColour } from "@/lib/intakeEdits";
 import type { IntakeCounts, IntakeQueueName, IntakeQueuePage, QueuedTrack } from "@/lib/intakeQueue";
 
 /** The mock's Problem colour: Red, `ColorID` 2. */
@@ -41,7 +42,17 @@ export interface MockIntakeSource {
   wait: <T>(value: T) => Promise<T>;
   /** Whether the mock's Library has finished loading. */
   ready: () => boolean;
+  /** The mock's own undoable colour edit (`setTrackColor`), as the service's `tracks.set_prep_colour` makes it (wbx-63). */
+  setColour: (id: string, colour: number | null) => Promise<unknown>;
 }
+
+/**
+ * The mock's colour labels as a DJ names them (wbx-63): Clean is Green
+ * and Problem is Red, as above; Pink, Orange and Blue are renamed too, the
+ * rest keep their colour's name. `?noProblemColour` leaves Red as "Red".
+ */
+const COLOUR_NAMES = ["Pink", "Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple"] as const;
+const DJ_LABELS: Partial<Record<number, string>> = { 1: "Sample", 2: "Problem", 3: "Buy", 5: "Clean", 7: "Delete" };
 
 function readUrl(): URLSearchParams {
   return typeof location === "undefined" ? new URLSearchParams() : new URLSearchParams(location.search);
@@ -134,8 +145,51 @@ export function createMockIntake(source: MockIntakeSource) {
     });
   };
 
+  const labels: PrepColour[] = COLOUR_NAMES.map((colour, at) => {
+    const id = at + 1;
+    const named = id === MOCK_PROBLEM_COLOUR && !problemNamed ? undefined : DJ_LABELS[id];
+    return { id, colour, label: named ?? colour };
+  });
+  const intakeColours = (): Promise<IntakeColours> => source.wait({
+    labels: labels.map((label) => ({ ...label })),
+    clean: { ...labels[MOCK_CLEAN_COLOUR - 1]! },
+    problem: problemNamed ? { ...labels[MOCK_PROBLEM_COLOUR - 1]! } : null,
+  });
+  /** Every Prep colour edit asked of the "service", in order: what a test checks really landed. */
+  const prepWrites: { id: string; colour: number | null }[] = [];
+  // `__holdPrepWrites()` holds every Prep colour write from then on until `__releasePrepWrites()`.
+  let holdingPrep = false;
+  let heldPrep: (() => void)[] = [];
+  const intakeSetPrepColour = async (id: string, colour: number | null): Promise<void> => {
+    prepWrites.push({ id, colour });
+    if (holdingPrep) await new Promise<void>((resolve) => { heldPrep.push(resolve); });
+    if (colour !== null && (colour < 1 || colour > 8)) throw new Error(`There is no colour label ${colour}.`);
+    if (!source.all.some((row) => row.id === id)) throw new Error(`no track ${id}`);
+    await source.setColour(id, colour);
+  };
+  if (typeof window !== "undefined") {
+    const hooks = window as unknown as {
+      __prepWrites: () => { id: string; colour: number | null }[];
+      __prepColourOf: (id: string) => number;
+      __holdPrepWrites: () => void;
+      __releasePrepWrites: () => void;
+    };
+    hooks.__holdPrepWrites = () => { holdingPrep = true; };
+    hooks.__releasePrepWrites = () => {
+      holdingPrep = false;
+      const waiting = heldPrep;
+      heldPrep = [];
+      for (const release of waiting) release();
+    };
+    hooks.__prepWrites = () => prepWrites.map((write) => ({ ...write }));
+    hooks.__prepColourOf = (id) => {
+      const at = source.all.findIndex((row) => row.id === id);
+      return at < 0 ? -1 : (source.colors[at] ?? 0);
+    };
+  }
+
   const intakeCounts = (): Promise<IntakeCounts> => guarded("counts", () =>
     source.wait({ intake: positions("intake").length, problems: problemNamed ? positions("problems").length : null }));
 
-  return { intakeQueue, intakeCounts };
+  return { intakeQueue, intakeCounts, intakeColours, intakeSetPrepColour };
 }

@@ -627,3 +627,128 @@ fn a_sidecar_the_queue_cannot_read_safely_lists_the_queue_and_says_suggestions_a
         .is_some_and(|why| !why.is_empty()));
     assert_unchanged(&sidecar, &before);
 }
+
+#[test]
+fn the_colours_are_the_djs_eight_labels_with_clean_and_problem_named() {
+    let fixture = Fixture::new(1);
+    dj_labels(&fixture);
+    let hosted = fixture.start();
+
+    let colours = hosted.call("intake.colours", json!({}));
+
+    let labels: Vec<(u64, &str, &str)> = colours["colours"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            (
+                c["id"].as_u64().unwrap(),
+                c["colour"].as_str().unwrap(),
+                c["label"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            (1, "Pink", "Buy"),
+            (2, "Red", "Problem"),
+            (3, "Orange", "Orange"),
+            (4, "Yellow", "Sample"),
+            (5, "Green", "Clean"),
+            (6, "Aqua", "Aqua"),
+            (7, "Blue", "Blue"),
+            (8, "Purple", "Delete"),
+        ]
+    );
+    assert_eq!(colours["clean"]["id"], 5);
+    assert_eq!(colours["problem"]["id"], 2);
+}
+
+#[test]
+fn the_colours_say_when_no_label_is_named_clean_or_problem() {
+    let hosted = Fixture::new(1).start();
+
+    let colours = hosted.call("intake.colours", json!({}));
+
+    assert_eq!(colours["colours"].as_array().unwrap().len(), 8);
+    assert_eq!(colours["colours"][4]["label"], "Green");
+    assert_eq!(colours["clean"], Value::Null);
+    assert_eq!(colours["problem"], Value::Null);
+}
+
+/// Labels that are other colours' names: Red is called "Green" and Green
+/// is called "Clean".
+fn overlapping_labels(fixture: &Fixture) {
+    fixture.edit(|writer| {
+        name_colour(writer, 2, "Green");
+        name_colour(writer, 5, "Clean");
+    });
+}
+
+#[test]
+fn a_prep_colour_is_set_by_its_number_whatever_the_labels_are_called() {
+    let fixture = Fixture::new(2);
+    overlapping_labels(&fixture);
+    let hosted = fixture.start();
+
+    // By name, "Green" is both Red's label and Green itself: refused.
+    let ambiguous = hosted
+        .service
+        .call(
+            "tracks.set_prep_colour",
+            json!({ "id": "10000", "prep_colour": "Green" }),
+        )
+        .unwrap_err();
+    assert_eq!(ambiguous.code, "prep_colour_not_found");
+
+    // By number there is no doubt.
+    let clean = hosted.call(
+        "tracks.set_prep_colour",
+        json!({ "id": "10000", "colour_id": 5 }),
+    );
+    assert_eq!(
+        clean["prep_colour"],
+        json!({ "id": 5, "colour": "Green", "label": "Clean" })
+    );
+    let red = hosted.call(
+        "tracks.set_prep_colour",
+        json!({ "id": "10000", "colour_id": 2 }),
+    );
+    assert_eq!(red["prep_colour"]["label"], "Green");
+    assert_eq!(red["previous"]["id"], 5);
+    // 0 clears it.
+    let none = hosted.call(
+        "tracks.set_prep_colour",
+        json!({ "id": "10000", "colour_id": 0 }),
+    );
+    assert_eq!(none["prep_colour"], Value::Null);
+}
+
+#[test]
+fn a_prep_colour_takes_a_name_or_a_number_never_both_or_neither() {
+    let hosted = Fixture::new(1).start();
+    for args in [
+        json!({ "id": "10000", "prep_colour": "Green", "colour_id": 5 }),
+        json!({ "id": "10000" }),
+    ] {
+        let refused = hosted
+            .service
+            .call("tracks.set_prep_colour", args.clone())
+            .unwrap_err();
+        assert_eq!(refused.code, "bad_request", "{args}");
+    }
+    let past = hosted
+        .service
+        .call(
+            "tracks.set_prep_colour",
+            json!({ "id": "10000", "colour_id": 9 }),
+        )
+        .unwrap_err();
+    assert_eq!(past.code, "prep_colour_not_found");
+    assert_eq!(
+        hosted.call("intake.counts", json!({}))["intake"],
+        1,
+        "nothing changed"
+    );
+}

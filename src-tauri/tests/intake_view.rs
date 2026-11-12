@@ -157,3 +157,60 @@ fn a_window_that_hosts_no_service_says_so() {
     );
     assert!(intake_view::counts(&state).is_err());
 }
+
+#[test]
+fn the_window_offers_the_djs_eight_prep_colours_through_the_service() {
+    let window = hosting_window();
+
+    let colours = intake_view::colours(&window.state()).unwrap();
+
+    assert_eq!(colours["colours"].as_array().unwrap().len(), 8);
+    assert_eq!(colours["colours"][4]["colour"], "Green");
+    // The fixture names no label Clean or Problem.
+    assert!(colours["clean"].is_null());
+    assert!(colours["problem"].is_null());
+}
+
+#[test]
+fn a_prep_colour_set_from_the_window_is_one_undoable_edit_refused_under_protection() {
+    let window = hosting_window();
+    let state = window.state();
+    let wanted = track_id(2);
+
+    // Library Protection on: refused, the queue unchanged, nothing to undo.
+    window.protect(true);
+    let refused = intake_view::set_prep_colour(&state, &wanted, Some(5)).unwrap_err();
+    assert!(
+        refused.message.contains("Library Protection"),
+        "{}",
+        refused.message
+    );
+    assert_eq!(intake_view::counts(&state).unwrap()["intake"], 5);
+    window.protect(false);
+    assert!(
+        tauri::async_runtime::block_on(rbxport_lib::commands::undo_edit(
+            window.app.handle().clone(),
+            window.app.state::<Arc<AppState>>()
+        ))
+        .is_err()
+    );
+
+    let set = intake_view::set_prep_colour(&state, &wanted, Some(5)).unwrap();
+    assert_eq!(set["prep_colour"]["colour"], "Green");
+    assert_eq!(intake_view::counts(&state).unwrap()["intake"], 4);
+
+    // One Undo in the window takes it back: the track waits in Intake again.
+    tauri::async_runtime::block_on(rbxport_lib::commands::undo_edit(
+        window.app.handle().clone(),
+        window.app.state::<Arc<AppState>>(),
+    ))
+    .unwrap();
+    assert_eq!(intake_view::counts(&state).unwrap()["intake"], 5);
+    let page = intake_view::queue_page(&state, IntakeQueueName::Intake, 0, 50).unwrap();
+    assert!(page.rows.iter().any(|row| row.id == wanted));
+
+    // Clearing: `None` takes the colour off.
+    intake_view::set_prep_colour(&state, &wanted, Some(2)).unwrap();
+    let cleared = intake_view::set_prep_colour(&state, &wanted, None).unwrap();
+    assert!(cleared["prep_colour"].is_null());
+}

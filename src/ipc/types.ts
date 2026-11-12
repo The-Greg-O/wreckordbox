@@ -1158,6 +1158,14 @@ export interface Backend {
   intakeQueue(queue: import("@/lib/intakeQueue").IntakeQueueName, offset: number, limit: number): Promise<import("@/lib/intakeQueue").IntakeQueuePage>;
   /** How many tracks wait in Intake and in Problems (the Intake tab). */
   intakeCounts(): Promise<import("@/lib/intakeQueue").IntakeCounts>;
+  /** The DJ's eight Prep colours, and which mean Clean and Problem (wbx-63; the service's `intake.colours`). */
+  intakeColours(): Promise<import("@/lib/intakeEdits").IntakeColours>;
+  /**
+   * Sets a track's Prep colour by colour label number (1 to 8), or clears
+   * it (`null`), through the Library service's `tracks.set_prep_colour`:
+   * one step of Edit › Undo, refused under Library Protection (wbx-63).
+   */
+  intakeSetPrepColour(id: string, colour: number | null): Promise<void>;
   /** Maps collection track ids to rows already in one of a stick's libraries. */
   devicePlaylistCollectionTracks(path: string, format: DeviceFormat, tracks: string[]): Promise<(string | null)[]>;
   /**

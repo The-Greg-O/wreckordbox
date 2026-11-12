@@ -148,6 +148,18 @@ export type Action =
   | "viewIntake"
   | "viewReview"
   | "viewStick"
+  // The Intake view's own (wbx-63): mark Clean and next, mark Problem and
+  // next, skip, and Energy 1 to 5. No row in `BINDINGS` for the same reason
+  // as the views: their keys are the view's while it shows, read ahead of
+  // the deck. See `intakeEdits.ts`.
+  | "intakeMarkClean"
+  | "intakeMarkProblem"
+  | "intakeSkip"
+  | "intakeEnergy1"
+  | "intakeEnergy2"
+  | "intakeEnergy3"
+  | "intakeEnergy4"
+  | "intakeEnergy5"
   // The GRID panel: `Adjust BPM/BeatGrid` (`command + G`) opens it, the
   // modified arrows are `Shift Beatgrid left/right`, and `Shift Beatgrid to
   // the center` (`option + command + \`) puts the nearest beat under the
