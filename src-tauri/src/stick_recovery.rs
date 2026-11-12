@@ -176,7 +176,7 @@ mod tests {
                     snapshot(mount),
                     before,
                     "lock {lock}: {what} changed the Stick"
-                )
+                );
             };
 
             // The old tree: expanding a Stick, and every later listing refresh.
