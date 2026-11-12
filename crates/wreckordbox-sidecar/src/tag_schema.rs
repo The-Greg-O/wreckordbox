@@ -68,6 +68,10 @@
 //! that has not passed it.
 //!
 //! [`Kinds::with_schema`]: crate::Kinds::with_schema
+#![allow(
+    clippy::doc_markdown,
+    reason = "MyTag is rekordbox's word for the thing, written as a word, not code"
+)]
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
@@ -720,7 +724,9 @@ fn check_dimension(dimension: &Dimension, problems: &mut Vec<Problem>) {
             {
                 problems.push(Problem::at(
                     term.line,
-                    format!("genre: the term {id} is its own ancestor: its parents lead back to it"),
+                    format!(
+                        "genre: the term {id} is its own ancestor: its parents lead back to it"
+                    ),
                 ));
                 continue;
             }
@@ -768,12 +774,14 @@ fn flatten<'a>(dimension: &'a Dimension, parent: Option<&str>, out: &mut Vec<&'a
 }
 
 fn also_on(line: Option<usize>) -> String {
-    line.map_or_else(String::new, |line| format!(" (the other is on line {line})"))
+    line.map_or_else(String::new, |line| {
+        format!(" (the other is on line {line})")
+    })
 }
 
 fn line_of(text: &str, offset: usize) -> usize {
     let end = offset.min(text.len());
-    text.as_bytes()[..end].iter().filter(|&&b| b == b'\n').count() + 1
+    text.get(..end).unwrap_or(text).matches('\n').count() + 1
 }
 
 fn heading_line(text: &str, heading: &str) -> Option<usize> {

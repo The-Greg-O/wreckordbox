@@ -127,14 +127,19 @@ fn checked_text(checked: &Checked) -> String {
         }
         return text;
     }
-    let mut text = format!("The Tag schema {file} is valid.\n\nDimensions (each is a kind of Fact):");
+    let mut text =
+        format!("The Tag schema {file} is valid.\n\nDimensions (each is a kind of Fact):");
     for dimension in &checked.dimensions {
         let _ = write!(
             text,
             "\n  {}  {}{}",
             dimension.name,
             plural(dimension.terms, "term", "terms"),
-            if dimension.tree { ", the genre tree" } else { "" }
+            if dimension.tree {
+                ", the genre tree"
+            } else {
+                ""
+            }
         );
     }
     if checked.deck.is_empty() {
@@ -176,7 +181,11 @@ fn converted_text(converted: &Converted) -> String {
             category.category,
             category.dimension,
             plural(category.terms, "term", "terms"),
-            if category.tree { ", the genre tree" } else { "" }
+            if category.tree {
+                ", the genre tree"
+            } else {
+                ""
+            }
         );
     }
     match &converted.tree {

@@ -42,8 +42,8 @@ use std::path::{Path, PathBuf};
 pub use audio::{audio_info, AudioInfo};
 pub use fingerprint::{fingerprint_file, Fingerprint};
 pub use kinds::{Declaration, Kinds, ValueType, KINDS_FILE};
-pub use tag_schema::{TagSchema, TAG_SCHEMA_FILE};
 pub use store::{Fact, Kind, Nature, NewFact, Run, RunId, Sidecar, Source, SourceKind};
+pub use tag_schema::{TagSchema, TAG_SCHEMA_FILE};
 
 /// The Sidecar's folder when nothing says otherwise: beside the Library's
 /// `master.db`, in the same folder.

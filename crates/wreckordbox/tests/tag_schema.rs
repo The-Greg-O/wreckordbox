@@ -144,7 +144,10 @@ fn a_schema_written_by_hand_is_accepted_and_shown_as_the_deck_would_list_it() {
     assert_eq!(
         deck(&checked),
         [
-            ("Mood".to_owned(), vec!["Dark".to_owned(), "Uplifting".to_owned()]),
+            (
+                "Mood".to_owned(),
+                vec!["Dark".to_owned(), "Uplifting".to_owned()]
+            ),
             (
                 "Sub-genre".to_owned(),
                 ["House", "> Melodic", "> Acid", "Techno", "> Melodic (T)"]
@@ -152,7 +155,10 @@ fn a_schema_written_by_hand_is_accepted_and_shown_as_the_deck_would_list_it() {
                     .to_vec()
             ),
             // The category's own order first, then the rest as written.
-            ("Vox".to_owned(), vec!["Full vocal".to_owned(), "Instrumental".to_owned()]),
+            (
+                "Vox".to_owned(),
+                vec!["Full vocal".to_owned(), "Instrumental".to_owned()]
+            ),
         ]
     );
     assert_eq!(checked["deck"][1]["tags"][4]["id"], "techno-melodic");
@@ -285,7 +291,9 @@ categories = [
         "{found:?}"
     );
     assert!(
-        found[1].1.contains("mood: two terms in the dimension are called \"Dark\": dark and dark-2"),
+        found[1]
+            .1
+            .contains("mood: two terms in the dimension are called \"Dark\": dark and dark-2"),
         "{found:?}"
     );
 
@@ -296,7 +304,10 @@ categories = [
         "version = 1\n\n[dimensions.mood]\nterms = [\n  { id = \"dark\", name = \"Dark\" },\n  { id = \"dark\", name = \"Darker\" },\n]\n",
     );
     assert_eq!(found[0].0, Some(6));
-    assert!(found[0].1.contains("two terms have the id dark"), "{found:?}");
+    assert!(
+        found[0].1.contains("two terms have the id dark"),
+        "{found:?}"
+    );
     let found = problems(
         &sandbox,
         "version = 1\n\n[dimensions.mood]\nterms = [\n  { id = \"dark\", nme = \"Dark\" },\n]\n",
@@ -308,13 +319,20 @@ categories = [
     // By hand: the mistakes one to a line, and a failing exit status.
     let text = sandbox.cli(&["schema", "check"]);
     assert!(!text.status.success());
-    assert!(text.stdout.contains("cannot be used: 1 problem"), "{}", text.stdout);
+    assert!(
+        text.stdout.contains("cannot be used: 1 problem"),
+        "{}",
+        text.stdout
+    );
     assert!(text.stdout.contains("\n  line 3: "), "{}", text.stdout);
 
     // A Tag schema that cannot be used stops Facts being recorded until it
     // is fixed, as a kinds file with a mistake does.
     assert_eq!(
-        refused(&sandbox, &["facts", "record", "10001", "energy", "3", "--source", "dj"])["code"],
+        refused(
+            &sandbox,
+            &["facts", "record", "10001", "energy", "3", "--source", "dj"]
+        )["code"],
         "tag_schema_invalid"
     );
 }
@@ -324,7 +342,10 @@ fn checking_where_there_is_no_schema_says_so() {
     let sandbox = Sandbox::new();
     let error = refused(&sandbox, &["schema", "check"]);
     assert_eq!(error["code"], "tag_schema_missing");
-    assert!(error["message"].as_str().unwrap().contains("schema convert"));
+    assert!(error["message"]
+        .as_str()
+        .unwrap()
+        .contains("schema convert"));
 }
 
 #[test]
@@ -399,17 +420,26 @@ fn converted_deck() -> Deck {
         .iter()
         .map(|name| sandbox.create_my_tag_in(&sub_genre, name))
         .collect();
-    let genre = |name: &str| {
-        genres[SUB_GENRES.iter().position(|at| *at == name).unwrap()].as_str()
-    };
+    let genre = |name: &str| genres[SUB_GENRES.iter().position(|at| *at == name).unwrap()].as_str();
     let peak = rbl_db::fixture::MY_TAG_PEAK;
     for (index, tags) in [
         // A child with its parent put on by hand, as most tracks have it.
-        (1, vec![peak, dark.as_str(), genre("House"), genre("> Deep")]),
+        (
+            1,
+            vec![peak, dark.as_str(), genre("House"), genre("> Deep")],
+        ),
         // A child without its parent.
         (2, vec![genre("> Deep (T)")]),
         // Two children of two parents, one parent put on.
-        (3, vec![genre("Techno"), genre("> Hypnotic"), genre(">  Acid"), vocal.as_str()]),
+        (
+            3,
+            vec![
+                genre("Techno"),
+                genre("> Hypnotic"),
+                genre(">  Acid"),
+                vocal.as_str(),
+            ],
+        ),
         // A parent alone.
         (4, vec![genre("House")]),
         // The entry that is not a tag, and two moods.
@@ -441,7 +471,10 @@ fn dj_facts(sandbox: &Sandbox, track: &str) -> Vec<(String, Value)> {
         .map(|fact| {
             assert_eq!(fact["source"], json!({"kind": "dj", "name": "dj"}));
             assert_eq!(fact["confidence"], 1.0);
-            (fact["kind"].as_str().unwrap().to_owned(), fact["value"].clone())
+            (
+                fact["kind"].as_str().unwrap().to_owned(),
+                fact["value"].clone(),
+            )
         })
         .collect();
     facts.sort_by(|a, b| a.0.cmp(&b.0));
@@ -563,7 +596,10 @@ fn every_tag_on_a_track_becomes_a_fact_from_the_dj_in_one_run_and_a_child_implie
             ("situation".to_owned(), json!(["peak"])),
         ]
     );
-    assert_eq!(dj_facts(&sandbox, "10002"), [("genre".to_owned(), json!(["techno-deep"]))]);
+    assert_eq!(
+        dj_facts(&sandbox, "10002"),
+        [("genre".to_owned(), json!(["techno-deep"]))]
+    );
     assert_eq!(
         dj_facts(&sandbox, "10003"),
         [
@@ -572,7 +608,10 @@ fn every_tag_on_a_track_becomes_a_fact_from_the_dj_in_one_run_and_a_child_implie
         ]
     );
     // A parent alone is itself the most specific term.
-    assert_eq!(dj_facts(&sandbox, "10004"), [("genre".to_owned(), json!(["house"]))]);
+    assert_eq!(
+        dj_facts(&sandbox, "10004"),
+        [("genre".to_owned(), json!(["house"]))]
+    );
     assert_eq!(
         dj_facts(&sandbox, "10005"),
         [
@@ -601,7 +640,10 @@ fn every_tag_on_a_track_becomes_a_fact_from_the_dj_in_one_run_and_a_child_implie
     assert_eq!(run["outcome"], "recorded 10 Facts");
     assert!(run["finished_at"].is_i64());
     for track in ["10001", "10002", "10003", "10004", "10005", "10006"] {
-        for fact in ok(&sandbox, &["facts", "show", track])["facts"].as_array().unwrap() {
+        for fact in ok(&sandbox, &["facts", "show", track])["facts"]
+            .as_array()
+            .unwrap()
+        {
             assert_eq!(fact["run"], run["id"], "{fact}");
         }
     }
@@ -657,9 +699,14 @@ fn conversion_changes_nothing_in_the_library() {
     assert_eq!(ok(&sandbox, &["mytags", "show", "10001"]), track);
     assert_eq!(ok(&sandbox, &["status"])["generation"], generation);
     assert_eq!(library_shape(&sandbox), shape);
-    assert!(std::fs::read(sandbox.master_db()).unwrap() == bytes, "master.db changed");
+    assert!(
+        std::fs::read(sandbox.master_db()).unwrap() == bytes,
+        "master.db changed"
+    );
     // What it wrote is in the Sidecar's folder, which is not the Library's.
-    assert!(!sandbox.sidecar_dir().starts_with(sandbox.master_db().parent().unwrap()));
+    assert!(!sandbox
+        .sidecar_dir()
+        .starts_with(sandbox.master_db().parent().unwrap()));
 }
 
 #[test]
@@ -692,35 +739,54 @@ fn converting_twice_records_nothing_twice_and_an_edited_schema_is_not_written_ov
     let error = refused(&sandbox, &["schema", "convert"]);
     assert_eq!(error["code"], "tag_schema_exists");
     assert!(error["message"].as_str().unwrap().contains("--replace"));
-    assert_eq!(std::fs::read_to_string(schema_file(&sandbox)).unwrap(), edited);
+    assert_eq!(
+        std::fs::read_to_string(schema_file(&sandbox)).unwrap(),
+        edited
+    );
     assert_eq!(all("10001"), 3);
 
     // A dry run shows what it would write and touches nothing.
     let dry = ok(&sandbox, &["schema", "convert", "--dry-run"]);
     assert_eq!(dry["file_state"], "not_written");
     assert_eq!(dry["text"], text);
-    assert_eq!(std::fs::read_to_string(schema_file(&sandbox)).unwrap(), edited);
+    assert_eq!(
+        std::fs::read_to_string(schema_file(&sandbox)).unwrap(),
+        edited
+    );
 
     // Told to, it writes over the edit; still no Fact twice.
     let replaced = ok(&sandbox, &["schema", "convert", "--replace"]);
     assert_eq!(replaced["file_state"], "replaced");
     assert_eq!(replaced["facts_recorded"], 0);
-    assert_eq!(std::fs::read_to_string(schema_file(&sandbox)).unwrap(), text);
+    assert_eq!(
+        std::fs::read_to_string(schema_file(&sandbox)).unwrap(),
+        text
+    );
     assert_eq!(all("10001"), 3);
 }
 
 #[test]
 fn the_tree_is_the_category_the_dj_names_when_told() {
-    let Deck { sandbox, sub_genre, there } = converted_deck();
+    let Deck {
+        sandbox,
+        sub_genre,
+        there,
+    } = converted_deck();
 
     // No tree: the sub-genre list is a dimension like the others, each tag
     // a term with its text as it is.
-    let flat = ok(&sandbox, &["schema", "convert", "--tree", "none", "--dry-run"]);
+    let flat = ok(
+        &sandbox,
+        &["schema", "convert", "--tree", "none", "--dry-run"],
+    );
     assert_eq!(flat["tree"], Value::Null);
     assert!(!flat["text"].as_str().unwrap().contains("[genre]"));
 
     // Another category as the tree, by name; the sub-genre list by id.
-    let mood = ok(&sandbox, &["schema", "convert", "--tree", "Mood", "--dry-run"]);
+    let mood = ok(
+        &sandbox,
+        &["schema", "convert", "--tree", "Mood", "--dry-run"],
+    );
     assert_eq!(mood["tree"]["category"], "Mood");
     assert_eq!(mood["tree"]["told"], true);
     assert_eq!(mood["tree"]["children"], 0);
@@ -737,7 +803,13 @@ fn the_tree_is_the_category_the_dj_names_when_told() {
     // A dimension is called what the DJ says, and its Facts are that kind.
     let named = ok(
         &sandbox,
-        &["schema", "convert", "--name", "Situation=set_role", "--replace"],
+        &[
+            "schema",
+            "convert",
+            "--name",
+            "Situation=set_role",
+            "--replace",
+        ],
     );
     assert_eq!(named["categories"][0]["dimension"], "set_role");
     assert_eq!(dj_facts(&sandbox, "10001")[2].0, "set_role");

@@ -29,6 +29,11 @@
 //! not the one the conversion would write is left alone unless
 //! [`Convert::replace`] is set.
 
+#![allow(
+    clippy::doc_markdown,
+    reason = "MyTag is rekordbox's word for the thing, written as a word, not code"
+)]
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -40,7 +45,7 @@ use wreckordbox_sidecar::tag_schema::{
     is_dimension_name, is_term_id, Deck, DeckCategory, Dimension, Term, DEFAULT_CHILD_PREFIX, GENRE,
 };
 use wreckordbox_sidecar::{
-    Kinds, Nature, NewFact, Run, Source, SourceKind, TagSchema, ValueType,
+    Kinds, Nature, NewFact, Run, RunId, Sidecar, Source, SourceKind, TagSchema, ValueType,
 };
 
 use super::{codes, declared_kinds, file, sidecar_error};
@@ -208,9 +213,8 @@ pub(crate) struct MyTags {
 /// Library.
 pub(crate) fn my_tags(library: &OpenLibrary) -> Result<MyTags, ServiceError> {
     let index = library.index()?;
-    let rows = library.with_db(|db| {
-        rbl_db::export_info::my_tags(db.connection()).map_err(|e| open_error(&e))
-    })?;
+    let rows = library
+        .with_db(|db| rbl_db::export_info::my_tags(db.connection()).map_err(|e| open_error(&e)))?;
     let catalogue = my_tag_catalogue(&rows);
     let categories = catalogue
         .categories
@@ -367,12 +371,27 @@ pub(super) fn convert(
         return Ok(converted);
     }
     let kinds = declared.with_schema(&plan.schema).map_err(invalid)?;
+    let run = record(stems, &sidecar, &kinds, &plan.schema, &to_record)?;
+    converted.run = sidecar.run(run).map_err(|e| sidecar_error(&e))?;
+    Ok(converted)
+}
+
+/// Records `to_record` (track, dimension by position, value) as Facts from
+/// the DJ in one Run, tells of each, and answers the Run.
+fn record(
+    stems: &Stems,
+    sidecar: &Sidecar,
+    kinds: &Kinds,
+    schema: &TagSchema,
+    to_record: &[(&str, usize, Value)],
+) -> Result<RunId, ServiceError> {
+    let dj = Source::new(SourceKind::Dj, "dj");
     let mut new = Vec::with_capacity(to_record.len());
     let run = sidecar
         .begin_run(&dj, RUN_DESCRIPTION)
         .map_err(|e| sidecar_error(&e))?;
-    for (track, at, value) in &to_record {
-        let name = &plan.schema.dimensions[*at].name;
+    for (track, at, value) in to_record {
+        let name = &schema.dimensions[*at].name;
         let kind = kinds.get(name).ok_or_else(|| {
             ServiceError::new(
                 service_codes::SERVICE_FAILED,
@@ -411,8 +430,7 @@ pub(super) fn convert(
             }),
         );
     }
-    converted.run = sidecar.run(run).map_err(|e| sidecar_error(&e))?;
-    Ok(converted)
+    Ok(run)
 }
 
 /// The terms a Fact names for a track that carries `carried`: in the tree,
@@ -489,6 +507,10 @@ fn checked_text(
     Ok(text)
 }
 
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "it is what `map_err` is given"
+)]
 fn invalid(problems: Vec<wreckordbox_sidecar::tag_schema::Problem>) -> ServiceError {
     let all: Vec<String> = problems.iter().map(ToString::to_string).collect();
     ServiceError::new(
@@ -509,7 +531,10 @@ fn write_whole(path: &std::path::Path, text: &str) -> Result<(), ServiceError> {
             let _ = std::fs::remove_file(&beside);
             ServiceError::new(
                 stems::codes::SIDECAR_FAILED,
-                format!("the Tag schema {} could not be written: {e}", path.display()),
+                format!(
+                    "the Tag schema {} could not be written: {e}",
+                    path.display()
+                ),
             )
         })
 }
@@ -532,7 +557,11 @@ fn plan(library: &MyTags, convert: &Convert, declared: &Kinds) -> Result<Plan, S
         categories
             .iter()
             .position(|category| category.id == named)
-            .or_else(|| categories.iter().position(|category| category.name == named))
+            .or_else(|| {
+                categories
+                    .iter()
+                    .position(|category| category.name == named)
+            })
             .ok_or_else(|| {
                 let known: Vec<String> = categories
                     .iter()
@@ -542,7 +571,11 @@ fn plan(library: &MyTags, convert: &Convert, declared: &Kinds) -> Result<Plan, S
                     codes::MY_TAG_CATEGORY_NOT_FOUND,
                     format!(
                         "the Library has no MyTag category {named}. It has: {}",
-                        if known.is_empty() { "none".to_owned() } else { known.join(", ") }
+                        if known.is_empty() {
+                            "none".to_owned()
+                        } else {
+                            known.join(", ")
+                        }
                     ),
                 )
             })
@@ -572,45 +605,7 @@ fn plan(library: &MyTags, convert: &Convert, declared: &Kinds) -> Result<Plan, S
         }
     };
 
-    let mut names: Vec<Option<String>> = vec![None; categories.len()];
-    for (category, name) in &convert.names {
-        let at = find(category)?;
-        let tree = tree_at == Some(at);
-        let fits = if tree { name == GENRE } else { is_dimension_name(name) && name != GENRE };
-        if !fits {
-            return Err(ServiceError::new(
-                service_codes::BAD_REQUEST,
-                if tree {
-                    format!("the genre tree's dimension is called {GENRE}, not \"{name}\"")
-                } else {
-                    format!("a dimension's name is lower-case letters, digits and underscores, starting with a letter, and {GENRE} is the tree's; \"{name}\" will not do")
-                },
-            ));
-        }
-        names[at] = Some(name.clone());
-    }
-    let mut taken: HashSet<String> = HashSet::from([GENRE.to_owned()]);
-    for name in names.iter().flatten() {
-        if !taken.insert(name.clone()) && name != GENRE {
-            return Err(ServiceError::new(
-                service_codes::BAD_REQUEST,
-                format!("two categories were given the dimension name {name}"),
-            ));
-        }
-    }
-    for (at, category) in categories.iter().enumerate() {
-        if names[at].is_some() {
-            continue;
-        }
-        let name = if tree_at == Some(at) {
-            GENRE.to_owned()
-        } else {
-            let name = dimension_name(&category.name, at, declared, &taken);
-            taken.insert(name.clone());
-            name
-        };
-        names[at] = Some(name);
-    }
+    let names = dimension_names(categories, convert, tree_at, declared, &find)?;
 
     let mut plan = Plan {
         schema: TagSchema::default(),
@@ -636,8 +631,16 @@ fn plan(library: &MyTags, convert: &Convert, declared: &Kinds) -> Result<Plan, S
             plan.tree = Some(Tree {
                 category: category.name.clone(),
                 told,
-                parents: made.terms.iter().filter(|term| term.parent.is_none()).count(),
-                children: made.terms.iter().filter(|term| term.parent.is_some()).count(),
+                parents: made
+                    .terms
+                    .iter()
+                    .filter(|term| term.parent.is_none())
+                    .count(),
+                children: made
+                    .terms
+                    .iter()
+                    .filter(|term| term.parent.is_some())
+                    .count(),
                 child_prefix: prefix,
             });
             made
@@ -691,6 +694,61 @@ fn plan(library: &MyTags, convert: &Convert, declared: &Kinds) -> Result<Plan, S
     }
     plan.schema.deck = deck;
     Ok(plan)
+}
+
+/// What each category's dimension is called: what the command says, else
+/// the tree's name for the tree and [`dimension_name`] for the others.
+fn dimension_names(
+    categories: &[Category],
+    convert: &Convert,
+    tree_at: Option<usize>,
+    declared: &Kinds,
+    find: &dyn Fn(&str) -> Result<usize, ServiceError>,
+) -> Result<Vec<Option<String>>, ServiceError> {
+    let mut names: Vec<Option<String>> = vec![None; categories.len()];
+    for (category, name) in &convert.names {
+        let at = find(category)?;
+        let tree = tree_at == Some(at);
+        let fits = if tree {
+            name == GENRE
+        } else {
+            is_dimension_name(name) && name != GENRE
+        };
+        if !fits {
+            return Err(ServiceError::new(
+                service_codes::BAD_REQUEST,
+                if tree {
+                    format!("the genre tree's dimension is called {GENRE}, not \"{name}\"")
+                } else {
+                    format!("a dimension's name is lower-case letters, digits and underscores, starting with a letter, and {GENRE} is the tree's; \"{name}\" will not do")
+                },
+            ));
+        }
+        names[at] = Some(name.clone());
+    }
+    let mut taken: HashSet<String> = HashSet::from([GENRE.to_owned()]);
+    for name in names.iter().flatten() {
+        if !taken.insert(name.clone()) && name != GENRE {
+            return Err(ServiceError::new(
+                service_codes::BAD_REQUEST,
+                format!("two categories were given the dimension name {name}"),
+            ));
+        }
+    }
+    for (at, category) in categories.iter().enumerate() {
+        if names[at].is_some() {
+            continue;
+        }
+        let name = if tree_at == Some(at) {
+            GENRE.to_owned()
+        } else {
+            let name = dimension_name(&category.name, at, declared, &taken);
+            taken.insert(name.clone());
+            name
+        };
+        names[at] = Some(name);
+    }
+    Ok(names)
 }
 
 /// What a category's dimension is called when nobody says: its label in
@@ -857,7 +915,10 @@ fn child_prefix(category: &Category) -> String {
             best = Some((prefix, times));
         }
     }
-    best.map_or_else(|| DEFAULT_CHILD_PREFIX.to_owned(), |(prefix, _)| prefix.to_owned())
+    best.map_or_else(
+        || DEFAULT_CHILD_PREFIX.to_owned(),
+        |(prefix, _)| prefix.to_owned(),
+    )
 }
 
 /// The genre tree a flat list makes.
@@ -945,8 +1006,8 @@ fn tree_terms(category: &Category, prefix: &str) -> Made {
 fn unmarked(name: &str) -> Option<&str> {
     let inside = name.strip_suffix(')')?;
     let (before, marker) = inside.rsplit_once('(')?;
-    let short = (1..=3).contains(&marker.chars().count())
-        && marker.chars().all(char::is_alphanumeric);
+    let short =
+        (1..=3).contains(&marker.chars().count()) && marker.chars().all(char::is_alphanumeric);
     let before = before.trim_end();
     (short && !before.is_empty()).then_some(before)
 }

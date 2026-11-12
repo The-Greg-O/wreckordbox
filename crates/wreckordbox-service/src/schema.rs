@@ -12,6 +12,11 @@
 //!
 //! The conversion itself is in [`convert`](self::convert).
 
+#![allow(
+    clippy::doc_markdown,
+    reason = "MyTag is rekordbox's word for the thing, written as a word, not code"
+)]
+
 mod convert;
 
 use std::path::PathBuf;
@@ -187,10 +192,9 @@ pub(crate) fn declared_kinds(stems: &Stems) -> Result<Kinds, ServiceError> {
 
 pub(crate) fn sidecar_error(error: &SidecarError) -> ServiceError {
     match error {
-        SidecarError::KindsFile { .. } => ServiceError::new(
-            crate::facts::codes::KINDS_FILE_INVALID,
-            error.to_string(),
-        ),
+        SidecarError::KindsFile { .. } => {
+            ServiceError::new(crate::facts::codes::KINDS_FILE_INVALID, error.to_string())
+        }
         SidecarError::TagSchema { .. } => {
             ServiceError::new(codes::TAG_SCHEMA_INVALID, error.to_string())
         }
