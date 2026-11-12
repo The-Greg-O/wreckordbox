@@ -7180,6 +7180,7 @@ dependencies = [
  "tracing",
  "wreckordbox-intensity",
  "wreckordbox-native-stems",
+ "wreckordbox-render",
  "wreckordbox-sidecar",
 ]
 
