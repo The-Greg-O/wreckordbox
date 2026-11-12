@@ -35,12 +35,15 @@ export function EnergyPips({ rating, onRate }: { rating: number; onRate: ((stars
     );
   }
   // The pip's own keys stay with it: the list and the deck hear Enter and
-  // Space on the window, and must not also load or play a track.
+  // Space on the window, and must not also load or play a track. The group
+  // is marked as the compact player is (OWN_ACTIVATION), so the shortcut
+  // dispatcher ignores them too; the shell's capture-phase listener only
+  // takes the view keys 1 to 4.
   const keepKey = (e: KeyboardEvent) => {
     if (e.key === "Enter" || e.key === " ") e.stopPropagation();
   };
   return (
-    <span className={styles.pips} data-level={level} role="radiogroup" aria-label={label}>
+    <span className={styles.pips} data-level={level} role="radiogroup" aria-label={label} data-own-activation="">
       {PIPS.map((pip) => (
         <button
           key={pip}
