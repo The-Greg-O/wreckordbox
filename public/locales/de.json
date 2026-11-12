@@ -1706,5 +1706,8 @@
   "Runs unavailable": "Läufe nicht verfügbar",
   "{count} Stick loads in progress": "{count} Stick-Übertragungen aktiv",
   "Analyzing {done}/{total} tracks": "Analysiere {done}/{total} Tracks",
-  "{count} failed": "{count} fehlgeschlagen"
+  "{count} failed": "{count} fehlgeschlagen",
+  "Dismiss": "Dismiss",
+  "Theme file": "Theme file",
+  "line {line}": "line {line}"
 }

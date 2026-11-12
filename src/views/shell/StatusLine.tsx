@@ -4,6 +4,7 @@ import { refusal } from "@/lib/menu";
 import { useTranslation } from "@/i18n";
 import { useServiceActivity } from "./useServiceActivity";
 import styles from "./StatusLine.module.css";
+import { ThemeFileStatus } from "./ThemeFileStatus";
 
 /** Shared by all four views, so a view switch never resets background work. */
 export function StatusLine(props: StatusBarProps) {
@@ -59,6 +60,7 @@ export function StatusLine(props: StatusBarProps) {
         <button type="button" className={styles.message} title={error} onClick={props.onShowLog}>{t(error)}</button>
         {props.onOpenProtection && <button type="button" onClick={props.onOpenProtection}>{t("Open Preferences")}</button>}
       </span>}
+      <ThemeFileStatus />
       <span className={styles.selection} title={props.selection}>{props.selection}</span>
     </div>
   );

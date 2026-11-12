@@ -8,10 +8,12 @@ mod encode;
 #[doc(hidden)]
 pub mod publish;
 mod source;
+mod stems;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub use source::{MemorySource, Source, TrackSource};
+pub use stems::{Kept, MutantSource, StemSum, Stems, STEM_RATE};
 
 /// What to do to the audio. The default is nothing.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -32,12 +34,58 @@ impl Default for Edits {
     }
 }
 
-/// The file format written.
+/// The file format written. Always 16-bit stereo at the source's rate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Format {
-    /// 16-bit PCM stereo at the source's sample rate.
+    /// PCM WAV.
     Wav,
+    /// PCM AIFF (big-endian).
+    Aiff,
+    /// MPEG-1 Layer III at 320 kbit/s constant, with a LAME Info frame: the
+    /// export's own MP3 settings. Only when asked for by name: never a
+    /// default. Lossy, and not exact in length: the encoder's delay and
+    /// padding surround the frames (both reported in [`Rendered`]), and
+    /// where a deck places the audio, and so a beat grid, is not known
+    /// without one (see the README).
+    Mp3,
+}
+
+impl Format {
+    /// The default format for a Mutant of `parent`: always lossless, so the
+    /// render is exact to the frame. AIFF for an AIFF parent, WAV for every
+    /// other, an MP3 parent included (MP3 output is [`Format::Mp3`], asked
+    /// for by name). By the parent file's extension, as the Library and the
+    /// export name formats.
+    #[must_use]
+    pub fn for_parent(parent: &Path) -> Self {
+        let extension = parent
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        match extension.as_str() {
+            "aif" | "aiff" => Self::Aiff,
+            _ => Self::Wav,
+        }
+    }
+
+    /// Whether a file in this format decodes to exactly the frames rendered,
+    /// sample for sample: WAV and AIFF.
+    #[must_use]
+    pub fn is_lossless(self) -> bool {
+        matches!(self, Self::Wav | Self::Aiff)
+    }
+
+    /// The extension a file in this format is given.
+    #[must_use]
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Wav => "wav",
+            Self::Aiff => "aiff",
+            Self::Mp3 => "mp3",
+        }
+    }
 }
 
 /// Where the render goes.
@@ -48,11 +96,34 @@ pub struct Destination {
 }
 
 impl Destination {
-    pub fn wav(path: impl Into<PathBuf>) -> Self {
+    pub fn new(path: impl Into<PathBuf>, format: Format) -> Self {
         Self {
             path: path.into(),
-            format: Format::Wav,
+            format,
         }
+    }
+
+    pub fn wav(path: impl Into<PathBuf>) -> Self {
+        Self::new(path, Format::Wav)
+    }
+
+    pub fn aiff(path: impl Into<PathBuf>) -> Self {
+        Self::new(path, Format::Aiff)
+    }
+
+    pub fn mp3(path: impl Into<PathBuf>) -> Self {
+        Self::new(path, Format::Mp3)
+    }
+
+    /// `name` plus the extension of [`Format::for_parent`], in that format:
+    /// `/work/m3` for an AIFF parent is `/work/m3.aiff`.
+    #[must_use]
+    pub fn for_parent(parent: &Path, name: &Path) -> Self {
+        let format = Format::for_parent(parent);
+        let mut path = name.as_os_str().to_owned();
+        path.push(".");
+        path.push(format.extension());
+        Self::new(path, format)
     }
 }
 
@@ -75,8 +146,17 @@ pub enum Proceed {
 /// What was written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rendered {
+    /// The frames the render made, every one of them in the file: for no
+    /// edits the source's length, for a tempo `round(source / tempo)`. A WAV
+    /// or AIFF decodes to exactly this many.
     pub frames: u64,
     pub sample_rate: u32,
+    /// Frames the encoder put ahead of the first rendered frame: 0 for WAV
+    /// and AIFF, LAME's delay (576) for MP3, as its LAME tag records it.
+    pub encoder_delay: u64,
+    /// Frames the encoder put after the last one to fill its last block: 0
+    /// for WAV and AIFF; for MP3 as the LAME tag records it.
+    pub padding: u64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -97,6 +177,38 @@ pub enum RenderError {
     NoReplaceUnsupported(PathBuf),
     #[error("the source holds no audio")]
     Empty,
+    #[error("a Stem edit needs the track's Stems, and there are none")]
+    StemsMissing,
+    #[error("no Stem is kept, so there is nothing to render")]
+    NothingKept,
+    #[error("the Stem {stem} is {found} frames long, not its parent's {expected}")]
+    StemLength {
+        stem: PathBuf,
+        expected: u64,
+        found: u64,
+    },
+    #[error("the Stem {stem} is at {found} Hz, not {expected} Hz")]
+    StemRate {
+        stem: PathBuf,
+        expected: u32,
+        found: u32,
+    },
+    #[error(
+        "the Stems are {stems} frames at 44100 Hz and their parent {parent} is {parent_frames} \
+         frames at {parent_rate} Hz: they were not made from this audio"
+    )]
+    StemsDoNotFitParent {
+        parent: PathBuf,
+        stems: u64,
+        parent_frames: u64,
+        parent_rate: u32,
+    },
+    #[error(
+        "the Stems of {parent} cannot be lined up with it: it is a lossy file, whose length \
+         includes encoder delay and padding, and where its Stems start on its timeline is not \
+         established"
+    )]
+    StemAlignmentUnknown { parent: PathBuf },
     #[error("the stretcher failed: {0}")]
     Stretch(rbl_deck::OfflineError),
     #[error(transparent)]
@@ -217,11 +329,13 @@ pub fn render_on(
     {
         return Err(RenderError::Cancelled);
     }
-    encoder.finish()?;
+    let coding = encoder.finish()?;
     part.commit(&destination.path)?;
     Ok(Rendered {
         frames: written,
         sample_rate,
+        encoder_delay: coding.delay,
+        padding: coding.padding,
     })
 }
 

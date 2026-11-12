@@ -1705,5 +1705,8 @@
   "Runs unavailable": "Körningar inte tillgängliga",
   "{count} Stick loads in progress": "{count} USB-överföringar pågår",
   "Analyzing {done}/{total} tracks": "Analyserar {done}/{total} spår",
-  "{count} failed": "{count} misslyckades"
+  "{count} failed": "{count} misslyckades",
+  "Dismiss": "Dismiss",
+  "Theme file": "Theme file",
+  "line {line}": "line {line}"
 }

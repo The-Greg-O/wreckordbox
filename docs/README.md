@@ -23,6 +23,7 @@ Commands in these guides run from the repository root unless stated otherwise.
 - [USB export](user/usb-export.md): compatibility conversion and playlist cleanup.
 - [Backups](user/backups.md): backup contents, storage, and restoration.
 - [Waveform scrubbing](user/waveform-scrubbing.md): drag behavior and its audio filter.
+- [Theme file](user/theme.md): the window's own look over the Omarchy theme, and where `theme.toml` goes.
 - [AppleScript](user/applescript.md): macOS automation, objects, commands, and examples.
 - [Nix](user/nix.md): installing, running, developing, and removing the flake.
 - [FAQ](user/faq.md): what RBXport is for, and why DJ controllers are not registered or mapped.

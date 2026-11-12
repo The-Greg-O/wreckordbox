@@ -75,7 +75,7 @@ impl Source for TrackSource {
 
 /// The inverse of the encoder's rounding, so a 16-bit sample that is not
 /// edited comes back out as itself.
-fn from_i16(sample: i16) -> f32 {
+pub(crate) fn from_i16(sample: i16) -> f32 {
     f32::from(sample) / 32_768.0
 }
 
