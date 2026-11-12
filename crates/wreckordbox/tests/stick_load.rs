@@ -502,3 +502,100 @@ fn only_a_stick_is_loaded() {
     );
     assert_eq!(snapshot(folder.path()), Vec::new());
 }
+
+/// A 16-bit stereo 44.1 kHz WAV tone of `frames` sample frames.
+fn write_tone(path: &Path, frames: u32, hertz: f64) {
+    let data_len = frames * 4;
+    let mut out = Vec::new();
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data_len).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16_u32.to_le_bytes());
+    out.extend_from_slice(&1_u16.to_le_bytes());
+    out.extend_from_slice(&2_u16.to_le_bytes());
+    out.extend_from_slice(&44_100_u32.to_le_bytes());
+    out.extend_from_slice(&(44_100_u32 * 4).to_le_bytes());
+    out.extend_from_slice(&4_u16.to_le_bytes());
+    out.extend_from_slice(&16_u16.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data_len.to_le_bytes());
+    for frame in 0..frames {
+        let t = f64::from(frame) / 44_100.0;
+        let sample = ((t * hertz * std::f64::consts::TAU).sin() * 12_000.0) as i16;
+        out.extend_from_slice(&sample.to_le_bytes());
+        out.extend_from_slice(&sample.to_le_bytes());
+    }
+    std::fs::write(path, out).unwrap();
+}
+
+/// Records four synthetic Stems for the track whose audio is `audio`, made
+/// from that audio as it is now. Before any service starts.
+fn record_stems(sandbox: &Sandbox, track: &str, audio: &Path) {
+    use wreckordbox_sidecar::stems::{NewStems, Role};
+    use wreckordbox_sidecar::{Sidecar, Source, SourceKind};
+    // The imported tracks are two seconds long.
+    let frames = 2 * 44_100;
+    let sidecar = Sidecar::open(&sandbox.sidecar_dir()).unwrap();
+    let source = Source::new(SourceKind::Tool, "separation-engine");
+    let run = sidecar
+        .begin_run(&source, "Synthetic Stems for a test")
+        .unwrap();
+    let workspace = sidecar.workspace(run).unwrap();
+    let files: Vec<(Role, PathBuf)> = Role::ALL
+        .into_iter()
+        .zip([880.0, 660.0, 110.0, 220.0])
+        .map(|(role, hertz)| {
+            let path = workspace.join(format!("{role}.wav"));
+            write_tone(&path, frames, hertz);
+            (role, path)
+        })
+        .collect();
+    let fingerprint = wreckordbox_sidecar::fingerprint_file(audio).unwrap();
+    sidecar
+        .record_stems(&NewStems {
+            track_id: track,
+            fingerprint: &fingerprint,
+            parent_samples: u64::from(frames),
+            sample_rate: 44_100,
+            files: &files,
+            source: &source,
+            produced_by: serde_json::json!({"engine": "test"}),
+            run,
+        })
+        .unwrap();
+    sidecar.finish_run(run, "recorded").unwrap();
+}
+
+#[test]
+fn a_spare_stick_gets_the_native_stems_of_tracks_that_have_them() {
+    let rig = Rig::new(&["SPARE*", "FRIDAY"]);
+    record_stems(
+        &rig.sandbox,
+        &rig.a,
+        &rig.sandbox.path().join("audio").join("Alpha.wav"),
+    );
+    rig.unlock(0);
+
+    let dry = rig.dry_run(0, &[&rig.set]);
+    assert_eq!(titles(&dry["changes"]["native_stems"]), ["Alpha"], "{dry}");
+    assert_eq!(dry["changes"]["counts"]["native_stems"], 1);
+    // A Gig stick never gets Native stems.
+    let gig = rig.dry_run(1, &[&rig.set]);
+    assert_eq!(gig["changes"]["native_stems"], serde_json::json!([]));
+
+    let run = rig.load(0, &[&rig.set], dry["plan"].as_str().unwrap());
+
+    assert!(run.status.success(), "{}", run.stderr);
+    let load = run.json();
+    assert_eq!(load["outcome"], "loaded", "{load}");
+    assert_eq!(load["native_stems"][0]["track"]["title"], "Alpha");
+    assert_eq!(load["native_stems"][0]["outcome"], "written", "{load}");
+    let folder = rig.paths[0].join("STEMS").join("Alpha");
+    for file in ["vocals.ogg", "other.ogg", "bass.ogg", "drums.ogg"] {
+        assert!(
+            folder.join(file).is_file(),
+            "{} missing",
+            folder.join(file).display()
+        );
+    }
+}
