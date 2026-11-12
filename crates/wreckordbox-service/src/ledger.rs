@@ -90,6 +90,8 @@
 
 #[path = "bulk_ledger.rs"]
 mod bulk;
+#[path = "bulk_spill.rs"]
+mod bulk_spill;
 #[path = "file_ledger.rs"]
 mod files;
 
@@ -264,6 +266,9 @@ pub struct LedgerEntry {
 /// What `runs.show` answers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunShown {
+    /// Accepted named writes waiting for recording; paging uses the same offset/limit.
+    #[serde(default)]
+    pub pending_recording: Value,
     pub run: RunSummary,
     /// In the order they were made.
     pub entries: Vec<LedgerEntry>,
@@ -668,16 +673,25 @@ pub(crate) fn answers(command: &str) -> bool {
 /// Answers `runs.list` and `runs.show`. Reading never makes a Sidecar:
 /// with none there are no Runs.
 pub(crate) fn answer(
-    _keeper: &Keeper,
+    keeper: &Keeper,
     stems: &Stems,
     request: &Request,
 ) -> Result<Value, ServiceError> {
+    let recovery_error = keeper.state().recovery_error.clone();
     stems.with_sidecar_wait(|sidecar| {
         if sidecar.is_none() && stems.sidecar_dir().join("sidecar.db").exists() {
+            if let Some(error) = recovery_error { return Err(error); }
             return Err(ServiceError::new(crate::stems::codes::SIDECAR_FAILED,
-                "The Sidecar appeared after the service started. Restart the service to open it; a Ledger query cannot open or recover it."));
+                "The Sidecar is not open. Check service startup diagnostics and storage access; a Ledger query cannot open or recover it."));
         }
-        read_ledger(sidecar, request)
+        let mut answer = read_ledger(sidecar, request)?;
+        if request.command == commands::RUNS_SHOW {
+            if let Some(run) = request.args["id"].as_i64() {
+                answer["pending_recording"] = bulk_spill::pending(stems.sidecar_dir(),run, answer["offset"].as_u64().unwrap_or(0) as usize, answer["limit"].as_u64().unwrap_or(DEFAULT_PAGE_LIMIT as u64) as usize)
+                    .map_err(|why|ServiceError::new(crate::stems::codes::SIDECAR_FAILED,why))?;
+            }
+        }
+        Ok(answer)
     })?
 }
 
@@ -729,6 +743,7 @@ fn read_ledger(sidecar: Option<&Sidecar>, request: &Request) -> Result<Value, Se
             .map_err(|e| failed(&e))?;
         let entries: Vec<LedgerEntry> = entries.into_iter().map(entry).collect();
         serde_json::to_value(RunShown {
+            pending_recording: Value::Null,
             run: summary(run),
             next_offset: next_offset(offset, entries.len(), total),
             entries,
@@ -913,9 +928,12 @@ struct State {
     /// Whether what an earlier service left behind has been dealt with:
     /// its kept entries written, its intents settled, its Runs ended.
     settled: bool,
+    recovery_error: Option<ServiceError>,
     /// Entries made and not yet in the Ledger, oldest first. Also in the
     /// spill file, when that could be written.
     unwritten: Vec<Spilled>,
+    /// Completed bulk spills only: live operation intents must never be settled.
+    bulk_waiting: Vec<std::path::PathBuf>,
     op: Option<Op>,
     /// Intents that needed no entry, removed with the next one.
     done: Vec<i64>,
@@ -1013,6 +1031,8 @@ const MADE_NOT_RECORDED: &str = "A change to the Library was made and its entry 
 
 /// Keeps the Ledger for one service: the `Ledger` its Library core tells.
 pub(crate) struct Keeper {
+    weak: std::sync::Weak<Keeper>,
+    stopping: std::sync::atomic::AtomicBool,
     stems: Arc<Stems>,
     location: rbl_db::LibraryLocation,
     pause: Duration,
@@ -1028,7 +1048,9 @@ impl Keeper {
             .ok()
             .and_then(|secs| secs.parse::<u64>().ok())
             .map_or(WINDOW_PAUSE, Duration::from_secs);
-        Arc::new(Self {
+        Arc::new_cyclic(|weak| Self {
+            weak: weak.clone(),
+            stopping: std::sync::atomic::AtomicBool::new(false),
             stems,
             location,
             pause,
@@ -1224,22 +1246,48 @@ impl Keeper {
     /// Settles what an earlier service left, when there is a Sidecar:
     /// asked as the service starts. Queries never call this or open a writer.
     pub(crate) fn recover(&self) -> Result<(), ServiceError> {
-        let Some(sidecar) = self.stems.sidecar_if_made()? else {
-            self.state().settled = true;
-            return Ok(());
-        };
+        let result = (|| {
+            let sidecar = if bulk_spill::exists(self.stems.sidecar_dir()) {
+                Some(self.stems.sidecar()?)
+            } else {
+                self.stems.sidecar_if_made()?
+            };
+            let Some(sidecar) = sidecar else {
+                self.state().settled = true;
+                return Ok(());
+            };
+            let mut state = self.state();
+            self.settle(&sidecar, &mut state).map_err(|why| {
+                ServiceError::new(
+                    crate::stems::codes::SIDECAR_FAILED,
+                    format!("the Ledger could not be brought up to date: {why}"),
+                )
+            })
+        })();
+        self.state().recovery_error = result.as_ref().err().cloned();
+        result
+    }
+
+    /// Bulk starts share recovery/catch-up admission. New recording failures
+    /// remain separate from accepted writes; earlier unresolved work does not.
+    fn admit_bulk(&self) -> Result<(), String> {
         let mut state = self.state();
-        self.settle(&sidecar, &mut state).map_err(|why| {
-            ServiceError::new(
-                crate::stems::codes::SIDECAR_FAILED,
-                format!("the Ledger could not be brought up to date: {why}"),
-            )
-        })
+        if state.closed {
+            return Err("wreckordbox is stopping".into());
+        }
+        if !state.settled || !state.unwritten.is_empty() || !state.bulk_waiting.is_empty() || state.op.is_some() {
+            let sidecar = self.stems.sidecar().map_err(|e| e.message)?;
+            self.settle(&sidecar, &mut state)?;
+            self.write_waiting(&sidecar, &mut state)?;
+            self.close_op(&sidecar, &mut state);
+        }
+        Ok(())
     }
 
     /// The service is stopping: no further write is begun. Writes already
     /// begun finish and are recorded.
     pub(crate) fn shut(&self) {
+        self.stopping.store(true, Ordering::Release);
         self.state().closed = true;
     }
 
@@ -1247,6 +1295,7 @@ impl Keeper {
     /// service has stopped and every write it saw is over. Entries still
     /// waiting stay in the spill file for the next service.
     pub(crate) fn close(&self) {
+        self.stopping.store(true, Ordering::Release);
         let mut state = self.state();
         state.closed = true;
         let Ok(Some(sidecar)) = self.stems.sidecar_if_made() else {
@@ -1284,6 +1333,7 @@ impl Keeper {
             state.unwritten = read_spill(&file)?;
         }
         self.write_waiting(sidecar, state)?;
+        bulk_spill::replay_all(self.stems.sidecar_dir(), sidecar)?;
         for open in sidecar.open_intents().map_err(|e| e.to_string())? {
             // What the unconfirmed write did to entries: the Library as it
             // is, and what it planned. A failed read keeps it unsettled.
@@ -1338,6 +1388,10 @@ impl Keeper {
     /// removes the spill file. An entry already there under its identifier
     /// (a replay cut short) is not written twice.
     fn write_waiting(&self, sidecar: &Sidecar, state: &mut State) -> Result<(), String> {
+        while let Some(dir) = state.bulk_waiting.first() {
+            bulk_spill::replay(dir, sidecar, || Ok(()))?;
+            state.bulk_waiting.remove(0);
+        }
         while let Some(waiting) = state.unwritten.first() {
             let run = match waiting.run {
                 Some(run) => RunId(run),
@@ -1702,7 +1756,7 @@ impl Keeper {
             return Err("wreckordbox is stopping".to_owned());
         }
         self.settle(&sidecar, &mut state)?;
-        if !state.unwritten.is_empty() {
+        if !state.unwritten.is_empty() || !state.bulk_waiting.is_empty() {
             self.write_waiting(&sidecar, &mut state)
                 .map_err(|e| format!("an earlier change is still not recorded ({e})"))?;
         }
@@ -1818,8 +1872,8 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn file_written(&self, kind: &str, track: &str) {
-        if let Some(active) = bulk::active(self).filter(|active| active.is_bulk()) {
-            active.written(true);
+        if bulk::active(self).is_some_and(|active| active.is_bulk()) {
+            // FileRecord has already called written(true).
             return;
         }
         let command = self.state().op.as_ref().and_then(|op| op.command.clone());

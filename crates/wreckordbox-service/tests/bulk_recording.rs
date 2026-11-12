@@ -19,6 +19,9 @@ struct Fixture {
 }
 impl Fixture {
     fn new(tracks: usize) -> Self {
+        Self::prepared(tracks, |_| {})
+    }
+    fn prepared(tracks: usize, prepare: impl FnOnce(&std::path::Path)) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("library");
         std::fs::create_dir_all(&root).unwrap();
@@ -30,6 +33,7 @@ impl Fixture {
             },
         )
         .unwrap();
+        prepare(&root);
         let config = Config {
             runtime_dir: dir.path().join("run"),
             idle_exit: None,
@@ -108,8 +112,9 @@ impl Fixture {
         let operation = Operation::new(&self.core, Kind::Import);
         for slice in paths.chunks(128) {
             operation
-                .run(
+                .run_many(
                     json!({"files":slice.len()}),
+                    slice.len(),
                     || {
                         self.core.write_then(
                             &NoHost,
@@ -148,12 +153,12 @@ fn registration_and_import_have_distinct_operation_runs() {
     for run in runs["runs"].as_array().unwrap() {
         let shown = f
             .service
-            .call("runs.show", json!({"id":run["id"]}))
+            .call("runs.show", json!({"id":run["id"],"limit":1000}))
             .unwrap();
         let entries = shown["entries"].as_array().unwrap();
-        assert_eq!(entries.len(), 1);
+        assert_eq!(entries.len(), 3);
         let entry = &entries[0];
-        assert_eq!(entry["payload"]["records"].as_array().unwrap().len(), 3);
+        assert_eq!(entry["payload"]["records"].as_array().unwrap().len(), 1);
         assert_eq!(entry["reversible"], false);
         assert!(entry["payload"]["not_reversible_reason"]
             .as_str()
@@ -210,17 +215,13 @@ fn recording_is_bounded_and_duplicate_imports_add_no_run() {
     for run in runs["runs"].as_array().unwrap() {
         let shown = f
             .service
-            .call("runs.show", json!({"id":run["id"]}))
+            .call("runs.show", json!({"id":run["id"],"limit":1000}))
             .unwrap();
         let entries = shown["entries"].as_array().unwrap();
-        assert_eq!(entries.len(), 3);
-        assert_eq!(
-            entries
-                .iter()
-                .map(|e| e["payload"]["records"].as_array().unwrap().len())
-                .collect::<Vec<_>>(),
-            [128, 128, 1]
-        );
+        assert_eq!(entries.len(), 257);
+        assert!(entries
+            .iter()
+            .all(|e| e["payload"]["records"].as_array().unwrap().len() == 1));
     }
     f.import(&paths);
     assert_eq!(f.runs()["total"], 2);
@@ -234,12 +235,12 @@ fn recording_is_bounded_and_duplicate_imports_add_no_run() {
             .unwrap(),
         0
     );
-    // Six bounded entries and three operation intents, including the unchanged retry.
+    // Two sets of three 128-id reservations plus three operation intents.
     assert_eq!(
         db.query_row("SELECT COUNT(*) FROM ledger_order", [], |row| row
             .get::<_, i64>(0))
             .unwrap(),
-        9
+        771
     );
 }
 
@@ -279,6 +280,13 @@ fn library_protection_refuses_both_bulk_writes_without_a_run() {
         assert_eq!(operation.finish(), None);
     }
     assert_eq!(f.runs()["total"], 0);
+    assert!(
+        !f.dir
+            .path()
+            .join("library/wreckordbox-sidecar/sidecar.db")
+            .exists(),
+        "refusal must not reserve an intent or sequence id"
+    );
     let db = f.core.open_read_only().unwrap();
     assert_ne!(
         db.connection()
@@ -360,7 +368,7 @@ fn finishing_during_a_write_waits_for_its_result() {
                     },
                     |_, v| Ok(v),
                 );
-                operation.finish();
+                assert!(operation.finish().unwrap().contains("still finishing"));
                 result
             },
             |_| vec![json!({"track":fixture::track_id(0)})],
@@ -423,3 +431,6 @@ fn an_unavailable_sidecar_does_not_refuse_this_or_the_next_bulk_write() {
         "an unavailable Sidecar is not an empty Ledger"
     );
 }
+
+#[path = "support/bulk_review.rs"]
+mod review;

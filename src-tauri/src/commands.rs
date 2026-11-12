@@ -3527,8 +3527,8 @@ async fn import_files_then<R: tauri::Runtime>(
             operation.as_deref(),
             rbl_library::bulk::Kind::Import,
         )?;
-        let result = recording.operation.run(
-            serde_json::json!({"files":files.len()}),
+        let result = recording.operation.run_many(
+            serde_json::json!({"files":files.len()}), files.len(),
             || {
                 let _gate = writing.edit_gate().lock();
                 writing

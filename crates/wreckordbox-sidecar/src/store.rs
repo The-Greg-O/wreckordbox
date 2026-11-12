@@ -305,6 +305,7 @@ impl Fact {
 pub struct Sidecar {
     dir: PathBuf,
     pub(crate) db: Mutex<Connection>,
+    pub(crate) order_seen: std::sync::Arc<std::sync::atomic::AtomicI64>,
 }
 
 impl std::fmt::Debug for Sidecar {
@@ -375,8 +376,20 @@ impl Sidecar {
             )?;
             tx.commit()?;
         }
+        let latest: i64 = db.query_row("SELECT COALESCE(MAX(seq),0) FROM ledger_order", [], |row| row.get(0))?;
+        let order_seen = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(latest));
+        let observed = order_seen.clone();
+        // Includes the Fact trigger as well as ordinary Ledger reservations.
+        // A rolled-back insertion may invalidate a lease unnecessarily, never
+        // let a later accepted write use an earlier writer's position.
+        db.update_hook(Some(move |action, _database: &str, table: &str, row: i64| {
+            if action == rusqlite::hooks::Action::SQLITE_INSERT && table == "ledger_order" {
+                observed.fetch_max(row, std::sync::atomic::Ordering::Release);
+            }
+        }));
         Ok(Self {
             dir,
+            order_seen,
             db: Mutex::new(db),
         })
     }

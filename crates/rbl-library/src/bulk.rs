@@ -16,6 +16,15 @@ pub enum Kind {
 /// must not cross an await. Completion reports only values already in hand.
 pub trait Recorder: Send + Sync {
     fn enter(&self, target: Value) -> Box<dyn Step>;
+    fn enter_many(&self, target: Value, _capacity: usize) -> Box<dyn Step> {
+        self.enter(target)
+    }
+    fn idle(&self) -> bool {
+        true
+    }
+    fn finish_wait(&self) -> Option<String> {
+        self.finish()
+    }
     /// A warning about recording, separate from the accepted writes.
     fn finish(&self) -> Option<String>;
 }
@@ -38,10 +47,21 @@ impl Operation {
         work: impl FnOnce() -> Result<T, E>,
         values: impl FnOnce(&T) -> Vec<Value>,
     ) -> Result<T, E> {
+        self.run_many(target, 1, work, values)
+    }
+    /// Maximum results of one accepted native write (e.g. an import slice).
+    /// Reserves order slots in bounded blocks, before another write can intervene.
+    pub fn run_many<T, E: std::fmt::Display>(
+        &self,
+        target: Value,
+        capacity: usize,
+        work: impl FnOnce() -> Result<T, E>,
+        values: impl FnOnce(&T) -> Vec<Value>,
+    ) -> Result<T, E> {
         let mut step = self
             .0
             .as_ref()
-            .map(|recorder| recorder.enter(target.clone()));
+            .map(|recorder| recorder.enter_many(target.clone(), capacity.max(1)));
         let result = work();
         if let Some(step) = &mut step {
             step.complete(match &result {
@@ -55,6 +75,12 @@ impl Operation {
             });
         }
         result
+    }
+    pub fn idle(&self) -> bool {
+        self.0.as_ref().is_none_or(|recorder| recorder.idle())
+    }
+    pub fn finish_wait(&self) -> Option<String> {
+        self.0.as_ref().and_then(|recorder| recorder.finish_wait())
     }
     pub fn finish(&self) -> Option<String> {
         self.0.as_ref().and_then(|recorder| recorder.finish())

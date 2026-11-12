@@ -64,8 +64,9 @@ fn worker() {
     let operation = Operation::new(&core, Kind::Analysis);
     let mode = std::env::var("WBX1411_MODE").unwrap();
     operation
-        .run(
+        .run_many(
             json!({"track":fixture::track_id(0)}),
+            129,
             || {
                 core.write_then(
                     &NoHost,
@@ -178,7 +179,10 @@ fn interrupted_operations_recover_in_their_own_run_and_recording_failure_does_no
         let runs = service.call("runs.list", json!({})).unwrap();
         assert_eq!(runs["total"], 1, "{mode}: {runs}");
         let shown = service
-            .call("runs.show", json!({"id":runs["runs"][0]["id"]}))
+            .call(
+                "runs.show",
+                json!({"id":runs["runs"][0]["id"],"limit":1000}),
+            )
             .unwrap();
         let entries = shown["entries"].as_array().unwrap();
         assert_eq!(
@@ -186,15 +190,30 @@ fn interrupted_operations_recover_in_their_own_run_and_recording_failure_does_no
                 .iter()
                 .filter(|e| e["kind"] == "unconfirmed")
                 .count(),
-            1,
+            if mode == "append_failure" { 0 } else { 1 },
             "{mode}: {shown}"
         );
         assert!(entries.iter().all(|e| e["source"]["kind"] == "tool"));
         if mode == "after_batch" {
-            assert_eq!(entries.len(), 2);
+            assert_eq!(entries.len(), 129);
+        }
+        if mode == "append_failure" {
+            let parts: std::collections::BTreeSet<_> = entries
+                .iter()
+                .flat_map(|e| e["payload"]["records"].as_array().into_iter().flatten())
+                .filter_map(|r| r["part"].as_u64())
+                .collect();
+            assert_eq!(
+                parts,
+                (0..129).collect(),
+                "every spilled accepted result must replay"
+            );
         }
         let snapshot: Value = service
-            .call("runs.show", json!({"id":runs["runs"][0]["id"]}))
+            .call(
+                "runs.show",
+                json!({"id":runs["runs"][0]["id"],"limit":1000}),
+            )
             .unwrap();
         assert_eq!(shown, snapshot);
         service.stop();

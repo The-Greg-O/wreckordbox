@@ -192,8 +192,16 @@ pub fn show(
         },
         counts_text(&shown.run),
     );
+    let pending=shown.pending_recording["total"].as_u64().unwrap_or(0);
+    if pending>0 {
+        let _=write!(text,"\n{pending} accepted writes are waiting for Ledger recording:");
+        if let Some(records)=shown.pending_recording["records"].as_array(){
+            for record in records {let _=write!(text,"\n  {}",record["result"]);}
+        }
+        if let Some(next)=shown.pending_recording["next_offset"].as_u64(){let _=write!(text,"\nMore pending results: --offset {next}");}
+    }
     if shown.total == 0 {
-        text.push_str("\nThis Run changed nothing.");
+        if pending==0 {text.push_str("\nThis Run changed nothing.");}
         return Ok(text);
     }
     let mut rows =

@@ -1,31 +1,37 @@
-//! One durable operation intent, one lazy Run and bounded confirmed batches.
-//! No Library reads, audio reads, fingerprints, or per-track transactions.
-use super::{Keeper, Target, CURRENT};
+//! One operation Run, acceptance-time order, bounded recording transactions.
+//! Reservation/admission never takes the flush mutex under the Library gate.
+use super::{
+    bulk_spill::{self as spill, Manifest, Record},
+    Keeper, Target, CURRENT,
+};
 use rbl_library::bulk::{Kind, Recorder, Step};
 use serde_json::{json, Value};
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
     sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Condvar, Mutex, Weak,
     },
 };
-use wreckordbox_sidecar::ledger::{Action, Intent, NewEntry, Store};
-use wreckordbox_sidecar::{RunId, Source, SourceKind};
+use wreckordbox_sidecar::{bulk::OrderLease, ledger::Intent, Sidecar, Source, SourceKind};
 
 const RECORDS: usize = 128;
 const BYTES: usize = 64 * 1024;
-const REASON: &str = "Previous analysis artifacts and imported native rows were not retained; Unwind cannot reverse this operation";
-
-thread_local! { static ACTIVE: RefCell<Option<Rc<Active>>> = const { RefCell::new(None) }; }
+pub(super) const REASON:&str="Previous analysis artifacts and imported native rows were not retained; Unwind cannot reverse this operation";
+thread_local! {static ACTIVE:RefCell<Option<Rc<Active>>>=const {RefCell::new(None)};}
 pub(super) struct Active {
     owner: usize,
     session: Arc<Session>,
-    began: Cell<bool>,
-    wrote: Cell<bool>,
+    uncertain: Cell<bool>,
     bulk_write: Cell<bool>,
     admitted: bool,
+    capacity: usize,
+    stamps: RefCell<Vec<Stamp>>,
+}
+struct Stamp {
+    at: i64,
+    ids: Vec<i64>,
 }
 pub(super) fn active(keeper: &Keeper) -> Option<Rc<Active>> {
     ACTIVE.with(|slot| {
@@ -47,11 +53,16 @@ impl Active {
             return Err("That Ledger operation has ended".into());
         }
         self.session.begin()?;
-        self.began.set(true);
+        self.uncertain.set(true);
         Ok(())
     }
     pub(super) fn written(&self, wrote: bool) {
-        self.wrote.set(self.wrote.get() || wrote);
+        self.uncertain.set(false);
+        if wrote {
+            self.stamps
+                .borrow_mut()
+                .push(self.session.accept(self.capacity));
+        }
     }
 }
 struct Handle(Arc<Session>);
@@ -63,6 +74,9 @@ struct Scope {
 }
 impl Recorder for Handle {
     fn enter(&self, target: Value) -> Box<dyn Step> {
+        self.enter_many(target, 1)
+    }
+    fn enter_many(&self, target: Value, capacity: usize) -> Box<dyn Step> {
         let admitted = {
             let mut state = self.0.state();
             let admitted = !state.ended && !state.finish_requested;
@@ -74,10 +88,11 @@ impl Recorder for Handle {
         let active = Rc::new(Active {
             owner: self.0.owner,
             session: self.0.clone(),
-            began: Cell::new(false),
-            wrote: Cell::new(false),
+            uncertain: Cell::new(false),
             bulk_write: Cell::new(false),
             admitted,
+            capacity,
+            stamps: RefCell::new(Vec::new()),
         });
         let previous = ACTIVE.with(|slot| slot.replace(Some(active.clone())));
         Box::new(Scope {
@@ -87,27 +102,62 @@ impl Recorder for Handle {
             completed: false,
         })
     }
+    fn idle(&self) -> bool {
+        self.0.state().active == 0
+    }
     fn finish(&self) -> Option<String> {
+        self.0.finish()
+    }
+    fn finish_wait(&self) -> Option<String> {
+        {
+            let mut state = self.0.state();
+            state.finish_requested = true;
+            while state.active != 0 {
+                state = self
+                    .0
+                    .left
+                    .wait(state)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+            }
+        }
         self.0.finish()
     }
 }
 impl Step for Scope {
-    fn complete(&mut self, records: Vec<Value>) {
+    fn complete(&mut self, mut records: Vec<Value>) {
         self.completed = true;
-        let partial = records.iter().any(|r| r["status"] == "partial_or_failed");
-        if self.active.wrote.get() || (partial && self.active.began.get()) {
-            for record in records {
-                self.active.session.record(record);
+        let mut stamps = self.active.stamps.take();
+        if stamps.is_empty() {
+            if self.active.uncertain.get()
+                && records.iter().any(|r| r["status"] == "partial_or_failed")
+            {
+                stamps.push(self.active.session.accept(records.len().max(1)));
+            } else {
+                return;
             }
+        }
+        let last = stamps.pop().expect("nonempty acceptance stamps");
+        if records.is_empty() {
+            records.push(json!({"track":self.target.get("track"),"target":self.target,"status":"accepted_native_step","not_reversible_reason":"The writer returned no result values"}));
+        }
+        for stamp in stamps {
+            self.active.session.record(Record{id:stamp.ids.first().copied(),at:stamp.at,value:json!({"track":self.target.get("track"),"target":self.target,"status":"accepted_native_step","not_reversible_reason":"Intermediate native write; its values were not retained"})});
+        }
+        for (index, value) in records.into_iter().enumerate() {
+            self.active.session.record(Record {
+                id: last.ids.get(index).copied(),
+                at: last.at,
+                value,
+            });
         }
     }
 }
 impl Drop for Scope {
     fn drop(&mut self) {
-        if !self.completed && self.active.began.get() {
-            self.active
-                .session
-                .record(json!({"target":self.target,"status":"unconfirmed"}));
+        if !self.completed
+            && (self.active.uncertain.get() || !self.active.stamps.borrow().is_empty())
+        {
+            self.complete(vec![json!({"track":self.target.get("track"),"target":self.target,"status":"partial_or_failed","error":"write unwound before its result"})]);
         }
         ACTIVE.with(|slot| slot.replace(self.previous.take()));
         let finish = {
@@ -117,38 +167,47 @@ impl Drop for Scope {
             }
             state.active == 0 && state.finish_requested
         };
+        self.active.session.left.notify_all();
         if finish {
             self.active.session.finish();
         }
     }
 }
 #[derive(Default)]
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "admission, completion and degraded recording are independent states"
-)]
-struct State {
-    began: bool,
+struct Admission {
+    sidecar: Option<Arc<Sidecar>>,
+    lease: OrderLease,
+    order_failed: bool,
     intent: Option<i64>,
-    run: Option<RunId>,
-    pending: Vec<Value>,
+    warning: Option<String>,
+}
+#[derive(Default)]
+struct State {
+    pending: Vec<Record>,
     bytes: usize,
     warning: Option<String>,
-    lost: bool,
     ended: bool,
-    failed_flush: bool,
     active: usize,
     finish_requested: bool,
+    manifest: Option<Manifest>,
+    spill_index: u64,
+    // Only used if BOTH the Sidecar and spill filesystem fail: keep compact
+    // named outcomes, not unbounded result payloads, and expose them in warning.
+    unspilled: Vec<Record>,
 }
 struct Session {
     owner: usize,
+    keeper: Weak<Keeper>,
     stems: Arc<crate::stems::Stems>,
     source: Source,
     kind: &'static str,
     description: &'static str,
+    admission: Mutex<Admission>,
     state: Mutex<State>,
+    left: Condvar,
     faults: super::Faults,
     begun: AtomicBool,
+    spill: std::path::PathBuf,
 }
 pub(super) fn make(keeper: &Keeper, kind: Kind) -> Arc<dyn Recorder> {
     let (kind, description, source) = match kind {
@@ -170,15 +229,26 @@ pub(super) fn make(keeper: &Keeper, kind: Kind) -> Arc<dyn Recorder> {
             ),
         ),
     };
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let serial = NEXT.fetch_add(1, Ordering::Relaxed);
+    let spill = keeper.stems.sidecar_dir().join("ledger-bulk").join(format!(
+        "{}-{}-{serial}",
+        super::now(),
+        std::process::id()
+    ));
     Arc::new(Handle(Arc::new(Session {
         owner: Arc::as_ptr(&keeper.stems) as usize,
+        keeper: keeper.weak.clone(),
         stems: keeper.stems.clone(),
         source,
         kind,
         description,
+        admission: Mutex::new(Admission::default()),
         state: Mutex::new(State::default()),
+        left: Condvar::new(),
         faults: super::Faults::from_env(),
         begun: AtomicBool::new(false),
+        spill,
     })))
 }
 impl Session {
@@ -187,8 +257,13 @@ impl Session {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
+    fn admission(&self) -> std::sync::MutexGuard<'_, Admission> {
+        self.admission
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
     fn command(&self) -> Value {
-        json!({"name":"bulk.write","args":{"kind":self.kind,"not_reversible_reason":REASON,"recovery":"Operation did not finish; confirmed batches are recorded separately. Further changes may be unrecorded."}})
+        json!({"name":"bulk.write","args":{"kind":self.kind,"not_reversible_reason":REASON,"recovery":"Operation did not finish; confirmed or spilled results are recorded separately. Further writes may be unconfirmed."}})
     }
     fn warning(&self, state: &mut State, error: impl std::fmt::Display) {
         let message = format!(
@@ -199,63 +274,91 @@ impl Session {
         state.warning = Some(message);
     }
     fn begin(&self) -> Result<(), String> {
-        // After admission, a row writer never waits on the buffer's Sidecar
-        // flush while holding the Library edit gate.
+        let keeper = self.keeper.upgrade().ok_or("wreckordbox has stopped")?;
+        if keeper.stopping.load(Ordering::Acquire) {
+            return Err("wreckordbox is stopping".into());
+        }
         if self.begun.load(Ordering::Acquire) {
             return Ok(());
         }
-        let mut state = self.state();
-        if state.ended {
-            return Err("That Ledger operation has ended".into());
-        }
-        if state.began {
+        let mut admission = self.admission();
+        if self.begun.load(Ordering::Acquire) {
             return Ok(());
         }
-        state.began = true;
+        keeper.admit_bulk()?;
         let command = self.command();
-        let result = self
-            .stems
-            .sidecar()
-            .map_err(|e| e.message)
-            .and_then(|sidecar| {
-                sidecar
-                    .begin_intent(
-                        &Intent {
-                            run: None,
-                            at: super::now(),
-                            source: &self.source,
-                            description: self.description,
-                            command: Some(&command),
-                        },
-                        &[],
-                    )
-                    .map_err(|e| e.to_string())
-            });
-        match result {
-            Ok(id) => state.intent = Some(id),
-            Err(error) => self.warning(&mut state, error),
+        match self.stems.sidecar() {
+            Ok(sidecar) => {
+                match sidecar.begin_intent(
+                    &Intent {
+                        run: None,
+                        at: super::now(),
+                        source: &self.source,
+                        description: self.description,
+                        command: Some(&command),
+                    },
+                    &[],
+                ) {
+                    Ok(id) => admission.intent = Some(id),
+                    Err(error) => admission.warning = Some(error.to_string()),
+                }
+                admission.sidecar = Some(sidecar);
+            }
+            Err(error) => admission.warning = Some(error.message),
         }
         self.begun.store(true, Ordering::Release);
         Ok(())
     }
-    fn record(&self, mut record: Value) {
+    fn accept(&self, capacity: usize) -> Stamp {
+        let at = super::now();
+        let mut admission = self.admission();
+        let ids = if let Some(sidecar) = admission.sidecar.clone() {
+            match sidecar.reserve_bulk_ids(&mut admission.lease, capacity) {
+                Ok(ids) => ids,
+                Err(error) => {
+                    admission.warning = Some(error.to_string());
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        };
+        if ids.len() != capacity {
+            admission.order_failed = true;
+        }
+        Stamp { at, ids }
+    }
+    fn manifest(&self, state: &mut State) -> Manifest {
+        state
+            .manifest
+            .get_or_insert_with(|| Manifest {
+                intent: self.admission().intent,
+                run: None,
+                source: self.source.clone(),
+                description: self.description.into(),
+                kind: self.kind.into(),
+                complete: false,
+            })
+            .clone()
+    }
+    fn record(&self, mut record: Record) {
         let mut state = self.state();
         if state.ended {
             return;
         }
-        let mut bytes = record.to_string().len();
+        if !record.value.is_object() { record.value = json!({"result":record.value}); }
+        if record.id.is_none() {
+            record.value["order_unavailable"] = json!("The Sidecar could not reserve an id at acceptance; this entry retains its write time but its id was assigned later");
+        }
+        let mut bytes = record.value.to_string().len();
         if bytes > BYTES {
-            record = json!({"status":"metadata_omitted","reason":"Result metadata exceeded the 64 KiB recording limit"});
-            bytes = record.to_string().len();
+            record.value = json!({"track":record.value.get("track"),"target":record.value.get("target"),"status":"metadata_omitted","reason":"Result metadata exceeded 64 KiB"});
+            bytes = record.value.to_string().len();
         }
-        if state.pending.len() >= RECORDS || state.bytes + bytes > BYTES {
+        if !state.pending.is_empty()
+            && (state.pending.len() >= RECORDS || state.bytes + bytes > BYTES)
+        {
             self.flush(&mut state);
-        }
-        // A persistent recording failure must neither grow memory without bound
-        // nor stop the remaining Library writes. The operation intent stays open.
-        if state.pending.len() >= RECORDS || state.bytes + bytes > BYTES {
-            state.lost = true;
-            return;
         }
         state.bytes += bytes;
         state.pending.push(record);
@@ -263,60 +366,49 @@ impl Session {
             self.flush(&mut state);
         }
     }
+    fn before_append(&self) -> Result<(), String> {
+        if self.faults.refuse_append() {
+            Err("injected bulk append failure".into())
+        } else {
+            Ok(())
+        }
+    }
     fn flush(&self, state: &mut State) {
-        if state.pending.is_empty() || state.failed_flush {
+        if state.pending.is_empty() {
             return;
         }
-        let result = (|| -> Result<(), String> {
+        let mut manifest = self.manifest(state);
+        let result = (|| {
             let sidecar = self.stems.sidecar().map_err(|e| e.message)?;
-            let run = if let Some(run) = state.run {
-                run
-            } else {
-                let run = sidecar
-                    .begin_bulk_run(state.intent, &self.source, self.description)
-                    .map_err(|e| e.to_string())?;
-                state.run = Some(run);
-                run
-            };
-            if self.faults.refuse_append() {
-                return Err("injected bulk append failure".into());
+            if manifest.run.is_none() {
+                manifest.run = Some(
+                    sidecar
+                        .begin_bulk_run(manifest.intent, &manifest.source, &manifest.description)
+                        .map_err(|e| e.to_string())?,
+                );
             }
-            let payload = json!({"records":state.pending,"not_reversible_reason":REASON});
-            let command = self.command();
-            sidecar
-                .append(&NewEntry {
-                    id: None,
-                    run,
-                    store: Store::Library,
-                    source: &self.source,
-                    at: None,
-                    action: Action::Write,
-                    kind: self.kind,
-                    label: &format!(
-                        "{}: {} results. Cannot reverse: {REASON}",
-                        self.description,
-                        state.pending.len()
-                    ),
-                    command: Some(&command),
-                    reverses: None,
-                    part_of: None,
-                    reversible: false,
-                    format: 1,
-                    payload: Some(&payload),
-                })
-                .map_err(|e| e.to_string())?;
-            Ok(())
+            state.manifest = Some(manifest.clone());
+            spill::bind_run(&self.spill, &manifest)?;
+            self.before_append()?;
+            manifest.append(&sidecar, &state.pending)
         })();
-        match result {
-            Ok(()) => {
-                state.pending.clear();
-                state.bytes = 0;
-            }
-            Err(error) => {
-                state.failed_flush = true;
-                self.warning(state, error);
+        if let Err(error) = result {
+            self.warning(state, error);
+            state.spill_index += 1;
+            if let Err(error) =
+                spill::save(&self.spill, &manifest, state.spill_index, &state.pending)
+            {
+                self.warning(
+                    state,
+                    format!("spill failed ({error}); named results retained in memory"),
+                );
+                for record in &state.pending {
+                    state.unspilled.push(Record{id:record.id,at:record.at,value:json!({"track":record.value.get("track"),"target":record.value.get("target"),"status":"accepted_but_details_not_recorded"})});
+                }
             }
         }
+        state.pending.clear();
+        state.bytes = 0;
     }
     fn finish(&self) -> Option<String> {
         let mut state = self.state();
@@ -325,41 +417,61 @@ impl Session {
         }
         state.finish_requested = true;
         if state.active != 0 {
-            return state.warning.clone();
+            return Some(
+                "Ledger operation is still finishing; its accepted writes are pending recording"
+                    .into(),
+            );
         }
-        if !state.began {
+        if !self.begun.load(Ordering::Acquire) {
             state.ended = true;
             return None;
         }
-        state.failed_flush = false;
         self.flush(&mut state);
-        if state.pending.is_empty() && !state.lost {
-            state.warning = None;
+        let unspilled = std::mem::take(&mut state.unspilled);
+        for chunk in unspilled.chunks(RECORDS) {
+            state.pending = chunk.to_vec();
+            self.flush(&mut state);
         }
-        match self.stems.sidecar_if_made() {
-            Ok(Some(sidecar)) => {
-                if state.pending.is_empty() && !state.lost {
-                    if let Some(intent) = state.intent {
-                        if let Err(error) = sidecar.settle_intents(&[intent]) {
-                            self.warning(&mut state, error);
-                        }
-                    }
+        let mut manifest = self.manifest(&mut state);
+        manifest.complete = true;
+        let result = (|| {
+            spill::mark_complete(&self.spill)?;
+            let sidecar = self.stems.sidecar().map_err(|e| e.message)?;
+            spill::replay(&self.spill, &sidecar, || self.before_append())?;
+            if !state.unspilled.is_empty() {
+                return Err(format!(
+                    "named writes could not be stored: {}",
+                    serde_json::to_string(&state.unspilled).unwrap_or_default()
+                ));
+            }
+            if let Some(intent) = manifest.intent {
+                sidecar
+                    .settle_intents(&[intent])
+                    .map_err(|e| e.to_string())?;
+            }
+            if let Some(run) = manifest.run {
+                sidecar
+                    .finish_run(run, "completed")
+                    .map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                state.warning = if self.admission().order_failed {
+                    Some("All accepted results were recorded, but some Ledger ids could not be reserved at write time; see order_unavailable on those results.".into())
+                } else {
+                    None
                 }
-                if let Some(run) = state.run {
-                    if let Err(error) = sidecar.finish_run(
-                        run,
-                        if state.warning.is_some() {
-                            "recording incomplete"
-                        } else {
-                            "completed"
-                        },
-                    ) {
-                        self.warning(&mut state, error);
+            }
+            Err(error) => {
+                self.warning(&mut state, error);
+                if self.spill.exists() {
+                    if let Some(keeper) = self.keeper.upgrade() {
+                        keeper.state().bulk_waiting.push(self.spill.clone());
                     }
                 }
             }
-            Ok(None) => self.warning(&mut state, "the Sidecar is no longer available"),
-            Err(error) => self.warning(&mut state, error.message),
         }
         state.ended = true;
         state.warning.clone()
@@ -370,7 +482,6 @@ impl Drop for Session {
         self.finish();
     }
 }
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::panic)]
@@ -421,5 +532,23 @@ mod tests {
                 }
             );
         }
+    }
+    #[test]
+    fn stopping_refuses_an_already_open_bulk_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let location =
+            rbl_db::fixture::build(dir.path(), rbl_db::fixture::Shape::default()).unwrap();
+        let (events, _) = std::sync::mpsc::channel();
+        let stems =
+            crate::stems::Stems::from_env(&location.master_db, &dir.path().join("state"), events);
+        let keeper = Keeper::new(stems, location);
+        let recorder = make(&keeper, Kind::Analysis);
+        let _scope = recorder.enter(json!({"track":"10000"}));
+        keeper.begin_unkept().unwrap();
+        keeper.shut();
+        assert!(
+            keeper.begin_unkept().is_err(),
+            "stopping must refuse another write in the same operation"
+        );
     }
 }
