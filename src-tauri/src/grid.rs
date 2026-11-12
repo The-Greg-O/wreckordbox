@@ -21,6 +21,8 @@ use tauri::State;
 use crate::commands::{blocking, reload, write_error};
 use crate::error::{AppError, AppResult, ErrorKind};
 use crate::state::AppState;
+use rbl_library::grid_step::{GridBeat, GridStep};
+use rbl_library::history::LibraryEdit;
 
 #[path = "grid_ledger.rs"]
 mod ledger;
@@ -101,6 +103,14 @@ pub struct GridOptions {
     /// read; the command fills it in, the frontend never sends it.
     #[serde(skip)]
     registered: Option<String>,
+}
+
+impl GridOptions {
+    /// Options naming the run (a tap run, a held nudge) an edit belongs to:
+    /// the edits of one run are one step of the shared history.
+    pub fn with_transaction(transaction: Option<String>) -> Self {
+        Self { transaction, ..Self::default() }
+    }
 }
 
 /// rekordbox stores its analysis lock in bit 7 of Analysed.
@@ -405,6 +415,83 @@ fn record_history(editor: &GridEditor, track: &str, action: GridAction, before: 
     }
 }
 
+fn shared_beats(beats: &[Beat]) -> std::sync::Arc<[GridBeat]> {
+    beats.iter().map(|b| GridBeat { time_ms: b.time_ms, beat_number: b.beat_number, tempo_x100: b.tempo_x100 }).collect()
+}
+
+fn file_beats(beats: &[GridBeat]) -> Vec<Beat> {
+    beats.iter().map(|b| Beat { time_ms: b.time_ms, beat_number: b.beat_number, tempo_x100: b.tempo_x100 }).collect()
+}
+
+/// The shared history's next entry for Undo (`action`) or Redo, when it is
+/// a grid step of `track`, with its label.
+fn shared_next(state: &AppState, track: &str, undo: bool) -> Option<(GridStep, &'static str)> {
+    let history = state.edit_history().lock();
+    match history.next(undo) {
+        Some(entry) => match &entry.edit {
+            LibraryEdit::Grid(step) if step.track == track => Some((step.clone(), entry.label)),
+            _ => None,
+        },
+        None => None,
+    }
+}
+
+/// The grid an Undo or Redo of the shared history's next entry writes: the
+/// entry must be a grid step of `track` (the grid panel's Undo never reaches
+/// past another edit), and the grid on disk the one it expects. One that
+/// finds a grid changed since leaves the history alone of all entries, as
+/// the core's refused steps do (#506).
+fn shared_target(state: &AppState, track: &str, action: GridAction, beats: &[Beat]) -> AppResult<Vec<Beat>> {
+    let undo = action == GridAction::Undo;
+    let Some((step, label)) = shared_next(state, track, undo) else {
+        let what = if undo { "undo" } else { "redo" };
+        return Err(AppError::new(ErrorKind::NotFound, format!("Nothing to {what} on this track's beat grid.")));
+    };
+    let (expected, target) = if undo { (&step.after, &step.before) } else { (&step.before, &step.after) };
+    if file_beats(expected) != beats {
+        state.edit_history().lock().drop_next(undo);
+        rbl_library::Host::history_changed(state);
+        return Err(conflict(action, label));
+    }
+    Ok(file_beats(target))
+}
+
+/// Records the window's grid action in the shared history: an edit as an
+/// entry (an edit of the same tap run or held nudge joins the one before
+/// it), an Undo or Redo as the step of the entry it took back or made again.
+fn record_shared(state: &AppState, track: &str, action: GridAction, before: &[Beat], after: &[Beat], options: &GridOptions) {
+    {
+        let mut history = state.edit_history().lock();
+        match action {
+            GridAction::Edit { edit, .. } => {
+                let transaction = options.transaction.clone()
+                    .filter(|_| matches!(edit, GridEdit::Tap { .. } | GridEdit::Nudge { .. }));
+                history.record_grid(GridStep {
+                    track: track.to_owned(),
+                    before: shared_beats(before),
+                    after: shared_beats(after),
+                    transaction,
+                }, edit.label());
+            }
+            GridAction::Undo => { history.stepped_elsewhere(true); }
+            GridAction::Redo => { history.stepped_elsewhere(false); }
+        }
+    }
+    rbl_library::Host::history_changed(state);
+}
+
+/// What the grid panel offers to undo and redo of `track`: the shared
+/// history's next entries, when they are grid steps of this track.
+pub(crate) fn with_shared_history(state: &AppState, track: &str, mut dto: GridStateDto) -> GridStateDto {
+    let undo = shared_next(state, track, true);
+    let redo = shared_next(state, track, false);
+    dto.can_undo = undo.is_some();
+    dto.can_redo = redo.is_some();
+    dto.undo_label = undo.map(|(_, label)| label);
+    dto.redo_label = redo.map(|(_, label)| label);
+    dto
+}
+
 /// Undo or Redo found a grid other than the one its entry expects:
 /// something outside this history (rekordbox, say, while RBXport stayed
 /// open) changed the grid since. The newer grid is kept, as #506 keeps a
@@ -442,7 +529,9 @@ fn apply_options(editor: &GridEditor, library: &Library, location: &rbl_db::Libr
             }
             rbl_anlz::grid::validate(&beats, from_ms, edit.into())
                 .map_err(|message| AppError::new(ErrorKind::Malformed, message))?;
-            if matches!(edit, GridEdit::Stretch { .. } | GridEdit::Tempo { .. })
+            // A tapped tempo respaces the grid as a typed one does, so it
+            // replaces tempo changes too: asked first (wbx-64 review 4).
+            if matches!(edit, GridEdit::Stretch { .. } | GridEdit::Tempo { .. } | GridEdit::Tap { .. })
                 && !options.allow_dynamic && rbl_anlz::grid::is_dynamic_from(&beats, from_ms) {
                 return Err(AppError::new(ErrorKind::Malformed, "Confirm replacing this section's tempo changes before adjusting its tempo."));
             }
@@ -454,14 +543,21 @@ fn apply_options(editor: &GridEditor, library: &Library, location: &rbl_db::Libr
                 return Err(AppError::new(ErrorKind::Malformed, "That edit would leave the track without a beat."));
             }
             if next == beats {
+                let found = editor.state_for(track, &beats);
                 return Ok(GridOutcome {
-                    state: editor.state_for(track, &beats),
+                    state: match recording.as_ref() { Some((_, state)) => with_shared_history(state, track, found), None => found },
                     bpm_changed: false,
                     written: false,
                     beats: wire_beats(&beats),
                 });
             }
             next
+        }
+        GridAction::Undo | GridAction::Redo if recording.is_some() => {
+            match recording.as_ref() {
+                Some((_, state)) => shared_target(state, track, action, &beats)?,
+                None => return Err(AppError::internal("no window to step the shared history in")),
+            }
         }
         GridAction::Undo | GridAction::Redo => {
             let mut histories = editor.histories.lock();
@@ -511,19 +607,29 @@ fn apply_options(editor: &GridEditor, library: &Library, location: &rbl_db::Libr
         return Err(e);
     }
     let saved = if let (Some(record), Some(host)) = (&record, row_host) {
-        record.write_row(host, |writer| writer.save_grid_revision(track, new_bpm)).map_err(write_error)
+        // The history's own write: a step of the shared history (wbx-64),
+        // which must not end the Redo branch it is about to step onto.
+        record.write_history_row(host, |writer| writer.save_grid_revision(track, new_bpm)).map_err(write_error)
     } else { set_bpm(new_bpm) };
     if let Err(refused) = saved {
         journal.reconcile(location)?;
         return Err(refused);
     }
     journal.commit()?;
-    if let Some(record) = record { record.written(); }
-
-    record_history(editor, track, action, beats, next.clone(), options);
+    if let (Some(record), Some(state)) = (record, row_host) {
+        // The window's edits are steps of the one shared history, in the
+        // order the DJ made them (wbx-64); the Ledger's entry is that record.
+        record.written_in_history();
+        record_shared(state, track, action, &beats, &next, options);
+    } else {
+        record_history(editor, track, action, beats, next.clone(), options);
+    }
 
     Ok(GridOutcome {
-        state: GridStateDto { locked: editor.is_locked(track) || database_locked(location, track)?, ..editor.state_for(track, &next) },
+        state: {
+            let found = GridStateDto { locked: editor.is_locked(track) || database_locked(location, track)?, ..editor.state_for(track, &next) };
+            match row_host { Some(state) => with_shared_history(state, track, found), None => found }
+        },
         bpm_changed,
         written: true,
         beats: wire_beats(&next),
@@ -652,10 +758,11 @@ pub async fn grid_state(
     let location = state.location()?;
     let registered = state.registered_analysis(&track);
     let editor = Arc::clone(&editor);
+    let state = Arc::clone(&state);
     blocking("grid_state", move || {
         let mut result = state_with(&editor, &library, &location.share_root, &track, registered.as_deref())?;
         result.locked |= database_locked(&location, &track)?;
-        Ok(result)
+        Ok(with_shared_history(&state, &track, result))
     }).await
 }
 
@@ -724,7 +831,7 @@ pub async fn grid_lock<R: tauri::Runtime>(
         editor.set_locked(&track, false)?;
         let mut result = state_with(&editor, &library, &location.share_root, &track, registered.as_deref())?;
         result.locked = database_locked(&location, &track)?;
-        Ok(result)
+        Ok(with_shared_history(&state, &track, result))
     }).await?;
     let _ = tauri::Emitter::emit(&app, "grid:changed", &changed);
     Ok(result)
@@ -881,15 +988,6 @@ mod tests {
         assert_eq!(f.dat().beat_grid().unwrap(), last_tap);
     }
 
-    /// One grid action as the commands run it: the row written through the
-    /// app's writer, not the fixture's recorder.
-    fn through_writer(f: &Fixture, state: &AppState, action: GridAction) -> AppResult<GridOutcome> {
-        // Held as `run` holds it, so the writer leaves this journal alone.
-        let _files = state.analysis_write().lock();
-        let mut set_bpm = |bpm: u32| state.write(|w| w.save_grid_revision(&Fixture::track(), bpm)).map_err(write_error);
-        apply(&f.editor, &f.library, &f.location, &Fixture::track(), action, &mut set_bpm)
-    }
-
     /// The bytes and modification times of the track's `.DAT` and `.EXT`.
     fn files_now(f: &Fixture) -> Vec<(Vec<u8>, std::time::SystemTime)> {
         let dat = rbl_anlz::resolve(&f.location.share_root, RELATIVE);
@@ -929,7 +1027,7 @@ mod tests {
         assert_eq!(typed.message, rbl_library::protection::MESSAGE);
         assert_eq!(files_now(&f), files);
         assert_eq!(row_bpm(&state), bpm);
-        let grid = f.editor.state_for(&track, &f.dat().beat_grid().unwrap());
+        let grid = with_shared_history(&state, &track, f.editor.state_for(&track, &f.dat().beat_grid().unwrap()));
         assert!(grid.can_undo && grid.can_redo);
 
         state.core().set_protection(false).unwrap();
@@ -942,14 +1040,20 @@ mod tests {
             "SELECT BPM FROM djmdContent WHERE ID=?1", [Fixture::track()], |r| r.get(0))?)).unwrap()
     }
 
+    /// A grid action as the window makes it: a step of the shared history.
+    fn in_window(f: &Fixture, state: &AppState, action: GridAction) -> AppResult<GridOutcome> {
+        guarded(state, &f.editor, &f.library, &f.location, &Fixture::track(), action, &GridOptions::default())
+    }
+
     #[test]
     fn a_typed_bpm_is_one_grid_undo_step_and_keeps_the_earlier_ones() {
         // #505: the Info panel's BPM is recorded as the grid editor's Set
         // Tempo. Undo puts the grid and the row back together, Redo puts the
         // typed tempo back, and the grid edit made before it stays undoable.
+        // Both are steps of the one shared history (wbx-64).
         let f = open();
         let state = app_state(&f);
-        through_writer(&f, &state, GridAction::Edit { edit: GridEdit::Nudge { ms: 20 }, from_ms: None }).unwrap();
+        in_window(&f, &state, GridAction::Edit { edit: GridEdit::Nudge { ms: 20 }, from_ms: None }).unwrap();
         let nudged = f.dat().beat_grid().unwrap();
         assert_eq!(row_bpm(&state), 12_000);
 
@@ -957,35 +1061,34 @@ mod tests {
         let typed = f.dat().beat_grid().unwrap();
         assert!(typed.iter().all(|b| b.tempo_x100 == 15_000));
         assert_eq!(row_bpm(&state), 15_000);
-        let after_typing = f.editor.state_for(&Fixture::track(), &typed);
+        let after_typing = with_shared_history(&state, &Fixture::track(), f.editor.state_for(&Fixture::track(), &typed));
         assert_eq!((after_typing.can_undo, after_typing.undo_label, after_typing.can_redo), (true, Some("Set Tempo"), false));
-        assert_eq!(f.editor.histories.lock()[&Fixture::track()].undo.len(), 2, "the nudge's entry survived the typed BPM");
 
-        let undone = through_writer(&f, &state, GridAction::Undo).unwrap();
+        let undone = in_window(&f, &state, GridAction::Undo).unwrap();
         assert_eq!(f.dat().beat_grid().unwrap(), nudged, "the grid is the one before the typed BPM");
         assert_eq!(row_bpm(&state), 12_000, "and so is the row");
         assert_eq!((undone.state.undo_label, undone.state.redo_label), (Some("Shift Beat Grid Right"), Some("Set Tempo")));
 
-        through_writer(&f, &state, GridAction::Redo).unwrap();
+        in_window(&f, &state, GridAction::Redo).unwrap();
         assert_eq!(f.dat().beat_grid().unwrap(), typed);
         assert_eq!(row_bpm(&state), 15_000);
 
-        through_writer(&f, &state, GridAction::Undo).unwrap();
-        through_writer(&f, &state, GridAction::Undo).unwrap();
+        in_window(&f, &state, GridAction::Undo).unwrap();
+        in_window(&f, &state, GridAction::Undo).unwrap();
         assert_eq!(f.dat().beat_grid().unwrap(), grid(), "the earlier nudge undid too");
         assert_eq!(row_bpm(&state), 12_000);
-        assert!(!f.editor.state_for(&Fixture::track(), &grid()).can_undo);
+        assert!(!with_shared_history(&state, &Fixture::track(), f.editor.state_for(&Fixture::track(), &grid())).can_undo);
     }
 
     #[test]
     fn a_typed_bpm_after_an_undo_ends_the_redo_branch() {
-        let mut f = open();
-        f.edit(GridEdit::Double);
-        f.run(GridAction::Undo).unwrap();
+        let f = open();
         let state = app_state(&f);
+        in_window(&f, &state, GridAction::Edit { edit: GridEdit::Double, from_ms: None }).unwrap();
+        in_window(&f, &state, GridAction::Undo).unwrap();
         set_tempo(&state, &f.editor, &Fixture::track(), "125").unwrap();
         let now = f.dat().beat_grid().unwrap();
-        let after = f.editor.state_for(&Fixture::track(), &now);
+        let after = with_shared_history(&state, &Fixture::track(), f.editor.state_for(&Fixture::track(), &now));
         assert_eq!((after.can_redo, after.undo_label), (false, Some("Set Tempo")));
     }
 
@@ -1113,6 +1216,22 @@ mod tests {
         let beats = f.dat().beat_grid().unwrap();
         assert!(beats.iter().filter(|b| b.time_ms < 1000).all(|b| b.tempo_x100 == 20_000));
         assert!(beats.iter().filter(|b| b.time_ms >= 1000).all(|b| b.tempo_x100 == 15_000));
+    }
+
+    /// wbx-64 review 4: a tapped tempo over tempo changes replaces them, so
+    /// it is refused unless the DJ confirmed, as tempo and stretch are; the
+    /// refusal leaves every beat where it was.
+    #[test]
+    fn a_tap_over_tempo_changes_is_refused_unless_confirmed() {
+        let f = open();
+        with_tempo_change(&f);
+        let before = f.dat().beat_grid().unwrap();
+        let refused = confirmed(&f, GridEdit::Tap { bpm: 124.0, anchor_ms: 400 }, None, false).unwrap_err();
+        assert_eq!(refused.kind, ErrorKind::Malformed);
+        assert_eq!(f.dat().beat_grid().unwrap(), before, "a refused tap moves no beat");
+
+        confirmed(&f, GridEdit::Tap { bpm: 124.0, anchor_ms: 400 }, None, true).unwrap();
+        assert!(f.dat().beat_grid().unwrap().iter().all(|b| b.tempo_x100 == 12_400));
     }
 
     #[test]

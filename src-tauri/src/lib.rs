@@ -15,6 +15,8 @@ mod screen_cache;
 mod test_stick;
 #[cfg(test)]
 mod file_ledger_tests;
+#[cfg(test)]
+mod grid_history_tests;
 pub mod analysis;
 mod analysis_extensions;
 mod analysis_pipeline;

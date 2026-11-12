@@ -43,13 +43,23 @@
  * slot is filled twice — a soft delete and a new row, or an update in place
  * — has not been recorded [UNKNOWN], so the pad calls rather than replaces,
  * and the writer is never asked to fill an occupied slot.
+ *
+ * Writes are queued, one at a time, never dropped (wbx-64 review 5): each
+ * press is captured with its track and playhead when it is made. A slot
+ * whose write is on its way, or written but not yet seen in a read begun
+ * after it, is pending: a second press on it does nothing, so a fast second
+ * press can never put a second cue in a slot. Each write is followed per
+ * track (`deckWrites`), so Intake waits for it before moving on and keeps a
+ * failure with the track it came from.
  */
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { Cue } from "@/ipc/types";
+import { getBackend } from "@/ipc/client";
 import { hotCue } from "@/lib/cues";
 import { foldIntoLoop, nearestBeatMs, quantizedLaunchMs, type BeatGrid } from "@/lib/player";
-import { useCueWriter } from "./useCueWriter";
+import { deckWrites } from "@/lib/trackWrites";
+import type { CueEdits } from "./useCueWriter";
 
 /** A loop's range, in seconds. */
 export interface DeckLoopRange {
@@ -106,6 +116,42 @@ export interface HotCueDeck {
   /** Rekordbox holds the database, so nothing here can write. */
   readOnly: boolean;
   onError?: ((message: string | null) => void) | undefined;
+  /**
+   * When the read that gave `cues` began: a pending slot is settled by a
+   * read begun after its write landed. Without it, by the next `cues`.
+   */
+  readAt?: number | undefined;
+}
+
+/** A slot whose write is on its way or not yet seen in a read. */
+interface PendingSlot {
+  id: number;
+  track: string;
+  letter: string;
+  op: "set" | "clear" | "move";
+  /** The cue a clear or move names. */
+  cue?: string;
+  /** Where a move takes it. */
+  to?: string;
+  /** When the write landed, or `null` while it is on its way. */
+  landedAt: number | null;
+}
+
+/** Whether `cues` already show what the slot's write did. */
+function shows(cues: readonly Cue[], slot: PendingSlot): boolean {
+  if (slot.op === "set") return hotCue(cues, slot.letter) !== null;
+  if (slot.op === "clear") return !cues.some((cue) => cue.id === slot.cue);
+  return cues.some((cue) => cue.id === slot.cue && !cue.memory && cue.letter === slot.to);
+}
+
+function describe(error: unknown): string {
+  if (error instanceof Error && error.message.trim() !== "") return error.message;
+  if (typeof error === "object" && error !== null) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim() !== "") return message;
+  }
+  if (typeof error === "string" && error.trim() !== "") return error;
+  return "That cue could not be saved.";
 }
 
 export interface HotCueActions {
@@ -125,19 +171,84 @@ export interface HotCueActions {
    * shift by one to make room. Nothing for an empty `from`.
    */
   move: (from: string, to: string) => void;
+  /** What is on its way for a slot of the loaded track, or `null`. */
+  pending: (letter: string) => "set" | "clear" | "move" | null;
 }
 
 export function useHotCues(deck: HotCueDeck): HotCueActions {
   const {
     trackId, cues, positionSeconds, seek, play, playing, jumpAt, setLoop, activeLoop, beatLoopBeats, exitLoop, quantiseTo, readOnly, onError,
+    readAt,
   } = deck;
   const canEdit = trackId !== null && !readOnly;
-  const write = useCueWriter(onError);
+  const [slots, setSlots] = useState<readonly PendingSlot[]>([]);
+  const queue = useRef<Promise<void>>(Promise.resolve());
+  const serial = useRef(0);
+  const current = useRef(trackId);
+  current.current = trackId;
+  const reportError = useRef(onError);
+  reportError.current = onError;
+
+  // A landed write is settled by a read of its track that shows what it did,
+  // or by any read begun after it landed (something else changed the slot
+  // meanwhile). Slots of other tracks are let go once their writes landed:
+  // nothing here shows them.
+  useEffect(() => {
+    setSlots((now) => {
+      const kept = now.filter((slot) => {
+        if (slot.landedAt === null) return true;
+        if (slot.track !== trackId) return false;
+        if (shows(cues, slot)) return false;
+        return readAt !== undefined && readAt <= slot.landedAt;
+      });
+      return kept.length === now.length ? now : kept;
+    });
+    // Again when a write lands: its read may have come back first.
+  }, [cues, readAt, trackId, slots]);
+
+  /**
+   * Queues one write of `track`'s cues for `letter`. Never dropped; one at a
+   * time, in the order pressed. Its outcome is followed per track.
+   */
+  const write = useCallback((
+    track: string, letter: string, op: PendingSlot["op"], action: (edits: CueEdits) => Promise<unknown>,
+    names?: { cue: string; to?: string },
+  ) => {
+    serial.current += 1;
+    const id = serial.current;
+    setSlots((now) => [...now, { id, track, letter, op, landedAt: null, ...names }]);
+    let settle: (why: string | null) => void = () => {};
+    deckWrites.track(track, "cues", new Promise<string | null>((resolve) => { settle = resolve; }));
+    queue.current = queue.current.then(async () => {
+      try {
+        const backend = await getBackend();
+        await action(backend.edits);
+        const landedAt = performance.now();
+        setSlots((now) => now.map((slot) => (slot.id === id ? { ...slot, landedAt } : slot)));
+        if (current.current === track) reportError.current?.(null);
+        settle(null);
+      } catch (error) {
+        const why = describe(error);
+        setSlots((now) => now.filter((slot) => slot.id !== id));
+        // Said where it belongs: with this track, whichever is loaded now.
+        if (current.current === track) reportError.current?.(why);
+        settle(why);
+      }
+    });
+  }, []);
+
+  const pendingOf = useCallback(
+    (letter: string) => slots.find((slot) => slot.track === trackId && slot.letter === letter) ?? null,
+    [slots, trackId],
+  );
+  const pending = useCallback((letter: string) => pendingOf(letter)?.op ?? null, [pendingOf]);
 
   const at = useCallback((letter: string) => hotCue(cues, letter), [cues]);
 
   const press = useCallback(
     (letter: string) => {
+      // A slot on its way is neither set again nor called.
+      if (pendingOf(letter)) return;
       const cue = hotCue(cues, letter);
       if (cue) {
         // A hot loop is called as its loop; anything else as a point.
@@ -184,15 +295,17 @@ export function useHotCues(deck: HotCueDeck): HotCueActions {
         const outMs = Math.round(loop.outSeconds * 1000);
         if (outMs > inMs) {
           const beats = beatLoopBeats?.() ?? undefined;
-          write((edits) => edits.addLoop(trackId, { hot: letter }, inMs, outMs, beats));
+          const track = trackId;
+          write(track, letter, "set", (edits) => edits.addLoop(track, { hot: letter }, inMs, outMs, beats));
           return;
         }
       }
       const at = Math.max(positionSeconds(), 0) * 1000;
       const positionMs = Math.round(quantiseTo ? nearestBeatMs(quantiseTo, at) : at);
-      write((edits) => edits.addCue(trackId, { hot: letter }, positionMs));
+      const track = trackId;
+      write(track, letter, "set", (edits) => edits.addCue(track, { hot: letter }, positionMs));
     },
-    [cues, seek, play, playing, jumpAt, setLoop, activeLoop, beatLoopBeats, exitLoop, canEdit, trackId, positionSeconds, quantiseTo, write],
+    [cues, seek, play, playing, jumpAt, setLoop, activeLoop, beatLoopBeats, exitLoop, canEdit, trackId, positionSeconds, quantiseTo, write, pendingOf],
   );
 
   const clear = useCallback(
@@ -200,20 +313,20 @@ export function useHotCues(deck: HotCueDeck): HotCueActions {
       const cue = hotCue(cues, letter);
       // An empty id is a cue the backend cannot address; the row shows it
       // without a ✕, and a key press finds nothing to do.
-      if (!cue || !canEdit || cue.id === "") return;
-      write((edits) => edits.deleteCue(cue.id));
+      if (!cue || !canEdit || cue.id === "" || trackId === null || pendingOf(letter)) return;
+      write(trackId, letter, "clear", (edits) => edits.deleteCue(cue.id), { cue: cue.id });
     },
-    [cues, canEdit, write],
+    [cues, canEdit, write, trackId, pendingOf],
   );
 
   const move = useCallback(
     (from: string, to: string) => {
       const cue = hotCue(cues, from);
-      if (!cue || !canEdit || cue.id === "" || from === to) return;
-      write((edits) => edits.moveHotCue(cue.id, to));
+      if (!cue || !canEdit || cue.id === "" || from === to || trackId === null || pendingOf(from) || pendingOf(to)) return;
+      write(trackId, from, "move", (edits) => edits.moveHotCue(cue.id, to), { cue: cue.id, to });
     },
-    [cues, canEdit, write],
+    [cues, canEdit, write, trackId, pendingOf],
   );
 
-  return { canEdit, at, press, clear, move };
+  return { canEdit, at, press, clear, move, pending };
 }
