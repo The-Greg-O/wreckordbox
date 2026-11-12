@@ -108,6 +108,8 @@ export function mockStickSpare(path: string): boolean {
 export function mockStickReplaced(path: string): void {
   const state = log();
   state.volume.set(path, (state.volume.get(path) ?? 0) + 1);
+  // Its unlock was for the volume before: the window reads it again.
+  if (typeof window !== "undefined") window.dispatchEvent(new Event("rbl:stick-protection"));
 }
 
 const bump = (state: Log, path: string) => { state.revision.set(path, (state.revision.get(path) ?? 0) + 1); };
@@ -251,6 +253,8 @@ function installHooks(): void {
     const state = log();
     if (unlocked) state.unlocked.set(path, state.volume.get(path) ?? 0);
     else state.unlocked.delete(path);
+    // As an unlock from the window says it: everything showing it reads it again.
+    window.dispatchEvent(new Event("rbl:stick-protection"));
   };
   hooks.__stickProtected = (path) => protection(log(), path).protected;
 }

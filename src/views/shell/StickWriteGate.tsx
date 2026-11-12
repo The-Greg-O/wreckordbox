@@ -305,13 +305,22 @@ function HoldDialog({ path, name, spare, protection, title, lines, answer }: Ask
   }, []);
 
   useEffect(() => { cancelButton.current?.focus(); }, []);
-  // Settled as cancelled if the dialog goes without an answer (replaced, or the window closing).
-  useEffect(() => () => {
-    if (timer.current !== null) window.clearTimeout(timer.current);
-    if (!settled.current) {
-      settled.current = true;
-      answer(false);
-    }
+  // Settled as cancelled if the dialog goes without an answer (replaced, or
+  // the window closing). Checked a moment later, so that React's own
+  // unmount-and-mount of a new component in development is not taken for one.
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      if (timer.current !== null) window.clearTimeout(timer.current);
+      timer.current = null;
+      queueMicrotask(() => {
+        if (mounted.current || settled.current) return;
+        settled.current = true;
+        answer(false);
+      });
+    };
   }, [answer]);
   // The window losing the focus, or being hidden, ends a hold: its release may never arrive here.
   useEffect(() => {
@@ -390,11 +399,12 @@ function HoldDialog({ path, name, spare, protection, title, lines, answer }: Ask
             {lines.map((line, at) => <li key={`${at}:${line}`}>{line}</li>)}
           </ul>
         </div>
-        <StickUnlock path={path} protection={guard} onChange={setGuard} />
+        {locked
+          ? <StickUnlock path={path} protection={guard} onChange={setGuard} />
+          : <p className={styles.note} data-stick-protection="unlocked">{guard.name} is unlocked until it is ejected or removed.</p>}
         <p className={styles.note} role="status">
-          {locked
-            ? `Unlock ${guard.name} to write to it.`
-            : interrupted
+          {locked ? `Unlock ${guard.name} first. ` : ""}
+          {interrupted
             ? "The hold was interrupted. Press and hold again to write."
             : `Hold the button for ${seconds} second${seconds === 1 ? "" : "s"} to write. Letting go early writes nothing.`}
         </p>

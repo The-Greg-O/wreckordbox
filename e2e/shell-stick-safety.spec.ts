@@ -10,6 +10,8 @@
  */
 import { expect, test, type Page } from "@playwright/test";
 
+import { unlockInDialog } from "./helpers";
+
 const TEST = "/Volumes/TEST";
 const tree = (page: Page) => page.getByTestId("shell-tree").getByRole("tree", { name: "Tree" });
 const stick = (page: Page) => tree(page).getByRole("group", { name: "Stick TEST", exact: true });
@@ -133,6 +135,7 @@ test("a Stick write that fails part-way leaves the Stick refused until it is set
   await stick(page).getByRole("treeitem", { name: "TEST", exact: true }).click({ button: "right" });
   await page.getByRole("menu", { name: "Playlists" }).getByRole("menuitem", { name: "Create New Playlist" }).click();
   const confirm = page.getByRole("alertdialog", { name: /Write to TEST/ });
+  await unlockInDialog(page);
   await confirm.getByRole("button", { name: /Hold to write/ }).hover();
   await page.mouse.down();
   await expect(confirm).toHaveCount(0, { timeout: 4000 });

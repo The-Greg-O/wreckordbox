@@ -13,6 +13,8 @@
  */
 import { expect, test, type Page } from "@playwright/test";
 
+import { unlockInDialog } from "./helpers";
+
 const TEST = "/Volumes/TEST";
 type Hooks = {
   __stickWrites: () => { method: string; path: string; args?: unknown }[];
@@ -20,6 +22,11 @@ type Hooks = {
   __stickPlaylistTitles: (path: string, format: string, name: string) => string[];
   __touchStick: (path: string) => void;
   __replaceStick: (path: string) => void;
+  __setStickUnlocked: (path: string, unlocked: boolean) => void;
+  __setStickSpare: (path: string, spare: boolean) => void;
+  __stickProtected: (path: string) => boolean;
+  __remountDevice: (path: string) => void;
+  __unmountDevice: (path: string) => void;
 };
 const writes = (page: Page) => page.evaluate(() => (window as unknown as Hooks).__stickWrites().map((w) => w.method));
 const refused = (page: Page) => page.evaluate(() => (window as unknown as Hooks).__stickRefusedWrites().map((w) => w.method));
@@ -33,12 +40,15 @@ const inPlaylists = (page: Page, name: string) =>
   tree(page).getByRole("group", { name: "Playlists", exact: true }).getByRole("treeitem", { name, exact: true });
 const rows = (page: Page) => page.getByRole("row").filter({ has: page.getByRole("gridcell") });
 
-async function open(page: Page, shell = true) {
+async function open(page: Page, shell = true, unlocked = true) {
   await page.addInitScript((viewShell) => localStorage.setItem("rbl.preferences", JSON.stringify({
     advanced: { protectLibrary: false }, view: { viewShell },
   })), shell);
   await page.goto("/?writable=1");
   await expect(page.getByTestId("browser-title")).toContainText("Tracks)");
+  // These tests are about the hold and the confirmation: TEST is unlocked
+  // (wbx-45.11), as `stick protection` below tests.
+  if (unlocked) await page.evaluate((path) => { (window as unknown as Hooks).__setStickUnlocked(path, true); }, TEST);
 }
 
 /** Create New Playlist on TEST from its row's menu in the shell's tree: a staged write. */
@@ -49,6 +59,7 @@ async function stageCreate(page: Page) {
 }
 
 async function hold(page: Page, ms: number) {
+  await unlockInDialog(page);
   await holdButton(page).hover();
   await page.mouse.down();
   await page.waitForTimeout(ms);
@@ -129,6 +140,72 @@ test.describe("the hold", () => {
   });
 });
 
+test.describe("stick protection (wbx-45.11)", () => {
+  const status = (page: Page) => page.getByTestId("status-line").locator("[data-stick-protection]").filter({ hasText: /^TEST / });
+  const stickRow = (page: Page) => stick(page).getByRole("treeitem", { name: "TEST", exact: true });
+
+  test("a Gig stick is protected until its name is typed; the hold waits; the tree and the status line say so", async ({ page }) => {
+    await open(page, true, false);
+    await expect(stickRow(page).locator("[data-stick-protection]")).toHaveText("Protected");
+    await expect(status(page)).toHaveText("TEST protected");
+    await stageCreate(page);
+    await expect(writeDialog(page)).toContainText("TEST is protected: nothing is written to it until it is unlocked.");
+    await expect(holdButton(page)).toBeDisabled();
+    const field = writeDialog(page).getByRole("textbox", { name: "Type TEST to unlock it" });
+    await field.fill("test");
+    await writeDialog(page).getByRole("button", { name: "Unlock TEST" }).click();
+    await expect(writeDialog(page).getByRole("alert")).toContainText("Type TEST exactly");
+    await expect(holdButton(page)).toBeDisabled();
+    await field.fill("TEST");
+    await writeDialog(page).getByRole("button", { name: "Unlock TEST" }).click();
+    await expect(writeDialog(page)).toContainText("TEST is unlocked until it is ejected or removed.");
+    await expect(holdButton(page)).toBeEnabled();
+    await expect(stickRow(page).locator("[data-stick-protection]")).toHaveText("Unlocked");
+    await expect(status(page)).toHaveText("TEST unlocked");
+    await hold(page, 0);
+    await expect(writeDialog(page)).toHaveCount(0, { timeout: 4000 });
+    await page.mouse.up();
+    await expect.poll(() => writes(page)).toEqual(["devicePlaylistEdit"]);
+  });
+
+  test("the command palette locks a Stick again, and a write to it is refused with nothing written", async ({ page }) => {
+    await open(page);
+    await page.getByRole("banner").getByRole("button", { name: "Command palette" }).click();
+    const palette = page.getByRole("dialog", { name: "Command palette" });
+    await palette.getByRole("combobox", { name: "Search actions" }).fill("Stick Protection");
+    await page.keyboard.press("Enter");
+    const dialog = page.getByTestId("stick-protection");
+    await expect(dialog).toContainText("TEST is unlocked");
+    await dialog.getByRole("button", { name: "Lock TEST" }).click();
+    await expect(dialog).toContainText("TEST is protected");
+    await dialog.getByRole("button", { name: "Close" }).click();
+    expect(await page.evaluate((path) => (window as unknown as Hooks).__stickProtected(path), TEST)).toBe(true);
+    await expect(stickRow(page).locator("[data-stick-protection]")).toHaveText("Protected");
+    await stageCreate(page);
+    await expect(holdButton(page)).toBeDisabled();
+    await page.keyboard.press("Escape");
+    expect(await writes(page)).toEqual([]);
+  });
+
+  test("an unlock ends when the Stick is put back", async ({ page }) => {
+    await open(page);
+    await expect(stickRow(page).locator("[data-stick-protection]")).toHaveText("Unlocked");
+    // Pulled out, then put back.
+    await page.evaluate((path) => {
+      (window as unknown as Hooks).__unmountDevice(path);
+      window.dispatchEvent(new Event("focus"));
+    }, TEST);
+    await expect(stick(page)).toHaveCount(0);
+    await page.evaluate((path) => {
+      (window as unknown as Hooks).__remountDevice(path);
+      window.dispatchEvent(new Event("focus"));
+    }, TEST);
+    await expect(stickRow(page).locator("[data-stick-protection]")).toHaveText("Protected");
+    await stageCreate(page);
+    await expect(holdButton(page)).toBeDisabled();
+  });
+});
+
 test.describe("the approval is for that Stick as it was planned", () => {
   test("a Stick changed after the plan refuses the write and asks for a fresh plan", async ({ page }) => {
     await open(page);
@@ -137,9 +214,10 @@ test.describe("the approval is for that Stick as it was planned", () => {
     await hold(page, 0);
     await expect(writeDialog(page)).toHaveCount(0, { timeout: 4000 });
     await page.mouse.up();
-    await expect(page.getByTestId("shell-status")).toContainText("The Stick changed since the write was confirmed");
+    // Refused as the hold is confirmed: the plan is not turned into a token.
+    await expect(page.getByTestId("shell-status")).toContainText("The Stick changed since the plan was made");
     expect(await writes(page)).toEqual([]);
-    expect(await refused(page)).toEqual(["devicePlaylistEdit"]);
+    expect(await refused(page)).toEqual([]);
   });
 
   test("another Stick at the same place refuses the write", async ({ page }) => {
@@ -149,7 +227,7 @@ test.describe("the approval is for that Stick as it was planned", () => {
     await hold(page, 0);
     await expect(writeDialog(page)).toHaveCount(0, { timeout: 4000 });
     await page.mouse.up();
-    await expect(page.getByTestId("shell-status")).toContainText("not the one the write was confirmed for");
+    await expect(page.getByTestId("shell-status")).toContainText("not the one the plan was made for");
     expect(await writes(page)).toEqual([]);
   });
 });

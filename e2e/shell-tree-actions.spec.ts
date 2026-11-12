@@ -12,6 +12,8 @@
  */
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
+import { unlockInDialog } from "./helpers";
+
 const TEST = "/Volumes/TEST";
 const tree = (page: Page) => page.getByTestId("shell-tree").getByRole("tree", { name: "Tree" });
 const playlists = (page: Page) => tree(page).getByRole("group", { name: "Playlists", exact: true });
@@ -88,6 +90,7 @@ async function drop(page: Page, from: Locator, to: Locator, at?: { clientY: numb
 /** Holds the dialog's button down until the write starts. */
 async function holdToWrite(page: Page) {
   const dialog = writeDialog(page);
+  await unlockInDialog(page);
   await dialog.getByRole("button", { name: /Hold to write/ }).hover();
   await page.mouse.down();
   await expect(dialog).toHaveCount(0, { timeout: 5000 });
@@ -374,11 +377,12 @@ test.describe("writes to a Stick", () => {
     expect(await stickWrites(page)).toEqual([]);
     expect(await stickTitles(page, "NP3-TEST-MP3")).toEqual(before);
 
-    // Let go after half a second: nothing.
+    // Let go after 1.7 seconds of a Gig stick's two: nothing.
     await drop(page, rows(page).first(), target);
+    await unlockInDialog(page);
     await dialog.getByRole("button", { name: /Hold to write/ }).hover();
     await page.mouse.down();
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(1700);
     await page.mouse.up();
     await page.waitForTimeout(2000);
     await expect(dialog).toBeVisible();
@@ -412,8 +416,20 @@ test.describe("writes to a Stick", () => {
     const dialog = writeDialog(page);
     await expect(dialog).toContainText("TEST · Spare stick");
     await expect(dialog).toContainText("Hold the button for 1 second");
-    await page.keyboard.press("Escape");
+    // A Spare stick unlocks with a plain confirmation (wbx-45.11).
+    await unlockInDialog(page);
+    // Let go after 0.7 seconds: nothing. Held past one second: written.
+    await dialog.getByRole("button", { name: /Hold to write/ }).hover();
+    await page.mouse.down();
+    await page.waitForTimeout(700);
+    await page.mouse.up();
+    await page.waitForTimeout(600);
+    await expect(dialog).toBeVisible();
     expect(await stickWrites(page)).toEqual([]);
+    await page.mouse.down();
+    await expect(dialog).toHaveCount(0, { timeout: 1600 });
+    await page.mouse.up();
+    await expect.poll(async () => (await stickWrites(page)).map((w) => w.method)).toEqual(["devicePlaylistEdit"]);
   });
 
   test("Export Playlist shows the export's own plan, writes nothing on Cancel, and exports exactly that playlist on the hold", async ({ page }) => {
@@ -462,7 +478,7 @@ test.describe("writes to a Stick", () => {
     const dialog = writeDialog(page);
     await expect(dialog).toContainText("Export 2 tracks to TEST");
     // Export Track writes again every playlist the Stick holds from this Library.
-    await expect(dialog).toContainText("Playlist “Hardstyle” written again with the tracks the Library holds");
+    await expect(dialog).toContainText("Playlist “Hardstyle” written again, its tracks unchanged");
     await dialog.getByRole("button", { name: "Cancel" }).click();
     expect((await stickWrites(page)).length).toBe(1);
     await drop(page, rows(page).first(), onStick(page, "TEST"));
@@ -470,6 +486,31 @@ test.describe("writes to a Stick", () => {
     await expect.poll(async () => (await stickWrites(page)).map((w) => w.method)).toEqual(["exportPlaylist", "exportTracksToDevice"]);
     expect(((await stickWrites(page))[1]?.args as unknown[])[0]).toEqual(ids);
     expect(await stickHolds(page)).toEqual({ playlists: [{ name: "Hardstyle", titles: hardstyle }], loose: picked });
+  });
+
+  test("what a Stick holds is what was written to it: a later Library edit, and other writes, leave it as it was", async ({ page }) => {
+    await open(page);
+    // Loose tracks on the Stick first, then a playlist exported beside them.
+    await allTracks(page).click();
+    const loose = await pick(page, 1);
+    await drop(page, rows(page).first(), onStick(page, "TEST"));
+    await holdToWrite(page);
+    await expect.poll(async () => (await stickHolds(page)).loose).toEqual(loose);
+    const hardstyle = await titlesOf(page, "Hardstyle");
+    const menu = await menuOn(page, inPlaylists(page, "Hardstyle"), "Playlist");
+    await menu.getByRole("menuitem", { name: "Export Playlist" }).hover();
+    await page.getByRole("menuitem", { name: "TEST", exact: true }).click();
+    await holdToWrite(page);
+    await expect.poll(() => stickHolds(page)).toEqual({ playlists: [{ name: "Hardstyle", titles: hardstyle }], loose });
+
+    // The Library's Hardstyle gains tracks: the Stick's does not, until it is written again.
+    await allTracks(page).click();
+    const picked = await pick(page, 2);
+    const fresh = picked.filter((t) => !hardstyle.includes(t));
+    await drop(page, rows(page).first(), inPlaylists(page, "Hardstyle"));
+    await expect.poll(() => titlesOf(page, "Hardstyle")).toEqual([...hardstyle, ...fresh]);
+    expect(fresh.length).toBeGreaterThan(0);
+    expect(await stickHolds(page)).toEqual({ playlists: [{ name: "Hardstyle", titles: hardstyle }], loose });
   });
 
   test("a Stick's playlists are made, renamed, deleted and imported, each write held for", async ({ page }) => {
