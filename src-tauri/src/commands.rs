@@ -295,7 +295,25 @@ fn enrich_rows(state: &AppState, rows: &mut [RowDto], columns: &[String]) -> App
     if columns.iter().any(|column| column == "fileCreated") {
         enrich_file_created(state, rows)?;
     }
+    if columns.iter().any(|column| column == "myTags") {
+        enrich_my_tags(state, rows)?;
+    }
     Ok(())
+}
+
+/// Each row's My Tags with their ids and categories, for the view shell's
+/// Library (#55); see `row_my_tags`.
+fn enrich_my_tags(state: &AppState, rows: &mut [RowDto]) -> AppResult<()> {
+    state.read_db(|db| {
+        for row in rows.iter_mut() {
+            if row.id.starts_with("file:") {
+                continue;
+            }
+            let tags = crate::row_my_tags::row_my_tags(db.connection(), &row.id);
+            row.extra.get_or_insert_with(Default::default).insert("myTags".to_owned(), tags);
+        }
+        Ok(())
+    }).map_err(write_error)
 }
 
 /// The file system's creation time of each row's file, in seconds since the
@@ -657,7 +675,8 @@ where
         let generation = state.write_history_then(action, |db, ()| refresh_after_edit(&state, db, touched)).map_err(write_error)?;
         // Any non-recorded edit after an undo starts a new branch.
         let mut history = state.edit_history().lock();
-        history.clear_redo();
+        // The Ledger is told which command it was; the history keeps nothing.
+        history.unrecorded(Some(name));
         Ok((generation, history_dto(generation, &history)))
     }).await?;
     let _ = tauri::Emitter::emit(&app, event, generation);
@@ -684,7 +703,8 @@ where
         let generation = state.write_history_then(action, |db, ()| refresh_after_edit(&state, db, touched))
             .map_err(write_error)?;
         let mut history = state.edit_history().lock();
-        history.clear();
+        // The Ledger is told which command it was; the history is emptied.
+        history.permanent(Some(name));
         Ok((generation, history_dto(generation, &history)))
     }).await?;
     let _ = tauri::Emitter::emit(&app, event, generation);
@@ -769,12 +789,15 @@ where
     let event = touched.event();
     let dto = blocking(name, move || {
         let _gate = state.edit_gate().lock();
-        let (generation, reversible) = state.write_history_then(
+        // The refresh's failure is kept aside: the edit is made by then and
+        // goes into the history (and the Ledger) whatever it says.
+        let (refreshed, reversible) = state.write_history_then(
             action,
-            |db, reversible| refresh_after_edit(&state, db, touched).map(|generation| (generation, reversible)),
+            |db, reversible| Ok((refresh_after_edit(&state, db, touched), reversible)),
         ).map_err(write_error)?;
         let mut history = state.edit_history().lock();
         record(&mut history, reversible);
+        let generation = refreshed.map_err(write_error)?;
         Ok(history_dto(generation, &history))
     }).await?;
     let _ = tauri::Emitter::emit(&app, event, dto.generation);

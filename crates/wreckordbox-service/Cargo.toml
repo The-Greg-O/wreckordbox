@@ -25,6 +25,7 @@ wreckordbox-sidecar = { path = "../wreckordbox-sidecar" }
 # drives because it owns the Sidecar the Stems are in.
 wreckordbox-native-stems = { path = "../wreckordbox-native-stems" }
 serde = { workspace = true }
+tracing = { workspace = true }
 serde_json = { workspace = true }
 dirs = "5"
 # Only to tell a locked Library from a damaged one by SQLite's result code.

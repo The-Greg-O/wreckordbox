@@ -423,6 +423,29 @@ fn visible_detail_columns_are_added_to_browser_pages() {
     assert!(!extra.contains_key("unknown"));
 }
 
+/// The Library view's MyTags (#55): each tag as itself, with its id and its
+/// category, never rebuilt from the joined names, so a tag whose name holds a
+/// comma stays one tag.
+#[test]
+fn the_my_tags_column_sends_each_tag_with_its_id_and_category() {
+    use rbl_db::fixture::{MY_TAG_PEAK, MY_TAG_WARM_UP};
+    let s = shell();
+    run(details::rename_my_tag(s.handle(), s.state(), MY_TAG_PEAK.to_owned(), "Dark, Driving".to_owned(), None)).unwrap();
+    run(details::set_my_tags(s.handle(), s.state(), track_id(1), vec![MY_TAG_PEAK.to_owned(), MY_TAG_WARM_UP.to_owned()], None)).unwrap();
+    let (view, len) = s.open(collection_spec());
+    let rows = run(commands::fetch_rows(s.state(), view, 0, len, Some(vec!["myTags".to_owned()]))).unwrap();
+    let tagged = rows.iter().find(|row| row.id == track_id(1)).unwrap();
+    assert_eq!(
+        tagged.extra.as_ref().unwrap()["myTags"],
+        serde_json::json!([
+            { "id": MY_TAG_PEAK, "name": "Dark, Driving", "category": "Situation" },
+            { "id": MY_TAG_WARM_UP, "name": "Warm-up", "category": "Situation" },
+        ]),
+    );
+    let untagged = rows.iter().find(|row| row.id == track_id(2)).unwrap();
+    assert_eq!(untagged.extra.as_ref().unwrap()["myTags"], serde_json::json!([]));
+}
+
 /// The file system's creation time (#308) is read from the track's file, in
 /// seconds since the Unix epoch, and is null where there is no file to read.
 #[test]

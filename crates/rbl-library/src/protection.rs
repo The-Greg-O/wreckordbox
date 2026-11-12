@@ -252,7 +252,11 @@ impl Turn {
         use std::io::{Read as _, Seek as _};
         let mut text = String::new();
         let mut file = &self.0;
-        if file.rewind().and_then(|()| file.read_to_string(&mut text)).is_err() {
+        if file
+            .rewind()
+            .and_then(|()| file.read_to_string(&mut text))
+            .is_err()
+        {
             return 0;
         }
         text.trim().parse().unwrap_or(0)

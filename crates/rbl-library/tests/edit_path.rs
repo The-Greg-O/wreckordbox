@@ -363,3 +363,276 @@ fn undo_refuses_a_value_changed_outside_the_history_and_drops_only_that_entry() 
     core.step_history(&NoHost, true).unwrap();
     assert_eq!(rating_of(&core, &first), 0, "the entry before it still runs");
 }
+
+/// What a Ledger is told, in order: the step, the label, what it reverses,
+/// and the identifier it answered.
+type Told = (rbl_library::ledger::Step, String, Option<i64>, i64);
+
+#[derive(Default)]
+struct LedgerTape {
+    changes: parking_lot::Mutex<Vec<Told>>,
+    /// The first slice each recorded change is part of, beside its id.
+    parts: parking_lot::Mutex<Vec<(i64, Option<i64>)>>,
+    /// The edits the history keeps no entry for, as they were named.
+    notes: parking_lot::Mutex<Vec<(rbl_library::ledger::Unkept, Option<String>)>>,
+    /// Why it cannot record, when it cannot.
+    broken: parking_lot::Mutex<Option<String>>,
+    /// Writes begun, and what each was then said to have written.
+    begun: parking_lot::Mutex<usize>,
+    written: parking_lot::Mutex<Vec<bool>>,
+    /// How many of the next records answer no identifier.
+    forget: parking_lot::Mutex<usize>,
+}
+
+impl rbl_library::ledger::Ledger for LedgerTape {
+    fn begin(&self) -> Result<(), String> {
+        self.broken.lock().clone().map_or(Ok(()), Err)?;
+        *self.begun.lock() += 1;
+        Ok(())
+    }
+
+    fn written(&self, wrote: bool) {
+        self.written.lock().push(wrote);
+    }
+
+    fn note(&self, kept: rbl_library::ledger::Unkept, name: Option<&str>) {
+        self.notes.lock().push((kept, name.map(str::to_owned)));
+    }
+
+    fn record(
+        &self,
+        step: rbl_library::ledger::Step,
+        edit: &rbl_library::history::LibraryEdit,
+        label: &str,
+        link: rbl_library::ledger::Link,
+    ) -> Option<i64> {
+        assert!(!edit.is_empty(), "only a change is recorded");
+        let mut changes = self.changes.lock();
+        let id = i64::try_from(changes.len()).unwrap() + 100;
+        changes.push((step, label.to_owned(), link.reverses, id));
+        self.parts.lock().push((id, link.part_of));
+        let mut forget = self.forget.lock();
+        if *forget > 0 {
+            *forget -= 1;
+            return None;
+        }
+        Some(id)
+    }
+}
+
+#[test]
+fn a_ledger_given_to_the_history_is_told_of_each_edit_undo_and_redo_with_what_it_reverses() {
+    use rbl_library::history::{LibraryEdit, TRACK_EDIT};
+    use rbl_library::ledger::Step;
+
+    let dir = tempfile::tempdir().unwrap();
+    let core = core_in(dir.path());
+    let tape = std::sync::Arc::new(LedgerTape::default());
+    core.history().lock().keep_ledger(Some(tape.clone()));
+    let track = rbl_db::fixture::track_id(2);
+
+    core.recorded_edit(&NoHost, Touched::Metadata(vec![track.clone()]), TRACK_EDIT, |w| {
+        let (_, recorded) = w.set_rating_with_undo(&track, 3)?;
+        Ok(((), LibraryEdit::Track(vec![recorded])))
+    })
+    .unwrap();
+    // An edit that changed nothing is neither in the history nor told.
+    core.recorded_edit(&NoHost, Touched::Metadata(vec![track.clone()]), TRACK_EDIT, |w| {
+        let (_, recorded) = w.set_rating_with_undo(&track, 3)?;
+        Ok(((), LibraryEdit::Track(vec![recorded])))
+    })
+    .unwrap();
+    core.step_history(&NoHost, true).unwrap();
+    core.step_history(&NoHost, false).unwrap();
+    core.step_history(&NoHost, true).unwrap();
+    // An outside write is no entry of the history's: it is named as an
+    // edit the history does not keep. One that changed no row is not.
+    assert!(tape.notes.lock().is_empty());
+    core.edit(&NoHost, History::Outside, Touched::Metadata(vec![track.clone()]), |w| w.set_rating(&track, 1))
+        .unwrap();
+    core.edit(&NoHost, History::Outside, Touched::Metadata(vec![track.clone()]), |_| Ok(())).unwrap();
+    assert_eq!(*tape.notes.lock(), vec![(rbl_library::ledger::Unkept::Unrecorded, None)]);
+
+    let label = TRACK_EDIT.to_owned();
+    assert_eq!(
+        *tape.changes.lock(),
+        vec![
+            (Step::Edit, label.clone(), None, 100),
+            (Step::Undo, label.clone(), Some(100), 101),
+            (Step::Redo, label.clone(), Some(101), 102),
+            (Step::Undo, label, Some(102), 103),
+        ]
+    );
+
+    // Taken away, it is told nothing more.
+    core.history().lock().keep_ledger(None);
+    core.recorded_edit(&NoHost, Touched::Metadata(vec![track.clone()]), TRACK_EDIT, |w| {
+        let (_, recorded) = w.set_rating_with_undo(&track, 5)?;
+        Ok(((), LibraryEdit::Track(vec![recorded])))
+    })
+    .unwrap();
+    assert_eq!(tape.changes.lock().len(), 4);
+}
+
+#[test]
+fn a_ledger_is_told_of_an_edit_that_empties_the_history() {
+    use rbl_library::ledger::Unkept;
+
+    let dir = tempfile::tempdir().unwrap();
+    let core = core_in(dir.path());
+    let tape = std::sync::Arc::new(LedgerTape::default());
+    core.history().lock().keep_ledger(Some(tape.clone()));
+    let track = rbl_db::fixture::track_id(1);
+
+    core.permanent_edit(&NoHost, Touched::Metadata(vec![track.clone()]), |w| w.set_rating(&track, 2)).unwrap();
+    // The window's own wrappers name what they did.
+    core.history().lock().permanent(Some("delete_my_tag"));
+    core.history().lock().unrecorded(Some("create_my_tag"));
+
+    assert_eq!(
+        *tape.notes.lock(),
+        vec![
+            (Unkept::Permanent, None),
+            (Unkept::Permanent, Some("delete_my_tag".to_owned())),
+            (Unkept::Unrecorded, Some("create_my_tag".to_owned())),
+        ]
+    );
+    assert!(tape.changes.lock().is_empty());
+}
+
+#[test]
+fn nothing_is_written_while_the_ledger_cannot_record() {
+    use rbl_library::history::{LibraryEdit, TRACK_EDIT};
+
+    let dir = tempfile::tempdir().unwrap();
+    let core = core_in(dir.path());
+    let tape = std::sync::Arc::new(LedgerTape::default());
+    core.history().lock().keep_ledger(Some(tape.clone()));
+    let track = rbl_db::fixture::track_id(2);
+    let rate = |stars: u8| {
+        core.recorded_edit(&NoHost, Touched::Metadata(vec![track.clone()]), TRACK_EDIT, |w| {
+            let (_, recorded) = w.set_rating_with_undo(&track, stars)?;
+            Ok(((), LibraryEdit::Track(vec![recorded])))
+        })
+    };
+    rate(3).unwrap();
+    let generation = core.generation();
+
+    *tape.broken.lock() = Some("the disk is full".to_owned());
+    let refused = rate(5).unwrap_err();
+    assert!(
+        matches!(&refused, rbl_db::DbError::WriteRefused(why) if why.contains("the disk is full")),
+        "{refused:?}"
+    );
+    let outside = core
+        .edit(&NoHost, History::Outside, Touched::Metadata(vec![track.clone()]), |w| w.set_rating(&track, 1))
+        .unwrap_err();
+    assert!(matches!(outside, rbl_db::DbError::WriteRefused(_)));
+    // Undo is a write too: the entry stays to be tried again.
+    assert!(matches!(core.step_history(&NoHost, true), Err(rbl_library::history::StepError::Write(_))));
+
+    assert_eq!(rating_of(&core, &track), 3, "nothing changed");
+    assert_eq!(core.generation(), generation);
+    assert_eq!(tape.changes.lock().len(), 1, "and nothing was recorded");
+    assert!(tape.notes.lock().is_empty());
+
+    *tape.broken.lock() = None;
+    core.step_history(&NoHost, true).unwrap();
+    assert_eq!(rating_of(&core, &track), 0);
+}
+
+#[test]
+fn an_edit_whose_refresh_fails_after_it_was_made_is_still_recorded() {
+    use rbl_library::history::{LibraryEdit, TRACK_EDIT};
+    use rbl_library::ledger::Step;
+
+    let dir = tempfile::tempdir().unwrap();
+    let core = core_in(dir.path());
+    let tape = std::sync::Arc::new(LedgerTape::default());
+    core.history().lock().keep_ledger(Some(tape.clone()));
+    let track = rbl_db::fixture::track_id(2);
+
+    // The rating is written; then the table the refresh reads is renamed
+    // away, so the re-read fails with the edit made.
+    let failed = core.recorded_edit(&NoHost, Touched::Metadata(vec![track.clone()]), TRACK_EDIT, |w| {
+        let (_, recorded) = w.set_rating_with_undo(&track, 4)?;
+        w.library()
+            .connection()
+            .execute_batch("ALTER TABLE djmdContent RENAME TO djmdContentGone")
+            .map_err(|e| rbl_db::DbError::Open(e.to_string()))?;
+        Ok(((), LibraryEdit::Track(vec![recorded])))
+    });
+
+    assert!(failed.is_err(), "the refresh failed");
+    assert_eq!(*tape.begun.lock(), 1);
+    assert_eq!(*tape.written.lock(), vec![true], "told before the refresh");
+    assert_eq!(*tape.changes.lock(), vec![(Step::Edit, TRACK_EDIT.to_owned(), None, 100)]);
+    assert_eq!(core.history().lock().undo_label(), Some(TRACK_EDIT));
+}
+
+#[test]
+fn a_redo_names_the_undo_it_reverses_even_when_the_undo_was_given_no_identifier() {
+    use rbl_library::history::{LibraryEdit, TRACK_EDIT};
+    use rbl_library::ledger::Step;
+
+    let dir = tempfile::tempdir().unwrap();
+    let core = core_in(dir.path());
+    let tape = std::sync::Arc::new(LedgerTape::default());
+    core.history().lock().keep_ledger(Some(tape.clone()));
+    let track = rbl_db::fixture::track_id(2);
+    core.recorded_edit(&NoHost, Touched::Metadata(vec![track.clone()]), TRACK_EDIT, |w| {
+        let (_, recorded) = w.set_rating_with_undo(&track, 3)?;
+        Ok(((), LibraryEdit::Track(vec![recorded])))
+    })
+    .unwrap();
+    *tape.forget.lock() = 1;
+    core.step_history(&NoHost, true).unwrap();
+    core.step_history(&NoHost, false).unwrap();
+
+    let label = TRACK_EDIT.to_owned();
+    assert_eq!(
+        *tape.changes.lock(),
+        vec![
+            (Step::Edit, label.clone(), None, 100),
+            (Step::Undo, label.clone(), Some(100), 101),
+            // Not the edit's: the Undo it reverses had none to give.
+            (Step::Redo, label, None, 102),
+        ]
+    );
+}
+
+#[test]
+fn every_slice_of_one_add_tracks_to_playlist_is_part_of_the_first_and_undone_with_it() {
+    use rbl_library::ledger::Step;
+
+    let dir = tempfile::tempdir().unwrap();
+    let core = core_in(dir.path());
+    let tape = std::sync::Arc::new(LedgerTape::default());
+    core.history().lock().keep_ledger(Some(tape.clone()));
+    let playlist = rbl_db::fixture::playlist_id(1);
+    let add = |tracks: &[usize]| {
+        let tracks: Vec<String> = tracks.iter().map(|&n| rbl_db::fixture::track_id(n)).collect();
+        let _gate = core.edit_gate().lock();
+        let addition = core
+            .write_then(
+                &NoHost,
+                History::Caller,
+                |w| w.add_tracks_with_undo(&playlist, &tracks, false).map(|(_, addition)| addition),
+                |_, addition| Ok(addition),
+            )
+            .unwrap();
+        core.history().lock().record_addition(addition, Some("drop-1".to_owned()), "Add Tracks to Playlist");
+    };
+    add(&[30, 31]);
+    add(&[32, 33]);
+    add(&[34]);
+    core.step_history(&NoHost, true).unwrap();
+
+    let steps: Vec<(Step, Option<i64>, i64)> =
+        tape.changes.lock().iter().map(|(step, _, reverses, id)| (*step, *reverses, *id)).collect();
+    assert_eq!(
+        steps,
+        vec![(Step::Edit, None, 100), (Step::Edit, None, 101), (Step::Edit, None, 102), (Step::Undo, Some(100), 103)]
+    );
+    assert_eq!(*tape.parts.lock(), vec![(100, None), (101, Some(100)), (102, Some(100)), (103, None)]);
+}

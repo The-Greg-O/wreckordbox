@@ -515,3 +515,19 @@ fn write_wav(path: &Path, seconds: u32) {
     out.resize(44 + data_len as usize, 0);
     std::fs::write(path, out).unwrap();
 }
+
+/// A command's text output without the last line saying which Run its
+/// changes are in, which every edit prints; the output itself when there
+/// is none.
+#[allow(dead_code)]
+pub fn without_run(stdout: &str) -> String {
+    let mut lines: Vec<&str> = stdout.lines().collect();
+    if lines.last().is_some_and(|line| line.starts_with("Run ")) {
+        lines.pop();
+    }
+    let mut text = lines.join("\n");
+    if !text.is_empty() {
+        text.push('\n');
+    }
+    text
+}

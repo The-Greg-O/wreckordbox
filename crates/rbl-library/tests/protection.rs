@@ -297,7 +297,11 @@ fn first_use_adoption_never_overwrites_a_turn_recorded_while_it_waited_for_the_l
     // The adoption has found nothing recorded and waits for the lock.
     std::thread::sleep(Duration::from_millis(300));
     // The other process records "on" and lets go.
-    std::fs::write(protection::file(&state_dir), br#"{"protect_library":true,"revision":7}"#).unwrap();
+    std::fs::write(
+        protection::file(&state_dir),
+        br#"{"protect_library":true,"revision":7}"#,
+    )
+    .unwrap();
     other.unlock().unwrap();
 
     let adopted = adopting.join().unwrap().unwrap();
@@ -391,5 +395,8 @@ fn a_file_edit_is_refused_by_a_core_that_is_not_the_writer() {
 
     let refusal = core.file_edit().map(|_| ()).unwrap_err();
 
-    assert!(matches!(refusal, rbl_db::DbError::WriteRefused(ref why) if why == "not the writer"), "{refusal:?}");
+    assert!(
+        matches!(refusal, rbl_db::DbError::WriteRefused(ref why) if why == "not the writer"),
+        "{refusal:?}"
+    );
 }

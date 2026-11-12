@@ -175,6 +175,21 @@ impl OpenLibrary {
             .map_err(|e| edit_error(&e))
     }
 
+    /// Gives the core's edit history `ledger` to tell of every edit from
+    /// now on (the Ledger, bead wbx-21).
+    pub(crate) fn keep_ledger(&self, ledger: Arc<dyn rbl_library::ledger::Ledger>) {
+        self.core.history().lock().keep_ledger(Some(ledger));
+    }
+
+    /// Takes the Ledger off the core once no edit is under way: the edit
+    /// gate is taken first, so an edit in progress (a hosting window's) is
+    /// over, and recorded, before `close` runs and the Ledger is removed.
+    pub(crate) fn let_go_of_ledger(&self, close: impl FnOnce()) {
+        let _gate = self.core.edit_gate().lock();
+        close();
+        self.core.history().lock().keep_ledger(None);
+    }
+
     /// Library Protection as the core holds it.
     pub(crate) fn protection(&self) -> protection::Protection {
         self.core.protection().into()

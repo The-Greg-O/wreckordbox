@@ -51,6 +51,12 @@ pub struct Client {
     /// How long a command is asked again while the answer is
     /// [`codes::LIBRARY_LOADING`].
     loading_wait: Duration,
+    /// Sent with every command from now on. See [`Self::in_run`].
+    run: Option<crate::ledger::RunArg>,
+    /// The Run the last command's changes are in. See [`Self::last_run`].
+    last_run: Option<crate::facts::Run>,
+    /// Told the Run of each command that has one. See [`Self::tell_runs`].
+    run_heard: Option<std::sync::Arc<std::sync::Mutex<Option<crate::facts::Run>>>>,
 }
 
 impl Client {
@@ -71,6 +77,9 @@ impl Client {
             partial: String::new(),
             events: VecDeque::new(),
             loading_wait: Duration::ZERO,
+            run: None,
+            last_run: None,
+            run_heard: None,
         })
     }
 
@@ -203,7 +212,9 @@ impl Client {
             id,
             command: command.to_owned(),
             args: args.clone(),
+            run: self.run.clone(),
         };
+        self.last_run = None;
         let mut line = serde_json::to_string(&request).map_err(|e| lost(&e))?;
         line.push('\n');
         self.writer
@@ -212,6 +223,14 @@ impl Client {
         loop {
             match self.read_message(None)? {
                 Some(Message::Response(response)) if response.id == id => {
+                    self.last_run = response
+                        .run
+                        .and_then(|run| serde_json::from_value(run).ok());
+                    if let (Some(run), Some(heard)) = (&self.last_run, &self.run_heard) {
+                        *heard
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(run.clone());
+                    }
                     return match response.outcome {
                         Outcome::Result(result) => serde_json::from_value(result).map_err(|e| {
                             ServiceError::new(
@@ -226,6 +245,30 @@ impl Client {
                 Some(Message::Event(event)) => on_event(event),
             }
         }
+    }
+
+    /// Names the Run, or the source and description, sent with every
+    /// command from now on: a command that edits the Library records its
+    /// changes there (the Ledger). `None` sends none again. A command that
+    /// edits nothing refuses a Run, so set it for edits only.
+    pub fn in_run(&mut self, run: Option<crate::ledger::RunArg>) {
+        self.run = run;
+    }
+
+    /// Puts the Run of every command that answers with one into `heard`,
+    /// for a caller that has let the client go by the time it reports.
+    pub fn tell_runs(
+        &mut self,
+        heard: std::sync::Arc<std::sync::Mutex<Option<crate::facts::Run>>>,
+    ) {
+        self.run_heard = Some(heard);
+    }
+
+    /// The Run the last command's changes are in: set by a command that
+    /// edited the Library or joined a Run, `None` after any other.
+    #[must_use]
+    pub fn last_run(&self) -> Option<&crate::facts::Run> {
+        self.last_run.as_ref()
     }
 
     /// The next event, waiting up to `timeout` for one. `None` when none

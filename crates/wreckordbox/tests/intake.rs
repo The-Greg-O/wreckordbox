@@ -182,7 +182,7 @@ fn setting_a_prep_colour_moves_a_track_out_of_intake_and_into_problems() {
 
     let line = text(&sandbox, &["intake", "colour", "10000", "clean"]);
     assert_eq!(
-        line.trim_end(),
+        common::without_run(&line).trim_end(),
         "Track 10000 \"Track 000\": Prep colour Clean (Green), was none."
     );
     let event = watcher
@@ -210,7 +210,7 @@ fn setting_a_prep_colour_moves_a_track_out_of_intake_and_into_problems() {
         "Track 10001 \"Ready\" already has Prep colour Problem (Red)."
     );
     assert_eq!(
-        text(&sandbox, &["intake", "colour", "10001", "none"]).trim_end(),
+        common::without_run(&text(&sandbox, &["intake", "colour", "10001", "none"])).trim_end(),
         "Track 10001 \"Ready\": no Prep colour, was Problem (Red)."
     );
     assert_eq!(

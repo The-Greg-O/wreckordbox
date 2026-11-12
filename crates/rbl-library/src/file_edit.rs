@@ -40,7 +40,9 @@ impl LibraryCore {
     /// The analysis-file lock is not reentrant: never call this while
     /// holding it. Blocking.
     pub fn file_edit(&self) -> Result<FileEdit<'_>, rbl_db::DbError> {
-        let location = self.location().map_err(|e| rbl_db::DbError::NotInstalled(e.to_string()))?;
+        let location = self
+            .location()
+            .map_err(|e| rbl_db::DbError::NotInstalled(e.to_string()))?;
         let gate = self.edit_gate().lock();
         let files = self.analysis_write().lock();
         if let Some(reason) = self.write_refusal() {
@@ -51,14 +53,20 @@ impl LibraryCore {
         }
         if rbl_backup::journal::pending(self.recovery_dir()) {
             return Err(rbl_db::DbError::WriteRefused(
-                "A library restore is unfinished. Restart the app to recover it before editing.".into(),
+                "A library restore is unfinished. Restart the app to recover it before editing."
+                    .into(),
             ));
         }
-        if let Some(reason) =
-            rbl_db::write_refusal_reason(location.is_real_install, rbl_db::test_mode(), rbl_db::is_rekordbox_running())
-        {
+        if let Some(reason) = rbl_db::write_refusal_reason(
+            location.is_real_install,
+            rbl_db::test_mode(),
+            rbl_db::is_rekordbox_running(),
+        ) {
             return Err(rbl_db::DbError::WriteRefused(reason.to_owned()));
         }
-        Ok(FileEdit { _gate: gate, _files: files })
+        Ok(FileEdit {
+            _gate: gate,
+            _files: files,
+        })
     }
 }

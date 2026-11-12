@@ -317,3 +317,90 @@ fn the_commands_help_states_the_rule_the_default_and_the_loading_wait() {
     assert!(top.contains(&format!("up to {bound} seconds")), "{top}");
     assert!(top.contains(wreckordbox_service::LOADING_WAIT_ENV), "{top}");
 }
+
+/// The Runs `runs list` shows.
+fn runs(sandbox: &Sandbox) -> serde_json::Value {
+    let run = sandbox.cli(&["--json", "runs", "list"]);
+    assert!(run.status.success(), "{}", run.stderr);
+    run.json()
+}
+
+/// An edit refused by Library Protection is refused before the Ledger
+/// commits an intent for it: no Run, no entry, and no intent left behind
+/// that a later service would report as an unconfirmed change. The next
+/// edit once protection is off is the Ledger's only entry.
+#[test]
+fn a_refused_edit_leaves_nothing_in_the_ledger_not_even_an_unconfirmed_trace() {
+    let sandbox = Sandbox::new();
+    sandbox.dj_prep_colours();
+    sandbox.protect(true);
+    for args in [
+        &[
+            "--json",
+            "tracks",
+            "rate",
+            "10001",
+            "4",
+            "--source",
+            "agent:tagger",
+            "--description",
+            "Rate it",
+        ][..],
+        &["--json", "tracks", "rate", "10002", "3"][..],
+        &["--json", "intake", "colour", "10003", "Clean"][..],
+    ] {
+        let refused = sandbox.cli(args);
+        assert!(!refused.status.success(), "{args:?}");
+        assert_eq!(
+            refused.error_json()["error"]["code"],
+            "library_protected",
+            "{args:?}"
+        );
+    }
+    assert_eq!(runs(&sandbox)["total"], 0);
+    // No intent was committed for any of them: none is waiting to be
+    // settled by the next write.
+    let sidecar = wreckordbox_sidecar::Sidecar::open(&sandbox.sidecar_dir()).unwrap();
+    assert!(sidecar.open_intents().unwrap().is_empty());
+    drop(sidecar);
+
+    // Another service settles what this one left: an intent with no entry
+    // would come back now as an unconfirmed change.
+    let pid = sandbox.status()["pid"].as_u64().unwrap();
+    sandbox.client().stop().unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while common::alive(pid) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the service did not stop"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let listed = runs(&sandbox);
+    assert_eq!(listed["total"], 0, "{listed}");
+    assert_eq!(listed["runs"], serde_json::json!([]));
+
+    sandbox.protect(false);
+    let rated = sandbox.cli(&[
+        "--json",
+        "tracks",
+        "rate",
+        "10001",
+        "4",
+        "--source",
+        "agent:tagger",
+        "--description",
+        "Rate it",
+    ]);
+    assert!(rated.status.success(), "{}", rated.stderr);
+    let run = rated.json()["run"]["id"].as_i64().unwrap();
+    let shown = sandbox.cli(&["--json", "runs", "show", &run.to_string()]);
+    assert!(shown.status.success(), "{}", shown.stderr);
+    let entries = shown.json()["entries"].as_array().unwrap().clone();
+    assert_eq!(entries.len(), 1, "{entries:#?}");
+    assert!(
+        entries.iter().all(|entry| entry["kind"] != "unconfirmed"),
+        "{entries:#?}"
+    );
+    assert_eq!(runs(&sandbox)["total"], 1);
+}

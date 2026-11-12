@@ -888,3 +888,73 @@ impl Run {
         assert!(self.ok, "{}", self.stderr);
     }
 }
+
+/// The entries `runs show` lists for a Run.
+fn ledger_entries(window: &Window, run: &serde_json::Value) -> Vec<serde_json::Value> {
+    window.cli(&["--json", "runs", "show", &run.to_string()]).json()["entries"].as_array().unwrap().clone()
+}
+
+#[test]
+fn the_djs_edits_in_the_window_and_the_commands_are_ledger_entries_of_their_own_runs() {
+    let window = window();
+    window.host().unwrap();
+    let (djs, agents) = (track_id(1), track_id(2));
+    let app = || window.app.handle().clone();
+
+    run(commands::set_track_rating(app(), window.state(), vec![djs.clone()], 3)).unwrap();
+    let rated = window.cli(&["--json", "tracks", "rate", &agents, "5", "--source", "agent:tagger"]).json();
+    // The DJ takes the agent's rating back, and makes it again: quick undo
+    // as before, each step a new entry of the DJ's.
+    let undone = run(commands::undo_edit(app(), window.state())).unwrap();
+    assert_eq!(window.rating(&agents), 0);
+    assert!(undone.can_undo && undone.can_redo);
+    let redone = run(commands::redo_edit(app(), window.state())).unwrap();
+    assert_eq!(window.rating(&agents), 5);
+    assert!(redone.can_undo && !redone.can_redo);
+
+    let runs = window.cli(&["--json", "runs", "list"]).json();
+    assert_eq!(runs["total"], 2);
+    let (agents_run, windows_run) = (&runs["runs"][0], &runs["runs"][1]);
+    assert_eq!(agents_run["id"], rated["run"]["id"]);
+    assert_eq!(agents_run["source"], serde_json::json!({"kind": "agent", "name": "tagger"}));
+    assert_eq!(windows_run["source"], serde_json::json!({"kind": "dj", "name": "dj"}));
+    assert_eq!(windows_run["description"], "Edits in the window");
+    assert!(windows_run["finished_at"].is_null(), "the window's Run is open while the DJ edits");
+    assert_eq!(windows_run["counts"], serde_json::json!([{"store": "library", "kind": "track", "count": 3}]));
+
+    let agents_entries = ledger_entries(&window, &agents_run["id"]);
+    assert_eq!(agents_entries.len(), 1);
+    assert_eq!(agents_entries[0]["values"], serde_json::json!([{"subject": format!("track {agents}"), "field": "Rating", "before": 0, "after": 5}]));
+
+    let djs_entries = ledger_entries(&window, &windows_run["id"]);
+    let dj = serde_json::json!({"kind": "dj", "name": "dj"});
+    assert!(djs_entries.iter().all(|entry| entry["source"] == dj && entry["command"].is_null()));
+    assert_eq!(djs_entries[0]["action"], "edit");
+    assert_eq!(djs_entries[0]["label"], "Track Edit");
+    assert_eq!(djs_entries[0]["values"], serde_json::json!([{"subject": format!("track {djs}"), "field": "Rating", "before": 0, "after": 3}]));
+    // The Undo names the agent's entry, with the values as it changed them.
+    assert_eq!(djs_entries[1]["action"], "undo");
+    assert_eq!(djs_entries[1]["reverses"], agents_entries[0]["id"]);
+    assert_eq!(djs_entries[1]["values"][0]["before"], 5);
+    assert_eq!(djs_entries[1]["values"][0]["after"], 0);
+    assert_eq!(djs_entries[2]["action"], "redo");
+    assert_eq!(djs_entries[2]["reverses"], djs_entries[1]["id"]);
+    assert_eq!(djs_entries[2]["values"][0]["after"], 5);
+}
+
+#[test]
+fn the_windows_run_ends_when_the_window_closes() {
+    let window = window();
+    window.host().unwrap();
+    run(commands::set_track_rating(window.app.handle().clone(), window.state(), vec![track_id(1)], 3)).unwrap();
+
+    window.state().stop_service();
+
+    // Read by a service a command starts by itself: the Ledger outlives
+    // the window.
+    let runs = window.cli(&["--json", "runs", "list"]).json();
+    assert_eq!(runs["total"], 1);
+    assert_eq!(runs["runs"][0]["description"], "Edits in the window");
+    assert_eq!(runs["runs"][0]["outcome"], "wreckordbox stopped");
+    assert_eq!(runs["runs"][0]["changes"], 1);
+}
