@@ -165,20 +165,22 @@ fn a_writer_holds_the_sticks_execution_lock_and_locking_waits_for_it_to_finish()
         .unwrap();
     assert!(!free, "held by the writer, against any other thread");
 
-    let (done, locked) = mpsc::channel();
+    let (sender, acknowledged) = mpsc::channel();
     let (dir, root) = (state.path().to_path_buf(), spare.clone());
     let locker = std::thread::spawn(move || {
         let now = lock(&dir, &root).unwrap();
-        done.send(now.protected).unwrap();
+        sender.send(now.protected).unwrap();
     });
     assert!(
-        locked.recv_timeout(Duration::from_millis(400)).is_err(),
+        acknowledged
+            .recv_timeout(Duration::from_millis(400))
+            .is_err(),
         "not acknowledged while a write runs"
     );
     writing.recheck().unwrap();
     drop(writing);
     assert_eq!(
-        locked.recv_timeout(Duration::from_secs(10)),
+        acknowledged.recv_timeout(Duration::from_secs(10)),
         Ok(true),
         "acknowledged once it is drained"
     );

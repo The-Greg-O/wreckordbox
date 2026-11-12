@@ -528,7 +528,7 @@ pub fn root_of(path: &Path) -> PathBuf {
 /// When the record cannot be written.
 pub fn lock_held(state_dir: &Path, root: &Path, _held: &ExecLock) -> std::io::Result<Status> {
     change(state_dir, |stored| {
-        stored.unlocked.retain(|m| m.root != root)
+        stored.unlocked.retain(|m| m.root != root);
     })?;
     Ok(status(state_dir, root))
 }
@@ -632,8 +632,8 @@ fn open_exec(key: &Path) -> std::io::Result<std::fs::File> {
 fn again(held: &mut Holds, key: &Path) -> bool {
     let me = std::thread::current().id();
     match held.get_mut(key) {
-        Some(hold) if hold.thread == me => {
-            hold.count += 1;
+        Some(entry) if entry.thread == me => {
+            entry.count += 1;
             true
         }
         _ => false,
@@ -753,7 +753,7 @@ impl Authorization {
             return Ok(());
         };
         change(&self.state_dir, |stored| {
-            stored.unlocked.retain(|m| m.root != held.root)
+            stored.unlocked.retain(|m| m.root != held.root);
         })
     }
 
@@ -824,6 +824,7 @@ pub fn authorize_stick(state_dir: &Path, root: &Path) -> Result<Authorization, R
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, reason = "a test fails loudly on its own setup")]
 mod tests {
     use super::*;
 
@@ -866,7 +867,7 @@ mod tests {
 
     #[test]
     fn without_a_boot_id_a_mount_has_no_identity() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().expect("a temporary folder");
         assert!(identity_in(dir.path(), None).is_none());
         assert!(
             identity_in(dir.path(), Some("b".into())).is_some(),
