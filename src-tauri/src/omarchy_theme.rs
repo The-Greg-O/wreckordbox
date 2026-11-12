@@ -79,7 +79,9 @@ type Rgb = [u8; 3];
 fn parse_colors(text: &str) -> BTreeMap<String, String> {
     let mut found = BTreeMap::new();
     for line in text.lines() {
-        let Some((key, value)) = line.split_once('=') else { continue };
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
         let key = key.trim();
         if key.is_empty() || key.starts_with('#') || key.starts_with('[') {
             continue;
@@ -90,7 +92,9 @@ fn parse_colors(text: &str) -> BTreeMap<String, String> {
             _ => value.split_whitespace().next().unwrap_or_default(),
         };
         if key == "mode" || rgb(value).is_some() {
-            found.entry(key.to_owned()).or_insert_with(|| value.to_ascii_lowercase());
+            found
+                .entry(key.to_owned())
+                .or_insert_with(|| value.to_ascii_lowercase());
         }
     }
     found
@@ -113,7 +117,11 @@ fn hex(colour: Rgb) -> String {
 fn mix(from: Rgb, to: Rgb, share: f64) -> Rgb {
     let channel = |at: usize| {
         let value = f64::from(from[at]) + (f64::from(to[at]) - f64::from(from[at])) * share;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "clamped to a byte first")]
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "clamped to a byte first"
+        )]
         let byte = value.round().clamp(0.0, 255.0) as u8;
         byte
     };
@@ -124,7 +132,11 @@ fn mix(from: Rgb, to: Rgb, share: f64) -> Rgb {
 fn luminance(colour: Rgb) -> f64 {
     let linear = |byte: u8| {
         let value = f64::from(byte) / 255.0;
-        if value <= 0.040_45 { value / 12.92 } else { ((value + 0.055) / 1.055).powf(2.4) }
+        if value <= 0.040_45 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
     };
     0.2126 * linear(colour[0]) + 0.7152 * linear(colour[1]) + 0.0722 * linear(colour[2])
 }
@@ -150,7 +162,10 @@ const SELECTION_CONTRAST: f64 = 2.0;
 #[must_use]
 pub fn roles_from_colors(text: &str) -> Option<ThemeRoles> {
     let colours = parse_colors(text);
-    let get = |keys: &[&str]| keys.iter().find_map(|key| colours.get(*key).and_then(|value| rgb(value)));
+    let get = |keys: &[&str]| {
+        keys.iter()
+            .find_map(|key| colours.get(*key).and_then(|value| rgb(value)))
+    };
     let background = get(&["background"])?;
     let foreground = get(&["foreground"])?;
     let light = match colours.get("mode").map(String::as_str) {
@@ -174,11 +189,15 @@ pub fn roles_from_colors(text: &str) -> Option<ThemeRoles> {
         ground: hex(get(&["darker_background"]).unwrap_or_else(|| mix(background, black, darker))),
         panel: hex(get(&["dark_background"]).unwrap_or_else(|| mix(background, black, dark))),
         working: hex(background),
-        hairline: hex(get(&["lighter_background"]).unwrap_or_else(|| mix(background, foreground, 0.10))),
+        hairline: hex(
+            get(&["lighter_background"]).unwrap_or_else(|| mix(background, foreground, 0.10))
+        ),
         selection: hex(selection),
         border: hex(get(&["muted"]).unwrap_or_else(|| mix(background, foreground, 0.30))),
         text: hex(foreground),
-        text_dim: hex(get(&["dark_foreground"]).unwrap_or_else(|| mix(foreground, background, 0.45))),
+        text_dim: hex(
+            get(&["dark_foreground"]).unwrap_or_else(|| mix(foreground, background, 0.45))
+        ),
         text_bright: hex(get(&["bright_foreground", "color15"]).unwrap_or(foreground)),
         accent: hex(accent),
         tab_from: hex(get(&["bright_magenta", "color13", "magenta", "color5"]).unwrap_or(accent)),
@@ -218,7 +237,9 @@ fn css_family(answer: &str) -> Option<String> {
     let family = answer.lines().next()?.split(',').next()?.trim();
     let safe = !family.is_empty()
         && family.len() <= 100
-        && family.chars().all(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.' | '+' | '(' | ')'));
+        && family
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.' | '+' | '(' | ')'));
     safe.then(|| family.to_owned())
 }
 
@@ -229,7 +250,10 @@ pub fn system_monospace_font() -> Option<String> {
     if !cfg!(target_os = "linux") {
         return None;
     }
-    let answer = std::process::Command::new("fc-match").args(["monospace", "-f", "%{family}\n"]).output().ok()?;
+    let answer = std::process::Command::new("fc-match")
+        .args(["monospace", "-f", "%{family}\n"])
+        .output()
+        .ok()?;
     if !answer.status.success() {
         return None;
     }
@@ -239,7 +263,10 @@ pub fn system_monospace_font() -> Option<String> {
 /// The theme as it stands now.
 #[must_use]
 pub fn current() -> Theme {
-    Theme { roles: colors_file().and_then(|path| roles_from_file(&path)), font: system_monospace_font() }
+    Theme {
+        roles: colors_file().and_then(|path| roles_from_file(&path)),
+        font: system_monospace_font(),
+    }
 }
 
 /// The theme, for a window that has just opened.
@@ -279,7 +306,11 @@ mod watch {
             let overridden = std::env::var_os(COLORS_FILE_ENV).is_some_and(|path| !path.is_empty());
             // The override is one file, rewritten in place. The active theme
             // is a folder that is replaced whole, so its parent is watched.
-            let folder = if overridden { colors.parent() } else { colors.parent().and_then(|theme| theme.parent()) };
+            let folder = if overridden {
+                colors.parent()
+            } else {
+                colors.parent().and_then(|theme| theme.parent())
+            };
             folders.extend(folder.map(PathBuf::from));
         }
         // `omarchy font set` rewrites fonts.conf here.
@@ -326,7 +357,12 @@ mod watch {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, reason = "test assertions")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test assertions"
+)]
 mod tests {
     use super::*;
 
@@ -358,7 +394,8 @@ bright_magenta = "#bb9af7"
 
     #[test]
     fn a_full_theme_gives_the_role_table_of_the_tokens_document() {
-        let roles = roles_from_colors(TOKYO_NIGHT).unwrap_or_else(|| panic!("a full theme has roles"));
+        let roles =
+            roles_from_colors(TOKYO_NIGHT).unwrap_or_else(|| panic!("a full theme has roles"));
         assert_eq!(
             roles,
             ThemeRoles {
@@ -398,7 +435,8 @@ color15 = "#ddc7a1"
 
     #[test]
     fn a_partial_theme_derives_the_missing_roles_from_the_ones_it_has() {
-        let roles = roles_from_colors(FROM_TERMINAL).unwrap_or_else(|| panic!("a partial theme has roles"));
+        let roles =
+            roles_from_colors(FROM_TERMINAL).unwrap_or_else(|| panic!("a partial theme has roles"));
         assert_eq!(roles.mode, "dark");
         assert_eq!(roles.working, "#282828");
         assert_eq!(roles.text, "#d4be98");
@@ -418,8 +456,11 @@ color15 = "#ddc7a1"
 
     #[test]
     fn a_partial_theme_stays_readable() {
-        let roles = roles_from_colors(FROM_TERMINAL).unwrap_or_else(|| panic!("a partial theme has roles"));
-        let pair = |one: &str, other: &str| contrast(rgb(one).unwrap_or_default(), rgb(other).unwrap_or_default());
+        let roles =
+            roles_from_colors(FROM_TERMINAL).unwrap_or_else(|| panic!("a partial theme has roles"));
+        let pair = |one: &str, other: &str| {
+            contrast(rgb(one).unwrap_or_default(), rgb(other).unwrap_or_default())
+        };
         // The file's selection is the text colour; a selected row must still
         // show its text.
         assert_ne!(roles.selection, roles.text);
@@ -444,17 +485,29 @@ color15 = "#ddc7a1"
     #[test]
     fn a_file_without_a_background_and_a_foreground_gives_no_roles() {
         assert_eq!(roles_from_colors(""), None);
-        assert_eq!(roles_from_colors("accent = \"#7aa2f7\"\nbackground = \"#1a1b26\"\n"), None);
-        assert_eq!(roles_from_colors("background = \"#1a1b26\"\nforeground = \"blue\"\n"), None);
+        assert_eq!(
+            roles_from_colors("accent = \"#7aa2f7\"\nbackground = \"#1a1b26\"\n"),
+            None
+        );
+        assert_eq!(
+            roles_from_colors("background = \"#1a1b26\"\nforeground = \"blue\"\n"),
+            None
+        );
     }
 
     #[test]
     fn values_that_are_not_colours_never_reach_the_interface() {
         let text = "background = \"#1a1b26\"\nforeground = \"#a9b1d6\"\n\
                     accent = \"red; } body { display: none\"\nmuted = \"#12345\"\n[table]\nnot a line\n";
-        let roles = roles_from_colors(text).unwrap_or_else(|| panic!("the two good colours are enough"));
+        let roles =
+            roles_from_colors(text).unwrap_or_else(|| panic!("the two good colours are enough"));
         assert_eq!(roles.accent, "#a9b1d6");
-        for value in [&roles.accent, &roles.border, &roles.selection, &roles.ground] {
+        for value in [
+            &roles.accent,
+            &roles.border,
+            &roles.selection,
+            &roles.ground,
+        ] {
             assert!(rgb(value).is_some(), "{value} is not #rrggbb");
         }
     }
@@ -463,7 +516,10 @@ color15 = "#ddc7a1"
     fn quoting_case_and_comments_are_tolerated() {
         let roles = roles_from_colors("background = '#1A1B26' # ground\n  foreground=#A9B1D6\n")
             .unwrap_or_else(|| panic!("both colours parse"));
-        assert_eq!((roles.working.as_str(), roles.text.as_str()), ("#1a1b26", "#a9b1d6"));
+        assert_eq!(
+            (roles.working.as_str(), roles.text.as_str()),
+            ("#1a1b26", "#a9b1d6")
+        );
     }
 
     #[test]
@@ -478,12 +534,18 @@ color15 = "#ddc7a1"
         let folder = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let file = folder.path().join("colors.toml");
         std::fs::write(&file, TOKYO_NIGHT).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(roles_from_file(&file).map(|roles| roles.accent), Some("#7aa2f7".into()));
+        assert_eq!(
+            roles_from_file(&file).map(|roles| roles.accent),
+            Some("#7aa2f7".into())
+        );
     }
 
     #[test]
     fn a_font_family_is_the_first_alias_and_safe_to_quote() {
-        assert_eq!(css_family("JetBrainsMono Nerd Font,JetBrainsMono NF\n"), Some("JetBrainsMono Nerd Font".into()));
+        assert_eq!(
+            css_family("JetBrainsMono Nerd Font,JetBrainsMono NF\n"),
+            Some("JetBrainsMono Nerd Font".into())
+        );
         assert_eq!(css_family("Evil\"; } body { display: none"), None);
         assert_eq!(css_family("It's Mono"), None);
         assert_eq!(css_family(""), None);
