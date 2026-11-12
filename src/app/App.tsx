@@ -698,8 +698,8 @@ function AppBody() {
       stop?.();
     };
   }, []);
-  // Library Protection is the service's rule too: kept in step with the
-  // copy the service reads, whichever side turns it.
+  // Library Protection belongs to the backend, which refuses every change
+  // while it is on; the preference shows what the backend last said.
   const updateAdvanced = prefs.update;
   useLibraryProtection(
     advancedPrefs.protectLibrary,

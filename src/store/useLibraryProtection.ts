@@ -1,56 +1,68 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { getBackend } from "@/ipc/client";
-import type { Backend } from "@/ipc/types";
+import type { Backend, LibraryProtection } from "@/ipc/types";
 
 /** What Library Protection needs of the backend. */
 export type ProtectionBackend = Pick<
   Backend,
-  "libraryProtection" | "recordLibraryProtection" | "onLibraryProtectionChanged"
+  "libraryProtection" | "adoptLibraryProtection" | "setLibraryProtection" | "onLibraryProtectionChanged"
 >;
 
 /**
- * Keeps Library Protection the same in the window and in the Library
- * service. The window's preferences live in its own storage, which the
- * service cannot read, so the switch is also recorded in a file both can
- * reach: the service reads it before every edit a command asks for.
+ * Shows Library Protection as the backend holds it. The backend owns the
+ * switch: it is recorded where the Library service reads it, and the
+ * Library core refuses every change while it is on, whoever asks. The
+ * window's preference is only what the window shows.
  *
- * - At start the recorded switch wins, so one turned from the command line
- *   while the window was closed is taken up and not overwritten. With
- *   nothing recorded, the window's own preference is recorded.
- * - From then on a change in Preferences is recorded, and a change from the
- *   command line (`wreckordbox protection off`) becomes the preference.
+ * - At start the window offers its stored preference, which the backend
+ *   takes up only the first time, while it has never recorded the switch,
+ *   and shows what the backend answers.
+ * - Every change, from Preferences (which turns it through the backend and
+ *   shows it once recorded) or the command line, arrives as a notification
+ *   with a revision; one older than what is shown is ignored.
+ * - Nothing here ever writes the switch. A preference changed without the
+ *   backend (another window's stale copy, say) is put back from what the
+ *   backend says.
+ * - When the backend cannot be asked, protection is shown on.
  */
 export function useLibraryProtection(
   protectLibrary: boolean,
   setProtectLibrary: (on: boolean) => void,
   connect: () => Promise<ProtectionBackend> = getBackend,
 ): void {
-  // Nothing is recorded until what was recorded has been read.
-  const [started, setStarted] = useState(false);
-  // A switch being taken up from outside: not recorded back until the
-  // preference has caught up with it.
-  const takingUp = useRef<boolean | null>(null);
+  // The newest state applied, so an older one arriving late is ignored.
+  const shown = useRef<LibraryProtection | null>(null);
+  const backendRef = useRef<ProtectionBackend | null>(null);
   const current = useRef(protectLibrary);
   current.current = protectLibrary;
   const set = useRef(setProtectLibrary);
   set.current = setProtectLibrary;
 
+  const apply = useRef((now: LibraryProtection) => {
+    if (shown.current && now.revision < shown.current.revision) return;
+    shown.current = now;
+    if (now.protectLibrary !== current.current) set.current(now.protectLibrary);
+  });
+
   useEffect(() => {
     let live = true;
     let stop: (() => void) | undefined;
-    const takeUp = (on: boolean) => {
-      if (on === current.current) return;
-      takingUp.current = on;
-      set.current(on);
-    };
+    // What the window had stored when it started: offered once.
+    const stored = current.current;
     void (async () => {
       const backend = await connect();
       if (!live) return;
-      stop = backend.onLibraryProtectionChanged(takeUp);
-      const recorded = await backend.libraryProtection().catch(() => null);
-      if (!live) return;
-      if (recorded !== null) takeUp(recorded);
-      setStarted(true);
+      backendRef.current = backend;
+      stop = backend.onLibraryProtectionChanged((now) => {
+        if (live) apply.current(now);
+      });
+      try {
+        const now = await backend.adoptLibraryProtection(stored);
+        if (live) apply.current(now);
+      } catch {
+        // Not known: shown on, as the backend treats it.
+        if (live && !shown.current && !current.current) set.current(true);
+      }
     })();
     return () => {
       live = false;
@@ -59,13 +71,20 @@ export function useLibraryProtection(
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the backend is fixed for the window's life
   }, []);
 
+  // A preference that is not what the backend last said: ask the backend
+  // again and show its answer, whichever way that goes.
   useEffect(() => {
-    if (!started) return;
-    if (takingUp.current !== null) {
-      if (takingUp.current !== protectLibrary) return;
-      takingUp.current = null;
-    }
-    void connect().then((backend) => backend.recordLibraryProtection(protectLibrary)).catch(() => undefined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- as above
-  }, [started, protectLibrary]);
+    const backend = backendRef.current;
+    const last = shown.current;
+    if (!backend || !last || last.protectLibrary === protectLibrary) return;
+    let live = true;
+    backend.libraryProtection().then((now) => {
+      if (live) apply.current(now);
+    }, () => {
+      if (live && !current.current) set.current(true);
+    });
+    return () => {
+      live = false;
+    };
+  }, [protectLibrary]);
 }
