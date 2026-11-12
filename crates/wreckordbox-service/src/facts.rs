@@ -299,7 +299,9 @@ pub(crate) fn open_run(stems: &Arc<Stems>, id: i64) -> Result<Run, ServiceError>
     .open_run(id)
 }
 
-pub(crate) fn arguments<T: serde::de::DeserializeOwned>(request: &Request) -> Result<T, ServiceError> {
+pub(crate) fn arguments<T: serde::de::DeserializeOwned>(
+    request: &Request,
+) -> Result<T, ServiceError> {
     serde_json::from_value(request.args.clone()).map_err(|e| {
         ServiceError::new(
             service_codes::BAD_REQUEST,

@@ -4,6 +4,7 @@
 //! when none is running. Results go to standard output, as text or with
 //! `--json` as JSON; errors go to standard error with a non-zero status.
 
+mod decisions;
 mod facts;
 mod intake;
 mod mytag_edits;
@@ -80,6 +81,12 @@ enum Commands {
     Runs {
         #[command(subcommand)]
         command: facts::RunCommands,
+    },
+    /// Ask, list and answer Decisions: recorded judgements between fixed
+    /// candidates, kept in the Sidecar. Never changes the Library.
+    Decisions {
+        #[command(subcommand)]
+        command: decisions::DecisionCommands,
     },
     /// The Intake and Problems queues: tracks with no Prep colour, tracks
     /// marked Problem, and what each still needs.
@@ -227,6 +234,9 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
         }
         Commands::Runs { command } => {
             print(&facts::runs(&mut connect(&config)?, cli.json, command)?);
+        }
+        Commands::Decisions { command } => {
+            print(&decisions::run(&mut connect(&config)?, cli.json, command)?);
         }
         Commands::Intake { command } => {
             print(&intake::run(&mut connect(&config)?, cli.json, command)?);

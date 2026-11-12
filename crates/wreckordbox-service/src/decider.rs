@@ -193,8 +193,8 @@ fn by_threshold(
             "the field \"{field}\" is not a number"
         )));
     };
-    let within = at_least.is_none_or(|least| number >= least)
-        && at_most.is_none_or(|most| number <= most);
+    let within =
+        at_least.is_none_or(|least| number >= least) && at_most.is_none_or(|most| number <= most);
     let bounds = match (at_least, at_most) {
         (Some(least), Some(most)) => format!("from {least} to {most}"),
         (Some(least), None) => format!("at least {least}"),

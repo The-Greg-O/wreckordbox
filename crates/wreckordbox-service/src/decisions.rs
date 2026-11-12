@@ -124,6 +124,11 @@ impl From<CandidateArg> for Candidate {
 #[serde(deny_unknown_fields)]
 pub struct CreateDecision {
     pub question_type: QuestionType,
+    /// What kind of question this is, in the asker's own word (`genre`,
+    /// `lookup_match`): lower-case letters, digits and underscores.
+    /// Decisions are listed, and Deciders compared, by it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topic: Option<String>,
     /// The question; for a yes-or-no question, the statement that is true
     /// or not.
     pub question: String,
@@ -156,6 +161,9 @@ pub struct ListDecisions {
     /// Only Decisions about this track.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub track: Option<String>,
+    /// Only Decisions of this topic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topic: Option<String>,
     /// The most Decisions to answer; [`DEFAULT_DECISION_LIMIT`] when left
     /// out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -359,6 +367,7 @@ impl Decisions<'_> {
             .sidecar
             .create_decision(&NewDecision {
                 question_type: create.question_type,
+                topic: create.topic.as_deref(),
                 question: &create.question,
                 context: &create.context.unwrap_or_else(|| json!({})),
                 candidates: &candidates,
@@ -379,6 +388,7 @@ impl Decisions<'_> {
                 state: wanted.state,
                 decider: wanted.decider.as_ref().map(facts::source).transpose()?,
                 track_id: wanted.track.clone(),
+                topic: wanted.topic.clone(),
                 limit,
                 offset,
             })
@@ -397,9 +407,9 @@ impl Decisions<'_> {
         let decision = self.existing(answer.id)?;
         let decider = facts::source(&answer.decider)?;
         // The DJ's answer is the DJ's word, as the DJ's Fact is.
-        let probability = answer.probability.or((decider.kind == SourceKind::Dj
-            && answer.probabilities.is_none())
-        .then_some(1.0));
+        let probability = answer
+            .probability
+            .or((decider.kind == SourceKind::Dj && answer.probabilities.is_none()).then_some(1.0));
         self.give(&Given {
             decision: &decision,
             decider: &decider,

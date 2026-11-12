@@ -2,13 +2,13 @@
 //! Deciders gave them.
 //!
 //! ```text
-//! decision(id, question_type, question, context, candidates, track_id, run_id, created_at)
+//! decision(id, question_type, topic, question, context, candidates, track_id, run_id, created_at)
 //! decision_answer(id, decision_id, decider_kind, decider_name, choice,
 //!                 choice_probability, probabilities, reason, fact_id, run_id, answered_at)
 //! ```
 //!
 //! Both tables are append-only: a row is written once and never changed or
-//! deleted. A Decision is the question as it was asked (its type, its
+//! deleted, and triggers in the store refuse either. A Decision is the question as it was asked (its type, its
 //! text, the context supplied and the candidates). An answer is one
 //! Decider's choice among those candidates. A Decision with no answer is
 //! pending. The same Decision can be answered again, by another Decider or
@@ -47,6 +47,7 @@ pub(crate) const SCHEMA: &str = "
 CREATE TABLE decision (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     question_type TEXT NOT NULL CHECK (question_type IN ('choice', 'yes_no')),
+    topic         TEXT,
     question      TEXT NOT NULL,
     context       TEXT NOT NULL,
     candidates    TEXT NOT NULL,
@@ -69,7 +70,19 @@ CREATE TABLE decision_answer (
     answered_at        INTEGER NOT NULL
 ) STRICT;
 
+-- Append-only, held by the store itself: a Decision and an answer are
+-- written once.
+CREATE TRIGGER decision_is_never_changed BEFORE UPDATE ON decision
+BEGIN SELECT RAISE(ABORT, 'a Decision is never changed'); END;
+CREATE TRIGGER decision_is_never_deleted BEFORE DELETE ON decision
+BEGIN SELECT RAISE(ABORT, 'a Decision is never deleted'); END;
+CREATE TRIGGER decision_answer_is_never_changed BEFORE UPDATE ON decision_answer
+BEGIN SELECT RAISE(ABORT, 'an answer to a Decision is never changed'); END;
+CREATE TRIGGER decision_answer_is_never_deleted BEFORE DELETE ON decision_answer
+BEGIN SELECT RAISE(ABORT, 'an answer to a Decision is never deleted'); END;
+
 CREATE INDEX decision_by_track ON decision (track_id);
+CREATE INDEX decision_by_topic ON decision (topic);
 CREATE INDEX decision_answer_by_decision ON decision_answer (decision_id);
 CREATE INDEX decision_answer_by_decider ON decision_answer (decider_kind, decider_name);
 ";
@@ -139,6 +152,10 @@ impl Candidate {
 #[derive(Debug, Clone)]
 pub struct NewDecision<'a> {
     pub question_type: QuestionType,
+    /// What kind of question this is, in the asker's own word (`genre`,
+    /// `lookup_match`): what Decisions are grouped by when Deciders are
+    /// compared. Lower-case letters, digits and underscores.
+    pub topic: Option<&'a str>,
     /// The question, or for [`QuestionType::YesNo`] the statement.
     pub question: &'a str,
     /// What a Decider is given to answer from: a JSON object.
@@ -203,6 +220,8 @@ pub struct Answer {
 pub struct Decision {
     pub id: i64,
     pub question_type: QuestionType,
+    /// What kind of question this is, in the asker's own word.
+    pub topic: Option<String>,
     pub question: String,
     pub context: Value,
     pub candidates: Vec<Candidate>,
@@ -236,6 +255,8 @@ pub struct DecisionQuery {
     pub decider: Option<Source>,
     /// Only Decisions about this track.
     pub track_id: Option<String>,
+    /// Only Decisions of this topic.
+    pub topic: Option<String>,
     pub limit: usize,
     pub offset: usize,
 }
@@ -255,11 +276,22 @@ impl Sidecar {
                     .to_owned(),
             ));
         }
+        if let Some(topic) = new.topic {
+            let plain = !topic.is_empty()
+                && topic
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+            if !plain {
+                return Err(SidecarError::Decision(format!(
+                    "a Decision's topic is lower-case letters, digits and underscores, not \"{topic}\""
+                )));
+            }
+        }
         let candidates = candidates_of(new.question_type, new.candidates)?;
         let db = self.db();
         db.execute(
-            "INSERT INTO decision (question_type, question, context, candidates, track_id, run_id, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO decision (question_type, question, context, candidates, track_id, run_id, created_at, topic)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 new.question_type.as_str(),
                 new.question.trim(),
@@ -268,6 +300,7 @@ impl Sidecar {
                 new.track_id,
                 new.run.map(|run| run.0),
                 now(),
+                new.topic,
             ],
         )?;
         let id = db.last_insert_rowid();
@@ -334,21 +367,25 @@ impl Sidecar {
     /// A page of Decisions, oldest first, and how many there are before
     /// the limit.
     pub fn decisions(&self, query: &DecisionQuery) -> Result<(Vec<Decision>, usize)> {
-        // ?1 track, ?2 and ?3 the Decider; each may be NULL for "any".
+        // ?1 track, ?2 and ?3 the Decider, ?4 topic; each may be NULL for
+        // "any".
         let answered = "EXISTS (SELECT 1 FROM decision_answer AS answer
                                 WHERE answer.decision_id = decision.id
                                   AND (?2 IS NULL OR (answer.decider_kind = ?2 AND answer.decider_name = ?3)))";
         let state = match query.state {
             DecisionState::Pending => format!("NOT {answered}"),
             DecisionState::Answered => answered.to_owned(),
-            // The Decider still binds, so the statement always has three
-            // parameters.
+            // The Decider still binds, so the statement always has the
+            // same parameters.
             DecisionState::All => "(?2 IS NULL OR ?3 IS NULL OR 1)".to_owned(),
         };
-        let filter = format!("WHERE (?1 IS NULL OR decision.track_id = ?1) AND {state}");
+        let filter = format!(
+            "WHERE (?1 IS NULL OR decision.track_id = ?1)
+               AND (?4 IS NULL OR decision.topic = ?4) AND {state}"
+        );
         let decider_kind = query.decider.as_ref().map(|decider| decider.kind.as_str());
         let decider_name = query.decider.as_ref().map(|decider| decider.name.as_str());
-        let bound = params![query.track_id, decider_kind, decider_name];
+        let bound = params![query.track_id, decider_kind, decider_name, query.topic];
         let db = self.db();
         let total: i64 = db.query_row(
             &format!("SELECT COUNT(*) FROM decision {filter}"),
@@ -498,13 +535,14 @@ fn checked_answer(
 fn read_decision(db: &Connection, id: i64) -> Result<Option<Decision>> {
     let Some(mut decision) = db
         .query_row(
-            "SELECT id, question_type, question, context, candidates, track_id, run_id, created_at
+            "SELECT id, question_type, question, context, candidates, track_id, run_id, created_at, topic
              FROM decision WHERE id = ?1",
             [id],
             |row| {
                 Ok(Decision {
                     id: row.get(0)?,
                     question_type: QuestionType::from_stored(&row.get::<_, String>(1)?),
+                    topic: row.get(8)?,
                     question: row.get(2)?,
                     context: serde_json::from_str(&row.get::<_, String>(3)?).unwrap_or(Value::Null),
                     candidates: serde_json::from_str(&row.get::<_, String>(4)?).unwrap_or_default(),
