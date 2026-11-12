@@ -164,7 +164,6 @@ impl Service {
         let library_lock = take_lock(&library.master_db, &socket)?;
         let master_db = library.master_db.clone();
         let open = open(library)?;
-        let core = open.core();
         let listener = listen(&config.runtime_dir, &socket)?;
         let (queue, queued) = std::sync::mpsc::channel();
         let (sidecar_events, sidecar_queued) = std::sync::mpsc::channel();
@@ -206,16 +205,35 @@ impl Service {
         // or the front end this service shares the core with. The core calls
         // this under its own lock, so the change is only queued here.
         {
-            let shared = Arc::downgrade(&shared);
-            core.watch(move |change| {
-                let Some(shared) = shared.upgrade() else {
-                    return false;
-                };
-                let queue = lock(&shared.changes);
-                queue
-                    .as_ref()
-                    .is_some_and(|queue| queue.send(LibraryChanged::from(change).event()).is_ok())
-            });
+            let watching = Arc::downgrade(&shared);
+            if let Some(owned) = lock(&shared.library).as_ref() {
+                owned.library.watch(move |change| {
+                    let Some(shared) = watching.upgrade() else {
+                        return false;
+                    };
+                    let queue = lock(&shared.changes);
+                    queue.as_ref().is_some_and(|queue| {
+                        queue.send(LibraryChanged::from(change).event()).is_ok()
+                    })
+                });
+                // Every turn of Library Protection, likewise in order, on
+                // the same queue. A hosting window hears of it from the core.
+                let watching = Arc::downgrade(&shared);
+                owned.library.watch_protection(move |state| {
+                    let Some(shared) = watching.upgrade() else {
+                        return false;
+                    };
+                    let queue = lock(&shared.changes);
+                    queue.as_ref().is_some_and(|queue| {
+                        queue
+                            .send(Event {
+                                event: crate::protection::PROTECTION_CHANGED.to_owned(),
+                                data: json!(crate::protection::Protection::from(state)),
+                            })
+                            .is_ok()
+                    })
+                });
+            }
         }
         {
             let shared = Arc::clone(&shared);
@@ -235,9 +253,9 @@ impl Service {
         // what an earlier service left settled, before any client is
         // accepted. A Ledger that cannot be settled now refuses every write
         // and every read of it, saying why, until it can.
-        core.history()
-            .lock()
-            .keep_ledger(Some(shared.ledger.clone()));
+        if let Some(owned) = lock(&shared.library).as_ref() {
+            owned.library.keep_ledger(shared.ledger.clone());
+        }
         if let Err(error) = shared.ledger.recover() {
             tracing::error!(%error, "the Ledger could not be brought up to date");
         }
@@ -435,6 +453,16 @@ impl Shared {
                 self.stop_requested.store(true, Ordering::Release);
                 Ok(json!({}))
             }
+            crate::protection::commands::GET => {
+                to_value(&self.with_library(OpenLibrary::protection)?)
+            }
+            crate::protection::commands::SET => {
+                // Turned through the core, which tells the clients (the
+                // watcher below) and a hosting window (its own watcher) in
+                // order, with the change's revision.
+                let set: crate::protection::SetProtection = required_arguments(request)?;
+                to_value(&self.with_library(|library| library.protect(set.protect_library))??)
+            }
             reading if crate::reading::answers(reading) => self
                 .with_library(|library| crate::reading::answer(library, reading, &request.args))?,
             edit if crate::mytag_edits::answers(edit) => {
@@ -575,10 +603,7 @@ impl Shared {
         // is taken first, so an edit the window is making is over, and
         // recorded, before the Ledger is taken off it.
         if let Some(owned) = lock(&self.library).take() {
-            let core = owned.library.core();
-            let _gate = core.edit_gate().lock();
-            self.ledger.close();
-            core.history().lock().keep_ledger(None);
+            owned.library.let_go_of_ledger(|| self.ledger.close());
         } else {
             self.ledger.close();
         }

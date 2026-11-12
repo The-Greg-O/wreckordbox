@@ -22,6 +22,14 @@ use crate::{Config, IDLE_EXIT_ENV, RUNTIME_DIR_ENV};
 /// How long a started service has to answer on its socket.
 const START_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long the `wreckordbox` command waits for a window that is still
+/// reading the Library before it gives up with [`codes::LIBRARY_LOADING`],
+/// unless [`LOADING_WAIT_ENV`](crate::LOADING_WAIT_ENV) says otherwise.
+pub const DEFAULT_LOADING_WAIT: Duration = Duration::from_secs(15);
+
+/// How often a command is asked again while the Library is being read.
+pub const LOADING_RETRY: Duration = Duration::from_millis(200);
+
 /// The program that runs a service when none is running: it must call
 /// [`serve_spawned`](crate::serve_spawned) when run with `args`.
 #[derive(Debug, Clone)]
@@ -40,6 +48,9 @@ pub struct Client {
     partial: String,
     /// Events that arrived while waiting for a response.
     events: VecDeque<Event>,
+    /// How long a command is asked again while the answer is
+    /// [`codes::LIBRARY_LOADING`].
+    loading_wait: Duration,
     /// Sent with every command from now on. See [`Self::in_run`].
     run: Option<crate::ledger::RunArg>,
     /// The Run the last command's changes are in. See [`Self::last_run`].
@@ -65,6 +76,7 @@ impl Client {
             next_id: 1,
             partial: String::new(),
             events: VecDeque::new(),
+            loading_wait: Duration::ZERO,
             run: None,
             last_run: None,
             run_heard: None,
@@ -131,6 +143,18 @@ impl Client {
             .map(|_| ())
     }
 
+    /// Has every command wait, for up to `wait`, for a window that is still
+    /// reading the Library: while the answer is [`codes::LIBRARY_LOADING`]
+    /// the command is asked again every [`LOADING_RETRY`], and that error
+    /// is the answer only once `wait` has passed. Nothing has been done by
+    /// a command answered so, so asking again cannot do it twice.
+    ///
+    /// A new connection does not wait at all; the `wreckordbox` command
+    /// waits [`DEFAULT_LOADING_WAIT`].
+    pub fn wait_while_loading(&mut self, wait: Duration) {
+        self.loading_wait = wait;
+    }
+
     /// Sends one command and waits for its answer. Events that arrive
     /// meanwhile are kept for [`next_event`](Self::next_event).
     pub fn call<T: DeserializeOwned>(
@@ -147,18 +171,47 @@ impl Client {
     /// Sends one command and waits for its answer, handing each event that
     /// arrives meanwhile to `on_event` as it arrives: how a client follows
     /// a long command's progress. [`subscribe`](Self::subscribe) first.
+    ///
+    /// While the answer is [`codes::LIBRARY_LOADING`] the command is asked
+    /// again, for as long as [`wait_while_loading`](Self::wait_while_loading)
+    /// allows.
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "callers build the arguments for the call and hand them over"
+    )]
     pub fn call_watching<T: DeserializeOwned>(
         &mut self,
         command: &str,
         args: Value,
         mut on_event: impl FnMut(Event),
     ) -> Result<T, ServiceError> {
+        let deadline = Instant::now() + self.loading_wait;
+        loop {
+            match self.call_once(command, &args, &mut on_event) {
+                Err(error) if error.code == codes::LIBRARY_LOADING => {
+                    let left = deadline.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        return Err(error);
+                    }
+                    std::thread::sleep(left.min(LOADING_RETRY));
+                }
+                answer => return answer,
+            }
+        }
+    }
+
+    fn call_once<T: DeserializeOwned>(
+        &mut self,
+        command: &str,
+        args: &Value,
+        on_event: &mut dyn FnMut(Event),
+    ) -> Result<T, ServiceError> {
         let id = self.next_id;
         self.next_id += 1;
         let request = Request {
             id,
             command: command.to_owned(),
-            args,
+            args: args.clone(),
             run: self.run.clone(),
         };
         self.last_run = None;

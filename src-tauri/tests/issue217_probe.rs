@@ -34,6 +34,8 @@ fn export_issue217_controlled_mp3_fixtures() {
     }
 
     let state = AppState::with_backups(root.join("backups"));
+    // As on the machine of a DJ who edits: Library Protection off.
+    state.core().set_protection(false).unwrap();
     let db = Db::open(location.clone(), OpenMode::ReadOnly).unwrap();
     let (library, _) = rbl_index::load(&db).unwrap();
     state.set_library(library, false, db.schema().db_version, 0, location);

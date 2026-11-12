@@ -25,6 +25,7 @@ import { useCommands } from "@/store/useCommands";
 import type { TrackSearchField } from "@/lib/search";
 
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useLibraryProtection } from "@/store/useLibraryProtection";
 import { droppedFilePaths, getBackend, subscribeNativeFileDrops } from "@/ipc/client";
 import type {
   Backend, DeckId, DeckTick, Device, ImportReport, LibraryProblem, LibrarySummary, RowDto, SortColumn, TrackField, TreeNode, ViewSpec,
@@ -709,6 +710,13 @@ function AppBody() {
       stop?.();
     };
   }, []);
+  // Library Protection belongs to the backend, which refuses every change
+  // while it is on; the preference shows what the backend last said.
+  const updateAdvanced = prefs.update;
+  useLibraryProtection(
+    advancedPrefs.protectLibrary,
+    useCallback((on: boolean) => updateAdvanced("advanced", { protectLibrary: on }), [updateAdvanced]),
+  );
   jobError.current = (job, error) => refuse(error instanceof Error ? error.message : `${job.label} failed.`);
   // A waveform click whose track could not be previewed says why.
   useEffect(() => onPreviewError(refuse), [refuse]);
