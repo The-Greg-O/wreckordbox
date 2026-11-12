@@ -1,0 +1,183 @@
+/* The Track Filter bar (wbx-57), drawn after docs/design/screens/library:
+   a dim uppercase label, then one outlined control per field; a control with
+   something picked is outlined in the accent and names its picks. Colours
+   are theme roles; the Prep colour swatches are rekordbox's track colours,
+   which do not follow the theme. */
+.bar {
+  font-family: var(--f-shell);
+  font-size: var(--f-size-shell);
+  color: var(--c-text);
+  background: var(--c-panel);
+  border-bottom: var(--s-shell-border) solid var(--c-raised);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-shell-space-3);
+  padding: var(--s-shell-space-2) var(--s-shell-space-4);
+  min-width: 0;
+}
+
+.label {
+  flex: none;
+  font-size: var(--f-size-shell-label);
+  letter-spacing: var(--f-tracking-shell-label);
+  text-transform: uppercase;
+  color: var(--c-text-dim);
+}
+
+/* The controls scroll sideways when the window is narrow; the count and
+   Clear stay in view beside them. */
+.controls {
+  display: flex;
+  align-items: center;
+  gap: var(--s-shell-space-2);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.control,
+.choice,
+.clear {
+  flex: none;
+  font: inherit;
+  color: var(--c-text-dim);
+  background: transparent;
+  border: var(--s-shell-border) solid var(--c-raised);
+  border-radius: var(--s-shell-radius);
+  padding: 1px var(--s-shell-space-3);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.control:hover,
+.choice:hover,
+.clear:not(:disabled):hover {
+  color: var(--c-text);
+}
+
+.control:focus-visible,
+.choice:focus-visible,
+.clear:focus-visible,
+.text:focus-visible,
+.field select:focus-visible,
+.field input:focus-visible {
+  outline: var(--s-shell-border) solid var(--c-accent);
+  outline-offset: 1px;
+}
+
+.control[data-active] {
+  border-color: var(--c-accent);
+  color: var(--c-text);
+}
+.control[data-active] .controlName {
+  color: var(--c-accent);
+}
+.control[aria-expanded="true"] {
+  background: var(--c-raised);
+}
+
+.caret {
+  color: var(--c-text-dim);
+}
+
+.text {
+  flex: 0 1 140px;
+  min-width: 80px;
+  font: inherit;
+  color: var(--c-text);
+  background: var(--c-black);
+  border: var(--s-shell-border) solid var(--c-raised);
+  border-radius: var(--s-shell-radius);
+  padding: 1px var(--s-shell-space-2);
+}
+
+.count {
+  flex: none;
+  font-family: var(--f-shell-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--c-text-dim);
+  white-space: nowrap;
+}
+.count[data-state="failed"] {
+  color: var(--c-error);
+}
+
+.clear:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-shell-space-3);
+  padding: var(--s-shell-space-2) var(--s-shell-space-4) var(--s-shell-space-3);
+  border-top: var(--s-shell-border) solid var(--c-raised);
+}
+
+.choices {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-shell-space-2);
+}
+
+.choice[aria-pressed="true"] {
+  color: var(--c-text);
+  border-color: var(--c-accent);
+  background: var(--c-raised);
+}
+.choice:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.field {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-shell-space-2);
+  color: var(--c-text-dim);
+}
+.field select,
+.field input {
+  font: inherit;
+  color: var(--c-text);
+  background: var(--c-black);
+  border: var(--s-shell-border) solid var(--c-raised);
+  border-radius: var(--s-shell-radius);
+}
+.field input {
+  width: 5em;
+}
+
+.empty {
+  color: var(--c-text-dim);
+}
+
+.problem {
+  margin: 0;
+  padding: 0 var(--s-shell-space-4) var(--s-shell-space-2);
+  color: var(--c-error);
+}
+
+.swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: var(--s-shell-space-2);
+  border-radius: 1px;
+  vertical-align: baseline;
+}
+.swatch[data-colour="Pink"] { background: var(--c-comment-pink); }
+.swatch[data-colour="Red"] { background: var(--c-comment-red); }
+.swatch[data-colour="Orange"] { background: var(--c-comment-orange); }
+.swatch[data-colour="Yellow"] { background: var(--c-comment-yellow); }
+.swatch[data-colour="Green"] { background: var(--c-comment-green); }
+.swatch[data-colour="Aqua"] { background: var(--c-comment-aqua); }
+.swatch[data-colour="Blue"] { background: var(--c-comment-blue); }
+.swatch[data-colour="Purple"] { background: var(--c-comment-purple); }

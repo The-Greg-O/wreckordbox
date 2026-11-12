@@ -98,6 +98,8 @@ import { autoAnalysisOffer, takeRemainingPages } from "@/lib/autoAnalysis";
 import type { LibraryQuestion } from "@/views/library/NewLibraryDialog";
 import type { QueueItem } from "@/lib/queue";
 import { TrackFilter } from "@/views/browser/TrackFilter";
+import { TrackFilterBar } from "@/views/shell/TrackFilterBar";
+import { useShellTrackFilter } from "@/views/shell/useShellTrackFilter";
 import { EMPTY_FILTER, toSpecFilter, type FilterState } from "@/lib/trackFilter";
 import type { AnalysisResult, DeviceFormat, DeviceImportMissing, DevicePlaylistEdit, DevicePlaylistImportPlan, FilterValues, LinkPeerSeen, LinkStatus, ListTotals, RelocateSearch, SmartRule, TrackLookups, UnanalysedTracks } from "@/ipc/types";
 import { statusBarListText } from "@/lib/format";
@@ -943,13 +945,18 @@ function AppBody() {
   const masterBpmX100 = (syncMaster === "b" ? playerTrackB : playerTrack)?.bpmX100 ?? null;
   // Related Tracks relate to the track on Player 1, as rekordbox's do.
   const relatedTo = playerTrack?.id ?? null;
+  // The view shell's Track Filter bar (wbx-57): always shown above the list,
+  // its text is the list's search.
+  const shellFilterBase: ViewSpec = useMemo(() => ({ ...specForNode(selectedNode, "", null, "classic", "alphabetical", relatedTo, deviceLibraries.revision), searchField }),
+    [selectedNode, relatedTo, deviceLibraries.revision, searchField]);
+  const shellFilter = useShellTrackFilter({ enabled: shellOn, base: shellFilterBase, query, setQuery, generation: libraryGeneration });
   const spec: ViewSpec = useMemo(() => {
     const base = { ...specForNode(selectedNode, query, sortState, viewPrefs.keyDisplay, viewPrefs.keySort, relatedTo, deviceLibraries.revision), searchField };
     // Only while the bar is showing: hiding it puts the whole list back,
     // so a closed bar can never be silently narrowing the library.
-    const filter = filterOpen ? toSpecFilter(filterState, masterBpmX100) : undefined;
+    const filter = shellOn ? shellFilter.viewFilter : filterOpen ? toSpecFilter(filterState, masterBpmX100) : undefined;
     return filter ? { ...base, filter } : base;
-  }, [selectedNode, sortState, query, searchField, filterOpen, filterState, masterBpmX100, viewPrefs.keyDisplay, viewPrefs.keySort, relatedTo, deviceLibraries.revision]);
+  }, [selectedNode, sortState, query, searchField, filterOpen, filterState, masterBpmX100, viewPrefs.keyDisplay, viewPrefs.keySort, relatedTo, deviceLibraries.revision, shellOn, shellFilter.viewFilter]);
 
   // What the bar's lists offer, from Rust, for the source and query alone.
   // Re-asked when either changes or the library does, and only while the bar
@@ -3562,9 +3569,12 @@ function AppBody() {
           searchRef={searchRef}
           seed={seed}
           onFirstRows={onFirstRows}
-          filterOpen={filterOpen}
-          onToggleFilter={toggleFilter}
-          filterBar={filterBar}
+          filterOpen={shellOn || filterOpen}
+          {...(shellOn ? {} : { onToggleFilter: toggleFilter })}
+          filterBar={shellOn ? (
+            <TrackFilterBar model={shellFilter.model} onChange={shellFilter.onChange} values={shellFilter.values}
+              valuesError={shellFilter.valuesError} count={shellFilter.count} keyDisplay={viewPrefs.keyDisplay} />
+          ) : filterBar}
         />
         )
   );

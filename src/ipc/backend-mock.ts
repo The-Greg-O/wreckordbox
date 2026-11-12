@@ -2256,6 +2256,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       // answer before the library is up. A mock that served rows while the
       // summary was still failing would not be standing in for anything.
       if (!ready) return notReady();
+      // A test's way to make list opens fail (track-filter-bar.spec.ts).
+      if ((globalThis as { __failOpenView?: boolean }).__failOpenView) return Promise.reject(new Error("The list could not be read."));
       if (spec.source.kind === "device") {
         const q = fold(spec.query.trim());
         let rows: RowDto[];
