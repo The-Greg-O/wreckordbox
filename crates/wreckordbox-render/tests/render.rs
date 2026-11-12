@@ -496,15 +496,10 @@ fn a_file_that_appears_at_the_destination_during_a_render_is_not_replaced() {
     let mut track = TrackSource::open(&source).unwrap();
     let out = bench.out();
 
-    let result = render(
-        &mut track,
-        an_edit(),
-        &Destination::wav(&out),
-        &mut |_| {
-            std::fs::write(&out, b"someone else's").unwrap();
-            Proceed::Continue
-        },
-    );
+    let result = render(&mut track, an_edit(), &Destination::wav(&out), &mut |_| {
+        std::fs::write(&out, b"someone else's").unwrap();
+        Proceed::Continue
+    });
 
     assert!(
         matches!(result, Err(RenderError::DestinationExists(_))),

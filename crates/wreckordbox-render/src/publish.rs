@@ -106,10 +106,7 @@ impl<'a> Part<'a> {
                 .map_or(0, |since| since.subsec_nanos());
             let mut part = std::ffi::OsString::from(".");
             part.push(name);
-            part.push(format!(
-                ".{}-{unique}-{nanos:08x}.part",
-                std::process::id()
-            ));
+            part.push(format!(".{}-{unique}-{nanos:08x}.part", std::process::id()));
             let path = destination.with_file_name(part);
             match files.create_new(&path) {
                 Ok(file) => {
@@ -151,9 +148,9 @@ impl<'a> Part<'a> {
         match self.files.hard_link(&self.path, destination) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Err(taken()),
-            Err(error) if not_offered(&error) => Err(RenderError::NoReplaceUnsupported(
-                destination.to_path_buf(),
-            )),
+            Err(error) if not_offered(&error) => {
+                Err(RenderError::NoReplaceUnsupported(destination.to_path_buf()))
+            }
             Err(error) => Err(error.into()),
         }
     }

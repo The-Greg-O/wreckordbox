@@ -90,6 +90,9 @@ pub fn decode_mono(path: &Path, max_secs: Option<f64>) -> Result<Audio> {
     Ok(Audio { samples, sample_rate: stream.sample_rate(), source_channels: stream.source_channels() })
 }
 
+/// One packet's frames: downmixed, and the same frames as 16-bit stereo.
+pub type Frames<'a> = (&'a [f32], &'a [[i16; 2]]);
+
 /// A file decoded to mono `f32` one packet at a time.
 ///
 /// What [`decode_mono`] collects into one buffer, for a caller that wants
@@ -136,14 +139,14 @@ impl MonoStream {
     /// Opens a file and its first audio track.
     pub fn open(path: &Path) -> Result<Self> {
         let (source, aifc) = aifc::open(path)?;
-        Self::over(source, &aifc, path.extension().and_then(|e| e.to_str()), Some(path))
+        Self::over(source, aifc, path.extension().and_then(|e| e.to_str()), Some(path))
     }
 
     /// [`MonoStream::open`] over bytes from anywhere. `path` is the file the
     /// bytes are from, when there is one: an MP3's lead is read from it.
     fn over(
         source: Box<dyn symphonia::core::io::MediaSource>,
-        aifc: &aifc::Aifc,
+        aifc: aifc::Aifc,
         extension: Option<&str>,
         path: Option<&Path>,
     ) -> Result<Self> {
@@ -233,7 +236,7 @@ impl MonoStream {
     ///
     /// A damaged packet inside the stream is still its own length of
     /// silence, as in rekordbox and on a deck: the audio keeps its place.
-    pub fn try_next_frames(&mut self) -> Result<Option<(&[f32], &[[i16; 2]])>> {
+    pub fn try_next_frames(&mut self) -> Result<Option<Frames<'_>>> {
         if self.advance()? {
             Ok(Some((&self.mono, &self.stereo)))
         } else {
@@ -611,7 +614,7 @@ mod tests {
         let bytes = std::fs::read(&path).unwrap();
         let flaky = || {
             let source = Flaky { bytes: std::io::Cursor::new(bytes.clone()), fails_at: 44 + 5_000 * 4 };
-            MonoStream::over(Box::new(source), &aifc::Aifc::default(), Some("wav"), None).unwrap()
+            MonoStream::over(Box::new(source), aifc::Aifc::default(), Some("wav"), None).unwrap()
         };
 
         let (error, before) = drain(&mut flaky()).unwrap_err();
