@@ -293,11 +293,13 @@ pub(crate) fn answer(
             .get(queue.offset..queue.offset + page_len(rows.len(), &queue))
             .unwrap_or(&[]);
         let known = Known::read(library, stems, &index, on_page)?;
-        queue.suggestions_unavailable.clone_from(&known.facts_unavailable);
+        queue
+            .suggestions_unavailable
+            .clone_from(&known.facts_unavailable);
         queue.tracks = on_page
             .iter()
             .map(|&row| known.describe(&index, row))
-            .collect::<Result<_, _>>()?;
+            .collect();
         to_value(&queue)
     };
     let answer = match request.command.as_str() {
@@ -578,7 +580,7 @@ struct Known {
     locked: HashSet<String>,
     /// The page's `title` and `artist` Facts, by track and kind, newest
     /// first: where waiting proposals are.
-    facts: HashMap<(String, &'static str), Vec<Fact>>,
+    facts: PageFacts,
     /// Why those could not be read, when they could not.
     facts_unavailable: Option<String>,
 }
@@ -617,7 +619,7 @@ impl Known {
         })
     }
 
-    fn describe(&self, index: &rbl_index::Library, row: Row) -> Result<QueuedTrack, ServiceError> {
+    fn describe(&self, index: &rbl_index::Library, row: Row) -> QueuedTrack {
         let track = crate::tracks::record(index, row);
         let mut suggestions = Vec::new();
         for (field, held) in [(needs::TITLE, &track.title), (needs::ARTIST, &track.artist)] {
@@ -660,15 +662,20 @@ impl Known {
         if grid != GridState::Confirmed {
             needs.push(needs::GRID);
         }
-        Ok(QueuedTrack {
+        QueuedTrack {
             track,
             needs: needs.into_iter().map(str::to_owned).collect(),
             empty_dimensions,
             grid,
             suggestions,
-        })
+        }
     }
 }
+
+/// A page's `title` and `artist` Facts, by track and kind, newest first.
+type PageFacts = HashMap<(String, &'static str), Vec<Fact>>;
+/// One track's Facts of one kind, from wherever they are read.
+type FactsOf<'a> = &'a dyn Fn(&str, &str) -> Result<Vec<Fact>, String>;
 
 /// The `title` and `artist` Facts of the page's tracks, read without ever
 /// being what creates, migrates or tidies a Sidecar (wbx-62 review): through
@@ -676,11 +683,8 @@ impl Known {
 /// snapshot of the file, with the Sidecar slot held throughout so the writer
 /// cannot open under the read. `Err` says why they could not be read; the
 /// queue is still listed without them.
-fn page_facts(
-    stems: &Stems,
-    ids: &[String],
-) -> Result<HashMap<(String, &'static str), Vec<Fact>>, String> {
-    let read = |facts: &dyn Fn(&str, &str) -> Result<Vec<Fact>, String>| {
+fn page_facts(stems: &Stems, ids: &[String]) -> Result<PageFacts, String> {
+    let read = |facts: FactsOf<'_>| {
         let mut out = HashMap::new();
         for id in ids {
             for field in [needs::TITLE, needs::ARTIST] {

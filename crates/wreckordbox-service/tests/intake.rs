@@ -518,7 +518,9 @@ fn a_prep_colour_edit_that_cannot_be_made_changes_nothing() {
 
 /// Every file in the Sidecar's folder, with its bytes: what a read must
 /// leave exactly as it found it.
-fn folder_snapshot(dir: &std::path::Path) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+fn folder_snapshot(
+    dir: &std::path::Path,
+) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
     let mut out = std::collections::BTreeMap::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(at) = stack.pop() {
@@ -536,14 +538,20 @@ fn folder_snapshot(dir: &std::path::Path) -> std::collections::BTreeMap<std::pat
 }
 
 /// Asserts the folder is byte for byte what it was, naming what changed.
-fn assert_unchanged(dir: &std::path::Path, before: &std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>) {
+fn assert_unchanged(
+    dir: &std::path::Path,
+    before: &std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>,
+) {
     let after = folder_snapshot(dir);
     let changed: Vec<_> = before
         .keys()
         .chain(after.keys())
         .filter(|path| before.get(*path) != after.get(*path))
         .collect();
-    assert!(changed.is_empty(), "the read changed the Sidecar's folder: {changed:?}");
+    assert!(
+        changed.is_empty(),
+        "the read changed the Sidecar's folder: {changed:?}"
+    );
 }
 
 /// A Sidecar made by an earlier service, with an agent's proposed title,
@@ -557,8 +565,17 @@ fn sidecar_appearing_after_start() -> (Hosted, std::path::PathBuf) {
     let location = fixture.location.clone();
     let dir = fixture.dir;
     {
-        let first = Fixture { dir, location: location.clone() }.start();
-        first.record("10000", "title", "A Better Title", json!({ "kind": "agent", "name": "tagger" }));
+        let first = Fixture {
+            dir,
+            location: location.clone(),
+        }
+        .start();
+        first.record(
+            "10000",
+            "title",
+            "A Better Title",
+            json!({ "kind": "agent", "name": "tagger" }),
+        );
         let Hosted { _dir: dir, service } = first;
         drop(service);
         std::fs::rename(&sidecar, &aside).unwrap();
@@ -578,7 +595,10 @@ fn reading_the_queues_never_opens_migrates_or_tidies_a_sidecar() {
     hosted.call("intake.counts", json!({}));
 
     // Read through a read-only snapshot: the proposal is there...
-    assert_eq!(track(&page, "10000")["suggestions"][0]["value"], "A Better Title");
+    assert_eq!(
+        track(&page, "10000")["suggestions"][0]["value"],
+        "A Better Title"
+    );
     assert!(page.get("suggestions_unavailable").is_none());
     // ...and not one byte of the Sidecar's folder changed, nor a file appeared.
     assert_unchanged(&sidecar, &before);
@@ -590,7 +610,11 @@ fn a_sidecar_the_queue_cannot_read_safely_lists_the_queue_and_says_suggestions_a
     // An older schema: opening it as the writer would migrate it.
     {
         let db = rusqlite::Connection::open(sidecar.join("sidecar.db")).unwrap();
-        db.execute("UPDATE meta SET value = '1' WHERE key = 'schema_version'", []).unwrap();
+        db.execute(
+            "UPDATE meta SET value = '1' WHERE key = 'schema_version'",
+            [],
+        )
+        .unwrap();
     }
     let before = folder_snapshot(&sidecar);
 
@@ -598,6 +622,8 @@ fn a_sidecar_the_queue_cannot_read_safely_lists_the_queue_and_says_suggestions_a
 
     assert_eq!(ids(&page).len(), 3);
     assert_eq!(track(&page, "10000")["suggestions"], json!([]));
-    assert!(page["suggestions_unavailable"].as_str().is_some_and(|why| !why.is_empty()));
+    assert!(page["suggestions_unavailable"]
+        .as_str()
+        .is_some_and(|why| !why.is_empty()));
     assert_unchanged(&sidecar, &before);
 }

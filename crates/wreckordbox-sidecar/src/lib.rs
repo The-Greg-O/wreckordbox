@@ -38,10 +38,10 @@
 //! rekordbox-format crate.
 
 mod active_runs;
-mod facts_snapshot;
 pub mod attachments;
 mod audio;
 pub mod decisions;
+mod facts_snapshot;
 mod fingerprint;
 mod kinds;
 pub mod ledger;
@@ -53,8 +53,8 @@ pub mod tag_schema;
 use std::path::{Path, PathBuf};
 
 pub use active_runs::{ActiveRun, ActiveRunsReader};
-pub use facts_snapshot::{FactsReader, FactsSnapshot};
 pub use audio::{audio_info, AudioInfo};
+pub use facts_snapshot::{FactsReader, FactsSnapshot};
 pub use fingerprint::{fingerprint_file, Fingerprint};
 pub use kinds::{Declaration, Kinds, ValueType, KINDS_FILE};
 pub use store::{
