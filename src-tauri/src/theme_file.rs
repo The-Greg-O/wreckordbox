@@ -258,27 +258,69 @@ pub fn parse(text: &str) -> ThemeFile {
     file
 }
 
-/// The theme file at `path`; `None` when there is none.
+/// Why a small text file could not be had.
+#[derive(Debug)]
+pub(crate) enum Unread {
+    /// Nothing at the path (or a parent is not a folder).
+    Missing,
+    /// Something is there and could not be read; why, for the DJ.
+    Failed(String),
+}
+
+/// At most `limit` bytes of the regular file at `path`, read through one
+/// handle: opened without waiting (a FIFO put in its place is refused, not
+/// waited on), checked on that handle, and read no further than `limit + 1`
+/// bytes whatever it grows to meanwhile.
+pub(crate) fn read_small(path: &Path, limit: u64) -> Result<Vec<u8>, Unread> {
+    use std::io::Read;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options.open(path).map_err(|error| match error.kind() {
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory => Unread::Missing,
+        _ => Unread::Failed(format!("the file could not be read: {error}")),
+    })?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| Unread::Failed(format!("the file could not be read: {error}")))?;
+    if !metadata.is_file() {
+        return Err(Unread::Failed(
+            "this is not a regular file, so it is not read".to_owned(),
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.take(limit + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| Unread::Failed(format!("the file could not be read: {error}")))?;
+    if bytes.len() as u64 > limit {
+        return Err(Unread::Failed(format!(
+            "the file is larger than {} KB, so it is not read",
+            limit / 1024
+        )));
+    }
+    Ok(bytes)
+}
+
+/// The theme file at `path`; `None` when there is none. A file that is there
+/// and cannot be read (no permission, not a regular file, too large, not
+/// UTF-8) is a file with one problem, on line 1.
 #[must_use]
 pub fn read(path: &Path) -> Option<ThemeFile> {
-    let metadata = std::fs::metadata(path).ok()?;
-    if !metadata.is_file() {
-        return None;
-    }
     let unreadable = |message: String| ThemeFile {
         problems: vec![ThemeProblem { line: 1, message }],
         ..ThemeFile::default()
     };
-    if metadata.len() > LARGEST {
-        return Some(unreadable(format!(
-            "the file is larger than {} KB, so it is not read",
-            LARGEST / 1024
-        )));
-    }
-    Some(match std::fs::read(path).map(String::from_utf8) {
-        Ok(Ok(text)) => parse(&text),
-        Ok(Err(_)) => unreadable("the file is not UTF-8 text, so it is not read".to_owned()),
-        Err(error) => unreadable(format!("the file could not be read: {error}")),
+    Some(match read_small(path, LARGEST) {
+        Err(Unread::Missing) => return None,
+        Err(Unread::Failed(message)) => unreadable(message),
+        Ok(bytes) => match String::from_utf8(bytes) {
+            Ok(text) => parse(&text),
+            Err(_) => unreadable("the file is not UTF-8 text, so it is not read".to_owned()),
+        },
     })
 }
 
@@ -420,6 +462,68 @@ mod tests {
             (bad.font, bad.font_size, bad.mono_font, bad.mono_font_size),
             (None, None, None, None)
         );
+    }
+
+    /// Takes read permission away from `path` for the length of `check`,
+    /// unless this runs as a user permissions do not stop (root).
+    #[cfg(unix)]
+    fn without_permission(path: &Path, mode: u32, check: impl FnOnce()) {
+        use std::os::unix::fs::PermissionsExt;
+        let before = std::fs::metadata(path).unwrap().permissions();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+        let stopped = std::fs::read_dir(path).is_err() || std::fs::read(path).is_err();
+        if stopped {
+            check();
+        }
+        std::fs::set_permissions(path, before).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_that_may_not_be_read_is_reported_not_taken_for_no_file() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = folder.path().join("theme.toml");
+        std::fs::write(&file, "accent = \"#ff8800\"\n").unwrap();
+        without_permission(&file, 0o000, || {
+            let read = read(&file).expect("a file that is there is not no file");
+            assert_eq!(lines(&read), [1]);
+            assert!(read.problems[0].message.contains("ermission"), "{:?}", read.problems);
+        });
+        // Its folder may not be searched: the file cannot even be looked at.
+        without_permission(folder.path(), 0o000, || {
+            let read = read(&file).expect("a folder that cannot be searched is not no file");
+            assert!(read.problems[0].message.contains("ermission"), "{:?}", read.problems);
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_special_file_is_reported_without_waiting_on_it() {
+        let folder = tempfile::tempdir().unwrap();
+        let fifo = folder.path().join("theme.toml");
+        let made = std::process::Command::new("mkfifo").arg(&fifo).status().unwrap();
+        assert!(made.success());
+        let (send, receive) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = send.send(read(&fifo));
+        });
+        let read = receive
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("reading a FIFO must not wait for a writer");
+        let read = read.expect("a FIFO where the file should be is reported");
+        assert!(read.problems[0].message.contains("not a regular file"), "{:?}", read.problems);
+    }
+
+    #[test]
+    fn no_more_than_the_limit_is_read() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = folder.path().join("theme.toml");
+        let mut big = "accent = \"#ff8800\"\n".to_owned();
+        big.push_str(&"# padding\n".repeat(40_000));
+        std::fs::write(&file, big).unwrap();
+        let read = read(&file).unwrap();
+        assert_eq!(read.colours.len(), 0);
+        assert!(read.problems[0].message.contains("larger than"), "{:?}", read.problems);
     }
 
     #[test]

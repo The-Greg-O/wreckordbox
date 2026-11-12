@@ -428,10 +428,8 @@ pub fn roles_from_file(path: &Path) -> Option<ThemeRoles> {
 /// The text of the colour file at `path`, if it is one.
 fn palette_text(path: &Path) -> Option<String> {
     // A palette is a few hundred bytes; anything large is not one.
-    if std::fs::metadata(path).ok()?.len() > 256 * 1024 {
-        return None;
-    }
-    std::fs::read_to_string(path).ok()
+    let bytes = crate::theme_file::read_small(path, 256 * 1024).ok()?;
+    String::from_utf8(bytes).ok()
 }
 
 /// The colour file to read: the override, or the active Omarchy theme's on
