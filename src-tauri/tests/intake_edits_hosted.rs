@@ -336,3 +336,51 @@ fn a_title_energy_and_prep_colour_edit_from_the_view_are_ledger_entries_and_undo
     assert_eq!(rows[at].rating, 0);
     assert_ne!(rows[at].title, "Fixed Title");
 }
+
+#[test]
+fn the_views_title_artist_energy_and_prep_colour_edits_are_the_djs_facts_and_undo_withdraws_one() {
+    // wbx-19: a hand edit is the DJ's Fact. The view's edits must be too,
+    // the Prep colour included though it goes through the hosted service.
+    let window = hosting_window(DJ_LABELS);
+    let id = track_id(1);
+    let app = || window.app.handle().clone();
+    for (field, value) in [("title", "Fixed Title"), ("artist", "Fixed Artist")] {
+        tauri::async_runtime::block_on(details::set_track_field(
+            app(),
+            window.state(),
+            vec![id.clone()],
+            field.into(),
+            value.into(),
+            None,
+        ))
+        .unwrap();
+    }
+    tauri::async_runtime::block_on(commands::set_track_rating(
+        app(),
+        window.state(),
+        vec![id.clone()],
+        4,
+    ))
+    .unwrap();
+    // Mark Clean: label 5, which the Library calls Green.
+    intake_view::set_prep_colour(&window.shared(), &id, Some(5)).unwrap();
+
+    let standing = |kind: &str| window.cli(&["facts", "standing", &id, kind])["standing"].clone();
+    for (kind, value) in [
+        ("title", json!("Fixed Title")),
+        ("artist", json!("Fixed Artist")),
+        ("energy", json!(4)),
+        ("prep_colour", json!("Green")),
+    ] {
+        let fact = standing(kind);
+        assert_eq!(fact["value"], value, "{kind}: {fact:#}");
+        assert_eq!(fact["source"]["kind"], "dj", "{kind}: {fact:#}");
+        assert!(fact["ledger_entry"].is_i64(), "{kind}: {fact:#}");
+    }
+
+    // Undo of Mark Clean withdraws its Fact and only that one.
+    window.undo();
+    assert!(standing("prep_colour").is_null(), "the colour's Fact is withdrawn");
+    assert_eq!(standing("energy")["value"], 4);
+    assert_eq!(standing("title")["value"], "Fixed Title");
+}
