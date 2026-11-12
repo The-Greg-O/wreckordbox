@@ -17,8 +17,7 @@ import { getBackend } from "@/ipc/client";
 import type { WaveformKind } from "@/ipc/types";
 import { coveredSize, exactBackingSize } from "@/lib/canvasSize";
 import { detailWaveOriginMs, detailWaveWindow, waveSlice } from "@/lib/player";
-import { useWaveColours } from "@/lib/waveTheme";
-import { usePreferences } from "@/store/usePreferences";
+import { useWaveColours, useWaveformTheme } from "@/lib/waveTheme";
 
 /** Raw waveform bytes per track. Small — a few hundred bytes each. */
 const bytesByTrack = new Map<string, Uint8Array>();
@@ -133,9 +132,10 @@ export const WaveformDetail = memo(function WaveformDetail({
   const pcmMode = requestedPcmWindow !== undefined;
   // Bumped when the track is re-analysed, so the bytes are fetched again.
   const [revision, setRevision] = useState(0);
-  // View › Color › Waveform color: each palette reads its own tags.
-  const palette = usePreferences().view.waveformColor;
-  // That palette's colours: the measured ones, or the desktop theme's.
+  // The waveform theme in force (the theme file's, else View › Color ›
+  // Waveform color): each palette reads its own tags.
+  const { palette } = useWaveformTheme();
+  // That palette's colours: the measured ones, or the Omarchy theme's.
   const colours = useWaveColours(palette);
   const pcmFromMs = requestedPcmWindow?.fromMs;
   const pcmToMs = requestedPcmWindow?.toMs;

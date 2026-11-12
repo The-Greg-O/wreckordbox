@@ -16,7 +16,7 @@ import { useTranslation } from "@/i18n";
 import { hotCueColour } from "@/lib/hotCueColours";
 import { previewBackingSize } from "@/lib/canvasSize";
 import { onPixelRatioChange, pixelRatio } from "@/lib/pixelRatio";
-import { useWaveColours, waveColoursKey } from "@/lib/waveTheme";
+import { useWaveColours, useWaveformTheme, waveColoursKey } from "@/lib/waveTheme";
 import { usePreferences } from "@/store/usePreferences";
 import { previewPositionMs, startPreview, stopPreview, usePreview } from "@/store/usePreview";
 import styles from "./TrackTable.module.css";
@@ -162,7 +162,8 @@ export const WaveformPreview = memo(function WaveformPreview({
   // bitmap rendered in one palette is not the row in another. View ›
   // Full/Preview Waveform switches the row between half and full, as it does
   // in rekordbox.
-  const { waveformColor: palette, hotCueColor, overviewWaveform } = usePreferences().view;
+  const { hotCueColor, overviewWaveform } = usePreferences().view;
+  const { palette } = useWaveformTheme();
   const half = overviewWaveform !== "full";
   // The waveform theme's colours: the measured ones, or the desktop theme's.
   const colours = useWaveColours(palette);

@@ -1,12 +1,20 @@
 /**
- * The colours the chosen waveform theme draws in.
+ * The waveform colour theme in force, and the colours it draws in.
  *
- * 3Band, RGB and BLUE are rekordbox's measured colours and never change. The
- * Theme palette takes three colours from the desktop (Omarchy) theme: its
- * blue for the low band, its magenta for the mid and its bright foreground
- * for the core. They are read from CSS custom properties on the document's
- * root, each with its own fallback, so this needs nothing of whatever sets
- * them: with no theme roles at all the Theme palette is Tokyo Night's.
+ * One source of truth for which theme every waveform draws (old layout,
+ * compact player, Intake's large player, the rows): `useWaveformTheme()`.
+ * The DJ's theme file (`~/.config/wreckordbox/theme.toml`, key `waveform`)
+ * wins where it sets one; otherwise it is the persisted view preference
+ * (Preferences › View › Color, or the deck's menu).
+ *
+ * 3Band, RGB and BLUE are rekordbox's measured colours and never change.
+ * The Theme palette takes three colours from the Omarchy theme, as the app
+ * shell reads them from the palette itself (`wave` in the theme payload):
+ * its blue for the low band, its magenta for the mid and its bright
+ * foreground for the core. Never the window's roles, so neither the theme
+ * file's colours nor anything else that recolours the chrome moves a
+ * waveform. With no Omarchy theme (a browser tab, `follow = "none"`, another
+ * system) the Theme palette is Tokyo Night's.
  *
  * The canvases are handed the result (`WaveColours`) and are otherwise the
  * same under every waveform theme. Cue, playhead, beat and phrase colours
@@ -14,52 +22,38 @@
  */
 import { useSyncExternalStore } from "react";
 
-import { MEASURED_COLOURS, themeWaveColours, type WaveColours, type WavePalette } from "@/canvas/waveform";
+import { MEASURED_COLOURS, themeWaveColours, type WaveColours } from "@/canvas/waveform";
+import type { WaveformTheme } from "@/lib/preferences";
+import { shownTheme, subscribeShownTheme, type Theme, type ThemeWave } from "@/lib/themeRoles";
+import { usePreferences } from "@/store/usePreferences";
 
-/**
- * The custom properties the Theme palette reads, by the band each colours.
- * Named as the theme roles are (`--role-*`, `docs/design/tokens.md`): the
- * theme's `blue`, its `magenta` and its `bright_foreground`.
- */
-export const THEME_WAVE_ROLES = {
-  low: "--role-blue",
-  mid: "--role-magenta",
-  high: "--role-text-bright",
-} as const;
+/** Tokyo Night's blue, magenta and bright foreground. */
+export const THEME_WAVE_FALLBACK: ThemeWave = { low: "#7aa2f7", mid: "#ad8ee6", high: "#c0caf5" };
 
-/** Tokyo Night's blue, magenta and bright foreground (`docs/design/tokens.md`). */
-export const THEME_WAVE_FALLBACK = { low: "#7aa2f7", mid: "#bb9af7", high: "#c0caf5" } as const;
+export const WAVEFORM_THEME_NAMES: readonly WaveformTheme[] = ["3band", "rgb", "blue", "theme"];
 
+const HEX = /^#[0-9a-f]{6}$/i;
 const byte = (n: number) => n.toString(16).padStart(2, "0");
 
-/**
- * A custom property's colour as `#rrggbb`, or null when it is not one this
- * reads: hex in three, six or eight digits, or `rgb()`/`rgba()` with whole
- * channels. Alpha is dropped; a waveform band is opaque.
- */
-export function cssHex(value: string): string | null {
-  const text = value.trim().toLowerCase();
-  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/.exec(text)?.[1];
-  if (hex) return hex.length === 3 ? `#${[...hex].map((c) => c + c).join("")}` : `#${hex.slice(0, 6)}`;
-  const rgb = /^rgba?\(\s*(\d{1,3})[\s,]+(\d{1,3})[\s,]+(\d{1,3})\s*(?:[,/]\s*[\d.]+%?\s*)?\)$/.exec(text);
-  if (!rgb) return null;
-  const channels = [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])];
-  return channels.every((c) => c <= 255) ? `#${channels.map(byte).join("")}` : null;
+/** The Omarchy theme's three colours, or the fallback, band by band. */
+export function themeWave(theme: Pick<Theme, "wave">): ThemeWave {
+  const own = theme.wave;
+  const band = (name: keyof ThemeWave) => {
+    const value = own?.[name];
+    return typeof value === "string" && HEX.test(value) ? value.toLowerCase() : THEME_WAVE_FALLBACK[name];
+  };
+  return { low: band("low"), mid: band("mid"), high: band("high") };
 }
 
 let held: { key: string; colours: WaveColours } | null = null;
 
 /**
- * The colours for `palette`, reading the theme's roles through `read` (a
- * custom property's name to its value, empty when unset). The same object
- * comes back while the colours are the same, so it can key an effect.
+ * The colours for `palette` under `theme`. The same object comes back while
+ * the colours are the same, so it can key an effect.
  */
-export function waveColoursFrom(palette: WavePalette, read: (name: string) => string): WaveColours {
+export function waveColoursFrom(palette: WaveformTheme, theme: Pick<Theme, "wave">): WaveColours {
   if (palette !== "theme") return MEASURED_COLOURS;
-  const role = (band: keyof typeof THEME_WAVE_ROLES) => cssHex(read(THEME_WAVE_ROLES[band])) ?? THEME_WAVE_FALLBACK[band];
-  const low = role("low");
-  const mid = role("mid");
-  const high = role("high");
+  const { low, mid, high } = themeWave(theme);
   const key = `${low}${mid}${high}`;
   if (held?.key !== key) held = { key, colours: themeWaveColours(low, mid, high) };
   return held.colours;
@@ -70,62 +64,40 @@ export function waveColoursKey(colours: WaveColours): string {
   return colours === MEASURED_COLOURS ? "measured" : colours.map((c) => c.map(byte).join("")).join("");
 }
 
-function readRoot(name: string): string {
-  if (typeof document === "undefined") return "";
-  return getComputedStyle(document.documentElement).getPropertyValue(name);
+/** The theme file's waveform theme, if it names one this window knows. */
+export function fileWaveform(theme: Pick<Theme, "waveform">): WaveformTheme | null {
+  const named = theme.waveform;
+  return typeof named === "string" && (WAVEFORM_THEME_NAMES as readonly string[]).includes(named)
+    ? (named as WaveformTheme)
+    : null;
 }
 
-const listeners = new Set<() => void>();
-let observer: MutationObserver | null = null;
-/** The Theme colours as last read from the root; null when they must be read again. */
-let read: WaveColours | null = null;
-
-/** Tells every waveform the desktop theme's colours may have changed. */
-export function waveThemeChanged(): void {
-  read = null;
-  for (const listener of listeners) listener();
+/** The waveform theme in force: the theme file's, else the preference. */
+export function effectiveWaveform(
+  preferred: WaveformTheme,
+  theme: Pick<Theme, "waveform">,
+): { palette: WaveformTheme; fromFile: boolean } {
+  const fromFile = fileWaveform(theme);
+  return fromFile ? { palette: fromFile, fromFile: true } : { palette: preferred, fromFile: false };
 }
 
-/**
- * Watches for the theme's roles changing. Whatever sets them does it by
- * touching the root element's attributes or a stylesheet in the head, and
- * either is seen here; it may also call `waveThemeChanged()` itself.
- */
-function subscribe(listener: () => void): () => void {
-  listeners.add(listener);
-  if (!observer && typeof MutationObserver !== "undefined" && typeof document !== "undefined") {
-    read = null;
-    observer = new MutationObserver(waveThemeChanged);
-    observer.observe(document.documentElement, { attributes: true });
-    observer.observe(document.head, { childList: true, subtree: true, characterData: true, attributes: true });
-  }
-  return () => {
-    listeners.delete(listener);
-    if (listeners.size === 0) {
-      observer?.disconnect();
-      observer = null;
-      read = null;
-    }
-  };
+/** The theme this window shows, kept current. */
+function useShownTheme(): Theme {
+  return useSyncExternalStore(subscribeShownTheme, shownTheme, shownTheme);
 }
 
-/**
- * The root's colours for `palette`. Read from the computed style once per
- * change while anything is watching, not once per waveform: a list has a
- * preview in every row.
- */
-function current(palette: WavePalette): WaveColours {
-  if (palette !== "theme") return MEASURED_COLOURS;
-  if (!observer) return waveColoursFrom(palette, readRoot);
-  read ??= waveColoursFrom(palette, readRoot);
-  return read;
+/** `effectiveWaveform` of `preferred` and the theme this window shows, kept current. */
+export function useEffectiveWaveform(preferred: WaveformTheme): { palette: WaveformTheme; fromFile: boolean } {
+  return effectiveWaveform(preferred, useShownTheme());
 }
 
-/** The colours to hand the waveform drawing for the chosen waveform theme. */
-export function useWaveColours(palette: WavePalette): WaveColours {
-  return useSyncExternalStore(
-    subscribe,
-    () => current(palette),
-    () => waveColoursFrom(palette, () => ""),
-  );
+/** The waveform theme every waveform draws, and whether the theme file set it. */
+export function useWaveformTheme(): { palette: WaveformTheme; fromFile: boolean } {
+  return useEffectiveWaveform(usePreferences().view.waveformColor);
+}
+
+/** The colours to hand the waveform drawing for `palette`. */
+export function useWaveColours(palette: WaveformTheme): WaveColours {
+  const theme = useShownTheme();
+  return waveColoursFrom(palette, theme);
 }

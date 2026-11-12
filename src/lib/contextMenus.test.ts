@@ -409,6 +409,14 @@ describe("deckMenu", () => {
       .toEqual(["Disable"]);
   });
 
+  it("ticks the theme file's waveform colour and greys every choice while the file sets it", () => {
+    const rows = deckMenu({ ...state, waveformColor: "blue", waveformColorFromFile: true });
+    const items = entriesOf(entriesOf(rows).find((e) => e.label === "Change waveform color")?.items ?? []);
+    expect(items.map((e) => [e.label, e.checked ?? false, e.action])).toEqual([
+      ["BLUE", true, null], ["RGB", false, null], ["3Band", false, null], ["Theme", false, null],
+    ]);
+  });
+
   it("offers Analyze Track for the loaded track", () => {
     const entry = entriesOf(deckMenu(state)).find((e) => e.label === "Analyze Track");
     expect(entry?.action).toBe("analyse");

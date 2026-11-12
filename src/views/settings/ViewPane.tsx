@@ -8,10 +8,11 @@
 import { getBackend } from "@/ipc/client";
 import { BROWSE_SCALE_STEPS } from "@/lib/preferences";
 import { LANGUAGE_CHOICES, useTranslation } from "@/i18n";
+import { useEffectiveWaveform } from "@/lib/waveTheme";
 import { usePreferencesContext } from "@/store/usePreferences";
 import styles from "./Preferences.module.css";
 import {
-  Button, Checkbox, Radios, Section, Select, Separator, Slider, Sub, Toggle,
+  Button, Checkbox, Note, Radios, Section, Select, Separator, Slider, Sub, Toggle,
 } from "./controls";
 
 export type ViewTab = "display" | "layout" | "color";
@@ -41,6 +42,8 @@ export function ViewPane({ tab, onResetColumns, onResetLayout }: ViewPaneProps) 
   const { preferences, update } = usePreferencesContext();
   const view = preferences.view;
   const set = (patch: Partial<typeof view>) => update("view", patch);
+  // The theme file's waveform colour wins over this pane's (`waveTheme.ts`).
+  const waveform = useEffectiveWaveform(view.waveformColor);
 
   if (tab === "color") {
     return (
@@ -64,7 +67,8 @@ export function ViewPane({ tab, onResetColumns, onResetLayout }: ViewPaneProps) 
               shape in the desktop theme's colours (`waveTheme.ts`). */}
           <Radios
             label="Waveform color"
-            value={view.waveformColor}
+            value={waveform.palette}
+            dim={waveform.fromFile}
             choices={[
               { value: "blue", label: "BLUE" },
               { value: "rgb", label: "RGB" },
@@ -73,6 +77,7 @@ export function ViewPane({ tab, onResetColumns, onResetLayout }: ViewPaneProps) 
             ]}
             onChange={(waveformColor) => set({ waveformColor })}
           />
+          {waveform.fromFile ? <Note>{t("Set by the theme file (waveform).")}</Note> : null}
         </Section>
         <Section title="HOT CUE color">
           <Select
