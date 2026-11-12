@@ -4,6 +4,7 @@
 //! when none is running. Results go to standard output, as text or with
 //! `--json` as JSON; errors go to standard error with a non-zero status.
 
+mod backup;
 mod decisions;
 mod facts;
 mod intake;
@@ -148,6 +149,14 @@ enum Commands {
         #[command(subcommand)]
         command: schema::SchemaCommands,
     },
+    /// Restore and list backups of the Library and its Sidecar.
+    Backup {
+        #[command(subcommand)]
+        command: backup::BackupCommands,
+    },
+    /// Stop the Library service running by itself, if one is. The window's
+    /// service stops only when the window closes.
+    Stop,
     /// Run the Library service in the foreground until interrupted.
     ///
     /// Not needed in ordinary use: the other subcommands start a service on
@@ -328,6 +337,22 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
             if !ok {
                 return Ok(ExitCode::FAILURE);
             }
+        }
+        Commands::Backup { command } => print(&backup::run(&config, cli.json, command)?),
+        Commands::Stop => {
+            let library = wreckordbox_service::locate_library()?;
+            let socket = config.socket_path(&library);
+            Client::connect(&socket)?.stop()?;
+            // Answered before it stops: wait until it no longer answers.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while Client::connect(&socket).is_ok() && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            print(if cli.json {
+                "{}"
+            } else {
+                "Stopped the Library service."
+            });
         }
         Commands::Serve { spawned: true } => {
             return Ok(if wreckordbox_service::serve_spawned(config) {
