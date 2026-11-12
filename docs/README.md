@@ -21,6 +21,7 @@ Commands in these guides run from the repository root unless stated otherwise.
 
 - [Track analysis settings](user/analysis-settings.md): choosing stages and queuing a batch.
 - [USB export](user/usb-export.md): compatibility conversion and playlist cleanup.
+- [Loading a Stick from the command line](user/stick-load.md): list, dry run, load, and what an agent can do.
 - [Backups](user/backups.md): backup contents, storage, and restoration.
 - [Waveform scrubbing](user/waveform-scrubbing.md): drag behavior and its audio filter.
 - [Theme file](user/theme.md): the window's own look over the Omarchy theme, and where `theme.toml` goes.
