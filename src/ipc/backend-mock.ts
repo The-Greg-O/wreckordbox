@@ -1613,6 +1613,18 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       membership.set(history, membersOf(history).filter((t) => !tracks.includes(t)));
       return bump();
     },
+    // The mock has no Sidecar: a test lists Mutants in
+    // `window.__mockMutants` (a `trackId` of "*" stands for any track asked
+    // about), or a reason in `window.__mockMutantsFail` to refuse.
+    collectionRemovalMutants: (tracks) => {
+      const page = window as unknown as {
+        __mockMutants?: import("@/lib/collectionRemoval").RemovalMutant[];
+        __mockMutantsFail?: string;
+      };
+      if (page.__mockMutantsFail) return Promise.reject(new Error(page.__mockMutantsFail));
+      const named = (page.__mockMutants ?? []).filter((m) => m.trackId === "*" || tracks.includes(m.trackId));
+      return wait(named);
+    },
     // The mock's rows are addressed by index, so a removal only takes the
     // tracks out of every playlist; the collection keeps its count.
     removeFromCollection: async (tracks) => {

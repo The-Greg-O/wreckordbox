@@ -1,4 +1,5 @@
 import { ConfirmHost } from "@/components/ConfirmDialog";
+import { removalQuestion } from "@/lib/collectionRemoval";
 import type { DuplicateAnswer } from "@/components/DuplicateTracksDialog";
 import type { FolderClashAnswer } from "@/lib/folderDrop";
 import { JobQueue, slices, type JobView } from "@/lib/jobQueue";
@@ -2057,10 +2058,12 @@ function AppBody() {
     async (ids: readonly string[]): Promise<boolean> => {
       if (ids.length === 0) return false;
       const backend = await getBackend();
-      const count = `${ids.length} track${ids.length === 1 ? "" : "s"}`;
-      const sure = await backend.confirm(
-        `Remove ${count} from the collection? This can’t be undone. The files stay where they are.`,
-      );
+      // The Mutants that would go with the tracks, named before asking
+      // (wbx-80); a failure to read them is said, not hidden.
+      const mutants = await backend.edits
+        .collectionRemovalMutants([...ids])
+        .catch((e: unknown) => ({ error: e instanceof Error ? e.message : String(e) }));
+      const sure = await backend.confirm(removalQuestion(ids.length, mutants));
       if (!sure) return false;
       jobs.add({
         label: t("Removing {count} from the collection", { count: ids.length }),

@@ -2141,6 +2141,11 @@ export interface Edits {
   removeFromHistory(history: string, tracks: string[]): Promise<number>;
   /** Remove from Collection: the tracks leave the library and every playlist. The files stay. */
   removeFromCollection(tracks: string[]): Promise<number>;
+  /**
+   * The Mutants Remove from Collection would remove with `tracks` (wbx-80),
+   * asked before the DJ confirms. Reads only.
+   */
+  collectionRemovalMutants(tracks: string[]): Promise<import("@/lib/collectionRemoval").RemovalMutant[]>;
   /** A new order, or Renumber Track Order: one step of Edit › Undo (#499). */
   reorderPlaylist(playlist: string, tracks: string[]): Promise<number>;
   /**
