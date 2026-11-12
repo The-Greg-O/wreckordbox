@@ -59,6 +59,8 @@ impl Fixture {
             idle_exit: None,
             recovery_dir: self.dir.path().join("recovery"),
         };
+        // As on the machine of a DJ who edits: Library Protection is off.
+        wreckordbox_service::protection::store(&config.recovery_dir, false).unwrap();
         let service = Service::start(self.location.clone(), &config).unwrap();
         Hosted {
             _dir: self.dir,

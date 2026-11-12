@@ -467,6 +467,8 @@ pub fn run() {
                     commands::announce_history(&handle, handle.state::<Arc<AppState>>().inner());
                 });
             }
+            // Every turn of Library Protection reaches the interface, in order.
+            service_host::announce_protection(app.handle());
             #[cfg(target_os = "macos")]
             if let Some(store) = crate::test_port::data_store() {
                 let config = app.config().app.windows.iter().find(|window| window.label == MAIN_WINDOW)
@@ -503,7 +505,7 @@ pub fn run() {
                 });
                 app.manage(mounts);
             }
-            app.set_menu(crate::menu::build(app.handle())?)?;
+            crate::menu::install(app.handle())?;
             // Windows: paths of files dropped from Explorer onto a playlist.
             #[cfg(windows)]
             if let Some(main) = app.get_webview_window("main") {
@@ -551,10 +553,15 @@ pub fn run() {
             menu::set_history_menu,
             menu::set_menu_labels,
             menu::set_menu_enabled,
+            menu::run_menu_item,
+            menu::run_edit_command,
             commands::library_summary,
             commands::disable_read_only,
             new_library::library_problem,
             service_host::service_problem,
+            service_host::library_protection,
+            service_host::adopt_library_protection,
+            service_host::set_library_protection,
             new_library::create_library,
             new_library::use_default_library,
             new_library::database_drives,

@@ -103,6 +103,8 @@ fn hosted() -> Hosted {
         idle_exit: None,
         recovery_dir: dir.path().join("recovery"),
     };
+    // As on the machine of a DJ who edits: Library Protection off.
+    wreckordbox_service::protection::store(&config.recovery_dir, false).unwrap();
     let core = Arc::new(LibraryCore::new(config.recovery_dir.clone()));
     let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
     let (index, _) = rbl_index::load(&db).unwrap();

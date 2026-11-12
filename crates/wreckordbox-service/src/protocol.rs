@@ -46,6 +46,10 @@ pub mod events {
 pub mod codes {
     /// No Library where one is configured.
     pub const LIBRARY_MISSING: &str = "library_missing";
+    /// Library Protection is on, so nothing that changes the Library is
+    /// done; the message is the window's own. See
+    /// [`protection`](crate::protection).
+    pub const LIBRARY_PROTECTED: &str = "library_protected";
     /// The Library's database is locked by another program.
     pub const LIBRARY_LOCKED: &str = "library_locked";
     /// The Library is there and cannot be read as one.

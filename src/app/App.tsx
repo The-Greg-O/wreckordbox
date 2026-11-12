@@ -24,6 +24,7 @@ import { useCommands } from "@/store/useCommands";
 import type { TrackSearchField } from "@/lib/search";
 
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useLibraryProtection } from "@/store/useLibraryProtection";
 import { droppedFilePaths, getBackend, subscribeNativeFileDrops } from "@/ipc/client";
 import type {
   Backend, DeckId, DeckTick, Device, ImportReport, LibraryProblem, LibrarySummary, RowDto, SortColumn, TrackField, TreeNode, ViewSpec,
@@ -101,6 +102,7 @@ import { statusBarListText } from "@/lib/format";
 import { autoRelocated, missingAmong, relocateSteps, relocateTracks } from "@/lib/relocate";
 import { useTooltip } from "@/store/usePreferences";
 import { useTranslation } from "@/i18n";
+import { CommandPaletteButton, CommandPaletteHost } from "@/views/palette/CommandPalette";
 import { nativeMenuLabels } from "@/lib/nativeMenu";
 
 /** The commands the shell itself registers, and so the keys it runs. */
@@ -710,6 +712,13 @@ function AppBody() {
       stop?.();
     };
   }, []);
+  // Library Protection belongs to the backend, which refuses every change
+  // while it is on; the preference shows what the backend last said.
+  const updateAdvanced = prefs.update;
+  useLibraryProtection(
+    advancedPrefs.protectLibrary,
+    useCallback((on: boolean) => updateAdvanced("advanced", { protectLibrary: on }), [updateAdvanced]),
+  );
   jobError.current = (job, error) => refuse(error instanceof Error ? error.message : `${job.label} failed.`);
   // A waveform click whose track could not be previewed says why.
   useEffect(() => onPreviewError(refuse), [refuse]);
@@ -2529,6 +2538,34 @@ function AppBody() {
     editHistory, runLibraryHistory,
   ]);
 
+  // The command palette (#54): from the view shell, a part only the old
+  // layout draws (the two-deck layout, the Information and Sub-Browser
+  // windows, the tempo slider) switches to that layout and shows it; the
+  // palette's "Use the view shell" comes back.
+  const updateView = prefs.update;
+  const setShell = useCallback((on: boolean) => updateView("view", { viewShell: on }), [updateView]);
+  const runOldLayout = useCallback((id: string) => {
+    updateView("view", { viewShell: false });
+    if (id === "info") {
+      setInfoOpen(true);
+      setMyTagOpen(false);
+      return;
+    }
+    if (id === "sub") {
+      setSubOpen(true);
+      return;
+    }
+    runMenu(id);
+  }, [updateView, runMenu]);
+  const paletteHistory = useMemo(
+    () => ({ undo: editHistory.canUndo, redo: editHistory.canRedo }),
+    [editHistory.canUndo, editHistory.canRedo],
+  );
+  const paletteLoaded = useMemo(
+    () => ({ a: playerTrack !== null, b: playerTrackB !== null }),
+    [playerTrack, playerTrackB],
+  );
+
   // The Track and Playlist menus' greyed items, worked out from the focus
   // and what the lists and trees report, and sent on whenever they change.
   useEffect(() => {
@@ -3521,6 +3558,10 @@ function AppBody() {
   );
   const dialogs = (
       <Suspense fallback={null}>
+      {/* The command palette (#54): in both layouts, since Linux has no menu row. */}
+      <CommandPaletteHost platform={platform} keyOverrides={keyOverrides} shell={shellOn} readOnly={readOnly}
+        history={paletteHistory} loaded={paletteLoaded}
+        runMenu={runMenu} runOldLayout={runOldLayout} setShell={setShell} openPreferences={openPreferences} />
       {duplicatePrompt ? (
         <DuplicateTracksDialog playlist={duplicatePrompt.playlist} duplicates={duplicatePrompt.duplicates}
           total={duplicatePrompt.total} onAnswer={duplicatePrompt.settle} />
@@ -3698,6 +3739,7 @@ function AppBody() {
           stick={selectedDevice ? library : undefined}
           library={library}
           status={<>{linkStrip}{statusBar}</>}
+          topBarEnd={<CommandPaletteButton platform={platform} />}
         />
         {dialogs}
       </div>
@@ -3715,6 +3757,7 @@ function AppBody() {
         onOpenSettings={openViewSettings}
         layout={chosenLayout}
         onLayoutChange={setLayout}
+        beforeSettings={<CommandPaletteButton platform={platform} />}
       />
       {/* Full Browser draws no deck at all, and no gutter under one. */}
       {deckCount(layout) > 0 ? (

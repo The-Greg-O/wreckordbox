@@ -4750,7 +4750,7 @@ mod tests {
         writer.disable_automatic_backups();
         prepare(&mut writer);
         drop(writer);
-        let state = crate::state::AppState::with_backups(dir.join("backups"));
+        let state = crate::state::AppState::unprotected(dir.join("backups"));
         reload(&state, &location);
         (state, location, crate::test_stick::stick())
     }
@@ -5011,7 +5011,7 @@ mod tests {
         let location = rbl_db::fixture::build(dir.path(), rbl_db::fixture::Shape::default()).unwrap();
         let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
         let (library, _) = rbl_index::load(&db).unwrap();
-        let state = AppState::with_backups(dir.path().join("backups"));
+        let state = AppState::unprotected(dir.path().join("backups"));
         state.set_library(library, false, db.schema().db_version, 0, location);
         crate::backups::create(&state).unwrap();
         let tracks: Vec<String> = (1..=3).map(rbl_db::fixture::track_id).collect();
@@ -5055,7 +5055,7 @@ mod tests {
         let location = rbl_db::fixture::build(dir.path(), rbl_db::fixture::Shape::default()).unwrap();
         let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
         let (library, _) = rbl_index::load(&db).unwrap();
-        let state = AppState::with_backups(dir.path().join("backups"));
+        let state = AppState::unprotected(dir.path().join("backups"));
         state.set_library(library, false, db.schema().db_version, 0, location);
         crate::backups::create(&state).unwrap();
         let tracks: Vec<String> = (1..=4).map(rbl_db::fixture::track_id).collect();

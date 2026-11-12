@@ -21,7 +21,7 @@ import { VolumeKnob } from "./VolumeKnob";
 import type { PlayerLayout } from "@/lib/layout";
 import { LayoutMenu } from "./LayoutMenu";
 import styles from "./TopBar.module.css";
-import { memo } from "react";
+import { memo, type ReactNode } from "react";
 import { useMasterDisplay } from "@/store/MasterOutput";
 
 export const ConnectedTopBar = memo(function ConnectedTopBar(props: Omit<TopBarProps, "level" | "onLevelChange" | "vu" | "peakLeft" | "peakRight">) {
@@ -54,6 +54,8 @@ export interface TopBarProps {
   /** How much of the window the deck takes. rekordbox puts this at the left. */
   layout?: PlayerLayout;
   onLayoutChange?: (layout: PlayerLayout) => void;
+  /** Drawn just before the settings button: the command palette's opener (#54). */
+  beforeSettings?: ReactNode;
 }
 
 /** 0 to 1, and never a NaN: a NaN width is a bar that does not draw. */
@@ -72,6 +74,7 @@ export function TopBar({
   audioLoad,
   layout = "one",
   onLayoutChange,
+  beforeSettings,
 }: TopBarProps) {
   const filled = clamp(level);
   return (
@@ -79,6 +82,8 @@ export function TopBar({
       <LayoutMenu layout={layout} onChange={onLayoutChange} />
 
       <span className={styles.spacer} />
+
+      {beforeSettings}
 
       <button
         type="button"

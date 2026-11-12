@@ -38,6 +38,8 @@ fn host() -> Hosted {
         idle_exit: None,
         recovery_dir: dir.path().join("recovery"),
     };
+    // As on the machine of a DJ who edits: Library Protection is off.
+    wreckordbox_service::protection::store(&config.recovery_dir, false).unwrap();
     let socket = config.socket_path(&location);
     let service = Service::start(location, &config).unwrap();
     Hosted {
@@ -213,6 +215,8 @@ fn shared_core() -> SharedCore {
         idle_exit: None,
         recovery_dir: dir.path().join("recovery"),
     };
+    // As on the machine of a DJ who edits: Library Protection is off.
+    wreckordbox_service::protection::store(&config.recovery_dir, false).unwrap();
     let core = Arc::new(LibraryCore::new(config.recovery_dir.clone()));
     SharedCore {
         _dir: dir,
@@ -408,4 +412,51 @@ fn a_front_ends_own_change_is_sent_to_clients_and_not_back_to_the_front_end() {
         events.recv_timeout(Duration::from_secs(5)).unwrap().data,
         json!({ "kind": "library", "generation": rated.generation })
     );
+}
+
+#[test]
+fn turning_protection_tells_subscribed_clients_in_order_with_a_rising_revision() {
+    let hosted = host();
+    let mut client = Client::connect(&hosted.socket).unwrap();
+    client.subscribe().unwrap();
+
+    let on: serde_json::Value = client
+        .call("protection.set", json!({ "protect_library": true }))
+        .unwrap();
+    let off: serde_json::Value = client
+        .call("protection.set", json!({ "protect_library": false }))
+        .unwrap();
+    let again: serde_json::Value = client
+        .call("protection.set", json!({ "protect_library": true }))
+        .unwrap();
+
+    assert_eq!(on["protect_library"], true);
+    assert_eq!(on["previous"], false);
+    assert_eq!(off["previous"], true);
+    let revisions: Vec<u64> = [&on, &off, &again]
+        .iter()
+        .map(|set| set["revision"].as_u64().unwrap())
+        .collect();
+    assert!(
+        revisions.windows(2).all(|pair| pair[0] < pair[1]),
+        "{revisions:?}"
+    );
+    for (set, on) in [(&on, true), (&off, false), (&again, true)] {
+        assert_eq!(
+            client.next_event(Duration::from_secs(5)).unwrap(),
+            Some(Event {
+                event: "protection_changed".into(),
+                data: json!({ "protect_library": on, "revision": set["revision"] }),
+            })
+        );
+    }
+    // The hosting process's own commands are held to the switch as well.
+    let refused = hosted
+        .service
+        .call(
+            "tracks.rate",
+            json!({ "id": fixture::track_id(1), "rating": 3 }),
+        )
+        .unwrap_err();
+    assert_eq!(refused.code, codes::LIBRARY_PROTECTED);
 }
