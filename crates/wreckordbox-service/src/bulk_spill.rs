@@ -117,12 +117,63 @@ fn files(dir: &Path) -> Result<Vec<PathBuf>, String> {
     files.sort();
     Ok(files)
 }
+enum Header {
+    Ready(Manifest),
+    Empty,
+    Orphaned(String),
+}
+
+/// Only a missing header is special. Unreadable or malformed manifests retain
+/// the normal recovery failure. Never mistake a batch (even a .tmp batch) for
+/// disposable metadata; conservatively keep unknown files too.
+fn header(dir: &Path) -> Result<Header, String> {
+    let path = dir.join("manifest.json");
+    match std::fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .map(Header::Ready)
+            .map_err(|e| format!("{}: {e}", path.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if files(dir)?
+                .iter()
+                .any(|p| p.file_name().is_none_or(|n| n != "manifest.tmp"))
+            {
+                Ok(Header::Orphaned(format!(
+                    "Bulk spill {} has no manifest.json; files that may contain accepted writes are kept for recovery",
+                    dir.display()
+                )))
+            } else {
+                Ok(Header::Empty)
+            }
+        }
+        Err(error) => Err(format!("{}: {error}", path.display())),
+    }
+}
+
+fn remove_empty(dir: &Path) -> Result<(), String> {
+    local(dir)?;
+    for result in [
+        std::fs::remove_file(dir.join("manifest.tmp")),
+        std::fs::remove_dir(dir),
+    ] {
+        if let Err(error) = result {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                return Err(format!("{}: {error}", dir.display()));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn mark_complete(dir: &Path) -> Result<(), String> {
     if !dir.exists() {
         return Ok(());
     }
     let file = dir.join("manifest.json");
-    let mut manifest: Manifest = read(&file)?;
+    let mut manifest = match header(dir)? {
+        Header::Ready(manifest) => manifest,
+        Header::Empty => return remove_empty(dir),
+        Header::Orphaned(error) => return Err(error),
+    };
     manifest.complete = true;
     write(&file, &manifest)
 }
@@ -135,8 +186,12 @@ pub(super) fn replay(
         return Ok(());
     }
     local(dir)?;
+    let mut manifest = match header(dir)? {
+        Header::Ready(manifest) => manifest,
+        Header::Empty => return remove_empty(dir),
+        Header::Orphaned(error) => return Err(error),
+    };
     let header = dir.join("manifest.json");
-    let mut manifest: Manifest = read(&header)?;
     if manifest.run.is_none() {
         manifest.run = Some(
             sidecar
@@ -193,13 +248,25 @@ pub(super) fn replay(
 pub(super) fn exists(root: &Path) -> bool {
     root.join("ledger-bulk").is_dir()
 }
-pub(super) fn replay_all(root: &Path, sidecar: &Sidecar) -> Result<(), String> {
+/// Completed/startup work with no manifest cannot be attributed safely. Keep
+/// it and return a diagnostic separately so unrelated writes can still proceed.
+pub(super) fn recover(dir: &Path, sidecar: &Sidecar) -> Result<Option<String>, String> {
+    if let Header::Orphaned(error) = header(dir)? {
+        return Ok(Some(error));
+    }
+    replay(dir, sidecar, || Ok(()))?;
+    Ok(None)
+}
+pub(super) fn replay_all(root: &Path, sidecar: &Sidecar) -> Result<Vec<String>, String> {
+    let mut errors = Vec::new();
     for dir in files(&root.join("ledger-bulk"))? {
         if dir.is_dir() {
-            replay(&dir, sidecar, || Ok(()))?;
+            if let Some(error) = recover(&dir, sidecar)? {
+                errors.push(error);
+            }
         }
     }
-    Ok(())
+    Ok(errors)
 }
 /// Named accepted writes waiting on disk. A query never replays or cleans up.
 pub(super) fn pending(
@@ -214,7 +281,11 @@ pub(super) fn pending(
         if !dir.is_dir() {
             continue;
         }
-        let manifest: Manifest = read(&dir.join("manifest.json"))?;
+        let manifest = match header(&dir)? {
+            Header::Ready(manifest) => manifest,
+            Header::Empty => continue,
+            Header::Orphaned(error) => return Err(error),
+        };
         if manifest.run.map(|id| id.0) != run {
             continue;
         }

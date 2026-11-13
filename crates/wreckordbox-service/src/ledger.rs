@@ -1291,8 +1291,10 @@ impl Keeper {
                 )
             })
         })();
-        self.state().recovery_error = result.as_ref().err().cloned();
-        result
+        if let Err(error) = &result {
+            self.state().recovery_error = Some(error.clone());
+        }
+        result.and_then(|()| self.state().recovery_error.clone().map_or(Ok(()), Err))
     }
 
     /// Bulk starts share recovery/catch-up admission. New recording failures
@@ -1354,7 +1356,8 @@ impl Keeper {
     /// settled becomes an entry saying its change was begun and not
     /// confirmed, and the Runs it owned and never ended are ended. A
     /// damaged spill file stops here, untouched, until the DJ deals with
-    /// it.
+    /// it. Bulk batches missing their manifest are kept and reported, but
+    /// cannot prevent unrelated work from settling.
     fn settle(&self, sidecar: &Sidecar, state: &mut State) -> Result<(), String> {
         if state.settled {
             return Ok(());
@@ -1364,7 +1367,9 @@ impl Keeper {
             state.unwritten = read_spill(&file)?;
         }
         self.write_waiting(sidecar, state)?;
-        bulk_spill::replay_all(&self.stems.bulk_recovery_dir(), sidecar)?;
+        for error in bulk_spill::replay_all(&self.stems.bulk_recovery_dir(), sidecar)? {
+            Self::bulk_recovery_error(state, error);
+        }
         for open in sidecar.open_intents().map_err(|e| e.to_string())? {
             // What the unconfirmed write did to entries: the Library as it
             // is, and what it planned. A failed read keeps it unsettled.
@@ -1415,12 +1420,26 @@ impl Keeper {
         Ok(())
     }
 
+    fn bulk_recovery_error(state: &mut State, error: String) {
+        tracing::error!(%error, "the Ledger could not be brought up to date");
+        let message = match &state.recovery_error {
+            Some(previous) => format!("{}; {error}", previous.message),
+            None => error,
+        };
+        state.recovery_error = Some(ServiceError::new(
+            crate::stems::codes::SIDECAR_FAILED,
+            message,
+        ));
+    }
+
     /// Writes every entry still waiting into the Ledger, oldest first, and
     /// removes the spill file. An entry already there under its identifier
     /// (a replay cut short) is not written twice.
     fn write_waiting(&self, sidecar: &Sidecar, state: &mut State) -> Result<(), String> {
         while let Some(dir) = state.bulk_waiting.first() {
-            bulk_spill::replay(dir, sidecar, || Ok(()))?;
+            if let Some(error) = bulk_spill::recover(dir, sidecar)? {
+                Self::bulk_recovery_error(state, error);
+            }
             state.bulk_waiting.remove(0);
         }
         while let Some(waiting) = state.unwritten.first() {

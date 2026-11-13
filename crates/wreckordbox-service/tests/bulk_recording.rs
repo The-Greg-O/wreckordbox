@@ -462,3 +462,6 @@ fn unavailable_storage_keeps_the_accepted_write_then_requires_catch_up() {
 
 #[path = "support/bulk_review.rs"]
 mod review;
+
+#[path = "support/bulk_orphans.rs"]
+mod orphans;
