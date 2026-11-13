@@ -6,7 +6,7 @@
 .view {
   --iv-queue-w: 280px;
   --iv-row-h: 58px; /* docs/design/tokens.md: Intake queue row, three lines */
-  --iv-missing: var(--role-tab-to);
+  --iv-missing: var(--role-tab-to-ink, var(--role-tab-to));
   display: grid;
   grid-template-columns: var(--iv-queue-w) minmax(0, 1fr);
   min-width: 0;
@@ -148,7 +148,7 @@
   cursor: pointer;
 }
 .offer:hover { border-color: var(--role-accent); }
-.offerCount { color: var(--role-tab-to); }
+.offerCount { color: var(--role-tab-to-ink, var(--role-tab-to)); }
 
 /* The counter's parts: drawn only at half width, where the heading is the queue. */
 .counterOnly { display: none; }

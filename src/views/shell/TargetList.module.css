@@ -162,3 +162,11 @@
   border: var(--s-shell-border) solid var(--c-raised);
   border-radius: var(--s-shell-radius);
 }
+
+/* A light theme (wbx-45.1): the target's orange would not read as text on a
+   light ground, so the mark sits in a dark well. The orange is unchanged. */
+:global(:root[data-theme-mode="light"]) .mark {
+  padding: 0 var(--s-shell-space-2);
+  border-radius: var(--s-shell-radius);
+  background: #0e0e14;
+}
