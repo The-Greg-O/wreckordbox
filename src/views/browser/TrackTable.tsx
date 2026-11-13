@@ -1073,6 +1073,15 @@ export interface TrackTableProps {
   onArtworkMode?: (mode: ArtworkMode) => void;
   /** A view's own look for rows, headings and the headings' menu (`listLook.ts`). */
   look?: ListLook | undefined;
+  /**
+   * The list is kept mounted but out of sight (wbx-45.2: the view shell's
+   * Library list while another view shows). Inert, it hears no window keys
+   * (list keys, locate, renumber, Delete), registers no commands, publishes
+   * no Track menu state and reports an empty selection upwards, so nothing
+   * acts on rows nobody can see; its own selection and scroll are kept and
+   * reported again once it is shown.
+   */
+  inert?: boolean;
 }
 
 /**
@@ -1177,7 +1186,7 @@ export const TrackTable = memo(function TrackTable({
   onImportToCollection, onAnalysisLock, onAddToPlaylist, onAddToTagList, onRemoveFromTagList, onExportTrack, onReloadTag,
   playlists = [], devices = [], deviceMenu,
   players = 0, onLoadTrack, onSelectedRow, filterOpen = false, onToggleFilter, filterBar, onHiddenSelectionDropped,
-  trafficLight, onTrafficLight, trafficKey = null, artworkMode = "partial", onArtworkMode, look,
+  trafficLight, onTrafficLight, trafficKey = null, artworkMode = "partial", onArtworkMode, look, inert = false,
 }: TrackTableProps) {
   // Browse › FontSize and Line Space scale the measured tokens; the
   // virtualizer has to be told the same height the CSS draws. The whole
@@ -1682,8 +1691,9 @@ export const TrackTable = memo(function TrackTable({
     toBottom: cursorCommand("toBottom"),
     extendUp: extendCommand("extendUp"),
     extendDown: extendCommand("extendDown"),
-  }, listScope);
+  }, listScope, !inert);
   useEffect(() => {
+    if (inert) return undefined;
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const action = dispatch(event, platform, target, keyOverrides);
@@ -1707,7 +1717,7 @@ export const TrackTable = memo(function TrackTable({
     return () => {
       window.removeEventListener("keydown", onKey);
     };
-  }, [platform, keyOverrides, answersLocate, listScope]);
+  }, [platform, keyOverrides, answersLocate, listScope, inert]);
 
   const startDragOut = useCallback(
     (row: RowDto, index: number) => {
@@ -1935,8 +1945,9 @@ export const TrackTable = memo(function TrackTable({
     if (was !== null && was.source !== view.sourceKey) pickedIn.current = null;
     else if (was !== null && was.ids !== selection.ids) pickedIn.current = view.sourceKey;
     counted.current = { ids: selection.ids, source: view.sourceKey };
-    onSelectionChange?.(selection.ids.size, pickedIn.current === view.sourceKey);
-  }, [selection.ids, view.sourceKey, onSelectionChange]);
+    if (inert) onSelectionChange?.(0, false);
+    else onSelectionChange?.(selection.ids.size, pickedIn.current === view.sourceKey);
+  }, [selection.ids, view.sourceKey, onSelectionChange, inert]);
 
   useEffect(() => {
     onTotalsChange?.(view.totals);
@@ -1960,8 +1971,8 @@ export const TrackTable = memo(function TrackTable({
   useEffect(() => {
     if (!onSelectedRow) return;
     // One row, or nothing: a deck holds one track, so a selection of four has
-    // no answer to which of them clicking a deck would load.
-    const only = selection.ids.size === 1 ? [...selection.ids][0] : undefined;
+    // no answer to which of them clicking a deck would load. Inert, nothing.
+    const only = !inert && selection.ids.size === 1 ? [...selection.ids][0] : undefined;
     if (only === reportedRow.current) return;
     reportedRow.current = only ?? null;
     if (only === undefined) {
@@ -1977,7 +1988,7 @@ export const TrackTable = memo(function TrackTable({
     }
     // Selected but not fetched — off screen, which a click cannot reach.
     onSelectedRow(null);
-  }, [selection.ids, view, view.token, onSelectedRow]);
+  }, [selection.ids, view, view.token, onSelectedRow, inert]);
 
   // The rows behind the selection, resolved from what is cached. A selection
   // spanning unfetched rows contributes only what is on hand, which is what
@@ -2063,9 +2074,13 @@ export const TrackTable = memo(function TrackTable({
       onShowInFinder(row);
       return true;
     },
-  }, listScope);
+  }, listScope, !inert);
   // What the native Track menu needs to grey its items, kept current.
   useEffect(() => {
+    if (inert) {
+      publishListMenuState(listScope, null);
+      return;
+    }
     if (spec.source.kind === "device") {
       publishListMenuState(listScope, { source: "device", selected: selection.ids.size, rows: [], loose: false });
       return;
@@ -2077,7 +2092,7 @@ export const TrackTable = memo(function TrackTable({
       rows,
       loose: hasLooseId(selection.ids),
     });
-  }, [listScope, spec.source.kind, selection.ids, view.token, selectedRows]);
+  }, [listScope, spec.source.kind, selection.ids, view.token, selectedRows, inert]);
   useEffect(() => () => publishListMenuState(listScope, null), [listScope]);
 
   // Whether the Delete key speaks to this list: rekordbox's list hears it
@@ -2121,7 +2136,7 @@ export const TrackTable = memo(function TrackTable({
       if (!repeat) renumber();
       return true;
     },
-  }, subBrowser ? "sub" : "main");
+  }, subBrowser ? "sub" : "main", !inert);
   // Its key, once the Keyboard pane gives it one. rekordbox hands the
   // command to the sub-browser's list while the sub-browser has the focus
   // and to the main list otherwise [OBS: `BrowseBasicView::performCommand`
@@ -2142,6 +2157,7 @@ export const TrackTable = memo(function TrackTable({
         event.preventDefault();
       }
     };
+    if (inert) return undefined;
     if (subBrowser) window.addEventListener("mousedown", onDown, true);
     window.addEventListener("keydown", onKey);
     return () => {
@@ -2151,7 +2167,7 @@ export const TrackTable = memo(function TrackTable({
       }
       window.removeEventListener("keydown", onKey);
     };
-  }, [subBrowser, platform, keyOverrides]);
+  }, [subBrowser, platform, keyOverrides, inert]);
 
   // Delete and ⌫ remove the whole selection the way this list's own menu
   // entry does, asking first as it does: from the collection, a playlist, a
@@ -2202,11 +2218,20 @@ export const TrackTable = memo(function TrackTable({
       });
   });
   useEffect(() => {
+    if (inert) return undefined;
     window.addEventListener("keydown", removeSelection);
     return () => {
       window.removeEventListener("keydown", removeSelection);
     };
-  }, [removeSelection]);
+  }, [removeSelection, inert]);
+  // Put out of sight: its menus close and the Delete key's claim lapses.
+  useEffect(() => {
+    if (!inert) return;
+    engaged.current = false;
+    setTrackMenu(null);
+    setMenu(null);
+    setTrafficMenu(false);
+  }, [inert]);
 
   const reportedSelection = useRef("");
   // The list order of a selection the row cache could not order, asked of
@@ -2214,6 +2239,17 @@ export const TrackTable = memo(function TrackTable({
   const listOrder = useRef<{ ids: ReadonlySet<string>; token: string; order: string[] | null } | null>(null);
   useEffect(() => {
     if (!onSelectedTracks) return;
+    // Out of sight it holds nothing the window may act on; shown again, the
+    // selection it keeps is reported anew below.
+    if (inert) {
+      // An order still being asked for must not report the selection after all.
+      listOrder.current = null;
+      if (reportedSelection.current !== "") {
+        reportedSelection.current = "";
+        onSelectedTracks([]);
+      }
+      return;
+    }
     // Titles come from whatever pages are cached; the ids are the whole
     // selection, cached or not. The scan runs top to bottom, so the titles
     // map holds the cached selected rows in list order.
@@ -2263,7 +2299,7 @@ export const TrackTable = memo(function TrackTable({
       // The order only decides which track's colour the information panel
       // shows; the selection already reported stands.
     });
-  }, [selection.ids, view, onSelectedTracks, listedIds]);
+  }, [selection.ids, view, onSelectedTracks, listedIds, inert]);
 
   // An arrow drawn to rekordbox's geometry rather than the text arrows that
   // stood in for it: those render in the body font and sit off the baseline.
