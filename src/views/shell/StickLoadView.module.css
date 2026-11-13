@@ -35,6 +35,20 @@
   gap: var(--s-shell-space-4);
 }
 
+/* Every button of the view: outlined, as the design draws "Show every change". */
+.view button {
+  font: inherit;
+  color: var(--role-text);
+  background: none;
+  padding: var(--s-shell-space-2) var(--s-shell-space-4);
+  border: var(--s-shell-border) solid var(--role-hairline);
+  border-radius: var(--s-shell-radius);
+  cursor: pointer;
+}
+.view button:hover:not(:disabled) { border-color: var(--role-accent); }
+.view button:focus-visible { outline: var(--s-shell-border) solid var(--role-accent); outline-offset: 1px; }
+.view button:disabled, .view .load:disabled { color: var(--role-text-dim); border-color: var(--role-hairline); cursor: default; }
+
 .sticks { display: flex; flex-wrap: wrap; gap: var(--s-shell-space-2); }
 .sticks button[aria-pressed="true"] { border-color: var(--role-accent); color: var(--role-text-bright); }
 
@@ -120,8 +134,9 @@
 .changes h4, .outcome h4 { margin: 0 0 var(--s-shell-space-2); font-weight: 400; color: var(--role-text-dim); }
 .changes ul, .outcome ul { margin: 0; padding-left: var(--s-shell-space-5); overflow-wrap: anywhere; }
 
-.load {
+.view .load {
   min-height: 56px;
+  border-color: var(--role-accent);
   font-size: var(--f-size-shell-title);
   font-weight: 700;
 }

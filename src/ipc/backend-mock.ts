@@ -2544,7 +2544,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     devices: () => devices, tree: () => tree, wait,
     tracksOf: (id) => membership.get(id) ?? seededMembers(id).map((i) => all[i]?.id ?? ""),
     titleOf: (id) => all.find((row) => row.id === id)?.title ?? id,
-    spare: mockStickSpare, protectedNow: mockStickProtected, pending: mockStickPending,
+    spare: mockStickSpare, protectedNow: mockStickProtected,
+    pending: (path) => mockStickPending(path) || unfinishedWrites.has(path),
   });
   if (typeof window !== "undefined") {
     // `__setPrepColour(id, colourId)` (0 for none): an edit as the Library list makes it.

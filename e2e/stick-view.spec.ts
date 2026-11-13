@@ -248,3 +248,18 @@ for (const width of [1280, 900, 640, 436]) {
     await page.screenshot({ path: `test-results/stick-view-${width}.png` });
   });
 }
+
+test("a Stick with an unfinished write says so, is not dry-run or loaded, and its panel offers the named action", async ({ page }) => {
+  await open(page);
+  await call(page, "__setStickPending", DJ, true);
+  await tab(page, "Stick").click();
+  await page.getByTestId("shell-tree").getByRole("group", { name: "Stick DJ STICK" }).getByRole("treeitem", { name: "DJ STICK", exact: true }).click();
+  await expect(view(page).getByTestId("stick-unfinished")).toContainText("did not finish");
+  await expect(loadButton(page)).toBeDisabled();
+  await chooseFirst(page);
+  await page.waitForTimeout(300);
+  expect(await dryRuns(page)).toBe(0);
+  await expect(view(page).getByTestId("stick-panel")).toBeVisible();
+  expect(await writes(page)).toEqual([]);
+  expect(await call(page, "__stickRecovered")).toEqual([]);
+});
