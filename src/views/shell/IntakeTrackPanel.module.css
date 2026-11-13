@@ -56,6 +56,8 @@
 .level { width: 2.4em; padding: var(--s-shell-space-3) 0; }
 .level:hover, .chip:hover, .small:hover { border-color: var(--role-accent); }
 .level[aria-checked="true"] { color: var(--role-ground, #000); font-weight: 600; }
+/* Under a light theme the ground is light: the Energy colours are written on in dark ink (wbx-45.1). */
+:global(:root[data-theme-mode="light"]) .level[aria-checked="true"] { color: #0e0e14; }
 .level[data-level="1"][aria-checked="true"] { background: var(--c-energy-1); border-color: var(--c-energy-1); }
 .level[data-level="2"][aria-checked="true"] { background: var(--c-energy-2); border-color: var(--c-energy-2); }
 .level[data-level="3"][aria-checked="true"] { background: var(--c-energy-3); border-color: var(--c-energy-3); }
@@ -80,7 +82,7 @@
 .swatch[data-prep="Purple"] { background: var(--c-comment-purple); }
 
 .failed, .note { margin: 0; line-height: 1.4; }
-.failed { color: var(--role-tab-to); }
+.failed { color: var(--role-tab-to-ink, var(--role-tab-to)); }
 .note { color: var(--role-text-dim); }
 
 /* The row of actions, at the foot of the panel. */
@@ -119,7 +121,7 @@
   font: inherit;
   font-size: var(--f-size-shell-label);
 }
-.open { color: var(--role-tab-to); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.open { color: var(--role-tab-to-ink, var(--role-tab-to)); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .secondary { display: inline-flex; align-items: center; gap: var(--s-shell-space-3); margin-left: auto; }
 
 @container shell (max-width: 800px) {
@@ -138,4 +140,12 @@
   .secondary { margin-left: 0; }
   /* What the track needs is said once, in the counter above (wbx-69). */
   .actions .open { display: none; }
+}
+
+/* A light theme (wbx-45.1): mixed with a light ground the green turns pale
+   and the ground-coloured label vanishes; the button is the green itself,
+   written in black. */
+:global(:root[data-theme-mode="light"]) .markClean:not(:disabled) {
+  background: var(--c-comment-green);
+  color: #000000;
 }

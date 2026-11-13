@@ -1,0 +1,98 @@
+/* Light Omarchy themes in the view shell (wbx-45.1; docs/design/tokens.md).
+
+   Under a light theme upstream's layout keeps its dark chrome
+   (`:root[data-theme-mode="light"]` at the end of tokens.css), because its
+   icons and labels are drawn for a dark ground. The view shell is drawn on
+   the light theme's own roles: inside the shell (`[data-shell-roles]`, the
+   frame's root element) the chrome tokens point back at the roles, and the
+   fixed light-on-dark tokens the shell's parts still use (fields, icons,
+   outlines, the player's glyphs) take the role that does their job.
+   Menus and dialogs drawn outside the shell keep upstream's dark look.
+
+   Nothing here describes the music: waveform, phrase, cue, Prep, key, Energy,
+   meter and Mutant colours keep their values. Where one would not stand out
+   from a light ground it is given a dark well or an outline instead. */
+
+:root[data-theme-mode="light"] [data-shell-roles] {
+  /* Grounds, text and selection: the theme's. */
+  --c-black: var(--role-ground);
+  --c-top: var(--role-panel);
+  --c-panel: var(--role-working);
+  --c-button: var(--role-control);
+  --c-raised: var(--role-hairline);
+  --c-select: var(--role-selection);
+  --c-text: var(--role-text);
+  --c-text-dim: var(--role-text-dim);
+  /* The accent and the tab line's end, dark enough to be written with
+     (legibleRoles.ts accentInk, writtenIn). The fallbacks are tokens.css's. */
+  --role-accent: var(--role-accent-ink, #1373EB);
+  --role-on-accent: var(--role-on-accent-ink, #F0F0F0);
+  --c-accent: var(--role-accent);
+  --c-on-accent: var(--role-on-accent);
+
+  /* Fixed light-on-dark chrome the shell's parts still draw with. */
+  --c-field: var(--role-working);
+  --c-field-placeholder: var(--role-text-dim);
+  --c-filter-text: var(--role-text);
+  --c-icon-off: var(--role-text-dim);
+  --c-icon-on: var(--role-text);
+  --c-outline: var(--role-border);
+  --c-status-text: var(--role-text-dim);
+  --c-simple-head: var(--role-text-bright);
+  --c-play-ring-on: var(--role-accent-ink, var(--role-accent));
+  --c-scroll-thumb: var(--role-border);
+  --c-scroll-track: var(--role-panel);
+  /* Upstream's device panel, the Stick view's content until wbx-71 lands. */
+  --c-device-label: var(--role-text-dim);
+  --c-device-arrow: var(--role-text-dim);
+  --c-device-list-dim: var(--role-text-dim);
+  --c-device-disabled: var(--role-text-dim);
+  --c-device-disabled-ring: var(--role-border);
+  --c-device-row: var(--role-panel);
+
+  /* The outline a meaning colour gets where it alone would not stand out
+     from a light ground (pips, Prep stripes, key lights, tag hues). */
+  --c-meaning-edge: rgb(0 0 0 / 0.6);
+}
+
+/* Waveform wells (`data-wave-well`: the compact overview, the large
+   player's detail) keep the dark ground the waveform colours were measured
+   on, since the 3Band high band is white, and the dark chrome for what is
+   written inside them (tempo labels, the "no waveform" note). These are
+   upstream's own values, the --role-* fallbacks of tokens.css. */
+:root[data-theme-mode="light"] [data-shell-roles] [data-wave-well] {
+  --role-ground: #000000;
+  --role-panel: #0F0F0F;
+  --role-working: #1E1E1E;
+  --role-hairline: #323232;
+  --role-text: #E6E6E6;
+  --role-text-dim: #9A9A9A;
+  --role-text-bright: #FFFFFF;
+  --c-black: var(--role-ground);
+  --c-top: var(--role-panel);
+  --c-panel: var(--role-working);
+  --c-raised: var(--role-hairline);
+  --c-text: var(--role-text);
+  --c-text-dim: var(--role-text-dim);
+  --c-simple-head: #707070;
+  background: var(--c-black);
+}
+
+/* Phrase labels: the ink that reads on each phrase colour, in every theme
+   (white was 3:1 on CHORUS; LargePlayer wrote in the ground colour, which a
+   light theme turns light). */
+[data-shell-roles] [data-phrase] { color: #ffffff; }
+[data-shell-roles] [data-phrase="chorus"],
+[data-shell-roles] [data-phrase="down"],
+[data-shell-roles] [data-phrase="outro"] { color: #000000; }
+
+/* Meaning colours on a light ground: an edge where the colour alone would
+   not stand out (yellow and green Prep stripes, cyan and green pips, the key
+   lights' green and yellow, the phrase strip's lighter blocks). The colours
+   themselves are untouched. */
+:root[data-theme-mode="light"] [data-shell-roles] :is([data-prep], [data-level] [data-on], [data-light="match"], [data-light="boost"]) {
+  box-shadow: 0 0 0 1px var(--c-meaning-edge);
+}
+:root[data-theme-mode="light"] [data-shell-roles] [data-phrase] {
+  box-shadow: inset 0 0 0 1px var(--c-meaning-edge);
+}

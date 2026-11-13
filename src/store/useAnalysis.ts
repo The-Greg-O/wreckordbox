@@ -28,6 +28,7 @@ import {
 } from "@/lib/queue";
 
 export interface Analysis {
+  recordingError: string | null;
   state: QueueState;
   running: boolean;
   /** Tracks are waiting and none is being analysed: a library job holds the run. */
@@ -71,6 +72,32 @@ export function useAnalysis(
   // The tracks whose request is in flight, so the effect below never sends
   // one twice.
   const inFlight = useRef(new Set<string>());
+  const operation = useRef<Promise<string> | null>(null);
+  const mounted = useRef(true);
+  const [recordingError, setRecordingError] = useState<string | null>(null);
+  const finishOperation = useCallback(() => {
+    const ending = operation.current;
+    operation.current = null;
+    if (!ending) return;
+    void (async () => {
+      const token = await ending.catch(() => null);
+      if (token === null) return;
+      try {
+        const warning = await (await getBackend()).finishLedgerOperation(token);
+        if (warning && mounted.current) setRecordingError(warning);
+      } catch (error) {
+        if (mounted.current) setRecordingError(`Library changes were accepted, but Ledger completion failed: ${String(error)}`);
+      }
+    })();
+  }, []);
+  useEffect(() => {
+    mounted.current = true;
+    const active = inFlight.current;
+    return () => {
+      mounted.current = false;
+      if (active.size === 0) finishOperation();
+    };
+  }, [finishOperation]);
   // Whether a run has been going, so the drain fires once at its end.
   const ran = useRef(false);
   const running = isRunning(state);
@@ -79,9 +106,10 @@ export function useAnalysis(
       ran.current = true;
     } else if (ran.current) {
       ran.current = false;
+      finishOperation();
       onDrained?.();
     }
-  }, [running, onDrained]);
+  }, [running, onDrained, finishOperation]);
 
   useEffect(() => {
     // Fill the free slots first, if the run has not been cancelled; the
@@ -98,23 +126,26 @@ export function useAnalysis(
         try {
           const backend = await getBackend();
           const trackMode = track.analysis?.mode ?? mode;
-          const result = keyNotationRef.current === "alphanumeric"
-            ? await backend.analyseTrack(track.id, trackMode, track.analysis, keyTag.current, track.drawing || undefined, keyNotationRef.current)
-            : track.drawing
-            ? await backend.analyseTrack(track.id, trackMode, track.analysis, keyTag.current, true)
-            : keyTag.current
-              ? await backend.analyseTrack(track.id, trackMode, track.analysis, keyTag.current)
-              : await backend.analyseTrack(track.id, trackMode, track.analysis);
+          if (!operation.current) {
+            setRecordingError(null);
+            operation.current = backend.beginLedgerOperation("analysis");
+          }
+          const token = await operation.current;
+          const result = await backend.analyseTrack(track.id, trackMode, track.analysis,
+            keyTag.current, track.drawing || undefined,
+            keyNotationRef.current === "alphanumeric" ? keyNotationRef.current : undefined, token);
+          if (result.recordingWarning) setRecordingError(result.recordingWarning);
           setState((s) => succeed(s, track.id));
           onAnalysed?.(track.id, result);
         } catch (e) {
           setState((s) => fail(s, track.id, e instanceof Error ? e.message : String(e)));
         } finally {
           inFlight.current.delete(track.id);
+          if (!mounted.current && inFlight.current.size === 0) finishOperation();
         }
       })();
     }
-  }, [state, onAnalysed, mode, concurrentTracks, held]);
+  }, [state, onAnalysed, mode, concurrentTracks, held, finishOperation]);
 
   // The preferred settings, for a track queued without the dialog.
   const preferred = useCallback(
@@ -136,7 +167,7 @@ export function useAnalysis(
   // Memoised as a whole: see the note in `useColumns`.
   const waiting = isWaiting(state, held);
   return useMemo(
-    () => ({ state, running, waiting, total: total(state), add, draw, cancel, clear }),
-    [state, running, waiting, add, draw, cancel, clear],
+    () => ({ recordingError, state, running, waiting, total: total(state), add, draw, cancel, clear }),
+    [recordingError, state, running, waiting, add, draw, cancel, clear],
   );
 }

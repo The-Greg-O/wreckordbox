@@ -339,6 +339,8 @@ pub fn cue_colour_css(index: u8) -> Option<String> {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportReportDto {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recording_warning: Option<String>,
     pub imported: u32,
     /// One line per file that was not imported, saying why.
     pub skipped: Vec<String>,
