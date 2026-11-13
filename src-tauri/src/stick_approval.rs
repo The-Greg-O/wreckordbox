@@ -87,5 +87,7 @@ pub const STICK_WRITING_COMMANDS: &[&str] = &[
     "ensure_device_library",
     "stick_settle",
     "format_device",
-    "stick_view_load",
+    // Not `stick_view_load` (wbx-71): its token is the hold on the service's
+    // own plan, used up by the service under the Stick's lock
+    // (`approval::consume_bound_for`), not here.
 ];

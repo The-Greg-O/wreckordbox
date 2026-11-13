@@ -827,6 +827,10 @@ pub fn run() {
     match result {
         Ok(app) => {
             app.run(|handle, event| {
+                if let tauri::RunEvent::ExitRequested { api, .. } = &event {
+                    // A Stick load running: stopped where it safely can first (wbx-71).
+                    stick_view::exit_requested(handle, api);
+                }
                 if matches!(event, tauri::RunEvent::Exit) {
                     // Lets go of the Library's lock and socket, so a command
                     // run next starts a service of its own.

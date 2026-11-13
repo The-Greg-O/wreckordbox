@@ -18,6 +18,7 @@
 //! load, because the service takes the same lock itself.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use serde_json::{json, Value};
@@ -27,19 +28,19 @@ use wreckordbox_service::ServiceError;
 use crate::commands::blocking;
 use crate::error::{AppError, AppResult, ErrorKind};
 use crate::state::AppState;
-use crate::stick_approval::{bound, StickOperation};
 
-/// Runs one Stick command on the service this window hosts.
+/// Runs one Stick command on the service this window hosts, through a
+/// handle taken under the hosting lock and called with it let go, so a
+/// load never keeps the window from stopping the service (which asks the
+/// load to stop where it safely can and waits for its report).
 fn ask(state: &AppState, command: &str, args: Value) -> AppResult<Value> {
-    state
-        .with_service(|service| service.call(command, args))
-        .ok_or_else(|| {
-            AppError::new(
-                ErrorKind::NotFound,
-                "The Library service is not running in this window, so the Stick cannot be read or loaded.",
-            )
-        })?
-        .map_err(|error| failed(&error))
+    let caller = state.service_caller().ok_or_else(|| {
+        AppError::new(
+            ErrorKind::NotFound,
+            "The Library service is not running in this window, so the Stick cannot be read or loaded. Nothing was written.",
+        )
+    })?;
+    caller.call(command, args).map_err(|error| failed(&error))
 }
 
 /// The service's refusal in the window's words, its code kept as the detail.
@@ -74,17 +75,45 @@ pub fn dry_run(state: &AppState, stick: &str, playlists: &[String]) -> AppResult
     )
 }
 
-/// What the hold confirmed for a load of `playlists`: the Sync the window
-/// plans for them, with nothing else (no defaults, no compatibility format,
-/// nothing deleted), as the service loads them.
-fn held_operation(playlists: &[String]) -> StickOperation {
-    StickOperation::Sync {
-        playlists: playlists.to_vec(),
-        delete_unlisted_music: false,
-        automatic: false,
-        defaults: bound::<()>(None),
-        compatibility: bound::<()>(None),
+/// Stick loads the window has running, so closing it waits for them.
+static LOADS_RUNNING: AtomicUsize = AtomicUsize::new(0);
+/// Set once the window began closing behind a running load.
+static CLOSING: AtomicBool = AtomicBool::new(false);
+
+/// Counts one running load until dropped.
+struct Running;
+
+impl Running {
+    fn start() -> Self {
+        LOADS_RUNNING.fetch_add(1, Ordering::AcqRel);
+        Self
     }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        LOADS_RUNNING.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// The app is asked to exit (the window closed). With a Stick load running,
+/// the exit waits: on a thread of its own, never the interface's, the
+/// service is stopped, which asks the load to stop where it safely can and
+/// waits for it to end and send its report (logged by the load command);
+/// then the app exits. Nothing abandons the load part-way.
+pub fn exit_requested<R: tauri::Runtime>(
+    handle: &tauri::AppHandle<R>,
+    api: &tauri::ExitRequestApi,
+) {
+    if LOADS_RUNNING.load(Ordering::Acquire) == 0 || CLOSING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    api.prevent_exit();
+    let handle = handle.clone();
+    std::thread::spawn(move || {
+        tauri::Manager::state::<Arc<AppState>>(&handle).stop_service();
+        handle.exit(0);
+    });
 }
 
 /// The mounted Sticks, for the Stick view.
@@ -116,10 +145,14 @@ pub async fn stick_view_dry_run(
     .await
 }
 
-/// The load the DJ held for: `approval` is the window's token for a sync of
-/// exactly `playlists` onto `stick` (the hold), `plan` the dry run's plan id.
-/// Stick Protection and the token are checked, under the Stick's lock, before
-/// the service is asked; the service checks protection again under its own.
+/// The load the DJ held for: `plan` is the dry run's plan id the view
+/// showed, `approval` the token the window's hold exchanged that plan for
+/// (`stick_write_approve(plan)`). Stick Protection is checked here first,
+/// under the Stick's lock; the token is used up by the service under its
+/// own hold of that lock, and only for exactly `plan` and the result it
+/// was approved for (a fresh dry run's plan with an earlier hold, or a plan
+/// whose Native stems or audio changed since, is refused). The window's
+/// hosting lock is not held while the load runs.
 #[tauri::command]
 #[allow(
     clippy::needless_pass_by_value,
@@ -135,23 +168,26 @@ pub async fn stick_view_load(
     let state = Arc::clone(&state);
     blocking("stick_view_load", move || {
         let root = Path::new(&stick);
-        let operation = held_operation(&playlists);
-        {
-            // The window's lock order: the Library edit gate, then the Stick.
-            // Both are let go before the service runs the load: it takes the
-            // Stick's lock itself.
-            let gate = state.edit_gate().lock();
-            let (_, generation) = state.library_at_generation()?;
-            let access = crate::stick_guard::enter_stick(state.backup_dir(), root)?;
-            crate::stick_approval::consume(approval.as_deref(), &operation, root, generation)?;
-            drop(access);
-            drop(gate);
-        }
-        ask(
+        // Refused here, before anything else, on a protected Stick.
+        drop(crate::stick_guard::enter_stick(state.backup_dir(), root)?);
+        let Some(approval) = approval.filter(|token| !token.is_empty()) else {
+            return Err(AppError::new(
+                ErrorKind::ReadOnly,
+                "This write to the Stick was not confirmed. Nothing was written: hold to confirm the load shown.",
+            ));
+        };
+        let _running = Running::start();
+        let report = ask(
             &state,
             commands::STICKS_LOAD,
-            json!({ "stick": stick, "playlists": playlists, "plan": plan }),
-        )
+            json!({ "stick": stick, "playlists": playlists, "plan": plan, "approval": approval }),
+        );
+        // Said in the log too, so a report is kept when nothing is left to show it.
+        match &report {
+            Ok(load) => tracing::info!(stick = %stick, outcome = %load["outcome"], "Stick load finished"),
+            Err(error) => tracing::warn!(stick = %stick, error = %error.message, "Stick load refused or failed"),
+        }
+        report
     })
     .await
 }

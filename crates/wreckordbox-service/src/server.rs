@@ -304,16 +304,19 @@ impl Service {
     /// is one path to the Library. `subscribe` is a connection's command;
     /// the host calls [`events`](Self::events) instead.
     pub fn call(&self, command: &str, args: Value) -> Result<Value, ServiceError> {
-        let request = Request {
-            id: 0,
-            command: command.to_owned(),
-            args,
-            run: None,
-        };
-        // A load the host asks for is waited for on stopping, as a client's is.
-        let _hold =
-            (command == crate::stick_load::commands::STICKS_LOAD).then(|| self.shared.loads.hold());
-        self.shared.answer(None, &request).0
+        self.caller().call(command, args)
+    }
+
+    /// A handle the host can call through without holding on to the
+    /// service itself (wbx-71): a long call (a Stick load) made through it
+    /// does not stop the host from stopping the service, and stopping asks
+    /// that load to stop where it safely can and waits for its answer. It
+    /// never keeps the service running; once stopped, calls are refused.
+    #[must_use]
+    pub fn caller(&self) -> Caller {
+        Caller {
+            shared: Arc::clone(&self.shared),
+        }
     }
 
     /// A track's Stems for the renderer, verified current for its audio as
@@ -359,6 +362,28 @@ impl Service {
         Stopped {
             shared: Arc::clone(&self.shared),
         }
+    }
+}
+
+/// Calls a [`Service`] for its host without owning it ([`Service::caller`]).
+#[derive(Clone)]
+pub struct Caller {
+    shared: Arc<Shared>,
+}
+
+impl Caller {
+    /// As [`Service::call`].
+    pub fn call(&self, command: &str, args: Value) -> Result<Value, ServiceError> {
+        let request = Request {
+            id: 0,
+            command: command.to_owned(),
+            args,
+            run: None,
+        };
+        // A load the host asks for is waited for on stopping, as a client's is.
+        let _hold =
+            (command == crate::stick_load::commands::STICKS_LOAD).then(|| self.shared.loads.hold());
+        self.shared.answer(None, &request).0
     }
 }
 

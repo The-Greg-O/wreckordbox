@@ -139,6 +139,9 @@ struct Approval {
     op: StickOperation,
     /// Approved by the DJ (`approve`): only then is it a token.
     approved: bool,
+    /// For a token: the plan id the DJ confirmed, so a token is good only
+    /// for that plan ([`consume_bound_for`], wbx-71).
+    confirmed: Option<String>,
     /// What the planned write was worked out to do, and the identities of
     /// what that depends on ([`Bound`]); `None` for a plan that records
     /// only its arguments (the window's).
@@ -332,6 +335,7 @@ pub fn propose(stick: &Path, op: StickOperation, generation: Option<u64>) -> App
         issued: Instant::now(),
         op,
         approved: false,
+        confirmed: None,
         bound: None,
     };
     let id = uuid::Uuid::new_v4().simple().to_string();
@@ -363,6 +367,7 @@ pub fn approve(state_dir: &Path, plan: &str) -> AppResult<String> {
         return Err(refused("The Stick changed since the plan was made."));
     }
     approval.approved = true;
+    approval.confirmed = Some(plan.to_owned());
     approval.issued = Instant::now();
     let token = uuid::Uuid::new_v4().simple().to_string();
     approvals().insert(token.clone(), approval);
@@ -409,6 +414,38 @@ pub fn consume_bound(
     now: &Bound,
 ) -> AppResult<()> {
     let approval = take(token, op, stick, generation)?;
+    let Some(planned) = approval.bound else {
+        return Err(refused(
+            "This plan does not record what the write would do (it was not made by a dry run of this write).",
+        ));
+    };
+    let changed = differences(&planned, now);
+    if changed.is_empty() {
+        Ok(())
+    } else {
+        Err(StickWriteError::Changed(changed))
+    }
+}
+
+/// [`consume_bound`] for a token the DJ gave for one plan (the window's
+/// hold on the plan its Stick view showed): also refused unless the token
+/// was approved from exactly `plan`, so the hold for one dry run never
+/// confirms another's, even for the same playlists (wbx-71). Call it under
+/// the Stick's execution lock, with `now` worked out under it.
+pub fn consume_bound_for(
+    token: Option<&str>,
+    plan: &str,
+    op: &StickOperation,
+    stick: &Path,
+    generation: u64,
+    now: &Bound,
+) -> AppResult<()> {
+    let approval = take(token, op, stick, generation)?;
+    if approval.confirmed.as_deref() != Some(plan) {
+        return Err(refused(
+            "This confirmation was for another plan: confirm the plan shown now.",
+        ));
+    }
     let Some(planned) = approval.bound else {
         return Err(refused(
             "This plan does not record what the write would do (it was not made by a dry run of this write).",

@@ -130,6 +130,13 @@ pub struct LoadArgs {
     pub playlists: Vec<String>,
     /// The plan id the dry run of exactly this load answered.
     pub plan: String,
+    /// The window's confirmation of exactly that plan: the token its hold
+    /// was exchanged for (`approve` on `plan`). Given, it is used up here,
+    /// under the Stick's execution lock, and must be for `plan`; absent,
+    /// the plan id itself is the confirmation (the CLI's, after the DJ's
+    /// explicit unlock).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<String>,
 }
 
 /// A track named in a plan or a report.
