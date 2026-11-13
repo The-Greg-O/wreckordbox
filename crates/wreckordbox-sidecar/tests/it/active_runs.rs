@@ -4,9 +4,9 @@
 fn unfinished_runs_use_a_partial_index_after_migration() {
     let dir = tempfile::tempdir().unwrap();
     let db = rusqlite::Connection::open(dir.path().join("sidecar.db")).unwrap();
-    db.execute_batch(include_str!("fixtures/sidecar-v1.sql"))
+    db.execute_batch(include_str!("../fixtures/sidecar-v1.sql"))
         .unwrap();
-    db.execute_batch(include_str!("fixtures/sidecar-v2.sql"))
+    db.execute_batch(include_str!("../fixtures/sidecar-v2.sql"))
         .unwrap();
     drop(db);
     let sidecar = wreckordbox_sidecar::Sidecar::open(dir.path()).unwrap();
