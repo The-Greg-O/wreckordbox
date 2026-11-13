@@ -134,6 +134,26 @@
   overflow: hidden;
 }
 
+/* Every view fills the working area's one cell; the Library list stays in it
+   while another view shows (wbx-45.2), hidden without display: none so its
+   scroller keeps its scrollTop. */
+.working > * {
+  grid-area: 1 / 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.libraryKept {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.libraryKept[data-kept-hidden] {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .status {
   grid-area: status;
   min-width: 0;

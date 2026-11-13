@@ -225,7 +225,14 @@ export function ViewShell({
           aria-labelledby={tabId(view)}
           data-testid="shell-working"
         >
-          {view === "library" ? <LibraryView list={library} target={libraryTarget} crumb={libraryCrumb} /> : null}
+          {/* Kept mounted while another view shows (wbx-45.2), out of sight and inert, so
+              the list's selection and scroll survive; the list itself stops listening
+              (`TrackTable`'s `inert`). A selected Stick's panel is the Stick view's instead. */}
+          {view === "library" || stick === undefined ? (
+            <div className={styles.libraryKept} data-kept-hidden={view !== "library" || undefined} inert={view !== "library"} aria-hidden={view !== "library" || undefined}>
+              <LibraryView list={library} target={libraryTarget} crumb={libraryCrumb} />
+            </div>
+          ) : null}
           {view === "intake" ? intake?.(intakeQueue ?? "intake") ?? null : null}
           {view === "review" ? <ReviewView /> : null}
           {view === "stick" ? <StickView stick={stick} /> : null}
