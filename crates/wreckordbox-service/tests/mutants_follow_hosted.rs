@@ -1167,3 +1167,6 @@ fn a_replacement_whose_process_died_after_the_write_still_carries_its_mutants() 
     let live = service.call(commands::MUTANTS_LIST, json!({})).unwrap()["mutants"].clone();
     assert_eq!(live.as_array().unwrap().len(), 1);
 }
+
+#[path = "support/bulk_follow.rs"]
+mod bulk_follow;

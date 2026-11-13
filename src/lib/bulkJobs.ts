@@ -1,4 +1,4 @@
-import type { ImportReport } from "@/ipc/types";
+import type { Backend, ImportReport } from "@/ipc/types";
 import { slices } from "./jobQueue";
 
 /**
@@ -15,6 +15,7 @@ export const REMOVE_SLICE = 100;
 
 /** What an import came to, over every slice it reached. */
 export interface SlicedImport {
+  recordingWarning?: string;
   /** Files sent to the backend, which is all of them unless it was stopped. */
   reached: number;
   imported: number;
@@ -45,6 +46,7 @@ export async function importInSlices(
     const result = await importSlice(slice);
     done.reached += slice.length;
     done.imported += result.imported;
+    if (result.recordingWarning) done.recordingWarning = result.recordingWarning;
     done.skipped.push(...result.skipped);
     done.existing += result.existing.length;
     done.tracks.push(...result.tracks);
@@ -76,4 +78,31 @@ export async function removeInSlices(
     progress(removed);
   }
   return removed;
+}
+
+/** One Ledger lifetime across every slice, including cancellation and failure. */
+export async function importWithLedger(
+  backend: Pick<Backend, "beginLedgerOperation" | "finishLedgerOperation" | "importPathsSlice">,
+  files: readonly string[], signal: AbortSignal,
+  progress?: (reached: number, sofar: SlicedImport) => void,
+): Promise<SlicedImport> {
+  const operation = await backend.beginLedgerOperation("import");
+  let outcome: { ok: true; value: SlicedImport } | { ok: false; error: unknown };
+  try {
+    outcome = { ok: true, value: await importInSlices(files, slice => backend.importPathsSlice(slice, operation), signal, progress) };
+  } catch (error) {
+    outcome = { ok: false, error };
+  }
+  let warning: string | null;
+  try {
+    warning = await backend.finishLedgerOperation(operation);
+  } catch (error) {
+    warning = `Ledger completion failed: ${String(error)}`;
+  }
+  if (!outcome.ok) {
+    if (warning) throw new Error(`${String(outcome.error)}; ${warning}`);
+    throw outcome.error;
+  }
+  if (warning) outcome.value.recordingWarning = warning;
+  return outcome.value;
 }
