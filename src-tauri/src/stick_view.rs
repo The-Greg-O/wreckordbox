@@ -49,9 +49,10 @@ fn failed(error: &ServiceError) -> AppError {
         "stick_unfinished_write" => ErrorKind::UnfinishedWrite,
         "stick_not_found" | "playlist_not_found" | "not_a_stick" => ErrorKind::NotFound,
         "write_refused" => ErrorKind::ReadOnly,
-        "stick_load_unconfirmed" | "stick_load_changed" | "stick_too_small" | "stick_load_incomplete" => {
-            ErrorKind::Conflict
-        }
+        "stick_load_unconfirmed"
+        | "stick_load_changed"
+        | "stick_too_small"
+        | "stick_load_incomplete" => ErrorKind::Conflict,
         "bad_request" => ErrorKind::Malformed,
         _ => ErrorKind::Internal,
     };
@@ -73,40 +74,17 @@ pub fn dry_run(state: &AppState, stick: &str, playlists: &[String]) -> AppResult
     )
 }
 
-/// The load the DJ held for: `approval` is the window's token for a sync of
-/// exactly `playlists` onto `stick`, `plan` the dry run's plan id.
-pub fn load(
-    state: &Arc<AppState>,
-    stick: &str,
-    playlists: &[String],
-    plan: &str,
-    approval: Option<String>,
-) -> AppResult<Value> {
-    let root = Path::new(stick);
-    // What the hold confirmed: the Sync the window plans for these
-    // playlists, with nothing else (no defaults, no compatibility format,
-    // nothing deleted), as the service loads them.
-    let operation = StickOperation::Sync {
+/// What the hold confirmed for a load of `playlists`: the Sync the window
+/// plans for them, with nothing else (no defaults, no compatibility format,
+/// nothing deleted), as the service loads them.
+fn held_operation(playlists: &[String]) -> StickOperation {
+    StickOperation::Sync {
         playlists: playlists.to_vec(),
         delete_unlisted_music: false,
         automatic: false,
         defaults: bound::<()>(None),
         compatibility: bound::<()>(None),
-    };
-    {
-        // The window's lock order: the Library edit gate, then the Stick.
-        let gate = state.edit_gate().lock();
-        let (_, generation) = state.library_at_generation()?;
-        let access = crate::stick_guard::enter_stick(state.backup_dir(), root)?;
-        crate::stick_approval::consume(approval.as_deref(), &operation, root, generation)?;
-        drop(access);
-        drop(gate);
     }
-    ask(
-        state,
-        commands::STICKS_LOAD,
-        json!({ "stick": stick, "playlists": playlists, "plan": plan }),
-    )
 }
 
 /// The mounted Sticks, for the Stick view.
@@ -138,7 +116,10 @@ pub async fn stick_view_dry_run(
     .await
 }
 
-/// The load, once held for (see [`load`]).
+/// The load the DJ held for: `approval` is the window's token for a sync of
+/// exactly `playlists` onto `stick` (the hold), `plan` the dry run's plan id.
+/// Stick Protection and the token are checked, under the Stick's lock, before
+/// the service is asked; the service checks protection again under its own.
 #[tauri::command]
 #[allow(
     clippy::needless_pass_by_value,
@@ -153,7 +134,24 @@ pub async fn stick_view_load(
 ) -> AppResult<Value> {
     let state = Arc::clone(&state);
     blocking("stick_view_load", move || {
-        load(&state, &stick, &playlists, &plan, approval)
+        let root = Path::new(&stick);
+        let operation = held_operation(&playlists);
+        {
+            // The window's lock order: the Library edit gate, then the Stick.
+            // Both are let go before the service runs the load: it takes the
+            // Stick's lock itself.
+            let gate = state.edit_gate().lock();
+            let (_, generation) = state.library_at_generation()?;
+            let access = crate::stick_guard::enter_stick(state.backup_dir(), root)?;
+            crate::stick_approval::consume(approval.as_deref(), &operation, root, generation)?;
+            drop(access);
+            drop(gate);
+        }
+        ask(
+            &state,
+            commands::STICKS_LOAD,
+            json!({ "stick": stick, "playlists": playlists, "plan": plan }),
+        )
     })
     .await
 }

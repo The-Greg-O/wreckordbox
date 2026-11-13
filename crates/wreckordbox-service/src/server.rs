@@ -311,8 +311,8 @@ impl Service {
             run: None,
         };
         // A load the host asks for is waited for on stopping, as a client's is.
-        let _hold = (command == crate::stick_load::commands::STICKS_LOAD)
-            .then(|| self.shared.loads.hold());
+        let _hold =
+            (command == crate::stick_load::commands::STICKS_LOAD).then(|| self.shared.loads.hold());
         self.shared.answer(None, &request).0
     }
 

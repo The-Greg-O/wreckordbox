@@ -357,7 +357,13 @@ fn every_writer_is_refused_on_a_protected_stick_and_writes_nothing() {
     let t = call("stick_view_load");
     protected(
         "stick_view_load",
-        rbxport_lib::stick_view::load(&rig.state(), &path, &[playlist_id(0)], "plan", t),
+        run(rbxport_lib::stick_view::stick_view_load(
+            rig.app.state(),
+            path.clone(),
+            vec![playlist_id(0)],
+            "plan".into(),
+            t,
+        )),
     );
     let on_stick = |name: &str| rig.stick.join(name).to_string_lossy().into_owned();
     call("export_playlist_file");

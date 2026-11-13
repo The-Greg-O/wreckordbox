@@ -142,6 +142,23 @@ impl Window {
     }
 }
 
+/// The window's load command, as the Stick view calls it.
+fn load(
+    window: &Window,
+    stick: &str,
+    playlists: &[String],
+    plan: &str,
+    approval: Option<&str>,
+) -> Result<serde_json::Value, rbxport_lib::AppError> {
+    tauri::async_runtime::block_on(stick_view::stick_view_load(
+        window.app.state(),
+        stick.to_owned(),
+        playlists.to_vec(),
+        plan.to_owned(),
+        approval.map(str::to_owned),
+    ))
+}
+
 fn path(stick: &Path) -> String {
     stick.to_string_lossy().into_owned()
 }
@@ -192,10 +209,14 @@ fn a_dry_run_says_what_the_load_will_do_and_writes_nothing() {
 fn a_dry_run_of_an_unknown_playlist_says_so() {
     let window = hosting_window();
 
-    let error = stick_view::dry_run(&window.state(), &path(&window.gig), &["no-such".into()])
-        .unwrap_err();
+    let error =
+        stick_view::dry_run(&window.state(), &path(&window.gig), &["no-such".into()]).unwrap_err();
 
-    assert_eq!(error.detail.as_deref(), Some("playlist_not_found"), "{error:?}");
+    assert_eq!(
+        error.detail.as_deref(),
+        Some("playlist_not_found"),
+        "{error:?}"
+    );
 }
 
 #[test]
@@ -207,22 +228,25 @@ fn a_load_without_the_hold_is_refused_and_writes_nothing() {
     let plan = plan["plan"].as_str().unwrap().to_owned();
     let before = bytes(&window.gig);
 
-    let error = stick_view::load(&window.state(), &path(&window.gig), &playlists, &plan, None)
-        .unwrap_err();
+    let error = load(&window, &path(&window.gig), &playlists, &plan, None).unwrap_err();
     assert!(error.message.contains("not confirmed"), "{error:?}");
 
     // A hold given for other playlists does not confirm this load either.
     let other = window.held(&window.gig, &[]);
-    let error = stick_view::load(
-        &window.state(),
+    let error = load(
+        &window,
         &path(&window.gig),
         &playlists,
         &plan,
-        Some(other),
+        Some(other.as_str()),
     )
     .unwrap_err();
     assert!(error.message.contains("different write"), "{error:?}");
-    assert_eq!(bytes(&window.gig), before, "a refused load wrote to the Stick");
+    assert_eq!(
+        bytes(&window.gig),
+        before,
+        "a refused load wrote to the Stick"
+    );
 }
 
 #[test]
@@ -234,12 +258,12 @@ fn a_load_on_a_protected_stick_is_refused_even_after_the_hold() {
     let token = window.held(&window.gig, &playlists);
     let before = bytes(&window.gig);
 
-    let error = stick_view::load(
-        &window.state(),
+    let error = load(
+        &window,
         &path(&window.gig),
         &playlists,
         &plan,
-        Some(token),
+        Some(token.as_str()),
     )
     .unwrap_err();
 
@@ -259,30 +283,45 @@ fn a_held_load_on_an_unlocked_stick_writes_what_its_dry_run_said() {
     let plan = dry["plan"].as_str().unwrap().to_owned();
     let token = window.held(&window.spare, &playlists);
 
-    let load = stick_view::load(
-        &window.state(),
+    let loaded = load(
+        &window,
         &path(&window.spare),
         &playlists,
         &plan,
-        Some(token),
+        Some(token.as_str()),
     )
     .unwrap();
 
-    assert_eq!(load["outcome"], "loaded", "{load}");
-    assert_eq!(load["written"]["tracks"].as_array().unwrap().len(), 3, "{load}");
-    assert_eq!(load["not_written"]["tracks"].as_array().unwrap().len(), 0, "{load}");
-    assert!(window.spare.join("PIONEER").is_dir(), "the export is on the Stick");
+    assert_eq!(loaded["outcome"], "loaded", "{loaded}");
+    assert_eq!(
+        loaded["written"]["tracks"].as_array().unwrap().len(),
+        3,
+        "{loaded}"
+    );
+    assert_eq!(
+        loaded["not_written"]["tracks"].as_array().unwrap().len(),
+        0,
+        "{loaded}"
+    );
+    assert!(
+        window.spare.join("PIONEER").is_dir(),
+        "the export is on the Stick"
+    );
     // The plan is used up: the same load again is refused.
     let again = window.held(&window.spare, &playlists);
-    let error = stick_view::load(
-        &window.state(),
+    let error = load(
+        &window,
         &path(&window.spare),
         &playlists,
         &plan,
-        Some(again),
+        Some(again.as_str()),
     )
     .unwrap_err();
-    assert_eq!(error.detail.as_deref(), Some("stick_load_unconfirmed"), "{error:?}");
+    assert_eq!(
+        error.detail.as_deref(),
+        Some("stick_load_unconfirmed"),
+        "{error:?}"
+    );
 }
 
 #[test]
