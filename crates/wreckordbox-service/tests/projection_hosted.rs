@@ -205,5 +205,34 @@ fn a_projection_the_window_asks_for_is_a_tools_and_undoes_in_one_step() {
             .any(|k| k["track"] == c.as_str() && k["reason"] == "dj_fact"),
         "{plan}"
     );
+
+    // Undo and Redo, three times over: a projection's value never becomes
+    // the DJ's Fact, however long the chain; a DJ's edit stays the DJ's.
+    let (e, f) = (fixture::track_id(5), fixture::track_id(0));
+    let source_of = |track: &str| -> Value {
+        service
+            .call("facts.standing", json!({"id": track, "kind": "energy"}))
+            .unwrap()["standing"]["source"]["kind"]
+            .clone()
+    };
+    record(&e, 4, 0.9);
+    project().unwrap();
+    assert_eq!(stars(&core, &e), 4);
+    for cycle in 1..=3 {
+        core.step_history(&NoHost, true).unwrap();
+        assert_eq!(stars(&core, &e), 0, "undo {cycle}");
+        assert_eq!(source_of(&e), "agent", "after undo {cycle}");
+        core.step_history(&NoHost, false).unwrap();
+        assert_eq!(stars(&core, &e), 4, "redo {cycle}");
+        assert_eq!(source_of(&e), "agent", "after redo {cycle}");
+    }
+    rate(&core, &f, 2);
+    assert_eq!(source_of(&f), "dj");
+    for cycle in 1..=3 {
+        core.step_history(&NoHost, true).unwrap();
+        assert!(source_of(&f).is_null(), "the DJ's Fact withdrawn by undo {cycle}");
+        core.step_history(&NoHost, false).unwrap();
+        assert_eq!(source_of(&f), "dj", "the DJ's Fact back after redo {cycle}");
+    }
     drop(service);
 }

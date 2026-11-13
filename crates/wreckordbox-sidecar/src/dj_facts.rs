@@ -129,8 +129,10 @@ impl Sidecar {
                 .flatten()
         });
         if let Some(undo) = redo {
-            let original:Option<String>=tx.query_row("SELECT source_kind FROM ledger WHERE id=(SELECT reverses FROM ledger WHERE id=?1)",[undo],|r|r.get(0)).optional()?;
-            if original.as_deref() != Some("dj") {
+            // A Redo re-asserts the edit it steps only when that edit, at
+            // the origin of the whole Undo/Redo chain, was the DJ's; a chain
+            // that cannot be followed to an edit promotes nothing (wbx-26).
+            if originating_source(&tx, undo)?.as_deref() != Some("dj") {
                 facts.values.clear();
             }
         }
@@ -196,6 +198,29 @@ impl Sidecar {
         Ok((id, followed))
     }
 }
+/// The source of the edit at the origin of the Undo/Redo chain that `step`
+/// belongs to: from `step`, follow `reverses` through every Undo and Redo,
+/// however many, to the first entry that is an edit. `None` when the chain
+/// breaks (an entry missing, or no edit at its end).
+fn originating_source(tx: &rusqlite::Transaction<'_>, step: i64) -> Result<Option<String>> {
+    let mut at = step;
+    for _ in 0..100_000 {
+        let found: Option<(String, Option<i64>, String)> = tx
+            .query_row(
+                "SELECT action, reverses, source_kind FROM ledger WHERE id = ?1",
+                [at],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        match found {
+            Some((action, _, source)) if action == "edit" => return Ok(Some(source)),
+            Some((_, Some(reverses), _)) => at = reverses,
+            _ => return Ok(None),
+        }
+    }
+    Ok(None)
+}
+
 fn with_omissions(entry: &NewEntry, skipped: &[Omission]) -> Option<Value> {
     if skipped.is_empty() {
         return entry.payload.cloned();
