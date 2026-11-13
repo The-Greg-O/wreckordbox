@@ -2425,7 +2425,7 @@ export const TrackTable = memo(function TrackTable({
       }}
     >
       <div className={styles.browserHead}>
-        <span className={styles.title} data-testid="browser-title">
+        <span className={styles.title} data-testid="browser-title" data-list-title="">
           {/*
             The count belongs to the list, so it appears only once the list
             has settled. While a view is opening, `view.count` is still the

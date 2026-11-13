@@ -74,6 +74,7 @@ import { libraryWidthOf } from "@/lib/libraryFit";
 import { libraryLookFor } from "@/views/shell/libraryFitLook";
 import { SHELL_PLAYER_LAYOUT, ViewShell } from "@/views/shell/ViewShell";
 import { useShellTree } from "@/views/shell/useShellTree";
+import { breadcrumbOf } from "@/lib/shellTreeOverlay";
 import { useTargetList } from "@/views/shell/useTargetList";
 import { IntakeView } from "@/views/shell/IntakeView";
 import { useIntakeCounts } from "@/views/shell/useIntakeCounts";
@@ -3725,6 +3726,8 @@ function AppBody() {
     actions: subTree, fromStick: draggedTracks !== null, expansion: treeExpansion, onExpansionChange: setTreeExpansion,
     stickGate, confirmDelete: confirmRemoval,
   });
+  // The open list's folders and name, its heading at half width (wbx-45.21).
+  const libraryCrumb = useMemo(() => breadcrumbOf(tree, selectedNode), [tree, selectedNode]);
   const library = (
         selectedDevice ? (
           <Suspense fallback={null}><DevicePanel
@@ -4020,6 +4023,7 @@ function AppBody() {
           stick={<StickLoadView devices={devices} selected={selectedDevice?.path ?? null} library={tree} revision={deviceLibraries.revision} panel={selectedDevice ? library : undefined} />}
           library={library}
           libraryTarget={targetList.pane}
+          libraryCrumb={libraryCrumb}
           status={<>{linkStrip}{statusBar}</>}
           topBarEnd={<CommandPaletteButton platform={platform} />}
         />
