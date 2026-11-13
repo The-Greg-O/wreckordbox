@@ -87,3 +87,24 @@ that support tree and its paths. Run these targets by their existing names;
 do not silently omit them from Cargo discovery or blindly add them to `it`.
 Any later consolidation must audit the entire helper tree and update child
 filters as well as module declarations, with before/after test inventories.
+
+## Sidecar
+
+All ten Sidecar integration suites share
+`crates/wreckordbox-sidecar/tests/it/main.rs`; none needs process isolation.
+
+```sh
+/home/go/code/wreckordbox-notes/bin/heavy rust mise exec -- cargo test -p wreckordbox-sidecar --test it ledger::
+/home/go/code/wreckordbox-notes/bin/heavy rust mise exec -- cargo test -p wreckordbox-sidecar --test it attachment_migration::
+```
+
+The common audio fixture helper is declared once by `it/main.rs`, with
+existing modules importing `crate::common`. Keep `tests/common/` and
+`tests/fixtures/` in place: new top-level files can still use `mod common;`
+and their original relative SQL includes. Moved modules include SQL through
+`../fixtures/`. The manual attachment-scale benchmark remains ignored.
+
+The pending Projection branch's Sidecar production changes merge normally;
+Git can follow edits to the renamed tests. Any newly added top-level test
+remains independently discoverable. Preserve new coverage and compare the
+resulting inventory; do not force later totals back to this branch's counts.

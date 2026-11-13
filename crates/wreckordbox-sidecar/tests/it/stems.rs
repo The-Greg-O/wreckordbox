@@ -7,7 +7,7 @@
     clippy::panic
 )]
 
-mod common;
+use crate::common;
 
 use std::path::PathBuf;
 

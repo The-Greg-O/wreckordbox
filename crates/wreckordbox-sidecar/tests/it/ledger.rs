@@ -157,18 +157,18 @@ fn a_store_from_each_earlier_version_is_given_the_ledger_and_keeps_its_facts_in_
         let dir = tempfile::tempdir().unwrap();
         let source = agent();
         let db = rusqlite::Connection::open(dir.path().join("sidecar.db")).unwrap();
-        db.execute_batch(include_str!("fixtures/sidecar-v1.sql"))
+        db.execute_batch(include_str!("../fixtures/sidecar-v1.sql"))
             .unwrap();
         if version >= 2 {
-            db.execute_batch(include_str!("fixtures/sidecar-v2.sql"))
+            db.execute_batch(include_str!("../fixtures/sidecar-v2.sql"))
                 .unwrap();
         }
         if version >= 3 {
-            db.execute_batch(include_str!("fixtures/sidecar-v3.sql"))
+            db.execute_batch(include_str!("../fixtures/sidecar-v3.sql"))
                 .unwrap();
         }
         if version >= 4 {
-            db.execute_batch(include_str!("fixtures/sidecar-v4.sql"))
+            db.execute_batch(include_str!("../fixtures/sidecar-v4.sql"))
                 .unwrap();
         }
         drop(db);

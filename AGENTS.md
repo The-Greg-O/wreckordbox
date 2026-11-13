@@ -67,6 +67,9 @@ Wreckordbox is a personal, Linux-first hard fork of rbxport: a rekordbox-compati
   <module>::` through the Rust queue (for example `library_protection::`).
   Its `tests/common/` stays at the original path so new top-level tests can
   still declare `mod common;`; `it/main.rs` shares it once across modules.
+- Sidecar integration files also use `cargo test -p wreckordbox-sidecar --test it
+  <module>::` through the Rust queue (for example `ledger::`). Its `common/`
+  helper and SQL fixtures stay under `tests/` for new standalone files.
 - Service integration modules use `cargo test -p wreckordbox-service --test it
   <module>::` through the Rust queue (for example `one_edit_gate::`). Ten
   suites that mutate process state or use crash workers remain separate;
