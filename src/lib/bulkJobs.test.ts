@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { ImportReport } from "@/ipc/types";
 import { importInSlices, removeInSlices } from "./bulkJobs";
@@ -106,4 +106,18 @@ describe("importInSlices", () => {
     expect(done.reached).toBe(0);
     expect(lib.calls).toEqual([]);
   });
+});
+
+
+it("keeps all import slices in one Ledger operation and reports recording failure separately", async () => {
+  const { importWithLedger } = await import("./bulkJobs");
+  const beginLedgerOperation = vi.fn().mockResolvedValue("import-operation");
+  const finishLedgerOperation = vi.fn().mockResolvedValue("Accepted files; Ledger recording incomplete");
+  const importPathsSlice = vi.fn((paths: string[], _operation?: string) => Promise.resolve({imported:paths.length,skipped:[],existing:[],tracks:paths.map(id=>({id,title:id}))}));
+  const result = await importWithLedger({beginLedgerOperation,finishLedgerOperation,importPathsSlice},Array.from({length:205},(_,i)=>String(i)),new AbortController().signal);
+  expect(result.imported).toBe(205);
+  expect(result.recordingWarning).toBe("Accepted files; Ledger recording incomplete");
+  expect(beginLedgerOperation).toHaveBeenCalledExactlyOnceWith("import");
+  expect(importPathsSlice.mock.calls.map(call=>[call[0].length,call[1]])).toEqual([[100,"import-operation"],[100,"import-operation"],[5,"import-operation"]]);
+  expect(finishLedgerOperation).toHaveBeenCalledExactlyOnceWith("import-operation");
 });
