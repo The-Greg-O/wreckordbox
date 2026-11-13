@@ -1875,6 +1875,12 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn record(&self, step: Step, edit: &LibraryEdit, label: &str, link: Link) -> Option<i64> {
+        // An edit that changed nothing reaches here only as an explicit set
+        // to the value a field holds (`EditHistory::record_or_assert`): the
+        // DJ's assertion, recorded (wbx-26). Anyone else's changes nothing.
+        if edit.is_empty() && !by_the_dj() {
+            return None;
+        }
         let sidecar = self.stems.sidecar().ok();
         // The plan the write left with its intent, before it was made.
         let plan = self
@@ -1947,6 +1953,20 @@ impl rbl_library::ledger::Ledger for Keeper {
             plan: None,
         });
     }
+}
+
+/// Whether the edit being recorded on this thread is the DJ's: the
+/// window's (no command), or a command attributed to the DJ.
+fn by_the_dj() -> bool {
+    CURRENT.with(|current| {
+        let current = current.borrow();
+        match current.as_ref().map(|scope| &scope.target) {
+            None | Some(Target::Window) => true,
+            Some(Target::Own { source, .. } | Target::Joined { source, .. }) => {
+                source.kind == SourceKind::Dj
+            }
+        }
+    })
 }
 
 /// A Run, ended at once, for an entry written after the Run it was made
