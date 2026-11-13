@@ -310,7 +310,8 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
             command: TrackCommands::Rate { id, stars },
             ..
         } => {
-            let rated = connect(&config)?.rate_track(id, *stars)?;
+            // Typed at the command line: a deliberate hand set (wbx-26).
+            let rated = connect(&config)?.assert_rating(id, *stars)?;
             if cli.json {
                 print(&json!(rated).to_string());
             } else {

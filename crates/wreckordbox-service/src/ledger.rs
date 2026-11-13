@@ -929,6 +929,9 @@ struct Draft<'a> {
     follow: Result<wreckordbox_sidecar::mutant_follow::Follow, String>,
     /// The plan its write left with the intent, for working it out again.
     plan: Option<Value>,
+    /// An explicit assertion of unchanged values (`Ledger::assert`): its
+    /// payload's unchanged fields are the DJ's Facts all the same.
+    asserted: bool,
 }
 
 /// Failures a test can inject into a service with [`FAULTS_ENV`], honoured
@@ -1611,7 +1614,7 @@ impl Keeper {
                 _ => None,
             };
             let mut dj_facts = if source.kind == SourceKind::Dj && draft.action != Action::Undo {
-                crate::dj_facts::derive(&self.location, &self.stems, draft.kind, draft.payload.as_ref())
+                crate::dj_facts::derive(&self.location, &self.stems, draft.kind, draft.payload.as_ref(), draft.asserted)
             } else { wreckordbox_sidecar::dj_facts::NativeFacts::default() };
             if source.kind == SourceKind::Dj {
                 if draft.action == Action::Undo { dj_facts.undo_of = draft.reverses; }
@@ -1833,6 +1836,7 @@ impl rbl_library::ledger::Ledger for Keeper {
             // A file edit moves no playlist entry.
             follow: Ok(wreckordbox_sidecar::mutant_follow::Follow::default()),
             plan: None,
+            asserted: false,
         });
     }
 
@@ -1874,13 +1878,26 @@ impl rbl_library::ledger::Ledger for Keeper {
         }
     }
 
-    fn record(&self, step: Step, edit: &LibraryEdit, label: &str, link: Link) -> Option<i64> {
-        // An edit that changed nothing reaches here only as an explicit set
-        // to the value a field holds (`EditHistory::record_or_assert`): the
-        // DJ's assertion, recorded (wbx-26). Anyone else's changes nothing.
-        if edit.is_empty() && !by_the_dj() {
+    fn assert(&self, edit: &LibraryEdit, label: &str) -> Option<i64> {
+        // An assertion is the DJ's or nothing: a tool's or an agent's set to
+        // the value a field holds changes nothing and is not recorded.
+        if !by_the_dj() {
             return None;
         }
+        self.append(Draft {
+            action: Action::Edit,
+            kind: stored::kind_of(edit),
+            label,
+            reverses: None,
+            part_of: None,
+            payload: stored::store(edit),
+            follow: Ok(wreckordbox_sidecar::mutant_follow::Follow::default()),
+            plan: None,
+            asserted: true,
+        })
+    }
+
+    fn record(&self, step: Step, edit: &LibraryEdit, label: &str, link: Link) -> Option<i64> {
         let sidecar = self.stems.sidecar().ok();
         // The plan the write left with its intent, before it was made.
         let plan = self
@@ -1909,6 +1926,7 @@ impl rbl_library::ledger::Ledger for Keeper {
             payload: stored::store(edit),
             follow,
             plan,
+            asserted: false,
         })
     }
 
@@ -1951,6 +1969,7 @@ impl rbl_library::ledger::Ledger for Keeper {
             payload: None,
             follow,
             plan: None,
+            asserted: false,
         });
     }
 }

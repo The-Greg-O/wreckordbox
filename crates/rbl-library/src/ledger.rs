@@ -159,6 +159,15 @@ pub trait Ledger: Send + Sync {
     /// written later.
     fn record(&self, step: Step, edit: &LibraryEdit, label: &str, link: Link) -> Option<i64>;
 
+    /// Records an explicit assertion (wbx-26): a deliberate hand set of a
+    /// field to the value it already holds. `edit` holds only such
+    /// unchanged track edits; it is no step of the history. Only a caller
+    /// that means it says so: an ordinary write that changed nothing is
+    /// never one. By default nothing is recorded.
+    fn assert(&self, _edit: &LibraryEdit, _label: &str) -> Option<i64> {
+        None
+    }
+
     /// Names an edit the history keeps no entry for. `name` is what the
     /// caller calls it, when the caller says; the Ledger may know more
     /// (which command it is answering).

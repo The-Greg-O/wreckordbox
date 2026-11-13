@@ -1467,3 +1467,68 @@ fn undo_restores_the_previous_dj_fact_and_clear_withdraws_an_opinion() {
 
 #[path = "service_host/file_ledger.rs"]
 mod file_ledger;
+
+/// wbx-26: the DJ's hand setters assert, in the window. Rating and colouring
+/// a selection where some tracks already hold the value records those tracks
+/// as the DJ's own (a Fact each, no Undo step), so a later projection keeps
+/// them; Undo still takes back only what changed.
+#[test]
+fn the_djs_hand_set_of_a_selection_asserts_the_tracks_that_already_had_it() {
+    let window = window();
+    window.host().unwrap();
+    let (a, b, c) = (track_id(1), track_id(2), track_id(3));
+    let sidecar = window.location.master_db.parent().unwrap().join("wreckordbox-sidecar");
+    std::fs::create_dir_all(&sidecar).unwrap();
+    std::fs::write(sidecar.join("projection-policy.toml"), "[energy]\napply = 0.5\n\n[prep_colour]\napply = 0.5\n").unwrap();
+    let fact = |track: &str, kind: &str, value: &str, confidence: &str| {
+        window.cli(&["--json", "facts", "record", track, kind, value, "--source", "agent:tagger", "--confidence", confidence]).json();
+    };
+    let standing = |track: &str, kind: &str| {
+        window.cli(&["--json", "facts", "standing", track, kind]).json()["standing"]["source"]["kind"].clone()
+    };
+    fact(&a, "energy", "3", "0.6");
+    fact(&b, "energy", "3", "0.6");
+    fact(&a, "prep_colour", "Green", "0.6");
+    window.cli(&["--json", "project"]).json();
+    assert_eq!((window.rating(&a), window.rating(&b)), (3, 3));
+    assert_eq!(window.prep_colour(&a), "Green");
+
+    // The DJ rates a, b and c 3 (a and b already are), and colours a and c
+    // Green (a already is), in the window.
+    let handle = || window.app.handle().clone();
+    run(commands::set_track_rating(handle(), window.state(), vec![a.clone(), b.clone(), c.clone()], 3)).unwrap();
+    run(commands::set_track_color(handle(), window.state(), vec![a.clone(), c.clone()], Some("5".to_owned()))).unwrap();
+    for track in [&a, &b] {
+        assert_eq!(standing(track, "energy"), "dj", "{track}: the DJ's hand set of the value it had");
+    }
+    assert_eq!(standing(&a, "prep_colour"), "dj");
+
+    // Undo takes back only the changes: c's colour, then c's rating.
+    run(commands::undo_edit(handle(), window.state())).unwrap();
+    assert!(window.prep_colour(&c).is_null());
+    assert_eq!(window.prep_colour(&a), "Green");
+    run(commands::undo_edit(handle(), window.state())).unwrap();
+    assert_eq!((window.rating(&a), window.rating(&b), window.rating(&c)), (3, 3, 0));
+
+    // A stronger agent Fact for a and b: their values are the DJ's, kept.
+    fact(&a, "energy", "4", "0.9");
+    fact(&b, "energy", "4", "0.9");
+    fact(&a, "prep_colour", "Red", "0.9");
+    let plan = window.cli(&["--json", "project", "--dry-run"]).json();
+    assert_eq!(plan["changes"], serde_json::json!([]), "{plan}");
+    let mut kept: Vec<(String, String, String)> = plan["kept"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|k| (k["track"].as_str().unwrap().into(), k["field"].as_str().unwrap().into(), k["reason"].as_str().unwrap().into()))
+        .collect();
+    kept.sort();
+    assert_eq!(
+        kept,
+        [
+            (a.clone(), "energy".into(), "dj_fact".into()),
+            (a.clone(), "prep_colour".into(), "dj_fact".into()),
+            (b.clone(), "energy".into(), "dj_fact".into()),
+        ]
+    );
+}

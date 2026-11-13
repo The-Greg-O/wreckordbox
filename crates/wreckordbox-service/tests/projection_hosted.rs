@@ -18,21 +18,23 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rbl_db::fixture::{self, Shape};
-use rbl_library::history::{LibraryEdit, TRACK_EDIT};
+use rbl_library::history::TRACK_EDIT;
 use rbl_library::{History, LibraryCore, NoHost, Touched};
 use serde_json::{json, Value};
 use wreckordbox_service::projection::PAUSE_ENV;
 use wreckordbox_service::stems::SIDECAR_DIR_ENV;
 use wreckordbox_service::{Client, Config, Service};
 
+/// The window's hand setter, as `set_track_rating` makes it: a track that
+/// already has `stars` is the DJ's assertion of them (wbx-26).
 fn rate(core: &LibraryCore, track: &str, stars: u8) {
-    core.recorded_edit(
+    core.asserting_edit(
         &NoHost,
         Touched::Metadata(vec![track.to_owned()]),
         TRACK_EDIT,
         |writer| {
             let (_, recorded) = writer.set_rating_with_undo(track, stars)?;
-            Ok(((), LibraryEdit::Track(vec![recorded])))
+            Ok(((), vec![recorded]))
         },
     )
     .unwrap();
@@ -63,7 +65,7 @@ fn a_projection_the_window_asks_for_is_a_tools_and_undoes_in_one_step() {
     let location = fixture::build(
         &library,
         Shape {
-            tracks: 6,
+            tracks: 8,
             ..Shape::default()
         },
     )
@@ -204,6 +206,26 @@ fn a_projection_the_window_asks_for_is_a_tools_and_undoes_in_one_step() {
             .iter()
             .any(|k| k["track"] == c.as_str() && k["reason"] == "dj_fact"),
         "{plan}"
+    );
+
+    // An in-process resend of the value the Library already holds, with no
+    // `assert`, is no assertion: no Run, no DJ Fact, and the projection's
+    // value stays the projection's to replace.
+    let g = fixture::track_id(6);
+    record(&g, 3, 0.6);
+    project().unwrap();
+    let runs_before = service.call("runs.list", json!({})).unwrap()["total"].clone();
+    service.call("tracks.rate", json!({"id": g, "rating": 3})).unwrap();
+    assert_eq!(service.call("runs.list", json!({})).unwrap()["total"], runs_before);
+    let standing = service
+        .call("facts.standing", json!({"id": g, "kind": "energy"}))
+        .unwrap();
+    assert_eq!(standing["standing"]["source"]["kind"], "agent", "{standing}");
+    record(&g, 4, 0.9);
+    let applied = project().unwrap();
+    assert!(
+        applied["changes"].as_array().unwrap().iter().any(|c| c["track"] == g.as_str() && c["after"] == 4),
+        "{applied}"
     );
 
     // Undo and Redo, three times over: a projection's value never becomes

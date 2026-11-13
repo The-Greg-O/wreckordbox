@@ -269,6 +269,18 @@ impl OpenLibrary {
         self.change(|core, host| core.recorded_edit(host, touched, label, action))
     }
 
+    /// [`Self::recorded_edit`] for a deliberate hand set (wbx-26): the
+    /// unchanged edits `action` answers are the DJ's assertion, told to the
+    /// Ledger, no step of the history ([`LibraryCore::asserting_edit`]).
+    pub(crate) fn asserting_edit<T>(
+        &self,
+        touched: Touched,
+        label: &'static str,
+        action: impl FnOnce(&mut rbl_db::write::Writer) -> Result<(T, Vec<rbl_db::write::TrackEdit>), DbError>,
+    ) -> Result<(T, LibraryChanged), ServiceError> {
+        self.change(|core, host| core.asserting_edit(host, touched, label, action))
+    }
+
     /// [`Self::edit`] for an edit that removes rows for good: the edit
     /// history is emptied, as the window empties it after its own.
     pub(crate) fn permanent_edit<T>(
@@ -308,11 +320,18 @@ impl OpenLibrary {
         let previous = track(&before, row);
         let id = previous.id.clone();
         let stars = edit.rating;
-        let ((), change) =
-            self.recorded_edit(Touched::Metadata(vec![id.clone()]), TRACK_EDIT, |writer| {
+        let touched = Touched::Metadata(vec![id.clone()]);
+        let ((), change) = if edit.assert {
+            self.asserting_edit(touched, TRACK_EDIT, |writer| {
+                let (_, recorded) = writer.set_rating_with_undo(&id, stars)?;
+                Ok(((), vec![recorded]))
+            })?
+        } else {
+            self.recorded_edit(touched, TRACK_EDIT, |writer| {
                 let (_, recorded) = writer.set_rating_with_undo(&id, stars)?;
                 Ok(((), LibraryEdit::Track(vec![recorded])))
-            })?;
+            })?
+        };
         // Read back from the index the edit refreshed, not assumed.
         let after = self.index()?;
         let rating = after

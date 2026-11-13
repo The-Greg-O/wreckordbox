@@ -406,11 +406,7 @@ impl rbl_library::ledger::Ledger for LedgerTape {
         label: &str,
         link: rbl_library::ledger::Link,
     ) -> Option<i64> {
-        assert!(
-            !edit.is_empty()
-                || matches!(edit, rbl_library::history::LibraryEdit::Track(edits) if !edits.is_empty()),
-            "only a change, or an explicit set of a track field (an assertion), is recorded"
-        );
+        assert!(!edit.is_empty(), "only a change is recorded");
         let mut changes = self.changes.lock();
         let id = i64::try_from(changes.len()).unwrap() + 100;
         changes.push((step, label.to_owned(), link.reverses, id));
@@ -440,9 +436,7 @@ fn a_ledger_given_to_the_history_is_told_of_each_edit_undo_and_redo_with_what_it
         Ok(((), LibraryEdit::Track(vec![recorded])))
     })
     .unwrap();
-    // A set to the value the field already holds changes nothing: it is
-    // no step of the history, but the Ledger is told of it as the DJ's
-    // assertion (wbx-26).
+    // An edit that changed nothing is neither in the history nor told.
     core.recorded_edit(&NoHost, Touched::Metadata(vec![track.clone()]), TRACK_EDIT, |w| {
         let (_, recorded) = w.set_rating_with_undo(&track, 3)?;
         Ok(((), LibraryEdit::Track(vec![recorded])))
@@ -464,10 +458,9 @@ fn a_ledger_given_to_the_history_is_told_of_each_edit_undo_and_redo_with_what_it
         *tape.changes.lock(),
         vec![
             (Step::Edit, label.clone(), None, 100),
-            (Step::Edit, label.clone(), None, 101),
-            (Step::Undo, label.clone(), Some(100), 102),
-            (Step::Redo, label.clone(), Some(102), 103),
-            (Step::Undo, label, Some(103), 104),
+            (Step::Undo, label.clone(), Some(100), 101),
+            (Step::Redo, label.clone(), Some(101), 102),
+            (Step::Undo, label, Some(102), 103),
         ]
     );
 
@@ -478,7 +471,7 @@ fn a_ledger_given_to_the_history_is_told_of_each_edit_undo_and_redo_with_what_it
         Ok(((), LibraryEdit::Track(vec![recorded])))
     })
     .unwrap();
-    assert_eq!(tape.changes.lock().len(), 5);
+    assert_eq!(tape.changes.lock().len(), 4);
 }
 
 #[test]

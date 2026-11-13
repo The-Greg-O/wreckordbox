@@ -141,6 +141,10 @@ pub struct SetPrepColour {
     /// name can be one colour's label and another colour's name (wbx-63).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub colour_id: Option<u8>,
+    /// A deliberate hand set (wbx-26): a track already in that Prep colour
+    /// is the DJ's assertion of it, recorded when the command is the DJ's.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub assert: bool,
 }
 
 /// What `tracks.set_prep_colour` answers.
@@ -454,11 +458,22 @@ fn set_prep_colour(
         .map_or_else(|| edit.id.clone(), u64::to_string);
     let title = before.title.get(row as usize).to_owned();
     let colour = wanted.as_ref().map(|colour| colour.id.to_string());
-    let (rows, change) =
-        library.recorded_edit(Touched::Metadata(vec![id.clone()]), TRACK_EDIT, |writer| {
-            let (changed, recorded) = writer.set_color_with_undo(&id, colour.as_deref())?;
-            Ok((changed.rows, LibraryEdit::Track(vec![recorded])))
-        })?;
+    let set = |writer: &mut rbl_db::write::Writer| -> Result<_, rbl_db::DbError> {
+        let (changed, recorded) = writer.set_color_with_undo(&id, colour.as_deref())?;
+        Ok((changed.rows, recorded))
+    };
+    let touched = Touched::Metadata(vec![id.clone()]);
+    let (rows, change) = if edit.assert {
+        library.asserting_edit(touched, TRACK_EDIT, |writer| {
+            let (rows, recorded) = set(writer)?;
+            Ok((rows, vec![recorded]))
+        })?
+    } else {
+        library.recorded_edit(touched, TRACK_EDIT, |writer| {
+            let (rows, recorded) = set(writer)?;
+            Ok((rows, LibraryEdit::Track(vec![recorded])))
+        })?
+    };
     // Read back from the index the edit refreshed, not assumed.
     let after = library.index()?;
     let prep_colour = after

@@ -236,6 +236,11 @@ pub struct RateTrack {
     pub id: String,
     /// Stars, 0 to 5; 0 clears the rating.
     pub rating: u8,
+    /// A deliberate hand set (wbx-26): a track that already has `rating` is
+    /// the DJ's assertion of it, recorded when the command is the DJ's.
+    /// Without it, a rating the track already has records nothing.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub assert: bool,
 }
 
 /// What `tracks.rate` answers: the track, and its rating before and after.
