@@ -72,6 +72,7 @@ other suites, and some deliberately leave overrides set until process exit.
 | `dj_undo_recovery` | Changes the Sidecar path and re-executes an exact-named test with an abort fault. |
 | `intensity_hosted` | Changes the Sidecar path, Intensity pause hook and test-mode environment. |
 | `ledger_hosted` | Changes the Sidecar path and window Run pause environment. |
+| `projection_hosted` | Changes the Sidecar path and the Projection pause environment. |
 | `ledger_recovery` | Changes the Sidecar path, test mode and Ledger failure injection. |
 | `mutants_hosted` | Changes the Sidecar path; its mutex only serializes this file's tests. |
 | `mutants_follow_hosted` | Changes the Sidecar path and Ledger/edit faults; has a file-local mutex and exact-named crash subprocess. |
