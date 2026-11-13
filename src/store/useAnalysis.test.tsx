@@ -7,7 +7,7 @@ import { DEFAULT_PREFERENCES, type AnalysisPreferences } from "@/lib/preferences
 import { PreferencesProvider } from "./usePreferences";
 import type { AnalysisResult } from "@/ipc/types";
 
-const held = vi.hoisted(() => ({ analyseTrack: vi.fn() }));
+const held = vi.hoisted(() => ({ analyseTrack: vi.fn(), beginLedgerOperation: vi.fn(), finishLedgerOperation: vi.fn() }));
 vi.mock("@/ipc/client", () => ({ getBackend: () => Promise.resolve(held) }));
 let host: HTMLDivElement;
 let root: Root;
@@ -18,6 +18,8 @@ function Harness({ preferences, held = false }: { preferences: AnalysisPreferenc
 }
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  held.beginLedgerOperation.mockReset().mockResolvedValue("analysis-operation");
+  held.finishLedgerOperation.mockReset().mockResolvedValue(null);
   held.analyseTrack.mockReset().mockImplementation(() => new Promise(() => {}));
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
 });
@@ -50,7 +52,7 @@ it("captures each batch's settings before preference changes or another batch", 
   await act(async () => { root.render(<Harness preferences={{ mode: "rekordbox", concurrentTracks: 1, auto: true, firstBeatCue: false, bpmRange: "70-180", writeKeyTag: false, detectKey: true }} />); await Promise.resolve(); });
   await act(async () => { analysis.add([{ id: "a", title: "First" }, { id: "b", title: "Waiting" }]); await Promise.resolve(); });
   const defaults = { mode: "rekordbox", bpmGrid: true, key: true, highPrecision: true, minBpm: 70, maxBpm: 180, firstBeatCue: false };
-  expect(held.analyseTrack).toHaveBeenCalledWith("a", "rekordbox", defaults);
+  expect(held.analyseTrack).toHaveBeenCalledWith(...inOperation("a", "rekordbox", defaults));
   const chosen = { mode: "rbxport" as const, bpmGrid: false, key: true, highPrecision: false, minBpm: 98, maxBpm: 195, firstBeatCue: true };
   await act(async () => {
     root.render(<Harness preferences={{ mode: "rbxport", concurrentTracks: 1, auto: true, firstBeatCue: false, bpmRange: "70-180", writeKeyTag: false, detectKey: true }} />);
@@ -61,14 +63,14 @@ it("captures each batch's settings before preference changes or another batch", 
   expect(analysis.state.pending.map(item => item.analysis)).toEqual([defaults, { ...chosen, key: true }]);
   // Once more slots open, both waiting tracks use their own saved choices.
   await act(async () => { root.render(<Harness preferences={{ mode: "rbxport", concurrentTracks: 3, auto: true, firstBeatCue: false, bpmRange: "70-180", writeKeyTag: false, detectKey: true }} />); await Promise.resolve(); });
-  expect(held.analyseTrack).toHaveBeenCalledWith("b", "rekordbox", defaults);
-  expect(held.analyseTrack).toHaveBeenCalledWith("c", "rbxport", { ...chosen, key: true });
+  expect(held.analyseTrack).toHaveBeenCalledWith(...inOperation("b", "rekordbox", defaults));
+  expect(held.analyseTrack).toHaveBeenCalledWith(...inOperation("c", "rbxport", { ...chosen, key: true }));
 });
 
 it("queues automatic batches with the first-beat cue preference captured", async () => {
   await act(async () => { root.render(<Harness preferences={{ mode: "rbxport", concurrentTracks: 1, auto: true, firstBeatCue: true, bpmRange: "70-180", writeKeyTag: false, detectKey: true }} />); await Promise.resolve(); });
   await act(async () => { analysis.add([{ id: "a", title: "Imported" }, { id: "b", title: "Waiting" }]); await Promise.resolve(); });
-  expect(held.analyseTrack).toHaveBeenCalledWith("a", "rbxport", expect.objectContaining({ firstBeatCue: true }));
+  expect(held.analyseTrack).toHaveBeenCalledWith(...inOperation("a", "rbxport", expect.objectContaining({ firstBeatCue: true })));
   await act(async () => { root.render(<Harness preferences={{ mode: "rbxport", concurrentTracks: 1, auto: true, firstBeatCue: false, bpmRange: "70-180", writeKeyTag: false, detectKey: true }} />); await Promise.resolve(); });
   expect(analysis.state.pending[0]?.analysis?.firstBeatCue).toBe(true);
 });
@@ -88,7 +90,7 @@ it("re-analysis asked for during Auto Relocate waits, says so, and runs once the
 it("queues automatic batches with the Preferences BPM Range", async () => {
   await act(async () => { root.render(<Harness preferences={{ mode: "rbxport", concurrentTracks: 1, auto: true, firstBeatCue: false, bpmRange: "108-215", writeKeyTag: false, detectKey: true }} />); await Promise.resolve(); });
   await act(async () => { analysis.add([{ id: "a", title: "Imported" }, { id: "b", title: "Waiting" }]); await Promise.resolve(); });
-  expect(held.analyseTrack).toHaveBeenCalledWith("a", "rbxport", expect.objectContaining({ minBpm: 108, maxBpm: 215 }));
+  expect(held.analyseTrack).toHaveBeenCalledWith(...inOperation("a", "rbxport", expect.objectContaining({ minBpm: 108, maxBpm: 215 })));
   await act(async () => { root.render(<Harness preferences={{ mode: "rbxport", concurrentTracks: 1, auto: true, firstBeatCue: false, bpmRange: "70-180", writeKeyTag: false, detectKey: true }} />); await Promise.resolve(); });
   expect(analysis.state.pending[0]?.analysis).toEqual(expect.objectContaining({ minBpm: 108, maxBpm: 215 }));
 });
@@ -96,11 +98,11 @@ it("queues automatic batches with the Preferences BPM Range", async () => {
 it("asks for the key to be written into the file only with Write the value to the ID3 tag on (#204)", async () => {
   await act(async () => { root.render(<Harness preferences={{ mode: "rbxport", concurrentTracks: 2, auto: true, firstBeatCue: false, bpmRange: "70-180", writeKeyTag: false, detectKey: true }} />); await Promise.resolve(); });
   await act(async () => { analysis.add([{ id: "off", title: "Off" }]); await Promise.resolve(); });
-  expect(held.analyseTrack).toHaveBeenLastCalledWith("off", "rbxport", expect.anything());
+  expect(held.analyseTrack).toHaveBeenLastCalledWith(...inOperation("off", "rbxport", expect.anything()));
   // On: the independent stored notation stays Classic, despite Camelot display.
   await act(async () => { root.render(<Harness preferences={{ mode: "rbxport", concurrentTracks: 2, auto: true, firstBeatCue: false, bpmRange: "70-180", writeKeyTag: true, detectKey: true }} />); await Promise.resolve(); });
   await act(async () => { analysis.add([{ id: "on", title: "On" }]); await Promise.resolve(); });
-  expect(held.analyseTrack).toHaveBeenLastCalledWith("on", "rbxport", expect.anything(), "classic");
+  expect(held.analyseTrack).toHaveBeenLastCalledWith(...inOperation("on", "rbxport", expect.anything(), "classic"));
 });
 
 it("uses explicitly selected stored notation even when display is Classic and tag writing is off", async () => {
@@ -114,7 +116,7 @@ it("uses explicitly selected stored notation even when display is Classic and ta
     await Promise.resolve();
   });
   await act(async () => { analysis.add([{ id: "key", title: "Detected" }]); await Promise.resolve(); });
-  expect(held.analyseTrack).toHaveBeenCalledWith("key", "rbxport", expect.anything(), undefined, undefined, "alphanumeric");
+  expect(held.analyseTrack).toHaveBeenCalledWith(...inOperation("key", "rbxport", expect.anything(), undefined, undefined, "alphanumeric"));
 });
 
 it("analyses a deck's track next, ahead of a batch, and asks for it to be drawn", async () => {
@@ -129,13 +131,29 @@ it("analyses a deck's track next, ahead of a batch, and asks for it to be drawn"
     await Promise.resolve();
   });
   const defaults = { mode: "rbxport", bpmGrid: true, key: true, highPrecision: true, minBpm: 70, maxBpm: 180, firstBeatCue: false };
-  expect(held.analyseTrack.mock.calls.at(-1)).toEqual(["deck", "rbxport", defaults, undefined, true]);
+  expect(held.analyseTrack.mock.calls.at(-1)).toEqual(inOperation("deck", "rbxport", defaults, undefined, true));
   // The batch's own tracks are not drawn.
-  expect(held.analyseTrack.mock.calls[0]).toEqual(["a", "rbxport", defaults]);
+  expect(held.analyseTrack.mock.calls[0]).toEqual(inOperation("a", "rbxport", defaults));
 });
 
 it("queues tracks without key analysis when Analyze key is off", async () => {
   await act(async () => { root.render(<Harness preferences={{ mode: "rbxport", concurrentTracks: 1, auto: true, firstBeatCue: false, bpmRange: "70-180", writeKeyTag: false, detectKey: false }} />); await Promise.resolve(); });
   await act(async () => { analysis.add([{ id: "a", title: "First" }]); await Promise.resolve(); });
-  expect(held.analyseTrack).toHaveBeenCalledWith("a", "rbxport", expect.objectContaining({ bpmGrid: true, key: false }));
+  expect(held.analyseTrack).toHaveBeenCalledWith(...inOperation("a", "rbxport", expect.objectContaining({ bpmGrid: true, key: false })));
 });
+
+it("shares one Ledger operation across concurrent tracks and ends it after the last completion", async () => {
+ const finish = new Map<string, (result: AnalysisResult) => void>();
+ held.analyseTrack.mockImplementation((id: string) => new Promise<AnalysisResult>(resolve => finish.set(id, resolve)));
+ await act(async () => {root.render(<Harness preferences={DEFAULT_PREFERENCES.analysis}/>); await Promise.resolve();});
+ await act(async () => {analysis.add([{id:"one",title:"One"},{id:"two",title:"Two"}]); await Promise.resolve();});
+ expect(held.beginLedgerOperation).toHaveBeenCalledTimes(1);
+ expect(held.analyseTrack.mock.calls.map(call => String(call[6]))).toEqual(["analysis-operation","analysis-operation"]);
+ const value=(id:string):AnalysisResult=>({trackId:id,bpmX100:12800,key:"Am",beats:1,peak:1,durationSec:1,elapsedMs:1,analysisPath:""});
+ await act(async () => {finish.get("one")!(value("one")); await Promise.resolve();});
+ expect(held.finishLedgerOperation).not.toHaveBeenCalled();
+ await act(async () => {finish.get("two")!(value("two")); await Promise.resolve();});
+ expect(held.finishLedgerOperation).toHaveBeenCalledExactlyOnceWith("analysis-operation");
+});
+
+function inOperation(...args: unknown[]) { return [...args, ...Array<undefined>(6 - args.length).fill(undefined), "analysis-operation"]; }

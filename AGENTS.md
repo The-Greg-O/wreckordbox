@@ -31,8 +31,9 @@ Wreckordbox is a personal, Linux-first hard fork of rbxport: a rekordbox-compati
 ## Toolchain
 
 - Versions are pinned in `mise.toml`: run tools as `mise exec -- <command>` (run `mise trust` once in a new checkout).
-- Front end: `mise exec -- pnpm install --frozen-lockfile`, then `pnpm typecheck`, `pnpm lint`, `pnpm test`; the mock-backed browser suite is `pnpm e2e` (pass `--trace off`). `pnpm dev:mock` serves the real interface against a mock backend with no Rust build.
-- Rust: before any cargo command, `export CARGO_BUILD_JOBS=2 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 RBXPORT_TEST=1`. This machine is shared with other builds and a debug build with debug info is 16 GB. Prefer `cargo test -p <crate>` and `cargo check -p <crate>` to workspace-wide commands. Delete your checkout's `target/` when you finish.
+- Heavy commands use the machine-wide queue: `/home/go/code/wreckordbox-notes/bin/heavy rust mise exec -- cargo ...` for build/test/run, `heavy check mise exec -- cargo ...` for check/clippy, and `heavy web mise exec -- pnpm ...` for install/typecheck/lint/test/build/Playwright (use the same absolute wrapper path). Never run these bare or in the background; a queued command waits its turn. `cargo fmt` runs without the queue.
+- Front end: install with `pnpm install --frozen-lockfile` through the web lane. Browser specs use the mock bundle, Chromium at `/usr/bin/chromium`, `--workers=1 --trace off`. `pnpm dev:mock` serves the real interface against a mock backend with no Rust build.
+- Rust: the queue sets the build-job limit, `CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 RBXPORT_TEST=1 RUSTC_WRAPPER=sccache SCCACHE_CACHE_SIZE=30G`. Export these for unqueued formatting too. Leave the worktree and its `target/` for review and the orchestrator's gate.
 - The machine is an Apple M2 under Asahi Linux (aarch64, 16K pages, 8 cores, 15 GB RAM), running Omarchy (Arch, Hyprland, Wayland).
 
 ## How to build a ticket
@@ -41,6 +42,45 @@ Wreckordbox is a personal, Linux-first hard fork of rbxport: a rekordbox-compati
 - ADR 0003: do not reshape `rbl-pdb`, `rbl-onelibrary`, `rbl-export`, `rbl-anlz` or `rbl-db`. Add beside them.
 - Many workers change the same crates. Put your code in modules of its own and touch shared files (service dispatch, the CLI entry point, the app root, shared styles, workspace manifests) with the smallest possible additions.
 - Every command that changes the Library goes through the single edit path, tells the hosting window, and honours Library Protection. Writing to the Sidecar is not a Library edit.
-- Finish each ticket with the full tests of every crate or package you touched, `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` for Rust, and typecheck, lint and unit tests for the front end. Say plainly in your completion notes what you could not verify.
+- Finish with the targeted checks below. Say plainly in your completion notes what failed, what you did not run, and what you could not verify.
 - If a ticket is too large to finish well in one sitting, land the largest coherent, green part and file the remainder as a new bead blocked appropriately.
 - Ask the human (escalate) instead of guessing when a ticket cannot be done as specified, when it would change something an ADR decided, or when it needs hardware (a physical XDJ-AZ, a real Stick, rekordbox on macOS). Nothing has been verified on hardware yet.
+
+## Which tests to run
+
+- While building, use the check lane for `cargo check` / `cargo clippy` and
+  the Rust lane for one integration module or test name.
+- At the end, run the full tests of crates whose `src/` changed, plus
+  `cargo clippy -p <crate> --all-targets -- -D warnings` and unqueued
+  `cargo fmt -p <crate> --check` (only touched files need to be clean).
+- For unchanged dependent crates, use `cargo check -p <crate> --tests` and
+  the specific integration modules that exercise the change, not every suite.
+  For app-shell source changes, run the relevant hosted modules and guard
+  tests rather than the whole shell suite.
+- App-shell integration files now live in `src-tauri/tests/it/`. Select one
+  with `cargo test -p rbxport --test it <module>::`; for example,
+  `--test it service_host::` or `--test it stick_protection::` (command
+  classification and shared-planner source guards). These commands all use
+  the Rust queue. First build `cargo build -p wreckordbox` through that queue
+  in the same target/profile for the hosted tests' prebuilt CLI.
+- CLI integration files use the same layout: `cargo test -p wreckordbox --test it
+  <module>::` through the Rust queue (for example `library_protection::`).
+  Its `tests/common/` stays at the original path so new top-level tests can
+  still declare `mod common;`; `it/main.rs` shares it once across modules.
+- Sidecar integration files also use `cargo test -p wreckordbox-sidecar --test it
+  <module>::` through the Rust queue (for example `ledger::`). Its `common/`
+  helper and SQL fixtures stay under `tests/` for new standalone files.
+- Service integration modules use `cargo test -p wreckordbox-service --test it
+  <module>::` through the Rust queue (for example `one_edit_gate::`). Ten
+  suites that mutate process state or use crash workers remain separate;
+  their names and reasons are in the integration-test guide below. Keep
+  incoming `projection_hosted`, `bulk_recording`, and `bulk_failures` tests
+  independently discoverable with their support files and child filters.
+- `identity`, `logging`, `omarchy_theme`, `theme_file`, and the custom-harness
+  `menu` remain separate shell targets; use `--test <name>` for them.
+  Reasons and new-file/merge guidance: [integration tests](docs/development/integration-tests.md).
+- Front end: typecheck, lint, relevant Vitest files and the requested browser
+  specs through the web lane; leave full suites to the orchestrator.
+- Merge current `foundation` before reporting. Re-run the affected crate
+  checks and your changed integration modules; include the guards if a
+  command changed. Do not repeat unrelated full suites after the merge.

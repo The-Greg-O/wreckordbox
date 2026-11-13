@@ -851,7 +851,7 @@ disabled in that case. This has not been checked at runtime.
 
 | Commit | Problem | Safeguard in the code |
 | --- | --- | --- |
-| `ed75e78` | A stick pulled mid-sync showed raw OS errors. | `disconnected_during_export` rewrites the error when the mount is gone. The next sync recovers the journal. Test: `a_stick_pulled_during_a_sync_is_reported_as_disconnected` (`src-tauri/tests/commands.rs`). |
+| `ed75e78` | A stick pulled mid-sync showed raw OS errors. | `disconnected_during_export` rewrites the error when the mount is gone. The next sync recovers the journal. Test: `a_stick_pulled_during_a_sync_is_reported_as_disconnected` (`src-tauri/tests/it/commands.rs`). |
 | `ca22b2a` | `rekordboxAgent` blocked every USB sync. | USB guards use `is_rekordbox_app_running`; the refusal is `ErrorKind::ReadOnly`, not internal. |
 | `a160112` | After an interrupted sync, rekordbox rewrote the databases, and recovery refused the stick until it was reformatted (#229). | `rbl_export::recover` catches `DeviceChanged` on a legacy journal and calls `Publication::set_aside`. See [recovery](#recovery-of-an-interrupted-publication). Tests: `crates/rbl-export/tests/recovery.rs`. |
 | `5f27bce` | A stick written by a clock ahead of this machine failed at "Publishing" (FAT stores local time with no zone). | `Publication::commit` calls `finish(.., replay: false)`, which skips `check_external_changes`. The check runs only when replaying a journal left by an earlier run. Test: `a_stick_whose_files_look_newer_than_this_clock_still_syncs`. |
@@ -1036,13 +1036,13 @@ as the stick, or a disposable stick named through `RBX_USB_STICK` /
 | `tests/device_library.rs` | Editing a stick's playlists | `--test device_library` |
 | `tests/pipeline.rs` | Analyse generated audio, author analysis, export, verify | `--test pipeline` |
 | `rbl-core` `durable` unit tests | Journal replay, retained generations, rollback, moves, set-aside, NFC/NFD, no exclusive rename | `RB_LITE_TEST=1 cargo test -p rbl-core` |
-| `src-tauri/tests/commands.rs` | The real commands against `rbl_db::fixture::build` libraries: preflight, Export Track, multi-stick sync, folders, intelligent playlists, a pulled stick | `RB_LITE_TEST=1 cargo test -p rbxport --test commands` |
+| `src-tauri/tests/it/commands.rs` | The real commands against `rbl_db::fixture::build` libraries: preflight, Export Track, multi-stick sync, folders, intelligent playlists, a pulled stick | `/home/go/code/wreckordbox-notes/bin/heavy rust mise exec -- cargo test -p rbxport --test it commands::` |
 | `src/views/sync/SyncManager.test.tsx`, `src/lib/exportProgress.test.ts` | Sync Manager behavior on the mock backend; stage measures and labels | `pnpm test` |
 | `e2e/sync-manager.spec.ts`, `e2e/sync-production.spec.ts` | Sync Manager in Chromium/WebKit on the mock backend, and the built window at `#sync` | `pnpm e2e` |
 
 `RB_LITE_TEST=1` (or `RBXPORT_TEST`) makes `rbl-db` refuse to open the
 installed library read-write. `rbl_db::fixture::build(dir, shape)` creates a
-throwaway encrypted library with the real schema. `src-tauri/tests/commands.rs`
+throwaway encrypted library with the real schema. `src-tauri/tests/it/commands.rs`
 builds its `shell()` this way. The `rbl-export` tests build `SourceTrack`
 values directly and do not need a library.
 
@@ -1084,7 +1084,7 @@ Before handing off, run the checks in [Testing](../development/testing.md#before
 | To change | Start in | Also touch |
 | --- | --- | --- |
 | A track field written to both databases | `SourceTrack` (`rbl-export/src/lib.rs`); `source_track` (`commands.rs`), or `rbl_db::export_info::track_extras` if the index lacks it | `rbl_pdb::rows::TrackInput` / `track_row`; `OneLibraryTrack` and `add_tracks` → `rbl_onelibrary::build::Track`; `reconcile::sources_from_one/legacy` for retained tracks; `snapshot::Track` if verification or conflict checks should compare it; the [metadata table](usb-export-db.md#metadata-and-cue-mapping). The request digest picks up `SourceTrack` changes on its own. |
-| Which tracks or playlists a selection contains | `ExportSelection::from_playlists_and_tracks`, `folder_contents`, `for_stick` | `SyncManager.tsx` ticking (`tickNode`, `playlistsUnder`); `held_on_stick`; `src-tauri/tests/commands.rs` |
+| Which tracks or playlists a selection contains | `ExportSelection::from_playlists_and_tracks`, `folder_contents`, `for_stick` | `SyncManager.tsx` ticking (`tickNode`, `playlistsUnder`); `held_on_stick`; `src-tauri/tests/it/commands.rs` |
 | Playlist rows, order, or folders on the stick | Playlist loop in `export_cancellable`; `playlist_ids` | `write_one_library` (`add_playlist_node`); `reconcile::retain_device_only`; `verify_staged_incremental` |
 | Reuse versus copy rules | The "unchanged" and "moved" blocks in the per-track loop; `incremental` | `ManifestTrack` and `Generation` fields (bump `MANIFEST_VERSION` if a field changes meaning; bump `TRANSFORM_VERSION` if outputs change for the same inputs); `estimate.rs` so the preview agrees; `tests/sync.rs`, `tests/redesign.rs`, `tests/performance.rs` |
 | Space preview | `plan::from_baseline`, `estimate::estimate_inspected` | `estimate_sync`, `SyncEstimateDto`, `SyncManager.tsx` space bars |
