@@ -74,6 +74,7 @@ import { libraryWidthOf } from "@/lib/libraryFit";
 import { libraryLookFor } from "@/views/shell/libraryFitLook";
 import { SHELL_PLAYER_LAYOUT, ViewShell } from "@/views/shell/ViewShell";
 import { useShellTree } from "@/views/shell/useShellTree";
+import { breadcrumbOf } from "@/lib/shellTreeOverlay";
 import { useTargetList } from "@/views/shell/useTargetList";
 import { IntakeView } from "@/views/shell/IntakeView";
 import { useIntakeCounts } from "@/views/shell/useIntakeCounts";
@@ -2409,20 +2410,12 @@ function AppBody() {
     setInfoSelection(tracks.map((t) => t.id));
   }, []);
   /**
-   * The shell's view changes. The Library list is unmounted while another
-   * view shows and comes back with nothing selected, so what this window
-   * holds for it (the tracks Analyze and the panels act on, the highlighted
-   * row, the count) is dropped with it: what a command targets is always
-   * what the list shows as selected.
+   * The shell's view changes. The Library list stays mounted but inert while
+   * another view shows (wbx-45.2): it reports an empty selection then, and
+   * its own again when shown, so what a command targets is always what the
+   * list shows as selected.
    */
   const changeShellView = useEventCallback((next: ShellView) => {
-    if (shellView === "library" && next !== "library") {
-      setSelectedTracks([]);
-      setInfoSelection([]);
-      setSelectedRow(null);
-      setSelectedCount(0);
-      setBarShowsSelection(false);
-    }
     setShellView(next);
   });
   const reportSubSelection = useCallback((tracks: { id: string; title: string }[]) => {
@@ -3730,6 +3723,8 @@ function AppBody() {
     actions: subTree, fromStick: draggedTracks !== null, expansion: treeExpansion, onExpansionChange: setTreeExpansion,
     stickGate, confirmDelete: confirmRemoval,
   });
+  // The open list's folders and name, its heading at half width (wbx-45.21).
+  const libraryCrumb = useMemo(() => breadcrumbOf(tree, selectedNode), [tree, selectedNode]);
   const library = (
         selectedDevice ? (
           <Suspense fallback={null}><DevicePanel
@@ -3779,7 +3774,7 @@ function AppBody() {
           onTrafficLight={setTrafficLight}
           trafficKey={trafficKey}
           {...listColumns}
-          {...(shellOn ? { look: libraryLook } : {})}
+          {...(shellOn ? { look: libraryLook, inert: shellView !== "library" } : {})}
           onFocusedRow={(row, from) => { void openInDeckA(row, from); }}
           onSelectedRow={setSelectedRow}
           onDragTracks={setDraggedTracks}
@@ -4025,6 +4020,7 @@ function AppBody() {
           stick={selectedDevice ? library : undefined}
           library={library}
           libraryTarget={targetList.pane}
+          libraryCrumb={libraryCrumb}
           status={<>{linkStrip}{statusBar}</>}
           topBarEnd={<CommandPaletteButton platform={platform} />}
         />

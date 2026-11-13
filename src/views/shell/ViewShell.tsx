@@ -21,7 +21,7 @@
  * The layout answers to the shell's own width through a container query (see
  * the stylesheet): at the breakpoint and below, the tree gives way.
  */
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 
 import { useTranslation } from "@/i18n";
 import { runCommand } from "@/lib/commands";
@@ -31,7 +31,10 @@ import type { PlayerLayout } from "@/lib/layout";
 import type { IntakeQueue } from "@/lib/shellTree";
 import { useCommands } from "@/store/useCommands";
 import { useEventCallback } from "@/store/useEventCallback";
-import { observeShellWidth } from "@/store/useShellWidth";
+import { observeShellWidth, useShellWidth } from "@/store/useShellWidth";
+import { SHELL_NARROW_MAX_PX } from "@/lib/shellViews";
+import { treeKeyAction } from "@/lib/shellTreeOverlay";
+import { isTyping } from "@/lib/shortcuts";
 import { LibraryView } from "./LibraryView";
 import { ReviewView } from "./ReviewView";
 import { StickView } from "./StickView";
@@ -44,6 +47,8 @@ import styles from "./ViewShell.module.css";
 export const SHELL_PLAYER_LAYOUT: PlayerLayout = "simple";
 
 export interface ViewShellProps {
+  /** The open list's breadcrumb (its folders, then its name), drawn in place of its heading at half width (wbx-45.21). */
+  libraryCrumb?: readonly string[] | undefined;
   /** The view in the working area. Held by the window, so it can be asked for from outside the shell. */
   view: ShellView;
   onViewChange: (view: ShellView) => void;
@@ -77,7 +82,7 @@ function tabId(view: ShellView): string {
 }
 
 export function ViewShell({
-  view, onViewChange, tree, player, status, library, libraryTarget, topBarEnd, platform, keyOverrides, intakeQueue, stick, tabCounts, intake,
+  view, onViewChange, tree, player, status, library, libraryTarget, libraryCrumb, topBarEnd, platform, keyOverrides, intakeQueue, stick, tabCounts, intake,
 }: ViewShellProps) {
   const t = useTranslation();
 
@@ -108,9 +113,79 @@ export function ViewShell({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [onKey]);
 
+  // The tree when the shell is too narrow to draw it (wbx-45.21): "Go to
+  // the Tree" (the Library's breadcrumb, the palette, Ctrl+T) draws it over
+  // the view; choosing a row, Escape or a click elsewhere puts it away. It
+  // is the same mounted tree, so its selection, folders and the target's
+  // mark are what they were. At full width the command moves the keyboard
+  // to it.
+  const shellWidth = useShellWidth();
+  const narrow = shellWidth !== null && shellWidth <= SHELL_NARROW_MAX_PX;
+  const [treeOpen, setTreeOpen] = useState(false);
+  const treeRef = useRef<HTMLElement>(null);
+  useEffect(() => { if (!narrow) setTreeOpen(false); }, [narrow]);
+  const focusTree = () => {
+    // After the tree is drawn: its rows are laid out only once it shows.
+    requestAnimationFrame(() => {
+      const root = treeRef.current;
+      const row = root?.querySelector<HTMLElement>('[role="treeitem"][aria-selected="true"]')
+        ?? root?.querySelector<HTMLElement>('[role="treeitem"][tabindex="0"]')
+        ?? root?.querySelector<HTMLElement>('[role="treeitem"]');
+      row?.scrollIntoView?.({ block: "nearest" });
+      row?.focus();
+    });
+  };
+  const closeTree = (refocus: boolean) => {
+    setTreeOpen(false);
+    if (refocus) requestAnimationFrame(() => document.querySelector<HTMLElement>("[data-shell-crumb]")?.focus());
+  };
+  const goToTree = useEventCallback(() => {
+    if (narrow) setTreeOpen(true);
+    focusTree();
+    return true;
+  });
+  useCommands({ goToTree });
+  const onTreeKey = useEventCallback((event: KeyboardEvent) => {
+    if (!treeKeyAction(event, platform, event.target as HTMLElement | null)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) runCommand("goToTree");
+  });
+  useEffect(() => {
+    window.addEventListener("keydown", onTreeKey, true);
+    return () => window.removeEventListener("keydown", onTreeKey, true);
+  }, [onTreeKey]);
+  // A click outside the drawn-over tree puts it away (the breadcrumb toggles it itself).
+  useEffect(() => {
+    if (!treeOpen) return undefined;
+    const away = (event: PointerEvent) => {
+      const at = event.target as Element | null;
+      if (treeRef.current?.contains(at) || at?.closest?.("[data-shell-crumb], [role=\"menu\"], [role=\"dialog\"]")) return;
+      setTreeOpen(false);
+    };
+    document.addEventListener("pointerdown", away, true);
+    return () => document.removeEventListener("pointerdown", away, true);
+  }, [treeOpen]);
+  const treeProps = treeOpen ? {
+    // Escape puts it away; a row chosen (clicked, or Enter or Space on it) opens and puts it away.
+    onKeyDownCapture: (event: ReactKeyboardEvent) => {
+      const at = event.target as HTMLElement;
+      if (isTyping(at)) return;
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeTree(true); return; }
+      if ((event.key === "Enter" || event.key === " ") && at.getAttribute("role") === "treeitem" && !event.repeat) {
+        setTimeout(() => closeTree(true), 0);
+      }
+    },
+    onClick: (event: ReactMouseEvent) => {
+      const at = event.target as HTMLElement;
+      if (isTyping(at) || !at.closest('[role="treeitem"]')) return;
+      closeTree(true);
+    },
+  } : {};
+
   return (
     <div className={styles.shell} data-testid="shell" data-view={view} ref={observeShellWidth}>
-      <div className={styles.frame}>
+      <div className={styles.frame} data-tree-open={(treeOpen && narrow) || undefined}>
         <header className={styles.topBar} data-testid="shell-top-bar">
           <div className={styles.tabs} role="tablist" aria-label={t("Views")}>
             {SHELL_VIEWS.map((entry) => {
@@ -142,7 +217,7 @@ export function ViewShell({
           <div className={styles.topBarEnd} data-testid="shell-top-bar-end">{topBarEnd}</div>
         </header>
         <section className={styles.player} data-testid="shell-player" aria-label={t("Player")}>{player}</section>
-        <aside className={styles.tree} data-testid="shell-tree" aria-label={t("Tree")}>{tree}</aside>
+        <aside className={styles.tree} data-testid="shell-tree" aria-label={t("Tree")} ref={treeRef} {...treeProps}>{tree}</aside>
         <main
           className={styles.working}
           id="shell-working"
@@ -150,7 +225,14 @@ export function ViewShell({
           aria-labelledby={tabId(view)}
           data-testid="shell-working"
         >
-          {view === "library" ? <LibraryView list={library} target={libraryTarget} /> : null}
+          {/* Kept mounted while another view shows (wbx-45.2), out of sight and inert, so
+              the list's selection and scroll survive; the list itself stops listening
+              (`TrackTable`'s `inert`). A selected Stick's panel is the Stick view's instead. */}
+          {view === "library" || stick === undefined ? (
+            <div className={styles.libraryKept} data-kept-hidden={view !== "library" || undefined} inert={view !== "library"} aria-hidden={view !== "library" || undefined}>
+              <LibraryView list={library} target={libraryTarget} crumb={libraryCrumb} />
+            </div>
+          ) : null}
           {view === "intake" ? intake?.(intakeQueue ?? "intake") ?? null : null}
           {view === "review" ? <ReviewView /> : null}
           {view === "stick" ? <StickView stick={stick} /> : null}
