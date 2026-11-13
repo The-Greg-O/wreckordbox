@@ -248,6 +248,8 @@ pub const STICK_WRITERS: &[&str] = &[
     "ensure_device_library",
     "stick_settle",
     "format_device",
+    // The Stick view's load through the hosted service (wbx-71).
+    "stick_view_load",
     // Files saved where the DJ chooses: a Stick write when that is on one.
     "export_playlist_file",
     "export_xml",

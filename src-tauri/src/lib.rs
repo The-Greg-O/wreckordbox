@@ -63,6 +63,7 @@ mod scripting;
 pub mod service_host;
 pub mod intake_tags;
 pub mod intake_view;
+pub mod stick_view;
 pub mod playlist_entries;
 pub mod mutant_window;
 pub mod service_status;
@@ -590,6 +591,9 @@ pub fn run() {
             new_library::library_problem,
             service_host::service_problem,
             intake_view::intake_queue,
+            stick_view::stick_view_sticks,
+            stick_view::stick_view_dry_run,
+            stick_view::stick_view_load,
             mutant_window::collection_removal_mutants,
             intake_view::intake_counts,
             intake_view::intake_colours,

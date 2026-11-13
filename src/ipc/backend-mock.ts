@@ -9,7 +9,7 @@
  * Its sort and search semantics are checked against the Rust view tests by a
  * parity test once `rbl-index` lands.
  */
-import { mockStickPending, mockStickReplaced, mockStickSpare, withStickSafetyLog } from "./mock-stick-safety";
+import { mockStickPending, mockStickProtected, mockStickReplaced, mockStickSpare, withStickSafetyLog } from "./mock-stick-safety";
 import { TRACK_SEARCH_OPTIONS, type TrackSearchField } from "@/lib/search";
 import theme from "@/styles/theme";
 import { mockServiceActivity } from "./mock-service-activity";
@@ -33,6 +33,8 @@ import { fromServicePanel, fromServiceTagsSet } from "@/lib/tagPanel";
 import { referenceDeviceSettings } from "./mock-device-settings";
 import { createMockDeviceLibraries, type MockImportEntry } from "./mock-device-library";
 import { createMockIntake } from "./mock-intake";
+import { createMockStickLoad } from "./mock-stick-load";
+import { fromServiceDryRun, fromServiceLoad, fromServiceSticks } from "@/lib/stickLoad";
 import { mockCueHooks } from "./mock-cue-pads";
 import { createMockTagPanel } from "./mock-tag-panel";
 import { keyLightRows } from "./mock-key-lights";
@@ -2537,6 +2539,13 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     setTags: (id, tags) => { const row = all.find((r) => r.id === id); if (row) detailsOf(row).myTags = [...tags]; },
     recordEdit: (label, apply, undo) => { apply(); return recordEdit({ label, undo, redo: apply }); },
   });
+  // The Stick view's load (wbx-71): `mock-stick-load.ts`.
+  const stickLoad = createMockStickLoad({
+    devices: () => devices, tree: () => tree, wait,
+    tracksOf: (id) => membership.get(id) ?? seededMembers(id).map((i) => all[i]?.id ?? ""),
+    titleOf: (id) => all.find((row) => row.id === id)?.title ?? id,
+    spare: mockStickSpare, protectedNow: mockStickProtected, pending: mockStickPending,
+  });
   if (typeof window !== "undefined") {
     // `__setPrepColour(id, colourId)` (0 for none): an edit as the Library list makes it.
     (window as unknown as { __setPrepColour: (id: string, colour: number) => Promise<unknown> }).__setPrepColour =
@@ -2552,6 +2561,9 @@ export function createMockBackend(options: MockOptions = {}): Backend {
   }
 
   return withStickSafetyLog({
+    stickViewSticks: async () => fromServiceSticks(await stickLoad.stickViewSticks()),
+    stickViewDryRun: async (stick, playlists) => fromServiceDryRun(await stickLoad.stickViewDryRun(stick, playlists)),
+    stickViewLoad: async (stick, playlists, plan) => fromServiceLoad(await stickLoad.stickViewLoad(stick, playlists, plan)),
     intakeQueue: intake.intakeQueue,
     intakeCounts: intake.intakeCounts,
     intakeColours: intake.intakeColours,

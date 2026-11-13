@@ -104,6 +104,11 @@ export function mockStickSpare(path: string): boolean {
   return log().spare.has(path);
 }
 
+/** Whether Stick Protection refuses writes to the mock's Stick at `path` now. */
+export function mockStickProtected(path: string): boolean {
+  return protection(log(), path).protected;
+}
+
 /** Another volume is now at `path` (a remount): approvals for the old one no longer hold. */
 export function mockStickReplaced(path: string): void {
   const state = log();
@@ -197,6 +202,8 @@ const WRITES: Record<string, { path: number; approval: number; op: (a: unknown[]
   settleStick: { path: 0, approval: 1, op: () => ({ kind: "settle" }) },
   ensureDeviceLibrary: { path: 0, approval: 2, op: (a) => ({ kind: "ensureLibrary", defaults: a[1] as never }) },
   formatDevice: { path: 0, approval: 2, op: (a) => ({ kind: "format", layout: a[1] as never }) },
+  // The Stick view's load (wbx-71): the hold confirms a sync of exactly these playlists.
+  stickViewLoad: { path: 0, approval: 3, op: (a) => ({ kind: "sync", playlists: [...(a[1] as string[])] }) },
 };
 
 /** Reads made before a write: they refuse a Stick with an unfinished write. */
@@ -421,6 +428,12 @@ export function withStickSafetyLog(backend: Backend): Backend {
       }
       return run(...args);
     };
+  }
+  // For the specs: a Stick write called straight, as a script or a stale
+  // button could, past the window's gate (wbx-71).
+  if (typeof window !== "undefined") {
+    (window as unknown as { __stickWriteUnstaged: (name: string, ...args: unknown[]) => unknown }).__stickWriteUnstaged =
+      (name, ...args) => (wrapped[name] as Call)(...args);
   }
   return wrapped as unknown as Backend;
 }

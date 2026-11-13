@@ -205,6 +205,7 @@ fn every_writer_is_refused_on_a_protected_stick_and_writes_nothing() {
         ("save_device_settings", serde_json::json!({ "kind": "saveSettings", "settings": serde_json::to_value(run(device_settings::device_settings(path.clone())).unwrap()).unwrap() })),
         ("ensure_device_library", serde_json::json!({ "kind": "ensureLibrary" })),
         ("format_device", serde_json::json!({ "kind": "format", "layout": "fat32" })),
+        ("stick_view_load", serde_json::json!({ "kind": "sync", "playlists": [playlist_id(0)] })),
     ]
     .into_iter()
     .map(|(name, op)| (name, rig.token(&op)))
@@ -350,6 +351,13 @@ fn every_writer_is_refused_on_a_protected_stick_and_writes_nothing() {
             serde_json::from_value(serde_json::json!("fat32")).unwrap(),
             t,
         )),
+    );
+    // The Stick view's load (wbx-71): refused before the hosted service is
+    // asked (this window hosts none), with the hold's token in hand.
+    let t = call("stick_view_load");
+    protected(
+        "stick_view_load",
+        rbxport_lib::stick_view::load(&rig.state(), &path, &[playlist_id(0)], "plan", t),
     );
     let on_stick = |name: &str| rig.stick.join(name).to_string_lossy().into_owned();
     call("export_playlist_file");
@@ -1205,6 +1213,8 @@ const NOT_STICK_WRITERS: &[&str] = &[
     "stick_outline",
     "stick_protection",
     "stick_unlock",
+    "stick_view_dry_run",
+    "stick_view_sticks",
     "stick_write_approve",
     "stick_write_plan",
     "stick_write_revoke",

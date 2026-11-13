@@ -21,6 +21,7 @@ import { liftMyTags } from "./rowMyTags";
 import { fromServiceColours, type ServiceColours } from "@/lib/intakeEdits";
 import { fromServicePanel, fromServiceTagsSet } from "@/lib/tagPanel";
 import { fromServicePage, type ServiceQueuePage } from "@/lib/intakeQueue";
+import { fromServiceDryRun, fromServiceLoad, fromServiceSticks } from "@/lib/stickLoad";
 
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -647,6 +648,10 @@ async function realBackend(): Promise<Backend> {
     settleStick: (path, approval) => invoke<void>("stick_settle", { path, approval: approval ?? null }),
     intakeQueue: async (queue, offset, limit) =>
       fromServicePage(await invoke<ServiceQueuePage>("intake_queue", { queue, offset, limit })),
+    stickViewSticks: async () => fromServiceSticks(await invoke<unknown>("stick_view_sticks")),
+    stickViewDryRun: async (stick, playlists) => fromServiceDryRun(await invoke<unknown>("stick_view_dry_run", { stick, playlists })),
+    stickViewLoad: async (stick, playlists, plan, approval) =>
+      fromServiceLoad(await invoke<unknown>("stick_view_load", { stick, playlists, plan, approval: approval ?? null })),
     intakeCounts: async () => {
       const counts = await invoke<{ intake: number; problems: number | null }>("intake_counts");
       return { intake: counts.intake, problems: counts.problems };

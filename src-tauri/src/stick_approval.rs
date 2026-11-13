@@ -87,4 +87,5 @@ pub const STICK_WRITING_COMMANDS: &[&str] = &[
     "ensure_device_library",
     "stick_settle",
     "format_device",
+    "stick_view_load",
 ];
