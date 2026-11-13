@@ -70,7 +70,7 @@ fn version_one_store(dir: &tempfile::TempDir) -> std::path::PathBuf {
     std::fs::create_dir_all(&folder).unwrap();
     rusqlite::Connection::open(folder.join("sidecar.db"))
         .unwrap()
-        .execute_batch(include_str!("fixtures/sidecar-v1.sql"))
+        .execute_batch(include_str!("../fixtures/sidecar-v1.sql"))
         .unwrap();
     folder
 }
@@ -80,7 +80,7 @@ fn version_one_store(dir: &tempfile::TempDir) -> std::path::PathBuf {
 fn version_two_store(dir: &tempfile::TempDir) -> std::path::PathBuf {
     let folder = version_one_store(dir);
     raw(&folder)
-        .execute_batch(include_str!("fixtures/sidecar-v2.sql"))
+        .execute_batch(include_str!("../fixtures/sidecar-v2.sql"))
         .unwrap();
     folder
 }

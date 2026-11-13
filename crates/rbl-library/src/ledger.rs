@@ -23,8 +23,9 @@
 //!   one that only ends the Redo branch ([`Unkept::Unrecorded`]) and one
 //!   that empties the history ([`Unkept::Permanent`]).
 //!
-//! A write that failed is never handed over: an entry says a change was
-//! made.
+//! Normal history entries describe confirmed changes. Bulk operation recorders
+//! may additionally retain explicit partial/uncertain outcomes; their recording
+//! failures are reported separately and do not refuse the native write.
 
 use crate::history::LibraryEdit;
 
@@ -121,11 +122,23 @@ impl Preparation {
 /// already made: it is the implementation's to keep (and to refuse the
 /// next write for, in [`Self::ready`]).
 pub trait Ledger: Send + Sync {
+    /// A bounded operation recorder. Creating it does not write anything.
+    fn bulk(&self, _kind: crate::bulk::Kind) -> Option<std::sync::Arc<dyn crate::bulk::Recorder>> {
+        None
+    }
+
     /// A write is about to be made: record durably that it was begun, so a
     /// process that dies before its entry is written leaves a trace. Asked
     /// before every write through the core; an error refuses the write
     /// with its text and nothing is changed.
     fn begin(&self) -> Result<(), String>;
+
+    /// A row write outside Undo history. Bulk analysis/import scopes may join
+    /// these writes; recorded playlist edits retain their ordinary intent,
+    /// preparation and transactional consequences (including Mutant Follows).
+    fn begin_unkept(&self) -> Result<(), String> {
+        self.begin()
+    }
 
     /// A file-only change, after the file-edit guards and before publication.
     /// Keep the kind and track with the intent for crash recovery. No audio,

@@ -18,6 +18,7 @@ use crate::dto::{cue_colour_css, RowCueDto, RowDto, TrackFilterDto, TrackSourceD
 use crate::error::{AppError, AppResult, ErrorKind};
 
 pub struct AppState {
+    pub(crate) bulk_operations: parking_lot::Mutex<crate::bulk_writes::Operations>,
     /// The loaded Library, its open views and the path every edit takes
     /// (`rbl-library`). The rest of this struct is what the window keeps
     /// around it, lent to the core through [`rbl_library::Host`].
@@ -126,6 +127,7 @@ impl AppState {
         let backup_dir = backup_dir.into();
         let backup_destination = rbl_backup::default_destination(&backup_dir);
         Self {
+            bulk_operations: parking_lot::Mutex::new(crate::bulk_writes::Operations::default()),
             core: Arc::new(LibraryCore::new(backup_dir.clone())),
             service: parking_lot::Mutex::new(None),
             history_changed: std::sync::OnceLock::new(),

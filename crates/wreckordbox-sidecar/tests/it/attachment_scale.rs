@@ -6,7 +6,7 @@
     clippy::expect_used,
     clippy::panic
 )]
-mod common;
+use crate::common;
 use rusqlite::{params, Connection};
 use serde_json::json;
 use std::time::Instant;

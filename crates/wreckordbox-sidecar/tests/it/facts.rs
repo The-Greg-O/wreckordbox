@@ -7,7 +7,7 @@
     clippy::panic
 )]
 
-mod common;
+use crate::common;
 
 use serde_json::json;
 use wreckordbox_sidecar::{

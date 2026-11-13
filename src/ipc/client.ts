@@ -224,9 +224,11 @@ async function realBackend(): Promise<Backend> {
       if (bytes instanceof ArrayBuffer) return new Uint8Array(bytes);
       return bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes);
     },
+    beginLedgerOperation: (kind) => invoke<string>("begin_ledger_operation", { kind }),
+    finishLedgerOperation: (operation) => invoke<string | null>("finish_ledger_operation", { operation }),
     analysisStages: () => invoke<AnalysisStageDescriptor[]>("analysis_stages"),
-    analyseTrack: (trackId, mode = "rbxport", settings, keyTag, drawing, keyDisplay) =>
-      invoke<AnalysisResult>("analyse_track", { trackId, mode, settings, keyTag: keyTag ?? null, drawing: drawing ?? false, keyDisplay: keyDisplay ?? null }),
+    analyseTrack: (trackId, mode = "rbxport", settings, keyTag, drawing, keyDisplay, operation) =>
+      invoke<AnalysisResult>("analyse_track", { trackId, mode, settings, keyTag: keyTag ?? null, drawing: drawing ?? false, keyDisplay: keyDisplay ?? null, operation: operation ?? null }),
     trackBeats: async (trackId) => {
       // Raw bytes rather than a JSON array of objects: a long mix has tens of
       // thousands of beats, and `{"timeMs":123,"downbeat":true}` each is an
@@ -281,7 +283,7 @@ async function realBackend(): Promise<Backend> {
     },
     importPaths: (paths) => invoke<ImportReport>("import_files", { paths }),
     listImportFiles: (paths) => invoke<string[]>("list_import_files", { paths }),
-    importPathsSlice: (paths) => invoke<ImportReport>("import_files_slice", { paths }),
+    importPathsSlice: (paths, operation) => invoke<ImportReport>("import_files_slice", { paths, operation: operation ?? null }),
     importFolderPlaylist: (path, parent, replace, at, copy) =>
       invoke<FolderPlaylistReport>("import_folder_playlist", {
         path, parent, replace: replace ?? null, at: at ?? null, copy: copy ?? null,

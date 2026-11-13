@@ -5,7 +5,7 @@
     clippy::expect_used,
     clippy::panic
 )]
-mod common;
+use crate::common;
 
 use wreckordbox_sidecar::{attachments::IdentifyingFields, fingerprint_file, Sidecar};
 
@@ -22,18 +22,18 @@ fn old_facts_can_reattach_after_migration_but_known_stale_audio_is_not_an_identi
         let folder = dir.path().join("sidecar");
         std::fs::create_dir_all(&folder).unwrap();
         let db = rusqlite::Connection::open(folder.join("sidecar.db")).unwrap();
-        db.execute_batch(include_str!("fixtures/sidecar-v1.sql"))
+        db.execute_batch(include_str!("../fixtures/sidecar-v1.sql"))
             .unwrap();
         if version >= 2 {
-            db.execute_batch(include_str!("fixtures/sidecar-v2.sql"))
+            db.execute_batch(include_str!("../fixtures/sidecar-v2.sql"))
                 .unwrap();
         }
         if version >= 3 {
-            db.execute_batch(include_str!("fixtures/sidecar-v3.sql"))
+            db.execute_batch(include_str!("../fixtures/sidecar-v3.sql"))
                 .unwrap();
         }
         if version >= 4 {
-            db.execute_batch(include_str!("fixtures/sidecar-v4.sql"))
+            db.execute_batch(include_str!("../fixtures/sidecar-v4.sql"))
                 .unwrap();
         }
         // Add multiple Facts using only the historical schema, never today's writer.
@@ -83,13 +83,13 @@ fn old_facts_can_reattach_after_migration_but_known_stale_audio_is_not_an_identi
 fn failed_attachment_migration_keeps_the_frozen_store_retryable() {
     let dir = tempfile::tempdir().unwrap();
     let db = rusqlite::Connection::open(dir.path().join("sidecar.db")).unwrap();
-    db.execute_batch(include_str!("fixtures/sidecar-v1.sql"))
+    db.execute_batch(include_str!("../fixtures/sidecar-v1.sql"))
         .unwrap();
-    db.execute_batch(include_str!("fixtures/sidecar-v2.sql"))
+    db.execute_batch(include_str!("../fixtures/sidecar-v2.sql"))
         .unwrap();
-    db.execute_batch(include_str!("fixtures/sidecar-v3.sql"))
+    db.execute_batch(include_str!("../fixtures/sidecar-v3.sql"))
         .unwrap();
-    db.execute_batch(include_str!("fixtures/sidecar-v4.sql"))
+    db.execute_batch(include_str!("../fixtures/sidecar-v4.sql"))
         .unwrap();
     db.execute_batch("CREATE TABLE attachment_review (obstruction TEXT);")
         .unwrap();

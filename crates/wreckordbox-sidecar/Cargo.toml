@@ -17,7 +17,7 @@ thiserror = { workspace = true }
 toml = "0.8"
 # The Sidecar's own small database. The same build of SQLite the Library
 # crates use, so the workspace compiles one; the Sidecar's file is plain.
-rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
+rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl", "hooks"] }
 # The fingerprint of a track's audio.
 blake3 = "1"
 # Only to find the audio inside a file (for the fingerprint) and to read a

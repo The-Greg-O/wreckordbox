@@ -1018,6 +1018,8 @@ const APP_FILE_WRITERS: &[&str] = &[
 /// Every registered command that cannot write to a Stick: a new command
 /// must be added here or to `STICK_WRITERS`, after deciding which it is.
 const NOT_STICK_WRITERS: &[&str] = &[
+    "begin_ledger_operation",
+    "finish_ledger_operation",
     "add_artwork",
     "add_cue",
     "add_loop",

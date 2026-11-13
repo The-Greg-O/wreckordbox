@@ -6,7 +6,7 @@
     clippy::panic
 )]
 
-mod common;
+use crate::common;
 
 use common::write_audio;
 use wreckordbox_sidecar::fingerprint_file;
