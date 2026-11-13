@@ -2424,7 +2424,7 @@ export const TrackTable = memo(function TrackTable({
         onDropFiles(Array.from(e.dataTransfer.files));
       }}
     >
-      <div className={styles.browserHead}>
+      <div className={styles.browserHead} data-list-head="">
         <span className={styles.title} data-testid="browser-title">
           {/*
             The count belongs to the list, so it appears only once the list

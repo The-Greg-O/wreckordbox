@@ -152,6 +152,9 @@ export type Action =
   // `BINDINGS`: the keys are the shell's own while the list is shown. See
   // `TARGET_ACTIONS` in `targetList.ts`.
   | "toggleTargetList"
+  // The tree over a narrow view, or the keyboard to the tree (wbx-45.21;
+  // `GO_TO_TREE` in `shellTreeOverlay.ts`). No row in `BINDINGS` either.
+  | "goToTree"
   | "addToTarget"
   | "moveTargetUp"
   | "moveTargetDown"
