@@ -350,7 +350,9 @@ fn written_since(db: &Connection, watermark: i64, tracks: &[String]) -> Result<b
                 .any(|edit| edit["track"].as_str().is_some_and(named)),
             // Unconfirmed, or unreadable: newer than the plan and possibly
             // about these tracks.
-            _ => tracks_named(command.as_deref()).is_none_or(|found| found.iter().any(|t| named(t))),
+            _ => {
+                tracks_named(command.as_deref()).is_none_or(|found| found.iter().any(|t| named(t)))
+            }
         }
     }))
 }
@@ -416,6 +418,7 @@ impl FactsReader {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::ledger::{Action, NewEntry, Store};
@@ -453,22 +456,38 @@ mod tests {
         let sidecar = Sidecar::open(dir.path()).unwrap();
         let dj = Source::new(SourceKind::Dj, "dj");
         let run = sidecar.begin_run(&dj, "test").unwrap();
-        let named = serde_json::json!({"name": "tracks.rate", "args": {"id": "10001", "rating": 3}});
+        let named =
+            serde_json::json!({"name": "tracks.rate", "args": {"id": "10001", "rating": 3}});
         let readable = serde_json::json!({"edits": [{"track": "10002", "column": "Rating", "before": 0, "after": 3}]});
         let unreadable = serde_json::json!({"no": "edits"});
-        sidecar.append(&entry(run, &dj, "track", None, Some(&readable))).unwrap();
-        sidecar.append(&entry(run, &dj, "track", Some(&named), None)).unwrap();
-        sidecar.append(&entry(run, &dj, "unconfirmed", Some(&named), None)).unwrap();
-        sidecar.append(&entry(run, &dj, "track", None, Some(&unreadable))).unwrap();
+        sidecar
+            .append(&entry(run, &dj, "track", None, Some(&readable)))
+            .unwrap();
+        sidecar
+            .append(&entry(run, &dj, "track", Some(&named), None))
+            .unwrap();
+        sidecar
+            .append(&entry(run, &dj, "unconfirmed", Some(&named), None))
+            .unwrap();
+        sidecar
+            .append(&entry(run, &dj, "track", None, Some(&unreadable)))
+            .unwrap();
         let found = sidecar.provenance(&["Rating"]).unwrap();
         let bounded: Vec<Option<Vec<String>>> =
             found.barriers.iter().map(|b| b.tracks.clone()).collect();
         assert_eq!(
             bounded,
-            vec![Some(vec!["10001".to_owned()]), Some(vec!["10001".to_owned()]), None]
+            vec![
+                Some(vec!["10001".to_owned()]),
+                Some(vec!["10001".to_owned()]),
+                None
+            ]
         );
         assert!(found.barriers[0].concerns("10001") && !found.barriers[0].concerns("10002"));
-        assert!(found.barriers[2].concerns("10002"), "unbounded concerns every track");
+        assert!(
+            found.barriers[2].concerns("10002"),
+            "unbounded concerns every track"
+        );
         // The readable entry still gives its field an owner.
         assert_eq!(
             found.fields[&("10002".to_owned(), "Rating".to_owned())].owner,

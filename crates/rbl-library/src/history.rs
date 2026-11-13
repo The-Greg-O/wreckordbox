@@ -642,15 +642,18 @@ impl crate::LibraryCore {
         host: &(impl crate::Host + ?Sized),
         touched: Touched,
         label: &'static str,
-        action: impl FnOnce(&mut rbl_db::write::Writer) -> Result<(T, Vec<rbl_db::write::TrackEdit>), DbError>,
+        action: impl FnOnce(
+            &mut rbl_db::write::Writer,
+        ) -> Result<(T, Vec<rbl_db::write::TrackEdit>), DbError>,
     ) -> Result<(T, crate::Change), DbError> {
         // Held across both, so the assertion follows its change with no
         // other edit between (the gate is re-entrant).
         let _gate = self.edit_gate().lock();
         let ((value, unchanged), change) = self.recorded_edit(host, touched, label, |writer| {
             let (value, edits) = action(writer)?;
-            let (unchanged, changed): (Vec<_>, Vec<_>) =
-                edits.into_iter().partition(rbl_db::write::TrackEdit::is_empty);
+            let (unchanged, changed): (Vec<_>, Vec<_>) = edits
+                .into_iter()
+                .partition(rbl_db::write::TrackEdit::is_empty);
             Ok(((value, unchanged), LibraryEdit::Track(changed)))
         })?;
         self.history.lock().assert(unchanged, label);

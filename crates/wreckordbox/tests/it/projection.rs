@@ -701,7 +701,11 @@ fn an_interrupted_assertion_makes_its_tracks_value_the_djs_and_no_other() {
     );
     assert_eq!(
         reasons(&applied, "kept"),
-        vec![("10001".into(), "energy".into(), "provenance_incomplete".into())]
+        vec![(
+            "10001".into(),
+            "energy".into(),
+            "provenance_incomplete".into()
+        )]
     );
     assert_eq!(track(&s, "10001")["rating"], 3);
 }

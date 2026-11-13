@@ -1100,7 +1100,9 @@ fn keep_marks(
                 .into_iter()
                 .map(|(track, mark)| (track, Mark { seq, ..mark }))
                 .collect();
-            sidecar.set_projection_marks(&marks).map_err(|e| e.to_string())
+            sidecar
+                .set_projection_marks(&marks)
+                .map_err(|e| e.to_string())
         })
         .map_err(|e| e.message)?
 }

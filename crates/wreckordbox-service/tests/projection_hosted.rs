@@ -252,16 +252,28 @@ fn a_projection_the_window_asks_for_is_a_tools_and_undoes_in_one_step() {
     record(&g, 3, 0.6);
     project().unwrap();
     let runs_before = service.call("runs.list", json!({})).unwrap()["total"].clone();
-    service.call("tracks.rate", json!({"id": g, "rating": 3})).unwrap();
-    assert_eq!(service.call("runs.list", json!({})).unwrap()["total"], runs_before);
+    service
+        .call("tracks.rate", json!({"id": g, "rating": 3}))
+        .unwrap();
+    assert_eq!(
+        service.call("runs.list", json!({})).unwrap()["total"],
+        runs_before
+    );
     let standing = service
         .call("facts.standing", json!({"id": g, "kind": "energy"}))
         .unwrap();
-    assert_eq!(standing["standing"]["source"]["kind"], "agent", "{standing}");
+    assert_eq!(
+        standing["standing"]["source"]["kind"], "agent",
+        "{standing}"
+    );
     record(&g, 4, 0.9);
     let applied = project().unwrap();
     assert!(
-        applied["changes"].as_array().unwrap().iter().any(|c| c["track"] == g.as_str() && c["after"] == 4),
+        applied["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["track"] == g.as_str() && c["after"] == 4),
         "{applied}"
     );
 
@@ -289,7 +301,10 @@ fn a_projection_the_window_asks_for_is_a_tools_and_undoes_in_one_step() {
     assert_eq!(source_of(&f), "dj");
     for cycle in 1..=3 {
         core.step_history(&NoHost, true).unwrap();
-        assert!(source_of(&f).is_null(), "the DJ's Fact withdrawn by undo {cycle}");
+        assert!(
+            source_of(&f).is_null(),
+            "the DJ's Fact withdrawn by undo {cycle}"
+        );
         core.step_history(&NoHost, false).unwrap();
         assert_eq!(source_of(&f), "dj", "the DJ's Fact back after redo {cycle}");
     }

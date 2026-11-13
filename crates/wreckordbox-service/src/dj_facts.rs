@@ -439,8 +439,20 @@ pub(crate) fn recover(
         facts.undo_of = Some(id);
         return facts;
     }
-    let native = derive(location, stems, "track", Some(&json!({"edits":edits})), false);
-    let tagged = derive(location, stems, "track_tags", Some(&json!({"tags":tags})), false);
+    let native = derive(
+        location,
+        stems,
+        "track",
+        Some(&json!({"edits":edits})),
+        false,
+    );
+    let tagged = derive(
+        location,
+        stems,
+        "track_tags",
+        Some(&json!({"tags":tags})),
+        false,
+    );
     facts.values.extend(native.values);
     facts.values.extend(tagged.values);
     facts.skipped.extend(native.skipped);

@@ -276,7 +276,9 @@ impl OpenLibrary {
         &self,
         touched: Touched,
         label: &'static str,
-        action: impl FnOnce(&mut rbl_db::write::Writer) -> Result<(T, Vec<rbl_db::write::TrackEdit>), DbError>,
+        action: impl FnOnce(
+            &mut rbl_db::write::Writer,
+        ) -> Result<(T, Vec<rbl_db::write::TrackEdit>), DbError>,
     ) -> Result<(T, LibraryChanged), ServiceError> {
         self.change(|core, host| core.asserting_edit(host, touched, label, action))
     }
