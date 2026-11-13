@@ -27,6 +27,7 @@ import type { CommandScope } from "./commands";
 import { menuBarItem } from "./menuBar";
 import { SHELL_VIEWS, shellViewChord } from "./shellViews";
 import { TARGET_ACTIONS } from "./targetList";
+import { GO_TO_TREE } from "./shellTreeOverlay";
 import {
   BINDINGS, chordMatches, type Action, type Binding, type KeyChord, type KeyOverrides, type Platform,
 } from "./shortcuts";
@@ -149,6 +150,15 @@ const EXPLICIT_ENTRIES: readonly PaletteEntry[] = [
     run: { kind: "command", action: view.action },
     key: { from: "view", action: view.action },
   })),
+  // The tree: over the view when it is too narrow to draw it, else focused (wbx-45.21).
+  {
+    id: "go-to-tree",
+    label: GO_TO_TREE.label,
+    group: "Views",
+    keywords: ["tree", "playlist", "open", "breadcrumb", "folder"],
+    run: { kind: "command", action: GO_TO_TREE.action },
+    key: chord(GO_TO_TREE.chord, "window"),
+  },
   // The Library view's second list (wbx-59): registered by the shell while
   // the Library view shows, so greyed elsewhere.
   ...TARGET_ACTIONS.map((entry): PaletteEntry => ({
