@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { contrastRatio, legibleRoles } from "./legibleRoles";
+import { accentInk, contrastRatio, legibleRoles, writtenIn } from "./legibleRoles";
 import type { ThemeRoles } from "./themeRoles";
 
 /** Omarchy's stock palettes, as the app shell reports them (`/usr/share/omarchy/themes/<slug>/colors.toml`). */
@@ -83,5 +83,40 @@ describe("legibleRoles under a light theme", () => {
 
   it("does not touch a dark theme", () => {
     expect(legibleRoles(TOKYO_NIGHT)).toBe(TOKYO_NIGHT);
+  });
+});
+
+describe("accentInk", () => {
+  it("is the accent as dark as it must be to be read as text or a glyph on every ground, with a label that reads on it", () => {
+    // Latte's accent is about 3.6:1 on its deepest ground: enough for a ring, not for a glyph.
+    expect(worst(LATTE.accent, LATTE)).toBeLessThan(4.5);
+    for (const roles of [LATTE, WHITE, { ...LATTE, accent: "#7da6ff", onAccent: "#4c4f69" }]) {
+      const { ink, onInk } = accentInk(roles)!;
+      expect(worst(ink, roles), roles.accent).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(ink, onInk), roles.accent).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it("is the theme's own accent and label where they already read", () => {
+    const dark = { ...LUPINE, accent: "#1f4fbf" };
+    expect(accentInk(dark)).toEqual({ ink: "#1f4fbf", onInk: "#ffffff" });
+  });
+
+  it("is not needed under a dark theme", () => {
+    expect(accentInk(TOKYO_NIGHT)).toBeNull();
+  });
+});
+
+describe("writtenIn", () => {
+  it("is a light theme's colour as dark as it must be to be written with on every ground", () => {
+    // Latte's bright_yellow, the tab line's end, is about 2:1 as text.
+    expect(worst(LATTE.tabTo, LATTE)).toBeLessThan(3);
+    expect(worst(writtenIn(LATTE.tabTo, LATTE)!, LATTE)).toBeGreaterThanOrEqual(4.5);
+    expect(writtenIn("#1f4fbf", LUPINE)).toBe("#1f4fbf");
+  });
+
+  it("is nothing under a dark theme or for a value that is not a colour", () => {
+    expect(writtenIn(TOKYO_NIGHT.tabTo, TOKYO_NIGHT)).toBeNull();
+    expect(writtenIn("yellow", LATTE)).toBeNull();
   });
 });

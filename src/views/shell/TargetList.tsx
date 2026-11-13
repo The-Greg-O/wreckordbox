@@ -174,7 +174,7 @@ export function TargetList({
       onMouseDown={() => { setBrowserFocus(null); }}
     >
       <h2 className={styles.heading}>
-        <span className={styles.mark}>▸ {t("target")}</span>
+        <span className={styles.mark} data-meaning-well="">▸ {t("target")}</span>
         <b className={styles.name}>{name ?? t("No target")}</b>
         {name !== null ? (
           <span className={styles.totals}>

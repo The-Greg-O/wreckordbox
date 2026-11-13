@@ -67,7 +67,36 @@ export function legibleRoles(roles: ThemeRoles): ThemeRoles {
   }
   // A darker accent may no longer carry the label the theme picked for it.
   if (lifted.accent !== roles.accent && isColour(lifted.onAccent) && contrastRatio(lifted.onAccent, lifted.accent) < 4.5) {
-    lifted.onAccent = contrastRatio("#ffffff", lifted.accent) >= contrastRatio("#000000", lifted.accent) ? "#ffffff" : "#000000";
+    lifted.onAccent = labelOn(lifted.accent);
   }
   return changed ? lifted : roles;
+}
+
+/** The better of black and white on `fill`. */
+const labelOn = (fill: string): string => (contrastRatio("#ffffff", fill) >= contrastRatio("#000000", fill) ? "#ffffff" : "#000000");
+
+/**
+ * The accent the view shell draws text, glyphs and fills in under a light
+ * theme: the theme's accent moved towards black until it reads at 4.5:1 on
+ * every ground (a focus ring or border needs only the 3:1 of `legibleRoles`),
+ * and the label written on it (the theme's on-accent colour while that
+ * still reads at 4.5:1, else black or white). Null under a dark theme.
+ */
+export function accentInk(roles: ThemeRoles): { ink: string; onInk: string } | null {
+  const ink = writtenIn(roles.accent, roles);
+  if (ink === null) return null;
+  const onInk = isColour(roles.onAccent) && contrastRatio(roles.onAccent, ink) >= 4.5 ? roles.onAccent : labelOn(ink);
+  return { ink, onInk };
+}
+
+/**
+ * `colour` (one of a light theme's own, such as the tab line's end) as the
+ * view shell writes text in it: moved towards black until it reads at 4.5:1
+ * on every ground. Null under a dark theme, or when it is not a colour.
+ */
+export function writtenIn(colour: string, roles: ThemeRoles): string | null {
+  if (roles.mode !== "light") return null;
+  const grounds = [roles.ground, roles.panel, roles.working, roles.hairline, roles.selection];
+  if (!grounds.every(isColour) || !isColour(colour)) return null;
+  return darkened(colour, grounds, 4.5);
 }

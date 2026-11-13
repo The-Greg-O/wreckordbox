@@ -184,7 +184,7 @@ export function ViewShell({
   } : {};
 
   return (
-    <div className={styles.shell} data-testid="shell" data-view={view} ref={observeShellWidth}>
+    <div className={styles.shell} data-testid="shell" data-shell-roles="" data-view={view} ref={observeShellWidth}>
       <div className={styles.frame} data-tree-open={(treeOpen && narrow) || undefined}>
         <header className={styles.topBar} data-testid="shell-top-bar">
           <div className={styles.tabs} role="tablist" aria-label={t("Views")}>

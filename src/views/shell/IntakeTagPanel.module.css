@@ -112,3 +112,16 @@
 .options { margin: 0; padding: 0; list-style: none; max-height: 50vh; overflow: auto; }
 .option { padding: var(--s-shell-space-2) var(--s-shell-space-4); cursor: pointer; }
 .option[aria-selected="true"] { background: var(--role-selection, var(--role-control)); color: var(--role-text-bright); }
+
+/* A light theme (wbx-45.1): the dimension hues are pastel and would not read
+   as text on a light ground, so a set tag is filled with its hue and written
+   in the key lights' dark ink; an implied one keeps its hue as the border and
+   is written in the secondary text colour. The hues are unchanged. */
+:global(:root[data-theme-mode="light"]) .chip[data-state="set"] {
+  background: var(--tag-hue);
+  color: #0e0e14;
+}
+:global(:root[data-theme-mode="light"]) .chip[data-state="implied"] {
+  border-color: var(--tag-hue);
+  color: var(--role-text-dim);
+}

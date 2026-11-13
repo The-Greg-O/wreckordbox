@@ -84,7 +84,7 @@
 }
 
 /* The number waiting on a view's tab (Intake 23), in the theme's second line colour. */
-.count { color: var(--role-tab-to); font-variant-numeric: tabular-nums; }
+.count { color: var(--role-tab-to-ink, var(--role-tab-to)); font-variant-numeric: tabular-nums; }
 
 /* The key a tab is on, drawn as a key cap. */
 .key {
