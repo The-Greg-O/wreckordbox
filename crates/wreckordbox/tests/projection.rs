@@ -157,10 +157,7 @@ fn a_dry_run_lists_exactly_what_applying_then_does_as_one_run_and_twice_changes_
     let hash = dry["policy_hash"].as_str().unwrap();
     assert_eq!(hash.len(), 16, "{dry}");
     assert_eq!(applied["policy_hash"], hash);
-    assert!(
-        run["description"].as_str().unwrap().contains(hash),
-        "{run}"
-    );
+    assert!(run["description"].as_str().unwrap().contains(hash), "{run}");
     let shown = ok(&s, &["runs", "show", &run["id"].to_string()]);
     let library: Vec<&Value> = shown["entries"]
         .as_array()
@@ -332,12 +329,26 @@ fn the_djs_explicit_set_to_the_same_value_is_recorded_and_protects_it() {
     // The DJ says 3, which is what the Library already holds.
     let rated = ok(&s, &["tracks", "rate", "10001", "3", "--source", "dj"]);
     assert_eq!(rated["run"]["source"]["kind"], "dj", "{rated}");
-    assert_eq!(ok(&s, &["runs", "list"])["total"].as_u64().unwrap(), runs + 1);
+    assert_eq!(
+        ok(&s, &["runs", "list"])["total"].as_u64().unwrap(),
+        runs + 1
+    );
     let standing = ok(&s, &["facts", "standing", "10001", "energy"]);
     assert_eq!(standing["standing"]["source"]["kind"], "dj");
     assert_eq!(standing["standing"]["value"], 3);
     // A colour set by the DJ asserts nothing about Energy.
-    ok(&s, &["intake", "colour", "10002", "--colour-id", "5", "--source", "dj"]);
+    ok(
+        &s,
+        &[
+            "intake",
+            "colour",
+            "10002",
+            "--colour-id",
+            "5",
+            "--source",
+            "dj",
+        ],
+    );
     let other = ok(&s, &["facts", "standing", "10002", "energy"]);
     assert!(other["standing"].is_null(), "{other}");
     // A better Fact arrives: the DJ's 3 stays.
@@ -493,14 +504,25 @@ fn protection_a_changed_plan_and_the_djs_name_are_refused_with_nothing_written()
     // Nor can it join the DJ's Run, whatever source it names.
     let djs = ok(
         &s,
-        &["runs", "start", "--source", "dj", "--description", "By hand"],
+        &[
+            "runs",
+            "start",
+            "--source",
+            "dj",
+            "--description",
+            "By hand",
+        ],
     );
     let djs = djs["id"].to_string();
     for args in [
         vec!["project", "--run", djs.as_str()],
         vec!["project", "--run", djs.as_str(), "--source", "agent:x"],
     ] {
-        assert_eq!(refused(&s, &args)["code"], "projection_not_the_djs", "{args:?}");
+        assert_eq!(
+            refused(&s, &args)["code"],
+            "projection_not_the_djs",
+            "{args:?}"
+        );
     }
     assert_eq!(track(&s, "10001")["rating"], 0);
     // A plan checked before a new Fact arrived is not the plan now.

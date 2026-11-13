@@ -1141,6 +1141,7 @@ impl Keeper {
         if let Some(source) = &source {
             crate::projection::attribution(&request.command, source)?;
         }
+        let unnamed = crate::projection::description(request).unwrap_or_else(|| described(request));
         let description =
             match named.description.as_deref().map(str::trim) {
                 Some("") => return Err(ServiceError::new(
@@ -1148,8 +1149,7 @@ impl Keeper {
                     "a Run's description cannot be empty: say what the work is, or leave it out",
                 )),
                 Some(description) => description.to_owned(),
-                None => crate::projection::description(request)
-                    .unwrap_or_else(|| described(request)),
+                None => unnamed,
             };
         Ok(Some(Target::Own {
             source: source

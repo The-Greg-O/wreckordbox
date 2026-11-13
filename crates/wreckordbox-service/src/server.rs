@@ -613,17 +613,7 @@ impl Shared {
                 }
                 Ok(result)
             }
-            projection if crate::projection::answers(projection) => {
-                let (changed, result) = self.with_library(|library| {
-                    crate::projection::answer(library, &self.stems, request)
-                })?;
-                // As for any edit: the hosting process is told here, even
-                // of a change whose answer then failed.
-                if let Some(changed) = changed {
-                    self.tell_host(&changed.event());
-                }
-                result
-            }
+            projection if crate::projection::answers(projection) => self.project(request),
             intake if crate::intake::answers(intake) => {
                 let (result, changed) = self.with_library(|library| {
                     crate::intake::answer(library, &self.stems, request)
@@ -640,6 +630,17 @@ impl Shared {
                 format!("unknown command: {unknown}"),
             )),
         }
+    }
+
+    /// `projection.plan` and `projection.apply` (wbx-26). The host is told
+    /// of a change even when its answer then failed.
+    fn project(&self, request: &Request) -> Result<Value, ServiceError> {
+        let (changed, result) =
+            self.with_library(|library| crate::projection::answer(library, &self.stems, request))?;
+        if let Some(changed) = changed {
+            self.tell_host(&changed.event());
+        }
+        result
     }
 
     fn publish(&self, event: &Event) {

@@ -143,7 +143,9 @@ pub(crate) fn stamped(request: &Request, stems: &Stems) -> Option<Request> {
     if !answers(&request.command) || request.args.get("policy_hash").is_some() {
         return None;
     }
-    let hash = policy_bytes(stems.sidecar_dir()).ok().map(|bytes| hash_of(&bytes))?;
+    let hash = policy_bytes(stems.sidecar_dir())
+        .ok()
+        .map(|bytes| hash_of(&bytes))?;
     let mut stamped = request.clone();
     match &mut stamped.args {
         Value::Object(args) => {
@@ -498,7 +500,10 @@ fn read_sidecar(stems: &Stems) -> Result<(FactsByField, Provenance), ServiceErro
                 }
                 None => match FactsSnapshot::open(stems.sidecar_dir()).map_err(text)? {
                     FactsSnapshot::Absent => Ok((
-                        Field::ALL.iter().map(|field| (*field, Vec::new())).collect(),
+                        Field::ALL
+                            .iter()
+                            .map(|field| (*field, Vec::new()))
+                            .collect(),
                         Provenance::default(),
                     )),
                     FactsSnapshot::Unknown(why) => Err(why),
@@ -630,7 +635,9 @@ fn plan(
                 title: &title,
                 field,
                 native: native(&index, row, field, &labels),
-                state: provenance.fields.get(&(track.clone(), field.column().to_owned())),
+                state: provenance
+                    .fields
+                    .get(&(track.clone(), field.column().to_owned())),
                 latest_recorded: provenance.latest.get(&track).copied(),
                 row_written: stamp
                     .as_ref()
@@ -861,10 +868,7 @@ fn target(field: Field, value: &Value, labels: &[PrepColour]) -> Result<Value, S
 /// The number a report value stands for: stars, or a colour label's id;
 /// none is 0.
 fn native_number(value: &Value) -> i64 {
-    value
-        .as_i64()
-        .or_else(|| value["id"].as_i64())
-        .unwrap_or(0)
+    value.as_i64().or_else(|| value["id"].as_i64()).unwrap_or(0)
 }
 
 /// The number a Ledger value stands for (`Rating` is stored as a number,
@@ -913,7 +917,9 @@ fn write(
     let result = library.recorded_edit(Touched::Metadata(ids), UNDO_LABEL, |writer| {
         let newer = stems
             .with_sidecar_wait(|open| {
-                open.map_or(Ok(false), |sidecar| sidecar.written_since(watermark, &tracks))
+                open.map_or(Ok(false), |sidecar| {
+                    sidecar.written_since(watermark, &tracks)
+                })
             })
             .map_err(|e| DbError::WriteRefused(e.message))?
             .map_err(|e| DbError::WriteRefused(e.to_string()))?;

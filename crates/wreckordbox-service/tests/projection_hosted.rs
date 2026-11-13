@@ -70,7 +70,11 @@ fn a_projection_the_window_asks_for_is_a_tools_and_undoes_in_one_step() {
     .unwrap();
     let sidecar = dir.path().join("sidecar");
     std::fs::create_dir_all(&sidecar).unwrap();
-    std::fs::write(sidecar.join("projection-policy.toml"), "[energy]\napply = 0.5\n").unwrap();
+    std::fs::write(
+        sidecar.join("projection-policy.toml"),
+        "[energy]\napply = 0.5\n",
+    )
+    .unwrap();
     std::env::set_var(SIDECAR_DIR_ENV, &sidecar);
     let config = Config {
         runtime_dir: dir.path().join("run"),
@@ -81,7 +85,14 @@ fn a_projection_the_window_asks_for_is_a_tools_and_undoes_in_one_step() {
     core.set_protection(false).unwrap();
     let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
     let (index, _) = rbl_index::load(&db).unwrap();
-    core.set_library(&NoHost, index, false, db.schema().db_version, 0, location.clone());
+    core.set_library(
+        &NoHost,
+        index,
+        false,
+        db.schema().db_version,
+        0,
+        location.clone(),
+    );
     let host: Arc<dyn rbl_library::Host + Send + Sync> = Arc::new(NoHost);
     let service = Service::host(&location, &config, &core, &host).unwrap();
     let events = service.events();
@@ -110,12 +121,19 @@ fn a_projection_the_window_asks_for_is_a_tools_and_undoes_in_one_step() {
     assert_eq!(told.event, "library_changed");
     // A tool's Run of its own, not the DJ's window Run.
     let runs = service.call("runs.list", json!({})).unwrap();
-    assert_eq!(runs["runs"][0]["source"], json!({"kind": "tool", "name": "projection"}), "{runs}");
+    assert_eq!(
+        runs["runs"][0]["source"],
+        json!({"kind": "tool", "name": "projection"}),
+        "{runs}"
+    );
     // No DJ Fact: the agent's answer still stands.
     let standing = service
         .call("facts.standing", json!({"id": a, "kind": "energy"}))
         .unwrap();
-    assert_eq!(standing["standing"]["source"]["kind"], "agent", "{standing}");
+    assert_eq!(
+        standing["standing"]["source"]["kind"], "agent",
+        "{standing}"
+    );
 
     // One Undo takes the whole projection back; one Redo puts it back.
     core.step_history(&NoHost, true).unwrap();
@@ -163,9 +181,7 @@ fn a_projection_the_window_asks_for_is_a_tools_and_undoes_in_one_step() {
     record(&d, 3, 0.9);
     std::env::set_var(PAUSE_ENV, "600");
     let mut client = Client::connect(&config.socket_path(&location)).unwrap();
-    let applying = std::thread::spawn(move || {
-        client.call::<Value>("projection.apply", json!({}))
-    });
+    let applying = std::thread::spawn(move || client.call::<Value>("projection.apply", json!({})));
     std::thread::sleep(Duration::from_millis(250));
     rate(&core, &c, 2);
     let refused = applying.join().unwrap().unwrap_err();

@@ -67,6 +67,9 @@ fn facts_of_kind(db: &Connection, kind: &str) -> Result<Vec<Fact>> {
     Ok(facts)
 }
 
+/// The states each step of one field replaced, by the edit it steps.
+type Steps = Vec<(i64, Option<FieldState>)>;
+
 struct Row {
     id: i64,
     at: i64,
@@ -78,8 +81,9 @@ struct Row {
 }
 
 fn provenance(db: &Connection, columns: &[&str]) -> Result<Provenance> {
-    let watermark: i64 =
-        db.query_row("SELECT COALESCE(MAX(id), 0) FROM ledger", [], |row| row.get(0))?;
+    let watermark: i64 = db.query_row("SELECT COALESCE(MAX(id), 0) FROM ledger", [], |row| {
+        row.get(0)
+    })?;
     let mut statement = db.prepare_cached(
         "SELECT id, at, action, source_kind, source_name,
                 json_extract(command, '$.name'), reverses, payload
@@ -108,7 +112,7 @@ fn provenance(db: &Connection, columns: &[&str]) -> Result<Provenance> {
     // id -> (action, reverses, owner when it is an edit)
     let mut steps: HashMap<i64, (String, Option<i64>, Owner)> = HashMap::new();
     // Per field: the states each step replaced, to go back to on Undo.
-    let mut stacks: HashMap<(String, String), Vec<(i64, Option<FieldState>)>> = HashMap::new();
+    let mut stacks: HashMap<(String, String), Steps> = HashMap::new();
     for row in rows {
         let owner = if row.command.as_deref() == Some(PROJECTION_COMMAND) {
             Owner::Projection
@@ -128,17 +132,23 @@ fn provenance(db: &Connection, columns: &[&str]) -> Result<Provenance> {
                         at = *reverses;
                         hops += 1;
                     }
-                    Some((action, _, owner)) if action == "edit" => break Some((at, owner.clone())),
+                    Some((action, _, owner)) if action == "edit" => {
+                        break Some((at, owner.clone()))
+                    }
                     _ => break None,
                 }
             }
         };
-        let Some(payload) = row.payload.as_deref().and_then(|p| serde_json::from_str::<Value>(p).ok())
+        let Some(payload) = row
+            .payload
+            .as_deref()
+            .and_then(|p| serde_json::from_str::<Value>(p).ok())
         else {
             continue;
         };
         for edit in payload["edits"].as_array().into_iter().flatten() {
-            let (Some(track), Some(column)) = (edit["track"].as_str(), edit["column"].as_str()) else {
+            let (Some(track), Some(column)) = (edit["track"].as_str(), edit["column"].as_str())
+            else {
                 continue;
             };
             let latest = provenance.latest.entry(track.to_owned()).or_insert(row.at);
@@ -156,7 +166,10 @@ fn provenance(db: &Connection, columns: &[&str]) -> Result<Provenance> {
                             let before = stack[at].1.clone();
                             stack.truncate(at);
                             match before {
-                                Some(state) => FieldState { at: row.at, ..state },
+                                Some(state) => FieldState {
+                                    at: row.at,
+                                    ..state
+                                },
                                 None => FieldState {
                                     owner: Owner::Original,
                                     value: Value::Null,
@@ -204,11 +217,15 @@ fn written_since(db: &Connection, watermark: i64, tracks: &[String]) -> Result<b
         payload
             .and_then(|p| serde_json::from_str::<Value>(&p).ok())
             .is_some_and(|payload| {
-                payload["edits"].as_array().into_iter().flatten().any(|edit| {
-                    edit["track"]
-                        .as_str()
-                        .is_some_and(|track| tracks.iter().any(|t| t == track))
-                })
+                payload["edits"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|edit| {
+                        edit["track"]
+                            .as_str()
+                            .is_some_and(|track| tracks.iter().any(|t| t == track))
+                    })
             })
     }))
 }
