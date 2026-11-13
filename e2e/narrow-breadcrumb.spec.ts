@@ -59,6 +59,12 @@ async function expectCrumbLaidOut(page: Page, width: number): Promise<void> {
   expect(parts[0]!.x + parts[0]!.width).toBeLessThanOrEqual(parts[1]!.x + 0.5);
   // It is the list's heading: the old title row is not drawn beside it.
   await expect(page.getByTestId("browser-title")).toBeHidden();
+  // The rest of the list's head stays: its search, within the window, below the breadcrumb.
+  await expect(working(page).getByRole("searchbox")).toBeVisible();
+  const search = await box(working(page).getByRole("searchbox"));
+  expect(search.x).toBeGreaterThanOrEqual(-0.5);
+  expect(search.x + search.width).toBeLessThanOrEqual(width + 0.5);
+  expect(search.y).toBeGreaterThanOrEqual(c.y + c.height - 0.5);
   // Above the Track Filter bar, which stays.
   const b = await box(bar(page));
   expect(c.y + c.height).toBeLessThanOrEqual(b.y + 0.5);

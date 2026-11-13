@@ -15,11 +15,11 @@
 }
 
 /* The breadcrumb (wbx-45.21): only at half width, where it is the list's
-   heading and the list's own title row gives way to it (the Track Filter
-   bar's text is the list's search, so nothing is lost). */
+   heading and the list's own title gives way to it (the rest of the list's
+   head, the Traffic Light deck and the search, stays). */
 .crumb { display: none; }
 @container shell (max-width: 800px) {
-  .source [data-list-head] { display: none; }
+  .source [data-list-title] { display: none; }
   .crumb {
     display: flex;
     align-items: baseline;

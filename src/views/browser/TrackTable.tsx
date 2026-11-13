@@ -2424,8 +2424,8 @@ export const TrackTable = memo(function TrackTable({
         onDropFiles(Array.from(e.dataTransfer.files));
       }}
     >
-      <div className={styles.browserHead} data-list-head="">
-        <span className={styles.title} data-testid="browser-title">
+      <div className={styles.browserHead}>
+        <span className={styles.title} data-testid="browser-title" data-list-title="">
           {/*
             The count belongs to the list, so it appears only once the list
             has settled. While a view is opening, `view.count` is still the
