@@ -615,3 +615,93 @@ fn projecting_two_thousand_tracks_stays_cheap() {
     assert!(dry_took < Duration::from_secs(20), "{dry_took:?}");
     assert!(apply_took < Duration::from_secs(60), "{apply_took:?}");
 }
+
+/// Starts a service here with `faults` given to it, and waits until it is up.
+fn serve_with_faults(s: &Sandbox, faults: &str) -> std::process::Child {
+    let child = s
+        .command()
+        .env("WRECKORDBOX_LEDGER_FAULTS", faults)
+        .arg("serve")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let socket = s.config().socket_path(s.location());
+    assert!(
+        (0..400).any(|_| {
+            std::thread::sleep(Duration::from_millis(25));
+            wreckordbox_service::Client::connect(&socket).is_ok()
+        }),
+        "the service did not come up"
+    );
+    child
+}
+
+fn stop_service(s: &Sandbox) {
+    let socket = s.config().socket_path(s.location());
+    if let Ok(mut client) = wreckordbox_service::Client::connect(&socket) {
+        let _ = client.stop();
+    }
+    let gone = (0..400).any(|_| {
+        std::thread::sleep(Duration::from_millis(25));
+        wreckordbox_service::Client::connect(&socket).is_err()
+    });
+    assert!(gone, "the service did not stop");
+}
+
+/// The review's case: the DJ's assertion of a projected value is begun (its
+/// intent saved) and the service dies before it is recorded; the next
+/// service records it as unconfirmed. That track's value is the DJ's from
+/// then on; another track's projected value is not affected.
+#[test]
+fn an_interrupted_assertion_makes_its_tracks_value_the_djs_and_no_other() {
+    let s = Sandbox::new();
+    policy(&s, "[energy]\napply = 0.5\n");
+    ok(&s, &["status"]);
+    fact(&s, "10001", "energy", "3", "agent:tagger", "0.6");
+    fact(&s, "10002", "energy", "3", "agent:tagger", "0.6");
+    ok(&s, &["project"]);
+    stop_service(&s);
+
+    let mut service = serve_with_faults(&s, "delay_after_begin_ms=4000");
+    let rating = s
+        .command()
+        .args(["--json", "tracks", "rate", "10001", "3", "--source", "dj"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(1500));
+    service.kill().unwrap();
+    service.wait().unwrap();
+    let mut rating = rating;
+    assert!(!rating.wait().unwrap().success(), "the rating was cut off");
+
+    // The next service recovers the intent as an unconfirmed write.
+    let runs = ok(&s, &["runs", "list"]);
+    let mut unconfirmed = 0;
+    for run in runs["runs"].as_array().unwrap() {
+        let shown = ok(&s, &["runs", "show", &run["id"].to_string()]);
+        unconfirmed += shown["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["kind"] == "unconfirmed")
+            .count();
+    }
+    assert_eq!(unconfirmed, 1, "{runs}");
+
+    fact(&s, "10001", "energy", "4", "agent:other", "0.9");
+    fact(&s, "10002", "energy", "4", "agent:other", "0.9");
+    let applied = ok(&s, &["project"]);
+    assert_eq!(
+        changes(&applied, "changes"),
+        vec![("10002".into(), "energy".into(), json!(3), json!(4))],
+        "{applied}"
+    );
+    assert_eq!(
+        reasons(&applied, "kept"),
+        vec![("10001".into(), "energy".into(), "provenance_incomplete".into())]
+    );
+    assert_eq!(track(&s, "10001")["rating"], 3);
+}

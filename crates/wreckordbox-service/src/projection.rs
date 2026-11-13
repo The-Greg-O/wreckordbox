@@ -16,15 +16,19 @@
 //! values ([`wreckordbox_sidecar::projection::Provenance`]): the owner is
 //! the source of the effective latest recorded write to that field in the
 //! Ledger, following Undo and Redo. A projection may replace a value only
-//! when that write is a projection's own, the Library still holds the value
-//! it left, and the track's row has not been written since (its
-//! `updated_at` is no later than that entry, so no unrecorded write by a
-//! player, an import or rekordbox came after). An empty field nothing
-//! recorded wrote may be filled. Everything else, the DJ's values, other
-//! sources', a migrated Library's and anything provenance cannot account
-//! for, is kept and, when a Fact disagrees, reported. Ownership is checked
-//! again under the edit gate: if a track's row or its Ledger provenance
-//! changed since the plan, the whole apply is refused and nothing written.
+//! when that write is a projection's own and the track's row is still at
+//! exactly the revision (USN and `updated_at`) that write read back under
+//! the edit gate and kept in the Sidecar (a `Mark`), holding the value it
+//! wrote. No clock is compared: any later write to the row, recorded or
+//! not (a player, an import, rekordbox, another field's edit), leaves
+//! another revision, and the value is then the DJ's. An empty field nothing
+//! recorded wrote may be filled. Incomplete provenance (an unsettled
+//! intent, an unconfirmed write, an unreadable entry) that could concern a
+//! track is a barrier: its fields are the DJ's. Everything that is not the
+//! projection's is kept and, when a Fact disagrees, reported. Ownership is
+//! checked again under the edit gate: if a track's row or its Ledger
+//! provenance changed since the plan, the whole apply is refused and
+//! nothing written.
 //!
 //! The value projected is always the standing Fact of the field's own kind
 //! (`energy`, `prep_colour`) under the ordinary precedence, so the DJ's
@@ -56,7 +60,7 @@ use rbl_library::Touched;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use wreckordbox_sidecar::precedence::Rules;
-use wreckordbox_sidecar::projection::{FieldState, Owner, Provenance};
+use wreckordbox_sidecar::projection::{Barrier, FieldState, Mark, Owner, Provenance};
 use wreckordbox_sidecar::{Fact, FactsSnapshot, Source, SourceKind};
 
 use crate::intake::PrepColour;
@@ -348,12 +352,13 @@ pub struct Kept {
     /// Whose the value is: `set_by_dj` (the latest recorded write is the
     /// DJ's), `set_by_other` (another source's, not a projection's),
     /// `no_record` (nothing recorded wrote it: a migrated Library),
-    /// `unrecorded_write` (the track was written after the latest recorded
-    /// write, by something the Ledger does not record), `written_since`
-    /// (the track was written after the projection, by a recorded edit of
-    /// another of its fields: field-by-field provenance cannot tell),
-    /// `unknown` (an Undo the Ledger cannot follow), or `dj_fact` (the
-    /// DJ's own standing Fact is what the Library holds).
+    /// `written_since` (the projection's value, but the track's row is not
+    /// at the revision its write confirmed: something wrote the track after
+    /// it, recorded or not, this field or another), `provenance_incomplete`
+    /// (a write the Ledger cannot account for, an unsettled intent, an
+    /// unconfirmed write or an unreadable entry, could concern the track),
+    /// `unknown` (an Undo the Ledger cannot follow), or `dj_fact` (the DJ's
+    /// own standing Fact is what the Library holds).
     pub reason: String,
 }
 
@@ -394,6 +399,9 @@ pub struct Report {
     pub unchanged: usize,
     /// Library Protection is on: applying would be refused.
     pub library_protected: bool,
+    /// What went wrong without undoing what was applied.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// A planned change with what is checked again under the edit gate.
@@ -401,6 +409,8 @@ struct Planned {
     change: Change,
     /// The track row's `updated_at` and USN when the plan was made.
     row: RowStamp,
+    /// The track's mark then, whose other fields a new mark keeps.
+    mark: Option<Mark>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -462,7 +472,9 @@ fn plan_or_apply(
         return Ok((report, None));
     }
     pause();
-    let changed = write(library, stems, &planned, watermark)?;
+    let (changed, warnings) = write(library, stems, &planned, watermark)?;
+    let mut report = report;
+    report.warnings = warnings;
     Ok((report, Some(changed)))
 }
 
@@ -623,6 +635,7 @@ fn plan(
         stale: Vec::new(),
         unchanged: 0,
         library_protected: library.protection().protect_library,
+        warnings: Vec::new(),
     };
     let mut planned = Vec::new();
     for (row, (track, mut fields)) in by_track {
@@ -638,11 +651,9 @@ fn plan(
                 state: provenance
                     .fields
                     .get(&(track.clone(), field.column().to_owned())),
-                latest_recorded: provenance.latest.get(&track).copied(),
-                row_written: stamp
-                    .as_ref()
-                    .and_then(|stamp| rbl_core::time::parse_millis(&stamp.updated_at))
-                    .and_then(|ms| i64::try_from(ms).ok()),
+                row: stamp.as_ref(),
+                mark: provenance.marks.get(&track),
+                barriers: &provenance.barriers,
             };
             let before = report.changes.len();
             decide(&mut report, &one, &facts, &rules, &policy, &labels);
@@ -653,7 +664,11 @@ fn plan(
                     report.changes.pop();
                     continue;
                 };
-                planned.push(Planned { change, row: stamp });
+                planned.push(Planned {
+                    change,
+                    row: stamp,
+                    mark: provenance.marks.get(&track).cloned(),
+                });
             }
         }
     }
@@ -671,43 +686,59 @@ struct One<'a> {
     /// The effective latest recorded write to the field; `None` when no
     /// recorded write ever touched it.
     state: Option<&'a FieldState>,
-    /// When the latest recorded write naming the track was recorded.
-    latest_recorded: Option<i64>,
-    /// When the track's row was last written (`updated_at`), whoever wrote
-    /// it; `None` when it cannot be read.
-    row_written: Option<i64>,
+    /// The track row's revision now; `None` when it cannot be read.
+    row: Option<&'a RowStamp>,
+    /// The revision a projection's own write last left on the row.
+    mark: Option<&'a Mark>,
+    /// What the Ledger cannot account for.
+    barriers: &'a [Barrier],
 }
 
-/// Why a projection may not write this field: `None` when it may (the
-/// field is empty and nothing recorded wrote it, or the latest recorded
-/// write is a projection's own, still in place, with nothing after it).
+/// Why a projection may not write this field: `None` when it may.
+///
+/// It may fill a field that is empty, that no recorded write touched (or an
+/// Undo returned to before any), and that no incomplete provenance could
+/// concern. It may replace a value only when the latest recorded write is a
+/// projection's own, the row's revision is exactly the one that write
+/// confirmed ([`Mark`]: its USN and `updated_at`, read back under the gate),
+/// the field still holds the value it wrote, and nothing the Ledger cannot
+/// account for came after it. Anything else is the DJ's. No clock is read:
+/// a revision is equal or it is not.
 fn not_owned(one: &One<'_>) -> Option<&'static str> {
-    let written_after = |at: i64| one.row_written.is_none_or(|written| written > at);
-    let after_reason = || {
-        if one
-            .latest_recorded
-            .zip(one.row_written)
-            .is_some_and(|(recorded, written)| recorded >= written)
-        {
-            "written_since"
+    let barred = |after: i64| {
+        one.barriers
+            .iter()
+            .any(|barrier| barrier.seq > after && barrier.concerns(one.track))
+    };
+    let empty = || {
+        if barred(0) {
+            Some("provenance_incomplete")
         } else {
-            "unrecorded_write"
+            None
         }
     };
     match one.state {
-        None if one.native.is_null() => None,
+        None if one.native.is_null() => empty(),
         None => Some("no_record"),
         Some(state) => match &state.owner {
-            Owner::Original if one.native.is_null() => None,
+            Owner::Original if one.native.is_null() => empty(),
             Owner::Original => Some("no_record"),
             Owner::Unknown => Some("unknown"),
             Owner::Dj => Some("set_by_dj"),
             Owner::Other(_) => Some("set_by_other"),
             Owner::Projection => {
-                if stored_number(&state.value) != native_number(&one.native) {
-                    Some("unrecorded_write")
-                } else if written_after(state.at) {
-                    Some(after_reason())
+                let Some(mark) = one.mark else {
+                    return Some("written_since");
+                };
+                let same_revision = one
+                    .row
+                    .is_some_and(|row| row.usn == mark.usn && row.updated_at == mark.updated_at);
+                let same_value =
+                    mark.fields.get(one.field.column()) == Some(&native_number(&one.native));
+                if !same_revision || !same_value {
+                    Some("written_since")
+                } else if barred(mark.seq) {
+                    Some("provenance_incomplete")
                 } else {
                     None
                 }
@@ -871,15 +902,6 @@ fn native_number(value: &Value) -> i64 {
     value.as_i64().or_else(|| value["id"].as_i64()).unwrap_or(0)
 }
 
-/// The number a Ledger value stands for (`Rating` is stored as a number,
-/// `ColorID` as text); none is 0.
-fn stored_number(value: &Value) -> i64 {
-    value
-        .as_i64()
-        .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
-        .unwrap_or(0)
-}
-
 /// A hash the same in every build (FNV-1a), as 16 hex digits.
 fn hash_of(bytes: &[u8]) -> String {
     let hash = bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
@@ -909,7 +931,8 @@ fn write(
     stems: &Stems,
     planned: &[Planned],
     watermark: i64,
-) -> Result<LibraryChanged, Failure> {
+) -> Result<(LibraryChanged, Vec<String>), Failure> {
+    let mut warnings = Vec::new();
     let mut ids: Vec<String> = planned.iter().map(|p| p.change.track.clone()).collect();
     ids.dedup();
     let tracks = ids.clone();
@@ -985,10 +1008,18 @@ fn write(
                 }
             }
         }
+        // What the projection's own write left: each written row's revision,
+        // read back here under the gate, kept as its mark. A later projection
+        // may replace these values only while the row is still at it.
+        if let Err(why) = keep_marks(writer, stems, &planned[..done.len()]) {
+            warnings.push(format!(
+                "the revisions this projection left could not be kept ({why}): the values it wrote count as the DJ's until projected again"
+            ));
+        }
         Ok((failure, LibraryEdit::Track(done)))
     });
     match result {
-        Ok((None, made)) => Ok(made),
+        Ok((None, made)) => Ok((made, warnings)),
         Ok((Some(failure), made)) => Err((
             Some(made),
             ServiceError::new(
@@ -1008,6 +1039,70 @@ fn write(
         )),
         Err(e) => Err((None, e)),
     }
+}
+
+/// Keeps a [`Mark`] for each track `written` changed: the row's revision as
+/// read back on the writer's connection, the Ledger position, and the
+/// values written, with the fields of the track's earlier mark when the row
+/// was still at that mark's revision when the plan was made.
+fn keep_marks(
+    writer: &rbl_db::write::Writer,
+    stems: &Stems,
+    written: &[Planned],
+) -> Result<(), String> {
+    let mut marks: BTreeMap<String, Mark> = BTreeMap::new();
+    for p in written {
+        let track = &p.change.track;
+        if !marks.contains_key(track) {
+            let row: RowStamp = writer
+                .library()
+                .connection()
+                .query_row(
+                    "SELECT COALESCE(updated_at, ''), COALESCE(rb_local_usn, 0)
+                     FROM djmdContent WHERE ID = ?1",
+                    [track],
+                    |row| {
+                        Ok(RowStamp {
+                            updated_at: row.get(0)?,
+                            usn: row.get(1)?,
+                        })
+                    },
+                )
+                .map_err(|e| e.to_string())?;
+            let fields = p
+                .mark
+                .as_ref()
+                .filter(|mark| mark.usn == p.row.usn && mark.updated_at == p.row.updated_at)
+                .map(|mark| mark.fields.clone())
+                .unwrap_or_default();
+            marks.insert(
+                track.clone(),
+                Mark {
+                    usn: row.usn,
+                    updated_at: row.updated_at,
+                    seq: 0,
+                    fields,
+                },
+            );
+        }
+        if let Some(mark) = marks.get_mut(track) {
+            mark.fields.insert(
+                p.change.field.column().to_owned(),
+                native_number(&p.change.after),
+            );
+        }
+    }
+    stems
+        .with_sidecar_wait(|open| -> Result<(), String> {
+            let sidecar = open.ok_or("the Sidecar is not open")?;
+            let seq = sidecar.ledger_position().map_err(|e| e.to_string())?;
+            let marks: Vec<(String, Mark)> = marks
+                .into_iter()
+                .map(|(track, mark)| (track, Mark { seq, ..mark }))
+                .collect();
+            sidecar.set_projection_marks(&marks).map_err(|e| e.to_string())
+        })
+        .map_err(|e| e.message)?
 }
 
 fn to_value<T: Serialize>(value: &T) -> Result<Value, ServiceError> {

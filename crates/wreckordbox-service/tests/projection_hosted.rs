@@ -65,7 +65,7 @@ fn a_projection_the_window_asks_for_is_a_tools_and_undoes_in_one_step() {
     let location = fixture::build(
         &library,
         Shape {
-            tracks: 8,
+            tracks: 10,
             ..Shape::default()
         },
     )
@@ -110,6 +110,15 @@ fn a_projection_the_window_asks_for_is_a_tools_and_undoes_in_one_step() {
             .unwrap();
     };
     let project = || service.call("projection.apply", json!({}));
+    let kept_for = |track: &str| -> Option<String> {
+        let plan = service.call("projection.plan", json!({})).unwrap();
+        plan["kept"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|k| k["track"] == track && k["field"] == "energy")
+            .and_then(|k| k["reason"].as_str().map(str::to_owned))
+    };
     let drain = || while events.recv_timeout(Duration::from_millis(100)).is_ok() {};
 
     // The window asks for a projection, with nothing said about a Run.
@@ -137,42 +146,70 @@ fn a_projection_the_window_asks_for_is_a_tools_and_undoes_in_one_step() {
         "{standing}"
     );
 
-    // One Undo takes the whole projection back; one Redo puts it back.
-    core.step_history(&NoHost, true).unwrap();
-    assert_eq!(stars(&core, &a), 0);
-    core.step_history(&NoHost, false).unwrap();
-    assert_eq!(stars(&core, &a), 3);
-    // Still the projection's value: a better Fact replaces it.
+    // While the row is still at the revision the projection's write left,
+    // the value is the projection's: a better Fact replaces it.
     record(&a, 4, 0.7);
     let applied = project().unwrap();
+    assert_eq!(applied["changes"][0]["before"], 3, "{applied}");
     assert_eq!(applied["changes"][0]["after"], 4, "{applied}");
-    // Undo that second projection: the first one's 3 is back, and still
-    // the projection's own, so a better Fact replaces it again.
+    // One Undo takes that projection back in one step, and one Redo puts it
+    // back. Either is a write the projection did not make: the row is at
+    // another revision, and the value is the DJ's from then on.
     core.step_history(&NoHost, true).unwrap();
     assert_eq!(stars(&core, &a), 3);
+    core.step_history(&NoHost, false).unwrap();
+    assert_eq!(stars(&core, &a), 4);
     record(&a, 5, 0.8);
-    let applied = project().unwrap();
-    assert_eq!(applied["changes"][0]["before"], 3, "{applied}");
-    assert_eq!(applied["changes"][0]["after"], 5, "{applied}");
+    assert_eq!(kept_for(&a), Some("written_since".into()));
+    project().unwrap();
+    assert_eq!(stars(&core, &a), 4);
 
     // A write no Ledger entry records (a player's) takes the field from the
     // projection, even when it puts the projected value back.
     record(&b, 2, 0.6);
     project().unwrap();
     assert_eq!(stars(&core, &b), 2);
-    std::thread::sleep(Duration::from_millis(5));
     unrecorded(&core, &b, 1);
     unrecorded(&core, &b, 2);
     record(&b, 4, 0.9);
-    let plan = service.call("projection.plan", json!({})).unwrap();
-    let kept = plan["kept"].as_array().unwrap();
-    assert!(
-        kept.iter()
-            .any(|k| k["track"] == b.as_str() && k["reason"] == "unrecorded_write"),
-        "{plan}"
-    );
+    assert_eq!(kept_for(&b), Some("written_since".into()));
     project().unwrap();
     assert_eq!(stars(&core, &b), 2);
+
+    // No clock decides it. The same value written by a player with a clock
+    // stepped back (an earlier `updated_at`), or at the very millisecond the
+    // projection's write has (an equal one): another revision either way.
+    let [h, i, j] = [7, 8, 9].map(fixture::track_id);
+    for track in [&h, &i, &j] {
+        record(track, 3, 0.6);
+    }
+    project().unwrap();
+    let rewrite = |track: &str, stamp: Option<&str>| {
+        core.edit(&NoHost, History::Outside, Touched::Metadata(vec![track.to_owned()]), |writer| {
+            let sql = match stamp {
+                Some(_) => "UPDATE djmdContent SET Rating = 3, rb_local_usn = rb_local_usn + 1, updated_at = ?2 WHERE ID = ?1",
+                None => "UPDATE djmdContent SET Rating = 3, rb_local_usn = rb_local_usn + 1 WHERE ID = ?1 AND ?2 IS NULL",
+            };
+            writer
+                .library()
+                .connection()
+                .execute(sql, rusqlite::params![track, stamp])
+                .map(|_| ())
+                .map_err(rbl_db::DbError::from)
+        })
+        .unwrap();
+    };
+    rewrite(&h, Some("2000-01-01 00:00:00.000 +00:00"));
+    rewrite(&i, None);
+    unrecorded(&core, &j, 3);
+    for track in [&h, &i, &j] {
+        record(track, 5, 0.9);
+        assert_eq!(kept_for(track), Some("written_since".into()), "{track}");
+    }
+    project().unwrap();
+    for track in [&h, &i, &j] {
+        assert_eq!(stars(&core, track), 3, "{track}");
+    }
 
     // The window's edit made while a projection is being applied: the DJ
     // rating the track to the value it already has (no row changes, but
