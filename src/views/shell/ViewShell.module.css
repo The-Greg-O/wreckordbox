@@ -178,6 +178,20 @@
       "status";
   }
   .tree { display: none; }
+  /* "Go to the Tree" at this width (wbx-45.21): the same tree, drawn over
+     the player and the working area, from the left edge. */
+  .frame[data-tree-open] .tree {
+    display: grid;
+    grid-area: auto;
+    grid-row: 2 / 4;
+    grid-column: 1;
+    justify-self: start;
+    position: relative;
+    z-index: 30;
+    width: min(calc(var(--s-shell-tree-w) * 1.5), 100%);
+    border-right: var(--s-shell-border) solid var(--role-border, var(--c-raised));
+    box-shadow: 4px 0 16px rgb(0 0 0 / 0.5);
+  }
 }
 
 /* Narrow (about 436, wbx-69; 600 since wbx-60, where the four tabs with
