@@ -152,7 +152,7 @@ test("a load is staged through the hold: cancelling writes nothing; holding unlo
   await loadButton(page).click();
   await confirmStickWrite(page);
   await expect(view(page).getByTestId("stick-outcome")).toHaveAttribute("data-outcome", "loaded");
-  await expect(view(page).getByTestId("stick-outcome")).toContainText("Loaded: DJ STICK holds");
+  await expect(view(page).getByTestId("stick-outcome")).toContainText(/Loaded DJ STICK\..*DJ STICK now holds \d+ tracks in 1 playlist/);
   expect((await writes(page)).map((w) => [w.method, w.path])).toEqual([["stickViewLoad", DJ]]);
   expect((await call<{ playlists: string[] }>(page, "__stickHeld", DJ)).playlists).toEqual([name]);
   // Read again after the load: unlocked, last loaded today, nothing left to do.
@@ -262,4 +262,155 @@ test("a Stick with an unfinished write says so, is not dry-run or loaded, and it
   await expect(view(page).getByTestId("stick-panel")).toBeVisible();
   expect(await writes(page)).toEqual([]);
   expect(await call(page, "__stickRecovered")).toEqual([]);
+});
+
+// ---- Review of wbx-71 -------------------------------------------------
+
+/** Holds for the staged load, as the DJ does (the Gig stick unlocked by name in the dialog). */
+async function holdToLoad(page: Page): Promise<void> {
+  await loadButton(page).click();
+  await confirmStickWrite(page);
+}
+
+test("the hold approves exactly the plan shown: an approval for one dry run never confirms another", async ({ page }) => {
+  await openStick(page);
+  await call(page, "__setStickUnlocked", DJ, true);
+  const refused = await page.evaluate(async ([path]) => {
+    const call = (window as unknown as { __stickWriteUnstaged: (name: string, ...a: unknown[]) => Promise<unknown> }).__stickWriteUnstaged;
+    const ids = ["pl-0-0"];
+    const first = await call("stickViewDryRun", path, ids) as { plan: string };
+    const fresh = await call("stickViewDryRun", path, ids) as { plan: string };
+    const approval = await call("stickWriteApprove", first.plan);
+    try {
+      await call("stickViewLoad", path, ids, fresh.plan, approval);
+      return "loaded";
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }, [DJ] as const);
+  expect(refused).toContain("another plan");
+  expect(await writes(page)).toEqual([]);
+  expect((await call<{ playlists: string[] }>(page, "__stickHeld", DJ)).playlists).toEqual([]);
+});
+
+test("the load the hold confirms carries the plan the summary showed", async ({ page }) => {
+  await openStick(page);
+  await chooseFirst(page);
+  await expect(view(page).getByTestId("stick-summary")).toBeVisible();
+  const shown = await call<string[]>(page, "__stickLoadPlans");
+  await holdToLoad(page);
+  await expect(view(page).getByTestId("stick-outcome")).toHaveAttribute("data-outcome", "loaded");
+  const loads = await call<{ plan: string }[]>(page, "__stickLoadCalls");
+  expect(loads.map((l) => l.plan)).toEqual([shown.at(-1)]);
+});
+
+test("a failed load says so and why, and the failure is still there after leaving the view", async ({ page }) => {
+  await openStick(page);
+  await chooseFirst(page);
+  await call(page, "__failNextStickLoad", DJ, "The Stick was removed during the export.");
+  await holdToLoad(page);
+  await expect(view(page).getByTestId("stick-load-error")).toContainText("The Stick was removed during the export.");
+  await tab(page, "Library").click();
+  await tab(page, "Stick").click();
+  await expect(view(page).getByTestId("stick-load-error")).toContainText("The Stick was removed during the export.");
+});
+
+test("an incomplete load lists what was not written and every Native stems set with its reason", async ({ page }) => {
+  await open(page);
+  await call(page, "__setStickSpare", TEST, true);
+  await tab(page, "Stick").click();
+  await view(page).getByRole("group", { name: "Mounted Sticks" }).getByRole("button", { name: "TEST" }).click();
+  await chooseFirst(page);
+  await expect(view(page).getByTestId("stick-summary").locator('[data-change="stems"]')).toBeVisible();
+  await call(page, "__nextStickLoadIncomplete", TEST, "Its Stems changed since the dry run.");
+  await holdToLoad(page);
+  const outcome = view(page).getByTestId("stick-outcome");
+  await expect(outcome).toHaveAttribute("data-outcome", "incomplete");
+  await expect(outcome).toContainText(/Not written: 1 track/);
+  const stems = outcome.getByRole("list", { name: "Native stems" });
+  await expect(stems.getByRole("listitem").filter({ hasText: "failed" })).toContainText("Its Stems changed since the dry run.");
+  await expect(stems.getByRole("listitem").filter({ hasText: "written" }).first()).toBeVisible();
+});
+
+test("a load keeps running when the DJ leaves the view or picks another Stick; its result reaches the DJ and never sits beside the other Stick", async ({ page }) => {
+  await openStick(page);
+  const name = await chooseFirst(page);
+  await call(page, "__holdStickLoads");
+  await holdToLoad(page);
+  await expect(loadButton(page)).toHaveText("Loading…");
+  await tab(page, "Library").click();
+  await tab(page, "Stick").click();
+  await expect(loadButton(page)).toHaveText("Loading…");
+  // Another Stick: its own controls, and no word of the first one's result beside them.
+  await view(page).getByRole("group", { name: "Mounted Sticks" }).getByRole("button", { name: "TEST" }).click();
+  await expect(view(page).getByTestId("stick-name")).toHaveText("TEST");
+  await expect(view(page).getByTestId("stick-outcome")).toHaveCount(0);
+  await expect(view(page).getByTestId("stick-other-loads")).toContainText("DJ STICK: loading");
+  await call(page, "__releaseStickLoads");
+  await expect(view(page).getByTestId("stick-other-loads")).toContainText("DJ STICK: loaded");
+  await expect(view(page).getByTestId("stick-outcome")).toHaveCount(0);
+  await view(page).getByTestId("stick-other-loads").getByRole("button", { name: "Show DJ STICK" }).click();
+  await expect(view(page).getByTestId("stick-name")).toHaveText("DJ STICK");
+  await expect(view(page).getByTestId("stick-outcome")).toHaveAttribute("data-outcome", "loaded");
+  expect((await call<{ playlists: string[] }>(page, "__stickHeld", DJ)).playlists).toEqual([name]);
+});
+
+test("a repeat load says nothing needed writing and what the Stick now holds, not that it holds nothing", async ({ page }) => {
+  await openStick(page);
+  await chooseFirst(page);
+  await holdToLoad(page);
+  await expect(view(page).getByTestId("stick-outcome")).toContainText(/Written: \d+ tracks, 1 playlist/);
+  await expect(view(page).getByTestId("stick-summary")).toHaveText(/Nothing to change/);
+  await holdToLoad(page);
+  const outcome = view(page).getByTestId("stick-outcome");
+  await expect(outcome).toContainText("Nothing needed writing");
+  await expect(outcome).toContainText(/Already as planned: \d+ tracks, 1 playlist/);
+  await expect(outcome).toContainText(/DJ STICK now holds [1-9]\d* tracks in 1 playlist/);
+});
+
+test("a playlist whose tracks change is a change, though no track is added to the Stick", async ({ page }) => {
+  await open(page);
+  // The Stick holds both chosen playlists' tracks, but the first one's last track sits only in the second.
+  const ids = ["pl-0-0", "pl-0-1"];
+  const tracks = await Promise.all(ids.map((id) => call<string[]>(page, "__playlistTracks", id)));
+  const moved = tracks[0]!.at(-1)!;
+  await call(page, "__setStickHolds", DJ, [
+    { id: ids[0], name: "Melodic Vox", tracks: tracks[0]!.slice(0, -1) },
+    { id: ids[1], name: "Hardstyle", tracks: [...tracks[1]!, moved] },
+  ]);
+  await tab(page, "Stick").click();
+  await playlistRows(page).nth(0).getByRole("checkbox").check();
+  await playlistRows(page).nth(1).getByRole("checkbox").check();
+  const summary = view(page).getByTestId("stick-summary");
+  await expect(summary.locator('[data-change="membership"]')).toContainText("Melodic Vox (+1)");
+  await expect(summary).not.toContainText("Nothing to change");
+});
+
+test("a Stick replaced at the same place drops its preview at once, and a late answer for the old one is not shown", async ({ page }) => {
+  await openStick(page);
+  await chooseFirst(page);
+  await expect(view(page).getByTestId("stick-space-line")).toContainText("after this load");
+  await call(page, "__holdStickDryRuns");
+  // Something else ticks a second playlist: a dry run for the old Stick is now in flight.
+  await playlistRows(page).nth(1).getByRole("checkbox").check();
+  await expect(view(page).getByTestId("stick-summary-reading")).toBeVisible();
+  // Another Stick is now mounted at the same path.
+  await call(page, "__swapStickAt", DJ, 2_000_000_000);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(view(page).getByTestId("stick-summary")).toHaveCount(0);
+  await expect(view(page).getByTestId("stick-load")).toBeDisabled();
+  // The old Stick's answer arrives late: not shown.
+  await call(page, "__releaseFirstStickDryRun");
+  await page.waitForTimeout(300);
+  await expect(view(page).getByTestId("stick-summary")).toHaveCount(0);
+  await call(page, "__releaseStickDryRuns");
+  await expect(view(page).getByTestId("stick-space-line")).toContainText("Free now 2.0 GB");
+});
+
+test("after a Stick is chosen with the buttons, choosing one in the tree still shows it", async ({ page }) => {
+  await openStick(page);
+  await view(page).getByRole("group", { name: "Mounted Sticks" }).getByRole("button", { name: "TEST" }).click();
+  await expect(view(page).getByTestId("stick-name")).toHaveText("TEST");
+  await page.getByTestId("shell-tree").getByRole("group", { name: "Stick DJ STICK" }).getByRole("treeitem", { name: "DJ STICK", exact: true }).click();
+  await expect(view(page).getByTestId("stick-name")).toHaveText("DJ STICK");
 });

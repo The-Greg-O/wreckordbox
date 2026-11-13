@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   chosenAfterToggle,
+  outcomeLines,
   formatBytes,
   fromServiceDryRun,
   fromServiceLoad,
@@ -97,6 +98,42 @@ describe("summaryLines", () => {
       .toEqual(["Nothing to change: the Stick already holds these playlists as they are."]);
   });
 
+  it("counts playlists whose tracks change even when no track is added or removed from the Stick", () => {
+    const base = serviceDryRun().changes;
+    const none = {
+      ...base,
+      counts: {
+        tracks_added: 0, tracks_changed: 0, audio_changed: 0, tracks_removed: 0, tracks_missing: 0, audio_reused: 4,
+        playlists_created: 0, playlists_rewritten: 2, playlists_reordered: 0, playlists_removed: 0, native_stems: 0,
+      },
+      tracks: { added: [], changed: [], audio_changed: [], removed: [], missing: [] },
+      playlists: {
+        created: [],
+        rewritten: [
+          { name: "Friday warm-up", added: 1, removed: 0, reordered: false },
+          { name: "Melodic Vox", added: 0, removed: 0, reordered: false },
+        ],
+        reordered: [], removed: [],
+      },
+      native_stems: [],
+    };
+    expect(summaryLines(plan({ changes: none })).map((line) => [line.kind, line.count, line.text])).toEqual([
+      ["membership", "1", "playlist's tracks change: Friday warm-up (+1)"],
+    ]);
+  });
+
+  it("says nothing changes only when no playlist's tracks change either", () => {
+    const base = serviceDryRun().changes;
+    const same = {
+      ...base,
+      counts: { ...base.counts, tracks_added: 0, tracks_changed: 0, audio_changed: 0, tracks_removed: 0, playlists_created: 0, playlists_reordered: 0, playlists_removed: 0, native_stems: 0 },
+      tracks: { added: [], changed: [], audio_changed: [], removed: [], missing: [] },
+      playlists: { created: [], rewritten: [{ name: "Melodic Vox", added: 0, removed: 0, reordered: false }], reordered: [], removed: [] },
+      native_stems: [],
+    };
+    expect(summaryLines(plan({ changes: same })).map((line) => line.kind)).toEqual(["nothing"]);
+  });
+
   it("names the playlists when only one or two are chosen", () => {
     const one = plan({ playlists: [{ id: "11", name: "Friday warm-up" }] });
     expect(summaryLines(one)[0]?.text).toBe("tracks added, across Friday warm-up");
@@ -163,20 +200,54 @@ describe("chosenAfterToggle", () => {
 });
 
 describe("fromServiceLoad", () => {
-  it("reads what a load wrote and did not write", () => {
-    const outcome = fromServiceLoad({
-      stick: serviceStick(), outcome: "incomplete", error: { code: "x", message: "One track's audio could not be read." },
-      planned: serviceDryRun().changes,
-      written: { tracks: [{ id: "1", title: "Alpha" }], playlists: ["Friday warm-up"] },
-      not_written: { tracks: [{ id: "2", title: "Beta" }], playlists: [] },
-      unchanged: { tracks: [], playlists: [] },
-      native_stems: [],
-    });
-    expect(outcome).toMatchObject({
+  const report = (over: Record<string, unknown> = {}) => fromServiceLoad({
+    stick: serviceStick({ tracks: 3, playlists: 1 }), outcome: "incomplete", error: { code: "x", message: "One Native stems set was not written." },
+    planned: serviceDryRun().changes,
+    written: { tracks: [{ id: "1", title: "Alpha" }], playlists: ["Friday warm-up"] },
+    not_written: { tracks: [{ id: "2", title: "Beta" }], playlists: [] },
+    unchanged: { tracks: [{ id: "3", title: "Gamma" }], playlists: ["Melodic Vox"] },
+    native_stems: [
+      { track: { id: "1", title: "Alpha" }, outcome: "written", reason: null, stems_fact: 4 },
+      { track: { id: "2", title: "Beta" }, outcome: "failed", reason: "Its Stems changed since the dry run.", stems_fact: null },
+    ],
+    ...over,
+  });
+
+  it("reads what a load wrote, did not write and found unchanged, and what the Stick holds now", () => {
+    expect(report()).toMatchObject({
       outcome: "incomplete",
-      error: "One track's audio could not be read.",
+      error: "One Native stems set was not written.",
       written: { tracks: ["Alpha"], playlists: ["Friday warm-up"] },
       notWritten: { tracks: ["Beta"], playlists: [] },
+      unchanged: { tracks: ["Gamma"], playlists: ["Melodic Vox"] },
+      holds: { tracks: 3, playlists: 1 },
+      nativeStems: [
+        { title: "Alpha", outcome: "written", reason: null },
+        { title: "Beta", outcome: "failed", reason: "Its Stems changed since the dry run." },
+      ],
     });
+  });
+
+  it("says what changed and what the Stick holds as different things", () => {
+    expect(outcomeLines(report())).toEqual([
+      "Written: 1 track, 1 playlist",
+      "Already as planned: 1 track, 1 playlist",
+      "Not written: 1 track",
+      "GIGSTICK now holds 3 tracks in 1 playlist",
+    ]);
+  });
+
+  it("a repeat load says nothing needed writing and still says what the Stick holds", () => {
+    const repeat = report({
+      outcome: "loaded", error: null,
+      written: { tracks: [], playlists: [] }, not_written: { tracks: [], playlists: [] },
+      unchanged: { tracks: [{ id: "1", title: "Alpha" }, { id: "3", title: "Gamma" }], playlists: ["Melodic Vox"] },
+      native_stems: [],
+    });
+    expect(outcomeLines(repeat)).toEqual([
+      "Nothing needed writing",
+      "Already as planned: 2 tracks, 1 playlist",
+      "GIGSTICK now holds 3 tracks in 1 playlist",
+    ]);
   });
 });

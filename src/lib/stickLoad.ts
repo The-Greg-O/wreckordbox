@@ -85,8 +85,15 @@ export interface LoadOutcome {
   stick: LoadStick;
   outcome: "loaded" | "incomplete" | "failed";
   error: string | null;
+  /** Changes the load made: of what it was to put on the Stick, what it wrote. */
   written: { tracks: string[]; playlists: string[] };
+  /** Changes it set out to make and did not. */
   notWritten: { tracks: string[]; playlists: string[] };
+  /** What it was to put there that was already as planned: neither written nor failed. */
+  unchanged: { tracks: string[]; playlists: string[] };
+  /** What the Stick holds now (its library, read back): not the same thing as what was written. */
+  holds: { tracks: number | null; playlists: number | null };
+  /** Every Native stems set: `written`, `skipped` or `failed`, and why. */
   nativeStems: { title: string; outcome: string; reason: string | null }[];
 }
 
@@ -199,6 +206,8 @@ export function fromServiceLoad(value: unknown): LoadOutcome {
     error: raw.error === null || raw.error === undefined ? null : text(record(raw.error).message) || null,
     written: held(raw.written),
     notWritten: held(raw.not_written),
+    unchanged: held(raw.unchanged),
+    holds: { tracks: maybeNumber(record(raw.stick).tracks), playlists: maybeNumber(record(raw.stick).playlists) },
     nativeStems: list(raw.native_stems).map((entry) => {
       const s = record(entry);
       return { title: track(s.track).title, outcome: text(s.outcome), reason: maybeText(s.reason) };
@@ -227,7 +236,8 @@ function names(items: readonly string[]): string {
 
 const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
 
-export type SummaryKind = "added" | "stems" | "changed" | "audio" | "playlists" | "removed" | "playlistsRemoved" | "missing" | "nothing";
+export type SummaryKind =
+  | "added" | "stems" | "changed" | "audio" | "playlists" | "membership" | "removed" | "playlistsRemoved" | "missing" | "nothing";
 
 export interface SummaryLine {
   kind: SummaryKind;
@@ -256,10 +266,30 @@ export function summaryLines(plan: LoadPlan): SummaryLine[] {
   if (counts.audioChanged > 0) {
     lines.push({ kind: "audio", count: `${counts.audioChanged}`, text: `${plural(counts.audioChanged, "track's audio", "tracks' audio")} copied again: it changed at the source` });
   }
-  if (counts.playlistsCreated > 0 || counts.playlistsReordered > 0) {
+  if (counts.playlistsCreated > 0) {
     const created = `${plural(counts.playlistsCreated, "playlist", "playlists")} created`;
     const reordered = counts.playlistsReordered > 0 ? ` · ${counts.playlistsReordered} reordered` : "";
     lines.push({ kind: "playlists", count: `${counts.playlistsCreated}`, text: `${created}${reordered}` });
+  } else if (counts.playlistsReordered > 0) {
+    lines.push({ kind: "playlists", count: `${counts.playlistsReordered}`, text: `${plural(counts.playlistsReordered, "playlist", "playlists")} reordered` });
+  }
+  // Playlists on the Stick already whose tracks change (a track already on
+  // the Stick added to another chosen playlist, say): a change even when no
+  // track is added or removed. One whose entries could not be compared
+  // (an older export) is written again, so it counts too.
+  const membership = playlists.rewritten.filter((p) => p.added === null || p.removed === null || p.added > 0 || p.removed > 0);
+  if (membership.length > 0) {
+    const shown = membership.slice(0, 3).map((p) => {
+      if (p.added === null || p.removed === null) return `${p.name} (written again)`;
+      const parts = [p.added > 0 ? `+${p.added}` : null, p.removed > 0 ? `−${p.removed}` : null].filter((x) => x !== null);
+      return `${p.name} (${parts.join(" ")})`;
+    });
+    const more = membership.length > 3 ? ` and ${membership.length - 3} more` : "";
+    lines.push({
+      kind: "membership",
+      count: `${membership.length}`,
+      text: `${plural(membership.length, "playlist's tracks change", "playlists' tracks change")}: ${shown.join(", ")}${more}`,
+    });
   }
   if (counts.tracksRemoved > 0) {
     lines.push({ kind: "removed", count: `-${counts.tracksRemoved}`, text: `${plural(counts.tracksRemoved, "track", "tracks")} removed` });
@@ -276,6 +306,30 @@ export function summaryLines(plan: LoadPlan): SummaryLine[] {
   }
   if (lines.length === 0) {
     lines.push({ kind: "nothing", count: "", text: "Nothing to change: the Stick already holds these playlists as they are." });
+  }
+  return lines;
+}
+
+const items = (tracks: number, playlists: number) =>
+  [tracks > 0 ? `${tracks} ${plural(tracks, "track", "tracks")}` : null, playlists > 0 ? `${playlists} ${plural(playlists, "playlist", "playlists")}` : null]
+    .filter((x) => x !== null)
+    .join(", ");
+
+/**
+ * What a load did, as separate things: what it wrote, what was already as
+ * planned, what it did not write, and what the Stick holds now.
+ */
+export function outcomeLines(outcome: LoadOutcome): string[] {
+  const lines: string[] = [];
+  const written = items(outcome.written.tracks.length, outcome.written.playlists.length);
+  lines.push(written === "" ? "Nothing needed writing" : `Written: ${written}`);
+  const unchanged = items(outcome.unchanged.tracks.length, outcome.unchanged.playlists.length);
+  if (unchanged !== "") lines.push(`Already as planned: ${unchanged}`);
+  const missed = items(outcome.notWritten.tracks.length, outcome.notWritten.playlists.length);
+  if (missed !== "") lines.push(`Not written: ${missed}`);
+  const { tracks, playlists } = outcome.holds;
+  if (tracks !== null) {
+    lines.push(`${outcome.stick.name} now holds ${tracks} ${plural(tracks, "track", "tracks")} in ${playlists ?? 0} ${plural(playlists ?? 0, "playlist", "playlists")}`);
   }
   return lines;
 }

@@ -52,6 +52,12 @@ export interface StickWriteQuestion {
   lines: readonly string[];
   /** The write, as the backend plans and approves it. */
   plan: StickWriteOperation;
+  /**
+   * A plan already made and shown to the DJ (the Stick view's load: the
+   * service's dry run, wbx-71): the hold approves exactly its id, and the
+   * dialog shows `lines` alone. Without it the write is planned here.
+   */
+  planned?: StickWritePlan;
 }
 
 export interface StagedStickWrite extends StickWriteQuestion {
@@ -163,7 +169,7 @@ export function useStickWriteGate({ sticks, refresh, refuse }: {
     let plan: StickWritePlan;
     try {
       const backend = await getBackend();
-      plan = await backend.stickWritePlan({ destination: path, operation: question.plan });
+      plan = question.planned ?? await backend.stickWritePlan({ destination: path, operation: question.plan });
     } catch (error) {
       if (latest.current === id) refuse(error instanceof Error ? error.message : "What the write would change could not be worked out, so nothing was written.");
       return null;
@@ -179,7 +185,7 @@ export function useStickWriteGate({ sticks, refresh, refuse }: {
     const planId = plan.plan;
     // A Spare stick only when both readings say so; anything else is held for as a Gig stick.
     const spare = stick?.outline?.spare === true && plan.spare;
-    const lines = [...question.lines, ...describeStickPlan(plan)];
+    const lines = question.planned ? [...question.lines] : [...question.lines, ...describeStickPlan(plan)];
     const protection: StickProtection = { protected: plan.protected, spare: plan.spare, name: plan.stickName, revision: 0 };
     const yes = await new Promise<boolean>((answer) => {
       const entry: Asking = { id, path, name: stick?.name ?? path, spare, protection, title: question.title, lines, answer };

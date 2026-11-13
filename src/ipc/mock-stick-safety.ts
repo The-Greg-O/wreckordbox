@@ -56,6 +56,8 @@ interface Approval {
   op: string;
   /** Confirmed by the DJ's hold: only then is it a token. */
   approved: boolean;
+  /** For a token: the plan id the DJ confirmed (wbx-71). */
+  from?: string;
 }
 
 /** Kept across a reload, as a Stick's state survives the window restarting. */
@@ -102,6 +104,22 @@ export function mockStickPending(path: string): boolean {
 /** Whether the mock's Stick at `path` carries the Spare stick marker. */
 export function mockStickSpare(path: string): boolean {
   return log().spare.has(path);
+}
+
+/**
+ * Records the service's dry-run plan `id` (the Stick view's, wbx-71) in the
+ * same store as the window's plans, as the hosted service does: the hold
+ * approves exactly it.
+ */
+export function mockProposeStickWrite(id: string, path: string, op: StickWriteOperation): void {
+  const state = log();
+  state.tokens.set(id, {
+    path,
+    volume: state.volume.get(path) ?? 0,
+    revision: state.revision.get(path) ?? 0,
+    op: key(op),
+    approved: false,
+  });
 }
 
 /** Whether Stick Protection refuses writes to the mock's Stick at `path` now. */
@@ -202,8 +220,6 @@ const WRITES: Record<string, { path: number; approval: number; op: (a: unknown[]
   settleStick: { path: 0, approval: 1, op: () => ({ kind: "settle" }) },
   ensureDeviceLibrary: { path: 0, approval: 2, op: (a) => ({ kind: "ensureLibrary", defaults: a[1] as never }) },
   formatDevice: { path: 0, approval: 2, op: (a) => ({ kind: "format", layout: a[1] as never }) },
-  // The Stick view's load (wbx-71): the hold confirms a sync of exactly these playlists.
-  stickViewLoad: { path: 0, approval: 3, op: (a) => ({ kind: "sync", playlists: [...(a[1] as string[])] }) },
 };
 
 /** Reads made before a write: they refuse a Stick with an unfinished write. */
@@ -304,7 +320,7 @@ export function withStickSafetyLog(backend: Backend): Backend {
     if ((state.volume.get(planned.path) ?? 0) !== planned.volume) return Promise.reject(new Error(`The Stick at this place is not the one the plan was made for. ${REFUSED}`));
     if ((state.revision.get(planned.path) ?? 0) !== planned.revision) return Promise.reject(new Error(`The Stick changed since the plan was made. ${REFUSED}`));
     const token = `mock-${Math.random().toString(36).slice(2)}-${Date.now()}`;
-    state.tokens.set(token, { ...planned, approved: true });
+    state.tokens.set(token, { ...planned, approved: true, from: id });
     return Promise.resolve(token);
   };
   wrapped.stickWriteRevoke = (id: string) => {
@@ -379,6 +395,29 @@ export function withStickSafetyLog(backend: Backend): Backend {
       });
     };
   }
+
+  // The Stick view's load (wbx-71): Stick Protection, then the hold's token,
+  // which must be for exactly the plan the load carries, as the service's
+  // `consume_bound_for` checks it.
+  const stickLoad = original("stickViewLoad");
+  wrapped.stickViewLoad = (...args: unknown[]) => {
+    const state = log();
+    const [path, playlists, plan, token] = args as [string, string[], string, string | undefined];
+    const call: StickCall = { method: "stickViewLoad", path, args: { playlists, plan } };
+    if (protection(state, path).protected) {
+      state.refused.push(call);
+      return Promise.reject(protectedError(path));
+    }
+    const from = token ? state.tokens.get(token)?.from : undefined;
+    const refusal = consume(state, token, { kind: "sync", playlists: [...playlists] }, path)
+      ?? (from === plan ? null : `This confirmation was for another plan: confirm the plan shown now. ${REFUSED}`);
+    if (refusal !== null) {
+      state.refused.push(call);
+      return Promise.reject(Object.assign(new Error(refusal), { kind: "conflict", detail: "stick_load_unconfirmed" }));
+    }
+    state.writes.push(call);
+    return Promise.resolve(stickLoad?.(...args)).finally(() => { bump(state, path); });
+  };
 
   // A sync: each Stick's own approval; a Stick without one is reported and left alone.
   const sync = original("syncDevices");

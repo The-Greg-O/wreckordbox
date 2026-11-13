@@ -21,7 +21,22 @@
  * - `__stickHeld(path)`: what the Stick holds (playlist names, track ids).
  * - `__setStickHolds(path, playlists)`: what it holds, as `[{ id, name, tracks }]`.
  * - `__changeTrackOnLibrary(id, fields)`: the track's data differs from the Stick's.
+ * - `__stickLoadPlans()`: every plan id a dry run answered; `__stickLoadCalls()`:
+ *   every load that reached the mock service (past protection and the hold).
+ * - `__releaseFirstStickDryRun()`: lets only the oldest held dry run answer.
+ * - `__failNextStickLoad(path, message)`, `__nextStickLoadIncomplete(path, reason)`:
+ *   the next load fails before writing / writes all but one track and one
+ *   Native stems set (that one's reason given).
+ * - `__holdStickLoads()` / `__releaseStickLoads()`: loads wait to finish.
+ * - `__playlistTracks(id)`: a Library playlist's tracks.
+ * - `__swapStickAt(path, freeBytes)`: another Stick at the same path (a new
+ *   volume id, empty, with that free space); the window sees it on its next
+ *   device listing.
+ *
+ * Each dry run is worked out when it is asked, so an answer held back and
+ * let go late is the answer for the Stick as it was then.
  */
+import { mockProposeStickWrite, mockStickReplaced } from "./mock-stick-safety";
 import type { TreeNode } from "./types";
 
 interface HeldPlaylist { id: string; name: string; tracks: string[] }
@@ -34,7 +49,7 @@ interface StickState {
 }
 
 export interface MockStickLoadSource {
-  devices: () => readonly { name: string; path: string; freeBytes: number; totalBytes: number }[];
+  devices: () => readonly { name: string; path: string; freeBytes: number; totalBytes: number; volumeId: string }[];
   tree: () => readonly TreeNode[];
   /** A playlist's tracks, as ids, without changing anything. */
   tracksOf: (playlist: string) => readonly string[];
@@ -60,6 +75,11 @@ export function createMockStickLoad(source: MockStickLoadSource) {
   let lastDryRun: { stick: string; playlists: string[] } | null = null;
   let failDryRuns: string | null = null;
   let holding: (() => void)[] | null = null;
+  let loadsHeld: (() => void)[] | null = null;
+  const failNext = new Map<string, string>();
+  const incompleteNext = new Map<string, string>();
+  const issued: string[] = [];
+  const loadCalls: { stick: string; playlists: string[]; plan: string }[] = [];
   let revision = 0;
 
   const stateOf = (path: string): StickState => {
@@ -149,7 +169,12 @@ export function createMockStickLoad(source: MockStickLoadSource) {
     const shortfall = free !== null && needed > free ? needed - free : null;
     revision += 1;
     const plan = state.notLoadable === null ? `mock-load-${revision}` : null;
-    if (plan !== null) plans.set(plan, { path, playlists: JSON.stringify(ids), revision: revisionOf(path) });
+    if (plan !== null) {
+      plans.set(plan, { path, playlists: JSON.stringify(ids), revision: revisionOf(path) });
+      // In the store the window's hold approves from, as the hosted service's plans are.
+      mockProposeStickWrite(plan, path, { kind: "sync", playlists: [...ids] });
+      issued.push(plan);
+    }
     return {
       stick: stickJson(path),
       playlists: chosen.map((p) => ({ id: p.id, name: p.name })),
@@ -207,6 +232,25 @@ export function createMockStickLoad(source: MockStickLoadSource) {
       touch(path);
     };
     hooks.__changeTrackOnLibrary = (id: string, fields: string[]) => { changed.set(id, fields); };
+    hooks.__stickLoadPlans = () => [...issued];
+    hooks.__stickLoadCalls = () => loadCalls.map((c) => ({ ...c }));
+    hooks.__releaseFirstStickDryRun = () => { holding?.shift()?.(); };
+    hooks.__failNextStickLoad = (path: string, message: string) => { failNext.set(path, message); };
+    hooks.__nextStickLoadIncomplete = (path: string, reason: string) => { incompleteNext.set(path, reason); };
+    hooks.__holdStickLoads = () => { loadsHeld ??= []; };
+    hooks.__releaseStickLoads = () => {
+      const waiting = loadsHeld ?? [];
+      loadsHeld = null;
+      for (const go of waiting) go();
+    };
+    hooks.__playlistTracks = (id: string) => [...source.tracksOf(id)];
+    hooks.__swapStickAt = (path: string, free: number) => {
+      const device = source.devices().find((d) => d.path === path) as { volumeId: string } | undefined;
+      if (device) device.volumeId = `${device.volumeId}-swapped-${Date.now()}`;
+      sticks.set(path, { playlists: [], lastLoaded: null, free, notLoadable: null });
+      touch(path);
+      mockStickReplaced(path);
+    };
   }
 
   return {
@@ -217,19 +261,29 @@ export function createMockStickLoad(source: MockStickLoadSource) {
     stickViewDryRun: async (stick: string, playlists: string[]): Promise<unknown> => {
       reads.dryRuns += 1;
       lastDryRun = { stick, playlists: [...playlists] };
+      // Worked out now, for the Stick as it is now; then perhaps held back.
+      const answer = (() => {
+        if (failDryRuns !== null) return new Error(failDryRuns);
+        if (!source.devices().some((d) => d.path === stick)) {
+          return Object.assign(new Error(`No Stick is mounted at ${stick}.`), { kind: "notFound", detail: "stick_not_found" });
+        }
+        if (source.pending(stick)) {
+          return Object.assign(new Error("A write to this Stick did not finish; settle it in the window first."), { kind: "unfinishedWrite", detail: "stick_unfinished_write" });
+        }
+        const { chosen: _chosen, ...planned } = dryRunNow(stick, playlists);
+        return planned;
+      })();
       if (holding !== null) await new Promise<void>((go) => { holding?.push(go); });
-      if (failDryRuns !== null) throw new Error(failDryRuns);
-      if (!source.devices().some((d) => d.path === stick)) {
-        throw Object.assign(new Error(`No Stick is mounted at ${stick}.`), { kind: "notFound", detail: "stick_not_found" });
-      }
-      if (source.pending(stick)) {
-        throw Object.assign(new Error("A write to this Stick did not finish; settle it in the window first."), { kind: "unfinishedWrite", detail: "stick_unfinished_write" });
-      }
-      const { chosen: _chosen, ...answer } = dryRunNow(stick, playlists);
+      if (answer instanceof Error) throw answer;
       return source.wait(answer);
     },
     /** Reached only through `mock-stick-safety.ts`: protected Sticks and loads without the hold never get here. */
     stickViewLoad: async (stick: string, playlists: string[], plan: string): Promise<unknown> => {
+      loadCalls.push({ stick, playlists: [...playlists], plan });
+      if (loadsHeld !== null) await new Promise<void>((go) => { loadsHeld?.push(go); });
+      const failure = failNext.get(stick);
+      failNext.delete(stick);
+      if (failure !== undefined) throw Object.assign(new Error(failure), { kind: "internal", detail: "stick_load_failed" });
       const bound = plans.get(plan);
       plans.delete(plan);
       if (!bound || bound.path !== stick || bound.playlists !== JSON.stringify(playlists) || bound.revision !== revisionOf(stick)) {
@@ -243,21 +297,36 @@ export function createMockStickLoad(source: MockStickLoadSource) {
         throw Object.assign(new Error("The load does not fit on the Stick."), { kind: "conflict", detail: "stick_too_small" });
       }
       const state = stateOf(stick);
-      state.playlists = planned.chosen;
+      const before = new Set(state.playlists.flatMap((p) => p.tracks));
+      const beforePlaylists = new Map(state.playlists.map((p) => [p.id, p.tracks.join()]));
+      const reason = incompleteNext.get(stick) ?? null;
+      incompleteNext.delete(stick);
+      const all = [...new Set(planned.chosen.flatMap((p) => p.tracks))];
+      // Incomplete: the last new track's audio could not be read.
+      const added = all.filter((id) => !before.has(id));
+      const skipped = reason !== null ? added.at(-1) ?? null : null;
+      state.playlists = planned.chosen.map((p) => ({ ...p, tracks: p.tracks.filter((t) => t !== skipped) }));
       state.lastLoaded = new Date().toISOString().replace("T", " ").replace("Z", " +00:00");
       if (state.free !== null) state.free = planned.space.free_after ?? state.free;
-      for (const id of planned.chosen.flatMap((p) => p.tracks)) changed.delete(id);
+      for (const id of all) changed.delete(id);
       touch(stick);
-      const tracks = [...new Set(planned.chosen.flatMap((p) => p.tracks))].map(line);
+      const writtenTracks = added.filter((id) => id !== skipped).map(line);
+      const changedPlaylists = planned.chosen.filter((p) => beforePlaylists.get(p.id) !== p.tracks.join());
+      const samePlaylists = planned.chosen.filter((p) => beforePlaylists.get(p.id) === p.tracks.join());
+      const stems = planned.changes.native_stems.map((track, at) => (
+        reason !== null && at === 0
+          ? { track, outcome: "failed", reason, stems_fact: null }
+          : { track, outcome: "written", reason: null, stems_fact: at + 1 }
+      ));
       return source.wait({
         stick: stickJson(stick),
-        outcome: "loaded",
-        error: null,
+        outcome: reason === null ? "loaded" : "incomplete",
+        error: reason === null ? null : { code: "stick_load_incomplete", message: "Not everything planned is on the Stick." },
         planned: planned.changes,
-        written: { tracks, playlists: planned.chosen.map((p) => p.name) },
-        not_written: { tracks: [], playlists: [] },
-        unchanged: { tracks: [], playlists: [] },
-        native_stems: planned.changes.native_stems.map((track) => ({ track, outcome: "written", reason: null, stems_fact: 1 })),
+        written: { tracks: writtenTracks, playlists: changedPlaylists.map((p) => p.name) },
+        not_written: { tracks: skipped === null ? [] : [line(skipped)], playlists: [] },
+        unchanged: { tracks: all.filter((id) => before.has(id)).map(line), playlists: samePlaylists.map((p) => p.name) },
+        native_stems: stems,
       });
     },
   };

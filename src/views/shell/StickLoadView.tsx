@@ -29,6 +29,7 @@ import {
   formatBytes,
   lastLoadedLine,
   loadBlocked,
+  outcomeLines,
   shortfallLine,
   spaceLine,
   summaryLines,
@@ -39,6 +40,7 @@ import {
 import styles from "./StickLoadView.module.css";
 import { useStickWriteGateContext } from "./StickWriteGate";
 import { StickUnlock } from "./StickUnlock";
+import { runStickLoad, stickIdentity, useStickLoads, type StickLoad } from "@/store/stickLoads";
 
 /** The playlists a load can include: the Library's playlists and folders, in tree order. */
 export interface LoadablePlaylist {
@@ -102,6 +104,12 @@ export function StickLoadView({ devices, selected, library, revision, panel }: {
   const gate = useStickWriteGateContext();
   const [sticks, setSticks] = useState<Read<LoadStick[]>>({ state: "reading" });
   const [picked, setPicked] = useState<string | null>(null);
+  // A Stick chosen in the tree wins over one picked with the buttons before it.
+  const [treeChoice, setTreeChoice] = useState(selected);
+  if (treeChoice !== selected) {
+    setTreeChoice(selected);
+    setPicked(null);
+  }
   const deviceKey = devices.map((d) => `${d.path}\u0000${d.volumeId}`).join("\u0001");
 
   // The Sticks: on show, when the mounted volumes change, when a Stick is
@@ -132,7 +140,12 @@ export function StickLoadView({ devices, selected, library, revision, panel }: {
 
   const list = sticks.state === "read" ? sticks.value : [];
   const stick = list.find((s) => s.path === (picked ?? selected)) ?? list.find((s) => s.path === selected) ?? list[0] ?? null;
-  const total = stick === null ? null : stick.totalBytes ?? devices.find((d) => d.path === stick.path)?.totalBytes ?? null;
+  const device = stick === null ? undefined : devices.find((d) => d.path === stick.path);
+  const total = stick === null ? null : stick.totalBytes ?? device?.totalBytes ?? null;
+  // This Stick as mounted now: another volume at the same path is another Stick.
+  const identity = stick === null ? null : stickIdentity(stick.path, device?.volumeId);
+  // What the window last saw of its contents: a write moves it on.
+  const written = `${revision}\u0000${device?.export?.written ?? ""}\u0000${device?.export?.tracks ?? ""}`;
 
   const playlists = useMemo(() => loadablePlaylists(library), [library]);
   const order = useMemo(() => playlists.map((p) => p.id), [playlists]);
@@ -151,7 +164,12 @@ export function StickLoadView({ devices, selected, library, revision, panel }: {
   };
 
   // The dry run of what is asked now; an answer for anything else is dropped.
-  const asked = stick === null || chosen.length === 0 || stick.unfinishedWrite ? null : JSON.stringify([stick.path, chosen]);
+  // Keyed by the Stick's identity and what was last written to it too, so a
+  // Stick replaced at the same path, or written since, has no preview until
+  // its own answer comes, and an answer for the Stick as it was is dropped.
+  const asked = stick === null || chosen.length === 0 || stick.unfinishedWrite
+    ? null
+    : JSON.stringify([stick.path, chosen, identity, written]);
   const [plan, setPlan] = useState<{ key: string; read: Read<LoadPlan> } | null>(null);
   const live = useRef(asked);
   live.current = asked;
@@ -160,7 +178,7 @@ export function StickLoadView({ devices, selected, library, revision, panel }: {
     if (asked === null) return undefined;
     let mounted = true;
     const stops: (() => void)[] = [];
-    const [path, ids] = JSON.parse(asked) as [string, string[]];
+    const [path, ids] = JSON.parse(asked) as [string, string[], string, string];
     const refresh = coalescedRefresh(async () => {
       const backend = await getBackend();
       try {
@@ -194,10 +212,13 @@ export function StickLoadView({ devices, selected, library, revision, panel }: {
   const [choosing, setChoosing] = useState(false);
   // With nothing chosen the choice is open, and stays open while the DJ ticks.
   if (stick !== null && chosen.length === 0 && !choosing) setChoosing(true);
-  const [loading, setLoading] = useState(false);
-  const [outcome, setOutcome] = useState<LoadOutcome | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  useEffect(() => { setOutcome(null); setLoadError(null); }, [asked]);
+  // Loads live above the view (`stickLoads`): this Stick's latest, and the others'.
+  const allLoads = useStickLoads();
+  const current = identity === null ? null : [...allLoads].reverse().find((l) => l.identity === identity) ?? null;
+  const others = allLoads.filter((l) => l.identity !== identity && l.state !== "confirming");
+  const loading = current !== null && (current.state === "running" || current.state === "confirming");
+  const outcome = current?.state === "done" ? current.outcome : null;
+  const loadError = current?.state === "failed" ? current.error : null;
 
   const ready = shown?.state === "read" ? shown.value : null;
   const blocked = stick === null ? null
@@ -205,38 +226,35 @@ export function StickLoadView({ devices, selected, library, revision, panel }: {
     : ready === null ? (chosen.length === 0 ? "Choose at least one playlist to load." : null)
     : loadBlocked(ready, chosen.length);
 
-  const load = async () => {
-    if (stick === null || ready === null || ready.plan === null || loading) return;
+  const load = () => {
+    if (stick === null || identity === null || ready === null || ready.plan === null || loading) return;
     const servicePlan = ready.plan;
     const path = stick.path;
+    const name = stick.name;
     const ids = [...chosen];
-    setOutcome(null);
-    setLoadError(null);
-    if (gate === null) {
-      setLoadError("Nothing was written: the Stick write confirmation is not available here.");
-      return;
-    }
-    setLoading(true);
-    try {
-      await gate.stage({
+    const lines = summaryLines(ready).map((line) => `${line.count} ${line.text}`.trim());
+    // The plan the DJ is shown is what the hold approves (its id), nothing else.
+    const planned = {
+      onStick: true, stickName: name, protected: stick.protected, spare: stick.kind === "spare", pending: false,
+      audioEstimated: ready.changes.audioEstimated, tracksNew: 0, tracksChanged: 0, audioReused: 0, tracksRemoved: 0,
+      tracksMissing: 0, trackChanges: [], analysisWritten: 0, playlists: [], netAdditionalBytes: 0, adding: null,
+      plan: servicePlan,
+    };
+    void runStickLoad({ identity, path, name }, async (run) => {
+      if (gate === null) throw new Error("Nothing was written: the Stick write confirmation is not available here.");
+      return gate.stage({
         path,
-        title: `Load ${ids.length} ${ids.length === 1 ? "playlist" : "playlists"} onto ${stick.name}`,
-        lines: summaryLines(ready).map((line) => `${line.count} ${line.text}`.trim()),
+        title: `Load ${ids.length} ${ids.length === 1 ? "playlist" : "playlists"} onto ${name}`,
+        lines,
         plan: { kind: "sync", playlists: ids },
-        run: async (approval) => {
-          const backend = await getBackend();
-          try {
-            setOutcome(await backend.stickViewLoad(path, ids, servicePlan, approval));
-          } catch (error) {
-            setLoadError(message(error));
-          }
-        },
+        planned,
+        run: (approval) => run(async () => (await getBackend()).stickViewLoad(path, ids, servicePlan, approval)),
       });
-    } finally {
-      setLoading(false);
-      readSticks();
+    }).finally(() => {
+      // Whoever is showing now reads again (a view gone stops its reads).
+      stickReads.current?.request();
       dryRuns.current?.request();
-    }
+    });
   };
 
   if (sticks.state === "reading") {
@@ -386,13 +404,16 @@ export function StickLoadView({ devices, selected, library, revision, panel }: {
           data-testid="stick-load"
           disabled={blocked !== null || ready === null || loading}
           aria-describedby={blocked !== null ? "stick-load-why" : undefined}
-          onClick={() => { void load(); }}
+          onClick={load}
         >
-          {loading ? "Loading…" : `Load ${stick.name}`}
+          {current?.state === "running" ? "Loading…" : `Load ${stick.name}`}
         </button>
         {blocked !== null ? <p id="stick-load-why" className={styles.note} data-testid="stick-load-why">{blocked}</p> : null}
-        {loadError !== null ? <p className={styles.problem} role="alert" data-testid="stick-load-error">Nothing more was loaded: {loadError}</p> : null}
+        {loadError !== null ? <p className={styles.problem} role="alert" data-testid="stick-load-error">The load did not finish: {loadError}</p> : null}
         {outcome !== null ? <Outcome outcome={outcome} /> : null}
+        {others.length > 0 ? (
+          <OtherLoads loads={others} mounted={(l) => devices.some((d) => stickIdentity(d.path, d.volumeId) === l.identity)} show={setPicked} />
+        ) : null}
       </aside>
     </div>
   );
@@ -473,23 +494,61 @@ function ChangeList({ plan }: { plan: LoadPlan }) {
   );
 }
 
-/** What the load did: everything, or what was and was not written. */
+/** What the load did: what it wrote, what was already so, what it did not, every Native stems set, and what the Stick holds now. */
 function Outcome({ outcome }: { outcome: LoadOutcome }) {
   const name = outcome.stick.name;
+  const head = outcome.outcome === "loaded"
+    ? `Loaded ${name}.`
+    : outcome.outcome === "failed"
+      ? `The load failed; ${name} holds what it held before.`
+      : `The load did not finish everything on ${name}.`;
   return (
     <div className={styles.outcome} role="status" data-testid="stick-outcome" data-outcome={outcome.outcome}>
-      {outcome.outcome === "loaded" ? (
-        <p>Loaded: {name} holds {outcome.written.tracks.length} tracks and {outcome.written.playlists.length} playlists as planned.</p>
-      ) : (
-        <>
-          <p className={styles.problem}>
-            {outcome.outcome === "failed" ? `The load failed; ${name} holds what it held before.` : `The load did not finish everything.`}
-            {outcome.error !== null ? ` ${outcome.error}` : ""}
-          </p>
-          <Section title="Written" items={[...outcome.written.playlists, ...outcome.written.tracks]} />
-          <Section title="Not written" items={[...outcome.notWritten.playlists, ...outcome.notWritten.tracks]} />
-        </>
-      )}
+      <p className={outcome.outcome === "loaded" ? undefined : styles.problem}>
+        {head}{outcome.error !== null ? ` ${outcome.error}` : ""}
+      </p>
+      <ul aria-label="What the load did">
+        {outcomeLines(outcome).map((line) => <li key={line}>{line}</li>)}
+      </ul>
+      <Section title="Not written" items={[...outcome.notWritten.playlists, ...outcome.notWritten.tracks]} />
+      {outcome.nativeStems.length > 0 ? (
+        <section>
+          <h4>Native stems ({outcome.nativeStems.length})</h4>
+          <ul aria-label="Native stems">
+            {outcome.nativeStems.map((stems, at) => (
+              <li key={`${at}:${stems.title}`} data-stems={stems.outcome}>
+                {stems.title}: {stems.outcome}{stems.reason !== null ? ` (${stems.reason})` : ""}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
+const LOAD_STATE: Record<StickLoad["state"], string> = { confirming: "confirming", running: "loading", done: "loaded", failed: "failed" };
+
+/** Loads of other Sticks, so a result is never lost while another Stick is shown. */
+function OtherLoads({ loads, mounted, show }: { loads: readonly StickLoad[]; mounted: (load: StickLoad) => boolean; show: (path: string) => void }) {
+  return (
+    <div className={styles.note} data-testid="stick-other-loads" role="status">
+      <h4>Other Sticks</h4>
+      <ul>
+        {loads.map((load) => {
+          const state = load.state === "done" && load.outcome !== null && load.outcome.outcome !== "loaded"
+            ? load.outcome.outcome
+            : LOAD_STATE[load.state];
+          return (
+            <li key={load.id}>
+              {load.name}: {state}
+              {mounted(load)
+                ? <> <button type="button" onClick={() => { show(load.path); }}>Show {load.name}</button></>
+                : " (no longer mounted)"}
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }
