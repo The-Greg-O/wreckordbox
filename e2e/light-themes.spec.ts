@@ -172,7 +172,8 @@ test("under a light theme every view is drawn on the theme's own grounds, with i
   const factor = b! / accent[2]!;
   expect(factor, ring).toBeGreaterThan(0.5);
   expect(factor, ring).toBeLessThanOrEqual(1);
-  for (const [drawnChannel, own] of [[r!, accent[0]!], [g!, accent[1]!]]) expect(Math.abs(drawnChannel - own * factor), ring).toBeLessThanOrEqual(2);
+  expect(Math.abs(r! - accent[0]! * factor), ring).toBeLessThanOrEqual(2);
+  expect(Math.abs(g! - accent[1]! * factor), ring).toBeLessThanOrEqual(2);
 });
 
 test("colours that carry meaning are the same under a light theme as under a dark one, and each stands out from its light ground", async ({ page }) => {
