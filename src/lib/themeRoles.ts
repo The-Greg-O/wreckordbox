@@ -17,6 +17,8 @@
 
 import { useMemo, useSyncExternalStore } from "react";
 
+import { legibleRoles } from "./legibleRoles";
+
 /** The roles of `docs/design/tokens.md`, each `#rrggbb`. */
 export type ThemeRoles = {
   mode: "dark" | "light";
@@ -166,8 +168,10 @@ const pixels = (size: number | null | undefined): string | null => {
  */
 export function themeProperties(theme: Theme): Record<string, string | null> {
   const properties: Record<string, string | null> = {};
+  // A light theme's faint ink is made readable on its grounds (wbx-45.1).
+  const roles = theme.roles ? legibleRoles(theme.roles) : null;
   for (const [role, property] of Object.entries(COLOUR_PROPERTIES) as [keyof typeof COLOUR_PROPERTIES, string][]) {
-    const value = theme.roles?.[role];
+    const value = roles?.[role];
     properties[property] = typeof value === "string" && COLOUR.test(value) ? value : null;
   }
   // A control's fill is the hairline colour in a theme; only upstream's
