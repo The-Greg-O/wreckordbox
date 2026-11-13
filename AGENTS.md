@@ -63,6 +63,10 @@ Wreckordbox is a personal, Linux-first hard fork of rbxport: a rekordbox-compati
   classification and shared-planner source guards). These commands all use
   the Rust queue. First build `cargo build -p wreckordbox` through that queue
   in the same target/profile for the hosted tests' prebuilt CLI.
+- CLI integration files use the same layout: `cargo test -p wreckordbox --test it
+  <module>::` through the Rust queue (for example `library_protection::`).
+  Its `tests/common/` stays at the original path so new top-level tests can
+  still declare `mod common;`; `it/main.rs` shares it once across modules.
 - `identity`, `logging`, `omarchy_theme`, `theme_file`, and the custom-harness
   `menu` remain separate shell targets; use `--test <name>` for them.
   Reasons and new-file/merge guidance: [integration tests](docs/development/integration-tests.md).

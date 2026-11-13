@@ -1,7 +1,8 @@
 # Integration-test binaries
 
-The app shell groups integration tests in `src-tauri/tests/it/main.rs` so a
-change to the shell links one ordinary integration-test binary. Each former
+The app shell groups integration tests in `src-tauri/tests/it/main.rs` and
+the CLI in `crates/wreckordbox/tests/it/main.rs`, so each crate links one
+ordinary integration-test binary. Each former
 file is a module with its original name; its tests keep their names after
 that module prefix.
 
@@ -11,6 +12,7 @@ Run one module through the machine-wide queue:
 /home/go/code/wreckordbox-notes/bin/heavy rust mise exec -- cargo build -p wreckordbox
 /home/go/code/wreckordbox-notes/bin/heavy rust mise exec -- cargo test -p rbxport --test it service_host::
 /home/go/code/wreckordbox-notes/bin/heavy rust mise exec -- cargo test -p rbxport --test it stick_protection::
+/home/go/code/wreckordbox-notes/bin/heavy rust mise exec -- cargo test -p wreckordbox --test it library_protection::
 ```
 
 The CLI must be built in the same target directory and profile before hosted
@@ -29,6 +31,11 @@ Five shell tests deliberately keep their own binaries:
 
 Use `--test <target>` for these exceptions. The ignored manual probe remains
 ignored inside `it`; ordinary runs must not enable it.
+
+The CLI has no separate-process exceptions. Its shared `common` module stays
+in `tests/common/` and is declared once by `it/main.rs` with a path attribute.
+Existing test modules import `crate::common`; a new top-level test can still
+use `mod common;` unchanged.
 
 For a new ordinary test file, put it under `tests/it/` and declare it with
 `mod <name>;` in `main.rs`. Keep Cargo's automatic test discovery enabled:
