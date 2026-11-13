@@ -203,7 +203,7 @@ impl Window {
 fn every_case_lists_exactly_the_expected_tracks_in_the_window_and_the_service() {
     let window = hosting_window();
     let file: Value =
-        serde_json::from_str(include_str!("../../src/lib/shellTrackFilter.cases.json")).unwrap();
+        serde_json::from_str(include_str!("../../../src/lib/shellTrackFilter.cases.json")).unwrap();
 
     let everything = window.listed(json!({
         "source": { "kind": "collection" }, "sort": "trackNo", "descending": false, "query": ""

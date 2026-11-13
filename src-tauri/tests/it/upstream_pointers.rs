@@ -8,10 +8,10 @@
 
 use serde_json::Value;
 
-const CONFIG: &str = include_str!("../tauri.conf.json");
-const LINUX_CONFIG: &str = include_str!("../tauri.linux.conf.json");
-const CAPABILITIES: &str = include_str!("../capabilities/default.json");
-const MANIFEST: &str = include_str!("../Cargo.toml");
+const CONFIG: &str = include_str!("../../tauri.conf.json");
+const LINUX_CONFIG: &str = include_str!("../../tauri.linux.conf.json");
+const CAPABILITIES: &str = include_str!("../../capabilities/default.json");
+const MANIFEST: &str = include_str!("../../Cargo.toml");
 
 fn config() -> Value {
     serde_json::from_str(CONFIG).unwrap()

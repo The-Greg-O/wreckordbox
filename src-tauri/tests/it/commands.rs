@@ -386,7 +386,7 @@ fn a_full_page_stays_inside_the_ipc_response_budget() {
     let rows = s.rows(view);
     let bytes = serde_json::to_vec(&rows).unwrap().len();
     let budgets: serde_json::Value =
-        serde_json::from_str(include_str!("../../perf-budgets.json")).unwrap();
+        serde_json::from_str(include_str!("../../../perf-budgets.json")).unwrap();
     let limit_kb = budgets
         .pointer("/gates/ipc/responseKb")
         .and_then(serde_json::Value::as_u64)

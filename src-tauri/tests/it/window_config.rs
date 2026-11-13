@@ -19,8 +19,8 @@
 
 use serde_json::{json, Value};
 
-const BASE: &str = include_str!("../tauri.conf.json");
-const LINUX: &str = include_str!("../tauri.linux.conf.json");
+const BASE: &str = include_str!("../../tauri.conf.json");
+const LINUX: &str = include_str!("../../tauri.linux.conf.json");
 
 /// The window fields a platform file is allowed to change. Anything else the
 /// base file sets must survive the merge unchanged.

@@ -13,7 +13,7 @@ use tauri::test::{mock_builder, mock_context, noop_assets, MockRuntime};
 /// A mock app carrying the real bundle configuration, named and versioned
 /// the way `generate_context!` names and versions the shipped app.
 fn app_with_real_config() -> tauri::App<MockRuntime> {
-    let text = include_str!("../tauri.conf.json");
+    let text = include_str!("../../tauri.conf.json");
     let config: tauri::Config = serde_json::from_str(text).expect("tauri.conf.json parses");
     let mut context = mock_context(noop_assets());
     let name = config.product_name.clone().expect("productName is set");
@@ -46,7 +46,7 @@ fn about_shows_the_name_version_and_copyright_of_the_bundle() {
     let app = app_with_real_config();
     let metadata = rbxport_lib::menu::about_metadata(app.handle());
     let config: serde_json::Value =
-        serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
 
     assert_eq!(metadata.name.as_deref(), config["productName"].as_str());
     assert_eq!(metadata.version.as_deref(), config["version"].as_str());
