@@ -17,6 +17,8 @@
 
 import { useMemo, useSyncExternalStore } from "react";
 
+import { accentInk, legibleRoles, writtenIn } from "./legibleRoles";
+
 /** The roles of `docs/design/tokens.md`, each `#rrggbb`. */
 export type ThemeRoles = {
   mode: "dark" | "light";
@@ -166,8 +168,10 @@ const pixels = (size: number | null | undefined): string | null => {
  */
 export function themeProperties(theme: Theme): Record<string, string | null> {
   const properties: Record<string, string | null> = {};
+  // A light theme's faint ink is made readable on its grounds (wbx-45.1).
+  const roles = theme.roles ? legibleRoles(theme.roles) : null;
   for (const [role, property] of Object.entries(COLOUR_PROPERTIES) as [keyof typeof COLOUR_PROPERTIES, string][]) {
-    const value = theme.roles?.[role];
+    const value = roles?.[role];
     properties[property] = typeof value === "string" && COLOUR.test(value) ? value : null;
   }
   // A control's fill is the hairline colour in a theme; only upstream's
@@ -177,6 +181,11 @@ export function themeProperties(theme: Theme): Record<string, string | null> {
   const accent = properties[COLOUR_PROPERTIES.accent];
   const onAccent = properties[COLOUR_PROPERTIES.onAccent];
   properties[ACCENT_HOVER_PROPERTY] = own(theme.roles?.accentHover) ?? (accent && onAccent ? accentHover(accent, onAccent) : null);
+  // The accent as the view shell writes with it under a light theme (styles/shell-light.css).
+  const ink = roles ? accentInk(roles) : null;
+  properties["--role-accent-ink"] = ink?.ink ?? null;
+  properties["--role-on-accent-ink"] = ink?.onInk ?? null;
+  properties["--role-tab-to-ink"] = roles ? writtenIn(roles.tabTo, roles) : null;
   properties[FONT_PROPERTY] = face(theme.font);
   properties[INTERFACE_FONT_PROPERTY] = face(theme.interfaceFont);
   properties[INTERFACE_SIZE_PROPERTY] = pixels(theme.interfaceFontSize);

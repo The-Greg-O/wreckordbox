@@ -128,7 +128,7 @@
   gap: var(--s-shell-space-4);
   flex-basis: 100%;
   margin: 0;
-  color: var(--role-tab-to);
+  color: var(--role-tab-to-ink, var(--role-tab-to));
 }
 .dismiss {
   padding: 0 var(--s-shell-space-2);
@@ -150,4 +150,15 @@
   .grid { display: none; }
   .pads { flex: 1 1 100%; grid-template-columns: repeat(8, minmax(0, 1fr)); }
   .pad { height: 38px; }
+}
+
+/* A light theme (wbx-45.1): a set pad's cue colour would vanish as text on a
+   light ground, so the pad is filled with it and written in the hot cue
+   badge's ink. The cue colour itself is unchanged. */
+:global(:root[data-theme-mode="light"]) .pad[data-set],
+:global(:root[data-theme-mode="light"]) .pad[data-set] span {
+  color: var(--c-cue-hot-text);
+}
+:global(:root[data-theme-mode="light"]) .pad[data-set] {
+  background: var(--cue-colour, var(--c-cue-hot));
 }
