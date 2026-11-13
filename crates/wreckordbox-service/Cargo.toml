@@ -18,6 +18,8 @@ rbl-index = { path = "../rbl-index" }
 rbl-library = { path = "../rbl-library" }
 # Only for where the window keeps its recovery journals.
 rbl-backup = { path = "../rbl-backup" }
+# Only to read the time a track row was last written (`updated_at`).
+rbl-core = { path = "../rbl-core" }
 # The Sidecar: the store of Facts beside the Library, which the service owns
 # as it owns the Library.
 wreckordbox-sidecar = { path = "../wreckordbox-sidecar" }

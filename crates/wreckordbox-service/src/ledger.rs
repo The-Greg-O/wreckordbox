@@ -1113,13 +1113,29 @@ impl Keeper {
                 ));
             }
             let run = self.admit(id)?;
+            // A projection never joins the DJ's Run, whatever source it names.
+            if let Err(refused) = crate::projection::attribution(&request.command, &run.source)
+                .and_then(|()| match &source {
+                    Some(source) => crate::projection::attribution(&request.command, source),
+                    None => Ok(()),
+                })
+            {
+                self.leave(run.id);
+                return Err(refused);
+            }
             return Ok(Some(Target::Joined {
                 run: run.id,
                 source: source.unwrap_or(run.source),
             }));
         }
-        if !from_client && request.run.is_none() {
+        // A projection is never the DJ's, even asked for by the window: it
+        // is a tool's (or the named agent's) in a Run of its own.
+        let projection = crate::projection::default_source(&request.command);
+        if !from_client && request.run.is_none() && projection.is_none() {
             return Ok(Some(Target::Window));
+        }
+        if let Some(source) = &source {
+            crate::projection::attribution(&request.command, source)?;
         }
         let description =
             match named.description.as_deref().map(str::trim) {
@@ -1128,11 +1144,12 @@ impl Keeper {
                     "a Run's description cannot be empty: say what the work is, or leave it out",
                 )),
                 Some(description) => description.to_owned(),
-                None => described(request),
+                None => crate::projection::description(request)
+                    .unwrap_or_else(|| described(request)),
             };
         Ok(Some(Target::Own {
             source: source
-                .or_else(|| crate::projection::default_source(&request.command))
+                .or(projection)
                 .unwrap_or_else(|| Source::new(SourceKind::Tool, UNNAMED_SOURCE)),
             description,
             made: None,

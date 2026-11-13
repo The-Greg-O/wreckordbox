@@ -434,6 +434,10 @@ impl Shared {
         connection: Option<&Connection>,
         request: &Request,
     ) -> (Result<Value, ServiceError>, Option<Value>) {
+        // A projection names the policy it is made under, so its Run and
+        // Ledger entry record which one was in force.
+        let stamped = crate::projection::stamped(request, &self.stems);
+        let request = stamped.as_ref().unwrap_or(request);
         let (result, run) = self.ledger.attributed(connection.is_some(), request, || {
             self.dispatch(connection, request)
         });

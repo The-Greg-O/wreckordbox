@@ -395,6 +395,27 @@ impl EditHistory {
     /// window's or a service client's, passes through here once. (A later
     /// slice of one Add Tracks to Playlist extends the entry its first
     /// slice recorded here; see [`Self::record_addition`].)
+    /// [`Self::record`] for an edit that changed something; answers whether
+    /// the history changed. An edit that changed nothing is not a step, with
+    /// one exception: a [`LibraryEdit::Track`] whose edits all left their
+    /// field as it was is an explicit set of those fields to the values they
+    /// already hold (every track edit names exactly the fields its caller
+    /// chose to set, so a bulk edit that did not touch a field never names
+    /// it). That is an assertion, which the Ledger records, and so the DJ's
+    /// Fact, with no Undo step (wbx-26).
+    pub fn record_or_assert(&mut self, edit: LibraryEdit, label: &'static str) -> bool {
+        if !edit.is_empty() {
+            self.record(edit, label);
+            return true;
+        }
+        if matches!(&edit, LibraryEdit::Track(edits) if !edits.is_empty()) {
+            if let Some(ledger) = &self.ledger {
+                ledger.record(Step::Edit, &edit, label, Link::default());
+            }
+        }
+        false
+    }
+
     pub fn record(&mut self, edit: LibraryEdit, label: &'static str) {
         let ledger = self.ledger.as_ref().and_then(|ledger| ledger.record(Step::Edit, &edit, label, Link::default()));
         self.undo.push(HistoryEntry { edit, label, ledger });
@@ -608,8 +629,7 @@ impl crate::LibraryCore {
         let (value, reversible, refreshed) = self.write_then_prepared(host, crate::History::Caller, &preparation, action, |db, (value, reversible)| {
             Ok((value, reversible, self.refresh_after_edit(host, db, touched)))
         })?;
-        if !reversible.is_empty() {
-            self.history.lock().record(reversible, label);
+        if self.history.lock().record_or_assert(reversible, label) {
             host.history_changed();
         }
         let generation = refreshed?;

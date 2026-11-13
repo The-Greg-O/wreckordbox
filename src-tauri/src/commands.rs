@@ -763,9 +763,8 @@ where
     F: FnOnce(&mut rbl_db::write::Writer) -> Result<LibraryEdit, rbl_db::DbError> + Send + 'static,
 {
     recorded_edit_with(app, state, name, touched, action, move |history, reversible: LibraryEdit| {
-        if !reversible.is_empty() {
-            history.record(reversible, label);
-        }
+        // An unchanged set is still the DJ's assertion (wbx-26).
+        history.record_or_assert(reversible, label);
     }).await
 }
 

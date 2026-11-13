@@ -153,6 +153,14 @@ fn a_dry_run_lists_exactly_what_applying_then_does_as_one_run_and_twice_changes_
     let run = &applied["run"];
     assert_eq!(run["source"]["kind"], "tool");
     assert_eq!(run["source"]["name"], "projection");
+    // Which policy was in force is in the plan and in the Run.
+    let hash = dry["policy_hash"].as_str().unwrap();
+    assert_eq!(hash.len(), 16, "{dry}");
+    assert_eq!(applied["policy_hash"], hash);
+    assert!(
+        run["description"].as_str().unwrap().contains(hash),
+        "{run}"
+    );
     let shown = ok(&s, &["runs", "show", &run["id"].to_string()]);
     let library: Vec<&Value> = shown["entries"]
         .as_array()
@@ -261,8 +269,8 @@ fn a_kind_set_to_wait_is_held_and_a_threshold_applies_only_facts_at_or_above_it(
 fn a_value_the_dj_set_by_hand_is_never_overwritten_and_a_disagreeing_fact_is_reported() {
     let s = Sandbox::new();
     s.dj_prep_colours();
-    // Set by hand before wreckordbox knew of them: no DJ Fact at all
-    // (the shape of the wbx-19 case, where a hand edit records none).
+    // Set before wreckordbox recorded anything (a migrated Library): no
+    // Ledger entry and no DJ Fact; the value is the DJ's.
     s.edit(|writer| {
         writer.set_rating("10001", 2).unwrap();
         writer.set_color("10004", Some("2")).unwrap();
@@ -274,17 +282,21 @@ fn a_value_the_dj_set_by_hand_is_never_overwritten_and_a_disagreeing_fact_is_rep
     fact(&s, "10001", "energy", "5", "agent:tagger", "1");
     fact(&s, "10002", "energy", "4", "agent:tagger", "1");
     fact(&s, "10004", "prep_colour", "Green", "agent:tagger", "1");
-    // The DJ's own Fact, differing from the Library: a tool does not write it.
-    fact(&s, "10005", "energy", "3", "dj", "1");
+    // The DJ's own Fact, for an unrated track: projected, by a tool.
+    let djs = fact(&s, "10005", "energy", "3", "dj", "1");
 
     let dry = ok(&s, &["project", "--dry-run"]);
-    assert_eq!(dry["changes"], json!([]), "{dry}");
+    assert_eq!(
+        changes(&dry, "changes"),
+        vec![("10005".into(), "energy".into(), json!(null), json!(3))],
+        "{dry}"
+    );
     assert_eq!(
         reasons(&dry, "kept"),
         vec![
-            ("10001".into(), "energy".into(), "set_by_dj".into()),
+            ("10001".into(), "energy".into(), "no_record".into()),
             ("10002".into(), "energy".into(), "dj_fact".into()),
-            ("10004".into(), "prep_colour".into(), "set_by_dj".into()),
+            ("10004".into(), "prep_colour".into(), "no_record".into()),
         ]
     );
     let kept = dry["kept"]
@@ -295,21 +307,52 @@ fn a_value_the_dj_set_by_hand_is_never_overwritten_and_a_disagreeing_fact_is_rep
         .unwrap();
     assert_eq!(kept["value"]["label"], "Problem");
     assert_eq!(kept["fact_value"]["label"], "Clean");
-    assert_eq!(
-        reasons(&dry, "held"),
-        vec![("10005".into(), "energy".into(), "dj_fact".into())]
-    );
     let applied = ok(&s, &["project"]);
-    assert_eq!(applied["changes"], json!([]));
+    assert_eq!(changes(&applied, "changes"), changes(&dry, "changes"));
     assert_eq!(applied["kept"], dry["kept"]);
+    assert_eq!(applied["run"]["source"]["kind"], "tool");
     assert_eq!(track(&s, "10001")["rating"], 2);
     assert_eq!(track(&s, "10002")["rating"], 1);
     assert_eq!(track(&s, "10004")["colour_id"], 2);
-    assert_eq!(track(&s, "10005")["rating"], 0);
+    assert_eq!(track(&s, "10005")["rating"], 3);
+    // Writing the DJ's Fact made no new DJ Fact: the same one stands.
+    let standing = ok(&s, &["facts", "standing", "10005", "energy"]);
+    assert_eq!(standing["standing"]["id"], djs["id"]);
 }
 
 #[test]
-fn a_value_a_projection_wrote_follows_a_better_fact_but_not_once_the_dj_changes_it() {
+fn the_djs_explicit_set_to_the_same_value_is_recorded_and_protects_it() {
+    let s = Sandbox::new();
+    policy(&s, "[energy]\napply = 0.5\n");
+    ok(&s, &["status"]);
+    fact(&s, "10001", "energy", "3", "agent:tagger", "0.6");
+    ok(&s, &["project"]);
+    assert_eq!(track(&s, "10001")["rating"], 3);
+    let runs = ok(&s, &["runs", "list"])["total"].as_u64().unwrap();
+    // The DJ says 3, which is what the Library already holds.
+    let rated = ok(&s, &["tracks", "rate", "10001", "3", "--source", "dj"]);
+    assert_eq!(rated["run"]["source"]["kind"], "dj", "{rated}");
+    assert_eq!(ok(&s, &["runs", "list"])["total"].as_u64().unwrap(), runs + 1);
+    let standing = ok(&s, &["facts", "standing", "10001", "energy"]);
+    assert_eq!(standing["standing"]["source"]["kind"], "dj");
+    assert_eq!(standing["standing"]["value"], 3);
+    // A colour set by the DJ asserts nothing about Energy.
+    ok(&s, &["intake", "colour", "10002", "--colour-id", "5", "--source", "dj"]);
+    let other = ok(&s, &["facts", "standing", "10002", "energy"]);
+    assert!(other["standing"].is_null(), "{other}");
+    // A better Fact arrives: the DJ's 3 stays.
+    fact(&s, "10001", "energy", "4", "agent:other", "0.9");
+    let applied = ok(&s, &["project"]);
+    assert_eq!(applied["changes"], json!([]));
+    assert_eq!(
+        reasons(&applied, "kept"),
+        vec![("10001".into(), "energy".into(), "dj_fact".into())]
+    );
+    assert_eq!(track(&s, "10001")["rating"], 3);
+}
+
+#[test]
+fn a_value_a_projection_wrote_follows_a_better_fact_but_not_once_another_writes_it() {
     let s = Sandbox::new();
     policy(&s, "[energy]\napply = 0.5\n");
     ok(&s, &["status"]);
@@ -317,7 +360,7 @@ fn a_value_a_projection_wrote_follows_a_better_fact_but_not_once_the_dj_changes_
     fact(&s, "10002", "energy", "3", "agent:tagger", "0.6");
     ok(&s, &["project"]);
     assert_eq!(track(&s, "10001")["rating"], 3);
-    // The DJ changes one by hand; a better Fact arrives for both.
+    // Someone else (here a tool, not a projection) changes one.
     ok(&s, &["tracks", "rate", "10002", "1"]);
     fact(&s, "10001", "energy", "4", "agent:other", "0.9");
     fact(&s, "10002", "energy", "4", "agent:other", "0.9");
@@ -328,44 +371,102 @@ fn a_value_a_projection_wrote_follows_a_better_fact_but_not_once_the_dj_changes_
     );
     assert_eq!(
         reasons(&applied, "kept"),
-        vec![("10002".into(), "energy".into(), "set_by_dj".into())]
+        vec![("10002".into(), "energy".into(), "set_by_other".into())]
     );
     assert_eq!(track(&s, "10001")["rating"], 4);
     assert_eq!(track(&s, "10002")["rating"], 1);
 }
 
 #[test]
-fn stale_measurements_are_never_projected() {
+fn prep_colour_facts_name_the_colour_not_the_djs_label() {
     let s = Sandbox::new();
-    let current = s.import_track("Current.wav", 1);
-    let changed = s.import_track("Changed.wav", 2);
+    // The DJ calls colour 2 "Green" and colour 5 "Clean".
+    s.name_colours(&[(2, "Green"), (5, "Clean")]);
+    policy(&s, "[prep_colour]\napply = 0.5\n");
+    ok(&s, &["status"]);
+    fact(&s, "10001", "prep_colour", "Green", "agent:tagger", "0.9");
+    fact(&s, "10002", "prep_colour", "Red", "agent:tagger", "0.9");
+    let applied = ok(&s, &["project"]);
+    assert_eq!(
+        changes(&applied, "changes"),
+        vec![
+            (
+                "10001".into(),
+                "prep_colour".into(),
+                json!(null),
+                json!({"id": 5, "colour": "Green", "label": "Clean"})
+            ),
+            (
+                "10002".into(),
+                "prep_colour".into(),
+                json!(null),
+                json!({"id": 2, "colour": "Red", "label": "Green"})
+            ),
+        ]
+    );
+    assert_eq!(track(&s, "10001")["colour_id"], 5);
+    assert_eq!(track(&s, "10002")["colour_id"], 2);
+}
+
+#[test]
+fn only_the_energy_judgement_is_projected_never_a_measurement() {
+    let s = Sandbox::new();
     std::fs::create_dir_all(s.sidecar_dir()).unwrap();
     std::fs::write(
         s.sidecar_dir().join("kinds.toml"),
         "[kinds.energy_estimate]\nnature = \"measurement\"\nvalue = \"integer\"\nmin = 1\nmax = 5\n",
     )
     .unwrap();
+    let current = s.import_track("Current.wav", 1);
     policy(&s, "[energy]\napply = 0.5\nfrom = \"energy_estimate\"\n");
     ok(&s, &["status"]);
-    fact(&s, &current, "energy_estimate", "4", "tool:meter", "0.9");
-    let measured = fact(&s, &changed, "energy_estimate", "5", "tool:meter", "0.9");
-    // The audio changes after it was measured; nothing has looked since.
-    let path = s.path().join("audio/Changed.wav");
-    let mut bytes = std::fs::read(&path).unwrap();
-    bytes[44] ^= 0x55;
-    std::fs::write(&path, bytes).unwrap();
-
-    let dry = ok(&s, &["project", "--dry-run"]);
+    // Projecting another kind into Energy is not allowed (wbx-33 turns
+    // Intensity into an Energy Judgement).
     assert_eq!(
-        changes(&dry, "changes"),
-        vec![(current.clone(), "energy".into(), json!(null), json!(4))]
+        refused(&s, &["project", "--dry-run"])["code"],
+        "projection_policy_invalid"
     );
-    assert_eq!(dry["stale"][0]["track"], changed.as_str());
-    assert_eq!(dry["stale"][0]["fact"], measured["id"]);
+    policy(&s, "[energy]\napply = 0.5\n");
+    fact(&s, &current, "energy_estimate", "5", "tool:meter", "1");
     let applied = ok(&s, &["project"]);
-    assert_eq!(changes(&applied, "changes"), changes(&dry, "changes"));
-    assert_eq!(track(&s, &current)["rating"], 4);
-    assert_eq!(track(&s, &changed)["rating"], 0);
+    assert_eq!(applied["changes"], json!([]));
+    assert_eq!(track(&s, &current)["rating"], 0);
+}
+
+fn files(dir: &std::path::Path) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+    let mut found = std::collections::BTreeMap::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                found.extend(files(&path));
+            } else {
+                found.insert(path.clone(), std::fs::read(&path).unwrap());
+            }
+        }
+    }
+    found
+}
+
+#[test]
+fn a_dry_run_leaves_every_sidecar_file_byte_for_byte_and_makes_none() {
+    let absent = Sandbox::new();
+    ok(&absent, &["status"]);
+    let dry = ok(&absent, &["project", "--dry-run"]);
+    assert_eq!(dry["changes"], json!([]));
+    assert!(!absent.sidecar_dir().exists(), "a dry run made a Sidecar");
+
+    let s = Sandbox::new();
+    policy(&s, "[energy]\napply = 0.5\n");
+    ok(&s, &["status"]);
+    fact(&s, "10001", "energy", "4", "agent:tagger", "0.9");
+    // Let the service close its Sidecar's write-ahead log state settle:
+    // the comparison is of the files as they are between two reads.
+    let before = files(&s.sidecar_dir());
+    let dry = ok(&s, &["project", "--dry-run"]);
+    assert_eq!(dry["changes"].as_array().unwrap().len(), 1);
+    assert_eq!(files(&s.sidecar_dir()), before);
+    assert_eq!(track(&s, "10001")["rating"], 0);
 }
 
 #[test]
@@ -389,6 +490,19 @@ fn protection_a_changed_plan_and_the_djs_name_are_refused_with_nothing_written()
         refused(&s, &["project", "--source", "dj"])["code"],
         "projection_not_the_djs"
     );
+    // Nor can it join the DJ's Run, whatever source it names.
+    let djs = ok(
+        &s,
+        &["runs", "start", "--source", "dj", "--description", "By hand"],
+    );
+    let djs = djs["id"].to_string();
+    for args in [
+        vec!["project", "--run", djs.as_str()],
+        vec!["project", "--run", djs.as_str(), "--source", "agent:x"],
+    ] {
+        assert_eq!(refused(&s, &args)["code"], "projection_not_the_djs", "{args:?}");
+    }
+    assert_eq!(track(&s, "10001")["rating"], 0);
     // A plan checked before a new Fact arrived is not the plan now.
     fact(&s, "10002", "energy", "2", "agent:tagger", "0.9");
     let runs = ok(&s, &["runs", "list"]);

@@ -6,24 +6,42 @@
 //!   the policy and writes nothing at all (no Library edit, no Run, no
 //!   Sidecar, no event).
 //! - `projection.apply` computes the same plan with the same code and makes
-//!   its changes as ONE recorded edit through the single edit path, in one
-//!   Run by `tool:projection` (never the DJ). Before writing, under the edit
-//!   gate, every change's `before` is checked against the Library; if
-//!   anything moved since the plan was made the whole apply is refused and
-//!   nothing is written. Given `expect` (a dry run's `plan`), it refuses
-//!   unless it would do exactly what that dry run said.
+//!   its changes as ONE recorded edit through the single edit path, in a
+//!   Run of its own by `tool:projection` or the agent or tool the request
+//!   names: never the DJ's, even when the hosting window asks
+//!   (`ledger::Keeper::target`). Given `expect` (a dry run's `plan`), it
+//!   refuses unless it would do exactly what that dry run said.
 //!
-//! The DJ's values are never overwritten. A native value counts as set by
-//! the DJ when it is set and is not the value a previous Projection wrote
-//! (read from the Ledger: the latest `projection.apply` entry for that track
-//! and field). Such a value is kept and, when a Fact disagrees, reported.
-//! A standing Fact by the DJ is never written by a tool's Run: if it differs
-//! from the Library it is held for the DJ.
+//! **Who owns a native field** is decided by provenance, never by comparing
+//! values ([`wreckordbox_sidecar::projection::Provenance`]): the owner is
+//! the source of the effective latest recorded write to that field in the
+//! Ledger, following Undo and Redo. A projection may replace a value only
+//! when that write is a projection's own, the Library still holds the value
+//! it left, and the track's row has not been written since (its
+//! `updated_at` is no later than that entry, so no unrecorded write by a
+//! player, an import or rekordbox came after). An empty field nothing
+//! recorded wrote may be filled. Everything else, the DJ's values, other
+//! sources', a migrated Library's and anything provenance cannot account
+//! for, is kept and, when a Fact disagrees, reported. Ownership is checked
+//! again under the edit gate: if a track's row or its Ledger provenance
+//! changed since the plan, the whole apply is refused and nothing written.
 //!
-//! Cost: one query for each kind's Facts and one over the Ledger's
-//! Projection entries, whatever the Library's size; no audio is read unless
-//! the policy projects a Measurement kind, whose fingerprints must then be
-//! checked (stale Measurements are never projected).
+//! The value projected is always the standing Fact of the field's own kind
+//! (`energy`, `prep_colour`) under the ordinary precedence, so the DJ's
+//! Fact can never be passed over; a DJ's Fact is projected like any other
+//! when the policy allows, as a tool's write that makes no new DJ Fact.
+//! Both kinds are Judgements; no Measurement is ever projected (turning
+//! Intensity into an Energy Judgement is wbx-33's). Prep colour Facts name
+//! a colour (`Green`), resolved through the fixed colour table to the
+//! label's stable id; the DJ's label names are for display only.
+//!
+//! The policy file is the DJ's, but nothing authenticates it: an agent that
+//! can write the Sidecar folder can lower a threshold. Every plan and every
+//! Run names the hash of the policy it was made under.
+//!
+//! Cost: one query for each kind's Facts, one over the Ledger's `track`
+//! entries and one over the Library's track rows, whatever the Library's
+//! size; no audio is read.
 #![allow(
     clippy::doc_markdown,
     reason = "MyTag and the like are the glossary's words, not code items"
@@ -38,8 +56,8 @@ use rbl_library::Touched;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use wreckordbox_sidecar::precedence::Rules;
-use wreckordbox_sidecar::projection::Projected;
-use wreckordbox_sidecar::{Fact, FactsSnapshot, Kinds, Nature, Source, SourceKind, ValueType};
+use wreckordbox_sidecar::projection::{FieldState, Owner, Provenance};
+use wreckordbox_sidecar::{Fact, FactsSnapshot, Source, SourceKind};
 
 use crate::intake::PrepColour;
 use crate::library::OpenLibrary;
@@ -63,7 +81,8 @@ pub mod codes {
     /// The plan is not what the dry run named (`expect`), or the Library
     /// changed while it was being applied: nothing was written.
     pub const PLAN_CHANGED: &str = "projection_changed";
-    /// A Projection was asked to record its edits as the DJ's.
+    /// A Projection was asked to record its edits as the DJ's, or to join
+    /// the DJ's Run.
     pub const NOT_THE_DJ: &str = "projection_not_the_djs";
 }
 
@@ -73,6 +92,11 @@ pub const POLICY_FILE: &str = "projection.toml";
 pub const SOURCE_NAME: &str = "projection";
 /// What the window's Undo calls an applied Projection.
 pub const UNDO_LABEL: &str = "Projection";
+
+/// Milliseconds `projection.apply` waits between making its plan and
+/// writing it, so a test can make a change in between. Read only in test
+/// mode (`RBXPORT_TEST=1`).
+pub const PAUSE_ENV: &str = "WRECKORDBOX_PROJECTION_PAUSE_MS";
 
 const CHANGED_MARK: &str = "projection_changed: ";
 
@@ -84,9 +108,51 @@ pub(crate) fn answers(command: &str) -> bool {
     )
 }
 
-/// The source a Projection's Run is by when the request names none.
+/// The source a Projection's Run is by when the request names none; `None`
+/// for any other command.
 pub(crate) fn default_source(command: &str) -> Option<Source> {
     (command == commands::PROJECTION_APPLY).then(|| Source::new(SourceKind::Tool, SOURCE_NAME))
+}
+
+/// Refuses a projection attributed to the DJ: by the source it names or by
+/// the Run it would join. Any other command passes.
+pub(crate) fn attribution(command: &str, source: &Source) -> Result<(), ServiceError> {
+    if command == commands::PROJECTION_APPLY && source.kind == SourceKind::Dj {
+        return Err(ServiceError::new(
+            codes::NOT_THE_DJ,
+            "a Projection's edits are never recorded as the DJ's, nor in the DJ's Run: name a tool or an agent, or no source",
+        ));
+    }
+    Ok(())
+}
+
+/// What a projection's own Run is called: it names the policy in force.
+pub(crate) fn description(request: &Request) -> Option<String> {
+    (request.command == commands::PROJECTION_APPLY).then(|| {
+        format!(
+            "Projection under policy {}",
+            request.args["policy_hash"].as_str().unwrap_or("unknown")
+        )
+    })
+}
+
+/// A projection's request with the hash of the policy file as it is now
+/// (`policy_hash`), unless the request already names one; `None` for any
+/// other request. The plan refuses if the file it then reads differs.
+pub(crate) fn stamped(request: &Request, stems: &Stems) -> Option<Request> {
+    if !answers(&request.command) || request.args.get("policy_hash").is_some() {
+        return None;
+    }
+    let hash = policy_bytes(stems.sidecar_dir()).ok().map(|bytes| hash_of(&bytes))?;
+    let mut stamped = request.clone();
+    match &mut stamped.args {
+        Value::Object(args) => {
+            args.insert("policy_hash".into(), json!(hash));
+        }
+        Value::Null => stamped.args = json!({ "policy_hash": hash }),
+        _ => return None,
+    }
+    Some(stamped)
 }
 
 /// The arguments of both commands.
@@ -100,6 +166,10 @@ pub struct Wanted {
     /// The apply is refused unless it would make exactly those changes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expect: Option<String>,
+    /// The policy the request is made under; the service fills it in. A
+    /// policy file that reads otherwise refuses the command.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy_hash: Option<String>,
 }
 
 /// A native field a Projection writes.
@@ -115,6 +185,7 @@ pub enum Field {
 impl Field {
     const ALL: [Self; 2] = [Self::Energy, Self::PrepColour];
 
+    /// The field's name, which is also the kind of Fact projected into it.
     fn name(self) -> &'static str {
         match self {
             Self::Energy => "energy",
@@ -151,9 +222,6 @@ pub enum WaitWord {
 #[serde(deny_unknown_fields)]
 pub struct Rule {
     pub apply: Apply,
-    /// The kind of Fact projected; the field's own kind when left out.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub from: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -170,6 +238,17 @@ pub struct Policy {
     pub prep_colour: Rule,
 }
 
+/// The policy file's bytes; none (an empty file's) when there is no file.
+fn policy_bytes(dir: &Path) -> Result<Vec<u8>, std::io::Error> {
+    let path = dir.join(POLICY_FILE);
+    match std::fs::read(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && path.symlink_metadata().is_err() => {
+            Ok(Vec::new())
+        }
+        other => other,
+    }
+}
+
 impl Policy {
     fn rule(&self, field: Field) -> &Rule {
         match field {
@@ -178,9 +257,9 @@ impl Policy {
         }
     }
 
-    /// Reads the policy without creating anything. No file: everything
-    /// waits for the DJ.
-    fn load(dir: &Path) -> Result<Self, ServiceError> {
+    /// Reads the policy without creating anything, and answers it with the
+    /// hash of the bytes read. No file: everything waits for the DJ.
+    fn load(dir: &Path) -> Result<(Self, String), ServiceError> {
         let path = dir.join(POLICY_FILE);
         let invalid = |why: String| {
             ServiceError::new(
@@ -191,18 +270,11 @@ impl Policy {
                 ),
             )
         };
-        let file: PolicyFile = match std::fs::read_to_string(&path) {
-            Ok(text) => toml::from_str(&text).map_err(|e| invalid(e.to_string()))?,
-            Err(e)
-                if e.kind() == std::io::ErrorKind::NotFound && path.symlink_metadata().is_err() =>
-            {
-                PolicyFile::default()
-            }
-            Err(e) => return Err(invalid(e.to_string())),
-        };
+        let bytes = policy_bytes(dir).map_err(|e| invalid(e.to_string()))?;
+        let text = String::from_utf8(bytes.clone()).map_err(|e| invalid(e.to_string()))?;
+        let file: PolicyFile = toml::from_str(&text).map_err(|e| invalid(e.to_string()))?;
         let wait = || Rule {
             apply: Apply::Wait(WaitWord::Wait),
-            from: None,
         };
         let policy = Self {
             energy: file.energy.unwrap_or_else(wait),
@@ -218,7 +290,7 @@ impl Policy {
                 }
             }
         }
-        Ok(policy)
+        Ok((policy, hash_of(&bytes)))
     }
 }
 
@@ -251,29 +323,35 @@ pub struct Held {
     pub fact: i64,
     pub source: Source,
     pub confidence: f64,
-    /// `waits_for_dj` (the policy waits), `below_confidence`, or `dj_fact`
-    /// (the DJ's own Fact differs from the Library: a tool's Run does not
-    /// write it).
+    /// `waits_for_dj` (the policy waits) or `below_confidence`.
     pub reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub threshold: Option<f64>,
 }
 
-/// A value the DJ set, left as it is although a Fact disagrees with it.
+/// A value a projection does not own, left as it is although a Fact
+/// disagrees with it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Kept {
     pub track: String,
     pub title: String,
     pub field: Field,
-    /// The DJ's value, in the Library, kept.
+    /// The value in the Library, kept.
     pub value: Value,
     /// What the disagreeing Fact says.
     pub fact_value: Value,
     pub fact: i64,
     pub source: Source,
     pub confidence: f64,
-    /// `set_by_dj` (the Library's value is not one a Projection wrote) or
-    /// `dj_fact` (the DJ's own Fact stands).
+    /// Whose the value is: `set_by_dj` (the latest recorded write is the
+    /// DJ's), `set_by_other` (another source's, not a projection's),
+    /// `no_record` (nothing recorded wrote it: a migrated Library),
+    /// `unrecorded_write` (the track was written after the latest recorded
+    /// write, by something the Ledger does not record), `written_since`
+    /// (the track was written after the projection, by a recorded edit of
+    /// another of its fields: field-by-field provenance cannot tell),
+    /// `unknown` (an Undo the Ledger cannot follow), or `dj_fact` (the
+    /// DJ's own standing Fact is what the Library holds).
     pub reason: String,
 }
 
@@ -292,25 +370,41 @@ pub struct Unusable {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Report {
     pub dry_run: bool,
-    /// Names exactly this list of changes: give it to `projection.apply`
-    /// as `expect` to apply what was checked, or nothing.
+    /// Names exactly this list of changes under this policy: give it to
+    /// `projection.apply` as `expect` to apply what was checked, or nothing.
     pub plan: String,
     pub policy_file: PathBuf,
+    /// The hash of the policy file's bytes as read (of nothing, with no
+    /// file). The Run of an apply names it too.
+    pub policy_hash: String,
     pub policy: Policy,
     /// Applied, or in a dry run to be applied, in track order.
     pub changes: Vec<Change>,
     /// Held for review.
     pub held: Vec<Held>,
-    /// The DJ's values left alone, where a Fact disagrees.
+    /// Values a projection does not own, left alone, where a Fact disagrees.
     pub kept: Vec<Kept>,
     /// Facts whose value cannot be written to the field.
     pub invalid: Vec<Unusable>,
-    /// Stale Measurements: never projected.
+    /// Stale Facts: never projected.
     pub stale: Vec<Unusable>,
     /// Tracks and fields whose standing Fact the Library already holds.
     pub unchanged: usize,
     /// Library Protection is on: applying would be refused.
     pub library_protected: bool,
+}
+
+/// A planned change with what is checked again under the edit gate.
+struct Planned {
+    change: Change,
+    /// The track row's `updated_at` and USN when the plan was made.
+    row: RowStamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RowStamp {
+    updated_at: String,
+    usn: i64,
 }
 
 /// Answers one of this module's commands, and what to tell every client
@@ -347,10 +441,7 @@ fn plan_or_apply(
             "expect is for projection.apply: a dry run is what makes a plan",
         )));
     }
-    if !dry_run {
-        refuse_the_djs(stems, request).map_err(early)?;
-    }
-    let report = plan(library, stems, &wanted, dry_run).map_err(early)?;
+    let (report, planned, watermark) = plan(library, stems, &wanted, dry_run).map_err(early)?;
     if dry_run {
         return Ok((report, None));
     }
@@ -365,154 +456,117 @@ fn plan_or_apply(
             )));
         }
     }
-    if report.changes.is_empty() {
+    if planned.is_empty() {
         return Ok((report, None));
     }
-    let changed = write(library, &report.changes)?;
+    pause();
+    let changed = write(library, stems, &planned, watermark)?;
     Ok((report, Some(changed)))
 }
 
-/// A Projection's edits are a tool's or an agent's, never the DJ's.
-fn refuse_the_djs(stems: &Stems, request: &Request) -> Result<(), ServiceError> {
-    let refused = || {
-        ServiceError::new(
-            codes::NOT_THE_DJ,
-            "a Projection's edits are never recorded as the DJ's: name a tool or an agent, or no source",
-        )
-    };
-    let Some(run) = &request.run else {
-        return Ok(());
-    };
-    if run
-        .source
-        .as_ref()
-        .is_some_and(|s| s.kind == SourceKind::Dj)
+/// The test pause between plan and write ([`PAUSE_ENV`]).
+fn pause() {
+    if !rbl_db::test_mode() {
+        return;
+    }
+    if let Some(ms) = std::env::var(PAUSE_ENV)
+        .ok()
+        .and_then(|ms| ms.trim().parse::<u64>().ok())
     {
-        return Err(refused());
+        std::thread::sleep(std::time::Duration::from_millis(ms));
     }
-    if let (Some(id), None) = (run.id, &run.source) {
-        let by_dj = stems
-            .sidecar_if_made()?
-            .and_then(|sidecar| sidecar.run(wreckordbox_sidecar::RunId(id)).ok().flatten())
-            .is_some_and(|run| run.source.kind == SourceKind::Dj);
-        if by_dj {
-            return Err(refused());
-        }
-    }
-    Ok(())
 }
 
-/// The Facts of each field's kind, and what earlier Projections wrote,
-/// read without creating, migrating or tidying a Sidecar.
 /// The Facts of each field's kind.
 type FactsByField = Vec<(Field, Vec<Fact>)>;
 
-fn read_sidecar(
-    stems: &Stems,
-    kinds: &[(Field, String)],
-) -> Result<(FactsByField, Projected), ServiceError> {
+/// The Facts of each field's kind, and the provenance of native fields,
+/// read without creating, migrating or tidying a Sidecar.
+fn read_sidecar(stems: &Stems) -> Result<(FactsByField, Provenance), ServiceError> {
     let failed = |why: String| ServiceError::new(crate::stems::codes::SIDECAR_FAILED, why);
+    let columns: Vec<&str> = Field::ALL.iter().map(|field| field.column()).collect();
     stems
         .with_sidecar_wait(|open| -> Result<_, String> {
+            let text = |e: wreckordbox_sidecar::SidecarError| e.to_string();
             match open {
                 Some(sidecar) => {
                     let mut facts = Vec::new();
-                    for (field, kind) in kinds {
-                        facts.push((
-                            *field,
-                            sidecar.facts_of_kind(kind).map_err(|e| e.to_string())?,
-                        ));
+                    for field in Field::ALL {
+                        facts.push((field, sidecar.facts_of_kind(field.name()).map_err(text)?));
                     }
-                    let projected = sidecar
-                        .projected_by(commands::PROJECTION_APPLY)
-                        .map_err(|e| e.to_string())?;
-                    Ok((facts, projected))
+                    Ok((facts, sidecar.provenance(&columns).map_err(text)?))
                 }
-                None => {
-                    match FactsSnapshot::open(stems.sidecar_dir()).map_err(|e| e.to_string())? {
-                        FactsSnapshot::Absent => Ok((
-                            kinds
-                                .iter()
-                                .map(|(field, _)| (*field, Vec::new()))
-                                .collect(),
-                            Projected::new(),
-                        )),
-                        FactsSnapshot::Unknown(why) => Err(why),
-                        FactsSnapshot::Open(reader) => {
-                            let mut facts = Vec::new();
-                            for (field, kind) in kinds {
-                                facts.push((
-                                    *field,
-                                    reader.facts_of_kind(kind).map_err(|e| e.to_string())?,
-                                ));
-                            }
-                            let projected = reader
-                                .projected_by(commands::PROJECTION_APPLY)
-                                .map_err(|e| e.to_string())?;
-                            Ok((facts, projected))
+                None => match FactsSnapshot::open(stems.sidecar_dir()).map_err(text)? {
+                    FactsSnapshot::Absent => Ok((
+                        Field::ALL.iter().map(|field| (*field, Vec::new())).collect(),
+                        Provenance::default(),
+                    )),
+                    FactsSnapshot::Unknown(why) => Err(why),
+                    FactsSnapshot::Open(reader) => {
+                        let mut facts = Vec::new();
+                        for field in Field::ALL {
+                            facts.push((field, reader.facts_of_kind(field.name()).map_err(text)?));
                         }
+                        Ok((facts, reader.provenance(&columns).map_err(text)?))
                     }
-                }
+                },
             }
         })?
         .map_err(failed)
 }
 
-/// The kind each field projects from, checked against the declared kinds.
-fn source_kinds(
-    policy: &Policy,
-    kinds: &Kinds,
-    dir: &Path,
-) -> Result<Vec<(Field, String)>, ServiceError> {
-    let mut chosen = Vec::new();
-    for field in Field::ALL {
-        let name = policy
-            .rule(field)
-            .from
-            .clone()
-            .unwrap_or_else(|| field.name().to_owned());
-        let invalid = |why: String| {
+/// Every track row's `updated_at` and USN, in one read.
+fn row_stamps(library: &OpenLibrary) -> Result<HashMap<String, RowStamp>, ServiceError> {
+    library.with_db(|db| {
+        let read = || -> rusqlite::Result<HashMap<String, RowStamp>> {
+            db.connection()
+                .prepare(
+                    "SELECT ID, COALESCE(updated_at, ''), COALESCE(rb_local_usn, 0)
+                     FROM djmdContent WHERE COALESCE(rb_local_deleted, 0) = 0",
+                )?
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        RowStamp {
+                            updated_at: row.get(1)?,
+                            usn: row.get(2)?,
+                        },
+                    ))
+                })?
+                .collect()
+        };
+        read().map_err(|e| {
             ServiceError::new(
-                codes::POLICY_INVALID,
-                format!(
-                    "{} cannot be used, so nothing was projected: {}: {why}",
-                    dir.join(POLICY_FILE).display(),
-                    field.name()
-                ),
+                service_codes::SERVICE_FAILED,
+                format!("the Library's tracks could not be read: {e}"),
             )
-        };
-        let Some(declared) = kinds.get(&name) else {
-            return Err(invalid(format!("{name} is not a declared kind of Fact")));
-        };
-        let fits = match field {
-            Field::Energy => matches!(declared.value, ValueType::Integer | ValueType::Number),
-            Field::PrepColour => declared.value == ValueType::Text,
-        };
-        if !fits {
-            return Err(invalid(format!(
-                "{name} takes {}, which cannot be written to {}",
-                declared.value.name(),
-                field.name()
-            )));
-        }
-        chosen.push((field, name));
-    }
-    Ok(chosen)
+        })
+    })
 }
 
-/// The plan, computed the same way for a dry run and for applying.
+/// The plan, computed the same way for a dry run and for applying, with
+/// what the apply checks again and the Ledger watermark it was read at.
 fn plan(
     library: &OpenLibrary,
     stems: &Stems,
     wanted: &Wanted,
     dry_run: bool,
-) -> Result<Report, ServiceError> {
+) -> Result<(Report, Vec<Planned>, i64), ServiceError> {
     let dir = stems.sidecar_dir();
-    let policy = Policy::load(dir)?;
-    let kinds = Kinds::load(dir).map_err(|e| crate::facts::sidecar_error(&e))?;
+    let (policy, policy_hash) = Policy::load(dir)?;
+    if let Some(expected) = &wanted.policy_hash {
+        if *expected != policy_hash {
+            return Err(ServiceError::new(
+                codes::PLAN_CHANGED,
+                format!(
+                    "{} changed while the projection was being made (policy {policy_hash}, not {expected}): nothing was written",
+                    dir.join(POLICY_FILE).display()
+                ),
+            ));
+        }
+    }
     let rules =
         Rules::load(dir).map_err(|why| ServiceError::new(crate::standing::RULES_INVALID, why))?;
-    let chosen = source_kinds(&policy, &kinds, dir)?;
     let labels = crate::intake::labels(library)?;
     let index = library.index()?;
     for id in &wanted.tracks {
@@ -523,7 +577,7 @@ fn plan(
             ));
         }
     }
-    let (read, projected) = read_sidecar(stems, &chosen)?;
+    let (read, provenance) = read_sidecar(stems)?;
     // Facts by track, then field; tracks in the Library's order.
     let mut by_track: BTreeMap<u32, (String, FactsByField)> = BTreeMap::new();
     for (field, facts) in read {
@@ -546,10 +600,16 @@ fn plan(
                 .push((field, facts));
         }
     }
+    let stamps = if by_track.is_empty() {
+        HashMap::new()
+    } else {
+        row_stamps(library)?
+    };
     let mut report = Report {
         dry_run,
         plan: String::new(),
         policy_file: dir.join(POLICY_FILE),
+        policy_hash,
         policy: policy.clone(),
         changes: Vec::new(),
         held: Vec::new(),
@@ -559,74 +619,39 @@ fn plan(
         unchanged: 0,
         library_protected: library.protection().protect_library,
     };
+    let mut planned = Vec::new();
     for (row, (track, mut fields)) in by_track {
         fields.sort_by_key(|(field, _)| *field);
         let title = index.title.get(row as usize).to_owned();
-        let mut audio_checked = None;
-        for (field, mut facts) in fields {
-            let unusable = |fact: &Fact, why: String| Unusable {
-                track: track.clone(),
-                title: title.clone(),
-                field,
-                fact: fact.id,
-                value: fact.value.clone(),
-                why,
-            };
-            // A Measurement is projected only from the audio it measured.
-            if facts
-                .iter()
-                .any(|fact| fact.nature == Nature::Measurement && fact.is_live())
-            {
-                let current = audio_checked.get_or_insert_with(|| {
-                    let found = crate::stems::audio_at(&index, row);
-                    crate::stems::fingerprint(found.parent(), found.path()).map_err(|e| e.message)
-                });
-                for fact in &mut facts {
-                    if fact.nature != Nature::Measurement || !fact.is_live() {
-                        continue;
-                    }
-                    match current {
-                        Ok(print) => {
-                            fact.stale_at =
-                                (fact.fingerprint.as_ref() != Some(&*print)).then_some(0);
-                        }
-                        Err(why) => {
-                            report.invalid.push(unusable(
-                                fact,
-                                format!("its audio could not be checked: {why}"),
-                            ));
-                            // Not eligible: unverified is not current.
-                            fact.stale_at = Some(0);
-                            fact.superseded_at = Some(0);
-                        }
-                    }
-                }
-            }
-            for fact in facts.iter().filter(|f| f.is_live() && f.is_stale()) {
-                report.stale.push(unusable(
-                    fact,
-                    "a Measurement of other audio than the track's: never projected".into(),
-                ));
-            }
+        let stamp = stamps.get(&track).cloned();
+        for (field, facts) in fields {
             let one = One {
                 track: &track,
                 title: &title,
                 field,
                 native: native(&index, row, field, &labels),
+                state: provenance.fields.get(&(track.clone(), field.column().to_owned())),
+                latest_recorded: provenance.latest.get(&track).copied(),
+                row_written: stamp
+                    .as_ref()
+                    .and_then(|stamp| rbl_core::time::parse_millis(&stamp.updated_at))
+                    .and_then(|ms| i64::try_from(ms).ok()),
             };
-            decide(
-                &mut report,
-                &one,
-                &facts,
-                &rules,
-                &policy,
-                &projected,
-                &labels,
-            );
+            let before = report.changes.len();
+            decide(&mut report, &one, &facts, &rules, &policy, &labels);
+            if report.changes.len() > before {
+                let change = report.changes[before].clone();
+                let Some(stamp) = stamp.clone() else {
+                    // No row to check again: not written.
+                    report.changes.pop();
+                    continue;
+                };
+                planned.push(Planned { change, row: stamp });
+            }
         }
     }
-    report.plan = digest(&report.changes);
-    Ok(report)
+    report.plan = digest(&report.policy_hash, &report.changes);
+    Ok((report, planned, provenance.watermark))
 }
 
 /// One track and field being decided.
@@ -636,6 +661,52 @@ struct One<'a> {
     field: Field,
     /// What the Library holds now, in the report's form.
     native: Value,
+    /// The effective latest recorded write to the field; `None` when no
+    /// recorded write ever touched it.
+    state: Option<&'a FieldState>,
+    /// When the latest recorded write naming the track was recorded.
+    latest_recorded: Option<i64>,
+    /// When the track's row was last written (`updated_at`), whoever wrote
+    /// it; `None` when it cannot be read.
+    row_written: Option<i64>,
+}
+
+/// Why a projection may not write this field: `None` when it may (the
+/// field is empty and nothing recorded wrote it, or the latest recorded
+/// write is a projection's own, still in place, with nothing after it).
+fn not_owned(one: &One<'_>) -> Option<&'static str> {
+    let written_after = |at: i64| one.row_written.is_none_or(|written| written > at);
+    let after_reason = || {
+        if one
+            .latest_recorded
+            .zip(one.row_written)
+            .is_some_and(|(recorded, written)| recorded >= written)
+        {
+            "written_since"
+        } else {
+            "unrecorded_write"
+        }
+    };
+    match one.state {
+        None if one.native.is_null() => None,
+        None => Some("no_record"),
+        Some(state) => match &state.owner {
+            Owner::Original if one.native.is_null() => None,
+            Owner::Original => Some("no_record"),
+            Owner::Unknown => Some("unknown"),
+            Owner::Dj => Some("set_by_dj"),
+            Owner::Other(_) => Some("set_by_other"),
+            Owner::Projection => {
+                if stored_number(&state.value) != native_number(&one.native) {
+                    Some("unrecorded_write")
+                } else if written_after(state.at) {
+                    Some(after_reason())
+                } else {
+                    None
+                }
+            }
+        },
+    }
 }
 
 /// Decides one track and field from its Facts: a change, held, kept,
@@ -646,7 +717,6 @@ fn decide(
     facts: &[Fact],
     rules: &Rules,
     policy: &Policy,
-    projected: &Projected,
     labels: &[PrepColour],
 ) {
     let field = one.field;
@@ -659,74 +729,52 @@ fn decide(
         value: fact.value.clone(),
         why,
     };
+    for fact in facts.iter().filter(|f| f.is_live() && f.is_stale()) {
+        report
+            .stale
+            .push(unusable(fact, "a stale Fact: never projected".into()));
+    }
     let (winner, _) = rules.standing(facts);
     let Some(winner) = winner else { return };
-    let target = match target(field, &winner.value, labels) {
-        Ok(target) => target,
+    let wanted = match target(field, &winner.value, labels) {
+        Ok(wanted) => wanted,
         Err(why) => {
             report.invalid.push(unusable(winner, why));
             return;
         }
     };
-    if winner.source.kind == SourceKind::Dj {
-        if target != native {
-            report.held.push(Held {
-                track: one.track.to_owned(),
-                title: one.title.to_owned(),
-                field,
-                before: native,
-                after: target,
-                fact: winner.id,
-                source: winner.source.clone(),
-                confidence: winner.confidence,
-                reason: "dj_fact".into(),
-                threshold: None,
-            });
-            return;
-        }
+    let kept = |value: Value, fact: &Fact, reason: &str| Kept {
+        track: one.track.to_owned(),
+        title: one.title.to_owned(),
+        field,
+        value: native.clone(),
+        fact_value: value,
+        fact: fact.id,
+        source: fact.source.clone(),
+        confidence: fact.confidence,
+        reason: reason.into(),
+    };
+    if wanted == native {
         report.unchanged += 1;
         // The DJ's value stands; say so where another source disagrees.
-        let others: Vec<Fact> = facts
-            .iter()
-            .filter(|f| f.source.kind != SourceKind::Dj)
-            .cloned()
-            .collect();
-        if let (Some(other), _) = rules.standing(&others) {
-            if let Ok(value) = crate::projection::target(field, &other.value, labels) {
-                if value != native {
-                    report.kept.push(Kept {
-                        track: one.track.to_owned(),
-                        title: one.title.to_owned(),
-                        field,
-                        value: native.clone(),
-                        fact_value: value,
-                        fact: other.id,
-                        source: other.source.clone(),
-                        confidence: other.confidence,
-                        reason: "dj_fact".into(),
-                    });
+        if winner.source.kind == SourceKind::Dj {
+            let others: Vec<Fact> = facts
+                .iter()
+                .filter(|f| f.source.kind != SourceKind::Dj)
+                .cloned()
+                .collect();
+            if let (Some(other), _) = rules.standing(&others) {
+                if let Ok(value) = target(field, &other.value, labels) {
+                    if value != native {
+                        report.kept.push(kept(value, other, "dj_fact"));
+                    }
                 }
             }
         }
         return;
     }
-    if target == native {
-        report.unchanged += 1;
-        return;
-    }
-    let stored = projected.get(&(one.track.to_owned(), field.column().to_owned()));
-    if !native.is_null() && stored.map(stored_number) != Some(native_number(&native)) {
-        report.kept.push(Kept {
-            track: one.track.to_owned(),
-            title: one.title.to_owned(),
-            field,
-            value: native,
-            fact_value: target,
-            fact: winner.id,
-            source: winner.source.clone(),
-            confidence: winner.confidence,
-            reason: "set_by_dj".into(),
-        });
+    if let Some(reason) = not_owned(one) {
+        report.kept.push(kept(wanted, winner, reason));
         return;
     }
     let held = |reason: &str, threshold| Held {
@@ -734,7 +782,7 @@ fn decide(
         title: one.title.to_owned(),
         field,
         before: native.clone(),
-        after: target.clone(),
+        after: wanted.clone(),
         fact: winner.id,
         source: winner.source.clone(),
         confidence: winner.confidence,
@@ -751,7 +799,7 @@ fn decide(
             title: one.title.to_owned(),
             field,
             before: native,
-            after: target,
+            after: wanted,
             fact: winner.id,
             source: winner.source.clone(),
             confidence: winner.confidence,
@@ -777,35 +825,46 @@ fn native(index: &rbl_index::Library, row: u32, field: Field, labels: &[PrepColo
     }
 }
 
-/// The value a Fact would give `field`, in the report's form.
-pub(crate) fn target(field: Field, value: &Value, labels: &[PrepColour]) -> Result<Value, String> {
+/// The value a Fact would give `field`, in the report's form. A Prep colour
+/// Fact names the colour, resolved through the fixed colour table to its
+/// label's stable id; the DJ's label names play no part.
+fn target(field: Field, value: &Value, labels: &[PrepColour]) -> Result<Value, String> {
     match field {
         Field::Energy => value
-            .as_f64()
-            .filter(|n| n.fract() == 0.0 && (1.0..=5.0).contains(n))
-            // Checked above: a whole number from 1 to 5.
-            .map(|n| {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let stars = n as u8;
-                json!(stars)
-            })
+            .as_u64()
+            .filter(|n| (1..=5).contains(n))
+            .map(|n| json!(n))
             .ok_or_else(|| format!("Energy is a whole number from 1 to 5, not {value}")),
         Field::PrepColour => {
             let text = value
                 .as_str()
-                .ok_or_else(|| format!("a Prep colour is a name, not {value}"))?;
-            match crate::intake::named_colour(labels, text) {
-                Ok(Some(colour)) => Ok(json!(colour)),
-                Ok(None) => Err("a Prep colour Fact of none is not projected".into()),
-                Err(e) => Err(e.message),
-            }
+                .ok_or_else(|| format!("a Prep colour is a colour's name, not {value}"))?;
+            let position = rbl_index::COLOR_NAMES
+                .iter()
+                .position(|name| name.eq_ignore_ascii_case(text.trim()))
+                .ok_or_else(|| {
+                    format!(
+                        "{text:?} is not a colour: a Prep colour Fact names one of {}",
+                        rbl_index::COLOR_NAMES.join(", ")
+                    )
+                })?;
+            let id = u8::try_from(position + 1).unwrap_or(0);
+            labels
+                .iter()
+                .find(|colour| colour.id == id)
+                .map(|colour| json!(colour))
+                .ok_or_else(|| format!("there is no colour label {id}"))
         }
     }
 }
 
-/// The number a report value stands for: stars, or a colour label's id.
+/// The number a report value stands for: stars, or a colour label's id;
+/// none is 0.
 fn native_number(value: &Value) -> i64 {
-    value.as_i64().or_else(|| value["id"].as_i64()).unwrap_or(0)
+    value
+        .as_i64()
+        .or_else(|| value["id"].as_i64())
+        .unwrap_or(0)
 }
 
 /// The number a Ledger value stands for (`Rating` is stored as a number,
@@ -817,49 +876,88 @@ fn stored_number(value: &Value) -> i64 {
         .unwrap_or(0)
 }
 
-/// A name for exactly this list of changes, the same in every build.
-fn digest(changes: &[Change]) -> String {
-    let named: Vec<Value> = changes
-        .iter()
-        .map(|c| json!([c.track, c.field, c.before, c.after, c.fact]))
-        .collect();
-    let bytes = serde_json::to_vec(&named).unwrap_or_default();
+/// A hash the same in every build (FNV-1a), as 16 hex digits.
+fn hash_of(bytes: &[u8]) -> String {
     let hash = bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
         (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
     });
     format!("{hash:016x}")
 }
 
-/// Makes `changes` as one recorded edit through the single edit path.
-/// Every change's `before` is checked first, under the edit gate, against
-/// the Library as it is: a mismatch refuses the whole apply before anything
-/// is written.
-fn write(library: &OpenLibrary, changes: &[Change]) -> Result<LibraryChanged, Failure> {
-    let mut ids: Vec<String> = changes.iter().map(|c| c.track.clone()).collect();
+/// A name for exactly this list of changes under this policy.
+fn digest(policy_hash: &str, changes: &[Change]) -> String {
+    let named: Vec<Value> = changes
+        .iter()
+        .map(|c| json!([c.track, c.field, c.before, c.after, c.fact]))
+        .collect();
+    hash_of(&serde_json::to_vec(&json!([policy_hash, named])).unwrap_or_default())
+}
+
+/// Makes the planned changes as one recorded edit through the single edit
+/// path. Under the edit gate, before anything is written, each change is
+/// checked again: its track's row has not been written since the plan
+/// (`updated_at` and USN), the Library still holds its `before`, and no
+/// Ledger entry newer than the plan's names the track (an assertion that
+/// writes no row, the DJ setting the value it already has). Any of these
+/// refuses the whole apply.
+fn write(
+    library: &OpenLibrary,
+    stems: &Stems,
+    planned: &[Planned],
+    watermark: i64,
+) -> Result<LibraryChanged, Failure> {
+    let mut ids: Vec<String> = planned.iter().map(|p| p.change.track.clone()).collect();
     ids.dedup();
+    let tracks = ids.clone();
+    let refused = |why: String| DbError::WriteRefused(format!("{CHANGED_MARK}{why}"));
     let result = library.recorded_edit(Touched::Metadata(ids), UNDO_LABEL, |writer| {
+        let newer = stems
+            .with_sidecar_wait(|open| {
+                open.map_or(Ok(false), |sidecar| sidecar.written_since(watermark, &tracks))
+            })
+            .map_err(|e| DbError::WriteRefused(e.message))?
+            .map_err(|e| DbError::WriteRefused(e.to_string()))?;
+        if newer {
+            return Err(refused(
+                "a track was edited while the projection was being made".into(),
+            ));
+        }
         let now = library
             .index()
             .map_err(|e| DbError::WriteRefused(e.message))?;
-        for change in changes {
-            let row = now.row_of(&change.track).ok_or_else(|| {
-                DbError::WriteRefused(format!("{CHANGED_MARK}track {} is gone", change.track))
-            })?;
-            let current = match change.field {
+        for p in planned {
+            let change = &p.change;
+            let stamp: Option<RowStamp> = writer
+                .library()
+                .connection()
+                .query_row(
+                    "SELECT COALESCE(updated_at, ''), COALESCE(rb_local_usn, 0)
+                     FROM djmdContent WHERE ID = ?1 AND COALESCE(rb_local_deleted, 0) = 0",
+                    [&change.track],
+                    |row| {
+                        Ok(RowStamp {
+                            updated_at: row.get(0)?,
+                            usn: row.get(1)?,
+                        })
+                    },
+                )
+                .ok();
+            let row = now.row_of(&change.track);
+            let current = row.map(|row| match change.field {
                 Field::Energy => i64::from(now.rating.get(row as usize).copied().unwrap_or(0)),
                 Field::PrepColour => i64::from(now.color.get(row as usize).copied().unwrap_or(0)),
-            };
-            if current != native_number(&change.before) {
-                return Err(DbError::WriteRefused(format!(
-                    "{CHANGED_MARK}the {} of track {} changed while the projection was being made",
-                    change.field.name(),
+            });
+            if stamp.as_ref() != Some(&p.row) || current != Some(native_number(&change.before)) {
+                return Err(refused(format!(
+                    "track {} was written while the projection was being made",
                     change.track
                 )));
             }
         }
         let mut done = Vec::new();
         let mut failure = None;
-        for change in changes {
+        for p in planned {
+            let change = &p.change;
             let wrote = match change.field {
                 Field::Energy => writer.set_rating_with_undo(
                     &change.track,
@@ -885,10 +983,13 @@ fn write(library: &OpenLibrary, changes: &[Change]) -> Result<LibraryChanged, Fa
     });
     match result {
         Ok((None, made)) => Ok(made),
-        Ok((Some(failure), made)) => Err((Some(made), ServiceError::new(
-            service_codes::WRITE_REFUSED,
-            format!("the projection stopped part-way; what it wrote is recorded in its Run and can be undone: {failure}"),
-        ))),
+        Ok((Some(failure), made)) => Err((
+            Some(made),
+            ServiceError::new(
+                service_codes::WRITE_REFUSED,
+                format!("the projection stopped part-way; what it wrote is recorded in its Run and can be undone: {failure}"),
+            ),
+        )),
         Err(e) if e.message.starts_with(CHANGED_MARK) => Err((
             None,
             ServiceError::new(

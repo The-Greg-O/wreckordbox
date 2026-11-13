@@ -37,9 +37,9 @@ pub(crate) fn derive(
         for edit in payload["edits"].as_array().into_iter().flatten() {
             let track = edit["track"].as_str().unwrap_or_default();
             let column = edit["column"].as_str().unwrap_or_default();
-            if edit["before"] == edit["after"] {
-                continue;
-            }
+            // A field a track edit names was set explicitly, even to the
+            // value it held: that is the DJ's assertion too (wbx-26). An
+            // edit that did not set a field does not name it.
             let value = &edit["after"];
             let (kind, value) = match column {
                 "Rating" => (

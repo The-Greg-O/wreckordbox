@@ -42,6 +42,7 @@ pub fn run(client: &mut Client, as_json: bool, args: &ProjectArgs) -> Result<Str
         json!(Wanted {
             tracks: args.tracks.clone(),
             expect: args.expect.clone(),
+            policy_hash: None,
         }),
     )?;
     if as_json {
@@ -161,6 +162,11 @@ fn text(report: &Report) -> String {
     if report.library_protected {
         let _ = writeln!(out, "Library Protection is on: applying would be refused.");
     }
-    let _ = write!(out, "Policy: {}", report.policy_file.display());
+    let _ = write!(
+        out,
+        "Policy: {} (hash {})",
+        report.policy_file.display(),
+        report.policy_hash
+    );
     out
 }
