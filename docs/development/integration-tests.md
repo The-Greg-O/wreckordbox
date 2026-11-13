@@ -50,3 +50,40 @@ passed/ignored totals and individual names before and after, allowing only
 the module prefix, and run the combined integration target three times with
 parallel test threads. Do not silently omit a module or disable a test to
 make the totals match.
+
+## Library service
+
+The service's environment-independent suites share
+`crates/wreckordbox-service/tests/it/main.rs`. Select one through the queue:
+
+```sh
+/home/go/code/wreckordbox-notes/bin/heavy rust mise exec -- cargo test -p wreckordbox-service --test it one_edit_gate::
+/home/go/code/wreckordbox-notes/bin/heavy rust mise exec -- cargo test -p wreckordbox-service --test it intake::
+```
+
+Ten suites retain `--test <name>`. They must not share a process with tests
+that read the same environment. Their existing local mutexes cannot protect
+other suites, and some deliberately leave overrides set until process exit.
+
+| Target | Reason for isolation |
+| --- | --- |
+| `identity` | Changes XDG data/runtime paths and the backup-state override. |
+| `dj_edit_cost` | The ignored latency benchmark changes the Sidecar path; remains isolated when explicitly enabled. |
+| `dj_undo_recovery` | Changes the Sidecar path and re-executes an exact-named test with an abort fault. |
+| `intensity_hosted` | Changes the Sidecar path, Intensity pause hook and test-mode environment. |
+| `ledger_hosted` | Changes the Sidecar path and window Run pause environment. |
+| `ledger_recovery` | Changes the Sidecar path, test mode and Ledger failure injection. |
+| `mutants_hosted` | Changes the Sidecar path; its mutex only serializes this file's tests. |
+| `mutants_follow_hosted` | Changes the Sidecar path and Ledger/edit faults; has a file-local mutex and exact-named crash subprocess. |
+| `render_stems_hosted` | Changes the Sidecar path and fake separation command. |
+| `stems_hosted` | Changes the Sidecar path and fake separation command. |
+
+When merging the pending branches `ticket/26-project-energy-prep` and
+`ticket/14-11-ledger-bulk-writes`, retain new top-level `projection_hosted.rs`,
+`bulk_recording.rs`, and `bulk_failures.rs` as independent tests. Projection
+uses environment overrides; the bulk tests use subprocess/fault machinery
+and exact-name filters, including helpers under `tests/support/`. Preserve
+that support tree and its paths. Run these targets by their existing names;
+do not silently omit them from Cargo discovery or blindly add them to `it`.
+Any later consolidation must audit the entire helper tree and update child
+filters as well as module declarations, with before/after test inventories.
