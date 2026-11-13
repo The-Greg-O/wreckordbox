@@ -210,19 +210,21 @@ test("what Analyze targets is what the list shows as selected, before and after 
   await analysis(page).getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(analysis(page)).toHaveCount(0);
 
-  // Away and back: the list comes back with nothing selected, so Analyze
-  // has nothing to act on. It must not reach the three chosen before.
+  // In another view the list is out of sight (kept, wbx-45.2), and nothing
+  // targets its hidden selection.
   await page.keyboard.press("2");
   await expect(working(page).getByRole("heading", { name: "Intake" })).toBeVisible();
-  // Nor from another view, where no list is shown at all.
   await page.keyboard.press("Control+Shift+A");
   await page.waitForTimeout(500);
   await expect(analysis(page)).toHaveCount(0);
+
+  // Back in Library the same rows are selected, and they are what Analyze takes.
   await page.keyboard.press("1");
   await expect(titles(page).first()).toBeVisible();
-  await expect(selectedRows(page)).toHaveCount(0);
+  await expect(selectedRows(page)).toHaveCount(3);
   await page.keyboard.press("Control+Shift+A");
-  await page.waitForTimeout(500);
+  await expect(analysis(page)).toContainText("3 tracks selected");
+  await analysis(page).getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(analysis(page)).toHaveCount(0);
 
   // A fresh selection is what Analyze takes.
