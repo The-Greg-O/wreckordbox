@@ -22,6 +22,7 @@ mod standing;
 mod stems;
 mod stems_write;
 mod stick;
+mod stick_load;
 mod tracks;
 
 use std::fmt::Write as _;
@@ -349,6 +350,13 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
             command: TrackCommands::Remove(args),
             ..
         } => print(&edits::remove(&mut connect(&config)?, cli.json, args)?),
+        Commands::Stick { command } if stick_load::uses_service(command) => {
+            let (text, ok) = stick_load::run(&mut connect(&config)?, cli.json, command)?;
+            print(&text);
+            if !ok {
+                return Ok(ExitCode::FAILURE);
+            }
+        }
         Commands::Stick { command } => {
             print(&stick::stick(&config.recovery_dir, cli.json, command)?);
         }

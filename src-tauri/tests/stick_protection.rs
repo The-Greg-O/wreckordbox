@@ -748,8 +748,18 @@ fn functions(sources: &[(PathBuf, String)]) -> Vec<Function> {
 /// to a name (not `_`, not inside `drop(`) to that name's `drop(`, or to
 /// the end. A guard dropped before a write does not cover it.
 fn held(text: &str) -> Vec<std::ops::Range<usize>> {
+    held_by(text, &["stick_guard::enter"])
+}
+
+/// [`held`] for any of the guards `markers` (the service's
+/// `wreckordbox_stick_protection::authorize…`).
+fn held_by(text: &str, markers: &[&str]) -> Vec<std::ops::Range<usize>> {
     let mut out = Vec::new();
-    for (at, _) in text.match_indices("stick_guard::enter") {
+    let found: Vec<usize> = markers
+        .iter()
+        .flat_map(|m| text.match_indices(*m).map(|(at, _)| at))
+        .collect();
+    for at in found {
         let start = text[..at].rfind([';', '{', '}']).map_or(0, |s| s + 1);
         let statement = text[start..at].trim_start();
         if statement.contains("drop(") {
@@ -824,6 +834,15 @@ fn unique_names(functions: &[Function]) -> BTreeSet<String> {
 /// cover: a function taking the capability is covered throughout; so is
 /// what follows a held guard, until it is dropped.
 fn unguarded_writers_of(functions: &[Function], primitives: &[&str]) -> BTreeMap<String, String> {
+    unguarded_writers_by(functions, primitives, &["stick_guard::enter"])
+}
+
+/// [`unguarded_writers_of`], a write covered by any of the guards `guards`.
+fn unguarded_writers_by(
+    functions: &[Function],
+    primitives: &[&str],
+    guards: &[&str],
+) -> BTreeMap<String, String> {
     let unique = unique_names(functions);
     let mut writers: BTreeMap<String, String> = BTreeMap::new();
     loop {
@@ -832,7 +851,7 @@ fn unguarded_writers_of(functions: &[Function], primitives: &[&str]) -> BTreeMap
             if writers.contains_key(&f.name) || capable(&f.text) {
                 continue;
             }
-            let cover = held(&f.text);
+            let cover = held_by(&f.text, guards);
             if let Some((_, why)) = writes(&f.text, primitives, &writers, &unique)
                 .into_iter()
                 .find(|(at, _)| !cover.iter().any(|r| r.contains(at)))
@@ -869,8 +888,23 @@ fn uncapable_helpers(functions: &[Function]) -> Vec<String> {
 }
 
 fn sources() -> Vec<(PathBuf, String)> {
+    sources_in(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"))
+}
+
+/// The sources of a crate of the workspace, by its folder under `crates/`.
+fn crate_sources(name: &str) -> Vec<(PathBuf, String)> {
+    sources_in(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../crates")
+            .join(name)
+            .join("src"),
+    )
+}
+
+/// Every `.rs` file under `root`, test modules at the end of a file cut.
+fn sources_in(root: &Path) -> Vec<(PathBuf, String)> {
     let mut out = Vec::new();
-    let mut todo = vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+    let mut todo = vec![root.to_path_buf()];
     while let Some(dir) = todo.pop() {
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
@@ -1422,4 +1456,193 @@ fn an_export_and_the_undo_of_a_key_edit_on_that_stick_never_wait_on_each_other()
         Some("Am"),
         "the Undo put the tag back"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The shared Stick write crate and the Library service (wbx-70 review, A)
+
+/// What writes to a Stick from outside the window: the export, recovery
+/// and settling, the Native stems writer.
+const STICK_PRIMITIVES: &[&str] = &[
+    "export_cancellable(",
+    "export_with_options(",
+    "rbl_export::export(",
+    "rbl_export::recover(",
+    "::settle(",
+    "wreckordbox_native_stems::write(",
+];
+
+/// The service's guard: Stick Protection's authorization, bound and held.
+const SERVICE_GUARDS: &[&str] = &[
+    "wreckordbox_stick_protection::authorize(",
+    "wreckordbox_stick_protection::authorize_stick(",
+];
+
+/// The service commands that write to a Stick. A new command is added here
+/// or to `SERVICE_NOT_STICK_WRITERS`, after deciding which it is.
+const SERVICE_STICK_WRITERS: &[&str] = &["stems.write", "sticks.load"];
+
+const SERVICE_NOT_STICK_WRITERS: &[&str] = &[
+    "decisions.answer", "decisions.create", "decisions.decide", "decisions.get", "decisions.list",
+    "facts.kinds", "facts.of_track", "facts.record", "facts.standing",
+    "history.list", "history.tracks",
+    "intake.colours", "intake.counts", "intake.list", "intake.problems", "intake.set_tags", "intake.tag_panel",
+    "intensity.cancel", "intensity.measure", "intensity.show",
+    "mutants.clear", "mutants.create", "mutants.edit", "mutants.get", "mutants.list", "mutants.remove",
+    "mytags.assign", "mytags.create", "mytags.create_category", "mytags.delete", "mytags.list",
+    "mytags.merge", "mytags.move", "mytags.of_track", "mytags.rename", "mytags.reorder",
+    "mytags.tracks", "mytags.unassign",
+    "playlists.copy", "playlists.delete", "playlists.remove", "playlists.reorder", "playlists.tracks", "playlists.tree",
+    "protection.get", "protection.set",
+    "runs.active", "runs.finish", "runs.list", "runs.show", "runs.start",
+    "schema.check", "schema.convert",
+    "stems.separate", "stems.show",
+    "sticks.dry_run", "sticks.list",
+    "tracks.get", "tracks.list", "tracks.query", "tracks.rate", "tracks.remove_from_collection",
+    "tracks.set_prep_colour",
+    "status", "subscribe", "stop",
+];
+
+/// Every command name the service's sources declare: each `const` naming a
+/// `group.command`, and the protocol's own commands.
+fn service_commands(sources: &[(PathBuf, String)]) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for (path, text) in sources {
+        for line in text.lines() {
+            let line = line.trim();
+            let Some(rest) = line
+                .strip_prefix("pub const ")
+                .or_else(|| line.strip_prefix("pub(crate) const "))
+                .or_else(|| line.strip_prefix("const "))
+            else {
+                continue;
+            };
+            let Some((_, value)) = rest.split_once(": &str = \"") else {
+                continue;
+            };
+            let Some(value) = value.strip_suffix("\";") else {
+                continue;
+            };
+            let protocol = path.ends_with("protocol.rs")
+                && matches!(value, "status" | "subscribe" | "stop");
+            if protocol
+                || (value.contains('.')
+                    && value
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c == '_' || c == '.'))
+            {
+                out.insert(value.to_owned());
+            }
+        }
+    }
+    out
+}
+
+/// What writes anything at all: a Stick write, or any file written.
+fn every_write() -> Vec<&'static str> {
+    STICK_PRIMITIVES
+        .iter()
+        .chain(PRIMITIVES)
+        .chain(FILE_PRIMITIVES)
+        .copied()
+        .collect()
+}
+
+/// The functions of `sources` that contain a write themselves.
+fn writing_functions(sources: &[(PathBuf, String)]) -> Vec<(String, String)> {
+    let every = every_write();
+    functions(sources)
+        .into_iter()
+        .filter_map(|f| {
+            every
+                .iter()
+                .find(|p| f.text.contains(**p))
+                .map(|p| (f.name, (*p).to_owned()))
+        })
+        .collect()
+}
+
+#[test]
+fn the_shared_stick_write_crate_never_writes() {
+    let sources = crate_sources("wreckordbox-stick-write");
+    assert!(sources.len() >= 4, "found the crate's sources");
+    let writing = writing_functions(&sources);
+    assert!(
+        writing.is_empty(),
+        "the shared planner, selection and confirmation must only read: {writing:?}"
+    );
+    // A write added to the planner is caught.
+    let (path, plan) = sources
+        .iter()
+        .find(|(p, _)| p.ends_with("plan.rs"))
+        .cloned()
+        .unwrap();
+    let mutated = plan.replacen(
+        "let read_error =",
+        "std::fs::write(destination.join(\"x\"), b\"\").ok();\n    let read_error =",
+        1,
+    );
+    assert_ne!(mutated, plan, "the mutation applies");
+    let caught = writing_functions(&[(path, mutated)]);
+    assert!(
+        caught.iter().any(|(name, _)| name == "export_plan_of"),
+        "{caught:?}"
+    );
+}
+
+#[test]
+fn every_service_command_is_classified_and_every_stick_write_is_authorized() {
+    let sources = crate_sources("wreckordbox-service");
+    let declared = service_commands(&sources);
+    assert!(declared.len() > 60, "found the commands: {declared:?}");
+    for name in &declared {
+        let writer = SERVICE_STICK_WRITERS.contains(&name.as_str());
+        let not = SERVICE_NOT_STICK_WRITERS.contains(&name.as_str());
+        assert!(
+            writer != not,
+            "service command `{name}` must be in exactly one of SERVICE_STICK_WRITERS and SERVICE_NOT_STICK_WRITERS"
+        );
+    }
+    for name in SERVICE_STICK_WRITERS.iter().chain(SERVICE_NOT_STICK_WRITERS) {
+        assert!(
+            declared.contains(*name),
+            "`{name}` is classified but not declared"
+        );
+    }
+    // No function of the service reaches a Stick write outside a held
+    // Stick Protection authorization, however many helpers away.
+    let functions = functions(&sources);
+    let unguarded = unguarded_writers_by(&functions, STICK_PRIMITIVES, SERVICE_GUARDS);
+    assert!(
+        unguarded.is_empty(),
+        "these reach a Stick write without holding Stick Protection's authorization: {unguarded:#?}"
+    );
+    // Each writer's handler holds it before writing.
+    for (command, handler) in [("sticks.load", "load"), ("stems.write", "write_one")] {
+        assert!(
+            functions
+                .iter()
+                .filter(|f| f.name == handler)
+                .any(|f| SERVICE_GUARDS.iter().any(|g| f.text.contains(g))),
+            "`{command}` ({handler}) must take Stick Protection's authorization"
+        );
+    }
+    // The load with its authorization taken out is caught.
+    let (path, text) = sources
+        .iter()
+        .find(|(p, _)| p.ends_with("stick_load/load.rs"))
+        .cloned()
+        .unwrap();
+    let mutated = text.replacen(
+        "wreckordbox_stick_protection::authorize_stick(state_dir, &root)",
+        "unauthorized(state_dir, &root)",
+        1,
+    );
+    assert_ne!(mutated, text, "the mutation applies");
+    let caught = unguarded_writers_by(
+        &self::functions(&[(path, mutated)]),
+        STICK_PRIMITIVES,
+        SERVICE_GUARDS,
+    );
+    assert!(caught.contains_key("load"), "{caught:?}");
 }

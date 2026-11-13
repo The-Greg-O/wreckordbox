@@ -78,6 +78,28 @@ impl core::fmt::Display for AppError {
 
 impl std::error::Error for AppError {}
 
+/// A Stick write's plan, selection or confirmation refused, in the window's
+/// words (the shared `wreckordbox_stick_write`, wbx-70).
+impl From<wreckordbox_stick_write::StickWriteError> for AppError {
+    fn from(error: wreckordbox_stick_write::StickWriteError) -> Self {
+        use wreckordbox_stick_write::StickWriteError as E;
+        match error {
+            E::NotFound(message) => Self::new(ErrorKind::NotFound, message),
+            E::Conflict(message) => Self::new(ErrorKind::Conflict, message),
+            changed @ E::Changed(_) => Self::new(ErrorKind::Conflict, changed.to_string()),
+            E::Db(error) => crate::commands::write_error(error),
+            E::Read { mount, error } => crate::stick_recovery::read_error(&mount, error),
+            E::Internal { message, detail } => {
+                let error = Self::internal(message);
+                match detail {
+                    Some(detail) => error.with_detail(detail),
+                    None => error,
+                }
+            }
+        }
+    }
+}
+
 pub type AppResult<T> = Result<T, AppError>;
 
 /// Runs a command body, converting a panic into an `AppError` instead of

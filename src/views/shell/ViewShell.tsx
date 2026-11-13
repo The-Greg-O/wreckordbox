@@ -31,6 +31,7 @@ import type { PlayerLayout } from "@/lib/layout";
 import type { IntakeQueue } from "@/lib/shellTree";
 import { useCommands } from "@/store/useCommands";
 import { useEventCallback } from "@/store/useEventCallback";
+import { observeShellWidth } from "@/store/useShellWidth";
 import { LibraryView } from "./LibraryView";
 import { ReviewView } from "./ReviewView";
 import { StickView } from "./StickView";
@@ -108,7 +109,7 @@ export function ViewShell({
   }, [onKey]);
 
   return (
-    <div className={styles.shell} data-testid="shell" data-view={view}>
+    <div className={styles.shell} data-testid="shell" data-view={view} ref={observeShellWidth}>
       <div className={styles.frame}>
         <header className={styles.topBar} data-testid="shell-top-bar">
           <div className={styles.tabs} role="tablist" aria-label={t("Views")}>

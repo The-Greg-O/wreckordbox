@@ -58,6 +58,11 @@ pub struct Sandbox {
     /// `--delay SECONDS`, `--fail CATEGORY`. Set them before the first
     /// command, which is what starts the service.
     pub engine_options: Vec<String>,
+    /// The folders standing in for the mounted Sticks a service started here
+    /// sees (each must carry the stand-in marker to count as a Stick). Empty
+    /// (the default): none; a sandbox's service never looks at the
+    /// machine's real mounts. Set before the first command.
+    pub sticks: Vec<PathBuf>,
     /// Services to stop when the test ends.
     pids: Mutex<Vec<u32>>,
 }
@@ -87,6 +92,28 @@ impl Sandbox {
         let sandbox = Self::new();
         std::fs::remove_file(sandbox.protection_file()).unwrap();
         sandbox
+    }
+
+    /// Makes every Stick report `bytes` free, instead of what its folder's
+    /// file system has (test mode only; read by the service each time).
+    pub fn set_stick_free_bytes(&self, bytes: u64) {
+        std::fs::write(
+            self.state_dir()
+                .join(wreckordbox_service::stick_load::TEST_FREE_BYTES_FILE),
+            bytes.to_string(),
+        )
+        .unwrap();
+    }
+
+    /// Makes every Stick's file system store files in clusters of `bytes`
+    /// (test mode only; read by the service each time).
+    pub fn set_stick_cluster_bytes(&self, bytes: u64) {
+        std::fs::write(
+            self.state_dir()
+                .join(wreckordbox_service::stick_load::TEST_CLUSTER_BYTES_FILE),
+            bytes.to_string(),
+        )
+        .unwrap();
     }
 
     /// The folder the window and the service share their state in.
@@ -128,6 +155,7 @@ impl Sandbox {
             location,
             idle_exit_secs: 5,
             engine_options: Vec::new(),
+            sticks: Vec::new(),
             pids: Mutex::new(Vec::new()),
         }
     }
@@ -412,6 +440,10 @@ impl Sandbox {
             .env(
                 "WRECKORDBOX_IDLE_EXIT_SECS",
                 self.idle_exit_secs.to_string(),
+            )
+            .env(
+                "RB_LITE_FAKE_VOLUMES",
+                std::env::join_paths(&self.sticks).unwrap(),
             )
             .stdin(Stdio::null());
         command

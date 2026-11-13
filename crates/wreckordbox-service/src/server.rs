@@ -75,6 +75,8 @@ struct Shared {
     /// The state folder shared with the window, where Stick Protection is
     /// kept (wbx-45.11).
     state_dir: PathBuf,
+    /// The Stick loads running, which stopping waits for (wbx-70).
+    loads: crate::stick_load::Loads,
 }
 
 struct Owned {
@@ -205,6 +207,7 @@ impl Service {
             stems,
             ledger,
             state_dir: config.recovery_dir.clone(),
+            loads: crate::stick_load::Loads::default(),
         });
         // What the Stems commands have to say (progress, a change to the
         // Sidecar), sent off the thread that said it. Ends with the service.
@@ -527,6 +530,17 @@ impl Shared {
                     self.with_library(|library| crate::native_stems::parent(library, id))?
                 })
             }
+            sticks if crate::stick_load::answers(sticks) => {
+                // Writes a Stick, not the Library: the Library is only read,
+                // to plan; the export runs with it free (wbx-70).
+                crate::stick_load::answer(
+                    &self.state_dir,
+                    &self.stems,
+                    request,
+                    &|f| self.with_library(|library| f(library)),
+                    &self.loads,
+                )
+            }
             stems if crate::stems::answers(stems) => {
                 // Only the lookup takes the Library; a separation runs
                 // with it free.
@@ -660,6 +674,11 @@ impl Shared {
         if self.stopping.swap(true, Ordering::AcqRel) {
             return;
         }
+        // A Stick load is asked to stop where it safely can, and waited for
+        // until its caller has its answer: never cut off mid-publication,
+        // never without saying what is on the Stick (wbx-70).
+        self.loads
+            .shut(crate::stick_load::shutdown_patience(&self.state_dir));
         for connection in lock(&self.connections).values() {
             let _ = lock(&connection.writer).shutdown(std::net::Shutdown::Both);
         }
@@ -739,13 +758,18 @@ fn accept_clients(shared: &Arc<Shared>, listener: &UnixListener) {
 }
 
 fn serve_client(shared: &Shared, connection: &Connection, stream: UnixStream) {
+    let mut hold = None;
     for line in BufReader::new(stream).lines() {
+        drop(hold.take());
         let Ok(line) = line else { break };
         if line.trim().is_empty() {
             continue;
         }
         let response = match serde_json::from_str::<Request>(&line) {
             Ok(request) => {
+                // Held until the answer is sent: stopping waits for it.
+                hold = (request.command == crate::stick_load::commands::STICKS_LOAD)
+                    .then(|| shared.loads.hold());
                 let (result, run) = shared.answer(Some(connection), &request);
                 Response {
                     id: request.id,
@@ -772,6 +796,7 @@ fn serve_client(shared: &Shared, connection: &Connection, stream: UnixStream) {
         if connection.send(&line).is_err() {
             break;
         }
+        drop(hold.take());
         if shared.stop_requested.load(Ordering::Acquire) {
             shared.stop();
             break;
@@ -900,7 +925,9 @@ pub(crate) fn open_error(error: &DbError) -> ServiceError {
         // `rbl-db` folds the failure of its first read into a message, so
         // SQLite's own wording for SQLITE_BUSY is all there is to go on.
         DbError::Open(why) if why.contains("database is locked") => locked(),
-        DbError::WriteRefused(why) if rbl_library::stick::refused(&DbError::WriteRefused(why.clone())) => {
+        DbError::WriteRefused(why)
+            if rbl_library::stick::refused(&DbError::WriteRefused(why.clone())) =>
+        {
             ServiceError::new(codes::STICK_PROTECTED, why.clone())
         }
         DbError::WriteRefused(why) => ServiceError::new(
