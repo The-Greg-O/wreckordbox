@@ -169,7 +169,7 @@ enum Commands {
     },
     /// Project standing Facts into the Library: Energy into the star
     /// rating and Prep colour into the colour label, under the policy in
-    /// `projection.toml` beside the Tag schema. Each kind of change waits
+    /// `projection-policy.toml` beside the Tag schema. Each kind of change waits
     /// for the DJ or applies at or above a confidence; values the DJ set by
     /// hand are never overwritten. Applying is one Run, by
     /// `tool:projection` unless `--source` names another tool or agent.

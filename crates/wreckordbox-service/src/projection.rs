@@ -76,7 +76,7 @@ pub mod commands {
 
 /// The error codes of the Projection commands.
 pub mod codes {
-    /// `projection.toml` cannot be read or has a mistake.
+    /// `projection-policy.toml` cannot be read or has a mistake.
     pub const POLICY_INVALID: &str = "projection_policy_invalid";
     /// The plan is not what the dry run named (`expect`), or the Library
     /// changed while it was being applied: nothing was written.
@@ -87,7 +87,7 @@ pub mod codes {
 }
 
 /// The DJ's policy file, beside the Tag schema in the Sidecar's folder.
-pub const POLICY_FILE: &str = "projection.toml";
+pub const POLICY_FILE: &str = "projection-policy.toml";
 /// Who a Projection's edits are by when the request names no one.
 pub const SOURCE_NAME: &str = "projection";
 /// What the window's Undo calls an applied Projection.

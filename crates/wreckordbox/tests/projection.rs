@@ -36,7 +36,7 @@ fn refused(s: &Sandbox, args: &[&str]) -> Value {
 
 fn policy(s: &Sandbox, text: &str) {
     std::fs::create_dir_all(s.sidecar_dir()).unwrap();
-    std::fs::write(s.sidecar_dir().join("projection.toml"), text).unwrap();
+    std::fs::write(s.sidecar_dir().join("projection-policy.toml"), text).unwrap();
 }
 
 fn fact(
@@ -530,7 +530,7 @@ fn protection_a_changed_plan_and_the_djs_name_are_refused_with_nothing_written()
     assert_eq!(track(&s, "10002")["rating"], 2);
 
     std::fs::write(
-        s.sidecar_dir().join("projection.toml"),
+        s.sidecar_dir().join("projection-policy.toml"),
         "[energy]\napply = 2\n",
     )
     .unwrap();

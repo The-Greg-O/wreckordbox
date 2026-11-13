@@ -70,7 +70,7 @@ fn a_projection_the_window_asks_for_is_a_tools_and_undoes_in_one_step() {
     .unwrap();
     let sidecar = dir.path().join("sidecar");
     std::fs::create_dir_all(&sidecar).unwrap();
-    std::fs::write(sidecar.join("projection.toml"), "[energy]\napply = 0.5\n").unwrap();
+    std::fs::write(sidecar.join("projection-policy.toml"), "[energy]\napply = 0.5\n").unwrap();
     std::env::set_var(SIDECAR_DIR_ENV, &sidecar);
     let config = Config {
         runtime_dir: dir.path().join("run"),

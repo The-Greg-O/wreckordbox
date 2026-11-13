@@ -18,8 +18,6 @@ rbl-index = { path = "../rbl-index" }
 rbl-library = { path = "../rbl-library" }
 # Only for where the window keeps its recovery journals.
 rbl-backup = { path = "../rbl-backup" }
-# Only to read the time a track row was last written (`updated_at`).
-rbl-core = { path = "../rbl-core" }
 # The Sidecar: the store of Facts beside the Library, which the service owns
 # as it owns the Library.
 wreckordbox-sidecar = { path = "../wreckordbox-sidecar" }
@@ -48,7 +46,7 @@ serde = { workspace = true }
 tracing = { workspace = true }
 serde_json = { workspace = true }
 dirs = "5"
-# The DJ's projection policy file (`projection.toml`).
+# The DJ's projection policy file (`projection-policy.toml`).
 toml = "0.8"
 # Only to tell a locked Library from a damaged one by SQLite's result code.
 rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
