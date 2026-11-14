@@ -549,17 +549,11 @@ fn every_declared_kind_says_whether_it_is_a_judgement_or_a_measurement_and_its_v
 fn a_kind_declared_in_the_kinds_file_is_usable_at_once_and_a_bad_file_is_refused() {
     let sandbox = Sandbox::new();
     let file = PathBuf::from(ok(&sandbox, &["facts", "kinds"])["file"].as_str().unwrap());
-    assert_eq!(
-        file,
-        sandbox
-            .sidecar_dir()
-            .canonicalize()
-            .unwrap()
-            .join("kinds.toml")
-    );
+    assert_eq!(file, sandbox.sidecar_dir().join("kinds.toml"));
     let era = ["facts", "record", "10003", "era", "90s", "--source", "dj"];
     assert_eq!(refused(&sandbox, &era)["code"], "kind_not_declared");
 
+    std::fs::create_dir_all(sandbox.sidecar_dir()).unwrap();
     // The service is already running; the file is read when it is needed.
     std::fs::write(
         &file,
@@ -790,10 +784,7 @@ fn recording_facts_changes_nothing_in_the_library_and_other_clients_hear_only_of
 
     // Each recorded Fact is announced as a change to the Sidecar, and
     // nothing is announced as a change to the Library.
-    let mut events = Vec::new();
-    while let Some(event) = watcher.next_event(Duration::from_millis(500)).unwrap() {
-        events.push(event);
-    }
+    let events = common::barrier::heard_exactly(&mut watcher, 3, Duration::from_millis(500));
     let heard: Vec<(&str, Value)> = events
         .iter()
         .map(|event| (event.event.as_str(), event.data.clone()))
@@ -897,7 +888,7 @@ fn a_measurement_is_tied_to_the_audio_it_was_made_from_and_a_judgement_is_not() 
     assert_eq!(genre["facts"][0]["fingerprint"], fingerprint.as_str());
     assert_eq!(genre["marked_stale"], json!([]));
 
-    // Explicit checking marks stale and leaves Judgements standing.
+    // Explicit checking computes staleness and leaves Judgements standing.
     // Subscribe before any recording, and consume each known recording
     // event before asking for the stale transition (delivery is asynchronous).
     for recorded in [&judged, &measured, &genre] {
@@ -918,12 +909,10 @@ fn a_measurement_is_tied_to_the_audio_it_was_made_from_and_a_judgement_is_not() 
     assert_eq!(checked["stale"][0]["id"], fact["id"]);
     assert_eq!(checked["stale"][0]["stale"], true);
     assert_eq!(by_kind(&checked, "genre")["stale"], false);
-    let event = watcher.next_event(Duration::from_secs(2)).unwrap().unwrap();
-    assert_eq!(event.event, "sidecar_changed");
-    assert_eq!(
-        event.data,
-        json!({ "track_id": track, "kind": "intensity", "fact_id": null, "stale": [fact["id"]] })
-    );
+    assert!(watcher
+        .next_event(Duration::from_millis(150))
+        .unwrap()
+        .is_none());
 
     // Measuring the new audio records a Fact with the new fingerprint.
     let again = ok(&sandbox, &run(&measure(&track, r#"{"summary": 0.7}"#)));

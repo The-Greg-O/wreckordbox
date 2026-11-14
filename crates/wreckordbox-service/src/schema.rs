@@ -143,12 +143,12 @@ fn arguments<T: serde::de::DeserializeOwned>(request: &Request) -> Result<T, Ser
 }
 
 /// Where the Library's own Tag schema is, or would be.
-pub(crate) fn file(stems: &Stems) -> Result<PathBuf, ServiceError> {
-    Ok(stems.sidecar()?.dir().join(TAG_SCHEMA_FILE))
+pub(crate) fn file(stems: &Stems) -> PathBuf {
+    stems.sidecar_dir().join(TAG_SCHEMA_FILE)
 }
 
 fn check(stems: &Stems, check: &Check) -> Result<Checked, ServiceError> {
-    let own = file(stems)?;
+    let own = file(stems);
     let file = check.file.clone().unwrap_or_else(|| own.clone());
     if !file.is_file() {
         let hint = if file == own {
@@ -196,7 +196,7 @@ fn check(stems: &Stems, check: &Check) -> Result<Checked, ServiceError> {
 /// The kinds declared without the Tag schema: the built-in ones and the
 /// kinds file's.
 pub(crate) fn declared_kinds(stems: &Stems) -> Result<Kinds, ServiceError> {
-    Kinds::load_declared(stems.sidecar()?.dir()).map_err(|e| sidecar_error(&e))
+    Kinds::load_declared(stems.sidecar_dir()).map_err(|e| sidecar_error(&e))
 }
 
 pub(crate) fn sidecar_error(error: &SidecarError) -> ServiceError {

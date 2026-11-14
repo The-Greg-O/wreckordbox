@@ -239,3 +239,5 @@ pub fn library_released(master_db: &Path) -> bool {
 }
 
 mod dj_facts;
+
+mod query_reads;

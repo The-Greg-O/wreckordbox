@@ -485,17 +485,7 @@ fn a_service_killed_between_a_removal_and_its_entry_still_removes_the_mutant_whe
         &["playlists", "remove", &playlist, "10002"],
     );
     assert!(!killed.status.success());
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while wreckordbox_service::Client::connect(&sandbox.config().socket_path(sandbox.location()))
-        .and_then(|mut client| client.status())
-        .is_ok()
-    {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the service did not die"
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    common::released::wait_until_released(&sandbox, "the service that was made to die");
 
     // The next service records the change as unconfirmed and brings the
     // Mutants into line with the Library as it is, in that entry's Run.
@@ -549,17 +539,7 @@ fn a_service_killed_between_a_copy_and_its_entry_still_copies_the_mutants_when_i
         &["playlists", "copy", &playlist, "--name", "Saved"],
     );
     assert!(!killed.status.success());
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while wreckordbox_service::Client::connect(&sandbox.config().socket_path(sandbox.location()))
-        .and_then(|mut client| client.status())
-        .is_ok()
-    {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the service did not die"
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    common::released::wait_until_released(&sandbox, "the service that was made to die");
 
     // The next service finds the copy and gives it its Mutant, with the
     // edits the source had, on the copy's entry of the same place.

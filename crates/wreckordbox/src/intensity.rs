@@ -324,7 +324,8 @@ fn shown_text(shown: &TrackIntensity) -> String {
         let why = match (earlier.stale, earlier.superseded) {
             (true, true) => "stale and replaced",
             (true, false) => "stale",
-            _ => "replaced",
+            (false, true) => "replaced",
+            (false, false) => "unverified: audio unavailable",
         };
         let _ = write!(
             text,

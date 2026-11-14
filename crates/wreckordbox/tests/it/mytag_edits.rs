@@ -11,8 +11,6 @@
 
 use crate::common;
 
-use std::time::Duration;
-
 use common::{Details, Sandbox};
 use rbl_db::fixture::{track_id, MY_TAG_CATEGORY, MY_TAG_PEAK, MY_TAG_WARM_UP};
 use serde_json::{json, Value};
@@ -157,38 +155,25 @@ fn comment_of(sandbox: &Sandbox, track: usize) -> String {
         .to_owned()
 }
 
-/// A second client of the sandbox's service, listening for events.
+/// A second client of the sandbox's service, listening for events, told
+/// nothing of what was done before it was made (the ordered barrier
+/// consumes any setup change still on its way, wbx-377).
 fn watcher(sandbox: &Sandbox) -> Client {
     sandbox.status();
     let mut watcher = sandbox.client();
     watcher.subscribe().unwrap();
+    common::barrier::settle(&mut watcher);
     watcher
 }
 
-/// The one change event the last edit sent `watcher`, as its generation.
+/// The one change event the last edit sent `watcher`, as its generation:
+/// exactly one event before the ordered barrier.
 fn told_of_one_change(watcher: &mut Client) -> u64 {
-    let event = watcher
-        .next_event(Duration::from_secs(5))
-        .unwrap()
-        .expect("no event arrived");
-    assert_eq!(event.event, "library_changed");
-    assert_eq!(event.data["kind"], "library");
-    let generation = event.data["generation"].as_u64().unwrap();
-    assert!(
-        watcher
-            .next_event(Duration::from_millis(200))
-            .unwrap()
-            .is_none(),
-        "one edit sent more than one event"
-    );
-    generation
+    common::barrier::one_library_change(watcher)
 }
 
 fn told_nothing(watcher: &mut Client) {
-    assert!(watcher
-        .next_event(Duration::from_millis(300))
-        .unwrap()
-        .is_none());
+    common::barrier::told_nothing(watcher);
 }
 
 #[test]

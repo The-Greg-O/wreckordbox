@@ -60,15 +60,7 @@ fn stop_service(sandbox: &Sandbox) {
 
 /// Waits for a service that was made to die to be gone.
 fn wait_for_no_service(sandbox: &Sandbox) {
-    let socket = sandbox.config().socket_path(sandbox.location());
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while wreckordbox_service::Client::connect(&socket)
-        .and_then(|mut client| client.status())
-        .is_ok()
-    {
-        assert!(Instant::now() < deadline, "the service did not die");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    common::released::wait_until_released(sandbox, "the service that was made to die");
 }
 
 /// Every entry of every Run, oldest Run first.

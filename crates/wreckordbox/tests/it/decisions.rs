@@ -731,10 +731,7 @@ fn decision_changes_send_the_sidecar_event_and_never_touch_the_library() {
     ok(&sandbox, &["decisions", "pending"]);
     ok(&sandbox, &["decisions", "show", &id.to_string()]);
 
-    let mut events = Vec::new();
-    while let Some(event) = watcher.next_event(Duration::from_millis(500)).unwrap() {
-        events.push(event);
-    }
+    let events = common::barrier::heard_exactly(&mut watcher, 2, Duration::from_millis(500));
     let seen: Vec<(&str, &Value)> = events
         .iter()
         .map(|event| (event.event.as_str(), &event.data))

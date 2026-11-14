@@ -68,3 +68,19 @@ any rule about who asked for what. What an agent working for you can do:
 Nothing stops an agent that ignores these rules from typing a Stick's name
 itself: keep a Stick you do not want written to locked, and eject it when
 you are done.
+
+## After removing and re-importing a track
+
+Re-importing gives a track a new Library ID. Its earlier Facts and Stems
+remain attached to the removed ID until a producer observes the new track.
+`facts show --check-audio`, `stems show`, and Stick dry runs only read:
+looking does not reattach anything. The new track initially shows no Facts
+or Stems. A Spare-stick dry run and load omit its Native stems; a load can
+still export the ordinary audio.
+
+Run `wreckordbox stems separate NEW_TRACK_ID`. If the audio matches and all
+four saved Stem files are intact, this reattaches and reuses the set without
+running the separation engine again. Facts then appear under the new track
+and the next dry run includes its Native stems. If the audio or saved files
+have changed, separation may need to run again. Make a fresh dry run before
+confirming the next load.

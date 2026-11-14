@@ -119,6 +119,22 @@ fn events(client: &mut Client) -> Vec<Value> {
     seen
 }
 
+/// The next `count` events, each waited for as long as it takes, then
+/// nothing more for the window [`events`] has always allowed (wbx-377): an
+/// exact count that does not end at the first quiet moment.
+fn exactly(client: &mut Client, count: usize) -> Vec<Value> {
+    let mut seen = Vec::new();
+    while seen.len() < count {
+        let event = client
+            .next_event(Duration::from_secs(30))
+            .unwrap()
+            .unwrap_or_else(|| panic!("{count} events were due: {seen:?}"));
+        seen.push(json!({ "event": event.event, "data": event.data }));
+    }
+    seen.extend(events(client));
+    seen
+}
+
 fn expect_sidecar_change(client: &mut Client, data: Value) {
     let event = client
         .next_event(Duration::from_secs(5))
@@ -203,7 +219,7 @@ fn when_the_answer_cannot_be_written_its_fact_is_not_recorded_and_no_client_is_t
     assert_eq!(answered["answer"]["fact_id"], answered["fact"]["id"]);
     assert_eq!(answered["answer"]["run"], answered["fact"]["run"]);
     assert!(answered["run"]["finished_at"].is_i64());
-    let told = events(&mut watcher);
+    let told = exactly(&mut watcher, 2);
     let kinds: Vec<&str> = told
         .iter()
         .map(|event| event["data"]["kind"].as_str().unwrap())

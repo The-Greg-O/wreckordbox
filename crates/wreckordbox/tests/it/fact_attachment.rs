@@ -20,7 +20,31 @@ fn ok(s: &Sandbox, args: &[&str]) -> Value {
     }
     let result = s.cli(&words);
     assert!(result.status.success(), "{args:?}: {}", result.stderr);
-    result.json()
+    let mut shown = result.json();
+    // Observation setup writes a separate marker Judgement. These assertions
+    // concern the original genre/measurement Facts and their provenance.
+    if args.starts_with(&["facts", "show"]) {
+        if let Some(facts) = shown["facts"].as_array_mut() {
+            facts.retain(|f| f["source"]["name"] != "attachment-observer");
+        }
+    }
+    shown
+}
+fn observe(s: &Sandbox, id: &str) -> Value {
+    ok(
+        s,
+        &[
+            "facts",
+            "record",
+            id,
+            "vocals",
+            "observed",
+            "--source",
+            "tool:attachment-observer",
+            "--confidence",
+            "1",
+        ],
+    )
 }
 fn record(s: &Sandbox, id: &str) -> Vec<Value> {
     [
@@ -90,9 +114,6 @@ fn verified_reads_report_stale_measurements_but_only_judgements_stand() {
     assert_eq!(shown["facts"], json!([recorded[0]]));
     assert_eq!(shown["stale"][0]["id"], recorded[1]["id"]);
     assert_eq!(shown["stale"][0]["stale"], true);
-    let event = watcher.next_event(Duration::from_secs(2)).unwrap().unwrap();
-    assert_eq!(event.event, "sidecar_changed");
-    assert_eq!(event.data["stale"], json!([recorded[1]["id"]]));
     ok(&s, &["facts", "show", &id]);
     assert!(watcher
         .next_event(Duration::from_millis(150))
@@ -133,6 +154,7 @@ fn a_fingerprint_reattaches_facts_with_their_provenance_and_survives_restart() {
     let mut service = s.serve();
     let mut watcher = s.client();
     watcher.subscribe().unwrap();
+    observe(&s, &next);
     let shown = ok(&s, &["facts", "show", &next]);
     let mut expected = recorded.clone();
     for fact in &mut expected {
@@ -140,11 +162,13 @@ fn a_fingerprint_reattaches_facts_with_their_provenance_and_survives_restart() {
     }
     expected.reverse();
     assert_eq!(shown["facts"], json!(expected));
-    assert_eq!(shown["reattached"][0]["from_track"], id);
+    assert_eq!(shown["reattached"], json!([]));
     assert_eq!(shown["review"], json!([]));
     let event = watcher.next_event(Duration::from_secs(2)).unwrap().unwrap();
     assert_eq!(event.event, "facts_reattached");
     assert_eq!(event.data["from_track"], id);
+    let marker_event = watcher.next_event(Duration::from_secs(2)).unwrap().unwrap();
+    assert_eq!(marker_event.event, "sidecar_changed");
     assert!(watcher
         .next_event(Duration::from_millis(150))
         .unwrap()
@@ -152,6 +176,7 @@ fn a_fingerprint_reattaches_facts_with_their_provenance_and_survives_restart() {
     drop(watcher);
     service.kill().unwrap();
     service.wait().unwrap();
+    observe(&s, &next);
     let shown = ok(&s, &["facts", "show", &next]);
     assert_eq!(shown["facts"], json!(expected));
     // The original source can replace its re-attached answer normally.
@@ -181,6 +206,7 @@ fn identifying_fields_alone_are_held_for_review_across_restarts() {
     change_audio(&s);
     let next = readd(&s, &id);
     let mut service = s.serve();
+    observe(&s, &next);
     let shown = ok(&s, &["facts", "show", &next]);
     assert_eq!(shown["facts"], json!([]));
     assert_eq!(shown["review"][0]["from_track"], id);
@@ -224,7 +250,9 @@ fn missing_audio_never_exposes_unverified_measurements_as_standing() {
     let id = s.import_track("Track.wav", 1);
     let recorded = record(&s, &id);
     std::fs::remove_file(s.path().join("audio/Track.wav")).unwrap();
-    let shown = ok(&s, &["facts", "show", &id]);
+    let refused = s.cli(&["--json", "facts", "show", &id, "--check-audio"]);
+    assert_eq!(refused.error_json()["error"]["code"], "track_file_missing");
+    let shown = s.cli(&["--json", "facts", "show", &id]).json();
     assert_eq!(shown["facts"], json!([recorded[0]]));
     assert_eq!(shown["unverified"][0]["id"], recorded[1]["id"]);
     assert_eq!(shown["unverified"][0]["stale"], false);
@@ -244,6 +272,7 @@ fn several_removed_fingerprint_matches_are_held_instead_of_combining_facts() {
         w.delete_track(&second).unwrap();
     });
     let next = readd(&s, &first);
+    observe(&s, &next);
     let shown = ok(&s, &["facts", "show", &next]);
     assert_eq!(shown["facts"], json!([]));
     assert_eq!(shown["review"].as_array().unwrap().len(), 2);
@@ -262,13 +291,14 @@ fn reattachment_uses_the_latest_audio_identity_not_an_old_judgements_fingerprint
     let mut service = s.serve();
     record(&s, &id);
     change_audio(&s);
-    ok(&s, &["facts", "show", &id]);
+    observe(&s, &id);
     service.kill().unwrap();
     service.wait().unwrap();
     // Restore the old audio after removal. The old Judgement's original
     // fingerprint is not evidence that the track still means that mix.
     change_audio(&s);
     let next = readd(&s, &id);
+    observe(&s, &next);
     let shown = ok(&s, &["facts", "show", &next]);
     assert_eq!(shown["facts"], json!([]));
     assert_eq!(shown["review"][0]["reason"], "identifying_fields");
@@ -309,6 +339,7 @@ fn a_fingerprint_match_takes_precedence_over_a_fields_only_candidate() {
         w.delete_track(&second).unwrap();
     });
     let next = readd(&s, &first);
+    observe(&s, &next);
     let shown = ok(&s, &["facts", "show", &next]);
     assert_eq!(shown["facts"].as_array().unwrap().len(), 2);
     assert_eq!(shown["facts"][0]["id"], recorded[1]["id"]);
@@ -368,11 +399,12 @@ fn attachments_follow_repeated_readds_and_restore_matching_measurements() {
     let mut service = s.serve();
     let recorded = record(&s, &id);
     change_audio(&s);
-    ok(&s, &["facts", "show", &id]);
+    observe(&s, &id);
     service.kill().unwrap();
     service.wait().unwrap();
     let next = readd(&s, &id);
     let mut service = s.serve();
+    observe(&s, &next);
     let shown = ok(&s, &["facts", "show", &next]);
     assert_eq!(shown["facts"].as_array().unwrap().len(), 1);
     assert_eq!(shown["facts"][0]["id"], recorded[0]["id"]);
@@ -380,11 +412,13 @@ fn attachments_follow_repeated_readds_and_restore_matching_measurements() {
     service.kill().unwrap();
     service.wait().unwrap();
     let last = readd(&s, &next);
+    observe(&s, &last);
     let shown = ok(&s, &["facts", "show", &last]);
     assert_eq!(shown["facts"][0]["id"], recorded[0]["id"]);
     assert_eq!(shown["facts"][0]["track_id"], last);
     // Returning to the original audio makes its Measurement current again.
     change_audio(&s);
+    observe(&s, &last);
     let shown = ok(&s, &["facts", "show", &last]);
     assert_eq!(shown["facts"].as_array().unwrap().len(), 2);
     assert_eq!(shown["stale"], json!([]));
@@ -537,6 +571,7 @@ fn a_fact_recorded_while_audio_is_missing_does_not_hide_the_removed_source() {
         &["facts", "record", &next, "mood", "Dark", "--source", "dj"],
     );
     std::fs::write(&path, bytes).unwrap();
+    observe(&s, &next);
     let checked = ok(&s, &["facts", "show", &next, "--check-audio"]);
     assert_eq!(
         checked["review"],

@@ -147,6 +147,8 @@ fn stop_service(s: &Sandbox) {
         wreckordbox_service::Client::connect(&socket).is_err()
     });
     assert!(gone, "the service did not stop");
+    // It answers `stop` before it lets go of the Library.
+    common::released::wait_until_released(s, "the stopped service");
 }
 
 /// Every entry of every Run, oldest Run first.
