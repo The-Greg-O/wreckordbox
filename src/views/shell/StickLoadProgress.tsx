@@ -1,7 +1,8 @@
 /**
  * A running Stick load, shown (wbx-72): full, in place of the Stick view,
  * as a plain progress bar naming the stage and the track being written
- * (the loud display is wbx-73's, behind a setting, and replaces this one);
+ * (the loud display, `LoudLoad.tsx`, is wbx-73's; `StickLoadDisplay.tsx`
+ * picks one of the two by the `view.loudStickLoad` setting);
  * or shrunk to the status line, where it stays while the DJ works in any
  * view and a click brings it back to the Stick view. `Esc` shrinks it.
  *
@@ -14,10 +15,11 @@ import { runCommand } from "@/lib/commands";
 import { progressLine, progressPercent, type LoadProgress } from "@/lib/holdToLoad";
 import { isTyping } from "@/lib/shortcuts";
 import { showStickLoad, shrinkStickLoad, useStickLoads, type StickLoad } from "@/store/stickLoads";
+import { usePreferencesContext } from "@/store/usePreferences";
 import { dialogHasInput } from "./StickHoldButton";
 import styles from "./StickLoadProgress.module.css";
 
-function Bar({ progress, label }: { progress: LoadProgress | null; label: string }) {
+export function Bar({ progress, label }: { progress: LoadProgress | null; label: string }) {
   const percent = progressPercent(progress);
   return (
     <div
@@ -35,19 +37,32 @@ function Bar({ progress, label }: { progress: LoadProgress | null; label: string
   );
 }
 
-/** The load filling the Stick view: what it is doing, how far, and the way to shrink it. */
-export function LoadProgressPanel({ load, progress }: { load: StickLoad; progress: LoadProgress | null }) {
-  // Esc shrinks it to the status line (not while a field or a dialog has the key).
+/** `Esc` shrinks a running load to the status line (not while a field or a dialog has the key). */
+export function useEscapeShrinks(id: number): void {
   useEffect(() => {
     const down = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       if (isTyping(event.target as HTMLElement | null) || dialogHasInput(event.target)) return;
       event.preventDefault();
-      shrinkStickLoad(load.id);
+      shrinkStickLoad(id);
     };
     window.addEventListener("keydown", down);
     return () => { window.removeEventListener("keydown", down); };
-  }, [load.id]);
+  }, [id]);
+}
+
+/** Swaps the loud display and the plain bar (the `view.loudStickLoad` setting, also in Preferences › View). */
+export function DisplaySwitch({ loud }: { loud: boolean }) {
+  const { update } = usePreferencesContext();
+  return (
+    <button type="button" onClick={() => { update("view", { loudStickLoad: !loud }); }}>
+      {loud ? "Show a plain bar" : "Show the loud display"}
+    </button>
+  );
+}
+
+/** The plain display: what the load is doing, how far, and the way to shrink it. */
+export function PlainLoadProgress({ load, progress }: { load: StickLoad; progress: LoadProgress | null }) {
   const percent = progressPercent(progress);
   return (
     <section className={styles.panel} data-testid="stick-progress" aria-label={`Loading ${load.name}`}>
@@ -56,9 +71,12 @@ export function LoadProgressPanel({ load, progress }: { load: StickLoad; progres
           <h2 className={styles.title}>Loading {load.name}</h2>
           <p className={styles.line} role="status" aria-live="polite">{progressLine(progress)}</p>
         </div>
-        <button type="button" className={styles.shrink} onClick={() => { shrinkStickLoad(load.id); }}>
-          <kbd>Esc</kbd> shrink to the status line and keep working
-        </button>
+        <div className={styles.actions}>
+          <DisplaySwitch loud={false} />
+          <button type="button" className={styles.shrink} onClick={() => { shrinkStickLoad(load.id); }}>
+            <kbd>Esc</kbd> shrink to the status line and keep working
+          </button>
+        </div>
       </header>
       <p className={styles.percent} aria-hidden>{percent === null ? "…" : `${percent}%`}</p>
       <Bar progress={progress} label={`Loading ${load.name}`} />

@@ -161,6 +161,15 @@ export function ViewPane({ tab, onResetColumns, onResetLayout }: ViewPaneProps) 
             checked={view.vocalFull}
             onChange={(vocalFull) => set({ vocalFull })}
           />
+          <Separator />
+          {/* Ours (wbx-73): the Stick view's running load, loud or a plain bar. */}
+          <Sub>Stick load</Sub>
+          <Checkbox
+            label="Loud load display"
+            nested
+            checked={view.loudStickLoad}
+            onChange={(loudStickLoad) => set({ loudStickLoad })}
+          />
         </Section>
         {/* Ours: the columns and pane widths the browser remembers. */}
         <Section title="Browser">
