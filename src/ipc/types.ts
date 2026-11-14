@@ -1219,6 +1219,16 @@ export interface Backend {
   intakeSetTags(track: string, dimension: string, terms: readonly string[], version: string, dropUnmapped: readonly string[], comments: boolean): Promise<import("@/lib/tagPanel").TagsSet>;
   /** A Fact changed in the Sidecar (any client): `{ trackId, kind }`. */
   onSidecarChanged(listener: (change: { trackId: string; kind: string }) => void): () => void;
+  /** Whether a track has current, stale or no Stems (wbx-67), read without writing (`stems.status`). */
+  stemsStatus(id: string): Promise<import("@/lib/stemsStatus").StemsStatus>;
+  /**
+   * Splits a track's Stems through the service (wbx-67); answered when the
+   * separation is done. Refusals and failures are `ok: false` with the
+   * service's reason. Current Stems are answered as they are unless `again`.
+   */
+  stemsSeparate(id: string, again: boolean): Promise<import("@/lib/stemSplits").SplitOutcome>;
+  /** A separation this window asked for moved on: `{ trackId, stage, fraction }`, a few a second. */
+  onStemsProgress(listener: (progress: import("@/lib/stemSplits").StemsProgress) => void): () => void;
   /** A Stick load moved on (wbx-72): the service's `stick_load_progress`, as it is (`fromServiceProgress`). */
   onStickLoadProgress(listener: (progress: unknown) => void): () => void;
   /** Maps collection track ids to rows already in one of a stick's libraries. */

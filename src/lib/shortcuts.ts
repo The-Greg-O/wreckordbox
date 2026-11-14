@@ -172,6 +172,8 @@ export type Action =
   | "intakeEnergy4"
   | "intakeEnergy5"
   | "intakeTag"
+  // The large player's Stems control (wbx-67): a palette entry, no key.
+  | "intakeSplitStems"
   // The GRID panel: `Adjust BPM/BeatGrid` (`command + G`) opens it, the
   // modified arrows are `Shift Beatgrid left/right`, and `Shift Beatgrid to
   // the center` (`option + command + \`) puts the nearest beat under the

@@ -1,7 +1,8 @@
 import type { ActiveRun, ServiceActivity } from "./serviceActivity";
 
 /** Controllable service work, with no audio processing or Library writes. */
-export function mockServiceActivity() {
+/** `extraRuns`: Runs other mock parts hold open (a split's, wbx-67). */
+export function mockServiceActivity(extraRuns: () => ActiveRun[] = () => []) {
   let runs: ActiveRun[] = [];
   let problem: string | null = null;
   let runsUnavailable = false;
@@ -32,7 +33,7 @@ export function mockServiceActivity() {
     serviceActivity: (): Promise<ServiceActivity> => {
       const hooks = window as unknown as { __serviceActivityReads?: number };
       hooks.__serviceActivityReads = (hooks.__serviceActivityReads ?? 0) + 1;
-      return hung ? new Promise(() => {}) : Promise.resolve({ connected: problem === null, problem, runs: problem || runsUnavailable ? [] : runs, runsUnavailable });
+      return hung ? new Promise(() => {}) : Promise.resolve({ connected: problem === null, problem, runs: problem || runsUnavailable ? [] : [...runs, ...extraRuns()], runsUnavailable });
     },
     serviceProblem: () => Promise.resolve(problem),
     onServiceStopped: (listener: (message: string) => void) => {
