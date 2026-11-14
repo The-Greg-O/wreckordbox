@@ -59,6 +59,15 @@ impl StickAccess {
             .iter()
             .try_for_each(|held| held.recheck().map_err(|e| refused(&e)))
     }
+
+    /// [`Self::recheck`] for the one Stick holding `path` (none for a path
+    /// on an ordinary folder): a write to that file may go on (wbx-45.14).
+    pub fn recheck_for(&self, path: &Path) -> AppResult<()> {
+        self.held
+            .iter()
+            .filter(|held| held.stick().is_some_and(|root| path.starts_with(root)))
+            .try_for_each(|held| held.recheck().map_err(|e| refused(&e)))
+    }
 }
 
 /// The Stick `destination` is on, or `None` for an ordinary folder.

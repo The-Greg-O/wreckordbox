@@ -83,6 +83,25 @@ pub fn write_logged(state_dir: &Path, track_id: &str, path: &str, key: &str) {
 /// Test hold: an Undo or Redo of a key edit has written its files' tags
 /// and not yet the Library (wbx-45.14).
 pub const TAGS_STEPPED: &str = "key_tag.tags_stepped";
+/// Puts back, last first, the tags a key edit wrote before it was stopped
+/// (wbx-45.14, round 1), each only while its own Stick may still be
+/// written; answers how many could not be.
+pub(crate) fn put_back(access: &crate::stick_guard::StickAccess, written: &[KeyTagWrite]) -> usize {
+    written
+        .iter()
+        .rev()
+        .filter(|file| {
+            if access.recheck_for(&file.path).is_err() {
+                return true;
+            }
+            !matches!(
+                swap_key(&file.path, Some(Some(file.after.as_str())), file.before.as_deref()),
+                Ok(KeySwap::Written { .. })
+            )
+        })
+        .count()
+}
+
 /// Test hold: a key edit has written the Library's key and not yet the
 /// files' tags (wbx-45.14).
 pub const LIBRARY_KEY_WRITTEN: &str = "key_tag.library_key_written";
@@ -169,23 +188,27 @@ impl rbl_library::history::OutsideSteps for KeyTagWrites {
 /// `access`: Stick Protection's leave for every file the edit may write,
 /// taken before the Library's key was written and held until the tags are
 /// (wbx-45.14), so a Stick cannot be locked between the two.
+///
+/// `Err`: the file's Stick was ejected or replaced since (wbx-45.14, round
+/// 1): unlike a file passed over, the caller must undo the Library's key,
+/// so the two stores agree.
 pub(crate) fn write_recorded(
     access: &crate::stick_guard::StickAccess,
     track_id: &str,
     path: &str,
     key: &str,
-) -> Option<KeyTagWrite> {
+) -> Result<Option<KeyTagWrite>, crate::error::AppError> {
     if path.is_empty() {
         tracing::warn!(track_id, "key not written to the file's tag: the track has no file path");
-        return None;
+        return Ok(None);
     }
     // Still the same mount, still unlocked (the leave itself cannot be
     // taken away; an eject or replacement can still happen).
-    if let Err(refused) = access.recheck() {
-        tracing::warn!(track_id, path, %refused, "key not written to the file's tag: its Stick was replaced");
-        return None;
+    if let Err(refused) = access.recheck_for(Path::new(path)) {
+        tracing::warn!(track_id, path, %refused, "key not written to the file's tag: its Stick was ejected or replaced");
+        return Err(refused);
     }
-    match swap_key(Path::new(path), None, Some(key)) {
+    Ok(match swap_key(Path::new(path), None, Some(key)) {
         Ok(KeySwap::Written { before }) => {
             tracing::info!(track_id, path, key, "key written to the file's tag");
             Some(KeyTagWrite { path: PathBuf::from(path), before, after: key.to_owned() })
@@ -206,7 +229,7 @@ pub(crate) fn write_recorded(
             tracing::warn!(track_id, path, %error, "key not written to the file's tag; the file is unchanged");
             None
         }
-    }
+    })
 }
 
 fn verb(undo: bool) -> &'static str {

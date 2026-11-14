@@ -596,14 +596,32 @@ pub async fn set_track_field<R: tauri::Runtime>(
         let edit = each_track(w, &tracks, |w, track| w.set_field_with_undo(track, which, &value))?;
         let (Some(library), Some(access), LibraryEdit::Track(steps)) = (library, access, &edit) else { return Ok(edit) };
         crate::test_holds::point(crate::key_tag::LIBRARY_KEY_WRITTEN, &state_dir);
-        let files: Vec<_> = steps
-            .iter()
-            .filter_map(|step| {
-                let track = step.content();
-                let row = library.row_of(track)?;
-                crate::key_tag::write_recorded(&access, track, library.folder_path.get(row as usize), &key)
-            })
-            .collect();
+        let mut files = Vec::new();
+        for step in steps {
+            let track = step.content();
+            let Some(row) = library.row_of(track) else { continue };
+            match crate::key_tag::write_recorded(&access, track, library.folder_path.get(row as usize), &key) {
+                Ok(written) => files.extend(written),
+                // The file's Stick was ejected or replaced since (wbx-45.14):
+                // the tags written are put back and the Library's key with
+                // them, so both stores agree, and the edit fails saying why.
+                Err(refused) => {
+                    let stranded = crate::key_tag::put_back(&access, &files);
+                    for step in steps.iter().rev() {
+                        w.undo_track_edit(step)?;
+                    }
+                    let outcome = if stranded == 0 {
+                        "Nothing was changed.".to_owned()
+                    } else {
+                        format!("{stranded} file(s) already written could not be changed back.")
+                    };
+                    return Err(rbl_db::DbError::WriteRefused(format!(
+                        "The key was not changed: {} {outcome}",
+                        refused.message.trim_end()
+                    )));
+                }
+            }
+        }
         if files.is_empty() {
             return Ok(edit);
         }

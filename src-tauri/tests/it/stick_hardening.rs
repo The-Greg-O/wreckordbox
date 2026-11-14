@@ -334,3 +334,61 @@ fn a_my_tag_edit_arriving_during_an_export_plan_waits_and_is_not_exported() {
         "the later edit was not: {on_stick:?}"
     );
 }
+
+/// wbx-45.14 round 1 (a): the Stick is replaced (taken out, another put in
+/// at the same place) after the Library has the new key and before the tag
+/// is written. The edit fails, says why, and the Library is put back, so
+/// the file on the original Stick and the Library still agree.
+#[test]
+fn replacing_the_stick_while_a_key_edit_writes_fails_the_edit_and_both_stores_agree() {
+    let rig = rig();
+    let (audio, id) = track_on_stick(&rig);
+    rig.unlock();
+
+    let held = test_holds::arm(key_tag::LIBRARY_KEY_WRITTEN, &rig.state_dir());
+    let editing = {
+        let (handle, id) = (rig.app.handle().clone(), id.clone());
+        std::thread::spawn(move || {
+            run(details::set_track_field(
+                handle.clone(),
+                handle.state(),
+                vec![id],
+                "key".into(),
+                "Fm".into(),
+                Some(true),
+            ))
+            .map(|_| ())
+            .map_err(|e| e.message)
+        })
+    };
+    held.reached();
+    let original = rig.stick.with_file_name("GIGSTICK-taken-out");
+    std::fs::rename(&rig.stick, &original).unwrap();
+    std::fs::create_dir_all(rig.stick.join("Contents")).unwrap();
+    std::fs::write(rig.stick.join(STAND_IN_MARKER), b"").unwrap();
+    held.release();
+
+    let error = editing
+        .join()
+        .unwrap()
+        .expect_err("the edit fails: its Stick was replaced");
+    assert!(error.contains("GIGSTICK"), "names the Stick: {error}");
+    assert_eq!(
+        library_key(&rig, &id),
+        "Am",
+        "the Library's key was put back"
+    );
+    let moved = original.join(audio.strip_prefix(&rig.stick).unwrap());
+    assert_eq!(
+        tag(&moved).as_deref(),
+        Some("Am"),
+        "the file on the original Stick keeps its key"
+    );
+    assert_eq!(
+        std::fs::read_dir(rig.stick.join("Contents"))
+            .unwrap()
+            .count(),
+        0,
+        "nothing was written to the Stick put in its place"
+    );
+}
