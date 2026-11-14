@@ -110,18 +110,32 @@ fn sidecar_bytes(s: &Sandbox) -> Vec<(String, Vec<u8>)> {
     out
 }
 
-/// How many `library_changed` events arrive before the line is quiet:
-/// the first within two seconds, then until 300 ms pass with none.
-pub(crate) fn library_changes(watcher: &mut wreckordbox_service::Client) -> usize {
+/// How many `library_changed` events the watcher was sent before an
+/// ordered barrier (wbx-j8k): Library Protection turned on and off again,
+/// whose events travel the same ordered queue as every Library change, so
+/// any duplicate of an earlier change arrives before the barrier's last
+/// event. Leaves protection off, as it was.
+pub(crate) fn library_changes(s: &Sandbox, watcher: &mut wreckordbox_service::Client) -> usize {
+    ok(s, &["protection", "on"]);
+    let off = ok(s, &["protection", "off"]);
+    assert_eq!(off["previous"], true, "{off}");
     let mut count = 0;
-    let mut wait = Duration::from_secs(2);
-    while let Some(event) = watcher.next_event(wait).unwrap() {
-        if event.event == "library_changed" {
-            count += 1;
+    loop {
+        let event = watcher
+            .next_event(Duration::from_secs(30))
+            .unwrap()
+            .expect("the barrier never arrived");
+        match event.event.as_str() {
+            "library_changed" => count += 1,
+            "protection_changed"
+                if event.data["protect_library"] == false
+                    && event.data["revision"] == off["revision"] =>
+            {
+                return count
+            }
+            _ => {}
         }
-        wait = Duration::from_millis(300);
     }
-    count
 }
 
 #[test]
@@ -211,7 +225,7 @@ fn accepting_a_fact_is_the_djs_hand_set_in_the_djs_run_and_it_leaves_the_queue()
     assert_eq!(rating(&s, "10002"), 0);
     assert_eq!(facts_waiting(&s), vec![other]);
     // The window hears of the edit exactly once.
-    assert_eq!(library_changes(&mut watcher), 1);
+    assert_eq!(library_changes(&s, &mut watcher), 1);
 
     // In the DJ's Run, one Library entry, Undo-able, by the DJ.
     let run = &accepted["run"];

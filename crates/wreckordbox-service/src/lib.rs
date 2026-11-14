@@ -16,6 +16,7 @@ mod client;
 pub mod decider;
 pub mod decisions;
 mod entries;
+mod fact_hold;
 pub mod facts;
 pub mod intake;
 pub mod intensity;
