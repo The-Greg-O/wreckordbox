@@ -61,7 +61,7 @@ The service's environment-independent suites share
 /home/go/code/wreckordbox-notes/bin/heavy rust mise exec -- cargo test -p wreckordbox-service --test it intake::
 ```
 
-Ten suites retain `--test <name>`. They must not share a process with tests
+These suites retain `--test <name>`. They must not share a process with tests
 that read the same environment. Their existing local mutexes cannot protect
 other suites, and some deliberately leave overrides set until process exit.
 
@@ -73,6 +73,7 @@ other suites, and some deliberately leave overrides set until process exit.
 | `intensity_hosted` | Changes the Sidecar path, Intensity pause hook and test-mode environment. |
 | `ledger_hosted` | Changes the Sidecar path and window Run pause environment. |
 | `projection_hosted` | Changes the Sidecar path and the Projection pause environment. |
+| `review_hosted` | Changes the Sidecar path (wbx-27: the window's accept, Undo, reject). |
 | `projection_crash` | Changes the Sidecar path and Ledger faults; re-executes its own exact-named test as the crashing child. |
 | `ledger_recovery` | Changes the Sidecar path, test mode and Ledger failure injection. |
 | `mutants_hosted` | Changes the Sidecar path; its mutex only serializes this file's tests. |

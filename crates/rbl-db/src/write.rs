@@ -96,6 +96,7 @@ use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 
 use crate::{is_rekordbox_running, DbError, Library, OpenMode, Result};
 
+pub mod checked;
 pub mod stored;
 
 /// Tables whose `rb_local_usn` participates in the shared counter.

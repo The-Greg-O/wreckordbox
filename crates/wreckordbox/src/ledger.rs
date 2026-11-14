@@ -34,6 +34,11 @@ pub struct RunOptions {
 }
 
 impl RunOptions {
+    /// The source this command was given (`--source`).
+    pub fn source(&self) -> Option<&SourceArg> {
+        self.source.as_ref()
+    }
+
     /// What to send with the command; nothing when nothing was given.
     fn named(&self) -> Option<RunArg> {
         (self.run.is_some() || self.source.is_some() || self.description.is_some()).then(|| {
