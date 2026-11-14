@@ -68,6 +68,7 @@ pub mod service_host;
 pub mod intake_tags;
 pub mod intake_stems;
 pub mod intake_view;
+pub mod review_view;
 pub mod stick_view;
 pub mod shutdown;
 pub mod stick_load_reports;
@@ -601,6 +602,11 @@ pub fn run() {
             intake_stems::intake_stems_separate,
             intake_stems::intake_stems_status,
             intake_view::intake_queue,
+            review_view::review_waiting,
+            review_view::review_accept,
+            review_view::review_reject,
+            review_view::review_rejected,
+            review_view::review_reopen,
             stick_view::stick_view_sticks,
             stick_view::stick_view_dry_run,
             stick_view::stick_view_load,

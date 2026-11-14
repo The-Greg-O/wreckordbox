@@ -8,6 +8,7 @@ mod intake_view;
 mod issue217_probe;
 mod mutants_window;
 mod playlist_entries;
+mod review_view;
 mod save_filter_playlist;
 mod scrub_meters;
 mod service_host;
