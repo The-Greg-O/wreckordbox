@@ -25,6 +25,7 @@ pub(super) struct Active {
     owner: usize,
     session: Arc<Session>,
     uncertain: Cell<bool>,
+    asserted: Cell<bool>,
     bulk_write: Cell<bool>,
     admitted: bool,
     capacity: usize,
@@ -59,7 +60,8 @@ impl Active {
     }
     pub(super) fn written(&self, wrote: bool) {
         self.uncertain.set(false);
-        if wrote {
+        let asserted = self.asserted.replace(false);
+        if wrote || asserted {
             self.stamps
                 .borrow_mut()
                 .push(self.session.accept(self.capacity));
@@ -90,6 +92,7 @@ impl Recorder for Handle {
             owner: self.0.owner,
             session: self.0.clone(),
             uncertain: Cell::new(false),
+            asserted: Cell::new(false),
             bulk_write: Cell::new(false),
             admitted,
             capacity,
@@ -102,6 +105,19 @@ impl Recorder for Handle {
             target,
             completed: false,
         })
+    }
+    fn assert_player_fields(&self) {
+        if matches!(self.0.kind, "link" | "round_trip") {
+            ACTIVE.with(|slot| {
+                if let Some(active) = slot.borrow().as_ref() {
+                    if Arc::ptr_eq(&active.session, &self.0) && active.is_bulk() {
+                        // written() reserves order under the native writer gate,
+                        // including when the fields were already at these values.
+                        active.asserted.set(true);
+                    }
+                }
+            });
+        }
     }
     fn idle(&self) -> bool {
         self.0.state().active == 0
@@ -136,6 +152,18 @@ impl Step for Scope {
             } else {
                 return;
             }
+        }
+        // A bounded file slice accepts several individual publications. Pair
+        // each result with its own acceptance stamp, after releasing its gates.
+        if stamps.len() > 1 && stamps.len() == records.len() {
+            for (stamp, value) in stamps.into_iter().zip(records) {
+                self.active.session.record(Record {
+                    id: stamp.ids.first().copied(),
+                    at: stamp.at,
+                    value,
+                });
+            }
+            return;
         }
         let Some(last) = stamps.pop() else {
             return;
@@ -218,6 +246,16 @@ pub(super) fn make(keeper: &Keeper, kind: Kind) -> Arc<dyn Recorder> {
             "analysis",
             "Analyze tracks",
             Source::new(SourceKind::Tool, "wreckordbox-analysis"),
+        ),
+        Kind::Link => (
+            "link",
+            "Player edits over LINK",
+            Source::new(SourceKind::Tool, "link"),
+        ),
+        Kind::RoundTrip => (
+            "round_trip",
+            "Player edits from Round-trip",
+            Source::new(SourceKind::Tool, "round-trip"),
         ),
         Kind::Import => (
             "import",
@@ -510,7 +548,7 @@ mod tests {
             crate::stems::Stems::from_env(&location.master_db, &dir.path().join("state"), events);
         let keeper = Keeper::new(stems.clone(), location);
         let request: crate::protocol::Request = serde_json::from_value(json!({"id":1,"command":"tracks.rate","args":{"id":"10000","stars":3},"run":{"source":{"kind":"agent","name":"fixture-importer"}}})).unwrap();
-        for kind in [Kind::Import, Kind::Analysis] {
+        for kind in [Kind::Import, Kind::Analysis, Kind::Link, Kind::RoundTrip] {
             let (result, _) = keeper.attributed(true, &request, || {
                 let recorder = make(&keeper, kind);
                 let mut step = recorder.enter(json!({"track":"fixture"}));
@@ -525,7 +563,7 @@ mod tests {
         }
         let sidecar = stems.sidecar().unwrap();
         let (runs, _) = sidecar.runs(10, 0).unwrap();
-        assert_eq!(runs.len(), 2);
+        assert_eq!(runs.len(), 4);
         for run in runs {
             let (entries, _) = sidecar.run_entries(run.run.id, 10, 0).unwrap();
             assert_eq!(entries.len(), 1);
@@ -534,7 +572,14 @@ mod tests {
                 if entries[0].kind == "import" {
                     Source::new(SourceKind::Agent, "fixture-importer")
                 } else {
-                    Source::new(SourceKind::Tool, "wreckordbox-analysis")
+                    Source::new(
+                        SourceKind::Tool,
+                        match entries[0].kind.as_str() {
+                            "link" => "link",
+                            "round_trip" => "round-trip",
+                            _ => "wreckordbox-analysis",
+                        },
+                    )
                 }
             );
         }

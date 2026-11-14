@@ -29,38 +29,47 @@ pub(super) struct Manifest {
 impl Manifest {
     pub fn append(&self, sidecar: &Sidecar, records: &[Record]) -> Result<(), String> {
         let run = self.run.ok_or("bulk Run is not available")?;
-        let payloads: Vec<_> = records
+        let descriptions: Vec<_> = records
             .iter()
             .map(|record| {
-                json!({
-                    "records":[record.value],"not_reversible_reason":super::bulk::REASON,
-                })
+                super::player_record::describe(&self.kind, &self.description, &record.value)
             })
             .collect();
-        let command = json!({"name":"bulk.write","args":{"kind":self.kind}});
-        let label = format!(
-            "{}. Cannot reverse: {}",
-            self.description,
-            super::bulk::REASON
-        );
+        let commands: Vec<_> = descriptions
+            .iter()
+            .map(|description| {
+                let mut command = json!({"name":"bulk.write","args":{"kind":self.kind}});
+                // The apply-time drift check reads command targets as well as the
+                // plan's barrier reader. Both must see the same bounded tracks.
+                if let Some(tracks) = description.payload.get("tracks") {
+                    command["args"]["tracks"] = tracks.clone();
+                }
+                command
+            })
+            .collect();
         let entries: Vec<_> = records
             .iter()
-            .zip(&payloads)
-            .map(|(record, payload)| NewEntry {
+            .zip(&descriptions)
+            .zip(&commands)
+            .map(|((record, description), command)| NewEntry {
                 id: record.id,
                 run,
                 store: Store::Library,
                 source: &self.source,
                 at: Some(record.at),
-                action: Action::Write,
-                kind: &self.kind,
-                label: &label,
-                command: Some(&command),
+                action: if description.reversible {
+                    Action::Edit
+                } else {
+                    Action::Write
+                },
+                kind: &description.kind,
+                label: &description.label,
+                command: Some(command),
                 reverses: None,
                 part_of: None,
-                reversible: false,
+                reversible: description.reversible,
                 format: 1,
-                payload: Some(payload),
+                payload: Some(&description.payload),
             })
             .collect();
         sidecar.append_bulk(&entries).map_err(|e| e.to_string())
