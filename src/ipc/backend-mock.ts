@@ -37,6 +37,7 @@ import { referenceDeviceSettings } from "./mock-device-settings";
 import { createMockDeviceLibraries, type MockImportEntry } from "./mock-device-library";
 import { STICK_MY_TAGS, passesStickTags, stickRowMyTags } from "./mock-stick-mytags";
 import { createMockIntake } from "./mock-intake";
+import { createMockReview } from "./mock-review";
 import { createMockStickLoad } from "./mock-stick-load";
 import { fromKeptReport, fromServiceDryRun, fromServiceLoad, fromServiceSticks } from "@/lib/stickLoad";
 import { mockCueHooks } from "./mock-cue-pads";
@@ -2556,6 +2557,12 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     gridLocked: (id) => gridStore.get(id)?.locked ?? false, wait, ready: () => ready,
     setColour: (id, colour) => edits.setTrackColor([id], colour === null ? null : String(colour)),
   });
+  // The Review queue (wbx-74): `mock-review.ts`.
+  const review = createMockReview({
+    all, wait, ready: () => ready,
+    rate: (id, stars) => edits.setTrackRating([id], stars),
+    colour: (id, colour) => edits.setTrackColor([id], String(colour)),
+  });
   // The Intake tag panel (wbx-65): `mock-tag-panel.ts`.
   const tagPanel = createMockTagPanel({
     all, categories: myTagCategories, wait, ready: () => ready,
@@ -2600,6 +2607,12 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     stickLoadReportDismiss: (id) => stickLoad.stickLoadReportDismiss(id),
     stickLoadReportReserve: () => stickLoad.stickLoadReportReserve(),
     intakeQueue: intake.intakeQueue,
+    reviewWaiting: review.reviewWaiting,
+    reviewAccept: review.reviewAccept,
+    reviewReject: review.reviewReject,
+    reviewRejected: review.reviewRejected,
+    reviewReopen: review.reviewReopen,
+    onReviewChanged: review.onReviewChanged,
     intakeCounts: intake.intakeCounts,
     intakeColours: intake.intakeColours,
     intakeSetPrepColour: intake.intakeSetPrepColour,

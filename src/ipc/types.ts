@@ -1217,6 +1217,26 @@ export interface Backend {
    * `detail`) when the panel was not current.
    */
   intakeSetTags(track: string, dimension: string, terms: readonly string[], version: string, dropUnmapped: readonly string[], comments: boolean): Promise<import("@/lib/tagPanel").TagsSet>;
+  /**
+   * The Facts waiting for the DJ (wbx-74; the service's `review.waiting`):
+   * the whole queue, the token naming exactly that listing, the Runs the
+   * Facts were recorded in, and each track's deck row. A read.
+   */
+  reviewWaiting(): Promise<import("@/lib/reviewQueue").ReviewListing>;
+  /**
+   * The DJ's acceptance of `facts` in the listing named by `token` (the
+   * listing the view shows), the DJ declared (`review.accept`). Refusals
+   * and a part-way accept are outcomes, never thrown and never retried.
+   */
+  reviewAccept(facts: number[], token: string): Promise<import("@/lib/reviewQueue").DecisionOutcome>;
+  /** The DJ's rejection of `facts` (`review.reject`). */
+  reviewReject(facts: number[]): Promise<import("@/lib/reviewQueue").DecisionOutcome>;
+  /** The suggestions standing rejected (`review.rejected`). A read. */
+  reviewRejected(): Promise<import("@/lib/reviewQueue").RejectedFact[]>;
+  /** The DJ's reopening of rejected `facts`, or of one rejection (its Ledger entry) as a whole (`review.reopen`). */
+  reviewReopen(facts: number[], rejection: number | null): Promise<import("@/lib/reviewQueue").DecisionOutcome>;
+  /** The queue may have changed (any client; coalesced): read it again. */
+  onReviewChanged(listener: () => void): () => void;
   /** A Fact changed in the Sidecar (any client): `{ trackId, kind }`. */
   onSidecarChanged(listener: (change: { trackId: string; kind: string }) => void): () => void;
   /** Whether a track has current, stale or no Stems (wbx-67), read without writing (`stems.status`). */
