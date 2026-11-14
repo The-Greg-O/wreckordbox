@@ -65,8 +65,24 @@ async function choose(page: Page, label: string) {
   await page.getByRole("menuitemradio", { name: label }).click();
 }
 
-test("two decks playing cost no more per frame than none at all", async ({ page }, testInfo) => {
+/**
+ * The deck gate runs in the waveform theme the window starts in, and again
+ * in Theme (wbx-45.9), which draws from the desktop theme's colours
+ * (wbx-45.13: every gate also runs with the Theme waveform on).
+ */
+const DECK_CASES = [
+  { name: "", waveformColor: null },
+  { name: " in the Theme waveform", waveformColor: "theme" },
+] as const;
+
+for (const deckCase of DECK_CASES) {
+test(`two decks playing cost no more per frame than none at all${deckCase.name}`, async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1800, height: 1130 });
+  if (deckCase.waveformColor !== null) {
+    await page.addInitScript((waveformColor) => localStorage.setItem("rbl.preferences", JSON.stringify({
+      view: { waveformColor },
+    })), deckCase.waveformColor);
+  }
   await page.goto(productionUrl);
   await expect(page.getByTestId("browser-title")).toContainText("Tracks)");
 
@@ -92,15 +108,18 @@ test("two decks playing cost no more per frame than none at all", async ({ page 
     budgets.gates.browser.deckFrameCostMs[browserName(testInfo.project.name)],
   );
 });
+}
 
 /**
  * The scroll gate runs twice: over upstream's layout, and with the view shell
  * on (#55: its own row look, the Prep colour stripe, Energy pips and MyTags,
- * which fetch more per row) over a much larger collection.
+ * which fetch more per row) over a much larger collection, and that again
+ * with the Theme waveform on (wbx-45.13).
  */
 const SCROLL_CASES = [
-  { name: "the track list", shell: false, query: "" },
-  { name: "the view shell's Library list over 20,000 tracks", shell: true, query: "?tracks=20000" },
+  { name: "the track list", shell: false, query: "", waveformColor: null },
+  { name: "the view shell's Library list over 20,000 tracks", shell: true, query: "?tracks=20000", waveformColor: null },
+  { name: "the view shell's Library list over 20,000 tracks in the Theme waveform", shell: true, query: "?tracks=20000", waveformColor: "theme" },
 ] as const;
 
 for (const scrollCase of SCROLL_CASES) {
@@ -111,9 +130,9 @@ test(`scrolling ${scrollCase.name} costs no more per frame than sitting still`, 
   // still.
   await page.setViewportSize({ width: 1800, height: 1130 });
   if (scrollCase.shell) {
-    await page.addInitScript(() => localStorage.setItem("rbl.preferences", JSON.stringify({
-      advanced: { protectLibrary: false }, view: { viewShell: true },
-    })));
+    await page.addInitScript((waveformColor) => localStorage.setItem("rbl.preferences", JSON.stringify({
+      advanced: { protectLibrary: false }, view: { viewShell: true, ...(waveformColor === null ? {} : { waveformColor }) },
+    })), scrollCase.waveformColor);
   }
   await page.goto(`${productionUrl}/${scrollCase.query}`);
   await expect(page.getByTestId("browser-title")).toContainText("Tracks)");
