@@ -224,6 +224,14 @@ for (const [stop, scale] of [[2, 0.8], [4, 1], [6, 1.25]] as const) {
       { what: "the load's bar", part: progress.getByRole("progressbar"), kind: "bar" },
       { what: "the status line's bar", part: statusLoad(page).getByRole("progressbar"), kind: "bar" },
     ]);
+    // The loud display over a track's own waveform, and the plain bar the setting gives instead (wbx-73).
+    await call(page, "__emitStickLoadTrack", DJ, 2, 3, "100003");
+    await expect(progress.getByTestId("stick-loud")).toHaveAttribute("data-wave", "analysis");
+    await readable(page, "loading-waveform", scale, [{ what: "the load's bar", part: progress.getByRole("progressbar"), kind: "bar" }]);
+    await progress.getByRole("button", { name: "Show a plain bar" }).click();
+    await expect(progress.getByTestId("stick-loud")).toHaveCount(0);
+    await readable(page, "loading-plain", scale, [{ what: "the plain bar", part: progress.getByRole("progressbar"), kind: "bar" }]);
+    await progress.getByRole("button", { name: "Show the loud display" }).click();
 
     // Shrunk to the status line.
     await page.keyboard.press("Escape");
