@@ -676,7 +676,7 @@ fn a_mutant_records_the_fingerprint_of_its_parents_audio() {
 
     let created = mutate(&sandbox, &entry_at(&sandbox, &playlist, 2));
     let fingerprint = created["mutant"]["fingerprint"].as_str().unwrap();
-    assert!(fingerprint.starts_with("a1:"), "{fingerprint}");
+    assert!(fingerprint.starts_with("a2:"), "{fingerprint}");
     // The fingerprint every other Sidecar command gives the same audio.
     let fact = ok(
         &sandbox,

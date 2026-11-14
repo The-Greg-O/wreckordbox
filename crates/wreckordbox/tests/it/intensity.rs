@@ -242,7 +242,7 @@ fn measuring_a_track_stores_a_summary_and_a_curve_that_rises_where_the_audio_doe
         json!({"kind": "tool", "name": "wreckordbox-intensity"})
     );
     assert_eq!(stored["stale"], false);
-    assert!(stored["fingerprint"].as_str().unwrap().starts_with("a1:"));
+    assert!(stored["fingerprint"].as_str().unwrap().starts_with("a2:"));
     assert_eq!(shown["previous"], json!([]));
 
     let value = &stored["value"];

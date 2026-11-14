@@ -872,7 +872,7 @@ fn a_measurement_is_tied_to_the_audio_it_was_made_from_and_a_judgement_is_not() 
         json!({ "summary": 0.62, "curve": [0.2, 0.9] })
     );
     let fingerprint = fact["fingerprint"].as_str().unwrap().to_owned();
-    assert!(fingerprint.starts_with("a1:"), "{fingerprint}");
+    assert!(fingerprint.starts_with("a2:"), "{fingerprint}");
     let genre = ok(
         &sandbox,
         &[
