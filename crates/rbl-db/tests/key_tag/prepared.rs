@@ -2,7 +2,19 @@
 use super::*;
 use rbl_db::key_tag::prepared::{prepare, Outcome, Prepared};
 fn ready(path: &Path, key: &str) -> Box<Prepared> {
-    match prepare(path, None, Some(key)).unwrap() {
+    ready_with_error(path, key, None)
+}
+fn ready_with_error(path: &Path, key: &str, error: Option<std::io::ErrorKind>) -> Box<Prepared> {
+    let outcome = match error {
+        None => prepare(path, None, Some(key)),
+        Some(kind) => rbl_db::key_tag::prepared::prepare_with_exchange_error_for_test(
+            path,
+            None,
+            Some(key),
+            kind,
+        ),
+    };
+    match outcome.unwrap() {
         Outcome::Ready(plan) => plan,
         Outcome::Skipped(other) => panic!("unexpected: {other:?}"),
     }
@@ -67,16 +79,14 @@ fn unsupported_exchange_falls_back_without_losing_rollback_or_checks() {
         let path = dir.path().join("fallback.mp3");
         write_mp3(&path, Some(&busy_tag(Some("Cm"))), false);
         let before = std::fs::read(&path).unwrap();
-        let mut plan = ready(&path, "Am");
-        plan.force_exchange_error_for_test(reason);
+        let mut plan = ready_with_error(&path, "Am", Some(reason));
         plan.publish().unwrap();
         assert_eq!(read_key(&path).unwrap().as_deref(), Some("Am"));
         plan.rollback().unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), before);
         drop(plan);
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
-        let mut stale = ready(&path, "Fm");
-        stale.force_exchange_error_for_test(reason);
+        let mut stale = ready_with_error(&path, "Fm", Some(reason));
         write_key(&path, "Gm").unwrap();
         assert!(stale.publish().is_err());
         assert_eq!(read_key(&path).unwrap().as_deref(), Some("Gm"));
@@ -118,10 +128,11 @@ fn prepared_aiff_and_flac_preserve_audio_other_tags_and_exact_rollback_bytes() {
         write_aiff(&aiff, Some(&busy_tag(Some("Cm"))));
         let before = std::fs::read(&aiff).unwrap();
         let tags = others(&read_id3(&aiff));
-        let mut plan = ready(&aiff, "Am");
-        if fallback {
-            plan.force_exchange_error_for_test(std::io::ErrorKind::Unsupported);
-        }
+        let mut plan = ready_with_error(
+            &aiff,
+            "Am",
+            fallback.then_some(std::io::ErrorKind::Unsupported),
+        );
         plan.publish().unwrap();
         assert_eq!(read_key(&aiff).unwrap().as_deref(), Some("Am"));
         assert_eq!(others(&read_id3(&aiff)), tags);
@@ -142,10 +153,11 @@ fn prepared_aiff_and_flac_preserve_audio_other_tags_and_exact_rollback_bytes() {
         );
         let before = std::fs::read(&flac).unwrap();
         let (_, offset) = flac_comments(&flac);
-        let mut plan = ready(&flac, "Am");
-        if fallback {
-            plan.force_exchange_error_for_test(std::io::ErrorKind::Unsupported);
-        }
+        let mut plan = ready_with_error(
+            &flac,
+            "Am",
+            fallback.then_some(std::io::ErrorKind::Unsupported),
+        );
         plan.publish().unwrap();
         let (tags, after_offset) = flac_comments(&flac);
         assert_eq!(tags, ["title=kept", "INITIALKEY=Am", "encoder=kept"]);

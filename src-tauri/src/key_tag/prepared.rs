@@ -443,7 +443,7 @@ mod tests {
             .map(|e| e.unwrap().file_name())
             .filter(|n| n.to_string_lossy().contains(".rbx-key-"))
             .collect();
-        assert_eq!(names.len(), 2);
+        assert_eq!(names.len(), 1, "exchange stages only one audio copy");
         let removed = dir.path().join("removed");
         std::fs::rename(&stick, &removed).unwrap();
         std::fs::create_dir(&stick).unwrap();

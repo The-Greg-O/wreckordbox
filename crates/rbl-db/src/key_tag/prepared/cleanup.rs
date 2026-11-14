@@ -31,7 +31,14 @@ pub(super) fn cleanup_stale_checked(
         let Some((pid, stamp)) = rest.split_once('-') else {
             continue;
         };
-        if stamp.is_empty() || !stamp.bytes().all(|b| b.is_ascii_digit()) {
+        // Before the counter, names had PID-STAMP; retain safe cleanup of both
+        // versions, and accept exactly one optional numeric counter.
+        let mut parts = stamp.split('-');
+        let numeric = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+        if !parts.next().is_some_and(numeric)
+            || !parts.next().is_none_or(numeric)
+            || parts.next().is_some()
+        {
             continue;
         }
         let Ok(pid) = pid.parse::<u32>() else {

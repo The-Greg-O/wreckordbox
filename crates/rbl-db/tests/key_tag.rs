@@ -581,7 +581,7 @@ fn a_hard_linked_file_is_not_split_from_its_other_names() {
 }
 
 #[test]
-fn a_replacement_left_by_a_crash_is_cleared_on_the_next_write() {
+fn a_legacy_write_leaves_cleanup_to_authorized_preparation() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("issue-204-crash.mp3");
     write_mp3(&path, Some(&busy_tag(Some("Am"))), false);
@@ -598,7 +598,7 @@ fn a_replacement_left_by_a_crash_is_cleared_on_the_next_write() {
 
     assert_eq!(write_key(&path, "Dbm").unwrap(), KeyTagOutcome::Written);
 
-    assert!(!old.exists(), "a stale replacement of this file is removed");
+    assert!(old.exists(), "legacy writes must not sweep an original kept by a live plan");
     assert!(fresh.exists(), "one written in the last hour may still be in use");
     assert!(unrelated.exists(), "a name not of that shape is not ours");
 }
@@ -705,3 +705,6 @@ fn a_swap_of_a_read_only_or_unsupported_file_says_so_and_writes_nothing() {
 
 #[path = "key_tag/prepared.rs"]
 mod prepared;
+
+#[path = "key_tag/gate.rs"]
+mod gate;

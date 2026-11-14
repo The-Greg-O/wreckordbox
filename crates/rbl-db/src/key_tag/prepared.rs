@@ -4,7 +4,7 @@
 //! rollback copy is prepared outside the Library gate for that case.
 use super::{
     can_write, format_of, keep_created, keep_owner, links, read_key, sync_parent, temp_beside,
-    verify, write_flac, write_id3, Format, KeySwap, KeyTagError, Result, WRITING,
+    verify, write_flac, write_id3, Format, KeySwap, KeyTagError, Result,
 };
 use std::{
     fs, io,
@@ -12,6 +12,7 @@ use std::{
 };
 
 mod cleanup;
+mod staging;
 /// Explicit cleanup entry point. The caller must authorize this location;
 /// preparation also sweeps stale copies under its authorization callback.
 pub use cleanup::cleanup_stale;
@@ -34,7 +35,6 @@ pub struct Prepared {
     published: Option<fs::Metadata>,
     staged: Option<fs::Metadata>,
     cleanup: bool,
-    test_exchange_error: Option<io::ErrorKind>,
 }
 
 fn changed() -> KeyTagError {
@@ -76,6 +76,28 @@ pub fn prepare_checked(
     key: Option<&str>,
     authorize: impl Fn() -> io::Result<()>,
 ) -> Result<Outcome> {
+    prepare_inner(path, expected, key, authorize, None)
+}
+
+/// Simulates a filesystem without exchange during off-gate preparation.
+#[doc(hidden)]
+pub fn prepare_with_exchange_error_for_test(
+    path: &Path,
+    expected: Option<Option<&str>>,
+    key: Option<&str>,
+    kind: io::ErrorKind,
+) -> Result<Outcome> {
+    assert!(crate::test_mode());
+    prepare_inner(path, expected, key, || Ok(()), Some(kind))
+}
+
+fn prepare_inner(
+    path: &Path,
+    expected: Option<Option<&str>>,
+    key: Option<&str>,
+    authorize: impl Fn() -> io::Result<()>,
+    exchange_error: Option<io::ErrorKind>,
+) -> Result<Outcome> {
     authorize()?;
     let requested = path.to_path_buf();
     let path = fs::canonicalize(path)?;
@@ -114,21 +136,16 @@ pub fn prepare_checked(
         published: None,
         staged: None,
         cleanup: true,
-        test_exchange_error: None,
     };
     let staged = (|| -> Result<()> {
         // Same rewrite/verification as swap_key, without any Library lock.
         authorize()?;
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&prepared.temp)?;
         fs::copy(&prepared.path, &prepared.temp)?;
-        // Needed on FAT/network filesystems without exchange or hard links. All
-        // audio copying is here, never in publish/rollback under the Library gate.
-        authorize()?;
-        fs::copy(&prepared.temp, &prepared.backup)?;
-        let backup = fs::OpenOptions::new().write(true).open(&prepared.backup)?;
-        keep_created(&backup, &prepared.original);
-        keep_owner(&backup, &prepared.original)?;
-        backup.sync_all()?;
-        prepared.backup_stamp = Some(backup.metadata()?);
+        prepared.stage_backup(&authorize, exchange_error)?;
         authorize()?;
         match format {
             Format::Mp3 | Format::Aiff => write_id3(&prepared.path, &prepared.temp, format, key)?,
@@ -153,13 +170,6 @@ pub fn prepare_checked(
 }
 
 impl Prepared {
-    /// Fault switch for fixture tests; never enabled by production callers.
-    #[doc(hidden)]
-    pub fn force_exchange_error_for_test(&mut self, kind: io::ErrorKind) {
-        assert!(crate::test_mode());
-        self.test_exchange_error = Some(kind);
-    }
-
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -181,15 +191,25 @@ impl Prepared {
         Ok(())
     }
 
-    /// Publish while the caller owns its edit/authorization guards. Never wait
-    /// under the Library gate for a legacy writer doing expensive audio I/O.
+    /// Publish while the caller owns its edit/authorization guards. Only the
+    /// same canonical file waits: validation and replacement must be indivisible
+    /// to another in-process publisher, including the legacy writer.
     pub fn publish(&mut self) -> Result<()> {
-        let _writer = WRITING.try_lock().map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::WouldBlock,
-                "Another audio key writer is publishing",
-            )
-        })?;
+        self.publish_checked(|| {})
+    }
+
+    /// Controlled fixture interleaving after validation, before publication.
+    #[doc(hidden)]
+    pub fn publish_held_for_test(&mut self, checked: impl FnOnce()) -> Result<()> {
+        assert!(crate::test_mode());
+        self.publish_checked(checked)
+    }
+
+    fn publish_checked(&mut self, checked: impl FnOnce()) -> Result<()> {
+        let writing = super::file_lock::for_path(&self.path);
+        let _writer = writing
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.check()?;
         let next = fs::metadata(&self.temp)?;
         if !self
@@ -199,24 +219,17 @@ impl Prepared {
         {
             return Err(changed());
         }
-        let exchanged = match self.test_exchange_error {
-            Some(kind) => Err(io::Error::new(kind, "forced unsupported exchange")),
-            None => exchange(&self.temp, &self.path),
-        };
-        match exchanged {
-            Ok(()) => self.exchanged = true,
-            Err(why)
-                if matches!(
-                    why.kind(),
-                    io::ErrorKind::InvalidInput | io::ErrorKind::Unsupported
-                ) =>
-            {
-                // The earlier swap_key publication, with the same preflight
-                // checks. Unlike exchange, this does not retain the old inode.
-                self.check()?;
-                fs::rename(&self.temp, &self.path)?;
-            }
-            Err(why) => return Err(why.into()),
+        checked();
+        if self.backup_stamp.is_some() {
+            // Exchange was unsupported in the off-gate probe; the synced backup
+            // was staged there. Publication never copies audio under the gate.
+            self.check()?;
+            fs::rename(&self.temp, &self.path)?;
+        } else {
+            // If filesystem capability changed after preparation, fail closed:
+            // no unprepared fallback or audio copy inside the Library gate.
+            exchange(&self.temp, &self.path)?;
+            self.exchanged = true;
         }
         // Publication succeeded even if a later metadata read fails. Keep the
         // fallback identity for rollback and never report an untouched file.
@@ -231,12 +244,10 @@ impl Prepared {
         let Some(published) = &self.published else {
             return Ok(());
         };
-        let _writer = WRITING.try_lock().map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::WouldBlock,
-                "Another audio key writer is publishing",
-            )
-        })?;
+        let writing = super::file_lock::for_path(&self.path);
+        let _writer = writing
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if fs::canonicalize(&self.requested)? != self.path
             || !same(published, &fs::metadata(&self.path)?)
         {
