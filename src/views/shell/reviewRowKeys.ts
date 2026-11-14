@@ -131,7 +131,7 @@ export function useReviewRowKeys(state: RowKeysState): RowKeys {
   }, []);
 
   const onFocusCapture = useCallback((event: FocusEvent<HTMLElement>) => {
-    const row = (event.target as Element).closest?.(ROW) as HTMLElement | null;
+    const row = (event.target as Element).closest?.<HTMLElement>(ROW) ?? null;
     const fact = row ? Number(row.dataset.fact) : null;
     if (row && atFocus.current?.row.fact === fact) return;
     atFocus.current = row ? { row: snapshot(row, live.current.shown), held: new Set(down.current) } : null;
@@ -144,7 +144,7 @@ export function useReviewRowKeys(state: RowKeysState): RowKeys {
     const target = event.target as HTMLElement;
     if (modalOwnsInput(target)) return;
     if (isTyping(target) && !(target instanceof HTMLInputElement && target.type === "checkbox")) return;
-    const row = target.closest?.(ROW) as HTMLElement | null;
+    const row = target.closest?.<HTMLElement>(ROW) ?? null;
     if (!row) return;
     // A Y or N on a row is the row's, whatever it does: never the deck's.
     event.preventDefault();
