@@ -21,6 +21,15 @@
 //! - a restart (`switch_library`) drains first, then restarts.
 //!
 //! No timeout: a load is never abandoned part-way (wbx-70).
+//!
+//! **Closed** (wbx-45.14): each lifecycle step above first latches the
+//! window closed, for good ([`AppState::close_for_shutdown`]);
+//! [`AppState::stop_service`] alone stays a plain drain. From then on no new core write starts (the Library core refuses
+//! every write with [`CLOSING`], checked under the edit gate, so an edit
+//! queued behind another is refused too), the window cannot host a service
+//! again ([`AppState::host_service`] refuses), and no new service command
+//! is handed a caller. Edits already under way finish, with the Ledger
+//! still attached, before the service is let go.
 
 use std::sync::Arc;
 
@@ -43,6 +52,8 @@ struct Inner {
     draining: bool,
     /// Drains completed, so a waiter knows the one it joined is over.
     drains: u64,
+    /// The window is closing: latched by the first stop, never undone.
+    closed: bool,
     /// An exit was held and its drain started.
     exiting: bool,
     /// That drain is over: the exit may happen.
@@ -60,7 +71,23 @@ impl Drop for LoadRunning<'_> {
     }
 }
 
+/// Why nothing more is written once the window is closing.
+pub const CLOSING: &str = "wreckordbox is closing, so nothing more is changed. Nothing was written.";
+
 impl Shutdown {
+    /// Latches the window closed; answers whether this call closed it.
+    pub(crate) fn close(&self) -> bool {
+        let mut inner = self.inner.lock();
+        let was = inner.closed;
+        inner.closed = true;
+        !was
+    }
+
+    /// Whether the window is closing (or closed).
+    pub fn is_closed(&self) -> bool {
+        self.inner.lock().closed
+    }
+
     /// Counts a load command until its report is kept (drop the guard then).
     pub(crate) fn load_running(&self) -> LoadRunning<'_> {
         self.inner.lock().loads += 1;
@@ -117,6 +144,7 @@ pub fn exit_requested(
     drop(inner);
     let state = Arc::clone(state);
     std::thread::spawn(move || {
+        state.close_for_shutdown();
         state.stop_service();
         state.shutdown.inner.lock().exit_ready = true;
         exit();
@@ -128,12 +156,14 @@ pub fn exit_requested(
 /// service is stopped, joining a drain under way, and every load's report
 /// is kept before this returns.
 pub fn on_exit(state: &Arc<AppState>) {
+    state.close_for_shutdown();
     state.stop_service();
 }
 
 /// Runs `then` (a restart) once the service is drained: any load stopped
 /// where it safely can and its report kept.
 pub fn drain_then<T>(state: &Arc<AppState>, then: impl FnOnce() -> T) -> T {
+    state.close_for_shutdown();
     state.stop_service();
     then()
 }

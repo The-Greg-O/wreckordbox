@@ -40,6 +40,10 @@ struct Point {
 /// Library's generation and not yet read what it exports (wbx-45.14).
 pub const EXPORT_CONFIRMED: &str = "export.confirmed";
 
+/// The window has latched closed and refuses new writes, and has not yet
+/// waited for the edits under way nor let the service go (wbx-45.14).
+pub const SHUTDOWN_CLOSED: &str = "shutdown.closed";
+
 static ANY: AtomicBool = AtomicBool::new(false);
 static POINTS: Mutex<Option<Points>> = Mutex::new(None);
 static CHANGED: Condvar = Condvar::new();
