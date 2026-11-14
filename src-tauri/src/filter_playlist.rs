@@ -35,7 +35,7 @@
 //!   an empty filter, an empty name.
 //!
 //! The save itself is the window's Create Intelligent Playlist edit, at the
-//! top of the tree: the one recorded edit path (gated, refused under
+//! top level of the tree: the one recorded edit path (gated, refused under
 //! Library Protection, told to the Ledger as the DJ's), one Undo step
 //! labelled "Save Filter as Intelligent Playlist".
 use std::sync::{Arc, Mutex};
@@ -82,7 +82,7 @@ pub struct SavedFilterPlaylistDto {
     pub generation: u32,
 }
 
-/// Saves the filter as an intelligent playlist named `name`, at the top of
+/// Saves the filter as an intelligent playlist named `name`, at the top level of
 /// the tree; refused, with nothing written, when an intelligent playlist
 /// cannot hold it.
 #[tauri::command]

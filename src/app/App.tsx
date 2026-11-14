@@ -101,7 +101,7 @@ import { MixerStrip } from "@/views/player/MixerStrip";
 import { DualZoom } from "@/views/player/DualDeck";
 import type { PreferencesTarget } from "@/views/settings/Preferences";
 import { PreferencesProvider, usePreferencesStore } from "@/store/usePreferences";
-import { stepUiScale, type PreferencePane } from "@/lib/preferences";
+import { formatKey, stepUiScale, type PreferencePane } from "@/lib/preferences";
 import { useEffectiveWaveform } from "@/lib/waveTheme";
 import { answer, deckNumber, setPlaying, whenLoaded, withSetting, type ScriptHandler } from "@/lib/scripting";
 import { continuesFrom, playedToEnd, skipRowIndex, type ListPosition } from "@/lib/continuousPlay";
@@ -113,9 +113,10 @@ import type { QueueItem } from "@/lib/queue";
 import { TrackFilter } from "@/views/browser/TrackFilter";
 import { TrackFilterBar } from "@/views/shell/TrackFilterBar";
 import { useShellTrackFilter } from "@/views/shell/useShellTrackFilter";
+import { useSaveFilterPlaylist } from "@/views/shell/SaveFilterPlaylist";
 import { hasPicks } from "@/lib/shellTrackFilter";
 import { EMPTY_FILTER, toSpecFilter, type FilterState } from "@/lib/trackFilter";
-import type { AnalysisResult, DeviceFormat, DeviceImportMissing, DevicePlaylistEdit, DevicePlaylistImportPlan, FilterValues, LinkPeerSeen, LinkStatus, ListTotals, RelocateSearch, SmartRule, StickWriteOperation, TrackLookups, UnanalysedTracks } from "@/ipc/types";
+import type { AnalysisResult, DeviceFormat, DeviceImportMissing, DevicePlaylistEdit, DevicePlaylistImportPlan, FilterValues, LinkPeerSeen, LinkStatus, ListTotals, RelocateSearch, SaveFilterRequest, SmartRule, StickWriteOperation, TrackLookups, UnanalysedTracks } from "@/ipc/types";
 import { statusBarListText } from "@/lib/format";
 import { StatusLine } from "@/views/shell/StatusLine";
 import { autoRelocated, missingAmong, relocateSteps, relocateTracks } from "@/lib/relocate";
@@ -1741,6 +1742,25 @@ function AppBody() {
     },
     [writeNow],
   );
+  // "Save as intelligent playlist" in the Track Filter bar (wbx-58): the
+  // filter of All Tracks only (the backend names the open list otherwise).
+  const saveFilterTo = useCallback(async (name: string, request: SaveFilterRequest): Promise<string | null> => {
+    if (readOnly) return refusal(advancedPrefs.protectLibrary);
+    try {
+      const backend = await getBackend();
+      await backend.edits.saveFilterPlaylist(name, request);
+      await afterWrite(`Saved ${name}.`);
+      return null;
+    } catch (e) {
+      return e instanceof Error ? e.message : "That could not be saved.";
+    }
+  }, [readOnly, advancedPrefs.protectLibrary, afterWrite]);
+  const saveShellFilter = useSaveFilterPlaylist({
+    filter: shellFilter.model,
+    within: shellFilterBase.source.kind === "collection" ? null : (listNode?.name ?? "this list"),
+    keyName: (identity) => formatKey(identity, viewPrefs.keyDisplay),
+    save: saveFilterTo,
+  });
 
   // rekordbox asks OK/Cancel ("Remove") before a track leaves a playlist, a
   // history or the Tag List, from the track menu and from the Delete key
@@ -3817,7 +3837,7 @@ function AppBody() {
             <TrackFilterBar model={shellFilter.model} onChange={onShellFilterChange} values={shellFilter.values}
               valuesError={shellFilter.valuesError} categories={shellFilter.categories} dropped={shellFilter.dropped}
               deselected={filterDeselected} onStick={shellFilter.onStick} count={shellFilter.count} filtering={shellFilter.filtering} loaded={shellFilterLoaded}
-              keyDisplay={viewPrefs.keyDisplay} keySort={viewPrefs.keySort} />
+              keyDisplay={viewPrefs.keyDisplay} keySort={viewPrefs.keySort} save={saveShellFilter} />
           ) : filterBar}
         />
         )
