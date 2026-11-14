@@ -766,6 +766,7 @@ async function realBackend(): Promise<Backend> {
       gridUndo: (track, deck) => invoke<GridState>("grid_undo", { track, deck: deck ?? null }),
       gridRedo: (track, deck) => invoke<GridState>("grid_redo", { track, deck: deck ?? null }),
       gridLock: (track, on) => invoke<GridState>("grid_lock", { track, on }),
+      gridLockSelection: (tracks, on) => invoke<void>("grid_lock_selection", { tracks, on }),
       convertMemoryCuesToHot: (track) => invoke<number>("convert_memory_cues_to_hot", { track }),
       setTrackField: (tracks, field, value, options) =>
         invoke<EditHistoryState>("set_track_field", { tracks, field, value, writeKeyTag: options?.writeKeyTag ?? false }),

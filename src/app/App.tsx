@@ -2231,15 +2231,14 @@ function AppBody() {
     [afterWrite, analysisPrefs.auto, analysis, jobs, t, refuse],
   );
 
-  // Analysis Lock: the GRID panel's lock, set from the list on every
-  // selected track.
+  // Analysis Lock is one atomic hand edit over the whole selection.
   const analysisLock = useCallback(
     (ids: readonly string[], on: boolean) => {
       if (ids.length === 0) return;
       void (async () => {
         const backend = await getBackend();
         try {
-          for (const id of ids) await backend.edits.gridLock(id, on);
+          await backend.edits.gridLockSelection(ids, on);
           report(`${on ? "Locked" : "Unlocked"} the analysis of ${ids.length} track${ids.length === 1 ? "" : "s"}.`);
         } catch (e) {
           refuse(e instanceof Error ? e.message : "The lock could not be set.");

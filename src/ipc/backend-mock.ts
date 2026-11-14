@@ -1,3 +1,4 @@
+import { lockAnalysisSelection } from "./mock-analysis-lock";
 import { createMockBulkLedger } from "./mock-bulk-ledger";
 /**
  * In-browser stand-in for the Rust backend.
@@ -2031,11 +2032,18 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       await edits.redoEdit();
       return gridStateOf(held);
     },
-    gridLock: (track, on) => {
+    gridLockSelection: (tracks, on) => lockAnalysisSelection(tracks, on, {
+      protected: () => protection?.protectLibrary ?? false,
+      exists: id => all.some(row => row.id === id),
+      locked: id => analysisLocks.get(id) ?? gridStore.get(id)?.locked ?? false,
+      set: (id, locked) => { analysisLocks.set(id, locked); const grid = gridStore.get(id); if (grid) grid.locked = locked; },
+      record: recordEdit,
+    }),
+    gridLock: async (track, on) => {
       const held = gridOf(track);
       if (!held) return notFound("That track has no beat grid to edit.");
-      held.locked = on;
-      return gridChanged(track, held);
+      await edits.gridLockSelection([track], on);
+      return gridStateOf(held);
     },
   };
 
@@ -2088,6 +2096,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
   const progressListeners = new Set<(trackId: string) => void>();
   // How far each drawing analysis has got through its track, 0 to 1.
   const drawn = new Map<string, number>();
+  const analysisLocks = new Map<string, boolean>();
   const gridOf = (trackId: string): HeldGrid | null => {
     const held = gridStore.get(trackId);
     if (held) return held;
@@ -2106,7 +2115,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       beats.push({ number: (n % 4) + 1, tempoX100: fast ? row.bpmX100 * 2 : row.bpmX100, timeMs: Math.round(at) });
       at += fast ? beatMs / 2 : beatMs;
     }
-    const made = { track: trackId, beats, undo: [], redo: [], locked: false };
+    const made = { track: trackId, beats, undo: [], redo: [], locked: analysisLocks.get(trackId) ?? false };
     gridStore.set(trackId, made);
     return made;
   };
@@ -2554,7 +2563,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
   // The Intake view's queues (wbx-62): `mock-intake.ts`.
   const intake = createMockIntake({
     all, colors, tagsOf: (row) => detailsOf(row).myTags, categories: myTagCategories,
-    gridLocked: (id) => gridStore.get(id)?.locked ?? false, wait, ready: () => ready,
+    gridLocked: (id) => analysisLocks.get(id) ?? gridStore.get(id)?.locked ?? false, wait, ready: () => ready,
     setColour: (id, colour) => edits.setTrackColor([id], colour === null ? null : String(colour)),
   });
   // The Review queue (wbx-74): `mock-review.ts`.

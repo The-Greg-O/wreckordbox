@@ -1553,3 +1553,6 @@ mod key_tag_ledger;
 
 #[path = "service_host/ledger_failures.rs"]
 mod ledger_failures;
+
+#[path = "service_host/analysis_lock_ledger.rs"]
+mod analysis_lock_ledger;
