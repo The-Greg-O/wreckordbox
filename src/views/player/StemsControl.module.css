@@ -1,0 +1,70 @@
+/* The large player's Stems control (wbx-67), the row under the pads.
+   Chrome is the theme's roles, so it reads under light and dark themes. */
+
+.stems {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-shell-space-2) var(--s-shell-space-4);
+  min-width: 0;
+  padding: var(--s-shell-space-3) var(--s-shell-space-4);
+  border-top: var(--s-shell-border) solid var(--role-hairline, var(--c-raised));
+  font-family: var(--f-shell);
+  font-size: var(--f-size-shell);
+  color: var(--role-text, var(--c-text));
+}
+
+.label {
+  color: var(--role-text-dim, var(--c-text-dim));
+  font-size: var(--f-size-shell-label);
+  letter-spacing: var(--f-tracking-shell-label, 0.1em);
+  text-transform: uppercase;
+}
+
+.line {
+  flex: 1 1 12em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stems[data-state="stale"] .line { color: var(--role-tab-to-ink, var(--role-tab-to, var(--c-text))); }
+.stems[data-state="failed"] .line,
+.stems[data-state="unread"] .line,
+.stems[data-state="unavailable"] .line { color: var(--role-tab-to-ink, var(--role-tab-to, var(--c-text))); white-space: normal; }
+
+.bar {
+  position: relative;
+  flex: 0 1 160px;
+  min-width: 60px;
+  height: 6px;
+  overflow: hidden;
+  border-radius: var(--s-shell-radius);
+  background: var(--role-raised, var(--c-raised));
+}
+.bar > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--role-accent, var(--c-accent));
+}
+
+.stems button {
+  box-sizing: border-box;
+  height: 30px;
+  padding: 0 var(--s-shell-space-3);
+  border: var(--s-shell-border) solid var(--role-border, var(--c-outline));
+  border-radius: var(--s-shell-radius);
+  background: none;
+  color: var(--role-text, var(--c-text));
+  font: inherit;
+  cursor: pointer;
+}
+.stems button:disabled { opacity: 0.45; cursor: default; }
+.stems button:not(:disabled):hover { color: var(--role-text-bright, var(--c-text)); }
+.stems button:focus-visible { outline: 1px solid var(--role-accent, var(--c-accent)); outline-offset: 1px; }
+
+/* Half width: the Stems tools move behind the command palette ("Split
+   Stems"); the split's progress stays in the status line. */
+@container shell (max-width: 800px) {
+  .stems { display: none; }
+}

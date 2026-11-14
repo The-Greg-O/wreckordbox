@@ -1,0 +1,8 @@
+.splits { display: inline-flex; align-items: center; gap: var(--s-shell-space-3, 6px); min-width: 0; }
+.item { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.failed { display: inline-flex; align-items: center; gap: var(--s-shell-space-2, 4px); min-width: 0; color: var(--role-tab-to-ink, var(--role-tab-to, var(--c-text))); }
+.bar {
+  position: relative; display: inline-block; width: 60px; height: 4px; margin-left: 6px; vertical-align: middle;
+  overflow: hidden; border-radius: 2px; background: var(--role-raised, var(--c-raised));
+}
+.bar > span { position: absolute; inset: 0 auto 0 0; background: var(--role-accent, var(--c-accent)); }
