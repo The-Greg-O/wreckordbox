@@ -74,6 +74,7 @@ import { libraryWidthOf } from "@/lib/libraryFit";
 import { libraryLookFor } from "@/views/shell/libraryFitLook";
 import { SHELL_PLAYER_LAYOUT, ViewShell } from "@/views/shell/ViewShell";
 import { useShellTree } from "@/views/shell/useShellTree";
+import { WaveformThemeChooser } from "@/views/shell/WaveformThemeChooser";
 import { breadcrumbOf } from "@/lib/shellTreeOverlay";
 import { useTargetList } from "@/views/shell/useTargetList";
 import { IntakeView } from "@/views/shell/IntakeView";
@@ -4022,7 +4023,7 @@ function AppBody() {
           libraryTarget={targetList.pane}
           libraryCrumb={libraryCrumb}
           status={<>{linkStrip}{statusBar}</>}
-          topBarEnd={<CommandPaletteButton platform={platform} />}
+          topBarEnd={<><WaveformThemeChooser /><CommandPaletteButton platform={platform} /></>}
         />
         {dialogs}
       </div>
