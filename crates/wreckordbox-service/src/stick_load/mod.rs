@@ -137,6 +137,11 @@ pub struct LoadArgs {
     /// explicit unlock).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval: Option<String>,
+    /// The caller's name for this load (the window's operation id, wbx-72):
+    /// every progress event of this load carries it, so a client tells its
+    /// own load's events from another's or an earlier one's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<String>,
 }
 
 /// A track named in a plan or a report.

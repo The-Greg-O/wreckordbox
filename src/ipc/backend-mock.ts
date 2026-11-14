@@ -2589,6 +2589,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       fromServiceLoad(await stickLoad.stickViewLoad(stick, playlists, plan, operation)),
     stickLoadReports: async () => (await stickLoad.stickLoadReports()).map(fromKeptReport),
     stickLoadReportDismiss: (id) => stickLoad.stickLoadReportDismiss(id),
+    stickLoadReportReserve: () => stickLoad.stickLoadReportReserve(),
     intakeQueue: intake.intakeQueue,
     intakeCounts: intake.intakeCounts,
     intakeColours: intake.intakeColours,
@@ -2597,6 +2598,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     intakeSetTags: async (track, dimension, terms, version, dropUnmapped) =>
       fromServiceTagsSet(await tagPanel.intakeSetTags(track, dimension, terms, version, dropUnmapped)),
     onSidecarChanged: tagPanel.onSidecarChanged,
+    onStickLoadProgress: stickLoad.onStickLoadProgress,
     rekordboxBrowseSettings: () => Promise.resolve(null),
     librarySummary: () =>
       ready
@@ -3093,6 +3095,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     ejectDevice: async (path) => {
       const index = devices.findIndex(device => device.path === path);
       if (index < 0) throw new Error("That device is no longer connected.");
+      // Kept, so `__remountDevice` can put the same volume back (wbx-72 review).
+      unmounted.set(path, devices[index] as Device);
       devices.splice(index, 1);
       await wait(undefined);
     },

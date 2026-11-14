@@ -16,7 +16,8 @@
  * refused with the backend's own words and nothing is written. Each write
  * that runs moves the Stick's revision on.
  *
- * Logs, for the specs: every Stick write that ran (`__stickWrites`, with
+ * Logs, for the specs: every plan id asked to be approved (`__stickApprovals`),
+ * every Stick write that ran (`__stickWrites`, with
  * its arguments), every refused one (`__stickRefusedWrites`), and every
  * call that in the real backend first runs `rbl_export::recover()`
  * (`__stickRecoveringCalls`); when such a call reaches a Stick marked as
@@ -312,7 +313,13 @@ export function withStickSafetyLog(backend: Backend): Backend {
     });
     return { ...stick, plan: id };
   };
+  // Every plan id the window asked to approve (wbx-72 review: a hold approves only the plan it was made on).
+  const approvals: string[] = [];
+  if (typeof window !== "undefined") {
+    (window as unknown as { __stickApprovals?: () => string[] }).__stickApprovals = () => [...approvals];
+  }
   wrapped.stickWriteApprove = (id: string) => {
+    approvals.push(id);
     const state = log();
     const planned = state.tokens.get(id);
     state.tokens.delete(id);

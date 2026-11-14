@@ -1185,6 +1185,8 @@ export interface Backend {
   stickLoadReports(): Promise<import("@/lib/stickLoad").KeptLoadReport[]>;
   /** The DJ has read a kept report. */
   stickLoadReportDismiss(id: string): Promise<void>;
+  /** A report id for the next load, issued and reserved by the shell (wbx-72): the load's name for its progress and its kept report. */
+  stickLoadReportReserve(): Promise<string>;
   /** How many tracks wait in Intake and in Problems (the Intake tab). */
   intakeCounts(): Promise<import("@/lib/intakeQueue").IntakeCounts>;
   /** The DJ's eight Prep colours, and which mean Clean and Problem (wbx-63; the service's `intake.colours`). */
@@ -1211,6 +1213,8 @@ export interface Backend {
   intakeSetTags(track: string, dimension: string, terms: readonly string[], version: string, dropUnmapped: readonly string[], comments: boolean): Promise<import("@/lib/tagPanel").TagsSet>;
   /** A Fact changed in the Sidecar (any client): `{ trackId, kind }`. */
   onSidecarChanged(listener: (change: { trackId: string; kind: string }) => void): () => void;
+  /** A Stick load moved on (wbx-72): the service's `stick_load_progress`, as it is (`fromServiceProgress`). */
+  onStickLoadProgress(listener: (progress: unknown) => void): () => void;
   /** Maps collection track ids to rows already in one of a stick's libraries. */
   devicePlaylistCollectionTracks(path: string, format: DeviceFormat, tracks: string[]): Promise<(string | null)[]>;
   /**
