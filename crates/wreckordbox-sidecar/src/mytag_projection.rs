@@ -21,6 +21,10 @@
 //!   leaves other rows, so no clock is ever compared. Kept in the `meta`
 //!   table, one key per assignment (`projection_tag:<track>:<tag>`);
 //!   [`Sidecar::set_tag_marks`] is the only write in this module.
+#![allow(
+    clippy::doc_markdown,
+    reason = "MyTag and the like are the glossary's words, not code items"
+)]
 use std::collections::HashMap;
 
 use rusqlite::{params, Connection};
@@ -92,9 +96,15 @@ fn tracks_named(command: Option<&str>) -> Option<Vec<String>> {
     (!tracks.is_empty()).then_some(tracks)
 }
 
+/// One track's MyTags before and after an edit: `(track, before, after)`.
+type TagEdit = (String, Vec<String>, Vec<String>);
+
+/// Per assignment: the states each step replaced, to go back to on Undo.
+type Stacks = HashMap<(String, String), Vec<(i64, Option<FieldState>)>>;
+
 /// `(track, before, after)` of each track a `track_tags` payload names;
 /// `None` when it does not read.
-fn tag_edits(payload: Option<&str>) -> Option<Vec<(String, Vec<String>, Vec<String>)>> {
+fn tag_edits(payload: Option<&str>) -> Option<Vec<TagEdit>> {
     let payload: Value = serde_json::from_str(payload?).ok()?;
     let ids = |list: &Value| -> Option<Vec<String>> {
         list.as_array()?
@@ -205,7 +215,7 @@ fn provenance(db: &Connection) -> Result<TagProvenance> {
     // id -> (action, reverses, owner when it is an edit)
     let mut steps: HashMap<i64, (String, Option<i64>, Owner)> = HashMap::new();
     // Per assignment: the states each step replaced, to go back to on Undo.
-    let mut stacks: HashMap<(String, String), Vec<(i64, Option<FieldState>)>> = HashMap::new();
+    let mut stacks: Stacks = HashMap::new();
     for row in rows(db)? {
         let owner = if row.command.as_deref() == Some(PROJECTION_COMMAND) {
             Owner::Projection

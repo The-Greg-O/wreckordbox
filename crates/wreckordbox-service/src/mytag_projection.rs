@@ -54,10 +54,11 @@
 //!
 //! The apply re-checks under the edit gate, before anything is written: no
 //! MyTag entry newer than the plan concerns a planned track, and every
-//! planned assignment's rows are still the rows the plan read; then each
+//! planned assignment's rows are still the rows the plan read; then every
 //! track's changes are written by `rbl_db`'s checked writer
 //! ([`rbl_db::write::Writer::set_my_tags_if_unchanged`]), which compares the
-//! rows and writes in one immediate transaction. The intent of the write
+//! rows again and writes the whole batch in one immediate transaction:
+//! all of it or none of it. The intent of the write
 //! names the planned tracks (`ledger::name_tracks`), so a crash part-way is
 //! a barrier bounded to those tracks, never to every track.
 //!
@@ -731,7 +732,7 @@ fn decide(
             dimension: one.view.dimension.clone(),
             term: deck_tag.id.clone(),
             change: if want { "add" } else { "remove" }.into(),
-            implied: implied.iter().any(|t| *t == deck_tag.id),
+            implied: implied.contains(&deck_tag.id),
             fact: winner.id,
             source: winner.source.clone(),
             confidence: winner.confidence,

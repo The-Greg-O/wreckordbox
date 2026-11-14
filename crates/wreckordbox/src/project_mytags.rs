@@ -1,5 +1,5 @@
 //! `wreckordbox project --mytags`: Projection of the Tag schema to native
-//! MyTags (wbx-29).
+//! `MyTags` (wbx-29).
 use std::fmt::Write as _;
 
 use serde_json::json;
@@ -13,7 +13,7 @@ pub fn run(
     client: &mut Client,
     as_json: bool,
     dry_run: bool,
-    wanted: Wanted,
+    wanted: &Wanted,
 ) -> Result<String, ServiceError> {
     let command = if dry_run {
         commands::PLAN

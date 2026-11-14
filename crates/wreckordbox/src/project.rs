@@ -23,8 +23,8 @@ pub struct ProjectArgs {
     /// out.
     #[arg(long = "track", value_name = "TRACK_ID")]
     tracks: Vec<String>,
-    /// Project the Tag schema's deck view to native MyTags instead
-    /// (wbx-29): each track's MyTags from the standing Facts of the
+    /// Project the Tag schema's deck view to the native tags instead
+    /// (wbx-29): each track's tags from the standing Facts of the
     /// dimensions on the deck, under the policy's `[mytags]` section.
     #[arg(long)]
     mytags: bool,
@@ -42,7 +42,7 @@ pub fn run(client: &mut Client, as_json: bool, args: &ProjectArgs) -> Result<Str
             client,
             as_json,
             args.dry_run,
-            Wanted {
+            &Wanted {
                 tracks: args.tracks.clone(),
                 expect: args.expect.clone(),
                 policy_hash: None,
