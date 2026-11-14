@@ -142,17 +142,23 @@ impl Armed {
         let mut points = POINTS.lock();
         let deadline = std::time::Instant::now() + TEST_WAIT;
         loop {
-            match points.as_ref().and_then(|p| p.armed.get(&self.name)) {
-                Some(state) if state.reached => return,
-                Some(_) => {
-                    assert!(
-                        !CHANGED.wait_until(&mut points, deadline).timed_out(),
-                        "no writer reached {}",
-                        self.name
-                    );
-                }
-                None => panic!("{} was released before it was reached", self.name),
+            let state = points
+                .as_ref()
+                .and_then(|p| p.armed.get(&self.name))
+                .copied();
+            assert!(
+                state.is_some(),
+                "{} was released before it was reached",
+                self.name
+            );
+            if state.is_some_and(|s| s.reached) {
+                return;
             }
+            assert!(
+                !CHANGED.wait_until(&mut points, deadline).timed_out(),
+                "no writer reached {}",
+                self.name
+            );
         }
     }
 

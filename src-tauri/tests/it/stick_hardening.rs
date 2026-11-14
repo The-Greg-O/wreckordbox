@@ -6,6 +6,13 @@
 //! test does what the race needs (locks the Stick, edits the Library), then
 //! lets it go. No sleeps. Temporary folders stand in for Sticks.
 
+#![allow(
+    clippy::pedantic,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 

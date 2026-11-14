@@ -44,6 +44,7 @@ pub struct Shutdown {
 }
 
 #[derive(Default)]
+#[allow(clippy::struct_excessive_bools, reason = "independent stages of one shutdown, each latched once")]
 struct Inner {
     /// Stick load commands running, from before the service is asked until
     /// their report is kept.

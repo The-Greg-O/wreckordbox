@@ -342,7 +342,7 @@ pub fn validate_destination(directory: &Path, location: &rbl_db::LibraryLocation
 }
 
 #[allow(clippy::too_many_lines, reason = "one linear backup pipeline; splitting it would hide the order writes happen in")]
-fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&str, u64, u64, &str) -> AppResult<()>) -> AppResult<String> {
+pub(crate) fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&str, u64, u64, &str) -> AppResult<()>) -> AppResult<String> {
     let _gate = state.edit_gate().lock();
     let _files = state.analysis_write().lock();
     let location = state.location()?;
@@ -651,10 +651,6 @@ pub fn delete(state: &AppState, path: &Path) -> AppResult<()> {
     remove(&path)?;
     crate::durable::sync_dir(&state.backup_destination()).map_err(error)
 }
-
-#[cfg(test)]
-#[path = "backup_stick_tests.rs"]
-mod stick_tests;
 
 #[cfg(test)]
 mod tests {
