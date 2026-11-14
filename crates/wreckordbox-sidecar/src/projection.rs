@@ -496,6 +496,18 @@ impl Sidecar {
         )?)
     }
 
+    /// Where the Runs stand now: the newest Run's identifier and how many
+    /// have ended. Beginning a Run moves the first, ending one the second
+    /// (wbx-25: a backup before a large Run is of one moment, and a Run a
+    /// separation begins writes no Ledger entry).
+    pub fn runs_position(&self) -> Result<(i64, i64)> {
+        Ok(self.db().query_row(
+            "SELECT COALESCE(MAX(id), 0), COUNT(finished_at) FROM run",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?)
+    }
+
     /// The identifier of the open intent of a write answering `command`,
     /// the newest: under the edit gate, the write in progress. Its Ledger
     /// entry takes this identifier when it is recorded.

@@ -1106,7 +1106,7 @@
   "Delete the backup from {date}? This cannot be undone.": "Sicherung vom {date} löschen? Dies kann nicht rückgängig gemacht werden.",
   "Backup deleted.": "Sicherung gelöscht.",
   "Restore a backup": "Stellen Sie ein Backup wieder her",
-  "To restore, quit wreckordbox and open wreckordbox Restore. It shows what each backup holds and lets you restore all of it or only some parts.": "Zum Wiederherstellen beenden Sie wreckordbox und öffnen wreckordbox Restore. Es zeigt den Inhalt jedes Backups und ermöglicht die Wiederherstellung des gesamten Backups oder nur einiger Teile.",
+  "To restore, quit wreckordbox and run wreckordbox backup restore with the backup's file in a terminal. It puts back the Library and the Sidecar together. Do not use the separate Restore app: it leaves the Sidecar out.": "Zum Wiederherstellen beenden Sie wreckordbox und führen in einem Terminal wreckordbox backup restore mit der Datei des Backups aus. Die Bibliothek und der Sidecar werden zusammen wiederhergestellt. Verwenden Sie nicht die separate Restore-App: Sie lässt den Sidecar aus.",
   "blue": "blau",
   "rgb": "RGB",
   "3band": "3band",

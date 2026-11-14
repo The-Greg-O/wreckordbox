@@ -34,6 +34,86 @@ Run names the hash of the policy it was made under (`policy_hash`, and the
 Run's description), so a changed policy is visible afterwards, but it is
 not prevented. Keep the file under version control if this matters to you.
 
+## A backup before a large Run
+
+Before a Run that will change more tracks than a threshold, wreckordbox
+backs up the Library and the Sidecar first, as a second way back besides
+unwinding the Run. The threshold is in the same policy file:
+
+```toml
+[backup]
+above_tracks = 200   # back up before a Run that changes more than 200 tracks
+```
+
+With no `[backup]` section the threshold is 200. It applies to applying a
+projection (`wreckordbox project`, `project --mytags`) and to accepting
+waiting Facts in review (`wreckordbox review accept`). A dry run never
+backs up and writes nothing. Recording Facts (one or many) and converting
+the Tag schema change only the Sidecar, not your tracks, and take no backup.
+
+- **What is counted** is the tracks the Run is about to write, worked out by
+  the Run itself, not by an earlier dry run: if anything changed since, the
+  Run is refused with nothing written, so the Run that writes is the one
+  counted.
+- **A Run of several commands** (an agent's Run named with `--run`) is
+  counted whole: the tracks its earlier commands changed and the tracks this
+  command will change. Its total is not known in advance, so the backup is
+  taken before the command that takes the Run over the threshold, not
+  before the Run's first write; the Run's earlier writes are not in it as
+  "before" values. One backup per Run: later commands of the same Run name
+  it (`run_backup`) and take no other. Any command joining the Run counts,
+  not only projections and review: a `wreckordbox tracks rate … --run N`
+  that takes the Run over the threshold is backed up first too. A change
+  that cannot say beforehand which tracks it changes (renaming, merging or
+  deleting a My Tag, removing tracks) counts as over the threshold
+  (`uncounted`), so a Run with one takes its backup before it.
+- **One moment:** the Library, the Sidecar and the analysis and artwork
+  files are copied together while no edit can be made (edits wait a moment,
+  see below), then the backup is written from that copy. The large files
+  are not copied byte for byte but linked, so the copy is made on the
+  Library's own drive; if a link cannot be made there, the backup is
+  refused with nothing changed (`run_backup_failed`) rather than holding
+  your edits up for a full copy. Of Stem audio (when backups include it)
+  the backup holds only the Stems the Sidecar records, so a separation
+  finishing meanwhile adds nothing half-recorded. If anything changes after
+  the copy and before the Run's first change (an edit in the window, a Fact
+  recorded, a Run begun or ended), the backup is no longer of the moment
+  before the Run: it is removed and taken again. Three backups at most,
+  each checked; then the Run is refused with nothing changed
+  (`run_backup_failed`).
+- **Where it goes:** the backup folder Preferences › Backups saves to (by
+  default the app's backup folder; a folder inside the Library's analysis
+  or artwork folders or the Sidecar is refused), named `rbexport-<date>-<time>-run-<id>.zip`.
+  It is an ordinary backup: `wreckordbox backup list` and Preferences show
+  it, and `wreckordbox backup restore` restores it, the Library and the
+  Sidecar together. Do not use the separate Restore app for it: it leaves
+  the Sidecar out. It does not carry the restore scripts the window's own
+  backups add.
+- **The Run names it:** every Ledger entry of the Run's write carries
+  `large_run` in its command (`wreckordbox runs show`): the tracks this
+  command changes (`tracks`) and the Run with it (`run_tracks`), the
+  threshold in force, and the backup's path, time and size (or `null` when
+  none was taken before this command). The answer of the apply carries the same.
+- **A backup that cannot be made stops the Run** before anything changes and
+  before a Run is recorded: a full disk or another failure
+  (`run_backup_failed`), a backup folder on a Stick you have not unlocked
+  (`stick_protected`), or Library Protection on (`library_protected`).
+- **A backup with no Run:** if wreckordbox stops after the backup and before
+  the first change, or the Run is then refused, the backup stays in the
+  folder like any other and nothing in the Library changed. Nothing deletes
+  it for you; delete it in Preferences › Backups if you do not want it.
+- **What waits meanwhile:** while the copy is made, edits (in the window
+  and from commands), analysis saves and the window's own backup wait; on a
+  20,000-track test Library with 60,000 analysis files that was under half
+  a second. While the backup is written from the copy, other `wreckordbox`
+  commands wait (the service answers one at a time), as does locking or
+  ejecting the Stick the backup goes to; on that Library it took about a
+  second and a half for a 21 MB archive, and it grows with the size of
+  your analysis files.
+- **Trust:** like the rest of the file, the threshold is not protected from
+  an agent; a raised threshold is visible in the policy hash and in each
+  Run's `large_run`.
+
 ## Your values are never overwritten
 
 A projection replaces a value only when the last recorded write to that

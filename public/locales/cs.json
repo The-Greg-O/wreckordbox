@@ -1105,7 +1105,7 @@
   "Delete the backup from {date}? This cannot be undone.": "Smazat zálohu z {date}? Toto nelze vrátit zpět.",
   "Backup deleted.": "Záloha byla smazána.",
   "Restore a backup": "Obnovte zálohu",
-  "To restore, quit wreckordbox and open wreckordbox Restore. It shows what each backup holds and lets you restore all of it or only some parts.": "Chcete-li obnovit, ukončete wreckordbox a otevřete wreckordbox Restore. Ukazuje, co každá záloha obsahuje, a umožňuje vám obnovit ji celou nebo jen některé části.",
+  "To restore, quit wreckordbox and run wreckordbox backup restore with the backup's file in a terminal. It puts back the Library and the Sidecar together. Do not use the separate Restore app: it leaves the Sidecar out.": "Chcete-li obnovit, ukončete wreckordbox a v terminálu spusťte wreckordbox backup restore se souborem zálohy. Obnoví knihovnu a Sidecar společně. Nepoužívejte samostatnou aplikaci Restore: Sidecar vynechá.",
   "blue": "modrá",
   "rgb": "rgb",
   "3band": "3pásmový",
