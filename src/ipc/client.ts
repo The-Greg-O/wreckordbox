@@ -24,6 +24,7 @@ import { liftMyTags } from "./rowMyTags";
 import { fromServiceColours, type ServiceColours } from "@/lib/intakeEdits";
 import { fromServicePanel, fromServiceTagsSet } from "@/lib/tagPanel";
 import { fromServicePage, type ServiceQueuePage } from "@/lib/intakeQueue";
+import { fromServiceListing, fromServiceRejected, outcomeOf } from "@/lib/reviewQueue";
 import { fromKeptReport, fromServiceDryRun, fromServiceLoad, fromServiceSticks } from "@/lib/stickLoad";
 
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -674,6 +675,12 @@ async function realBackend(): Promise<Backend> {
       fromServiceTagsSet(await invoke<unknown>("intake_set_tags", {
         track, dimension, terms: [...terms], version, dropUnmapped: [...dropUnmapped], comments,
       })),
+    reviewWaiting: async () => fromServiceListing(await invoke<unknown>("review_waiting")),
+    reviewAccept: async (rows) => outcomeOf(await invoke<unknown>("review_accept", { rows })),
+    reviewReject: async (facts) => outcomeOf(await invoke<unknown>("review_reject", { facts })),
+    reviewRejected: async () => fromServiceRejected(await invoke<unknown>("review_rejected")),
+    reviewReopen: async (facts, rejection) => outcomeOf(await invoke<unknown>("review_reopen", { facts, rejection })),
+    onReviewChanged: (listener) => subscribe("review:changed", () => listener()),
     onSidecarChanged: (listener) => subscribe("sidecar:changed", (payload) => listener(payload as { trackId: string; kind: string })),
     onStickLoadProgress: (listener) => subscribe<unknown>("stick-load:progress", listener),
     stemsStatus: async (id) => fromServiceStatus(await invoke<unknown>("intake_stems_status", { id })),

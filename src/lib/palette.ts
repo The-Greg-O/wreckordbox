@@ -188,6 +188,13 @@ const EXPLICIT_ENTRIES: readonly PaletteEntry[] = [
     run: { kind: "command", action: "intakeSplitStems" },
   },
 
+  // Start Player A unless it already plays; never pauses (wbx-74: the
+  // Review view's Listen runs it after loading a row's track).
+  {
+    id: "player-a-play", label: "Play (never pause)", group: "Player A", keywords: ["start", "listen", "deck", "player 1"],
+    run: { kind: "command", action: "deckPlayIfStopped", scope: "a" },
+  },
+
   // wreckordbox (the application menu).
   {
     id: "settings", label: "Preferences", group: "wreckordbox", keywords: ["settings", "options"],

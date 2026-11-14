@@ -79,7 +79,8 @@ import { WaveformThemeChooser } from "@/views/shell/WaveformThemeChooser";
 import { breadcrumbOf } from "@/lib/shellTreeOverlay";
 import { crumbTally } from "@/lib/crumbTally";
 import { useTargetList } from "@/views/shell/useTargetList";
-import { IntakeOnDemand, preloadShellViews, StickLoadOnDemand } from "@/views/shell/shellOnDemand";
+import { IntakeOnDemand, preloadShellViews, ReviewOnDemand, StickLoadOnDemand } from "@/views/shell/shellOnDemand";
+import { useReviewCount } from "@/views/shell/reviewQueueStore";
 import { useIntakeCounts } from "@/views/shell/useIntakeCounts";
 import { useStickOutlines } from "@/store/useStickOutlines";
 import { useStickProtection } from "@/store/useStickProtection";
@@ -598,6 +599,7 @@ function AppBody() {
   // Set during render, before any effect of this commit can read it.
   stickReadBack.current = !shellOn;
   const intakeCounts = useIntakeCounts(shellOn);
+  const reviewCount = useReviewCount(shellOn);
   // The views loaded on demand (wbx-45.13): fetched once the shell has painted.
   useEffect(() => { if (shellOn) { const at = setTimeout(preloadShellViews, 0); return () => clearTimeout(at); } return undefined; }, [shellOn]);
   // The shell's tree reads each Stick's playlists without writing to it
@@ -3724,6 +3726,18 @@ function AppBody() {
   // answer says whether it loaded; a refresh that failed is said in the
   // status line, and cleared there when it recovers, if it is still ours.
   const loadFromIntake = useCallback((row: RowDto) => openInDeckA(row), [openInDeckA]);
+  // The Review view's Listen (wbx-74): load, then play once the deck is ready.
+  const listenFromReview = useCallback((row: RowDto) => {
+    void (async () => {
+      if (!await openInDeckA(row)) return;
+      const until = Date.now() + 5000;
+      const tryPlay = () => {
+        if (runCommand("deckPlayIfStopped", { scope: "a" }) || Date.now() > until) return;
+        setTimeout(tryPlay, 50);
+      };
+      setTimeout(tryPlay, 0);
+    })();
+  }, [openInDeckA]);
   const intakeProblem = useRef<string | null>(null);
   const reportIntakeProblem = useCallback((message: string | null) => {
     const before = intakeProblem.current;
@@ -4036,7 +4050,8 @@ function AppBody() {
           player={deckA}
           tree={shellTree.tree}
           intakeQueue={shellTree.intakeQueue}
-          tabCounts={{ intake: intakeCounts?.intake ?? null }}
+          tabCounts={{ intake: intakeCounts?.intake ?? null, review: reviewCount }}
+          review={<ReviewOnDemand.View onListen={listenFromReview} loadedTrackId={playerTrack?.id ?? null} />}
           intake={(queue) => (
             <IntakeOnDemand.View
               queue={queue} onQueue={shellTree.showQueue} counts={intakeCounts}

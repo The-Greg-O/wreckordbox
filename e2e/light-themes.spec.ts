@@ -49,6 +49,10 @@ async function showView(page: Page, view: (typeof VIEWS)[number]): Promise<void>
     if (await first.getAttribute("aria-selected") !== "true") await first.click();
     await expect(page.getByRole("region", { name: "Tags" }).getByRole("group").first()).toBeVisible();
   }
+  if (view === "Review") {
+    // The waiting Facts drawn, a low-confidence row among them (wbx-74).
+    await expect(page.getByTestId("review-view").locator('[role="row"][data-low]').first()).toBeVisible();
+  }
 }
 
 /** The Library with a track loaded and a row selected, so the player, the selection and the queue all have something in them. */

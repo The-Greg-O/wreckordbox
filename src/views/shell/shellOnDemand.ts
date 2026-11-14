@@ -8,6 +8,7 @@
 import type { ComponentProps } from "react";
 
 import type { IntakeView } from "./IntakeView";
+import type { ReviewView } from "./ReviewView";
 import type { StickLoadView } from "./StickLoadView";
 import { onDemand } from "./onDemand";
 
@@ -21,7 +22,12 @@ export const StickLoadOnDemand = onDemand<ComponentProps<typeof StickLoadView>>(
   () => import("./StickLoadView").then((m) => m.StickLoadView),
 );
 
+export const ReviewOnDemand = onDemand<ComponentProps<typeof ReviewView>>(
+  "Review",
+  () => import("./ReviewView").then((m) => m.ReviewView),
+);
+
 /** Fetches every on-demand view's code; a failure is shown when that view is drawn. */
 export function preloadShellViews(): void {
-  for (const view of [IntakeOnDemand, StickLoadOnDemand]) view.preload().catch(() => {});
+  for (const view of [IntakeOnDemand, ReviewOnDemand, StickLoadOnDemand]) view.preload().catch(() => {});
 }

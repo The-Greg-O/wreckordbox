@@ -41,6 +41,7 @@ mod active_runs;
 pub mod attachments;
 mod audio;
 pub mod decisions;
+mod fact_runs;
 mod facts_snapshot;
 mod fingerprint;
 mod kinds;
