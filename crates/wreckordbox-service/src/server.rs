@@ -476,7 +476,8 @@ impl Shared {
         let stamped = crate::projection::stamped(request, &self.stems);
         let request = stamped.as_ref().unwrap_or(request);
         let (result, run) = self.ledger.attributed(connection.is_some(), request, || {
-            self.dispatch(connection, request)
+            // What a joined Run's write decided about its backup (wbx-25).
+            crate::large_run::answered(self.dispatch(connection, request))
         });
         (result, run.and_then(|run| serde_json::to_value(run).ok()))
     }

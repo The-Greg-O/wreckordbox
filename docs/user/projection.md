@@ -61,14 +61,25 @@ the Tag schema change only the Sidecar, not your tracks, and take no backup.
   taken before the command that takes the Run over the threshold, not
   before the Run's first write; the Run's earlier writes are not in it as
   "before" values. One backup per Run: later commands of the same Run name
-  it (`run_backup`) and take no other.
+  it (`run_backup`) and take no other. Any command joining the Run counts,
+  not only projections and review: a `wreckordbox tracks rate … --run N`
+  that takes the Run over the threshold is backed up first too. A change
+  that cannot say beforehand which tracks it changes (renaming, merging or
+  deleting a My Tag, removing tracks) counts as over the threshold
+  (`uncounted`), so a Run with one takes its backup before it.
 - **One moment:** the Library, the Sidecar and the analysis and artwork
-  files are copied to local storage together while no edit can be made
-  (edits wait a moment, see below), then the backup is written from that
-  copy. If anything changes after the copy and before the Run's first
-  change (an edit in the window, a Fact recorded), the backup is no longer of
-  the moment before the Run: it is taken again and the first one removed.
-  After three tries the Run is refused with nothing changed
+  files are copied together while no edit can be made (edits wait a moment,
+  see below), then the backup is written from that copy. The large files
+  are not copied byte for byte but linked, so the copy is made on the
+  Library's own drive; if a link cannot be made there, the backup is
+  refused with nothing changed (`run_backup_failed`) rather than holding
+  your edits up for a full copy. Of Stem audio (when backups include it)
+  the backup holds only the Stems the Sidecar records, so a separation
+  finishing meanwhile adds nothing half-recorded. If anything changes after
+  the copy and before the Run's first change (an edit in the window, a Fact
+  recorded, a Run begun or ended), the backup is no longer of the moment
+  before the Run: it is removed and taken again. Three backups at most,
+  each checked; then the Run is refused with nothing changed
   (`run_backup_failed`).
 - **Where it goes:** the backup folder Preferences › Backups saves to (by
   default the app's backup folder; a folder inside the Library's analysis

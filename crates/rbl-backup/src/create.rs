@@ -1,18 +1,22 @@
 //! Writing a backup archive from outside the window (wbx-25: the backup a
 //! large Run takes first), in two steps.
 //!
-//! 1. [`stage`]: everything the backup holds is copied to local staging,
-//!    where nothing else writes: the Sidecar (its databases snapshotted,
-//!    its other files copied), a vacuumed snapshot of `master.db`, the
-//!    library files beside it, and the analysis and artwork trees (each
-//!    file hard-linked where the file system allows, else copied). The
-//!    caller holds the Library's edit gate and the analysis-file lock for
-//!    this step only, so both stores and the trees are of one moment: no
-//!    edit through the edit path comes between the Sidecar and the Library.
-//!    Hard links are an immutable copy because the Library's own writers
-//!    publish analysis files and Stem audio by writing a new file and
-//!    renaming it over the old (`rbl_core::durable::write`); a writer that
-//!    rewrote such a file in place would change the staged copy too.
+//! 1. [`stage`]: everything the backup holds is staged in a folder where
+//!    nothing else writes, on the Library's own file system: the Sidecar
+//!    (its databases snapshotted, its small files copied, and of Stem audio
+//!    only the files its snapshot's Facts name), a vacuumed snapshot of
+//!    `master.db`, the library files beside it, and the analysis and
+//!    artwork trees. Analysis and artwork files and Stem audio are
+//!    hard-linked, never copied: a link that cannot be made refuses the
+//!    backup, so no byte copy of them is made while the Library is held.
+//!    The caller holds the Library's edit gate and the analysis-file lock
+//!    for this step only, so both stores and the trees are of one moment:
+//!    no edit through the edit path comes between the Sidecar and the
+//!    Library, and a Stem published after the Sidecar's snapshot is not in
+//!    it. Hard links are an immutable copy because the Library's own
+//!    writers publish analysis files and Stem audio by writing a new file
+//!    and renaming it over the old (`rbl_core::durable::write`); a writer
+//!    that rewrote such a file in place would change the staged copy too.
 //! 2. [`publish`]: from the staged copies only, with no lock of the
 //!    Library's held, the archive is written to the backup folder (which may
 //!    be on a Stick: every write asks `check` first, through [`Checked`]),
@@ -42,8 +46,12 @@ pub struct Stage<'a> {
     /// Library with no Sidecar.
     pub sidecar_dir: Option<&'a Path>,
     pub sidecar: crate::sidecar_part::Options,
-    /// Local storage the staged copies are made in.
+    /// Where the staged copies are made when it is on the Library's own
+    /// file system; else they are made in a hidden folder beside the
+    /// Library ([`STAGING_PREFIX`]). Removed when the backup is written.
     pub scratch: &'a Path,
+    /// Test mode only: every hard link fails, as across file systems.
+    pub link_fault: bool,
     /// Called at named moments (`between-stores`: the Sidecar is staged
     /// and the Library not yet), for a test to hold the writer there.
     pub at: &'a dyn Fn(&str),
@@ -84,6 +92,9 @@ pub struct Made {
 }
 
 const DATABASE: &str = "master.db";
+
+/// The staging folder's name begins with this, wherever it is made.
+pub const STAGING_PREFIX: &str = ".wreckordbox-run-backup-";
 const SIDECAR: &str = "sidecar-part";
 
 /// Refuses a backup folder inside what a backup reads: the analysis or
@@ -144,19 +155,31 @@ fn resolved_up(path: &Path) -> PathBuf {
 /// When anything cannot be read, snapshotted or copied: nothing is kept.
 pub fn stage(request: &Stage<'_>) -> Result<Staged> {
     let location = request.location;
+    let root = location
+        .master_db
+        .parent()
+        .ok_or_else(|| refused("Invalid database path"))?;
     fs::create_dir_all(request.scratch)?;
+    let staging = if same_file_system(request.scratch, root) {
+        request.scratch
+    } else {
+        root
+    };
     let dir = tempfile::Builder::new()
-        .prefix("run-backup-")
-        .tempdir_in(request.scratch)?;
+        .prefix(STAGING_PREFIX)
+        .tempdir_in(staging)?;
+    let link = Link {
+        fault: request.link_fault,
+        staging: dir.path(),
+    };
     let created_at = rbl_core::time::unix_millis();
     // The Sidecar first, then the Library.
     let sidecar = match request.sidecar_dir {
         Some(sidecar_dir) => {
             let checked = crate::sidecar_part::Destination::check(location, sidecar_dir)?;
-            match crate::sidecar_part::collect_with(
+            match crate::sidecar_part::collect_of_one_moment(
                 &checked.path,
                 request.sidecar,
-                &mut || true,
                 request.at,
             )? {
                 Some(part) => {
@@ -172,7 +195,7 @@ pub fn stage(request: &Stage<'_>) -> Result<Staged> {
                         place(
                             &item.source,
                             &root.join(&item.name),
-                            item.name.starts_with(&stems),
+                            item.name.starts_with(&stems).then_some(&link),
                         )?;
                         names.push(item.name.clone());
                     }
@@ -200,10 +223,6 @@ pub fn stage(request: &Stage<'_>) -> Result<Staged> {
         .ok()
         .flatten();
     drop(snapshot);
-    let root = location
-        .master_db
-        .parent()
-        .ok_or_else(|| refused("Invalid database path"))?;
     let library_files: Vec<String> = crate::LIBRARY_FILES
         .into_iter()
         .filter(|name| root.join(name).is_file())
@@ -213,14 +232,14 @@ pub fn stage(request: &Stage<'_>) -> Result<Staged> {
         place(
             &root.join(name),
             &dir.path().join("library").join(name),
-            false,
+            None,
         )?;
     }
     for (tree, prefix) in [
         (crate::analysis_dir(location), "analysis"),
         (crate::artwork_dir(location), "artwork"),
     ] {
-        stage_tree(&tree, &dir.path().join(prefix))?;
+        stage_tree(&tree, &dir.path().join(prefix), &link)?;
     }
     Ok(Staged {
         dir,
@@ -233,9 +252,31 @@ pub fn stage(request: &Stage<'_>) -> Result<Staged> {
     })
 }
 
-/// A staged copy of `source` at `target`: a hard link when `link` and the
-/// file system allows, else a copy. Symbolic links are refused.
-fn place(source: &Path, target: &Path, link: bool) -> Result<()> {
+/// How the large files are staged: by hard link, never a copy.
+struct Link<'a> {
+    fault: bool,
+    staging: &'a Path,
+}
+
+/// Whether `a` and `b` (folders that exist) are on one file system.
+fn same_file_system(a: &Path, b: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        matches!((fs::metadata(a), fs::metadata(b)), (Ok(a), Ok(b)) if a.dev() == b.dev())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (a, b);
+        true
+    }
+}
+
+/// A staged copy of `source` at `target`: a hard link with `link` (the
+/// analysis and artwork files and Stem audio, whose bytes are never
+/// copied while the Library is held: a link that cannot be made refuses
+/// the backup), else a copy (the small files). Symbolic links are refused.
+fn place(source: &Path, target: &Path, link: Option<&Link<'_>>) -> Result<()> {
     if fs::symlink_metadata(source)?.file_type().is_symlink() {
         return Err(refused(format!(
             "{} is a symbolic link; a backup does not follow links.",
@@ -245,15 +286,29 @@ fn place(source: &Path, target: &Path, link: bool) -> Result<()> {
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)?;
     }
-    if link && fs::hard_link(source, target).is_ok() {
+    let Some(link) = link else {
+        fs::copy(source, target)?;
         return Ok(());
-    }
-    fs::copy(source, target)?;
-    Ok(())
+    };
+    let linked = if link.fault {
+        Err(io::Error::new(
+            io::ErrorKind::CrossesDevices,
+            "Invalid cross-device link (test fault)",
+        ))
+    } else {
+        fs::hard_link(source, target)
+    };
+    linked.map_err(|e| {
+        refused(format!(
+            "{} could not be staged by a hard link in {} ({e}); this backup links the Library's analysis and artwork files and Stem audio rather than copying them while the Library is held, so they must be on one file system with its staging folder",
+            source.display(),
+            link.staging.display()
+        ))
+    })
 }
 
 /// The tree at `tree`, staged at `target` (an empty folder when missing).
-fn stage_tree(tree: &Path, target: &Path) -> Result<()> {
+fn stage_tree(tree: &Path, target: &Path, link: &Link<'_>) -> Result<()> {
     fs::create_dir_all(target)?;
     if !tree.exists() {
         return Ok(());
@@ -277,7 +332,7 @@ fn stage_tree(tree: &Path, target: &Path) -> Result<()> {
                 fs::create_dir_all(target.join(relative))?;
                 pending.push(path);
             } else {
-                place(&path, &target.join(relative), true)?;
+                place(&path, &target.join(relative), Some(link))?;
             }
         }
     }

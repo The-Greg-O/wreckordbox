@@ -206,10 +206,16 @@ impl OpenLibrary {
     ///
     /// Reading does not come this way, and neither does writing to the
     /// Sidecar, which is not the Library.
+    /// Every write of the service passes here, before the core's edit
+    /// path: a command that joined a named Run has the write counted with
+    /// the Run first, and the Run's backup taken when this write takes it
+    /// over the threshold (wbx-25, [`crate::large_run::before_joined_write`]).
     fn change<T>(
         &self,
+        planned: crate::large_run::Planned,
         write: impl FnOnce(&LibraryCore, &dyn Host) -> Result<(T, rbl_library::Change), DbError>,
     ) -> Result<(T, LibraryChanged), ServiceError> {
+        let _gate = crate::large_run::before_joined_write(self, planned)?;
         write(&self.core, &*self.host)
             .map(|(value, change)| (value, change.into()))
             .map_err(|e| edit_error(&e))
@@ -271,7 +277,10 @@ impl OpenLibrary {
         touched: Touched,
         action: impl FnOnce(&mut rbl_db::write::Writer) -> Result<T, DbError>,
     ) -> Result<(T, LibraryChanged), ServiceError> {
-        self.change(|core, host| core.edit(host, History::Outside, touched, action))
+        let planned = crate::large_run::Planned::of(&touched, &[]);
+        self.change(planned, |core, host| {
+            core.edit(host, History::Outside, touched, action)
+        })
     }
 
     /// [`Self::edit`] for an edit Undo can take back: `action` also answers
@@ -289,7 +298,10 @@ impl OpenLibrary {
         label: &'static str,
         action: impl FnOnce(&mut rbl_db::write::Writer) -> Result<(T, LibraryEdit), DbError>,
     ) -> Result<(T, LibraryChanged), ServiceError> {
-        self.change(|core, host| core.recorded_edit(host, touched, label, action))
+        let planned = crate::large_run::Planned::of(&touched, &[]);
+        self.change(planned, |core, host| {
+            core.recorded_edit(host, touched, label, action)
+        })
     }
 
     /// [`Self::recorded_edit`] for a deliberate hand set (wbx-26): the
@@ -303,7 +315,10 @@ impl OpenLibrary {
             &mut rbl_db::write::Writer,
         ) -> Result<(T, Vec<rbl_db::write::TrackEdit>), DbError>,
     ) -> Result<(T, LibraryChanged), ServiceError> {
-        self.change(|core, host| core.asserting_edit(host, touched, label, action))
+        let planned = crate::large_run::Planned::of(&touched, &[]);
+        self.change(planned, |core, host| {
+            core.asserting_edit(host, touched, label, action)
+        })
     }
 
     /// [`Self::recorded_edit`] for the DJ's hand set of My Tags (wbx-29):
@@ -319,7 +334,10 @@ impl OpenLibrary {
         )
             -> Result<(T, LibraryEdit, Vec<rbl_library::ledger::TagAssertion>), DbError>,
     ) -> Result<(T, LibraryChanged), ServiceError> {
-        self.change(|core, host| core.asserting_tag_edit(host, touched, tracks, label, action))
+        let planned = crate::large_run::Planned::of(&touched, tracks);
+        self.change(planned, |core, host| {
+            core.asserting_tag_edit(host, touched, tracks, label, action)
+        })
     }
 
     /// [`Self::edit`] for an edit that removes rows for good: the edit
@@ -329,7 +347,10 @@ impl OpenLibrary {
         touched: Touched,
         action: impl FnOnce(&mut rbl_db::write::Writer) -> Result<T, DbError>,
     ) -> Result<(T, LibraryChanged), ServiceError> {
-        self.change(|core, host| core.permanent_edit(host, touched, action))
+        let planned = crate::large_run::Planned::of(&touched, &[]);
+        self.change(planned, |core, host| {
+            core.permanent_edit(host, touched, action)
+        })
     }
 
     /// Sets one track's rating through the Library's single edit path, and

@@ -711,9 +711,24 @@ pub(crate) fn name_tracks(tracks: &[String]) {
 /// request), or `None` for a command that is a Run of its own, the
 /// window's, or none (wbx-25: a large Run is counted whole).
 pub(crate) fn joined_run() -> Option<RunId> {
-    CURRENT.with(|current| match current.borrow().as_ref().map(|scope| &scope.target) {
-        Some(Target::Joined { run, .. }) => Some(*run),
-        _ => None,
+    CURRENT.with(
+        |current| match current.borrow().as_ref().map(|scope| &scope.target) {
+            Some(Target::Joined { run, .. }) => Some(*run),
+            _ => None,
+        },
+    )
+}
+
+/// The Sidecar of the command answered on this thread, when it joined a
+/// Run named on its request (wbx-25: each of its writes is counted with
+/// the Run's before it is made).
+pub(crate) fn joined_sidecar() -> Option<Arc<Stems>> {
+    CURRENT.with(|current| {
+        current
+            .borrow()
+            .as_ref()
+            .filter(|scope| matches!(scope.target, Target::Joined { .. }))
+            .map(|scope| Arc::clone(&scope.stems))
     })
 }
 
@@ -929,6 +944,8 @@ struct Scope {
     name: String,
     /// How many entries it has made.
     entries: usize,
+    /// The Keeper's Sidecar (wbx-25: [`joined_sidecar`]).
+    stems: Arc<Stems>,
 }
 
 thread_local! {
@@ -1217,6 +1234,7 @@ impl Keeper {
             command: json!({"name": request.command, "args": request.args}),
             name: request.command.clone(),
             entries: 0,
+            stems: Arc::clone(&self.stems),
         };
         CURRENT.with(|current| *current.borrow_mut() = Some(scope));
         let result = answer();

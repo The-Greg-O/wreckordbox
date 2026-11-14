@@ -1241,7 +1241,12 @@ fn a_hard_link_that_cannot_be_made_refuses_the_backup_with_nothing_changed() {
     let staging_left: Vec<_> = [s.state_dir(), library_root]
         .iter()
         .flat_map(|dir| std::fs::read_dir(dir).unwrap().flatten())
-        .filter(|entry| entry.file_name().to_string_lossy().contains("run-backup"))
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(rbl_backup::create::STAGING_PREFIX)
+        })
         .map(|entry| entry.path())
         .collect();
     assert!(staging_left.is_empty(), "{staging_left:?}");

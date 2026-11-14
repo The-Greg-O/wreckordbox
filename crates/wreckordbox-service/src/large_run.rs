@@ -12,9 +12,10 @@
 //!
 //! Not covered: a Tag schema conversion (`schema.convert`) and bulk Fact
 //! recording (`facts.record-many`), which write only the Sidecar, never a
-//! track in the Library; every other bulk write an agent can make today
+//! track in the Library. Every other write an agent can make
 //! (`tracks.rate`, `mytags.assign`, `intake.set_tags`, playlist edits) is
-//! not a planned Run and has no count before it writes.
+//! counted when it joins a named Run (below); made as a Run of its own it
+//! is one command's small change and is not counted.
 //!
 //! # The count cannot be gamed
 //!
@@ -30,7 +31,14 @@
 //! command's plan. Its total is not known in advance, so the backup is
 //! taken before the command that takes it over the threshold, not before
 //! its first write; later commands of the Run name that backup
-//! (`run_backup`) and take none.
+//! (`run_backup`) and take none. Any command can cross it: every write of
+//! a command that joined a Run, whatever the command (`tracks.rate`, a My
+//! Tag edit), is counted the same way where the service's writes enter
+//! the edit path ([`before_joined_write`], from `OpenLibrary`), before it
+//! is made. A write that cannot say before it is made which tracks it
+//! changes (a My Tag renamed, merged or deleted, tracks removed) counts as
+//! over the threshold (`uncounted`). A command that is a Run of its own,
+//! and the DJ's edits in the window, are counted only as above.
 //!
 //! # The threshold
 //!
@@ -44,14 +52,20 @@
 //!
 //! # One moment
 //!
-//! [`take`] stages both stores and the trees to local storage under the
-//! edit gate and the analysis-file lock (`rbl_backup::create::stage`), and
-//! remembers where the Library (`localUpdateCount`, the index generation)
-//! and the Ledger (its order position) stood. With neither lock held it
-//! writes the archive from the staged copies. Before the write, under the
-//! edit gate, [`bound`] checks both still stand there; if not, the backup
-//! is taken again (the earlier one removed), up to [`RETAKES`] times, then
-//! the Run is refused. The gate is then held through the write.
+//! [`take`] stages both stores and the trees under the edit gate and the
+//! analysis-file lock (`rbl_backup::create::stage`), on the Library's own
+//! file system, hard-linking the large files (a link that cannot be made
+//! refuses the backup: no byte copy under the gate). Of Stem audio it
+//! stages only the files the Sidecar snapshot's Facts name, so a
+//! separation publishing meanwhile, which holds neither lock, adds nothing.
+//! It remembers where the Library (`localUpdateCount`, the index
+//! generation) and the Sidecar (the Ledger's order position; the newest
+//! Run and how many have ended, which a separation's Run moves) stood.
+//! With neither lock held it writes the archive from the staged copies.
+//! Before the write, under the edit gate, [`bound`] checks all still stand
+//! there; if not, the backup is removed and taken again: [`ATTEMPTS`]
+//! backups at most, each checked, then the Run is refused. The gate is
+//! then held through the write.
 //!
 //! # Failure
 //!
@@ -79,7 +93,10 @@
 //! the other two: staging holds the gate and the analysis lock, publishing
 //! holds only the Stick. Taken under the service's Library lock (one
 //! command at a time) and, for `MyTags` and Review, the Fact coordination,
-//! which the apply already holds: both are held for the whole backup.
+//! which the apply already holds (taken before the Library lock): both are
+//! held for the whole backup. The backup itself never takes the Fact
+//! coordination: background Stem publication is excluded by the snapshot
+//! rule and the Run mark above, not by a lock.
 
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -104,7 +121,8 @@ pub mod codes {
 pub const DEFAULT_ABOVE: usize = 200;
 
 /// Test mode only: `disk_full` makes the backup's writes fail as on a full
-/// disk once it has begun writing the archive.
+/// disk once it has begun writing the archive; `link_fails` makes every
+/// hard link of staging fail, as across file systems.
 pub const FAULT_ENV: &str = "WRECKORDBOX_RUN_BACKUP_FAULT";
 
 /// The policy file's `[backup]` section.
@@ -151,6 +169,36 @@ pub struct Checked {
     /// that took the Run over the threshold.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_backup: Option<PathBuf>,
+    /// This write joining a Run could not say before it was made which
+    /// tracks it changes (a My Tag renamed or deleted, tracks removed):
+    /// counted as over the threshold, so the Run's backup comes first.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub uncounted: bool,
+}
+
+/// The tracks a write will change, as known before it is made.
+#[derive(Debug, Clone)]
+pub(crate) enum Planned {
+    Tracks(Vec<String>),
+    /// Not known before the write.
+    Uncounted,
+}
+
+impl Planned {
+    /// What a write through the edit path that re-reads `touched` (and
+    /// names `named`) will change: the tracks it names, none for the
+    /// playlist tree or the Tag List alone, else not known.
+    pub(crate) fn of(touched: &rbl_library::Touched, named: &[String]) -> Self {
+        use rbl_library::Touched;
+        let mut tracks = named.to_vec();
+        match touched {
+            Touched::Tracks if named.is_empty() => return Self::Uncounted,
+            Touched::Playlists | Touched::TagList | Touched::Tracks => {}
+            Touched::Metadata(ids) | Touched::Histories(ids) => tracks.extend(ids.iter().cloned()),
+            Touched::Cues(id) => tracks.push(id.clone()),
+        }
+        Self::Tracks(tracks)
+    }
 }
 
 /// Where the Library and the Sidecar stood when a backup was staged.
@@ -159,11 +207,19 @@ struct Mark {
     update_count: Option<i64>,
     generation: u32,
     ledger: i64,
+    /// The newest Run and how many have ended: a Run begun or ended by
+    /// background work (a separation) writes no Ledger entry.
+    runs: (i64, i64),
 }
 
 struct Pending {
     checked: Checked,
     mark: Option<Mark>,
+    /// What was counted, for a backup taken again.
+    planned: Planned,
+    /// Decided by a planned Run's command ([`before_write`]) for all its
+    /// writes, not by its write ([`before_joined_write`]).
+    by_command: bool,
 }
 
 thread_local! {
@@ -245,11 +301,52 @@ pub(crate) fn before_write(
     stems: &Stems,
     tracks: impl IntoIterator<Item = String>,
 ) -> Result<(), ServiceError> {
-    let mine: HashSet<String> = tracks.into_iter().collect();
+    decide(
+        library,
+        stems,
+        Planned::Tracks(tracks.into_iter().collect()),
+        true,
+    )
+}
+
+/// Before every write through the service's edit path of a command that
+/// joined a named Run (wbx-25, review 2): the same count as
+/// [`before_write`], of the Run so far and this write's tracks, and the
+/// backup when this write takes the Run over the threshold. So a Run can
+/// cross it by any command (`tracks.rate`, a My Tag edit), not only the
+/// planned ones. The edit gate, held, for the write (taken first, then
+/// the write takes it again), or `None` when the command joined no Run
+/// or is a planned one that decided already.
+pub(crate) fn before_joined_write(
+    library: &OpenLibrary,
+    planned: Planned,
+) -> Result<Option<parking_lot::ReentrantMutexGuard<'_, ()>>, ServiceError> {
+    let Some(stems) = crate::ledger::joined_sidecar() else {
+        return Ok(None);
+    };
+    let decided = DECIDED.with(|decided| decided.borrow().as_ref().is_some_and(|p| p.by_command));
+    if decided {
+        return Ok(None);
+    }
+    decide(library, &stems, planned, false)?;
+    checked_gate(library, &stems).map(Some)
+}
+
+fn decide(
+    library: &OpenLibrary,
+    stems: &Stems,
+    planned: Planned,
+    by_command: bool,
+) -> Result<(), ServiceError> {
+    let mine: HashSet<String> = match &planned {
+        Planned::Tracks(tracks) => tracks.iter().cloned().collect(),
+        Planned::Uncounted => HashSet::new(),
+    };
+    let uncounted = matches!(planned, Planned::Uncounted);
     let above = threshold(stems.sidecar_dir())?;
     let (mut run, run_backup) = run_so_far(stems)?;
     run.extend(mine.iter().cloned());
-    let (backup, mark) = if run.len() > above && run_backup.is_none() {
+    let (backup, mark) = if (uncounted || run.len() > above) && run_backup.is_none() {
         let (taken, mark) = take(library, stems)?;
         hold("backed-up", library.for_backup().0);
         (Some(taken), Some(mark))
@@ -262,28 +359,44 @@ pub(crate) fn before_write(
         above,
         backup,
         run_backup,
+        uncounted,
     };
     let value = serde_json::to_value(&checked).unwrap_or(Value::Null);
     crate::ledger::note("large_run", value);
-    DECIDED.with(|decided| *decided.borrow_mut() = Some(Pending { checked, mark }));
+    DECIDED.with(|decided| {
+        *decided.borrow_mut() = Some(Pending {
+            checked,
+            mark,
+            planned,
+            by_command,
+        });
+    });
     Ok(())
 }
 
-/// How many times a backup is taken again before the Run is refused.
-const RETAKES: usize = 3;
+/// How many backups are taken, each checked, before the Run is refused.
+const ATTEMPTS: usize = 3;
 
 /// The edit gate, held, for the write of a Run [`before_write`] decided:
 /// when it took a backup, the Library and the Sidecar are checked to be
 /// where they stood when it was staged. If anything changed in between,
-/// the backup is no longer of the moment before the Run: it is taken again
-/// (and the earlier one removed), up to [`RETAKES`] times, then the Run is
+/// the backup is no longer of the moment before the Run: it is removed and
+/// taken again. [`ATTEMPTS`] backups at most, each checked; when the last
+/// is no longer of the moment either, it is removed too and the Run is
 /// refused with nothing changed.
 pub(crate) fn bound<'a>(
     library: &'a OpenLibrary,
     stems: &Stems,
-    tracks: &[String],
+    _tracks: &[String],
 ) -> Result<parking_lot::ReentrantMutexGuard<'a, ()>, ServiceError> {
-    for _ in 0..=RETAKES {
+    checked_gate(library, stems)
+}
+
+fn checked_gate<'a>(
+    library: &'a OpenLibrary,
+    stems: &Stems,
+) -> Result<parking_lot::ReentrantMutexGuard<'a, ()>, ServiceError> {
+    for attempt in 1..=ATTEMPTS {
         let guard = library.edit_gate().lock();
         let mark = DECIDED.with(|decided| decided.borrow().as_ref().and_then(|p| p.mark.clone()));
         let Some(mark) = mark else {
@@ -293,16 +406,16 @@ pub(crate) fn bound<'a>(
             return Ok(guard);
         }
         drop(guard);
-        let stale = DECIDED.with(|decided| {
-            decided
-                .borrow_mut()
-                .take()
-                .and_then(|p| p.checked.backup.map(|taken| taken.path))
-        });
-        if let Some(stale) = stale {
-            discard(library, &stale);
+        let Some(stale) = DECIDED.with(|decided| decided.borrow_mut().take()) else {
+            break;
+        };
+        if let Some(taken) = &stale.checked.backup {
+            discard(library, &taken.path);
         }
-        before_write(library, stems, tracks.iter().cloned())?;
+        if attempt == ATTEMPTS {
+            break;
+        }
+        decide(library, stems, stale.planned, stale.by_command)?;
     }
     Err(ServiceError::new(
         codes::BACKUP_FAILED,
@@ -323,15 +436,25 @@ fn mark_now(library: &OpenLibrary, stems: &Stems) -> Result<Mark, ServiceError> 
             .ok()
             .flatten())
     })?;
-    let ledger = stems
-        .with_sidecar_wait(|open| {
-            open.map_or(Ok(0), wreckordbox_sidecar::Sidecar::ledger_position)
-        })?
+    let (ledger, runs) = sidecar_mark(stems)?
         .map_err(|e| ServiceError::new(service_codes::SERVICE_FAILED, e.to_string()))?;
     Ok(Mark {
         update_count,
         generation: library.generation(),
         ledger,
+        runs,
+    })
+}
+
+/// The Ledger's order position, and the newest Run and how many ended.
+type SidecarMark = (i64, (i64, i64));
+
+/// Where the Sidecar stands: its Ledger order position, and its Runs.
+fn sidecar_mark(stems: &Stems) -> Result<wreckordbox_sidecar::Result<SidecarMark>, ServiceError> {
+    stems.with_sidecar_wait(|open| {
+        open.map_or(Ok((0, (0, 0))), |sidecar| {
+            Ok((sidecar.ledger_position()?, sidecar.runs_position()?))
+        })
     })
 }
 
@@ -426,17 +549,15 @@ fn take(library: &OpenLibrary, stems: &Stems) -> Result<(Taken, Mark), ServiceEr
     let (staged, mark) = {
         let _gate = library.edit_gate().lock();
         let _files = analysis_files.lock();
-        // Before the Sidecar is read: a Fact recorded meanwhile moves it.
-        let ledger = stems
-            .with_sidecar_wait(|open| {
-                open.map_or(Ok(0), wreckordbox_sidecar::Sidecar::ledger_position)
-            })?
-            .map_err(|e| failed(&destination, e))?;
+        // Before the Sidecar is read: a Fact recorded, or a Run begun or
+        // ended, meanwhile moves it.
+        let (ledger, runs) = sidecar_mark(stems)?.map_err(|e| failed(&destination, e))?;
         let staged = rbl_backup::create::stage(&rbl_backup::create::Stage {
             location: &location,
             sidecar_dir,
             sidecar: rbl_backup::sidecar_part::Options::saved(&state_dir),
             scratch: &state_dir,
+            link_fault: fault().as_deref() == Some("link_fails"),
             at: &|point| hold(point, &state_dir),
         })
         .map_err(|e| failed(&destination, e))?;
@@ -444,6 +565,7 @@ fn take(library: &OpenLibrary, stems: &Stems) -> Result<(Taken, Mark), ServiceEr
             update_count: staged.update_count,
             generation: library.generation(),
             ledger,
+            runs,
         };
         (staged, mark)
     };
@@ -452,9 +574,7 @@ fn take(library: &OpenLibrary, stems: &Stems) -> Result<(Taken, Mark), ServiceEr
     let authorized = wreckordbox_stick_protection::authorize(&state_dir, &destination)
         .map_err(|why| stick_refused(&why.to_string()))?;
     hold("stick-held", &state_dir);
-    let fault = rbl_db::test_mode()
-        .then(|| std::env::var(FAULT_ENV).ok())
-        .flatten();
+    let fault = fault();
     let writes = std::cell::Cell::new(0_u64);
     let failed_once = std::cell::Cell::new(false);
     let check = || -> std::io::Result<()> {
@@ -492,6 +612,13 @@ fn take(library: &OpenLibrary, stems: &Stems) -> Result<(Taken, Mark), ServiceEr
         },
         mark,
     ))
+}
+
+/// The test fault asked for ([`FAULT_ENV`]), in test mode only.
+fn fault() -> Option<String> {
+    rbl_db::test_mode()
+        .then(|| std::env::var(FAULT_ENV).ok())
+        .flatten()
 }
 
 fn stick_refused(why: &str) -> ServiceError {
