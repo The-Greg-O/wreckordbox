@@ -196,6 +196,8 @@ pub(crate) fn current_stems_read_only(stems: &Stems, found: &Found) -> Option<Cu
     let set = facts
         .into_iter()
         .filter_map(|fact| StemSet::from_fact(&dir, fact))
+        // Staleness as the audio says now, not as last stored (wbx-t3p).
+        .map(|set| crate::stems_show::as_now(set, Some(&fingerprint)))
         .find(|set| set.is_current() && set.fingerprint == fingerprint && set.audio_present())?;
     if !Role::ALL.iter().all(|role| {
         set.stems
