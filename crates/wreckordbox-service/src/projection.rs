@@ -819,12 +819,18 @@ fn not_owned(one: &One<'_>) -> Option<&'static str> {
                 // recorded write. A projection cut off after its write and
                 // before its entry left a mark that proves nothing, whatever
                 // barrier is cleared (wbx-29 review).
-                match mark.entry_of(one.field.column()) {
+                let column = one.field.column();
+                match mark.entry_of(column) {
                     // A mark kept before marks named their write (wbx-29
-                    // review): no evidence which write it was, so the value
-                    // is the DJ's. Deliberately not migrated: inferring
-                    // ownership from the old evidence is the risk.
-                    None => return Some("predates_confirmed_marks"),
+                    // review): it holds the field but not the write, so it
+                    // is no evidence and the value is the DJ's. Deliberately
+                    // not migrated: inferring ownership from the old
+                    // evidence is the risk. (A field a barrier dropped from
+                    // a refreshed mark is not in it at all: `written_since`.)
+                    None if mark.fields.contains_key(column) => {
+                        return Some("predates_confirmed_marks")
+                    }
+                    None => return Some("written_since"),
                     Some(entry) if entry != state.entry => return Some("written_since"),
                     Some(_) => {}
                 }
