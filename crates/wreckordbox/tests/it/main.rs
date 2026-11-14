@@ -31,6 +31,8 @@ mod mytag_edits;
 mod projection;
 mod projection_barriers;
 mod projection_failures;
+mod review;
+mod review_races;
 mod run_status;
 mod standing_facts;
 mod status;

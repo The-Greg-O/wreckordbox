@@ -476,6 +476,10 @@ impl Shared {
     }
 
     /// The one place a command name becomes behaviour.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one arm per command group; each arm hands off to its module"
+    )]
     fn dispatch(
         &self,
         connection: Option<&Connection>,
@@ -594,6 +598,7 @@ impl Shared {
                 })
             }
             facts if crate::facts::answers(facts) => {
+                let _facts = crate::review::exclude(&self.stems);
                 // The Sidecar's, not the Library's: the Library is only
                 // read, to find the track.
                 crate::facts::answer(&self.stems, request, &|id| {
@@ -607,6 +612,7 @@ impl Shared {
                 })
             }
             decisions if crate::decisions::answers(decisions) => {
+                let _facts = crate::review::exclude(&self.stems);
                 // The Sidecar's too: the Library is only read, to find a
                 // track a Decision or its Fact is about.
                 crate::decisions::answer(&self.stems, request, &|id| {
@@ -646,6 +652,7 @@ impl Shared {
                 crate::projection_barriers::answer(&self.stems, request)
             }
             projection if crate::projection::answers(projection) => self.project(request),
+            review if crate::review::answers(review) => self.review(request),
             intake if crate::intake::answers(intake) => {
                 let (result, changed) = self.with_library(|library| {
                     crate::intake::answer(library, &self.stems, request)
@@ -662,6 +669,19 @@ impl Shared {
                 format!("unknown command: {unknown}"),
             )),
         }
+    }
+
+    /// `review.waiting`, `review.accept` and `review.reject` (wbx-27). The
+    /// host is told of an accept's Library change.
+    fn review(&self, request: &Request) -> Result<Value, ServiceError> {
+        // Before the Library: Fact commands take it first too.
+        let _facts = crate::review::exclude(&self.stems);
+        let (changed, result) =
+            self.with_library(|library| crate::review::answer(library, &self.stems, request))?;
+        if let Some(changed) = changed {
+            self.tell_host(&changed.event());
+        }
+        result
     }
 
     /// `projection.plan` and `projection.apply` (wbx-26). The host is told

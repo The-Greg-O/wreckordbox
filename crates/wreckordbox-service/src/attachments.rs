@@ -26,6 +26,9 @@ impl Stems {
         fingerprint: Option<&Fingerprint>,
         run: Option<RunId>,
     ) -> Result<(Attachments, Vec<i64>), ServiceError> {
+        // Not while Review accepts (wbx-27); a command that came through
+        // dispatch holds it already (re-entrant).
+        let _facts = crate::review::exclude(self);
         let sidecar = self.sidecar()?;
         let track = &found.parent().id;
         let attachments = sidecar

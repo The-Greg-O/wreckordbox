@@ -259,6 +259,12 @@ pub(crate) struct Stems {
     state_dir: PathBuf,
     pub(crate) mutant_edits: Mutex<std::collections::HashMap<i64, std::sync::Weak<Mutex<()>>>>,
     pub(crate) run_status: Mutex<crate::run_status::RunStatus>,
+    /// Held by every command that records, supersedes or reattaches a Fact
+    /// (taken before its Library lookup) and by every Fact write's shared
+    /// observation ([`Self::before_record`]), and by Review's decisions
+    /// from their check to the end of their write (wbx-27). Re-entrant:
+    /// a command holding it reaches `before_record` on the same thread.
+    pub(crate) fact_writes: parking_lot::ReentrantMutex<()>,
     command: Vec<OsString>,
     sidecar: Mutex<Option<Arc<Sidecar>>>,
     /// Set, under the `sidecar` lock, when the service stops: the Sidecar
@@ -298,6 +304,7 @@ impl Stems {
         Arc::new(Self {
             mutant_edits: Mutex::new(HashMap::default()),
             run_status: Mutex::new(crate::run_status::RunStatus::new(&sidecar_dir)),
+            fact_writes: parking_lot::ReentrantMutex::new(()),
             sidecar_dir,
             state_dir: state_dir.to_path_buf(),
             command,
