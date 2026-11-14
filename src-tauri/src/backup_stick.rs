@@ -195,7 +195,7 @@ mod tests {
             let folder = tree.join(format!("P{i:03}"));
             fs::create_dir_all(&folder).unwrap();
             let bytes: Vec<u8> = (0..300_000_u32)
-                .map(|n| (n.wrapping_mul(31) ^ u32::from(i)) as u8)
+                .map(|n| n.wrapping_mul(31).to_le_bytes()[0] ^ i)
                 .collect();
             fs::write(folder.join("ANLZ0000.DAT"), bytes).unwrap();
         }
