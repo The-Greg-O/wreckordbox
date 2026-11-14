@@ -94,6 +94,18 @@ test("under a light theme the Stick view with a Stick selected, a load chosen an
     await announce(page, { roles, font: null });
     const { seen } = await audit(page.getByTestId("shell"));
     expect([...new Set(shortfalls(seen))], roles.working).toEqual([]);
+    // The space the load adds, a segment of the space bar, stands out from the bar's track.
+    const adds = await view.getByTestId("stick-space-bar").evaluate((bar) => {
+      const parse = (c: string) => (c.match(/[\d.]+/g) ?? []).map(Number);
+      const lum = (c: number[]) => {
+        const [r, g, b] = c.slice(0, 3).map((v) => { const x = v / 255; return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; });
+        return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+      };
+      const [h, l] = [lum(parse(getComputedStyle(bar.children[1]!).backgroundColor)), lum(parse(getComputedStyle(bar).backgroundColor))].sort((x, y) => y - x);
+      return { width: bar.children[1]!.getBoundingClientRect().width, ratio: (h! + 0.05) / (l! + 0.05) };
+    });
+    expect(adds.width, "the load adds space").toBeGreaterThan(0);
+    expect(adds.ratio, `space bar under ${roles.working}`).toBeGreaterThanOrEqual(3);
   }
 });
 

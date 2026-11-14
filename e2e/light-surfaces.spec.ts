@@ -73,6 +73,13 @@ test("under a light theme a track's and a playlist's context menu, with an entry
   await tree(page).getByRole("treeitem").filter({ hasText: "Melodic Vox" }).first().click({ button: "right" });
   await expect(menu()).toBeVisible();
   await readable(page, menu, "playlist menu");
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toHaveCount(0);
+
+  // The list headings' column menu.
+  await page.getByRole("columnheader").first().click({ button: "right" });
+  await expect(menu()).toBeVisible();
+  await readable(page, menu, "column menu");
 });
 
 test("under a light theme the Stick Protection dialog with its unlock can be read on the theme's grounds", async ({ page }) => {
@@ -117,4 +124,19 @@ test("upstream's old layout keeps its menus, palette and dialogs dark under a li
   const menu = page.getByRole("menu").first();
   await expect(menu).toBeVisible();
   expect(await surfaceGround(menu)).toBe(rgb("#1E1E1E"));
+});
+
+test("upstream's Preferences window, opened from the shell, stays wholly dark and readable under a light theme", async ({ page }) => {
+  await open(page);
+  await openPalette(page);
+  await palette(page).getByLabel("Search actions").fill("Preferences");
+  await page.keyboard.press("Enter");
+  const dialog = page.getByRole("dialog").filter({ hasText: "Preferences" }).first();
+  await expect(dialog).toBeVisible();
+  await announce(page, { roles: LATTE, font: null });
+  const { seen } = await audit(dialog);
+  // Its text reads; its pane rail's icons are upstream's own (the unlit one
+  // is under 4.5:1 on black under every theme), left to the window's redraw.
+  expect([...new Set(shortfalls(seen.filter((s) => s.kind === "text")))]).toEqual([]);
+  expect(groundsOf(LATTE).has(await surfaceGround(dialog))).toBe(false);
 });
