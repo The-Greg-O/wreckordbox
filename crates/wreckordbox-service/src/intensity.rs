@@ -640,13 +640,11 @@ impl Measuring<'_> {
             // shares: Facts of this audio left by a removed track are
             // re-attached here, and Measurements made from other audio are
             // marked stale, so one of them is never taken for current.
-            let run = *lock(&self.run);
-            match self
-                .stems
-                .before_record(&target.found, Some(&fingerprint), run)
-            {
-                Ok((_, stale)) => marked.extend(stale),
-                Err(error) => return failed(marked, error),
+            // A reuse records at once: observed and recorded under one
+            // hold of the Fact coordination (wbx-j8k), let go to decode.
+            let facts = self.stems.hold_facts();
+            if let Err(error) = self.observe(target, &fingerprint, &mut marked) {
+                return failed(marked, error);
             }
             let bars = bar_starts(target.analysis.as_deref());
             if !self.force {
@@ -656,6 +654,7 @@ impl Measuring<'_> {
                     Err(error) => return failed(marked, error),
                 }
             }
+            drop(facts);
 
             pause("decode", &parent.id);
             self.progress(parent, "measuring", self.done.load(Ordering::Acquire));
@@ -692,6 +691,12 @@ impl Measuring<'_> {
                 Err(error) => return failed(marked, error),
             }
             pause("commit", &parent.id);
+            // Observed again and recorded under one hold (wbx-j8k).
+            let _facts = self.stems.hold_facts();
+            if let Err(error) = self.observe(target, &fingerprint, &mut marked) {
+                return failed(marked, error);
+            }
+            crate::fact_hold::about_to_commit("intensity");
             return match self.record(parent, &fingerprint, &intensity) {
                 Ok(Some(fact)) => {
                     changed(self.stems, &parent.id, Some(fact.id), &[]);
@@ -753,6 +758,22 @@ impl Measuring<'_> {
                 ..TrackOutcome::recorded(parent, Status::Reused, &recorded, std::mem::take(marked))
             }
         }))
+    }
+
+    /// The audio observed at the point every Fact producer shares; what it
+    /// marked stale is added to `marked`. Under the caller's Fact hold.
+    fn observe(
+        &self,
+        target: &Target,
+        fingerprint: &Fingerprint,
+        marked: &mut Vec<i64>,
+    ) -> Result<(), ServiceError> {
+        let run = *lock(&self.run);
+        let (_, stale) = self
+            .stems
+            .before_record(&target.found, Some(fingerprint), run)?;
+        marked.extend(stale);
+        Ok(())
     }
 
     /// Records one track's Intensity, in the command's Run. `None` when the
@@ -877,6 +898,9 @@ fn show(stems: &Stems, target: Target) -> Result<TrackIntensity, ServiceError> {
     // bars made for a beat grid the track no longer has are made again.
     if path.is_file() {
         let fingerprint = stems::fingerprint(&parent, path)?;
+        // Observed and realigned (which records) under one hold of the
+        // Fact coordination (wbx-j8k).
+        let _facts = stems.hold_facts();
         stems.before_record(&found, Some(&fingerprint), None)?;
         realign(
             stems,
@@ -936,6 +960,7 @@ fn realign(
             ),
         )
         .map_err(|e| sidecar_error(&e))?;
+    crate::fact_hold::about_to_commit("realign");
     let recorded = record(sidecar, &source, run, parent, fingerprint, &value);
     let _ = sidecar.finish_run(
         run,
