@@ -89,3 +89,49 @@ Fact says the value should change, set it yourself.
 
 Changes the policy holds back wait in the review queue: see
 [review.md](review.md) to list them and accept or reject them.
+
+## MyTags from the Tag schema
+
+`wreckordbox project --mytags` projects the Tag schema (`tag-schema.toml`)
+to native MyTags: each category the schema's deck view names, with its
+tags, put on each track from the standing Facts of that dimension.
+
+```sh
+wreckordbox project --mytags --dry-run         # every category, tag and assignment; writes nothing
+wreckordbox project --mytags --expect PLAN     # apply exactly what that dry run listed
+```
+
+The policy's own section decides whether changes apply or wait:
+
+```toml
+[mytags]
+apply = 0.8      # or "wait"; no section waits
+```
+
+- **Matching.** A deck category is the Library's category of the same
+  name, a deck tag the MyTag of exactly the same text in it. A category
+  the deck view does not name, a dimension it leaves out, and a MyTag the
+  schema does not have are never written. A term with no MyTag yet is
+  listed under `definitions` and its assignments under `blocked`; applying
+  is refused until the MyTag exists (make it with `wreckordbox mytags
+  create`). Categories and tags are not renamed, reordered or made by a
+  projection yet.
+- **Parents.** With `[deck.genre] tag_parents = true`, a track whose Fact
+  names a child term gets the parent's MyTag too (`implied`), with no Fact
+  of its own.
+- **Your MyTags are yours.** Each assignment (one track, one MyTag) is the
+  projection's only if the latest recorded write to it is a projection's
+  and its rows in the Library are exactly those that write left. A MyTag
+  you put on or took off yourself, in the window, the CLI as `--source dj`,
+  or in rekordbox, is kept. Your Library's existing MyTags have no record
+  at all, so they are all yours: `wreckordbox schema convert` turns them
+  into your Facts without writing the Library, and projecting straight
+  after it changes nothing. From then on a projection only adds MyTags
+  your Facts call for where none was ever set, and changes again only what
+  it put on or took off itself.
+- **Applying** is one Run by `tool:projection` (never yours), one entry
+  in the Ledger and one step of Undo. Everything it changes is checked
+  again and written in one transaction: if anything was written since the
+  dry run, nothing is written.
+- Held changes are listed in the report's `held`; they do not reach the
+  review queue yet.
