@@ -15,7 +15,10 @@
 //! canonical, source, confidence}]}`). [`Sidecar::reopen`] is the DJ's
 //! reversal, kind [`REOPENED_KIND`], the same shape. Nothing is ever
 //! removed: the Ledger is append-only, and which suggestions stand rejected
-//! is the replay of both kinds in Ledger order. Neither touches the
+//! is the replay of both kinds in Ledger order, together with the recorded
+//! reattachments (`attachment` entries): when a track's Facts move to
+//! another track (its music added again), the rejections of suggestions
+//! for it move with them; an unrelated track's suggestions stay its own. Neither touches the
 //! Library.
 use std::collections::{BTreeMap, HashSet};
 
@@ -30,6 +33,9 @@ use crate::{Result, RunId, Sidecar, Source, SourceKind};
 pub const REJECTED_KIND: &str = "facts_rejected";
 /// The Ledger kind of the DJ's reopening of rejected suggestions.
 pub const REOPENED_KIND: &str = "facts_reopened";
+/// The Ledger kind of a recorded reattachment ([`crate::attachments`]):
+/// a rejection follows the Facts it moves.
+const ATTACHMENT_KIND: &str = "attachment";
 
 /// What a rejection is of: a track, a field, a canonical value and who
 /// suggests it.
@@ -107,9 +113,9 @@ pub enum NotRecorded {
 fn standing(db: &Connection) -> Result<Vec<Rejected>> {
     let mut statement = db.prepare(
         "SELECT id, run_id, at, kind, payload FROM ledger
-         WHERE store = 'sidecar' AND kind IN (?1, ?2) ORDER BY id",
+         WHERE store = 'sidecar' AND kind IN (?1, ?2, ?3) ORDER BY id",
     )?;
-    let rows = statement.query_map([REJECTED_KIND, REOPENED_KIND], |row| {
+    let rows = statement.query_map([REJECTED_KIND, REOPENED_KIND, ATTACHMENT_KIND], |row| {
         Ok((
             Decision {
                 entry: row.get(0)?,
@@ -124,6 +130,38 @@ fn standing(db: &Connection) -> Result<Vec<Rejected>> {
     let mut order: Vec<Suggestion> = Vec::new();
     for row in rows {
         let (decision, kind, payload) = row?;
+        if kind == ATTACHMENT_KIND {
+            // The track's Facts moved to another track (the same music
+            // added again): so do the rejections of their suggestions.
+            let moved = payload
+                .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+                .and_then(|p| {
+                    Some((
+                        p["from_track"].as_str()?.to_owned(),
+                        p["to_track"].as_str()?.to_owned(),
+                    ))
+                });
+            if let Some((from, to)) = moved {
+                let keys: Vec<Suggestion> = rejected
+                    .keys()
+                    .filter(|key| key.track == from)
+                    .cloned()
+                    .collect();
+                for key in keys {
+                    if let Some(mut one) = rejected.remove(&key) {
+                        one.offered.track.clone_from(&to);
+                        let moved_key = one.offered.suggestion();
+                        for k in &mut order {
+                            if *k == key {
+                                *k = moved_key.clone();
+                            }
+                        }
+                        rejected.insert(moved_key, one);
+                    }
+                }
+            }
+            continue;
+        }
         let offered: Vec<Offered> = payload
             .and_then(|text| serde_json::from_str::<Value>(&text).ok())
             .and_then(|payload| serde_json::from_value(payload["suggestions"].clone()).ok())

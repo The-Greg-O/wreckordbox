@@ -52,6 +52,11 @@ pub enum ReviewCommands {
         /// Every waiting Fact.
         #[arg(long)]
         all: bool,
+        /// The token `review waiting` printed with the listing the DJ
+        /// decided from. Required: the accept is refused, showing what
+        /// changed, if anything in that listing changed since.
+        #[arg(long, value_name = "TOKEN", required = true)]
+        token: String,
         #[command(flatten)]
         run: crate::ledger::RunOptions,
     },
@@ -143,23 +148,12 @@ pub fn run(
             facts,
             filter,
             all,
+            token,
             run,
         } => {
-            // Bound to the Facts as read here: what changes before the
-            // write is refused by name. The read takes no Run.
-            client.in_run(None);
-            let listed: Waiting = client.call(
-                commands::REVIEW_WAITING,
-                json!(selection(&[], filter, false, None)),
-            )?;
-            let shown: Vec<Held> = listed
-                .waiting
-                .into_iter()
-                .filter(|h| facts.is_empty() || facts.contains(&h.fact))
-                .collect();
+            // Bound to the listing the DJ saw: never listed again here.
             let mut asked = selection(facts, filter, *all, run.source());
-            asked.expect = Some(shown);
-            crate::ledger::attribute(client);
+            asked.token = Some(token.clone());
             let done: Decided = client.call(commands::REVIEW_ACCEPT, json!(asked))?;
             if as_json {
                 return Ok(json!(done).to_string());
@@ -278,6 +272,11 @@ fn waiting_text(listed: &Waiting) -> String {
     if listed.library_protected {
         out.push_str("Library Protection is on: accepting would be refused.\n");
     }
+    let _ = writeln!(
+        out,
+        "To accept from this listing: wreckordbox review accept ... --token {} --source dj",
+        listed.token
+    );
     out
 }
 

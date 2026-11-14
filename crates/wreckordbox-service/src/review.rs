@@ -7,7 +7,7 @@
 //!   track, the field, the value now and the value proposed, the source and
 //!   the confidence. It is the dry run's own code, so it is a read: no
 //!   Library edit, no Run, no Sidecar made, no event.
-//! - `review.accept {facts | filter | all, expect?, source}` is the DJ's
+//! - `review.accept {facts | filter | all, token, source}` is the DJ's
 //!   own hand set of each chosen Fact's value. See [`accept`].
 //! - `review.reject {facts | filter | all, source}` is the DJ's rejection
 //!   of the SUGGESTIONS the chosen Facts make (track, field, canonical
@@ -118,10 +118,11 @@ pub struct Selection {
     /// rejected.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rejection: Option<i64>,
-    /// For `review.accept`: the rows the DJ was shown, exactly as listed.
-    /// The selection must resolve to exactly these, unchanged.
+    /// For `review.accept`: the `token` of the listing the DJ was shown
+    /// (`review.waiting`). Required: the accept chooses within exactly that
+    /// listing, and is refused if anything in it changed.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub expect: Option<Vec<Held>>,
+    pub token: Option<String>,
     /// Who decides: must be the DJ.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<SourceArg>,
@@ -161,6 +162,10 @@ pub struct Waiting {
     pub count: usize,
     /// Library Protection is on: accepting would be refused.
     pub library_protected: bool,
+    /// Names exactly this listing (its filter and, for each row, the
+    /// Fact, its track, field, values, source, confidence and why it
+    /// waits): what `review.accept` requires.
+    pub token: String,
 }
 
 /// The answer of `review.accept` and `review.reject`.
@@ -215,19 +220,15 @@ pub(crate) fn declared(request: &Request) -> Option<Source> {
 
 /// Keeps Fact commands out while an accept is checked and written. A Fact
 /// command kept waiting says so in the test gate folder first.
-pub(crate) fn exclude(stems: &Stems) -> std::sync::MutexGuard<'_, ()> {
+pub(crate) fn exclude(stems: &Stems) -> parking_lot::ReentrantMutexGuard<'_, ()> {
     let lock = &stems.fact_writes;
-    match lock.try_lock() {
-        Ok(guard) => guard,
-        Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
-        Err(std::sync::TryLockError::WouldBlock) => {
-            if let Some(gate) = gate() {
-                let _ = std::fs::write(gate.join("facts-waiting"), b"");
-            }
-            lock.lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-        }
+    if let Some(guard) = lock.try_lock() {
+        return guard;
     }
+    if let Some(gate) = gate() {
+        let _ = std::fs::write(gate.join("facts-waiting"), b"");
+    }
+    lock.lock()
 }
 
 fn gate() -> Option<PathBuf> {
@@ -309,23 +310,184 @@ fn the_dj(asked: &Selection, what: &str) -> Result<Source, ServiceError> {
 fn waiting(library: &OpenLibrary, stems: &Stems, asked: &Selection) -> Result<Value, ServiceError> {
     if asked.ways() != usize::from(asked.filtered())
         || asked.source.is_some()
-        || asked.expect.is_some()
+        || asked.token.is_some()
     {
         return Err(bad_request(
             "review.waiting takes only a filter: tracks, field, from, at_least",
         ));
     }
-    let (report, _) = crate::projection::dry_run(library, stems, asked.tracks.clone())?;
-    let waiting: Vec<Held> = report
-        .held
-        .into_iter()
-        .filter(|h| asked.matches(&h.track, h.field, &h.source, h.confidence))
-        .collect();
+    let (waiting, library_protected, _) = listing(library, stems, asked)?;
     Ok(json!(Waiting {
         count: waiting.len(),
+        token: token_of(asked, &waiting),
         waiting,
-        library_protected: report.library_protected,
+        library_protected,
     }))
+}
+
+/// The waiting Facts a listing with `filter` shows, whether Library
+/// Protection is on, and the Ledger watermark they were read at.
+fn listing(
+    library: &OpenLibrary,
+    stems: &Stems,
+    filter: &Selection,
+) -> Result<(Vec<Held>, bool, i64), ServiceError> {
+    let (report, watermark) = crate::projection::dry_run(library, stems, filter.tracks.clone())?;
+    let rows = report
+        .held
+        .into_iter()
+        .filter(|h| filter.matches(&h.track, h.field, &h.source, h.confidence))
+        .collect();
+    Ok((rows, report.library_protected, watermark))
+}
+
+/// Only the filter of a selection.
+fn filter_of(asked: &Selection) -> Selection {
+    Selection {
+        tracks: asked.tracks.clone(),
+        field: asked.field,
+        from: asked.from.clone(),
+        at_least: asked.at_least,
+        ..Selection::default()
+    }
+}
+
+/// A listing's rows as the token covers them: everything that decides
+/// what an accept would do (not the title, which is only shown).
+fn digest(rows: &[Held]) -> String {
+    let named: Vec<Value> = rows
+        .iter()
+        .map(|h| {
+            json!([
+                h.fact,
+                h.track,
+                h.field,
+                h.before,
+                h.after,
+                h.source,
+                h.confidence,
+                h.reason,
+                h.threshold
+            ])
+        })
+        .collect();
+    crate::projection::hash_of(&serde_json::to_vec(&named).unwrap_or_default())
+}
+
+/// The token of a listing: its filter, hex-encoded, and its rows' digest.
+fn token_of(filter: &Selection, rows: &[Held]) -> String {
+    let filter = serde_json::to_vec(&filter_of(filter)).unwrap_or_default();
+    let hex: String = filter.iter().map(|b| format!("{b:02x}")).collect();
+    format!("{hex}.{}", digest(rows))
+}
+
+/// The filter and digest a token names.
+fn parse_token(token: &str) -> Result<(Selection, String), ServiceError> {
+    let bad = || {
+        bad_request(
+            "that is not a token of `review waiting`: list the waiting Facts and use the token it gives",
+        )
+    };
+    let (hex, digest) = token.split_once('.').ok_or_else(bad)?;
+    let bytes = (0..hex.len())
+        .step_by(2)
+        .map(|at| {
+            hex.get(at..at + 2)
+                .and_then(|b| u8::from_str_radix(b, 16).ok())
+        })
+        .collect::<Option<Vec<u8>>>()
+        .ok_or_else(bad)?;
+    let filter: Selection = serde_json::from_slice(&bytes).map_err(|_| bad())?;
+    Ok((filter, digest.to_owned()))
+}
+
+fn shown_row(h: &Held) -> String {
+    let kind = serde_json::to_value(h.source.kind)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .unwrap_or_default();
+    format!(
+        "Fact {} is now: track {}, {} {} -> {}, from {kind}:{} at {}",
+        h.fact,
+        h.track,
+        h.field.name(),
+        h.before,
+        h.after,
+        h.source.name,
+        h.confidence
+    )
+}
+
+/// The rows of the listing the DJ saw (`token`) that `asked` chooses, and
+/// the watermark they were read at. Refused, naming what the selection is
+/// now, when anything in that listing changed since it was shown.
+fn listed(
+    library: &OpenLibrary,
+    stems: &Stems,
+    asked: &Selection,
+) -> Result<(Vec<Held>, i64), ServiceError> {
+    if asked.ways() != 1 || asked.rejection.is_some() {
+        return Err(bad_request(
+            "name exactly one of: the Facts (facts), a filter (tracks, field, from, at_least), or all",
+        ));
+    }
+    let Some(token) = &asked.token else {
+        return Err(bad_request(
+            "an accept needs the token of the listing the DJ was shown: list with `wreckordbox review waiting` and pass its token",
+        ));
+    };
+    let (shown_filter, shown) = parse_token(token)?;
+    let (rows, _, watermark) = listing(library, stems, &shown_filter)?;
+    let pick = |rows: Vec<Held>| -> Vec<Held> {
+        rows.into_iter()
+            .filter(|h| {
+                if asked.facts.is_empty() {
+                    asked.all || asked.matches(&h.track, h.field, &h.source, h.confidence)
+                } else {
+                    asked.facts.contains(&h.fact)
+                }
+            })
+            .collect()
+    };
+    if digest(&rows) != shown {
+        let now = pick(rows.clone());
+        let mut said: Vec<String> = now.iter().map(shown_row).collect();
+        for f in &asked.facts {
+            if !now.iter().any(|h| h.fact == *f) {
+                said.push(format!("Fact {f} is no longer waiting"));
+            }
+        }
+        let said = if said.is_empty() {
+            "the selection is now empty".to_owned()
+        } else {
+            said.join("; ")
+        };
+        return Err(ServiceError::new(
+            codes::CHANGED,
+            format!(
+                "the listing the DJ was shown has changed since: {said}; nothing was written; list the waiting Facts again and decide again"
+            ),
+        ));
+    }
+    let chosen = pick(rows);
+    let found: HashSet<i64> = chosen.iter().map(|h| h.fact).collect();
+    let mut missing: Vec<i64> = asked
+        .facts
+        .iter()
+        .copied()
+        .filter(|f| !found.contains(f))
+        .collect();
+    if !missing.is_empty() {
+        missing.sort_unstable();
+        missing.dedup();
+        return Err(ServiceError::new(
+            codes::NOT_WAITING,
+            format!(
+                "Fact(s) {missing:?} are not in the listing the DJ was shown: nothing was done; list them with `wreckordbox review waiting`"
+            ),
+        ));
+    }
+    Ok((chosen, watermark))
 }
 
 /// The waiting Facts `asked` chooses, in order, and the Ledger watermark
@@ -357,11 +519,6 @@ fn chosen(
         .collect();
     let found: HashSet<i64> = chosen.iter().map(|h| h.fact).collect();
     let mut missing: Vec<i64> = named.difference(&found).copied().collect();
-    // A Fact named and shown but no longer waiting is the binding's to
-    // name ([`bound`]); one never shown is simply not waiting.
-    if let Some(shown) = &asked.expect {
-        missing.retain(|f| !shown.iter().any(|h| h.fact == *f));
-    }
     if !missing.is_empty() {
         missing.sort_unstable();
         return Err(ServiceError::new(
@@ -372,46 +529,6 @@ fn chosen(
         ));
     }
     Ok((chosen, watermark))
-}
-
-/// Whether `now` is the row the DJ was shown as `shown`: the same Fact,
-/// track, field, values, source and confidence.
-fn same(shown: &Held, now: &Held) -> bool {
-    shown.fact == now.fact
-        && shown.track == now.track
-        && shown.field == now.field
-        && shown.before == now.before
-        && shown.after == now.after
-        && shown.source == now.source
-        && shown.confidence.to_bits() == now.confidence.to_bits()
-}
-
-/// Refuses, naming them, the Facts that are not now exactly as shown.
-fn bound(chosen: &[Held], shown: &[Held]) -> Result<(), ServiceError> {
-    let now: HashMap<i64, &Held> = chosen.iter().map(|h| (h.fact, h)).collect();
-    let was: HashMap<i64, &Held> = shown.iter().map(|h| (h.fact, h)).collect();
-    let mut changed: Vec<i64> = shown
-        .iter()
-        .filter(|s| now.get(&s.fact).is_none_or(|n| !same(s, n)))
-        .map(|s| s.fact)
-        .chain(
-            chosen
-                .iter()
-                .filter(|c| !was.contains_key(&c.fact))
-                .map(|c| c.fact),
-        )
-        .collect();
-    if changed.is_empty() {
-        return Ok(());
-    }
-    changed.sort_unstable();
-    changed.dedup();
-    Err(ServiceError::new(
-        codes::CHANGED,
-        format!(
-            "Fact(s) {changed:?} are not as the DJ was shown them (replaced, moved to another track, no longer waiting, changed, or new to the selection): nothing was written; list the waiting Facts again"
-        ),
-    ))
 }
 
 /// A track row as the accept expects it: its revision and its values.
@@ -455,11 +572,11 @@ type Failure = (Option<LibraryChanged>, ServiceError);
 ///
 /// - Declared: the request names the DJ as its source, and its Run (if it
 ///   joins one) is the DJ's; nothing is inherited or defaulted.
-/// - Bound to what the DJ saw: a selection by filter or `all` resolves to
-///   its explicit set first and only that set is applied; with `expect`
-///   (the rows the DJ was shown) every chosen Fact must be exactly as
-///   shown (same Fact, track, field, values, source, confidence), and the
-///   set exactly the one shown, or the accept is refused naming them.
+/// - Bound to the listing the DJ saw: `token` (required) names a listing
+///   and its rows; the selection (Facts, filter or `all`) chooses within
+///   that listing, and if anything in it changed since (a Fact replaced,
+///   moved to another track, no longer waiting, a value changed, a new
+///   row) the accept is refused, naming what the selection is now.
 /// - Fact commands are kept out from before the check until the write is
 ///   done ([`exclude`], taken by the caller); the Library's edit gate is
 ///   held across the selection and the write.
@@ -491,10 +608,7 @@ fn accept(
     // edit made through the edit path comes between them.
     let gate_lock = library.edit_gate();
     let _gate = gate_lock.lock();
-    let (chosen, watermark) = chosen(library, stems, asked).map_err(early)?;
-    if let Some(shown) = &asked.expect {
-        bound(&chosen, shown).map_err(early)?;
-    }
+    let (chosen, watermark) = listed(library, stems, asked).map_err(early)?;
     if chosen.is_empty() {
         return Ok((
             Decided {
@@ -528,6 +642,7 @@ fn accept(
             ))));
         }
     }
+    let facts_then = facts_state(stems, &chosen).map_err(early)?;
     hold("selected");
     let refused = |why: String| DbError::WriteRefused(format!("{CHANGED_MARK}{why}"));
     let mut applied: Vec<i64> = Vec::new();
@@ -547,6 +662,17 @@ fn accept(
                 "a track was edited while the accept was being made".into(),
             ));
         }
+        // The selected tracks' Facts again, under the same hold of Fact
+        // commands: none recorded, replaced, moved or marked since.
+        match facts_state(stems, &chosen) {
+            Ok(now) if now == facts_then => {}
+            Ok(_) => {
+                return Err(refused(
+                    "a Fact of a chosen track changed while the accept was being made".into(),
+                ))
+            }
+            Err(e) => return Err(DbError::WriteRefused(e.message)),
+        }
         // Each row on the writer's own connection: at the revision and
         // value read with the selection, or nothing is written.
         let mut expected = rows.clone();
@@ -562,7 +688,10 @@ fn accept(
         for (at, held) in chosen.iter().enumerate() {
             let expect = expected.get(&held.track).cloned();
             let now = read_row(writer.library(), &held.track);
-            let wrote = if now != expect {
+            let unchanged = now == expect;
+            // Test: after the last comparison, before the write.
+            hold("write");
+            let wrote = if !unchanged {
                 Err(refused(format!(
                     "track {} was written while the accept was being made",
                     held.track
@@ -636,6 +765,41 @@ fn accept(
     }
 }
 
+/// Every Fact of the chosen fields on the chosen tracks, as it stands:
+/// its identity, attachment, value, source, confidence and eligibility.
+fn facts_state(stems: &Stems, chosen: &[Held]) -> Result<Vec<Value>, ServiceError> {
+    let tracks: HashSet<&str> = chosen.iter().map(|h| h.track.as_str()).collect();
+    let mut kinds: Vec<&str> = chosen.iter().map(|h| h.field.name()).collect();
+    kinds.sort_unstable();
+    kinds.dedup();
+    let mut state = Vec::new();
+    stems
+        .with_sidecar_wait(|open| -> Result<(), String> {
+            let Some(sidecar) = open else { return Ok(()) };
+            for kind in &kinds {
+                for f in sidecar.facts_of_kind(kind).map_err(|e| e.to_string())? {
+                    if tracks.contains(f.track_id.as_str()) {
+                        state.push(json!([
+                            f.id,
+                            f.track_id,
+                            f.kind,
+                            f.value,
+                            f.source,
+                            f.confidence,
+                            f.stale_at,
+                            f.superseded_at,
+                            f.superseded_by
+                        ]));
+                    }
+                }
+            }
+            Ok(())
+        })?
+        .map_err(failed)?;
+    state.sort_by_key(|v| v[0].as_i64());
+    Ok(state)
+}
+
 fn changed_error(why: &str) -> ServiceError {
     ServiceError::new(
         codes::CHANGED,
@@ -666,8 +830,8 @@ fn reject(
     asked: &Selection,
 ) -> Result<Value, ServiceError> {
     let source = the_dj(asked, "rejecting a waiting Fact")?;
-    if asked.expect.is_some() {
-        return Err(bad_request("expect is for review.accept"));
+    if asked.token.is_some() {
+        return Err(bad_request("token is for review.accept"));
     }
     let (chosen, _) = chosen(library, stems, asked)?;
     if chosen.is_empty() {
@@ -730,7 +894,7 @@ fn rejected_matching(stems: &Stems, asked: &Selection) -> Result<Vec<Rejected>, 
 fn rejected(stems: &Stems, asked: &Selection) -> Result<Value, ServiceError> {
     if asked.ways() != usize::from(asked.filtered())
         || asked.source.is_some()
-        || asked.expect.is_some()
+        || asked.token.is_some()
     {
         return Err(bad_request(
             "review.rejected takes only a filter: tracks, field, from, at_least",
@@ -745,7 +909,7 @@ fn rejected(stems: &Stems, asked: &Selection) -> Result<Value, ServiceError> {
 
 fn reopen(stems: &Stems, request: &Request, asked: &Selection) -> Result<Value, ServiceError> {
     let source = the_dj(asked, "reopening a rejection")?;
-    if asked.ways() != 1 || asked.expect.is_some() {
+    if asked.ways() != 1 || asked.token.is_some() {
         return Err(bad_request(
             "name exactly one of: the Facts rejected (facts), a filter (tracks, field, from, at_least), all, or one rejection (its Ledger entry)",
         ));

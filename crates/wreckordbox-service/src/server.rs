@@ -612,6 +612,7 @@ impl Shared {
                 })
             }
             decisions if crate::decisions::answers(decisions) => {
+                let _facts = crate::review::exclude(&self.stems);
                 // The Sidecar's too: the Library is only read, to find a
                 // track a Decision or its Fact is about.
                 crate::decisions::answer(&self.stems, request, &|id| {

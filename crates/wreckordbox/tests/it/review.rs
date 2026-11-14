@@ -74,6 +74,14 @@ pub(crate) fn waiting(s: &Sandbox) -> Vec<Value> {
         .clone()
 }
 
+/// The token of the listing the DJ sees now (`review waiting`).
+pub(crate) fn token(s: &Sandbox) -> String {
+    ok(s, &["review", "waiting"])["token"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
 pub(crate) fn facts_waiting(s: &Sandbox) -> Vec<i64> {
     waiting(s)
         .iter()
@@ -183,9 +191,18 @@ fn accepting_a_fact_is_the_djs_hand_set_in_the_djs_run_and_it_leaves_the_queue()
     let mut watcher = s.client();
     watcher.subscribe().unwrap();
 
+    let t = token(&s);
     let accepted = ok(
         &s,
-        &["review", "accept", &energy.to_string(), "--source", "dj"],
+        &[
+            "review",
+            "accept",
+            &energy.to_string(),
+            "--token",
+            &t,
+            "--source",
+            "dj",
+        ],
     );
     assert_eq!(accepted["count"], 1, "{accepted}");
     assert_eq!(accepted["decided"][0]["fact"], energy);
@@ -227,9 +244,10 @@ fn only_the_dj_accepts_and_library_protection_refuses_an_accept_with_nothing_wri
     let energy = fact(&s, "10001", "energy", "4", "agent:tagger", "0.7");
     let id = energy.to_string();
     let runs = ok(&s, &["runs", "list"]);
+    let t = token(&s);
 
     for source in [None, Some("agent:tagger"), Some("tool:meter")] {
-        let mut args = vec!["review", "accept", id.as_str()];
+        let mut args = vec!["review", "accept", id.as_str(), "--token", t.as_str()];
         if let Some(source) = source {
             args.extend(["--source", source]);
         }
@@ -246,7 +264,10 @@ fn only_the_dj_accepts_and_library_protection_refuses_an_accept_with_nothing_wri
     let listed = ok(&s, &["review", "waiting"]);
     assert_eq!(listed["library_protected"], true);
     assert_eq!(
-        refused(&s, &["review", "accept", &id, "--source", "dj"])["code"],
+        refused(
+            &s,
+            &["review", "accept", &id, "--token", &t, "--source", "dj"]
+        )["code"],
         "library_protected"
     );
     assert_eq!(rating(&s, "10001"), 0);
@@ -257,14 +278,31 @@ fn only_the_dj_accepts_and_library_protection_refuses_an_accept_with_nothing_wri
 
     // A Fact that is not waiting is refused, and nothing else is accepted
     // with it.
-    let error = refused(&s, &["review", "accept", &id, "999999", "--source", "dj"]);
+    let error = refused(
+        &s,
+        &[
+            "review", "accept", &id, "999999", "--token", &t, "--source", "dj",
+        ],
+    );
     assert_eq!(error["code"], "review_not_waiting", "{error}");
     assert_eq!(rating(&s, "10001"), 0);
     // A selection must say what it chooses.
     assert_eq!(
-        refused(&s, &["review", "accept", "--source", "dj"])["code"],
+        refused(&s, &["review", "accept", "--token", &t, "--source", "dj"])["code"],
         "bad_request"
     );
+    // Without the listing it was shown, an accept is refused.
+    let untokened = s.cli(&["--json", "review", "accept", &id, "--source", "dj"]);
+    assert!(!untokened.status.success());
+    assert!(untokened.stderr.contains("--token"), "{}", untokened.stderr);
+    let mut client = s.client();
+    let error = client
+        .call::<Value>(
+            "review.accept",
+            json!({"facts": [energy], "source": {"kind": "dj"}}),
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "bad_request", "{error:?}");
 }
 
 #[test]
@@ -362,9 +400,19 @@ fn bulk_decisions_by_filter_and_all_empty_the_queue_in_one_undo_step() {
 
     // Accept everything above 0.5 at once: one Library entry, one Undo
     // step, in one DJ Run.
+    let t = token(&s);
     let accepted = ok(
         &s,
-        &["review", "accept", "--at-least", "0.5", "--source", "dj"],
+        &[
+            "review",
+            "accept",
+            "--at-least",
+            "0.5",
+            "--token",
+            &t,
+            "--source",
+            "dj",
+        ],
     );
     let mut decided: Vec<i64> = accepted["decided"]
         .as_array()
@@ -403,7 +451,18 @@ fn bulk_decisions_by_filter_and_all_empty_the_queue_in_one_undo_step() {
     // Deciding all of an empty queue does nothing.
     let runs = ok(&s, &["runs", "list"]);
     assert_eq!(
-        ok(&s, &["review", "accept", "--all", "--source", "dj"])["count"],
+        ok(
+            &s,
+            &[
+                "review",
+                "accept",
+                "--all",
+                "--token",
+                &token(&s),
+                "--source",
+                "dj"
+            ]
+        )["count"],
         0
     );
     assert_eq!(ok(&s, &["runs", "list"]), runs);

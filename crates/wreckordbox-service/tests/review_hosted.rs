@@ -88,9 +88,10 @@ fn the_windows_accept_is_the_djs_and_one_undo_step_puts_the_facts_back_in_the_qu
     while events.recv_timeout(Duration::from_millis(100)).is_ok() {}
     assert_eq!(waiting(), 2);
 
+    let token = || -> Value { service.call("review.waiting", json!({})).unwrap()["token"].clone() };
     // The window must declare the DJ: no default, even in-process.
     let undeclared = service
-        .call("review.accept", json!({"all": true}))
+        .call("review.accept", json!({"all": true, "token": token()}))
         .unwrap_err();
     assert_eq!(undeclared.code, "review_not_the_djs");
     assert_eq!((stars(&core, &a), stars(&core, &b)), (0, 0));
@@ -98,7 +99,7 @@ fn the_windows_accept_is_the_djs_and_one_undo_step_puts_the_facts_back_in_the_qu
     let accepted = service
         .call(
             "review.accept",
-            json!({"all": true, "source": {"kind": "dj"}}),
+            json!({"all": true, "token": token(), "source": {"kind": "dj"}}),
         )
         .unwrap();
     assert_eq!(accepted["count"], 2, "{accepted}");
@@ -141,4 +142,41 @@ fn the_windows_accept_is_the_djs_and_one_undo_step_puts_the_facts_back_in_the_qu
         )
         .unwrap();
     assert_eq!(waiting(), 0);
+
+    // An accept whose second value fails: what it applied is one step of
+    // the window's Undo, and Redo puts it back, the DJ's again.
+    let [d, e] = [4, 5].map(fixture::track_id);
+    for (track, value) in [(&d, 5), (&e, 1)] {
+        service
+            .call(
+                "facts.record",
+                json!({"source": {"kind": "agent", "name": "tagger"},
+                    "facts": [{"track": track, "kind": "energy", "value": value,
+                    "confidence": 0.6}]}),
+            )
+            .unwrap();
+    }
+    while events.recv_timeout(Duration::from_millis(100)).is_ok() {}
+    std::env::set_var(wreckordbox_service::review::FAIL_AT_ENV, "2");
+    let partial = service
+        .call(
+            "review.accept",
+            json!({"all": true, "token": token(), "source": {"kind": "dj"}}),
+        )
+        .unwrap_err();
+    std::env::remove_var(wreckordbox_service::review::FAIL_AT_ENV);
+    assert_eq!(partial.code, "review_partial", "{partial:?}");
+    assert_eq!((stars(&core, &d), stars(&core, &e)), (5, 0));
+    assert_eq!(standing_kind(&d), "dj");
+    assert_eq!(waiting(), 1);
+    core.step_history(&NoHost, true).unwrap();
+    assert_eq!((stars(&core, &d), stars(&core, &e)), (0, 0));
+    assert_eq!(standing_kind(&d), "agent");
+    assert_eq!(waiting(), 2);
+    // The earlier accept is untouched by this Undo.
+    assert_eq!((stars(&core, &a), stars(&core, &b)), (4, 2));
+    core.step_history(&NoHost, false).unwrap();
+    assert_eq!((stars(&core, &d), stars(&core, &e)), (5, 0));
+    assert_eq!(standing_kind(&d), "dj");
+    assert_eq!(waiting(), 1);
 }

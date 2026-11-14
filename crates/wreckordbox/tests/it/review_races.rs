@@ -10,7 +10,9 @@
     clippy::panic
 )]
 use crate::common;
-use crate::review::{fact, facts_waiting, library_changes, ok, policy, rating, refused, waiting};
+use crate::review::{
+    fact, facts_waiting, library_changes, ok, policy, rating, refused, token, waiting,
+};
 
 use std::path::Path;
 use std::process::{Child, Stdio};
@@ -152,8 +154,20 @@ fn a_write_from_outside_the_edit_gate_after_the_selection_refuses_the_accept_and
     let f = fact(&s, "10001", "energy", "4", "agent:tagger", "0.7");
     let runs = ok(&s, &["runs", "list"]);
 
+    let t = token(&s);
     gate.hold("selected");
-    let accept = spawn(&s, &["review", "accept", &f.to_string(), "--source", "dj"]);
+    let accept = spawn(
+        &s,
+        &[
+            "review",
+            "accept",
+            &f.to_string(),
+            "--token",
+            &t,
+            "--source",
+            "dj",
+        ],
+    );
     gate.reached("at-selected");
     // A player or rekordbox writes the row: no edit gate, no Ledger entry.
     s.edit(|w| {
@@ -172,66 +186,247 @@ fn a_write_from_outside_the_edit_gate_after_the_selection_refuses_the_accept_and
 }
 
 #[test]
-fn an_accept_bound_to_what_the_dj_saw_refuses_a_superseded_fact_by_name() {
+fn an_accept_bound_to_the_djs_listing_refuses_a_superseded_fact_by_name() {
     let s = Sandbox::new();
     ok(&s, &["status"]);
     let f = fact(&s, "10001", "energy", "4", "agent:tagger", "0.7");
-    let shown = waiting(&s);
-    assert_eq!(shown.len(), 1);
+    let t = token(&s);
     // The agent replaces its answer after the DJ looked.
     fact(&s, "10001", "energy", "2", "agent:tagger", "0.7");
-    let mut client = s.client();
-    let error = client
-        .call::<Value>(
-            "review.accept",
-            json!({"facts": [f], "expect": shown, "source": {"kind": "dj"}}),
-        )
-        .unwrap_err();
-    assert_eq!(error.code, "review_changed", "{error:?}");
-    assert!(error.message.contains(&f.to_string()), "{error:?}");
+    let error = refused(
+        &s,
+        &[
+            "review",
+            "accept",
+            &f.to_string(),
+            "--token",
+            &t,
+            "--source",
+            "dj",
+        ],
+    );
+    assert_eq!(error["code"], "review_changed", "{error}");
+    let message = error["message"].as_str().unwrap();
+    assert!(message.contains(&format!("Fact {f}")), "{message}");
     assert_eq!(db_rating(&s, "10001"), 0);
 }
 
-#[test]
-fn an_accept_bound_to_what_the_dj_saw_refuses_a_fact_since_reattached_to_another_track() {
-    let s = Sandbox::new();
-    let id = s.import_track("Track.wav", 1);
-    let describe = |s: &Sandbox, id: &str| {
-        s.edit(|w| {
-            w.set_field(id, TrackField::Title, "Night Journey (Original Mix)")
-                .unwrap();
-            w.set_field(id, TrackField::Artist, "Fixture Artist")
-                .unwrap();
-        });
-    };
-    describe(&s, &id);
-    let mut service = s.serve();
-    let f = fact(&s, &id, "energy", "4", "agent:tagger", "0.7");
-    let shown = waiting(&s);
-    assert_eq!(shown[0]["track"], json!(id));
-    service.kill().unwrap();
-    service.wait().unwrap();
-    // The track is removed and added again: its Facts follow it.
+fn describe(s: &Sandbox, id: &str) {
+    s.edit(|w| {
+        w.set_field(id, TrackField::Title, "Night Journey (Original Mix)")
+            .unwrap();
+        w.set_field(id, TrackField::Artist, "Fixture Artist")
+            .unwrap();
+    });
+}
+
+/// The track removed and its music added again, with the service stopped;
+/// then a service, and the reading that reattaches its Facts. Answers the
+/// new track and the service.
+fn readd(s: &Sandbox, id: &str) -> (String, Serving) {
+    stop_service(s);
     let mut next = String::new();
     s.edit(|w| {
-        w.delete_track(&id).unwrap();
+        w.delete_track(id).unwrap();
         next = w.import_file(&s.path().join("audio/Track.wav")).unwrap();
     });
-    describe(&s, &next);
-    let _service = Serving(s.serve());
-    ok(&s, &["facts", "show", &next, "--check-audio"]);
+    describe(s, &next);
+    let service = Serving(s.serve());
+    ok(s, &["facts", "show", &next, "--check-audio"]);
+    (next, service)
+}
+
+#[test]
+fn an_accept_with_the_listing_the_dj_saw_refuses_a_fact_since_reattached_naming_the_change() {
+    let s = Sandbox::new();
+    let id = s.import_track("Track.wav", 1);
+    describe(&s, &id);
+    ok(&s, &["status"]);
+    let f = fact(&s, &id, "energy", "4", "agent:tagger", "0.7");
+    // The DJ lists: F on A, and the listing's token.
+    let t = token(&s);
+    assert_eq!(waiting(&s)[0]["track"], json!(id));
+    let (next, _service) = readd(&s, &id);
     assert_eq!(waiting(&s)[0]["track"], json!(next), "reattached");
 
-    let mut client = s.client();
-    let error = client
-        .call::<Value>(
-            "review.accept",
-            json!({"facts": [f], "expect": shown, "source": {"kind": "dj"}}),
-        )
-        .unwrap_err();
-    assert_eq!(error.code, "review_changed", "{error:?}");
-    assert!(error.message.contains(&f.to_string()), "{error:?}");
+    let error = refused(
+        &s,
+        &[
+            "review",
+            "accept",
+            &f.to_string(),
+            "--token",
+            &t,
+            "--source",
+            "dj",
+        ],
+    );
+    assert_eq!(error["code"], "review_changed", "{error}");
+    let message = error["message"].as_str().unwrap();
+    assert!(message.contains(&format!("Fact {f}")), "{message}");
+    assert!(
+        message.contains(&next),
+        "names the track it is on now: {message}"
+    );
     assert_eq!(db_rating(&s, &next), 0);
+}
+
+#[test]
+fn a_write_after_the_last_check_and_before_the_write_transaction_is_never_overwritten() {
+    let s = Sandbox::new();
+    let gate = Gate::new();
+    let _service = gated(&s, &gate);
+    let f = fact(&s, "10001", "energy", "4", "agent:tagger", "0.7");
+    let t = token(&s);
+
+    gate.hold("write");
+    let accept = spawn(
+        &s,
+        &[
+            "review",
+            "accept",
+            &f.to_string(),
+            "--token",
+            &t,
+            "--source",
+            "dj",
+        ],
+    );
+    gate.reached("at-write");
+    s.edit(|w| {
+        w.set_rating("10001", 5).unwrap();
+    });
+    gate.go("write");
+    let (success, answer) = finished(accept);
+    assert!(!success, "{answer}");
+    assert_eq!(answer["error"]["code"], "review_changed", "{answer}");
+    assert_eq!(db_rating(&s, "10001"), 5, "the other write is kept");
+}
+
+#[test]
+fn a_decision_recording_a_fact_waits_until_an_accept_is_written() {
+    let s = Sandbox::new();
+    let gate = Gate::new();
+    let _service = gated(&s, &gate);
+    let f = fact(&s, "10001", "energy", "4", "agent:tagger", "0.7");
+    let decision = ok(
+        &s,
+        &[
+            "decisions",
+            "create",
+            "--type",
+            "choice",
+            "--question",
+            "How hard?",
+            "--candidate",
+            "2",
+            "--candidate",
+            "4",
+            "--track",
+            "10001",
+        ],
+    )["id"]
+        .to_string();
+    let t = token(&s);
+
+    gate.hold("selected");
+    let accept = spawn(
+        &s,
+        &[
+            "review",
+            "accept",
+            &f.to_string(),
+            "--token",
+            &t,
+            "--source",
+            "dj",
+        ],
+    );
+    gate.reached("at-selected");
+    // The same agent answers a Decision with Energy 2, which would
+    // supersede the Fact being accepted.
+    let answer = spawn(
+        &s,
+        &[
+            "decisions",
+            "answer",
+            &decision,
+            "2",
+            "--decider",
+            "agent:tagger",
+            "--probability",
+            "0.7",
+            "--fact",
+            "energy",
+            "--fact-value",
+            "2",
+        ],
+    );
+    gate.reached("facts-waiting");
+    gate.go("selected");
+    let (accepted, accepted_answer) = finished(accept);
+    assert!(accepted, "{accepted_answer}");
+    let (answered, answered_answer) = finished(answer);
+    assert!(answered, "{answered_answer}");
+    assert_eq!(db_rating(&s, "10001"), 4);
+    let standing = standing(&s, "10001");
+    assert_eq!(standing["source"]["kind"], "dj", "{standing}");
+    assert_eq!(standing["value"], 4);
+}
+
+#[test]
+fn a_rejection_follows_its_fact_when_the_music_is_reimported_and_no_other_track() {
+    let s = Sandbox::new();
+    let id = s.import_track("Track.wav", 1);
+    describe(&s, &id);
+    ok(&s, &["status"]);
+    let f = fact(&s, &id, "energy", "4", "agent:tagger", "0.7");
+    ok(&s, &["review", "reject", &f.to_string(), "--source", "dj"]);
+    let (next, _service) = readd(&s, &id);
+    // The same suggestion for an unrelated track is its own.
+    let unrelated = fact(&s, "10001", "energy", "4", "agent:tagger", "0.7");
+
+    assert_eq!(facts_waiting(&s), vec![unrelated], "{:?}", waiting(&s));
+    policy(&s, "[energy]\napply = 0.1\n");
+    let applied = ok(&s, &["project"]);
+    let changed: Vec<&str> = applied["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["track"].as_str().unwrap())
+        .collect();
+    assert_eq!(changed, vec!["10001"], "{applied}");
+    assert_eq!(
+        db_rating(&s, &next),
+        0,
+        "the rejected Fact is not projected"
+    );
+}
+
+#[test]
+fn the_same_value_from_another_source_or_for_another_track_is_a_distinct_suggestion() {
+    let s = Sandbox::new();
+    ok(&s, &["status"]);
+    let f = fact(&s, "10001", "energy", "4", "agent:tagger", "0.7");
+    ok(&s, &["review", "reject", &f.to_string(), "--source", "dj"]);
+    let other_source = fact(&s, "10001", "energy", "4", "tool:meter", "0.7");
+    assert_eq!(facts_waiting(&s), vec![other_source]);
+    let other_track = fact(&s, "10002", "energy", "4", "agent:tagger", "0.7");
+    let mut now = facts_waiting(&s);
+    now.sort_unstable();
+    assert_eq!(now, vec![other_source, other_track]);
+}
+
+#[test]
+fn reopening_a_fact_never_rejected_is_refused() {
+    let s = Sandbox::new();
+    ok(&s, &["status"]);
+    let f = fact(&s, "10001", "energy", "4", "agent:tagger", "0.7");
+    let runs = ok(&s, &["runs", "list"]);
+    let error = refused(&s, &["review", "reopen", &f.to_string(), "--source", "dj"]);
+    assert_eq!(error["code"], "review_not_waiting", "{error}");
+    assert_eq!(ok(&s, &["runs", "list"]), runs);
+    assert_eq!(facts_waiting(&s), vec![f]);
 }
 
 #[test]
@@ -241,8 +436,20 @@ fn a_fact_recorded_while_an_accept_is_being_written_waits_until_the_write_is_don
     let _service = gated(&s, &gate);
     let f = fact(&s, "10001", "energy", "4", "agent:tagger", "0.7");
 
+    let t = token(&s);
     gate.hold("selected");
-    let accept = spawn(&s, &["review", "accept", &f.to_string(), "--source", "dj"]);
+    let accept = spawn(
+        &s,
+        &[
+            "review",
+            "accept",
+            &f.to_string(),
+            "--token",
+            &t,
+            "--source",
+            "dj",
+        ],
+    );
     gate.reached("at-selected");
     let record = spawn(
         &s,
@@ -281,7 +488,11 @@ fn a_batch_that_fails_part_way_records_what_it_applied_and_says_which_were_not()
     let mut watcher = s.client();
     watcher.subscribe().unwrap();
 
-    let error = refused(&s, &["review", "accept", "--all", "--source", "dj"]);
+    let t = token(&s);
+    let error = refused(
+        &s,
+        &["review", "accept", "--all", "--token", &t, "--source", "dj"],
+    );
     assert_eq!(error["code"], "review_partial", "{error}");
     let message = error["message"].as_str().unwrap();
     assert!(message.contains(&format!("applied: [{a}]")), "{message}");
@@ -324,11 +535,13 @@ fn a_crash_between_setters_is_reconciled_to_the_djs_values_and_hides_no_other_fa
     fact(&s, "10002", "energy", "2", "agent:tagger", "0.7");
     let other = fact(&s, "10003", "energy", "5", "agent:tagger", "0.7");
 
+    let t = token(&s);
     gate.hold("between");
     let accept = spawn(
         &s,
         &[
-            "review", "accept", "--track", "10001", "--track", "10002", "--source", "dj",
+            "review", "accept", "--track", "10001", "--track", "10002", "--token", &t, "--source",
+            "dj",
         ],
     );
     gate.reached("at-between");
@@ -343,9 +556,29 @@ fn a_crash_between_setters_is_reconciled_to_the_djs_values_and_hides_no_other_fa
     let standing = standing(&s, "10001");
     assert_eq!(standing["source"]["kind"], "dj", "{standing}");
     assert_eq!(standing["value"], 4);
-    // The cut-off write bars only its own tracks: the rest of the queue
+    // The cut-off write bars exactly its own tracks: the rest of the queue
     // still waits.
-    assert!(facts_waiting(&s).contains(&other), "{:?}", waiting(&s));
+    let barriers = ok(&s, &["projection", "barriers"]);
+    let standing_barriers: Vec<&Value> = barriers["barriers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|b| b["cleared"].is_null())
+        .collect();
+    assert_eq!(standing_barriers.len(), 1, "{barriers}");
+    let mut barred: Vec<String> = standing_barriers[0]["tracks"]
+        .as_array()
+        .unwrap_or_else(|| panic!("an unbounded barrier: {barriers}"))
+        .iter()
+        .map(|t| t.as_str().unwrap().to_owned())
+        .collect();
+    barred.sort();
+    assert_eq!(
+        barred,
+        vec!["10001".to_owned(), "10002".to_owned()],
+        "{barriers}"
+    );
+    assert_eq!(facts_waiting(&s), vec![other], "{:?}", waiting(&s));
     stop_service(&s);
 }
 
@@ -382,8 +615,20 @@ fn an_accept_must_declare_the_dj_on_every_request_even_in_the_djs_run() {
         &["runs", "start", "--source", "dj", "--description", "review"],
     )["id"]
         .to_string();
+    let t = token(&s);
     assert_eq!(
-        refused(&s, &["review", "accept", &f.to_string(), "--run", &run])["code"],
+        refused(
+            &s,
+            &[
+                "review",
+                "accept",
+                &f.to_string(),
+                "--token",
+                &t,
+                "--run",
+                &run
+            ]
+        )["code"],
         "review_not_the_djs"
     );
     // The envelope says an agent, the arguments say the DJ: refused.
@@ -395,7 +640,7 @@ fn an_accept_must_declare_the_dj_on_every_request_even_in_the_djs_run() {
     let error = client
         .call::<Value>(
             "review.accept",
-            json!({"facts": [f], "source": {"kind": "dj"}}),
+            json!({"facts": [f], "token": t, "source": {"kind": "dj"}}),
         )
         .unwrap_err();
     assert_eq!(error.code, "review_not_the_djs", "{error:?}");
@@ -407,6 +652,8 @@ fn an_accept_must_declare_the_dj_on_every_request_even_in_the_djs_run() {
             "review",
             "accept",
             &f.to_string(),
+            "--token",
+            &t,
             "--run",
             &run,
             "--source",
