@@ -716,3 +716,125 @@ fn the_dj_reopens_a_rejection_singly_by_filter_or_a_whole_reject_and_the_facts_w
     ok(&s, &["review", "reject", &b.to_string(), "--source", "dj"]);
     assert!(facts_waiting(&s).is_empty());
 }
+
+#[test]
+fn a_write_to_the_second_field_after_the_first_commit_is_kept_and_reported() {
+    let s = Sandbox::new();
+    s.dj_prep_colours();
+    let gate = Gate::new();
+    let _service = gated(&s, &gate);
+    let energy = fact(&s, "10001", "energy", "4", "agent:tagger", "0.7");
+    let colour = fact(&s, "10001", "prep_colour", "Green", "agent:tagger", "0.7");
+    let t = token(&s);
+
+    gate.hold("committed");
+    let accept = spawn(
+        &s,
+        &["review", "accept", "--all", "--token", &t, "--source", "dj"],
+    );
+    gate.reached("at-committed");
+    // The DJ sets the colour elsewhere (rekordbox), between the accept's
+    // first commit and its second value.
+    s.edit(|w| {
+        w.set_color("10001", Some("2")).unwrap();
+    });
+    gate.go("committed");
+    let (success, answer) = finished(accept);
+    assert!(!success, "{answer}");
+    assert_eq!(answer["error"]["code"], "review_partial", "{answer}");
+    let message = answer["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains(&format!("applied: [{energy}]")),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!("not applied: [{colour}]")),
+        "{message}"
+    );
+    assert_eq!(db_rating(&s, "10001"), 4);
+    let db = rbl_db::Library::open(s.location().clone(), rbl_db::OpenMode::ReadOnly).unwrap();
+    let kept: String = db
+        .connection()
+        .query_row(
+            "SELECT ColorID FROM djmdContent WHERE ID = '10001'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(kept, "2", "the DJ's colour is kept");
+}
+
+#[test]
+fn an_accept_waits_for_a_decision_already_past_its_lookup_and_is_refused_as_stale() {
+    let s = Sandbox::new();
+    let gate = Gate::new();
+    let _service = gated(&s, &gate);
+    let f = fact(&s, "10001", "energy", "4", "agent:tagger", "0.7");
+    let decision = ok(
+        &s,
+        &[
+            "decisions",
+            "create",
+            "--type",
+            "choice",
+            "--question",
+            "How hard?",
+            "--candidate",
+            "2",
+            "--candidate",
+            "4",
+            "--track",
+            "10001",
+        ],
+    )["id"]
+        .to_string();
+    // The DJ lists: F waits.
+    let t = token(&s);
+
+    // The Decision has found its track and is about to record Energy 2.
+    gate.hold("decision-found");
+    let answer = spawn(
+        &s,
+        &[
+            "decisions",
+            "answer",
+            &decision,
+            "2",
+            "--decider",
+            "agent:tagger",
+            "--probability",
+            "0.7",
+            "--fact",
+            "energy",
+            "--fact-value",
+            "2",
+        ],
+    );
+    gate.reached("at-decision-found");
+    // The DJ accepts from the listing: it waits for the Decision.
+    let accept = spawn(
+        &s,
+        &[
+            "review",
+            "accept",
+            &f.to_string(),
+            "--token",
+            &t,
+            "--source",
+            "dj",
+        ],
+    );
+    gate.reached("facts-waiting");
+    gate.go("decision-found");
+    let (answered, answered_answer) = finished(answer);
+    assert!(answered, "{answered_answer}");
+    // Then sees that F was replaced since the listing: refused, nothing
+    // written.
+    let (accepted, accepted_answer) = finished(accept);
+    assert!(!accepted, "{accepted_answer}");
+    assert_eq!(
+        accepted_answer["error"]["code"], "review_changed",
+        "{accepted_answer}"
+    );
+    assert_eq!(db_rating(&s, "10001"), 0);
+}

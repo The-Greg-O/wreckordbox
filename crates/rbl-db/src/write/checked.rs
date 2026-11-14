@@ -69,7 +69,11 @@ impl Writer {
     /// Sets `field` on track `content` only while its row is at `expected`
     /// (USN and `updated_at`), checked and written in one immediate
     /// transaction; answers the edit to undo, as the `_with_undo` setters
-    /// do. A track already holding the value is left as it is (nothing
+    /// do, and the revision the row is at after it: the one this write
+    /// committed (or `expected`, when nothing was written). A caller making
+    /// a further checked write to the row expects exactly that revision,
+    /// never one read back afterwards, which another connection may have
+    /// moved on. A track already holding the value is left as it is (nothing
     /// written, an unchanged edit). A row at another revision, or gone, is
     /// a [`DbError::Conflict`], with nothing written.
     pub fn set_track_if_unchanged(
@@ -77,7 +81,7 @@ impl Writer {
         content: &str,
         field: CheckedField,
         expected: &Revision,
-    ) -> Result<(Changed, TrackEdit)> {
+    ) -> Result<(Changed, TrackEdit, Revision)> {
         if let CheckedField::Rating(stars) = field {
             if stars > 5 {
                 return Err(DbError::WriteRefused(format!(
@@ -122,6 +126,7 @@ impl Writer {
                     before: before.clone(),
                     after: before,
                 },
+                expected.clone(),
             ));
         }
         let next = next_usn(&tx)?;
@@ -159,6 +164,10 @@ impl Writer {
                 column,
                 before,
                 after,
+            },
+            Revision {
+                usn: next,
+                updated_at: stamp,
             },
         ))
     }

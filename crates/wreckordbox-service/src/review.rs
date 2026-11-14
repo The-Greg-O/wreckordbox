@@ -239,8 +239,9 @@ fn gate() -> Option<PathBuf> {
         .flatten()
 }
 
-/// The test hold at `point` ([`GATE_ENV`]).
-fn hold(point: &str) {
+/// The test hold at `point` ([`GATE_ENV`]); also a Decision's, after its
+/// lookup (`decision-found`).
+pub(crate) fn hold(point: &str) {
     let Some(gate) = gate() else { return };
     if !gate.join(format!("hold-{point}")).exists() {
         return;
@@ -693,13 +694,24 @@ fn accept(
         for (at, held) in chosen.iter().enumerate() {
             let wrote = write_one(writer, held, expected.get(&held.track), at + 1);
             match wrote {
-                Ok((_, edit)) => {
+                Ok((_, edit, revision)) => {
                     done.push(edit);
                     applied.push(held.fact);
+                    // Test: after this value's commit, before the next
+                    // value's expectation is set.
+                    hold("committed");
                     // Our own write moved the row on: the next value for it
-                    // expects the revision it left.
-                    if let Some(row) = read_row(writer.library(), &held.track) {
-                        expected.insert(held.track.clone(), row);
+                    // expects exactly the revision this write committed and
+                    // the value it wrote, never a row read back now, which
+                    // another connection may have written since.
+                    if let Some(row) = expected.get_mut(&held.track) {
+                        row.usn = revision.usn;
+                        row.updated_at = revision.updated_at;
+                        let wrote = native_number(&held.after);
+                        match held.field {
+                            Field::Energy => row.rating = wrote,
+                            Field::PrepColour => row.colour = wrote,
+                        }
                     }
                     if done.len() == 1 {
                         hold("between");
@@ -755,7 +767,7 @@ fn write_one(
     held: &Held,
     expected: Option<&Row>,
     n: usize,
-) -> Result<(rbl_db::write::Changed, rbl_db::write::TrackEdit), DbError> {
+) -> Result<(rbl_db::write::Changed, rbl_db::write::TrackEdit, Revision), DbError> {
     let changed = || {
         DbError::WriteRefused(format!(
             "{CHANGED_MARK}track {} was written while the accept was being made",
