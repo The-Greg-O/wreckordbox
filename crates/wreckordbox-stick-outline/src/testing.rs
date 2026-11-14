@@ -249,7 +249,7 @@ pub fn assert_unchanged(root: &Path, before: &BTreeMap<PathBuf, Option<Vec<u8>>>
     assert!(found.is_empty(), "{what} changed the Stick: {found:?}");
 }
 
-/// The MyTags of [`tagged_stick`]: two categories, "Vibe" (Dark, Uplifting)
+/// The `MyTags` of [`tagged_stick`]: two categories, "Vibe" (Dark, Uplifting)
 /// and "Situation" (Peak, Warm-up, and a second "Dark" of its own), as
 /// `(id, seq, name, attribute, parent)` (wbx-45.12).
 pub const TAGS: [(u64, u32, &str, u8, u64); 7] = [
@@ -273,7 +273,7 @@ pub const TAGGED_TRACKS: [(&str, &[u64]); 6] = [
     ("Elsewhere", &[11, 21]),
 ];
 
-/// Exports to `dest` a Stick whose tracks carry MyTags ([`TAGS`],
+/// Exports to `dest` a Stick whose tracks carry `MyTags` ([`TAGS`],
 /// [`TAGGED_TRACKS`]), both libraries and `exportExt.pdb`, with the
 /// playlist "Warm Up" (so the WAL fixtures apply to it too).
 pub fn tagged_stick(dest: &Path) {

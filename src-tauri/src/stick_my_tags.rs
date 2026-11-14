@@ -1,4 +1,4 @@
-//! A Stick's own MyTags in the view shell's Track Filter (wbx-45.12).
+//! A Stick's own `MyTags` in the view shell's Track Filter (wbx-45.12).
 //!
 //! `wreckordbox_stick_outline` reads them through the read that cannot
 //! recover or write a Stick; this turns them into what the bar and the

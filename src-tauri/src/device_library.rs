@@ -1288,7 +1288,7 @@ fn device_filter(dto: &crate::dto::TrackFilterDto) -> rbl_index::device::DeviceF
 
 /// What the Track Filter bar offers on a Stick list: the keys and whole BPMs
 /// of the list's own rows, read the same way the list is (wbx-57), and the
-/// Stick's own MyTag categories (wbx-45.12).
+/// Stick's own `MyTag` categories (wbx-45.12).
 pub async fn filter_values(path: String, format: String, playlist: String, query: String, field: rbl_index::SearchField) -> AppResult<crate::dto::FilterValuesDto> {
     blocking("filter_values", move || {
         let mount = connected(&path)?;

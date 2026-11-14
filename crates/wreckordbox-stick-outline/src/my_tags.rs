@@ -1,8 +1,8 @@
-//! A Stick's own MyTags (wbx-45.12): its categories and tags, and which of
+//! A Stick's own `MyTags` (wbx-45.12): its categories and tags, and which of
 //! its tracks carry which, read by a [`StickRead`] so nothing can recover or
 //! write the Stick.
 //!
-//! The protected reader's `Library` carries no MyTags (ADR 0003 keeps it as
+//! The protected reader's `Library` carries no `MyTags` (ADR 0003 keeps it as
 //! it is), so they are read here, beside it:
 //!
 //! - **Device Library:** `exportExt.pdb`, read into memory. Type 3
@@ -12,7 +12,7 @@
 //!   one row per tag on a track: the track's `export.pdb` id at `0x04`, the
 //!   tag's id at `0x08`. The layout is `rbl_export::ext_pdb`'s, which a
 //!   rekordbox 7 file reproduces byte for byte (its module documentation).
-//!   A Stick with no `exportExt.pdb` has no MyTags; one that cannot be
+//!   A Stick with no `exportExt.pdb` has no `MyTags`; one that cannot be
 //!   parsed is an error, never an empty answer.
 //! - **`OneLibrary`:** `exportLibrary.db`'s `myTag` and `myTag_content`,
 //!   opened as [`crate::one_library::OneLibraryRead`] opens it (immutable,
@@ -44,7 +44,7 @@ pub struct StickTagCategory {
     pub tags: Vec<StickTag>,
 }
 
-/// A Stick library's MyTags.
+/// A Stick library's `MyTags`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StickMyTags {
     /// In rekordbox's order.
@@ -57,8 +57,11 @@ pub struct StickMyTags {
 /// A row of either table: `(id, seq, name, is_category, parent)`.
 type TagRow = (u32, u32, String, bool, u32);
 
+/// The tag rows and the `(track, tag)` memberships a library holds.
+type Raw = (Vec<TagRow>, Vec<(u32, u32)>);
+
 impl StickRead {
-    /// Reads one library's MyTags. Opens files for reading only.
+    /// Reads one library's `MyTags`. Opens files for reading only.
     ///
     /// # Errors
     ///
@@ -83,7 +86,7 @@ impl StickRead {
     }
 }
 
-fn read_ext(bytes: &[u8]) -> Result<(Vec<TagRow>, Vec<(u32, u32)>), String> {
+fn read_ext(bytes: &[u8]) -> Result<Raw, String> {
     let pdb = rbl_pdb::Pdb::parse(bytes).map_err(|e| e.to_string())?;
     // The ext file's types 3 and 4 share numbers with export.pdb's albums
     // and labels, which is how `rbl_pdb` names them.
@@ -118,7 +121,7 @@ fn read_ext(bytes: &[u8]) -> Result<(Vec<TagRow>, Vec<(u32, u32)>), String> {
     Ok((rows, pairs))
 }
 
-fn read_one(path: &Path) -> Result<(Vec<TagRow>, Vec<(u32, u32)>), String> {
+fn read_one(path: &Path) -> Result<Raw, String> {
     let db = crate::one_library::OneLibraryRead::open(path)?;
     let conn = db.connection();
     let has = |table: &str| -> Result<bool, String> {

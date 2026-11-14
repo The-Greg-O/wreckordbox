@@ -41,7 +41,7 @@ pub struct DeviceRow {
     pub has_artwork: bool,
     /// Cues read from this device library when the view was opened.
     pub cues: Vec<Cue>,
-    /// The ids of the Stick's own MyTags the track carries, read beside the
+    /// The ids of the Stick's own `MyTags` the track carries, read beside the
     /// Stick's library when a filter picks tags (wbx-45.12).
     pub my_tags: Vec<i32>,
 }
