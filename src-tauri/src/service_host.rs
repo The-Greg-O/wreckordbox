@@ -169,7 +169,9 @@ impl AppState {
                     } else if event.event == wreckordbox_service::stems::events::SIDECAR_CHANGED {
                         let field = |name: &str| event.data.get(name).and_then(serde_json::Value::as_str).unwrap_or_default().to_owned();
                         front.sidecar_changed(&field("track_id"), &field("kind"));
-                    } else if event.event == wreckordbox_service::stick_load::events::STICK_LOAD_PROGRESS {
+                    } else if event.event
+                        == wreckordbox_service::stick_load::events::STICK_LOAD_PROGRESS
+                    {
                         front.stick_load_progress(event.data);
                     }
                 }
