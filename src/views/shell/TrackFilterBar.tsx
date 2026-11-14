@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { FilterValues, KeyDisplay, TagCategory } from "@/ipc/types";
 import { formatKey } from "@/lib/preferences";
 import { OWN_ACTIVATION } from "@/lib/shortcuts";
@@ -39,6 +39,8 @@ export interface TrackFilterBarProps {
   /** How the list writes and sorts keys (wbx-56): `view.keyDisplay`, `view.keySort`. */
   keyDisplay: KeyDisplay;
   keySort: "auto" | "alphabetical" | "musical";
+  /** "Save as intelligent playlist" (wbx-58): its button for the row, and what goes under it. */
+  save?: { control: ReactNode; panel: ReactNode };
 }
 
 /**
@@ -51,7 +53,7 @@ export interface TrackFilterBarProps {
  * the bar owns Space and Enter so they never reach the deck.
  */
 export function TrackFilterBar(props: TrackFilterBarProps) {
-  const { model, onChange, values, valuesError, categories, dropped, deselected, onStick, count, filtering, loaded, keyDisplay, keySort } = props;
+  const { model, onChange, values, valuesError, categories, dropped, deselected, onStick, count, filtering, loaded, keyDisplay, keySort, save } = props;
   const [open, setOpen] = useState<Panel | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const buttons = useRef(new Map<string, HTMLButtonElement>());
@@ -161,7 +163,9 @@ export function TrackFilterBar(props: TrackFilterBarProps) {
         >
           Clear filter
         </button>
+        {save?.control}
       </div>
+      {save?.panel}
       {onStick && model.myTags.length > 0 ? <p className={styles.note}>{stickReason}: {Object.keys(said.myTags).join(", ")} left out here.</p> : null}
       {dropped.length > 0 ? <p className={styles.note} role="note">Left out of the filter, no longer in the Library: {dropped.join(", ")}</p> : null}
       {deselected > 0 ? (

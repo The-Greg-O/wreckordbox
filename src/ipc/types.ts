@@ -2131,6 +2131,28 @@ export interface EditHistoryState {
   redoLabel: string | null;
 }
 
+/**
+ * The Track Filter bar's filter as `save_filter_playlist` takes it
+ * (wbx-58): `tracks.query`'s Track Filter fields (`toServiceSelection`),
+ * plus the open list's name when it is not All Tracks and which of Key
+ * match (`key`) and BPM ±6% (`bpm`) are on.
+ */
+export interface SaveFilterRequest {
+  search?: string;
+  within?: string;
+  follows?: ("key" | "bpm")[];
+  keys?: string[];
+  prep_colours?: string[];
+  energies?: string[];
+  bpm_ranges?: string[];
+  my_tag_picks?: { category: string; tags: string[]; any: boolean }[];
+}
+
+export interface SavedFilterPlaylist {
+  id: string;
+  generation: number;
+}
+
 export interface Edits {
   /** `index` is the place among `parent`'s children; omitted, it goes last. */
   createPlaylist(name: string, parent: string, index?: number): Promise<number>;
@@ -2138,6 +2160,12 @@ export interface Edits {
   createSmartPlaylist(name: string, parent: string, rule: SmartRule): Promise<number>;
   /** Replaces an intelligent playlist's rule. */
   setSmartRule(playlist: string, rule: SmartRule): Promise<number>;
+  /**
+   * Saves the Track Filter bar's filter as an intelligent playlist at the
+   * top level of the tree (wbx-58). Refused, with the reason, when an
+   * intelligent playlist cannot hold the filter.
+   */
+  saveFilterPlaylist(name: string, filter: SaveFilterRequest): Promise<SavedFilterPlaylist>;
   createFolder(name: string, parent: string): Promise<number>;
   renamePlaylist(id: string, name: string): Promise<EditHistoryState>;
   /**

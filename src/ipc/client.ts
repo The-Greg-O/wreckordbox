@@ -9,7 +9,7 @@ import { confirmHandler } from "./confirmHost";
 import type {
   AnalysisStageDescriptor, AnalysisResult, AudioDevices, Backend, Backup, BackupProgress, BackupSizes, ConfirmReplace, Cue, SyncEstimate, StickWritePlan, StickProtection, DeckEvent, Device, DeviceLibrary,
   DevicePlaylistEditResult, DevicePlaylistImportPlan, DevicePlaylistImportResult, DeviceSettings, DeviceSyncState,
-  Diagnostics, Duplicates, LibraryProtection, LogPage, GridState, Limiter, PreferencesRequest, SmartRule, SyncDeviceReport, SyncProgress, XmlImportReport,
+  Diagnostics, Duplicates, LibraryProtection, LogPage, GridState, Limiter, PreferencesRequest, SavedFilterPlaylist, SmartRule, SyncDeviceReport, SyncProgress, XmlImportReport,
   ExportProgress, ExportReport, ExplorerChildren, ExplorerRoot, FilterValues, FolderPlaylistReport, Phrase, ImportReport,
   DatabaseDrive, EditHistoryState, ItunesLibrary, LibraryProblem, LibrarySummary, LinkPeerSeen, Meters,
   LinkStatus, MissingExportFile, MissingTrack, MissingTracks, PreviewState, UnanalysedTracks, ReferenceStickSettings, RelocateReport, RowDto, ScriptRequest, Tick,
@@ -704,6 +704,7 @@ async function realBackend(): Promise<Backend> {
       createPlaylist: (name, parent, index) => invoke<number>("create_playlist", { name, parent, index }),
       createSmartPlaylist: (name, parent, rule) => invoke<number>("create_smart_playlist", { name, parent, rule }),
       setSmartRule: (playlist, rule) => invoke<number>("set_smart_rule", { playlist, rule }),
+      saveFilterPlaylist: (name, filter) => invoke<SavedFilterPlaylist>("save_filter_playlist", { name, filter }),
       createFolder: (name, parent) => invoke<number>("create_folder", { name, parent }),
       renamePlaylist: (id, name) => invoke<EditHistoryState>("rename_playlist", { id, name }),
       movePlaylist: (id, parent, index) => invoke<EditHistoryState>("move_playlist", { id, parent, index }),
