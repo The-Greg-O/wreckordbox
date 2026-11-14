@@ -768,7 +768,6 @@ pub async fn device_playlist_import<R: tauri::Runtime>(
     let made = match made {
         Ok(made) => made,
         Err(error) => {
-            crate::import_recording::end_import_recording(app.clone(), operation).await?;
             if let Some(copies) = copies {
                 let rolled_back = blocking("device_playlist_import_roll_back", move || {
                     copies.roll_back().map_err(|e| AppError::new(ErrorKind::Internal, "The music files could not be copied.").with_detail(e.to_string()))
@@ -778,6 +777,8 @@ pub async fn device_playlist_import<R: tauri::Runtime>(
                     tracing::warn!(error = %left, "could not remove the copies of a failed device import");
                 }
             }
+            // A failed recording worker must not skip cleanup of a refused import.
+            crate::import_recording::end_import_recording(app.clone(), operation).await?;
             return Err(error);
         }
     };

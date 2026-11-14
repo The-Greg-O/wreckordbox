@@ -16,6 +16,7 @@ fn xml_imports_are_one_run_each_including_replacements_without_dj_facts() {
     window.host().unwrap();
     let mut observer = window.client();
     observer.subscribe().unwrap();
+    let mut imported_tracks = Vec::new();
     for (index, name) in ["first", "replacement"].into_iter().enumerate() {
         let path = xml(&window, name);
         let report = run(commands::import_xml(
@@ -27,6 +28,7 @@ fn xml_imports_are_one_run_each_including_replacements_without_dj_facts() {
         .unwrap();
         assert_eq!(report.imported, 1);
         let track = &report.tracks[0].id;
+        imported_tracks.push(track.clone());
         assert_eq!(window.rating(track), 3);
         let runs = window.cli(&["--json", "runs", "list"]).json();
         assert_eq!(runs["total"], index + 1, "{runs}");
@@ -63,16 +65,39 @@ fn xml_imports_are_one_run_each_including_replacements_without_dj_facts() {
             .unwrap()
             .is_none());
     }
+    let db = rbl_db::Library::open(window.location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
+    let playlist: String = db
+        .connection()
+        .query_row(
+            "SELECT ID FROM djmdPlaylist WHERE Name='Imported list'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let contents = || {
+        let page = window
+            .cli(&["--json", "playlists", "tracks", &playlist])
+            .json();
+        page["tracks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|track| track["id"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(contents(), vec![imported_tracks[1].clone()]);
     run(commands::undo_edit(
         window.app.handle().clone(),
         window.state(),
     ))
     .unwrap();
+    assert_eq!(contents(), vec![imported_tracks[0].clone()]);
     run(commands::redo_edit(
         window.app.handle().clone(),
         window.state(),
     ))
     .unwrap();
+    assert_eq!(contents(), vec![imported_tracks[1].clone()]);
     let before = window.cli(&["--json", "runs", "list"]).json()["total"].clone();
     window.protect(true);
     let path = xml(&window, "refused");
@@ -145,11 +170,7 @@ fn itunes_and_folder_imports_name_the_new_tracks_in_their_own_runs() {
     }
 }
 
-#[test]
-fn device_import_records_copied_tracks_and_metadata_without_writing_the_stick() {
-    let window = window();
-    window.load();
-    window.host().unwrap();
+fn device_fixture(window: &Window) -> (PathBuf, PathBuf, u32) {
     let stick = window.dir.path().join("fixture-stick");
     let destination = window.dir.path().join("imported-audio");
     std::fs::create_dir(&stick).unwrap();
@@ -187,6 +208,15 @@ fn device_import_records_copied_tracks_and_metadata_without_writing_the_stick() 
         .find(|n| n.name == "Imported device list")
         .unwrap()
         .id;
+    (stick, destination, playlist)
+}
+
+#[test]
+fn device_import_records_copied_tracks_and_metadata_without_writing_the_stick() {
+    let window = window();
+    window.load();
+    window.host().unwrap();
+    let (stick, destination, playlist) = device_fixture(&window);
     let before = std::fs::read(stick.join("PIONEER/rekordbox/exportLibrary.db")).unwrap();
     let report = run(rbxport_lib::device_library::device_playlist_import(
         window.app.handle().clone(),
@@ -366,3 +396,6 @@ fn a_replacement_history_append_failure_is_reported_even_when_bulk_results_succe
         .iter()
         .any(|e| e["kind"] == "replace_playlist_contents"));
 }
+
+#[path = "import_ledger/rollback.rs"]
+mod rollback;

@@ -598,6 +598,18 @@ fn generated_import_records_leave_the_writer_gate_and_name_all_three_hundred_row
                 );
                 for i in 0..300 {
                     emit(json!({"track":fixture::track_id(i),"title":"metadata".repeat(128)}));
+                    if i == 199 {
+                        let runs = f.runs();
+                        assert_eq!(
+                            runs["total"], 1,
+                            "a bounded batch must be visible before generation ends: {runs}"
+                        );
+                        let written = runs["runs"][0]["changes"].as_u64().unwrap();
+                        assert!(
+                            written > 0 && written <= 200,
+                            "records must be flushed while producing them: {runs}"
+                        );
+                    }
                 }
             },
         )
