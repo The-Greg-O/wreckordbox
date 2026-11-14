@@ -56,7 +56,7 @@ owner. Read requests do not settle intents, recover spills or publish files.
 | `commands::remove_from_collection`; `relocate::remove_missing_tracks`; service `playlist_edits::remove_from_collection` | Permanent native track/reference deletion; related Mutants reconciled | Yes, named `permanent` entry; no durable native inverse | Window or Caller |
 | `cues::{add_cue,add_loop,move_cue,move_hot_cue,set_cue_colour,set_cue_comment,set_active_loop,delete_cue,convert_memory_cues_to_hot}` via `edit_cues` | Cue/loop rows and revisions | Yes, named `cues` history entry | Window |
 | `grid::{guarded,set_tempo}`; Info BPM; grid panel/shared Undo/Redo | Beat-grid analysis files, BPM/revision rows | Yes, `window_grid` with already-held beat values in file intent metadata; history links/grouping retained | Window |
-| `grid::grid_lock` / `grid_lock_recording` | Native analysis-lock bit and row revision; local editor cleanup runs separately after the gate drops | **Covered:** named `track` entry, label `Analysis Lock`, exact `Analysed` before/after through the explicit assertion/edit path. Unchanged bit skips native admission/recording; Protection refuses before cleanup. Undo/Redo check the complete flag value. Accepted changes remain recorded on refresh/cleanup failure; append failure spills. | Window/DJ; tool use of the native adapter within an Analysis Operation retains `tool:wreckordbox-analysis`, bounded batches and one Run |
+| `grid::grid_lock` / `grid_lock_selection` / `grid_lock_recording` | Native analysis-lock bit and row revision; local editor cleanup runs separately after the gate drops | **Covered:** one named `track` entry per selected operation, label `Analysis Lock`, exact `Analysed` before/after through one explicit assertion/edit path and one native transaction. One Undo restores every changed selected track. Unchanged bit skips native admission/recording; Protection refuses before cleanup. Undo/Redo check the complete flag value. Accepted changes remain recorded on refresh/cleanup failure; append failure spills. | Window/DJ. No production tool uses this native adapter. A synthetic test wraps it in an Analysis Operation and verifies bounded batches, tool attribution and one Run. |
 | `analysis::edit_phrase` / `phrase_edit` | Phrase cut/clear in EXT | Yes, `phrase_cut` / `phrase_clear`, cheap phrase values; no Unwind implementation | Window |
 | `analysis::analyse_track` / `analyse_and_save_notated`, `save_analysis_files`, `save_key_only`, first-beat cue helper | Native analysis registration, detected-key vocabulary/key, artwork, analysis files, optional first-beat cue | Yes, Analysis Operation; named accepted intermediate steps and returned outcome values, not old audio/artifact snapshots | `tool:wreckordbox-analysis`, one Run per analysis operation |
 | Analysis key-tag preference, `key_tag::prepared::write_analysis_key_tag` | DJ-owned audio file's key tag after native analysis | Yes, same Analysis Operation, `{path,before,after}` under `audio_key_tag`; final publication has guarded admission | `tool:wreckordbox-analysis`, same bulk Run |
@@ -92,8 +92,10 @@ owner. Read requests do not settle intents, recover spills or publish files.
 
 wbx-14.12 closes the analysis-lock path, verified by hosted CLI readback,
 second-client notification, refused/no-op writes, refresh/cleanup failure,
-append spill with byte-identical reads, Undo/Redo, and 130 accepted native
-lock changes in one tool Analysis Run. No new bulk recorder was introduced.
+append spill with byte-identical reads, grouped Undo/Redo, atomic selection
+failure and a crash barrier bounded to the selected tracks. A synthetic test
+wraps 130 native locks in a tool Analysis Operation; this adapter is unused
+by production tools. No new bulk recorder was introduced.
 
 Disposition of the older unrecorded-path list:
 
@@ -101,7 +103,9 @@ Disposition of the older unrecorded-path list:
   Round-trip, window grid saves and scripting delegates: **already covered**
   by the recorded paths in the table; their separate source/Run rules remain.
 - Analysis lock: **now covered** as above. A repeated setter is a no-op,
-  not a fabricated DJ assertion. A changed hand choice uses the existing
+  not a DJ assertion: Analysis Lock is not a value Projection writes, so
+  there is no ownership to preserve (orchestrator decision, 2026-11-14).
+  A changed hand choice uses the existing
   explicit-set path used by wbx-26/29; tools never use that hand-action wrapper.
 - History clearing, `wrote_outside_history`, index reload, local editor locks,
   preferences, logging and backup creation: **deliberately excluded**, because

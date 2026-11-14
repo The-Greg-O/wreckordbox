@@ -304,3 +304,6 @@ fn native_locks_in_bulk_work_keep_the_analysis_source_and_one_run() {
         );
     }
 }
+
+#[path = "analysis_lock_selection.rs"]
+mod selection_tests;

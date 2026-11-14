@@ -26,6 +26,8 @@ use rbl_library::history::LibraryEdit;
 
 #[path = "grid_ledger.rs"]
 mod ledger;
+#[path = "grid_lock_selection.rs"]
+mod lock_selection;
 #[path = "grid_lock_recording.rs"]
 mod lock_recording;
 
@@ -841,6 +843,20 @@ pub async fn grid_lock<R: tauri::Runtime>(
     }).await?;
     let _ = tauri::Emitter::emit(&app, "grid:changed", &changed);
     Ok(result)
+}
+
+/// Set the native analysis lock for a selection as one window action.
+#[tauri::command]
+pub async fn grid_lock_selection<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: State<'_, Arc<AppState>>,
+    editor: State<'_, Arc<GridEditor>>,
+    tracks: Vec<String>,
+    on: bool,
+) -> AppResult<()> {
+    let state = Arc::clone(&state);
+    let editor = Arc::clone(&editor);
+    blocking("grid_lock_selection", move || lock_selection::set(&app, &state, &editor, &tracks, on)).await
 }
 
 #[cfg(test)]
