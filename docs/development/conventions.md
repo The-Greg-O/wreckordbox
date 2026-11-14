@@ -48,7 +48,10 @@ an unavailable public command.
 ## Performance
 
 `perf-budgets.json` distinguishes measured baselines, enforced gates, and
-manual targets. `pnpm budget` checks budget schema and production bundle size;
+manual targets. `pnpm budget` checks budget schema and the production build's
+start-up code: the chunks the main window loads before first paint (entry,
+its static imports, and the `App` chunk `src/main.tsx` awaits, with its static
+imports). Code loaded on demand is listed but not gated;
 `npm run perf:gate` runs isolated browser frame checks.
 `npm run perf:measure` builds and measures the production preview.
 

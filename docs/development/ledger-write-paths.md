@@ -1,6 +1,6 @@
 # Library write paths and Ledger coverage
 
-Audited for wbx-14.11, 2026-11-13. This is a coverage inventory, not a claim
+Audited for wbx-14.11, 2026-11-13; remaining paths rechecked for wbx-14.12, 2026-11-14. This is a coverage inventory, not a claim
 that every recorded operation can be unwound. It covers production window,
 service/CLI and scripting entry points, their row writes, and companion
 Library/audio files. Tests, fixture builders and developer examples are not
@@ -56,7 +56,7 @@ owner. Read requests do not settle intents, recover spills or publish files.
 | `commands::remove_from_collection`; `relocate::remove_missing_tracks`; service `playlist_edits::remove_from_collection` | Permanent native track/reference deletion; related Mutants reconciled | Yes, named `permanent` entry; no durable native inverse | Window or Caller |
 | `cues::{add_cue,add_loop,move_cue,move_hot_cue,set_cue_colour,set_cue_comment,set_active_loop,delete_cue,convert_memory_cues_to_hot}` via `edit_cues` | Cue/loop rows and revisions | Yes, named `cues` history entry | Window |
 | `grid::{guarded,set_tempo}`; Info BPM; grid panel/shared Undo/Redo | Beat-grid analysis files, BPM/revision rows | Yes, `window_grid` with already-held beat values in file intent metadata; history links/grouping retained | Window |
-| `grid::grid_lock` | Native analysis-lock column, plus local editor lock cleanup | **Gap:** unnamed `state.write`, no entry or source retained. Its old comment saying nothing in the Library changes is inaccurate. | None recorded; window initiated |
+| `grid::grid_lock` / `grid_lock_selection` / `grid_lock_recording` | Native analysis-lock bit and row revision; local editor cleanup runs separately after the gate drops | **Covered:** one named `track` entry per selected operation, label `Analysis Lock`, exact `Analysed` before/after through one explicit assertion/edit path and one native transaction. One Undo restores every changed selected track. Unchanged bit skips native admission/recording; Protection refuses before cleanup. Undo/Redo check the complete flag value. Accepted changes remain recorded on refresh/cleanup failure; append failure spills. | Window/DJ. No production tool uses this native adapter. A synthetic test wraps it in an Analysis Operation and verifies bounded batches, tool attribution and one Run. |
 | `analysis::edit_phrase` / `phrase_edit` | Phrase cut/clear in EXT | Yes, `phrase_cut` / `phrase_clear`, cheap phrase values; no Unwind implementation | Window |
 | `analysis::analyse_track` / `analyse_and_save_notated`, `save_analysis_files`, `save_key_only`, first-beat cue helper | Native analysis registration, detected-key vocabulary/key, artwork, analysis files, optional first-beat cue | Yes, Analysis Operation; named accepted intermediate steps and returned outcome values, not old audio/artifact snapshots | `tool:wreckordbox-analysis`, one Run per analysis operation |
 | Analysis key-tag preference, `key_tag::prepared::write_analysis_key_tag` | DJ-owned audio file's key tag after native analysis | Yes, same Analysis Operation, `{path,before,after}` under `audio_key_tag`; final publication has guarded admission | `tool:wreckordbox-analysis`, same bulk Run |
@@ -77,11 +77,11 @@ owner. Read requests do not settle intents, recover spills or publish files.
 
 | Path | Coverage / source |
 |---|---|
-| `file_journal::recover`, called on owning startup or before a write | Reconciles an interrupted file/row operation. Where a Ledger intent exists, recovery retains that operation's original attribution and an unconfirmed/recorded outcome. It does not create a new per-file recovery Run. Legacy journal work without an intent has no fresh Ledger entry. This is lifecycle/write recovery, not a read endpoint. |
+| `file_journal::recover`, called on owning startup or before a write | Reconciles an interrupted file/row operation. Where a Ledger intent exists, recovery retains that operation's original attribution and an unconfirmed/recorded outcome. It does not create a new per-file recovery Run. **Open (wbx-14.15):** legacy journal work without an intent has no fresh Ledger entry. Lifecycle recovery can itself publish files; being a recovery path does not exempt it from the entry criterion. Reads never recover. |
 | Ledger spill/recovery and pending native intents | Append/replay keeps the original source, Run and acceptance order. Reads expose pending records and never replay. Recording failure cannot roll back an accepted Library write. |
-| Backup restore (`rbl-backup` restore/journal, standalone Restore tool and generated restore scripts) | **Not a new Ledger operation.** Restores the saved Library and Sidecar, including the Ledger snapshot. The external restore initiator is not recorded as a new source/Run. Owning startup can finish/roll back its journal. |
-| rekordbox or another external application while wreckordbox is closed | **Not intercepted or recorded.** Later native conflict/ownership checks can preserve changed values but cannot reconstruct the external actor's Run. |
-| No hosted Ledger / standalone low-level Writer consumer | **No durable Ledger.** Native guards/history alone do not install one. Production coverage above depends on the service owning the Library and attaching its Keeper. |
+| Backup restore (`wreckordbox-service::backup`, restore journal, generated scripts) | **Covered when a Sidecar exists:** `record_owed` / `write_entry` append an idempotent `restore` entry in a DJ Run; failure retains the owed journal. **Open (wbx-14.15):** no Sidecar means the journal is discharged without an entry. Library-only standalone scripts restore files directly with no entry; Sidecar-bearing archives delegate to the recorded CLI. The older blanket exclusion was incorrect. |
+| rekordbox or another external application while wreckordbox is closed | **Deliberately excluded:** outside wreckordbox ownership; the actor and accepted operation cannot be reconstructed honestly. Later native conflict/ownership checks can preserve changed values but cannot reconstruct the external actor's Run. |
+| No hosted Ledger / standalone low-level Writer consumer | **Deliberately excluded for library consumers, fixtures and examples:** these are not production app entry points. Native guards/history alone do not install a Ledger; any future production consumer must attach one. Production coverage above depends on the service owning the Library and attaching its Keeper. |
 | `wrote_outside_history`, history clearing and index reload | Bookkeeping only, not independent native writes. Their surrounding operation owns any accepted mutation. |
 | Backups, preferences, played markers, local grid editor settings, logging | Separate output/state, not Library row/audio publication. No Library Ledger entry claimed. |
 | Review reject/reopen | Sidecar-only DJ decisions, recorded in their own Runs; no native Library write. Waiting/rejected listings only read. Requests must explicitly declare the DJ, and agents cannot make these decisions without the DJ asking. |
@@ -90,10 +90,36 @@ owner. Read requests do not settle intents, recover spills or publish files.
 
 ## Remaining work
 
-The analysis-lock gap is tracked by **wbx-14.12**: named recording and a
-refused-write regression.
-Restore/external-writer boundaries above must not be mistaken for automatic
-coverage. Recorded named-only history kinds still need durable inverse payloads
+wbx-14.12 closes the analysis-lock path, verified by hosted CLI readback,
+second-client notification, refused/no-op writes, refresh/cleanup failure,
+append spill with byte-identical reads, grouped Undo/Redo, atomic selection
+failure and a crash barrier bounded to the selected tracks. A synthetic test
+wraps 130 native locks in a tool Analysis Operation; this adapter is unused
+by production tools. No new bulk recorder was introduced.
+
+Disposition of the older unrecorded-path list:
+
+- Analysis, imports (local/folder/XML/iTunes/device), player rows/history,
+  Round-trip, window grid saves and scripting delegates: **already covered**
+  by the recorded paths in the table; their separate source/Run rules remain.
+- Analysis lock: **now covered** as above. A repeated setter is a no-op,
+  not a DJ assertion: Analysis Lock is not a value Projection writes, so
+  there is no ownership to preserve (orchestrator decision, 2026-11-14).
+  A changed hand choice uses the existing
+  explicit-set path used by wbx-26/29; tools never use that hand-action wrapper.
+- History clearing, `wrote_outside_history`, index reload, local editor locks,
+  preferences, logging and backup creation: **deliberately excluded**, because
+  these do not independently mutate Library rows or owned audio/analysis files.
+- Restore and legacy analysis-journal publication: **still open where noted**,
+  filed as **wbx-14.15**. Thus the epic's universal entry criterion is not yet met.
+- External applications and standalone low-level library consumers:
+  **deliberately excluded from app-owned writes**, for the ownership reasons
+  above; never presented as automatically recorded.
+- Sidecar-only changes and Stick outputs: **outside this Library-path audit**;
+  their own recording/protection contracts still apply. A read is never recovery.
+
+The audit does not turn known gaps into exclusions merely because a path runs
+at startup or outside the hosted service. Recorded named-only history kinds still need durable inverse payloads
 before Unwind can reverse them. Audio key tags have values and quick Undo/Redo,
 not a crash-atomic transaction across audio and SQLite or an Unwind implementation.
 The earlier bulk/player/import review hardening remains listed in the bead and
