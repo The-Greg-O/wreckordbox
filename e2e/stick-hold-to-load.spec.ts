@@ -115,15 +115,19 @@ test("holding L loads; a tap of L, L in a text field, L with a dialog open and a
   // A tap.
   await page.keyboard.press("l");
   await page.waitForTimeout(300);
-  // In a text field (the Library's search, say): the field's key.
-  const search = page.getByRole("searchbox").first();
-  if (await search.count() > 0) {
-    await search.focus();
-    await page.keyboard.down("l");
-    await page.waitForTimeout(2300);
-    await page.keyboard.up("l");
-    await page.locator("body").click({ position: { x: 1, y: 1 } });
-  }
+  // In a text field: the field's key (a field of the view's own, as a name or filter would be).
+  await page.evaluate(() => {
+    const field = document.createElement("input");
+    field.setAttribute("aria-label", "A text field");
+    document.querySelector('[data-testid="stick-view"] section')!.append(field);
+  });
+  const field = view(page).getByRole("textbox", { name: "A text field" });
+  await field.focus();
+  await page.keyboard.down("l");
+  await page.waitForTimeout(2300);
+  await page.keyboard.up("l");
+  await expect(field).toHaveValue(/^l+$/);
+  await page.locator("body").click({ position: { x: 1, y: 1 } });
   // With the command palette open.
   await page.keyboard.press("Control+Shift+P");
   await expect(page.locator("[data-command-palette]")).toBeVisible();
