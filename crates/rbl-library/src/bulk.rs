@@ -7,7 +7,8 @@ use std::sync::Arc;
 pub enum Kind {
     /// Results of the analysis tool, regardless of who requested the batch.
     Analysis,
-    /// Local file imports, attributed to the caller (or the DJ in the window).
+    /// Imports, attributed to the caller (or the DJ in the window).
+    /// Kept replacement history shares this Run without asserting DJ Facts.
     /// Player metadata and Round-trip need their own player source, not this kind.
     Import,
     /// A player message received over LINK; never attributed to its caller.
@@ -35,8 +36,13 @@ pub trait Recorder: Send + Sync {
     /// A warning about recording, separate from the accepted writes.
     fn finish(&self) -> Option<String>;
 }
+/// Produces result metadata incrementally after the native writer is released.
+pub type GenerateRecords<'a> = dyn FnMut(&mut dyn FnMut(Value)) + 'a;
+
 pub trait Step {
     fn complete(&mut self, records: Vec<Value>);
+    /// Streams already available outcomes after the writer and its guards end.
+    fn complete_generated(&mut self, generate: &mut GenerateRecords<'_>);
 }
 
 #[derive(Clone, Default)]
@@ -80,6 +86,40 @@ impl Operation {
                     vec![record]
                 }
             });
+        }
+        result
+    }
+    /// A native importer can return a large report. Feed its outcomes directly
+    /// to bounded recording, without building a second report-sized JSON vector.
+    pub fn run_generated<T, E: std::fmt::Display>(
+        &self,
+        target: Value,
+        capacity: usize,
+        work: impl FnOnce() -> Result<T, E>,
+        values: impl FnOnce(&T, &mut dyn FnMut(Value)),
+    ) -> Result<T, E> {
+        let mut step = self
+            .0
+            .as_ref()
+            .map(|recorder| recorder.enter_many(target.clone(), capacity.max(1)));
+        let result = work();
+        if let Some(step) = &mut step {
+            match &result {
+                Ok(value) => {
+                    let mut values = Some(values);
+                    step.complete_generated(&mut |emit| {
+                        if let Some(values) = values.take() {
+                            values(value, emit);
+                        }
+                    });
+                }
+                Err(error) => {
+                    let mut record =
+                        serde_json::json!({"status":"partial_or_failed","error":error.to_string()});
+                    record["target"] = target;
+                    step.complete(vec![record]);
+                }
+            }
         }
         result
     }

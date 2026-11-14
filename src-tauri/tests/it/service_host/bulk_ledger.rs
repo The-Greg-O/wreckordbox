@@ -2,7 +2,7 @@ use super::*;
 use rbxport_lib::bulk_writes::{begin_ledger_operation, finish_ledger_operation};
 use serde_json::json;
 
-fn wav(path: &std::path::Path) {
+pub(super) fn wav(path: &std::path::Path) {
     let rate = 22_050_u32;
     let frames = rate * 4;
     let data: Vec<u8> = (0..frames)
