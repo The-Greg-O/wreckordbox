@@ -856,7 +856,7 @@ pub async fn grid_lock_selection<R: tauri::Runtime>(
 ) -> AppResult<()> {
     let state = Arc::clone(&state);
     let editor = Arc::clone(&editor);
-    blocking("grid_lock_selection", move || lock_selection::set(&app, &state, &editor, &tracks, on)).await
+    blocking("grid_lock_selection", move || lock_selection::set_selection(&app, &state, &editor, &tracks, on)).await
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 use super::GridEditor;
 use crate::{state::AppState, AppError, AppResult};
 
-pub(super) fn set<R: tauri::Runtime>(
+pub(super) fn set_selection<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     state: &AppState,
     editor: &GridEditor,
