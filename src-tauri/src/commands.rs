@@ -786,7 +786,7 @@ where
         + Send
         + 'static,
 {
-    recorded_edit_preparing(app, state, name, touched, true, action, move |history, (reversible, asserted): (LibraryEdit, Vec<rbl_db::write::TrackEdit>)| {
+    recorded_edit_preparing(app, state, name, touched, Some(Vec::new()), action, move |history, (reversible, asserted): (LibraryEdit, Vec<rbl_db::write::TrackEdit>)| {
         if !reversible.is_empty() {
             history.record(reversible, label);
         }
@@ -810,18 +810,47 @@ where
     T: Send + 'static,
     G: FnOnce(&mut EditHistory, T) + Send + 'static,
 {
-    recorded_edit_preparing(app, state, name, touched, false, action, record).await
+    recorded_edit_preparing(app, state, name, touched, None, action, record).await
+}
+
+/// [`asserting_edit`] for the DJ's hand set of My Tags (wbx-29): `action`
+/// answers the edit (only its changes become the Undo step) and each
+/// assignment of `tracks` it left as it was, the DJ's assertion of it. The
+/// write's intent keeps `tracks`' My Tags as its evidence until the
+/// assertion is told.
+pub(crate) async fn asserting_tag_edit<R: tauri::Runtime, F>(
+    app: tauri::AppHandle<R>,
+    state: State<'_, Arc<AppState>>,
+    name: &'static str,
+    tracks: &[String],
+    label: &'static str,
+    action: F,
+) -> AppResult<EditHistoryDto>
+where
+    F: FnOnce(&mut rbl_db::write::Writer) -> Result<(LibraryEdit, Vec<rbl_library::ledger::TagAssertion>), rbl_db::DbError>
+        + Send
+        + 'static,
+{
+    let fields = tracks.iter().map(|track| (track.clone(), "MyTags".to_owned())).collect();
+    recorded_edit_preparing(app, state, name, Touched::Tracks, Some(fields), action, move |history, (reversible, asserted): (LibraryEdit, Vec<rbl_library::ledger::TagAssertion>)| {
+        if !reversible.is_empty() {
+            history.record(reversible, label);
+        }
+        history.assert_tags(&asserted, label);
+    }).await
 }
 
 /// [`recorded_edit_with`], saying whether the write is a hand set whose
 /// assertion `record` tells after its changes (wbx-26): the Ledger then
-/// keeps the write's intent until that assertion is told.
+/// keeps the write's intent until that assertion is told. `asserting` is
+/// `None` for an ordinary write, else the exact track/column pairs the
+/// intent keeps as evidence (none: those `touched` names).
 async fn recorded_edit_preparing<R: tauri::Runtime, F, T, G>(
     app: tauri::AppHandle<R>,
     state: State<'_, Arc<AppState>>,
     name: &'static str,
     touched: Touched,
-    asserting: bool,
+    asserting: Option<Vec<(String, String)>>,
     action: F,
     record: G,
 ) -> AppResult<EditHistoryDto>
@@ -837,7 +866,8 @@ where
         // The refresh's failure is kept aside: the edit is made by then and
         // goes into the history (and the Ledger) whatever it says.
         let preparation = rbl_library::ledger::Preparation {
-            asserting,
+            asserting: asserting.is_some(),
+            fields: asserting.clone().unwrap_or_default(),
             ..rbl_library::ledger::Preparation::touched(&touched)
         };
         let written = state.core().write_then_prepared(
@@ -845,7 +875,7 @@ where
             action,
             |db, reversible| Ok((refresh_after_edit(&state, db, touched), reversible)),
         );
-        if written.is_err() && asserting {
+        if written.is_err() && asserting.is_some() {
             // Nothing to assert: the Ledger settles the intent it kept for
             // the assertion, unless the failed write changed rows (wbx-26).
             state.edit_history().lock().assert(Vec::new(), name);

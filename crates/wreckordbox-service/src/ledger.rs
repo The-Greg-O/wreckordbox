@@ -677,18 +677,34 @@ pub mod stored {
 
 /// Whether `command` changes the Library, and so takes a Run on its
 /// request and answers with the Run its changes are in.
+/// The Ledger kind of the DJ's assertion of My Tag assignments (wbx-29):
+/// payload `{"assertions": [{"track", "tag", "on"}]}`, not reversible.
+pub const TAG_ASSERTION_KIND: &str = wreckordbox_sidecar::mytag_projection::ASSERTION_KIND;
+
 pub(crate) fn takes_run(command: &str) -> bool {
     command == crate::protocol::commands::TRACKS_RATE
         || command == crate::intake::commands::TRACKS_SET_PREP_COLOUR
         || command == crate::tag_panel::commands::INTAKE_SET_TAGS
         || crate::mytag_edits::answers(command)
         || crate::playlist_edits::answers(command)
-        || command == crate::projection::commands::PROJECTION_APPLY
+        || crate::projection::applies(command)
         || command == crate::review::commands::REVIEW_ACCEPT
 }
 
 pub(crate) fn answers(command: &str) -> bool {
     matches!(command, commands::RUNS_LIST | commands::RUNS_SHOW)
+}
+
+/// Names `tracks` in the command being answered on this thread
+/// (`args.ids`), before its write begins: the write's intent, and its entry,
+/// then say which tracks it could concern, so a write cut off part-way is a
+/// barrier bounded to them (wbx-29). Nothing when no command is answered.
+pub(crate) fn name_tracks(tracks: &[String]) {
+    CURRENT.with(|current| {
+        if let Some(scope) = current.borrow_mut().as_mut() {
+            scope.command["args"]["ids"] = json!(tracks);
+        }
+    });
 }
 
 /// Answers `runs.list` and `runs.show`. Reading never makes a Sidecar:
@@ -1116,6 +1132,24 @@ pub(crate) struct Keeper {
 }
 
 impl Keeper {
+    /// Settles the intent a hand set kept for its assertion when there is
+    /// nothing to assert (or the assertion is not the DJ's). Not a write that
+    /// changed rows and recorded nothing: that stays for the next write to
+    /// record as unconfirmed.
+    fn settle_unasserted(&self) {
+        let mut state = self.state();
+        if let Some(op) = state.op.as_mut().filter(|op| {
+            op.asserting && !op.recorded && (op.wrote != Some(true) || op.changes_recorded)
+        }) {
+            op.recorded = true;
+            if let Ok(sidecar) = self.stems.sidecar() {
+                if let Err(error) = sidecar.settle_intents(&[op.id]) {
+                    tracing::error!(%error, "could not settle a hand set's intent");
+                }
+            }
+        }
+    }
+
     pub(crate) fn new(stems: Arc<Stems>, location: rbl_db::LibraryLocation) -> Arc<Self> {
         let pause = std::env::var(WINDOW_PAUSE_ENV)
             .ok()
@@ -1783,7 +1817,9 @@ impl Keeper {
                 if draft.action == Action::Redo { dj_facts.redo_of = draft.reverses; }
             }
             let at = now();
-            let reversible = draft.payload.is_some() && !matches!(draft.kind, "key_edit" | "audio_key_tag_partial");
+            // An assertion of MyTags changed nothing: nothing to take back.
+            let reversible = draft.payload.is_some()
+                && !matches!(draft.kind, "key_edit" | "audio_key_tag_partial" | TAG_ASSERTION_KIND);
             let (follow, unworked) = match draft.follow {
                 Ok(follow) => (follow, None),
                 Err(why) => (wreckordbox_sidecar::mutant_follow::Follow::default(), Some(why)),
@@ -2127,19 +2163,7 @@ impl rbl_library::ledger::Ledger for Keeper {
         // (An assertion's edits are all unchanged, so `is_empty` is no test.)
         let nothing = matches!(edit, LibraryEdit::Track(edits) if edits.is_empty());
         if !by_the_dj() || nothing {
-            let mut state = self.state();
-            // Not a write that changed rows and recorded nothing: that stays
-            // for the next write to record as unconfirmed.
-            if let Some(op) = state.op.as_mut().filter(|op| {
-                op.asserting && !op.recorded && (op.wrote != Some(true) || op.changes_recorded)
-            }) {
-                op.recorded = true;
-                if let Ok(sidecar) = self.stems.sidecar() {
-                    if let Err(error) = sidecar.settle_intents(&[op.id]) {
-                        tracing::error!(%error, "could not settle a hand set's intent");
-                    }
-                }
-            }
+            self.settle_unasserted();
             return None;
         }
         self.append(Draft {
@@ -2149,6 +2173,36 @@ impl rbl_library::ledger::Ledger for Keeper {
             reverses: None,
             part_of: None,
             payload: stored::store(edit),
+            follow: Ok(wreckordbox_sidecar::mutant_follow::Follow::default()),
+            plan: None,
+            asserted: true,
+        })
+    }
+
+    fn assert_tags(
+        &self,
+        assertions: &[rbl_library::ledger::TagAssertion],
+        label: &str,
+    ) -> Option<i64> {
+        if self.faults.abort_before_assert {
+            std::process::abort();
+        }
+        // As for fields: the DJ's or nothing (wbx-29).
+        if !by_the_dj() || assertions.is_empty() {
+            self.settle_unasserted();
+            return None;
+        }
+        let listed: Vec<Value> = assertions
+            .iter()
+            .map(|a| serde_json::json!({"track": a.track, "tag": a.tag, "on": a.on}))
+            .collect();
+        self.append(Draft {
+            action: Action::Edit,
+            kind: TAG_ASSERTION_KIND,
+            label,
+            reverses: None,
+            part_of: None,
+            payload: Some(serde_json::json!({ "assertions": listed })),
             follow: Ok(wreckordbox_sidecar::mutant_follow::Follow::default()),
             plan: None,
             asserted: true,

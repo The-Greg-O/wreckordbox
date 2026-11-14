@@ -172,3 +172,196 @@ impl Writer {
         ))
     }
 }
+
+/// One `djmdSongMyTag` row of a track and a My Tag, live or soft-deleted,
+/// as stored (wbx-29): what a My Tag assignment's revision is made of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagRow {
+    pub id: String,
+    pub usn: i64,
+    pub updated_at: String,
+    pub live: bool,
+}
+
+const TAG_ROWS: &str = "SELECT COALESCE(ContentID, ''), COALESCE(MyTagID, ''), COALESCE(ID, ''),
+        COALESCE(rb_local_usn, 0), COALESCE(updated_at, ''), COALESCE(rb_local_deleted, 0) = 0
+     FROM djmdSongMyTag";
+
+fn tag_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<(String, String, TagRow)> {
+    Ok((
+        r.get(0)?,
+        r.get(1)?,
+        TagRow {
+            id: r.get(2)?,
+            usn: r.get(3)?,
+            updated_at: r.get(4)?,
+            live: r.get(5)?,
+        },
+    ))
+}
+
+/// Every `djmdSongMyTag` row, live or soft-deleted, as `(track, My Tag,
+/// row)`, ordered by track, My Tag and row id: one read, whatever the size
+/// of the Library. The rows of one track and tag are compared by
+/// [`Writer::set_my_tags_if_unchanged`] exactly as read here.
+pub fn my_tag_rows(conn: &rusqlite::Connection) -> Result<Vec<(String, String, TagRow)>> {
+    let mut statement = conn.prepare(&format!("{TAG_ROWS} ORDER BY ContentID, MyTagID, ID"))?;
+    let rows = statement
+        .query_map([], tag_row)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+fn rows_of(tx: &rusqlite::Connection, content: &str, tag: &str) -> Result<Vec<TagRow>> {
+    let mut statement = tx.prepare_cached(&format!(
+        "{TAG_ROWS} WHERE ContentID = ?1 AND MyTagID = ?2 ORDER BY ID"
+    ))?;
+    let rows = statement
+        .query_map(params![content, tag], tag_row)?
+        .map(|row| row.map(|(_, _, row)| row))
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// One track's My Tags to change with [`Writer::set_my_tags_if_unchanged`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagChanges {
+    pub content: String,
+    /// Each My Tag to put on (`true`) or take off (`false`).
+    pub changes: Vec<(String, bool)>,
+    /// Each of those tags' rows for the track, as the caller read them.
+    pub expected: std::collections::BTreeMap<String, Vec<TagRow>>,
+}
+
+/// What [`Writer::set_my_tags_if_unchanged`] did to one track.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagsWritten {
+    /// The track's whole My Tag set before and after, to undo.
+    pub edit: super::TrackTagEdit,
+    /// Each changed tag's rows for the track as the transaction left them.
+    pub rows: std::collections::BTreeMap<String, Vec<TagRow>>,
+}
+
+impl Writer {
+    /// For each of `tracks`, puts each of its My Tags on (`true`) or takes
+    /// it off (`false`) only while that tag's rows for the track are exactly
+    /// the `expected` ones (every row, live or not, by id, USN and
+    /// `updated_at`, as [`my_tag_rows`] reads them): every comparison and
+    /// every write in ONE immediate transaction, so a write another
+    /// connection commits after the caller's last read is never overwritten
+    /// and the batch is written whole or not at all (wbx-29). The tracks'
+    /// other My Tags are left as they are. Answers, per track, the edit to
+    /// undo (as [`Self::set_my_tags_with_undo`] does) and the changed tags'
+    /// rows as the transaction left them. A tag already in the wanted state
+    /// is left as it is. Any difference, or a track that is gone, is a
+    /// [`DbError::Conflict`]; a tag that is not a live My Tag is
+    /// `WriteRefused`; either way nothing is written.
+    pub fn set_my_tags_if_unchanged(
+        &mut self,
+        tracks: &[TagChanges],
+    ) -> Result<(Changed, Vec<TagsWritten>)> {
+        self.prepare()?;
+        let stamp = time::now();
+        let ids: Vec<Vec<(String, String)>> = tracks
+            .iter()
+            .map(|t| {
+                t.changes
+                    .iter()
+                    .map(|_| (self.rng.uuid4(), self.rng.uuid4()))
+                    .collect()
+            })
+            .collect();
+        let tx = self
+            .library
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for track in tracks {
+            let content = track.content.as_str();
+            if !super::content_exists(&tx, content)? {
+                return Err(DbError::Conflict(format!(
+                    "track {content} is no longer in the collection"
+                )));
+            }
+            for (tag, _) in &track.changes {
+                let known: i64 = tx.query_row(
+                    "SELECT COUNT(*) FROM djmdMyTag WHERE ID = ?1 AND Attribute = 0 AND rb_local_deleted = 0",
+                    params![tag],
+                    |r| r.get(0),
+                )?;
+                if known == 0 {
+                    return Err(DbError::WriteRefused(format!("no My Tag {tag}")));
+                }
+                if rows_of(&tx, content, tag)?
+                    != track.expected.get(tag).cloned().unwrap_or_default()
+                {
+                    return Err(DbError::Conflict(format!(
+                        "track {content}'s My Tag {tag} was written since it was read"
+                    )));
+                }
+            }
+        }
+        let live = |tx: &rusqlite::Connection, content: &str| -> Result<Vec<String>> {
+            let mut statement = tx.prepare_cached(
+                "SELECT DISTINCT MyTagID FROM djmdSongMyTag
+                 WHERE ContentID = ?1 AND rb_local_deleted = 0 ORDER BY MyTagID",
+            )?;
+            let tags = statement
+                .query_map(params![content], |r| r.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(tags)
+        };
+        let mut rows = 0;
+        // Numbered on from the counter once, not by a scan per row.
+        let mut usn = next_usn(&tx)? - 1;
+        let mut written = Vec::with_capacity(tracks.len());
+        for (track, ids) in tracks.iter().zip(&ids) {
+            let content = track.content.as_str();
+            let before = live(&tx, content)?;
+            for ((tag, on), (id, uuid)) in track.changes.iter().zip(ids) {
+                if *on == before.contains(tag) {
+                    continue;
+                }
+                usn += 1;
+                if *on {
+                    let track_no: i64 = tx.query_row(
+                        "SELECT COALESCE(MAX(TrackNo), 0) + 1 FROM djmdSongMyTag WHERE MyTagID = ?1 AND rb_local_deleted = 0",
+                        params![tag],
+                        |r| r.get(0),
+                    )?;
+                    rows += tx.execute(
+                        "INSERT INTO djmdSongMyTag
+                            (ID, MyTagID, ContentID, TrackNo, UUID,
+                             rb_data_status, rb_local_data_status, rb_local_deleted, rb_local_synced,
+                             usn, rb_local_usn, created_at, updated_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5, 0, 0, 0, 0, NULL, ?6, ?7, ?7)",
+                        params![id, tag, content, track_no, uuid, usn, stamp],
+                    )?;
+                } else {
+                    rows += tx.execute(
+                        "UPDATE djmdSongMyTag SET rb_local_deleted = 1, rb_local_usn = ?1, updated_at = ?2
+                         WHERE ContentID = ?3 AND MyTagID = ?4 AND rb_local_deleted = 0",
+                        params![usn, stamp, content, tag],
+                    )?;
+                }
+            }
+            let after = live(&tx, content)?;
+            let mut left = std::collections::BTreeMap::new();
+            for (tag, _) in &track.changes {
+                left.insert(tag.clone(), rows_of(&tx, content, tag)?);
+            }
+            written.push(TagsWritten {
+                edit: super::TrackTagEdit {
+                    content: content.to_owned(),
+                    before,
+                    after,
+                },
+                rows: left,
+            });
+        }
+        if rows > 0 {
+            set_counter(&tx, usn)?;
+        }
+        tx.commit()?;
+        Ok((Changed { rows, usn }, written))
+    }
+}

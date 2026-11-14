@@ -48,6 +48,7 @@ mod kinds;
 pub mod ledger;
 pub mod mutant_follow;
 pub mod mutants;
+pub mod mytag_projection;
 pub mod precedence;
 pub mod projection;
 pub mod projection_barriers;
