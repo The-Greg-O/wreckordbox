@@ -15,6 +15,7 @@ import { TRACK_SEARCH_OPTIONS, type TrackSearchField } from "@/lib/search";
 import theme from "@/styles/theme";
 import { mockServiceActivity } from "./mock-service-activity";
 import { createMockEntries, type MockEntry } from "./mock-playlist-entries";
+import { mockSaveRule } from "./mock-filter-playlist";
 import { rowMemoryCueColours } from "@/lib/memoryCueColours";
 import { shiftByGridBeats } from "@/lib/player";
 
@@ -578,6 +579,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
   const tagList: string[] = [];
   /** Intelligent playlists' rules, by id. */
   const smartRules = new Map<string, SmartRule>();
+  /** Intelligent playlists saved from the Track Filter bar (wbx-58): the filter they keep. */
+  const filterPlaylists = new Map<string, TrackFilter>();
   let nextId = 1;
   const indexOfId = new Map(all.map((row, i) => [row.id, i] as const));
 
@@ -655,7 +658,11 @@ export function createMockBackend(options: MockOptions = {}): Backend {
   };
   const candidatesFor = (spec: ViewSpec): number[] => {
     let candidates: number[];
-    if (spec.source.kind === "playlist") {
+    const saved = spec.source.kind === "playlist" ? filterPlaylists.get(spec.source.id) : undefined;
+    if (saved) {
+      candidates = all.flatMap((row, i) =>
+        passesFilter(row, colors[i] ?? 0, saved, detailsOf(row).myTags, myTagCategories) ? [i] : []);
+    } else if (spec.source.kind === "playlist") {
       const held = membership.get(spec.source.id);
       candidates = held
         ? held.map((id) => indexOfId.get(id)).filter((i): i is number => i !== undefined)
@@ -1412,6 +1419,17 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       membership.set(id, []);
       insertUnder(parent, { id, name, kind: "smartPlaylist", depth, childCount: 0 });
       return recordCreation(id, parent, "Create Intelligent Playlist");
+    },
+    saveFilterPlaylist: async (name, request) => {
+      const ruled = mockSaveRule(request, myTagCategories.map((c) => c.name));
+      if ("refusal" in ruled) throw new Error(ruled.refusal);
+      if (name.trim() === "") throw new Error("The intelligent playlist needs a name.");
+      const id = `made-${nextId++}`;
+      filterPlaylists.set(id, ruled.filter);
+      const count = all.filter((row, i) => passesFilter(row, colors[i] ?? 0, ruled.filter, detailsOf(row).myTags, myTagCategories)).length;
+      insertUnder(TREE_ROOT, { id, name: name.trim(), kind: "smartPlaylist", depth: 1, childCount: count });
+      const generation = await recordCreation(id, TREE_ROOT, "Save Filter as Intelligent Playlist");
+      return { id, generation };
     },
     setSmartRule: async (playlist, rule) => {
       const before = smartRules.get(playlist);

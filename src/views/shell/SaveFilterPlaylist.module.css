@@ -1,0 +1,82 @@
+/* "Save as intelligent playlist" in the Track Filter bar (wbx-58). */
+
+.open,
+.save,
+.cancel {
+  flex: none;
+  font: inherit;
+  color: var(--c-text-dim);
+  background: transparent;
+  border: var(--s-shell-border) solid var(--c-raised);
+  border-radius: var(--s-shell-radius);
+  padding: 1px var(--s-shell-space-3);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.open:not(:disabled):hover,
+.cancel:hover {
+  color: var(--c-text);
+}
+
+.open[aria-expanded="true"],
+.save {
+  color: var(--c-text);
+  border-color: var(--c-accent);
+}
+
+.open:disabled,
+.save:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-shell-space-3);
+  padding: var(--s-shell-space-2) var(--s-shell-space-4) var(--s-shell-space-3);
+  min-width: 0;
+}
+
+.field {
+  display: flex;
+  align-items: center;
+  gap: var(--s-shell-space-2);
+  flex: 1 1 220px;
+  min-width: 0;
+  color: var(--c-text-dim);
+}
+
+.field input {
+  flex: 1 1 auto;
+  min-width: 80px;
+  max-width: 420px;
+  font: inherit;
+  color: var(--c-text);
+  background: var(--c-black);
+  border: var(--s-shell-border) solid var(--c-raised);
+  border-radius: var(--s-shell-radius);
+  padding: 1px var(--s-shell-space-2);
+}
+
+.open:focus-visible,
+.save:focus-visible,
+.cancel:focus-visible,
+.field input:focus-visible {
+  outline: var(--s-shell-border) solid var(--c-accent);
+  outline-offset: 1px;
+}
+
+.problem {
+  flex: 1 0 100%;
+  margin: 0;
+  color: var(--c-error);
+}
+
+.note {
+  margin: 0;
+  padding: 0 var(--s-shell-space-4) var(--s-shell-space-2);
+  color: var(--c-text-dim);
+}

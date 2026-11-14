@@ -69,6 +69,7 @@ pub mod stick_view;
 pub mod shutdown;
 pub mod stick_load_reports;
 pub mod playlist_entries;
+pub mod filter_playlist;
 pub mod mutant_window;
 pub mod service_status;
 pub mod device_settings;
@@ -770,6 +771,7 @@ pub fn run() {
             commands::reorder_playlist,
             playlist_entries::playlist_entries,
             playlist_entries::reorder_playlist_entries,
+            filter_playlist::save_filter_playlist,
             commands::set_track_rating,
             commands::set_track_comment,
             commands::set_track_color,
