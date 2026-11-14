@@ -3100,11 +3100,11 @@ pub async fn unanalysed_tracks(
 /// How deep a chosen folder is walked. A music library is a handful of levels
 /// deep; a folder that turns out to be a whole drive is not walked to the
 /// bottom. Matches the relocate walk's ceiling.
-const IMPORT_MAX_DEPTH: usize = 16;
+pub(crate) const IMPORT_MAX_DEPTH: usize = 16;
 /// How many entries the walk looks at in all, so a folder pointed at the root
 /// of a disk ends rather than running for minutes. Shared across every chosen
 /// path in one import.
-const IMPORT_MAX_ENTRIES: usize = 500_000;
+pub(crate) const IMPORT_MAX_ENTRIES: usize = 500_000;
 
 /// Expands the chosen paths into the audio files to import.
 ///
@@ -3289,96 +3289,7 @@ pub async fn import_folder_playlist<R: tauri::Runtime>(
     at: Option<u32>,
     copy: Option<bool>,
 ) -> AppResult<FolderPlaylistDto> {
-    let writing = Arc::clone(&state);
-    let report = blocking("import_folder_playlist", move || {
-        let dir = std::path::PathBuf::from(&path);
-        let name = dir
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let mut report = FolderPlaylistDto {
-            name: name.clone(),
-            renamed: None,
-            replaced: None,
-            playlist: None,
-            conflict: None,
-            folder: dir.is_dir(),
-            imported: 0,
-            skipped: Vec::new(),
-            tracks: Vec::new(),
-            existing: 0,
-            at,
-        };
-        if !report.folder || name.is_empty() {
-            return Ok(report);
-        }
-        let mut budget = rbl_db::import::WalkBudget::new(IMPORT_MAX_DEPTH, IMPORT_MAX_ENTRIES);
-        let files = rbl_db::import::audio_files_in(&dir, &mut budget);
-        // Held from the write to the history entry, so no Undo runs between.
-        let _gate = writing.edit_gate().lock();
-        // A Replace existing is planned for the replaced list's Mutants (wbx-80).
-        let replacing = replace.is_some();
-        let mut outcome = crate::mutant_window::write_replacing(&writing, replacing, |writer| {
-                let clash = match (replace.as_deref(), copy.unwrap_or(false)) {
-                    (Some(id), _) => rbl_db::write::FolderClash::Replace(id),
-                    (None, true) => rbl_db::write::FolderClash::Copy,
-                    (None, false) => rbl_db::write::FolderClash::Ask,
-                };
-                writer.import_folder_as_playlist(
-                    &name,
-                    &parent,
-                    &files,
-                    clash,
-                    at.and_then(|at| usize::try_from(at).ok()),
-                )
-            })
-            .map_err(write_error)?;
-        report.playlist = outcome.playlist;
-        report.renamed = outcome.renamed;
-        report.replaced = outcome.replaced.map(|r| crate::dto::ReplacedListDto {
-            lists: u32::try_from(r.lists).unwrap_or(u32::MAX),
-            tracks: u32::try_from(r.tracks).unwrap_or(u32::MAX),
-        });
-        report.conflict = outcome.conflict;
-        let replacement = outcome.replacement.take();
-        report.imported = u32::try_from(outcome.imported.len()).unwrap_or(u32::MAX);
-        report.existing = u32::try_from(outcome.existing.len()).unwrap_or(u32::MAX);
-        report.skipped = outcome.skipped;
-        report.at = outcome.at.map(|at| u32::try_from(at).unwrap_or(u32::MAX)).or(at);
-        report.tracks = outcome
-            .imported
-            .into_iter()
-            .map(|(id, file)| crate::dto::ImportedTrackDto {
-                id,
-                title: file
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
-            })
-            .collect();
-        if let Some(replacement) = replacement {
-            // Replace existing is one step of history (#426): Undo takes the
-            // new playlist away and puts the replaced list back. The tracks
-            // it imported stay in the collection.
-            writing.edit_history().lock().record(LibraryEdit::ReplacePlaylist(replacement), "Replace Playlist");
-        } else if replacing {
-            // A write of the history's own that it keeps no entry for.
-            writing.edit_history().lock().unrecorded(None);
-        } else if report.playlist.is_some() {
-            // An edit outside the undo history starts a new branch.
-            writing.edit_history().lock().clear_redo();
-        }
-        Ok(report)
-    })
-    .await?;
-
-    // Both the tree and, usually, the collection changed.
-    if report.playlist.is_some() {
-        let generation = reload(app.clone(), Arc::clone(&state)).await?;
-        let history = history_dto(generation, &state.edit_history().lock());
-        let _ = tauri::Emitter::emit(&app, "edit-history:changed", history);
-    }
-    Ok(report)
+    crate::import_recording::import_folder_recorded(app, state, path, parent, replace, at, copy).await
 }
 
 /// The history's name for every relocation run (#502): Undo Relocate.
@@ -4071,7 +3982,7 @@ pub async fn import_itunes_selected<R: tauri::Runtime>(
 /// The Edit menu's name for an XML or iTunes import's Replace existing:
 /// "Undo Replace Playlist Contents". It names only what Undo reverses, the
 /// replaced playlists' members, not the tracks the import added.
-const REPLACE_PLAYLIST_CONTENTS: &str = "Replace Playlist Contents";
+pub(crate) const REPLACE_PLAYLIST_CONTENTS: &str = "Replace Playlist Contents";
 
 /// Reads a collection file with `parse` and imports what it holds.
 ///
@@ -4088,94 +3999,7 @@ async fn import_collection<R: tauri::Runtime>(
     replace: bool,
     parse: impl FnOnce(&str) -> AppResult<rbl_db::xml::XmlLibrary> + Send + 'static,
 ) -> AppResult<XmlImportReportDto> {
-    let state_for_reload = Arc::clone(&state);
-    let writing = Arc::clone(&state);
-    let progress_app = app.clone();
-    let (report, changed_playlists) = blocking(name, move || {
-        let text = std::fs::read_to_string(&path).map_err(|e| {
-            AppError::new(ErrorKind::NotFound, "That file could not be read.").with_detail(e.to_string())
-        })?;
-        let document = parse(&text)?;
-        let mut on_progress = |done: usize, total: usize| {
-            let _ = tauri::Emitter::emit(
-                &progress_app,
-                "import:progress",
-                ExportProgressDto {
-                    path: path.clone(),
-                    state: "writing",
-                    done: u32::try_from(done).unwrap_or(u32::MAX),
-                    total: u32::try_from(total).unwrap_or(u32::MAX),
-                    title: String::new(),
-                    ..Default::default()
-                },
-            );
-        };
-        // Looked for under the same edit gate as the import, so nothing can
-        // make a same-named list between the question and the write.
-        let _gate = writing.edit_gate().lock();
-        // A Replace existing is planned for the Mutants of the playlists it
-        // may replace (wbx-80).
-        let outcome = crate::mutant_window::write_replacing(&writing, replace, |writer| {
-                if !replace {
-                    let same_named = rbl_db::xml::same_named_lists(writer.library(), &document)?;
-                    if !same_named.is_empty() {
-                        return Ok(Err(same_named));
-                    }
-                }
-                on_progress(0, document.tracks.len());
-                rbl_db::xml::import(writer, &document, &mut on_progress).map(Ok)
-            })
-            .map_err(write_error)?;
-        let mut report = match outcome {
-            Ok(report) => report,
-            Err(same_named) => {
-                return Ok((XmlImportReportDto {
-                    imported: 0,
-                    existing: 0,
-                    skipped: Vec::new(),
-                    playlists: 0,
-                    cues: 0,
-                    tracks: Vec::new(),
-                    same_named,
-                }, false));
-            }
-        };
-        // A replaced playlist may have changed without a list or track being
-        // made: that, too, needs a reload.
-        let changed_playlists = report.playlist_tracks > 0 || report.playlists_replaced > 0;
-        let replacements = std::mem::take(&mut report.replacements);
-        if !replacements.is_empty() {
-            // Replace existing is one step of history (#501): Undo puts back
-            // every replaced playlist's members and order, Redo the file's.
-            // The tracks and lists the import added stay. Recording it also
-            // ends the redo branch; older entries stay, each checking its
-            // own rows when it runs (#506).
-            writing.edit_history().lock().record(
-                LibraryEdit::ReplacePlaylistContents(replacements),
-                REPLACE_PLAYLIST_CONTENTS,
-            );
-        } else if replace {
-            // A write of the history's own that it keeps no entry for.
-            writing.edit_history().lock().unrecorded(None);
-        } else if report.imported > 0 || report.playlists > 0 || changed_playlists {
-            wrote_outside_history(&writing, false);
-        }
-        Ok((XmlImportReportDto {
-            imported: u32::try_from(report.imported).unwrap_or(u32::MAX),
-            existing: u32::try_from(report.existing).unwrap_or(u32::MAX),
-            skipped: report.skipped,
-            playlists: u32::try_from(report.playlists).unwrap_or(u32::MAX),
-            cues: u32::try_from(report.cues).unwrap_or(u32::MAX),
-            tracks: report.tracks.into_iter().map(|(id, title)| crate::dto::ImportedTrackDto { id, title }).collect(),
-            same_named: Vec::new(),
-        }, changed_playlists))
-    })
-    .await?;
-    if report.imported > 0 || report.playlists > 0 || changed_playlists {
-        reload(app.clone(), Arc::clone(&state_for_reload)).await?;
-        announce_history(&app, &state_for_reload);
-    }
-    Ok(report)
+    crate::import_recording::import_collection_recorded(app, state, path, name, replace, parse).await
 }
 
 /// Export Loop As WAV: the loop's stretch of the track, `in_ms` to
