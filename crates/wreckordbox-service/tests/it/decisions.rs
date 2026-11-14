@@ -119,9 +119,23 @@ fn events(client: &mut Client) -> Vec<Value> {
     seen
 }
 
+fn expect_sidecar_change(client: &mut Client, data: Value) {
+    let event = client
+        .next_event(Duration::from_secs(5))
+        .unwrap()
+        .expect("the committed setup change must reach the watcher");
+    assert_eq!(event.event, "sidecar_changed");
+    assert_eq!(event.data, data);
+}
+
 #[test]
 fn when_the_answer_cannot_be_written_its_fact_is_not_recorded_and_no_client_is_told() {
     let hosted = start();
+    // A command's response does not flush the asynchronous Sidecar forwarder.
+    // Subscribe before setup and account for its exact events before the
+    // failed answer; a quiet interval cannot establish that boundary.
+    let mut watcher = hosted.client();
+    watcher.subscribe().unwrap();
     let id = hosted.ask_genre();
     // The Decider already holds a view, which a new Fact would supersede.
     hosted.call(
@@ -134,6 +148,20 @@ fn when_the_answer_cannot_be_written_its_fact_is_not_recorded_and_no_client_is_t
     );
     let before = hosted.facts();
     assert_eq!(before.len(), 1);
+    expect_sidecar_change(
+        &mut watcher,
+        json!({
+            "track_id": fixture::track_id(3), "kind": "decision",
+            "fact_id": null, "stale": [], "decision_id": id, "answer_id": null,
+        }),
+    );
+    expect_sidecar_change(
+        &mut watcher,
+        json!({
+            "track_id": fixture::track_id(3), "kind": "genre",
+            "fact_id": before[0]["id"], "stale": [],
+        }),
+    );
     let db = hosted.sidecar_db();
     let runs = |db: &rusqlite::Connection| -> i64 {
         db.query_row("SELECT count(*) FROM run", [], |row| row.get(0))
@@ -146,9 +174,6 @@ fn when_the_answer_cannot_be_written_its_fact_is_not_recorded_and_no_client_is_t
          BEGIN SELECT RAISE(ABORT, 'injected failure'); END;",
     )
     .unwrap();
-    let mut watcher = hosted.client();
-    watcher.subscribe().unwrap();
-
     let failed = hosted
         .service
         .call("decisions.answer", answer_with_fact(id, "Tech House"))

@@ -121,12 +121,15 @@ pub async fn database_drives(state: State<'_, Arc<AppState>>) -> AppResult<Vec<D
 /// again on the new library, so nothing from the old one is left open.
 #[tauri::command]
 pub async fn switch_library(app: tauri::AppHandle, master_db: String) -> AppResult<()> {
+    let state = std::sync::Arc::clone(tauri::Manager::state::<std::sync::Arc<crate::state::AppState>>(&app).inner());
     blocking("switch_library", move || {
         let switched = rbl_db::locate::switch_to(&PathBuf::from(master_db)).map_err(|e| {
             AppError::new(ErrorKind::Internal, "Failed to switch Master Database.").with_detail(e.to_string())
         })?;
         tracing::info!(path = %switched.master_db.display(), "switched master database; restarting");
-        app.restart();
+        // A restart cannot be held: a Stick load is stopped where it safely
+        // can and its report kept first (wbx-71).
+        crate::shutdown::drain_then(&state, || app.restart())
     })
     .await
 }

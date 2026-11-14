@@ -74,12 +74,14 @@ import { libraryWidthOf } from "@/lib/libraryFit";
 import { libraryLookFor } from "@/views/shell/libraryFitLook";
 import { SHELL_PLAYER_LAYOUT, ViewShell } from "@/views/shell/ViewShell";
 import { useShellTree } from "@/views/shell/useShellTree";
+import { WaveformThemeChooser } from "@/views/shell/WaveformThemeChooser";
 import { breadcrumbOf } from "@/lib/shellTreeOverlay";
 import { crumbTally } from "@/lib/crumbTally";
 import { useTargetList } from "@/views/shell/useTargetList";
 import { IntakeView } from "@/views/shell/IntakeView";
 import { useIntakeCounts } from "@/views/shell/useIntakeCounts";
 import { useStickOutlines } from "@/store/useStickOutlines";
+import { StickLoadView } from "@/views/shell/StickLoadView";
 import { useStickProtection } from "@/store/useStickProtection";
 import { StickProtectionDialog } from "@/views/shell/StickProtectionDialog";
 import { StickWriteGateProvider, useStickWriteGate } from "@/views/shell/StickWriteGate";
@@ -4018,13 +4020,14 @@ function AppBody() {
               onEdit={writeEdit} protectLibrary={advancedPrefs.protectLibrary} platform={platform} keyOverrides={keyOverrides}
             />
           )}
-          stick={selectedDevice ? library : undefined}
+          stick={<StickLoadView devices={devices} selected={selectedDevice?.path ?? null} library={tree} revision={deviceLibraries.revision} panel={selectedDevice ? library : undefined} />}
+          stickHoldsLibrary={selectedDevice !== null}
           library={library}
           libraryTarget={targetList.pane}
           libraryCrumb={libraryCrumb}
           libraryTally={crumbTally(listTotals)}
           status={<>{linkStrip}{statusBar}</>}
-          topBarEnd={<CommandPaletteButton platform={platform} />}
+          topBarEnd={<><WaveformThemeChooser /><CommandPaletteButton platform={platform} /></>}
         />
         {dialogs}
       </div>

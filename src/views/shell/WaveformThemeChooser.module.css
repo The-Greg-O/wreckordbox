@@ -1,0 +1,98 @@
+/* The waveform theme chooser (wbx-45.9): a quiet button like the palette's
+   opener beside it, and its menu drawn under it inside the top bar, so a
+   light theme's roles reach it. */
+.box {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: none;
+}
+
+.trigger {
+  display: flex;
+  align-items: center;
+  gap: var(--s-shell-space-3);
+  height: calc(var(--s-shell-top-bar-h) - var(--s-shell-space-3));
+  padding: 0 var(--s-shell-space-4);
+  border: var(--s-shell-border) solid transparent;
+  border-radius: var(--s-shell-radius);
+  background: none;
+  color: var(--c-text-dim);
+  font-family: var(--f-shell);
+  font-size: var(--f-size-shell);
+  white-space: nowrap;
+  cursor: default;
+}
+.trigger:hover, .trigger[aria-expanded="true"] { border-color: var(--c-raised); color: var(--c-text); }
+.trigger:focus-visible { outline: var(--s-shell-border) solid var(--c-accent); outline-offset: -1px; }
+.name { color: var(--c-text); }
+.trigger[aria-disabled="true"] .name { color: var(--c-text-dim); }
+.caret { color: var(--c-text-dim); }
+.glyph { display: none; width: 1em; height: 1em; flex: none; }
+
+.menu {
+  position: absolute;
+  top: calc(100% + var(--s-shell-space-1));
+  right: 0;
+  z-index: 40;
+  display: grid;
+  min-width: max-content;
+  max-width: calc(100cqw - 2 * var(--s-shell-space-4));
+  padding: var(--s-shell-space-2) 0;
+  border: var(--s-shell-border) solid var(--c-raised);
+  border-radius: var(--s-shell-radius);
+  background: var(--c-panel);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.35);
+  font-family: var(--f-shell);
+  font-size: var(--f-size-shell);
+}
+.menu:focus { outline: none; }
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: var(--s-shell-space-3);
+  padding: var(--s-shell-space-2) var(--s-shell-space-5) var(--s-shell-space-2) var(--s-shell-space-3);
+  border: 0;
+  background: none;
+  color: var(--c-text);
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  cursor: default;
+}
+.item:hover:not(:disabled), .item:focus-visible { background: var(--c-raised); outline: none; }
+.item:disabled { color: var(--c-text-dim); }
+.tick { display: inline-block; width: 1.2em; color: var(--c-accent); }
+.item:disabled .tick { color: inherit; }
+
+.note {
+  max-width: 24ch;
+  margin: var(--s-shell-space-2) 0 0;
+  padding: var(--s-shell-space-2) var(--s-shell-space-4) 0;
+  border-top: var(--s-shell-border) solid var(--c-raised);
+  color: var(--c-text-dim);
+  white-space: normal;
+}
+
+/* Half width: the word gives way, the theme's name stays. Where the top bar
+   has no room for the name, a waveform glyph stands in for it (the name stays
+   in the accessible name, the tooltip and the menu): 601-720 px, where the
+   tabs' key caps and the palette opener's key are still drawn (they go at
+   600 px, wbx-69), and 460 px and below (wbx-45.22, with the opener's glyph). */
+@container shell (max-width: 800px) {
+  .word { display: none; }
+}
+@container shell (max-width: 720px) {
+  .name { display: none; }
+  .glyph { display: block; }
+}
+@container shell (max-width: 600px) {
+  .trigger { padding: 0 var(--s-shell-space-2); gap: var(--s-shell-space-2); }
+  .name { display: inline; }
+  .glyph { display: none; }
+}
+@container shell (max-width: 460px) {
+  .name { display: none; }
+  .glyph { display: block; }
+}

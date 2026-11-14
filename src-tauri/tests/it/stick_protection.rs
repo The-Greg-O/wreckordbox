@@ -205,6 +205,7 @@ fn every_writer_is_refused_on_a_protected_stick_and_writes_nothing() {
         ("save_device_settings", serde_json::json!({ "kind": "saveSettings", "settings": serde_json::to_value(run(device_settings::device_settings(path.clone())).unwrap()).unwrap() })),
         ("ensure_device_library", serde_json::json!({ "kind": "ensureLibrary" })),
         ("format_device", serde_json::json!({ "kind": "format", "layout": "fat32" })),
+        ("stick_view_load", serde_json::json!({ "kind": "sync", "playlists": [playlist_id(0)] })),
     ]
     .into_iter()
     .map(|(name, op)| (name, rig.token(&op)))
@@ -349,6 +350,20 @@ fn every_writer_is_refused_on_a_protected_stick_and_writes_nothing() {
             path.clone(),
             serde_json::from_value(serde_json::json!("fat32")).unwrap(),
             t,
+        )),
+    );
+    // The Stick view's load (wbx-71): refused before the hosted service is
+    // asked (this window hosts none), with the hold's token in hand.
+    let t = call("stick_view_load");
+    protected(
+        "stick_view_load",
+        run(rbxport_lib::stick_view::stick_view_load(
+            rig.app.state(),
+            path.clone(),
+            vec![playlist_id(0)],
+            "plan".into(),
+            t,
+            None,
         )),
     );
     let on_stick = |name: &str| rig.stick.join(name).to_string_lossy().into_owned();
@@ -1013,6 +1028,9 @@ const APP_FILE_WRITERS: &[&str] = &[
     "stick_unlock",
     "undo_edit",
     "use_default_library",
+    // Stick load reports kept in the app's state folder (wbx-71), never on a Stick.
+    "stick_load_report_dismiss",
+    "stick_view_load",
 ];
 
 /// Every registered command that cannot write to a Stick: a new command
@@ -1207,6 +1225,10 @@ const NOT_STICK_WRITERS: &[&str] = &[
     "stick_outline",
     "stick_protection",
     "stick_unlock",
+    "stick_load_report_dismiss",
+    "stick_load_reports",
+    "stick_view_dry_run",
+    "stick_view_sticks",
     "stick_write_approve",
     "stick_write_plan",
     "stick_write_revoke",

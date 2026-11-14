@@ -737,15 +737,28 @@ pub(crate) fn load(
             }
             other => ServiceError::new(codes::STICK_LOAD_UNCONFIRMED, other.to_string()),
         };
-        let token = approval::approve(state_dir, &args.plan).map_err(unconfirmed)?;
-        approval::consume_bound(
-            Some(&token),
-            &operation(&args.playlists),
-            &root,
-            generation,
-            &planned.bound,
-        )
-        .map_err(unconfirmed)?;
+        if let Some(token) = &args.approval {
+            // The window's hold, given for exactly the plan it showed.
+            approval::consume_bound_for(
+                Some(token),
+                &args.plan,
+                &operation(&args.playlists),
+                &root,
+                generation,
+                &planned.bound,
+            )
+            .map_err(unconfirmed)?;
+        } else {
+            let token = approval::approve(state_dir, &args.plan).map_err(unconfirmed)?;
+            approval::consume_bound(
+                Some(&token),
+                &operation(&args.playlists),
+                &root,
+                generation,
+                &planned.bound,
+            )
+            .map_err(unconfirmed)?;
+        }
         if !planned.changes.audio_estimated {
             return Err(ServiceError::new(
                 codes::STICK_LOAD_INCOMPLETE,

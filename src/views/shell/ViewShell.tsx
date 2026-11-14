@@ -73,6 +73,12 @@ export interface ViewShellProps {
   intakeQueue?: IntakeQueue | undefined;
   /** The Stick view's content: the Stick selected in the tree, if any. */
   stick?: ReactNode | undefined;
+  /**
+   * The Stick view shows the `library` element itself (a selected Stick's
+   * panel, wbx-71), so the list is not kept mounted beside it. Defaults to
+   * whether `stick` is given.
+   */
+  stickHoldsLibrary?: boolean | undefined;
   /** The number waiting, drawn on a view's tab ("Intake 23"); absent or `null` draws none. */
   tabCounts?: Partial<Record<ShellView, number | null>> | undefined;
   /** The Intake view: given the queue it shows, so the shell stays out of its data. */
@@ -84,7 +90,7 @@ function tabId(view: ShellView): string {
 }
 
 export function ViewShell({
-  view, onViewChange, tree, player, status, library, libraryTarget, libraryCrumb, libraryTally, topBarEnd, platform, keyOverrides, intakeQueue, stick, tabCounts, intake,
+  view, onViewChange, tree, player, status, library, libraryTarget, libraryCrumb, libraryTally, topBarEnd, platform, keyOverrides, intakeQueue, stick, stickHoldsLibrary, tabCounts, intake,
 }: ViewShellProps) {
   const t = useTranslation();
 
@@ -230,7 +236,7 @@ export function ViewShell({
           {/* Kept mounted while another view shows (wbx-45.2), out of sight and inert, so
               the list's selection and scroll survive; the list itself stops listening
               (`TrackTable`'s `inert`). A selected Stick's panel is the Stick view's instead. */}
-          {view === "library" || stick === undefined ? (
+          {view === "library" || !(stickHoldsLibrary ?? stick !== undefined) ? (
             <div className={styles.libraryKept} data-kept-hidden={view !== "library" || undefined} inert={view !== "library"} aria-hidden={view !== "library" || undefined}>
               <LibraryView list={library} target={libraryTarget} crumb={libraryCrumb} tally={libraryTally} />
             </div>
