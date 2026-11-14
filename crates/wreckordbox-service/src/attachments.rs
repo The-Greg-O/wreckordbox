@@ -10,14 +10,6 @@ use crate::{
 };
 
 impl Stems {
-    pub(crate) fn observe_audio(
-        &self,
-        found: &ParentAudio,
-        fingerprint: Option<&Fingerprint>,
-    ) -> Result<(Attachments, Vec<i64>), ServiceError> {
-        self.before_record(found, fingerprint, None)
-    }
-
     /// Shared pre-write observation for EVERY Fact producer, including
     /// producers which own the transaction that records the Fact.
     pub(crate) fn before_record(

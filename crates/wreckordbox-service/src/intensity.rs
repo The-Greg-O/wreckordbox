@@ -751,6 +751,7 @@ impl Measuring<'_> {
         let Ok(value) = value.with_bars(bars) else {
             return Ok(None);
         };
+        crate::fact_hold::about_to_commit("intensity-reuse");
         Ok(self.record(parent, fingerprint, &value)?.map(|recorded| {
             changed(self.stems, &parent.id, Some(recorded.id), &[]);
             TrackOutcome {
@@ -889,89 +890,46 @@ impl TrackOutcome {
 
 fn show(stems: &Stems, target: Target) -> Result<TrackIntensity, ServiceError> {
     let Target { found, analysis } = target;
+    let _activity = stems.intensity.begin(false)?;
     let parent = found.parent().clone();
-    let path = found.path();
-    let activity = stems.intensity.begin(false)?;
-    let sidecar = stems.sidecar()?;
-    // With the audio at hand, a Measurement made from other audio is
-    // found out here too, so nothing reads a stale one as current; and
-    // bars made for a beat grid the track no longer has are made again.
-    if path.is_file() {
-        let fingerprint = stems::fingerprint(&parent, path)?;
-        // Observed and realigned (which records) under one hold of the
-        // Fact coordination (wbx-j8k).
-        let _facts = stems.hold_facts();
-        stems.before_record(&found, Some(&fingerprint), None)?;
-        realign(
-            stems,
-            &sidecar,
-            &activity,
-            &parent,
-            &fingerprint,
-            analysis.as_deref(),
-        )?;
+    let audio = if found.path().is_file() {
+        Some(stems::fingerprint(&parent, found.path())?)
+    } else {
+        None
+    };
+    let facts =
+        crate::mutant_reads::inspect(stems, |store| store.facts(&parent.id, INTENSITY.name))?;
+    let bars = bar_starts(analysis.as_deref());
+    let mut current = None;
+    let mut previous = Vec::new();
+    for fact in facts.into_iter().filter(is_ours) {
+        let aligned = valid(&fact);
+        let mut measurement = Measurement::from(fact);
+        if let Some(audio) = &audio {
+            measurement.stale = measurement.fingerprint.as_ref() != Some(audio);
+        }
+        if audio.is_some() && !measurement.superseded && !measurement.stale {
+            // Alignment is an answer, not a new Fact. measure still records
+            // aligned reuse under its Fact hold; reads retain provenance.
+            if let Some(value) = aligned {
+                let value = value
+                    .with_bars(&bars)
+                    .map_err(|e| ServiceError::new(codes::INTENSITY_FAILED, e.to_string()))?;
+                measurement.value = serde_json::to_value(value)
+                    .map_err(|e| ServiceError::new(codes::INTENSITY_FAILED, e.to_string()))?;
+            }
+            if current.is_none() {
+                current = Some(measurement);
+            }
+        } else {
+            previous.push(measurement);
+        }
     }
-    drop(activity);
-    let (current, previous): (Vec<Fact>, Vec<Fact>) = ours(&sidecar, &parent.id)?
-        .into_iter()
-        .partition(|fact| fact.is_live() && !fact.is_stale());
     Ok(TrackIntensity {
         track: parent,
-        intensity: current.into_iter().next().map(Measurement::from),
-        previous: previous.into_iter().map(Measurement::from).collect(),
+        intensity: current,
+        previous,
     })
-}
-
-/// When the track's current Intensity has bars for another beat grid than
-/// the one it has now, records it again with bars for this one, made from
-/// the stored value in a Run of its own.
-fn realign(
-    stems: &Stems,
-    sidecar: &Sidecar,
-    activity: &Activity,
-    parent: &Parent,
-    fingerprint: &Fingerprint,
-    analysis: Option<&Path>,
-) -> Result<(), ServiceError> {
-    let Some(fact) = ours(sidecar, &parent.id)?
-        .into_iter()
-        .find(|fact| fact.is_live() && !fact.is_stale())
-    else {
-        return Ok(());
-    };
-    let Some(value) = valid(&fact).filter(|_| fact.fingerprint.as_ref() == Some(fingerprint))
-    else {
-        return Ok(());
-    };
-    let bars = bar_starts(analysis);
-    if value.grid == grid_of(&bars) || activity.stopped() {
-        return Ok(());
-    }
-    let Ok(value) = value.with_bars(&bars) else {
-        return Ok(());
-    };
-    let source = Source::new(SourceKind::Tool, SOURCE_NAME);
-    let run = sidecar
-        .begin_run(
-            &source,
-            &format!(
-                "Align the Intensity of track {} \"{}\" to its beat grid",
-                parent.id, parent.title
-            ),
-        )
-        .map_err(|e| sidecar_error(&e))?;
-    crate::fact_hold::about_to_commit("realign");
-    let recorded = record(sidecar, &source, run, parent, fingerprint, &value);
-    let _ = sidecar.finish_run(
-        run,
-        if recorded.is_ok() {
-            "bars made again for the beat grid"
-        } else {
-            "failed"
-        },
-    );
-    changed(stems, &parent.id, Some(recorded?.id), &[]);
-    Ok(())
 }
 
 /// Records an Intensity for a track, once it has passed its check.

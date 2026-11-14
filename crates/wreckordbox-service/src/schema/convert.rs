@@ -284,6 +284,7 @@ static CONVERTING: Mutex<()> = Mutex::new(());
 /// Numbers the working files, so no two are ever the same one.
 static WORKING_FILES: AtomicU64 = AtomicU64::new(0);
 
+#[allow(clippy::too_many_lines, reason = "keep preview, observation, and the coordinated conversion commit in order")]
 pub(super) fn convert(
     stems: &Stems,
     convert: &Convert,
@@ -307,7 +308,7 @@ pub(super) fn convert(
             .map_err(|why| ServiceError::new(service_codes::SERVICE_FAILED, why))?;
     }
 
-    let path = file(stems)?;
+    let path = file(stems);
     let existing = existing(&path)?;
     let file_state = match &existing {
         _ if convert.dry_run => FileState::NotWritten,
@@ -325,18 +326,24 @@ pub(super) fn convert(
         }
     };
 
-    let sidecar = stems.sidecar()?;
-    let mut sorted = sort_out(
-        &sidecar,
-        &kinds,
-        &plan.schema,
-        &library,
-        &wanted,
-        convert.reimport,
-    )?;
+    let sidecar = if convert.dry_run {
+        None
+    } else {
+        Some(stems.sidecar()?)
+    };
+    let mut sorted = crate::mutant_reads::inspect(stems, |store| {
+        Ok(sort_out(
+            &store,
+            &kinds,
+            &plan.schema,
+            &library,
+            &wanted,
+            convert.reimport,
+        ))
+    })??;
     // Attach before comparing the DJ's earlier word with the MyTags. The
     // first comparison only identifies work; attachment can reveal conflicts.
-    let run = if !convert.dry_run && !sorted.to_record.is_empty() {
+    let run = if let Some(sidecar) = sidecar.as_ref().filter(|_| !sorted.to_record.is_empty()) {
         let run = sidecar
             .begin_run(&Source::new(SourceKind::Dj, "dj"), RUN_DESCRIPTION)
             .map_err(|e| sidecar_error(&e))?;
@@ -350,7 +357,7 @@ pub(super) fn convert(
                 }
             }
             sort_out(
-                &sidecar,
+                &crate::mutant_reads::Store::Open(sidecar),
                 &kinds,
                 &plan.schema,
                 &library,
@@ -395,6 +402,9 @@ pub(super) fn convert(
         return Ok(converted);
     }
 
+    let sidecar = sidecar.ok_or_else(|| {
+        ServiceError::new(service_codes::SERVICE_FAILED, "conversion writer missing")
+    })?;
     let installed = matches!(file_state, FileState::Written | FileState::Replaced);
     if installed {
         if let Err(error) = write_whole(&path, text.as_bytes()) {
@@ -527,7 +537,7 @@ struct Sorted<'a> {
 /// otherwise than the tags (other terms, or terms where the track has no
 /// tag), it stands and is a conflict.
 fn sort_out<'a>(
-    sidecar: &Sidecar,
+    sidecar: &crate::mutant_reads::Store<'_>,
     kinds: &Kinds,
     schema: &TagSchema,
     library: &'a MyTags,

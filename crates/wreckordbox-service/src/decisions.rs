@@ -36,9 +36,7 @@ use serde_json::{json, Value};
 pub use wreckordbox_sidecar::decisions::{
     Answer, Candidate, Decision, DecisionState, QuestionType, NO, YES,
 };
-use wreckordbox_sidecar::decisions::{
-    DecisionQuery, FactOfAnswer, NewAnswer, NewDecision, RunOfAnswer,
-};
+use wreckordbox_sidecar::decisions::{FactOfAnswer, NewAnswer, NewDecision, RunOfAnswer};
 use wreckordbox_sidecar::{Kinds, RunId, Sidecar, SidecarError};
 
 pub use crate::decider::Rule;
@@ -296,17 +294,16 @@ pub(crate) fn answer(
     request: &Request,
     lookup: &dyn Fn(&str) -> Result<ParentAudio, ServiceError>,
 ) -> Result<Value, ServiceError> {
+    if matches!(
+        request.command.as_str(),
+        commands::DECISIONS_LIST | commands::DECISIONS_GET
+    ) {
+        return crate::query_reads::decisions(stems, request);
+    }
     let decisions = Decisions::new(stems, lookup)?;
     let answer = match request.command.as_str() {
         commands::DECISIONS_CREATE => {
             serde_json::to_value(decisions.create(facts::arguments(request)?)?)
-        }
-        commands::DECISIONS_LIST => {
-            serde_json::to_value(decisions.list(&facts::arguments(request)?)?)
-        }
-        commands::DECISIONS_GET => {
-            let wanted: GetDecision = facts::arguments(request)?;
-            serde_json::to_value(decisions.existing(wanted.id)?)
         }
         commands::DECISIONS_ANSWER => {
             serde_json::to_value(decisions.answer(facts::arguments(request)?)?)
@@ -387,30 +384,6 @@ impl<'a> Decisions<'a> {
             .map_err(|e| sidecar_error(&e))?;
         self.changed(&decision, None);
         Ok(decision)
-    }
-
-    fn list(&self, wanted: &ListDecisions) -> Result<DecisionPage, ServiceError> {
-        let limit = wanted.limit.unwrap_or(DEFAULT_DECISION_LIMIT);
-        let offset = wanted.offset.unwrap_or(0);
-        let (decisions, total) = self
-            .sidecar
-            .decisions(&DecisionQuery {
-                state: wanted.state,
-                decider: wanted.decider.as_ref().map(facts::source).transpose()?,
-                track_id: wanted.track.clone(),
-                topic: wanted.topic.clone(),
-                limit,
-                offset,
-            })
-            .map_err(|e| sidecar_error(&e))?;
-        let end = offset.saturating_add(decisions.len());
-        Ok(DecisionPage {
-            next_offset: (end < total && !decisions.is_empty()).then_some(end),
-            decisions,
-            total,
-            offset,
-            limit,
-        })
     }
 
     /// Answers a Decision as the Decider named, as `decisions.answer`
@@ -650,7 +623,7 @@ fn unreadable(kind: &str, takes: &str, choice: &str) -> ServiceError {
     )
 }
 
-fn sidecar_error(error: &SidecarError) -> ServiceError {
+pub(crate) fn sidecar_error(error: &SidecarError) -> ServiceError {
     let code = match error {
         SidecarError::NoDecision(_) => codes::DECISION_NOT_FOUND,
         SidecarError::Decision(_) => codes::INVALID_DECISION,

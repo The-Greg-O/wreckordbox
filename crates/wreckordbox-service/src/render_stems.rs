@@ -6,8 +6,8 @@
 //! of the same length from the right ones; it checks length and rate
 //! against the parent file. Currency is checked here, by the same machinery
 //! every Stems command uses (`stems.show`, `stems.write`): the parent's file
-//! is fingerprinted, the audio observation marks Stems of other audio stale
-//! (and Stems of audio that came back current again), and only a set made
+//! is fingerprinted, currency is computed without writing or events,
+//! and only a set made
 //! from this fingerprint, with all four files present, is handed over.
 
 use std::path::{Path, PathBuf};
