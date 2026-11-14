@@ -131,7 +131,7 @@ function AudioDropoutMeter({ audioLoad }: { audioLoad: number | undefined }) {
       className={`${styles.meter} ${styles.cpu}`}
       role="meter"
       aria-label="Audio Dropout Meter"
-      title={`Audio callback deadline usage. Overruns: ${cost.audioXruns}`}
+      title={`Audio callback deadline usage. Overruns: ${cost.audioXruns}. Device underruns: ${cost.audioUnderruns}`}
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={Math.round(clamp(fraction) * 100)}

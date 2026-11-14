@@ -3460,8 +3460,14 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       mockLogLine(failed ? "warn" : "info", "wreckordbox::status", text);
       return wait(undefined);
     },
-    appDiagnostics: () =>
-      wait({ audioLoad: 0, audioXruns: 0, cpu: 0, memoryMb: 0, threads: null, openFiles: null, gpu: null }),
+    // The engine's device health, settable by a spec: `window.__mockAudioHealth`.
+    appDiagnostics: () => {
+      const health = (window as unknown as { __mockAudioHealth?: { underruns?: number; latencyMs?: number | null } }).__mockAudioHealth;
+      return wait({
+        audioLoad: 0, audioXruns: 0, audioUnderruns: health?.underruns ?? 0, audioLatencyMs: health?.latencyMs ?? null,
+        cpu: 0, memoryMb: 0, threads: null, openFiles: null, gpu: null,
+      });
+    },
     // A browser has no Finder to open. Refusing is the truth; succeeding
     // silently made the menu item look as if it had done something.
     revealTrack: () =>

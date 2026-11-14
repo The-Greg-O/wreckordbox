@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatCount, formatMemory, formatPercent } from "./useDiagnostics";
+import { formatCount, formatLatency, formatMemory, formatPercent } from "./useDiagnostics";
 
 describe("formatMemory", () => {
   it("switches to gigabytes rather than printing five digits", () => {
@@ -35,5 +35,14 @@ describe("formatPercent", () => {
     expect(formatPercent(0.15)).toBe("0.1%");
     expect(formatPercent(3.42)).toBe("3.4%");
     expect(formatPercent(9.96)).toBe("10.0%");
+  });
+});
+
+describe("formatLatency", () => {
+  it("rounds to whole milliseconds and says unknown before a stream has run", () => {
+    expect(formatLatency(197.4)).toBe("197 ms");
+    expect(formatLatency(10.6)).toBe("11 ms");
+    expect(formatLatency(null)).toBe("unknown");
+    expect(formatLatency(0)).toBe("unknown");
   });
 });
