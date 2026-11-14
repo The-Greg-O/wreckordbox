@@ -809,3 +809,61 @@ fn closing_after_publication_before_native_stems_finish_keeps_every_stems_outcom
         "{report}"
     );
 }
+
+/// wbx-72: the service's `stick_load_progress` events reach the window as
+/// `stick-load:progress`, so the Stick view can show which track is being
+/// written: every one names the Stick, counts never run past the total, a
+/// track being written is named, and the last says the load is done.
+#[test]
+fn the_window_hears_a_hosted_load_progress_track_by_track() {
+    use std::sync::Mutex;
+    use tauri::Listener;
+
+    let window = hosting_window();
+    window.unlock(&window.spare);
+    let heard: Arc<Mutex<Vec<serde_json::Value>>> = Arc::default();
+    let into = Arc::clone(&heard);
+    window.app.listen("stick-load:progress", move |event| {
+        into.lock()
+            .unwrap()
+            .push(serde_json::from_str(event.payload()).unwrap());
+    });
+    let playlists = vec![playlist_id(0)];
+    let plan = window.plan(&window.spare, &playlists);
+    let token = window.held(&plan);
+
+    let loaded = load(
+        &window,
+        &path(&window.spare),
+        &playlists,
+        &plan,
+        Some(token.as_str()),
+    )
+    .unwrap();
+    assert_eq!(loaded["outcome"], "loaded", "{loaded}");
+
+    // Events are delivered on the forwarding thread: wait for the last.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let done = heard.lock().unwrap().iter().any(|e| e["stage"] == "done");
+        if done || std::time::Instant::now() > deadline {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let heard = heard.lock().unwrap().clone();
+    assert!(!heard.is_empty(), "the window heard no progress");
+    for event in &heard {
+        assert_eq!(event["stick"], path(&window.spare), "{event}");
+        assert!(
+            event["done"].as_u64().unwrap() <= event["total"].as_u64().unwrap(),
+            "{event}"
+        );
+    }
+    let titles: Vec<&str> = heard
+        .iter()
+        .filter_map(|e| e["track"]["title"].as_str())
+        .collect();
+    assert!(!titles.is_empty(), "no track was named: {heard:?}");
+    assert_eq!(heard.last().unwrap()["stage"], "done", "{heard:?}");
+}

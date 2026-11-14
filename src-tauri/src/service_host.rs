@@ -43,6 +43,11 @@ pub const SERVICE_STOPPED: &str = "service:stopped";
 /// `{ trackId, kind }` (wbx-65).
 pub const SIDECAR_CHANGED: &str = "sidecar:changed";
 
+/// The interface's event for a Stick load's progress (wbx-72): the
+/// service's `stick_load_progress` as it is, `{ stick, stage, done, total,
+/// track }`. Sent for every step; the interface coalesces a burst.
+pub const STICK_LOAD_PROGRESS: &str = "stick-load:progress";
+
 /// The interface's event for every turn of Library Protection, by
 /// whoever: a [`ProtectionDto`]. Sent in order; one with a lower revision
 /// than one already applied is stale.
@@ -64,6 +69,8 @@ pub trait FrontEnd: Send + Sync + 'static {
     /// `facts.record`, a tag set from Intake): what follows the Sidecar
     /// reads again (wbx-65).
     fn sidecar_changed(&self, _track: &str, _kind: &str) {}
+    /// A Stick load moved on (`stick_load_progress`, wbx-72).
+    fn stick_load_progress(&self, _progress: serde_json::Value) {}
 }
 
 /// The service the window is hosting, and for which Library.
@@ -162,6 +169,8 @@ impl AppState {
                     } else if event.event == wreckordbox_service::stems::events::SIDECAR_CHANGED {
                         let field = |name: &str| event.data.get(name).and_then(serde_json::Value::as_str).unwrap_or_default().to_owned();
                         front.sidecar_changed(&field("track_id"), &field("kind"));
+                    } else if event.event == wreckordbox_service::stick_load::events::STICK_LOAD_PROGRESS {
+                        front.stick_load_progress(event.data);
                     }
                 }
             });
@@ -252,6 +261,10 @@ impl<R: tauri::Runtime> FrontEnd for Interface<R> {
 
     fn sidecar_changed(&self, track: &str, kind: &str) {
         let _ = tauri::Emitter::emit(&self.0, SIDECAR_CHANGED, serde_json::json!({ "trackId": track, "kind": kind }));
+    }
+
+    fn stick_load_progress(&self, progress: serde_json::Value) {
+        let _ = tauri::Emitter::emit(&self.0, STICK_LOAD_PROGRESS, progress);
     }
 }
 
