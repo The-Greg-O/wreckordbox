@@ -17,7 +17,7 @@ export function StickProtectionDialog({ devices, protection, onClose }: {
   const close = useRef<HTMLButtonElement>(null);
   useEffect(() => { close.current?.focus(); }, []);
   return (
-    <div className={styles.backdrop}>
+    <div className={styles.backdrop} data-shell-surface="">
       <div
         role="dialog"
         aria-modal="true"

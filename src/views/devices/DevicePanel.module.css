@@ -183,7 +183,8 @@
   display: inline-block;
   width: var(--s-device-image-btn-w);
   height: var(--s-device-image-btn-h);
-  background: var(--c-device-row);
+  /* Under a light theme in the view shell, the label's ink (shell-light.css). */
+  background: var(--c-device-image-glyph, var(--c-device-row));
 }
 
 /* Total Space / Available Space / Device Library. */

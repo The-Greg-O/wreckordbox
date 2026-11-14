@@ -7,13 +7,24 @@
    frame's root element) the chrome tokens point back at the roles, and the
    fixed light-on-dark tokens the shell's parts still use (fields, icons,
    outlines, the player's glyphs) take the role that does their job.
-   Menus and dialogs drawn outside the shell keep upstream's dark look.
+   While the shell is drawn, what it opens outside its frame takes the same
+   tokens (wbx-lfa): menus (`[role="menu"]`, portals on the body), the
+   command palette (`[data-command-palette]`) and the shell's own dialogs,
+   which carry `data-shell-surface` (the staged Stick write with its
+   unlock, Stick Protection). Mark a new dialog the same way once
+   `e2e/light-surfaces.spec.ts` reads it clean. Upstream's windows
+   (Preferences, the Sync Manager and the other managers and prompts) are
+   not marked: they draw with many fixed dark-design tokens and stay wholly
+   dark, readable, until they are redrawn. Under upstream's layout there is
+   no shell, so its menus and palette keep upstream's dark look with the
+   rest of it.
 
    Nothing here describes the music: waveform, phrase, cue, Prep, key, Energy,
    meter and Mutant colours keep their values. Where one would not stand out
    from a light ground it is given a dark well or an outline instead. */
 
-:root[data-theme-mode="light"] [data-shell-roles] {
+:root[data-theme-mode="light"] [data-shell-roles],
+:root[data-theme-mode="light"]:has([data-shell-roles]) :is([role="menu"], [data-command-palette], [data-shell-surface]) {
   /* Grounds, text and selection: the theme's. */
   --c-black: var(--role-ground);
   --c-top: var(--role-panel);
@@ -49,6 +60,24 @@
   --c-device-disabled: var(--role-text-dim);
   --c-device-disabled-ring: var(--role-border);
   --c-device-row: var(--role-panel);
+  /* The device panel's three image buttons: a glyph square drawn in the
+     label's ink rather than a panel-coloured square that vanishes. */
+  --c-device-image-glyph: var(--role-text-dim);
+
+  /* Menus (context menus, the column and search-scope menus, the layout
+     menu) and the dialogs' buttons, drawn outside the frame. */
+  --c-context-menu: var(--role-working);
+  --c-context-menu-border: var(--role-border);
+  --c-context-menu-inner: var(--role-hairline);
+  --c-context-menu-text: var(--role-text);
+  --c-context-menu-text-dim: var(--role-text-dim);
+  --c-context-menu-separator: var(--role-hairline);
+  --c-search-menu-inner: var(--role-hairline);
+  --c-menu: var(--role-working);
+  --c-menu-border: var(--role-border);
+  --c-pref-button-top: var(--role-control);
+  --c-pref-button-bottom: var(--role-control);
+  --c-pref-button-border: var(--role-border);
 
   /* The outline a meaning colour gets where it alone would not stand out
      from a light ground (pips, Prep stripes, key lights, tag hues). */
@@ -96,3 +125,32 @@
 :root[data-theme-mode="light"] [data-shell-roles] [data-phrase] {
   box-shadow: inset 0 0 0 1px var(--c-meaning-edge);
 }
+
+/* The Stick view (wbx-71) writes Energy colours as text: its Gig, Spare and
+   Unlocked badges and the load summary's counts, 1.6 to 2.3:1 on a light
+   ground. Under a light theme each is filled with its colour and written in
+   dark ink, as the Intake view's Energy levels are; the colours keep their
+   values. Keyed on the view's data attributes because wbx-72 is changing
+   StickLoadView.module.css at the same time: move these rules there (as
+   `:global(:root[data-theme-mode="light"])` rules beside the colours they
+   mirror) once wbx-72 has merged. */
+:root[data-theme-mode="light"] [data-testid="stick-view"] :is([data-testid="stick-kind"], [data-testid="stick-protection"][data-protection="unlocked"]),
+:root[data-theme-mode="light"] [data-testid="stick-summary"] li[data-change] > span:first-child {
+  padding: 0 var(--s-shell-space-2);
+  border-color: transparent;
+  border-radius: var(--s-shell-radius);
+  color: #0e0e14;
+  justify-self: end;
+}
+:root[data-theme-mode="light"] [data-testid="stick-view"] [data-testid="stick-kind"][data-kind="gig"] { background: var(--c-energy-5); }
+:root[data-theme-mode="light"] [data-testid="stick-view"] [data-testid="stick-kind"][data-kind="spare"] { background: var(--c-energy-3); }
+:root[data-theme-mode="light"] [data-testid="stick-view"] [data-testid="stick-protection"][data-protection="unlocked"] { background: var(--c-energy-4); }
+:root[data-theme-mode="light"] [data-testid="stick-summary"] li[data-change="added"] > span:first-child { background: var(--c-energy-3); }
+:root[data-theme-mode="light"] [data-testid="stick-summary"] li[data-change="stems"] > span:first-child { background: var(--c-energy-2); }
+:root[data-theme-mode="light"] [data-testid="stick-summary"] li:is([data-change="changed"], [data-change="audio"]) > span:first-child { background: var(--c-energy-4); }
+:root[data-theme-mode="light"] [data-testid="stick-summary"] li:is([data-change="playlists"], [data-change="playlistsRemoved"]) > span:first-child { background: var(--c-energy-1); }
+:root[data-theme-mode="light"] [data-testid="stick-summary"] li:is([data-change="removed"], [data-change="missing"]) > span:first-child { background: var(--c-energy-5); }
+/* Its space bar's "adds" segment, drawn in the tab line's end, takes the
+   ink variant of that colour (legibleRoles.ts) so it stands out from the
+   bar's light track. */
+:root[data-theme-mode="light"] [data-testid="stick-space-bar"] { --role-tab-to: var(--role-tab-to-ink, var(--role-accent)); }
