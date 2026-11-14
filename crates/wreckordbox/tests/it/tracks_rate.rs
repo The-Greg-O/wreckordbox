@@ -116,11 +116,8 @@ fn a_second_client_is_told_what_kind_of_data_changed_and_the_new_generation() {
         event.data,
         json!({ "kind": "library", "generation": generation })
     );
-    // One edit, one event.
-    assert_eq!(
-        watcher.next_event(Duration::from_millis(300)).unwrap(),
-        None
-    );
+    // One edit, one event: nothing more before the ordered barrier.
+    common::barrier::told_nothing(&mut watcher);
 
     // The next edit is a newer generation.
     let second = sandbox.cli(&["tracks", "rate", "10004", "1"]);
@@ -157,10 +154,7 @@ fn an_unknown_track_fails_and_changes_nothing() {
         "{error}"
     );
     assert_eq!(sandbox.cli(&["--json", "tracks", "list"]).json(), before);
-    assert_eq!(
-        watcher.next_event(Duration::from_millis(500)).unwrap(),
-        None
-    );
+    common::barrier::told_nothing(&mut watcher);
 
     // Not a number at all is the same failure, and says so in words by hand.
     let text = sandbox.cli(&["tracks", "rate", "midnight", "4"]);
@@ -200,10 +194,7 @@ fn a_rating_out_of_range_is_refused() {
     }
 
     assert_eq!(listed_rating(&sandbox, "10003"), 2);
-    assert_eq!(
-        watcher.next_event(Duration::from_millis(500)).unwrap(),
-        None
-    );
+    common::barrier::told_nothing(&mut watcher);
 }
 
 #[test]
@@ -237,10 +228,7 @@ fn a_real_library_is_not_written_to_under_test() {
         "RBXPORT_TEST is set and this is the real library; tests must copy a fixture first"
     );
     assert_eq!(listed_rating(&sandbox, "10003"), 2);
-    assert_eq!(
-        watcher.next_event(Duration::from_millis(500)).unwrap(),
-        None
-    );
+    common::barrier::told_nothing(&mut watcher);
 }
 
 #[test]

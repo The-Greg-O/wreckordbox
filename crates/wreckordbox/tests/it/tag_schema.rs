@@ -646,10 +646,11 @@ fn every_tag_on_a_track_becomes_a_fact_from_the_dj_in_one_run_and_a_child_implie
     }
 
     // Other clients hear of the Sidecar, never of the Library.
-    let mut heard = Vec::new();
-    while let Some(event) = watcher.next_event(Duration::from_millis(500)).unwrap() {
-        heard.push(event.event);
-    }
+    let heard: Vec<String> =
+        common::barrier::heard_exactly(&mut watcher, 10, Duration::from_millis(500))
+            .into_iter()
+            .map(|event| event.event)
+            .collect();
     assert_eq!(heard, vec!["sidecar_changed"; 10]);
 }
 

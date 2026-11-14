@@ -2,7 +2,9 @@
 //! real `wreckordbox` binary pointed at them.
 #![allow(dead_code)]
 
+pub mod barrier;
 pub mod catalogue;
+pub mod released;
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};

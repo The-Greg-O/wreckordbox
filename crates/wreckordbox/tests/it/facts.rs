@@ -790,10 +790,7 @@ fn recording_facts_changes_nothing_in_the_library_and_other_clients_hear_only_of
 
     // Each recorded Fact is announced as a change to the Sidecar, and
     // nothing is announced as a change to the Library.
-    let mut events = Vec::new();
-    while let Some(event) = watcher.next_event(Duration::from_millis(500)).unwrap() {
-        events.push(event);
-    }
+    let events = common::barrier::heard_exactly(&mut watcher, 3, Duration::from_millis(500));
     let heard: Vec<(&str, Value)> = events
         .iter()
         .map(|event| (event.event.as_str(), event.data.clone()))
