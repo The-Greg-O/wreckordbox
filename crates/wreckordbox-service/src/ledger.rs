@@ -1937,7 +1937,12 @@ impl Keeper {
                     let on_disk = sidecar
                         .as_ref()
                         .map_err(|e| e.message.clone())
-                        .and_then(|sidecar| spill(&spill_file(sidecar), &spilled));
+                        .and_then(|sidecar| {
+                            // Beside the Sidecar, so it passes its admission
+                            // (wbx-8yh): a locked Stick keeps it in memory.
+                            sidecar.admit_write().map_err(|e| e.to_string())?;
+                            spill(&spill_file(sidecar), &spilled)
+                        });
                     tracing::error!(
                         %error,
                         kept_on_disk = on_disk.is_ok(),

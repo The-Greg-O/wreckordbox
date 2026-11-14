@@ -409,8 +409,9 @@ impl Sidecar {
         self.admission.set(admission);
     }
 
-    /// Asks the write admission before the handle writes a file itself.
-    pub(crate) fn admit_write(&self) -> Result<()> {
+    /// Asks the write admission now: for a file written beside the
+    /// Sidecar by its owner (and by the handle itself), before the write.
+    pub fn admit_write(&self) -> Result<()> {
         self.admission.admit().map_err(SidecarError::Refused)
     }
 
