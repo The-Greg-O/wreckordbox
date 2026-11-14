@@ -80,6 +80,13 @@ pub fn write_logged(state_dir: &Path, track_id: &str, path: &str, key: &str) {
     }
 }
 
+/// Test hold: an Undo or Redo of a key edit has written its files' tags
+/// and not yet the Library (wbx-45.14).
+pub const TAGS_STEPPED: &str = "key_tag.tags_stepped";
+/// Test hold: a key edit has written the Library's key and not yet the
+/// files' tags (wbx-45.14).
+pub const LIBRARY_KEY_WRITTEN: &str = "key_tag.library_key_written";
+
 /// One audio file a key edit wrote its key into (#507): the key the tag
 /// held before (`None`: no key) and the key written.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,18 +137,22 @@ impl rbl_library::history::OutsideSteps for KeyTagWrites {
         check_restore(&self.files, undo, label)
     }
 
-    fn step(&self, undo: bool, label: &str) -> Result<(), rbl_db::DbError> {
+    fn step(&self, undo: bool, label: &str) -> Result<rbl_library::history::OutsideHold, rbl_db::DbError> {
         let access = crate::stick_guard::enter_files(&self.state_dir, self.files.iter().map(|f| f.path.as_path()))
             .map_err(|refused| protected(undo, label, &refused))?;
-        restore(&access, &self.files, undo, label)
+        restore(&access, &self.files, undo, label)?;
+        crate::test_holds::point(TAGS_STEPPED, &self.state_dir);
+        // The Sticks' leave goes back to the core, held until the Library's
+        // step is made or this is reverted (wbx-45.14): a lock asked for in
+        // between waits for both.
+        Ok(Box::new(access))
     }
 
-    fn revert(&self, undo: bool) -> (usize, usize) {
-        // Putting back what the step wrote is a write too: under the Sticks'
-        // locks and unlocks again (wbx-45.11). Refused (a Stick locked,
-        // ejected or replaced since), nothing is written and every file is
-        // reported as not put back.
-        let Ok(access) = crate::stick_guard::enter_files(&self.state_dir, self.files.iter().map(|f| f.path.as_path())) else {
+    fn revert(&self, held: rbl_library::history::OutsideHold, undo: bool) -> (usize, usize) {
+        // Putting back what the step wrote, under the leave it wrote with
+        // (wbx-45.14). A Stick ejected or replaced since cannot be written:
+        // every file is reported as not put back.
+        let Ok(access) = held.downcast::<crate::stick_guard::StickAccess>() else {
             return (self.files.len(), self.files.len());
         };
         let written: Vec<_> = if undo { self.files.iter().rev().collect() } else { self.files.iter().collect() };
@@ -154,19 +165,26 @@ impl rbl_library::history::OutsideSteps for KeyTagWrites {
 /// A file passed over (no path, a format rekordbox writes no key into, a
 /// read-only file, a write that failed) is left out, so Undo of it stays a
 /// library-only Undo.
-pub(crate) fn write_recorded(state_dir: &Path, track_id: &str, path: &str, key: &str) -> Option<KeyTagWrite> {
+///
+/// `access`: Stick Protection's leave for every file the edit may write,
+/// taken before the Library's key was written and held until the tags are
+/// (wbx-45.14), so a Stick cannot be locked between the two.
+pub(crate) fn write_recorded(
+    access: &crate::stick_guard::StickAccess,
+    track_id: &str,
+    path: &str,
+    key: &str,
+) -> Option<KeyTagWrite> {
     if path.is_empty() {
         tracing::warn!(track_id, "key not written to the file's tag: the track has no file path");
         return None;
     }
-    // A file on a Stick is written only while that Stick is unlocked (wbx-45.11).
-    let _access = match crate::stick_guard::enter_files(state_dir, [Path::new(path)]) {
-        Ok(access) => access,
-        Err(refused) => {
-            tracing::warn!(track_id, path, %refused, "key not written to the file's tag: it is on a protected Stick");
-            return None;
-        }
-    };
+    // Still the same mount, still unlocked (the leave itself cannot be
+    // taken away; an eject or replacement can still happen).
+    if let Err(refused) = access.recheck() {
+        tracing::warn!(track_id, path, %refused, "key not written to the file's tag: its Stick was replaced");
+        return None;
+    }
     match swap_key(Path::new(path), None, Some(key)) {
         Ok(KeySwap::Written { before }) => {
             tracing::info!(track_id, path, key, "key written to the file's tag");

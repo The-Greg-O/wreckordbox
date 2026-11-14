@@ -68,6 +68,7 @@ pub mod intake_tags;
 pub mod intake_view;
 pub mod stick_view;
 pub mod shutdown;
+pub mod test_holds;
 pub mod stick_load_reports;
 pub mod playlist_entries;
 pub mod filter_playlist;

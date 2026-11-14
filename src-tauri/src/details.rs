@@ -575,14 +575,33 @@ pub async fn set_track_field<R: tauri::Runtime>(
     }
     let key = value.trim().to_owned();
     recorded_edit(app, state, "set_track_field", Touched::Tracks, crate::commands::TRACK_EDIT, move |w| {
+        // The files' Sticks entered under the edit gate, before the
+        // Library's key is written, and held until every tag is (wbx-45.14):
+        // a Stick locked in between waits, so the tags cannot be left
+        // disagreeing with the Library. Refused here, nothing is written.
+        let access = match &library {
+            Some(library) => Some(
+                crate::stick_guard::enter_files(
+                    &state_dir,
+                    tracks
+                        .iter()
+                        .filter_map(|track| library.row_of(track))
+                        .map(|row| std::path::Path::new(library.folder_path.get(row as usize)))
+                        .filter(|path| !path.as_os_str().is_empty()),
+                )
+                .map_err(|refused| rbl_db::DbError::WriteRefused(refused.message))?,
+            ),
+            None => None,
+        };
         let edit = each_track(w, &tracks, |w, track| w.set_field_with_undo(track, which, &value))?;
-        let (Some(library), LibraryEdit::Track(steps)) = (library, &edit) else { return Ok(edit) };
+        let (Some(library), Some(access), LibraryEdit::Track(steps)) = (library, access, &edit) else { return Ok(edit) };
+        crate::test_holds::point(crate::key_tag::LIBRARY_KEY_WRITTEN, &state_dir);
         let files: Vec<_> = steps
             .iter()
             .filter_map(|step| {
                 let track = step.content();
                 let row = library.row_of(track)?;
-                crate::key_tag::write_recorded(&state_dir, track, library.folder_path.get(row as usize), &key)
+                crate::key_tag::write_recorded(&access, track, library.folder_path.get(row as usize), &key)
             })
             .collect();
         if files.is_empty() {
