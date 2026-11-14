@@ -287,6 +287,10 @@ export function createMockStickLoad(source: MockStickLoadSource) {
     hooks.__emitStickLoadProgress = (path: string, count: number, operation?: string) => {
       for (let at = 1; at <= count; at += 1) progress(path, "copying", at, count, { id: `burst-${at}`, title: `Burst track ${at}` }, operation);
     };
+    // wbx-73: one copying event naming a Library track (its waveform and details are the mock's).
+    hooks.__emitStickLoadTrack = (path: string, done: number, total: number, id: string | null) => {
+      progress(path, "copying", done, total, id === null ? null : line(id));
+    };
     hooks.__stickLoadOperations = () => [...operations];
     hooks.__swapStickAt = (path: string, free: number) => {
       const device = source.devices().find((d) => d.path === path) as { volumeId: string } | undefined;

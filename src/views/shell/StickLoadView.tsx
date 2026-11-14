@@ -50,7 +50,8 @@ import styles from "./StickLoadView.module.css";
 import { useStickWriteGateContext } from "./StickWriteGate";
 import { StickUnlock } from "./StickUnlock";
 import { StickHoldButton } from "./StickHoldButton";
-import { LoadProgressPanel, ShrunkLoad } from "./StickLoadProgress";
+import { LoadProgressPanel } from "./StickLoadDisplay";
+import { ShrunkLoad } from "./StickLoadProgress";
 import {
   dismissStickLoad, dismissStickRemoval, ejectStick, machineOf, readKeptStickLoads, runStickLoad, stickIdentity,
   takeWantedStick, useStickLoads, useStickRemovals, type StickLoad, type StickRemoval,

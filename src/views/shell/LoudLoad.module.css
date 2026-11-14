@@ -1,0 +1,155 @@
+/* The loud load display (wbx-73): docs/design/screens/stick, "Loading".
+   The waveform keeps its meaning colours (the DJ's waveform theme); chrome
+   and text are the theme's roles. Everything that moves between progress
+   updates is a transform the compositor animates: the write head's sweep
+   (Web Animations, LoudLoad.tsx) and the beat (below). */
+
+.loud {
+  grid-column: 1 / -1;
+  position: relative;
+  min-width: 0;
+  min-height: 320px;
+  background: var(--role-ground);
+}
+
+.stage {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto);
+  grid-template-rows: auto 1fr auto;
+  gap: var(--s-shell-space-4);
+  padding: var(--s-shell-space-6) var(--s-shell-space-6) calc(var(--s-shell-space-6) + 8px);
+  overflow: hidden;
+  container-type: size;
+  color: var(--role-text);
+  background: var(--role-ground);
+}
+
+/* The waveform band across the middle of the view, pulsing on the beat. */
+.waveBox {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 20%;
+  bottom: 22%;
+  overflow: hidden;
+  transform-origin: 50% 50%;
+  animation: beat var(--beat-ms, 500ms) cubic-bezier(0.2, 0.7, 0.4, 1) infinite;
+  will-change: transform;
+}
+@keyframes beat {
+  0% { transform: scaleY(1.08); }
+  100% { transform: scaleY(0.94); }
+}
+.wave {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* The stand-in's one muted colour. */
+  color: var(--role-hairline);
+}
+
+/* What is not yet written: the waveform dimmed, its left edge the write head. */
+.head {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--role-ground) 74%, transparent);
+  border-left: 3px solid var(--c-playhead);
+  will-change: transform;
+}
+
+.top {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--s-shell-space-4);
+}
+.top > div:first-child { min-width: 0; }
+.actions { display: flex; flex-wrap: wrap; gap: var(--s-shell-space-3); }
+.actions button { background: var(--role-ground); }
+.shrink kbd {
+  font: inherit;
+  padding: 0 var(--s-shell-space-2);
+  border: var(--s-shell-border) solid var(--role-accent);
+  border-radius: var(--s-shell-radius);
+}
+
+.title {
+  margin: 0;
+  font-size: var(--f-size-shell-label);
+  font-weight: 400;
+  letter-spacing: var(--f-tracking-shell-label);
+  text-transform: uppercase;
+  color: var(--role-text-dim);
+}
+.line { margin: 0; color: var(--role-text); overflow-wrap: anywhere; }
+
+/* Text over the waveform keeps the ground behind it. */
+.line, .title, .track, .detail, .note {
+  justify-self: start;
+  width: fit-content;
+  max-width: 100%;
+  background: var(--role-ground);
+}
+
+.percent {
+  grid-column: 1;
+  grid-row: 3;
+  align-self: end;
+  position: relative;
+  margin: 0;
+  font-size: clamp(56px, min(22cqw, 30cqh), 240px);
+  line-height: 0.8;
+  font-weight: 700;
+  letter-spacing: -0.05em;
+  color: var(--role-text-bright);
+  text-shadow: 0 0 0.06em var(--role-ground), 0 0 0.12em var(--role-ground);
+  white-space: nowrap;
+}
+
+.now {
+  grid-column: 2;
+  grid-row: 3;
+  align-self: end;
+  position: relative;
+  display: grid;
+  justify-items: end;
+  gap: var(--s-shell-space-2);
+  max-width: 44cqw;
+  text-align: right;
+}
+.track {
+  margin: 0;
+  font-size: var(--f-size-shell-title);
+  font-weight: 700;
+  color: var(--role-text-bright);
+  overflow-wrap: anywhere;
+  justify-self: end;
+}
+.detail, .note { margin: 0; color: var(--role-text-dim); overflow-wrap: anywhere; justify-self: end; }
+.why { display: block; color: var(--role-text); }
+
+/* The plain bar's bar, thin, along the foot of the view. */
+.bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+.bar > div { height: 8px; }
+
+/* Narrow: the track's lines go under the percentage. */
+@container (max-width: 560px) {
+  .now { grid-column: 1; grid-row: 4; justify-items: start; text-align: left; max-width: 100%; }
+  .track, .detail, .note { justify-self: start; }
+  .stage { grid-template-rows: auto 1fr auto auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .waveBox { animation: none; }
+}
