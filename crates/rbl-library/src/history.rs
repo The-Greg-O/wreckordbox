@@ -418,6 +418,15 @@ impl EditHistory {
         }
     }
 
+    /// Tells the Ledger of `assertions`, each a MyTag assignment the DJ set
+    /// by hand to the state it already had (wbx-29), as [`Self::assert`]
+    /// does for fields: no step of the history, told even when empty.
+    pub fn assert_tags(&mut self, assertions: Vec<crate::ledger::TagAssertion>, label: &'static str) {
+        if let Some(ledger) = &self.ledger {
+            ledger.assert_tags(&assertions, label);
+        }
+    }
+
     pub fn record(&mut self, edit: LibraryEdit, label: &'static str) {
         let ledger = self.ledger.as_ref().and_then(|ledger| ledger.record(Step::Edit, &edit, label, Link::default()));
         self.undo.push(HistoryEntry { edit, label, ledger });
@@ -635,14 +644,26 @@ impl crate::LibraryCore {
         asserting: bool,
         action: impl FnOnce(&mut rbl_db::write::Writer) -> Result<(T, LibraryEdit), DbError>,
     ) -> Result<(T, crate::Change), DbError> {
-        let _gate = self.edit_gate().lock();
-        let kind = touched.change_kind();
-        // The refresh's own failure is kept aside: the edit is made by then
-        // and goes into the history (and the Ledger) whatever it says.
         let preparation = crate::ledger::Preparation {
             asserting,
             ..crate::ledger::Preparation::touched(&touched)
         };
+        self.recorded_edit_prepared(host, touched, label, preparation, action)
+    }
+
+    /// [`Self::recorded_edit`] with the Ledger told `preparation`.
+    fn recorded_edit_prepared<T>(
+        &self,
+        host: &(impl crate::Host + ?Sized),
+        touched: Touched,
+        label: &'static str,
+        preparation: crate::ledger::Preparation,
+        action: impl FnOnce(&mut rbl_db::write::Writer) -> Result<(T, LibraryEdit), DbError>,
+    ) -> Result<(T, crate::Change), DbError> {
+        let _gate = self.edit_gate().lock();
+        let kind = touched.change_kind();
+        // The refresh's own failure is kept aside: the edit is made by then
+        // and goes into the history (and the Ledger) whatever it says.
         let (value, reversible, refreshed) = self.write_then_prepared(host, crate::History::Caller, &preparation, action, |db, (value, reversible)| {
             Ok((value, reversible, self.refresh_after_edit(host, db, touched)))
         })?;
@@ -692,6 +713,46 @@ impl crate::LibraryCore {
             }
         };
         self.history.lock().assert(unchanged, label);
+        Ok((value, change))
+    }
+
+    /// [`Self::asserting_edit`] for MyTags (wbx-29): `action` answers the
+    /// edit it made and every assignment of the DJ's selection it left as it
+    /// was (`TagAssertion`). The edit is one step of the history as usual
+    /// (only real changes); the assertions are told to the Ledger, no step.
+    /// The write's intent names `tracks`' MyTags as its recovery evidence and
+    /// is kept until the assertion is told, so a crash in between leaves a
+    /// barrier bounded to those tracks.
+    ///
+    /// Blocking.
+    pub fn asserting_tag_edit<T>(
+        &self,
+        host: &(impl crate::Host + ?Sized),
+        touched: Touched,
+        tracks: &[String],
+        label: &'static str,
+        action: impl FnOnce(
+            &mut rbl_db::write::Writer,
+        ) -> Result<(T, LibraryEdit, Vec<crate::ledger::TagAssertion>), DbError>,
+    ) -> Result<(T, crate::Change), DbError> {
+        let _gate = self.edit_gate().lock();
+        let preparation = crate::ledger::Preparation {
+            asserting: true,
+            fields: tracks.iter().map(|track| (track.clone(), "MyTags".to_owned())).collect(),
+            ..crate::ledger::Preparation::touched(&touched)
+        };
+        let made = self.recorded_edit_prepared(host, touched, label, preparation, |writer| {
+            let (value, edit, assertions) = action(writer)?;
+            Ok(((value, assertions), edit))
+        });
+        let ((value, assertions), change) = match made {
+            Ok(made) => made,
+            Err(error) => {
+                self.history.lock().assert_tags(Vec::new(), label);
+                return Err(error);
+            }
+        };
+        self.history.lock().assert_tags(assertions, label);
         Ok((value, change))
     }
 

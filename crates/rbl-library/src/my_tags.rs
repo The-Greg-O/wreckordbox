@@ -42,6 +42,27 @@ pub fn put_on_tracks(
     Ok(edits)
 }
 
+/// The members of a hand set of `tag` (`on` or off) on `tracks` that
+/// [`put_on_tracks`] left as they were, because they already were so: the
+/// DJ's assertion of each (wbx-29).
+#[must_use]
+pub fn unchanged(
+    tracks: &[String],
+    edits: &[TrackTagEdit],
+    tag: &str,
+    on: bool,
+) -> Vec<crate::ledger::TagAssertion> {
+    tracks
+        .iter()
+        .filter(|track| !edits.iter().any(|edit| edit.parts().track == **track))
+        .map(|track| crate::ledger::TagAssertion {
+            track: track.clone(),
+            tag: tag.to_owned(),
+            on,
+        })
+        .collect()
+}
+
 /// Puts back `edits`, last first, after a failure part of the way through
 /// an edit. One that cannot be put back is logged; the failure that led
 /// here is the one the caller reports.

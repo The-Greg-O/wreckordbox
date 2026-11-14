@@ -205,6 +205,13 @@ pub struct SetTags {
     /// Add "My Tag" to the "Comments" (#605), for a deck-facing dimension.
     #[serde(default)]
     pub comments: bool,
+    /// The DJ's deliberate selection (the window's panel, the CLI): each
+    /// MyTag of a deck-facing dimension it leaves as it was, on or off, is
+    /// the DJ's assertion of it (wbx-29), recorded when the request is the
+    /// DJ's, no step of the history. A selection equal to the track's is
+    /// then still recorded, as an assertion. Left out, nothing is asserted.
+    #[serde(default)]
+    pub assert: bool,
 }
 
 /// The answer of `intake.set_tags`.
@@ -819,7 +826,8 @@ fn set_tags(
         .cloned()
         .collect();
     let current = now.set.get(&dimension.id).cloned().unwrap_or_default();
-    if selection == current && set.drop_unmapped.is_empty() {
+    let asserted = set.assert && dimension.edit == EDIT_MY_TAG;
+    if selection == current && set.drop_unmapped.is_empty() && !asserted {
         return Ok((
             TagsSet {
                 changed: false,
@@ -829,6 +837,7 @@ fn set_tags(
             None,
         ));
     }
+    let unchanged = selection == current && set.drop_unmapped.is_empty();
     let changed = if dimension.edit == EDIT_MY_TAG {
         set_my_tags(
             library,
@@ -837,6 +846,7 @@ fn set_tags(
             &selection,
             &set.drop_unmapped,
             set.comments,
+            asserted,
         )?
     } else {
         set_fact(
@@ -850,15 +860,18 @@ fn set_tags(
     };
     // What the Ledger could not record, said; then the panel as it is now.
     let facts_not_recorded = not_recorded(library, stems, &set.id, &dimension.id);
-    stems.publish(
-        stems::events::SIDECAR_CHANGED,
-        json!(SidecarChanged {
-            track_id: set.id.clone(),
-            kind: dimension.id.clone(),
-            fact_id: None,
-            stale: Vec::new(),
-        }),
-    );
+    // An assertion of the selection as it was changes no Fact.
+    if !unchanged {
+        stems.publish(
+            stems::events::SIDECAR_CHANGED,
+            json!(SidecarChanged {
+                track_id: set.id.clone(),
+                kind: dimension.id.clone(),
+                fact_id: None,
+                stale: Vec::new(),
+            }),
+        );
+    }
     let resolved = Resolved::read(library, stems)?;
     let panel = panel_of(library, stems, &resolved, Some(&set.id))?;
     let mut facts_not_recorded = facts_not_recorded;
@@ -887,7 +900,7 @@ fn set_tags(
     }
     Ok((
         TagsSet {
-            changed: true,
+            changed: !unchanged,
             panel,
             facts_not_recorded,
         },
@@ -958,6 +971,7 @@ fn set_my_tags(
     selection: &[String],
     drop_unmapped: &[String],
     comments: bool,
+    assert: bool,
 ) -> Result<LibraryChanged, ServiceError> {
     let mut wanted: BTreeSet<String> = BTreeSet::new();
     for term in selection {
@@ -985,8 +999,9 @@ fn set_my_tags(
         .filter_map(|tag| tag.my_tag.clone())
         .collect();
     let track = track.to_owned();
+    let named = track.clone();
     let dropped: BTreeSet<String> = drop_unmapped.iter().cloned().collect();
-    let ((), changed) = library.recorded_edit(Touched::Tracks, TRACK_EDIT, move |writer| {
+    let write = move |writer: &mut rbl_db::write::Writer| {
         let held: Vec<String> = {
             let mut statement = writer.library().connection().prepare(
                 "SELECT MyTagID FROM djmdSongMyTag WHERE ContentID = ?1 AND rb_local_deleted = 0 ORDER BY TrackNo, ID",
@@ -1008,14 +1023,39 @@ fn set_my_tags(
             }
         }
         let (_, edit) = writer.set_my_tags_with_undo(&track, &next)?;
-        let tags = vec![edit];
+        // The dimension's MyTags the selection left as they were: on or off,
+        // each the DJ's choice when the selection is asserted (wbx-29).
+        let assertions: Vec<rbl_library::ledger::TagAssertion> = mapped
+            .iter()
+            .filter(|id| held.contains(*id) == next.contains(*id))
+            .map(|id| rbl_library::ledger::TagAssertion {
+                track: track.clone(),
+                tag: id.clone(),
+                on: next.contains(id),
+            })
+            .collect();
+        let tags: Vec<_> = std::iter::once(edit)
+            .filter(|edit| !edit.is_empty())
+            .collect();
         let comments = if comments {
             rbl_library::my_tags::refresh_comments(writer, std::slice::from_ref(&track), &tags)?
         } else {
             Vec::new()
         };
-        Ok(((), LibraryEdit::TrackTags { tags, comments }))
-    })?;
+        Ok(((), LibraryEdit::TrackTags { tags, comments }, assertions))
+    };
+    let ((), changed) = if assert {
+        library.asserting_tag_edit(
+            Touched::Tracks,
+            std::slice::from_ref(&named),
+            TRACK_EDIT,
+            write,
+        )?
+    } else {
+        library.recorded_edit(Touched::Tracks, TRACK_EDIT, move |writer| {
+            write(writer).map(|(value, edit, _)| (value, edit))
+        })?
+    };
     Ok(changed)
 }
 

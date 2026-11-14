@@ -64,6 +64,8 @@ pub fn set_tags(
             "version": version,
             "drop_unmapped": drop_unmapped,
             "comments": comments,
+            // A click of the panel: the DJ's selection (wbx-29).
+            "assert": true,
         }),
     )?
     .map_err(|error| {

@@ -36,6 +36,10 @@ use crate::{FactsReader, Result, Sidecar, Source, SourceKind};
 
 /// The service command whose MyTag edits are a projection's.
 pub const PROJECTION_COMMAND: &str = "projection.mytags.apply";
+/// The Ledger kind of the DJ's explicit assertion of MyTag assignments
+/// (wbx-29 review): the DJ setting each to the state it already had.
+/// Payload `{"assertions": [{"track", "tag", "on"}]}`; no step of Undo.
+pub const ASSERTION_KIND: &str = "my_tag_assertion";
 /// The `meta` key of an assignment's [`TagMark`], before `<track>:<tag>`.
 const MARK_KEY: &str = "projection_tag:";
 /// The first key after every mark key (`:` + 1 is `;`).
@@ -59,6 +63,13 @@ pub struct TagMark {
     pub rows: Vec<TagRow>,
     /// Whether the projection left the tag on.
     pub on: bool,
+    /// The Ledger entry of the write that left these rows (its intent's
+    /// identifier, which the entry takes when it is recorded). The mark is
+    /// evidence only while that entry, confirmed, is the assignment's latest
+    /// recorded write: a write cut off before its entry, or one whose entry
+    /// waits, leaves a mark that proves nothing (wbx-29 review). 0 for none.
+    #[serde(default)]
+    pub entry: i64,
     /// The Ledger's order position when it was left: a barrier after it is
     /// newer than the projection's write.
     pub seq: i64,
@@ -102,6 +113,44 @@ type TagEdit = (String, Vec<String>, Vec<String>);
 /// Per assignment: the states each step replaced, to go back to on Undo.
 type Stacks = HashMap<(String, String), Vec<(i64, Option<FieldState>)>>;
 
+/// What an entry of `kind` wrote, as `(track, tag, on)`: a `track_tags`
+/// edit writes each tag in exactly one of its `before` and `after`; an
+/// assertion writes each it names. `None` when the payload does not read.
+pub(crate) fn writes(kind: &str, payload: Option<&str>) -> Option<Vec<(String, String, bool)>> {
+    if kind == ASSERTION_KIND {
+        let payload: Value = serde_json::from_str(payload?).ok()?;
+        return payload["assertions"]
+            .as_array()?
+            .iter()
+            .map(|a| {
+                Some((
+                    a["track"].as_str()?.to_owned(),
+                    a["tag"].as_str()?.to_owned(),
+                    a["on"].as_bool()?,
+                ))
+            })
+            .collect();
+    }
+    let mut found = Vec::new();
+    for (track, before, after) in tag_edits(payload)? {
+        for tag in before.iter().filter(|tag| !after.contains(tag)) {
+            found.push((track.clone(), tag.clone(), false));
+        }
+        for tag in after.iter().filter(|tag| !before.contains(tag)) {
+            found.push((track.clone(), tag.clone(), true));
+        }
+    }
+    Some(found)
+}
+
+/// The tracks a MyTag entry names, when its payload reads.
+pub(crate) fn tracks_of(kind: &str, payload: Option<&str>) -> Option<Vec<String>> {
+    if kind == ASSERTION_KIND {
+        return writes(kind, payload).map(|w| w.into_iter().map(|(track, _, _)| track).collect());
+    }
+    tag_edits(payload).map(|edits| edits.into_iter().map(|(track, _, _)| track).collect())
+}
+
 /// `(track, before, after)` of each track a `track_tags` payload names;
 /// `None` when it does not read.
 fn tag_edits(payload: Option<&str>) -> Option<Vec<TagEdit>> {
@@ -127,6 +176,7 @@ fn tag_edits(payload: Option<&str>) -> Option<Vec<TagEdit>> {
 
 struct Row {
     id: i64,
+    kind: String,
     action: String,
     source: Source,
     command: Option<String>,
@@ -137,13 +187,14 @@ struct Row {
 fn rows(db: &Connection) -> Result<Vec<Row>> {
     let mut statement = db.prepare_cached(
         "SELECT id, action, source_kind, source_name, json_extract(command, '$.name'),
-                reverses, payload, command
-         FROM ledger WHERE store = 'library' AND kind = 'track_tags' ORDER BY id",
+                reverses, payload, kind
+         FROM ledger WHERE store = 'library' AND kind IN ('track_tags', ?1) ORDER BY id",
     )?;
     let rows = statement
-        .query_map([], |row| {
+        .query_map([ASSERTION_KIND], |row| {
             Ok(Row {
                 id: row.get(0)?,
+                kind: row.get(7)?,
                 action: row.get(1)?,
                 source: Source {
                     kind: SourceKind::from_stored(&row.get::<_, String>(2)?),
@@ -156,33 +207,6 @@ fn rows(db: &Connection) -> Result<Vec<Row>> {
         })?
         .collect::<rusqlite::Result<Vec<Row>>>()?;
     Ok(rows)
-}
-
-/// The `track_tags` entries whose payload does not read: barriers, bounded
-/// by the tracks their command names.
-fn unreadable(db: &Connection) -> Result<Vec<Barrier>> {
-    let mut statement = db.prepare_cached(
-        "SELECT id, payload, command FROM ledger
-         WHERE store = 'library' AND kind = 'track_tags' ORDER BY id",
-    )?;
-    let found = statement
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, Option<String>>(1)?,
-                row.get::<_, Option<String>>(2)?,
-            ))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?
-        .into_iter()
-        .filter(|(_, payload, _)| tag_edits(payload.as_deref()).is_none())
-        .map(|(seq, _, command)| Barrier {
-            seq,
-            tracks: tracks_named(command.as_deref()),
-            cleared: None,
-        })
-        .collect();
-    Ok(found)
 }
 
 fn marks(db: &Connection) -> Result<HashMap<(String, String), TagMark>> {
@@ -242,15 +266,12 @@ fn provenance(db: &Connection) -> Result<TagProvenance> {
                 }
             }
         };
-        let Some(edits) = tag_edits(row.payload.as_deref()) else {
+        // A payload that does not read is a barrier (`projection::barriers`).
+        let Some(written) = writes(&row.kind, row.payload.as_deref()) else {
             continue;
         };
-        for (track, before, after) in edits {
-            let written = before
-                .iter()
-                .filter(|tag| !after.contains(tag))
-                .chain(after.iter().filter(|tag| !before.contains(tag)));
-            for tag in written {
+        {
+            for (track, tag, on) in written {
                 let key = (track.clone(), tag.clone());
                 let current = provenance.assignments.get(&key).cloned();
                 let stack = stacks.entry(key.clone()).or_default();
@@ -284,7 +305,7 @@ fn provenance(db: &Connection) -> Result<TagProvenance> {
                         stack.push((*origin, current));
                         FieldState {
                             owner: owner.clone(),
-                            value: Value::Bool(after.contains(tag)),
+                            value: Value::Bool(on),
                             entry: row.id,
                         }
                     }
@@ -294,10 +315,7 @@ fn provenance(db: &Connection) -> Result<TagProvenance> {
             }
         }
     }
-    let mut barriers = crate::projection::barriers(db)?;
-    barriers.extend(unreadable(db)?);
-    barriers.sort_by_key(|barrier| barrier.seq);
-    provenance.barriers = barriers;
+    provenance.barriers = crate::projection::barriers(db)?;
     provenance.marks = marks(db)?;
     Ok(provenance)
 }
@@ -308,10 +326,10 @@ fn provenance(db: &Connection) -> Result<TagProvenance> {
 fn written_since(db: &Connection, watermark: i64, tracks: &[String]) -> Result<bool> {
     let mut statement = db.prepare_cached(
         "SELECT kind, payload, command FROM ledger
-         WHERE id > ?1 AND store = 'library' AND kind IN ('track_tags', 'unconfirmed')",
+         WHERE id > ?1 AND store = 'library' AND kind IN ('track_tags', ?2, 'unconfirmed')",
     )?;
     let rows = statement
-        .query_map(params![watermark], |row| {
+        .query_map(params![watermark, ASSERTION_KIND], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, Option<String>>(1)?,
@@ -321,8 +339,11 @@ fn written_since(db: &Connection, watermark: i64, tracks: &[String]) -> Result<b
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let named = |track: &str| tracks.iter().any(|t| t == track);
     Ok(rows.into_iter().any(|(kind, payload, command)| {
-        match (kind.as_str(), tag_edits(payload.as_deref())) {
-            ("track_tags", Some(edits)) => edits.iter().any(|(track, _, _)| named(track)),
+        let read = (kind != "unconfirmed")
+            .then(|| tracks_of(&kind, payload.as_deref()))
+            .flatten();
+        match read {
+            Some(found) => found.iter().any(|track| named(track)),
             _ => {
                 tracks_named(command.as_deref()).is_none_or(|found| found.iter().any(|t| named(t)))
             }
@@ -443,6 +464,45 @@ mod tests {
         assert_eq!(undone.owner, Owner::Original);
     }
 
+    /// The DJ's assertion of an assignment as it is (on or off) makes it the
+    /// DJ's, though no membership changed.
+    #[test]
+    fn an_assertion_makes_the_assignment_the_djs_on_or_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let sidecar = Sidecar::open(dir.path()).unwrap();
+        let dj = Source::new(SourceKind::Dj, "dj");
+        let run = sidecar.begin_run(&dj, "test").unwrap();
+        let payload = serde_json::json!({"assertions": [
+            {"track": "1", "tag": "a", "on": true},
+            {"track": "1", "tag": "b", "on": false},
+        ]});
+        sidecar
+            .append(&NewEntry {
+                id: None,
+                run,
+                store: Store::Library,
+                source: &dj,
+                at: None,
+                action: Action::Edit,
+                kind: ASSERTION_KIND,
+                label: "Track Edit",
+                command: None,
+                reverses: None,
+                part_of: None,
+                reversible: false,
+                format: 1,
+                payload: Some(&payload),
+            })
+            .unwrap();
+        let found = sidecar.tag_provenance().unwrap();
+        for (tag, on) in [("a", true), ("b", false)] {
+            let state = &found.assignments[&("1".to_owned(), tag.to_owned())];
+            assert_eq!((&state.owner, &state.value), (&Owner::Dj, &Value::Bool(on)));
+        }
+        assert!(found.barriers.is_empty());
+        assert!(sidecar.tags_written_since(0, &["1".into()]).unwrap());
+    }
+
     #[test]
     fn an_unreadable_mytag_entry_is_a_barrier_and_marks_read_back() {
         let dir = tempfile::tempdir().unwrap();
@@ -468,6 +528,7 @@ mod tests {
             }],
             on: true,
             seq: 2,
+            entry: 1,
         };
         sidecar
             .set_tag_marks(&[(("3".into(), "9".into()), mark.clone())])

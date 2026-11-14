@@ -61,6 +61,15 @@ pub struct Link {
     pub part_of: Option<i64>,
 }
 
+/// One MyTag assignment the DJ set by hand to the state it already had
+/// (wbx-29): `tag` on `track` (`on`) or off it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagAssertion {
+    pub track: String,
+    pub tag: String,
+    pub on: bool,
+}
+
 /// Bounded evidence for recovery if a recorded write dies before history.record.
 /// Empty targets mean no inference is safe, never “all tracks”.
 #[derive(Debug, Default)]
@@ -183,6 +192,16 @@ pub trait Ledger: Send + Sync {
     /// that means it says so: an ordinary write that changed nothing is
     /// never one. By default nothing is recorded.
     fn assert(&self, _edit: &LibraryEdit, _label: &str) -> Option<i64> {
+        None
+    }
+
+    /// Records an explicit assertion of MyTag assignments (wbx-29): the DJ
+    /// deliberately setting each of `assertions` (one track, one MyTag, on
+    /// or off) to the state it already has. No step of the history; told
+    /// only by a caller that means it, never because a write changed
+    /// nothing. Told even when empty, so a kept intent is settled. By
+    /// default nothing is recorded.
+    fn assert_tags(&self, _assertions: &[TagAssertion], _label: &str) -> Option<i64> {
         None
     }
 

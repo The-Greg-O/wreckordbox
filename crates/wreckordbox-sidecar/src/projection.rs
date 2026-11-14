@@ -101,6 +101,14 @@ pub struct Mark {
     /// barrier (wbx-xme review).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub field_seqs: BTreeMap<String, i64>,
+    /// Per column, the Ledger entry of the projection's write of THAT field
+    /// (its intent's identifier, which the entry takes when recorded). A
+    /// field's mark is evidence only while that entry, confirmed, is the
+    /// field's latest recorded write (wbx-29 review): a write cut off before
+    /// its entry leaves a mark that proves nothing. A column missing here
+    /// (a mark kept before) is no evidence.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub field_entries: BTreeMap<String, i64>,
 }
 
 impl Mark {
@@ -108,6 +116,13 @@ impl Mark {
     #[must_use]
     pub fn seq_of(&self, column: &str) -> i64 {
         self.field_seqs.get(column).copied().unwrap_or(self.seq)
+    }
+
+    /// The Ledger entry whose write left `column`'s value; `None` when the
+    /// mark does not say.
+    #[must_use]
+    pub fn entry_of(&self, column: &str) -> Option<i64> {
+        self.field_entries.get(column).copied()
     }
 }
 
@@ -196,10 +211,11 @@ pub(crate) fn barriers(db: &Connection) -> Result<Vec<Barrier>> {
     let mut found = Vec::new();
     let mut statement = db.prepare_cached(
         "SELECT id, kind, payload, command FROM ledger
-         WHERE store = 'library' AND kind IN ('unconfirmed', 'track') ORDER BY id",
+         WHERE store = 'library' AND kind IN ('unconfirmed', 'track', 'track_tags', ?1)
+         ORDER BY id",
     )?;
     let rows = statement
-        .query_map([], |row| {
+        .query_map([crate::mytag_projection::ASSERTION_KIND], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
                 row.get::<_, String>(1)?,
@@ -209,6 +225,18 @@ pub(crate) fn barriers(db: &Connection) -> Result<Vec<Barrier>> {
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     for (seq, kind, payload, command) in rows {
+        // A MyTag entry (wbx-29) that does not read is one too, listed and
+        // cleared like any other.
+        if kind != "unconfirmed" && kind != "track" {
+            if crate::mytag_projection::writes(&kind, payload.as_deref()).is_none() {
+                found.push(Barrier {
+                    seq,
+                    tracks: tracks_named(command.as_deref()),
+                    cleared: None,
+                });
+            }
+            continue;
+        }
         if kind == "unconfirmed" {
             // Its command's tracks, else those its recovery evidence named.
             let recovered = || listed(payload.as_deref(), "tracks", None);
@@ -389,6 +417,15 @@ fn provenance(db: &Connection, columns: &[&str]) -> Result<Provenance> {
     Ok(provenance)
 }
 
+/// The identifier of the newest open intent of a write answering `command`.
+pub(crate) fn open_intent_of(db: &Connection, command: &str) -> Result<Option<i64>> {
+    Ok(db.query_row(
+        "SELECT MAX(id) FROM ledger_intent WHERE json_extract(command, '$.name') = ?1",
+        [command],
+        |row| row.get(0),
+    )?)
+}
+
 /// Whether an entry newer than `watermark` could concern one of `tracks`.
 fn written_since(db: &Connection, watermark: i64, tracks: &[String]) -> Result<bool> {
     let mut statement = db.prepare_cached(
@@ -446,6 +483,13 @@ impl Sidecar {
             [],
             |row| row.get(0),
         )?)
+    }
+
+    /// The identifier of the open intent of a write answering `command`,
+    /// the newest: under the edit gate, the write in progress. Its Ledger
+    /// entry takes this identifier when it is recorded.
+    pub fn open_intent_of(&self, command: &str) -> Result<Option<i64>> {
+        open_intent_of(&self.db(), command)
     }
 
     /// Keeps `marks`, each replacing the track's earlier one, together.
@@ -567,6 +611,7 @@ mod tests {
             seq: 3,
             fields: BTreeMap::from([("Rating".to_owned(), 4)]),
             field_seqs: BTreeMap::new(),
+            field_entries: BTreeMap::from([("Rating".to_owned(), 9)]),
         };
         sidecar
             .set_projection_marks(&[("10001".into(), mark.clone())])

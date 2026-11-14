@@ -202,6 +202,8 @@ pub fn run(
                     "terms": terms,
                     "drop_unmapped": drop_unmapped,
                     "comments": comments,
+                    // Typed at the command line: the DJ's selection (wbx-29).
+                    "assert": true,
                 }),
             )?;
             Ok(if as_json {

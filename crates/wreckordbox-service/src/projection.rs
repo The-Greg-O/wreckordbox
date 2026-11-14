@@ -811,6 +811,14 @@ fn not_owned(one: &One<'_>) -> Option<&'static str> {
                 let Some(mark) = one.mark else {
                     return Some("written_since");
                 };
+                // The mark proves ownership only for the confirmed write it
+                // was made for: that entry must be the field's latest
+                // recorded write. A projection cut off after its write and
+                // before its entry left a mark that proves nothing, whatever
+                // barrier is cleared (wbx-29 review).
+                if mark.entry_of(one.field.column()) != Some(state.entry) {
+                    return Some("written_since");
+                }
                 let same_revision = one
                     .row
                     .is_some_and(|row| row.usn == mark.usn && row.updated_at == mark.updated_at);
@@ -1163,6 +1171,7 @@ fn carried(mark: &Mark, track: &str, barriers: &[Barrier]) -> Mark {
     let mut kept = Mark {
         fields: BTreeMap::new(),
         field_seqs: BTreeMap::new(),
+        field_entries: BTreeMap::new(),
         ..mark.clone()
     };
     for (column, value) in &mark.fields {
@@ -1175,6 +1184,9 @@ fn carried(mark: &Mark, track: &str, barriers: &[Barrier]) -> Mark {
         }
         kept.fields.insert(column.clone(), *value);
         kept.field_seqs.insert(column.clone(), at);
+        if let Some(entry) = mark.entry_of(column) {
+            kept.field_entries.insert(column.clone(), entry);
+        }
     }
     kept
 }
@@ -1209,11 +1221,17 @@ fn keep_marks(
                 )
                 .map_err(|e| e.to_string())?;
             // Only what `carried` kept, each with its own position.
-            let (fields, field_seqs) = p
+            let (fields, field_seqs, field_entries) = p
                 .mark
                 .as_ref()
                 .filter(|mark| mark.usn == p.row.usn && mark.updated_at == p.row.updated_at)
-                .map(|mark| (mark.fields.clone(), mark.field_seqs.clone()))
+                .map(|mark| {
+                    (
+                        mark.fields.clone(),
+                        mark.field_seqs.clone(),
+                        mark.field_entries.clone(),
+                    )
+                })
                 .unwrap_or_default();
             marks.insert(
                 track.clone(),
@@ -1223,6 +1241,7 @@ fn keep_marks(
                     seq: 0,
                     fields,
                     field_seqs,
+                    field_entries,
                 },
             );
         }
@@ -1230,8 +1249,10 @@ fn keep_marks(
             let column = p.change.field.column().to_owned();
             mark.fields
                 .insert(column.clone(), native_number(&p.change.after));
-            // Written now: its position is set below, under the gate.
+            // Written now: its position and entry are set below, under the
+            // gate.
             mark.field_seqs.remove(&column);
+            mark.field_entries.remove(&column);
             written_now.push((track.clone(), column));
         }
     }
@@ -1239,9 +1260,15 @@ fn keep_marks(
         .with_sidecar_wait(|open| -> Result<(), String> {
             let sidecar = open.ok_or("the Sidecar is not open")?;
             let seq = sidecar.ledger_position().map_err(|e| e.to_string())?;
+            // The entry this write's record will be: its intent's id.
+            let entry = sidecar
+                .open_intent_of(commands::PROJECTION_APPLY)
+                .map_err(|e| e.to_string())?
+                .ok_or("this write has no intent in the Ledger")?;
             for (track, column) in &written_now {
                 if let Some(mark) = marks.get_mut(track) {
                     mark.field_seqs.insert(column.clone(), seq);
+                    mark.field_entries.insert(column.clone(), entry);
                 }
             }
             let marks: Vec<(String, Mark)> = marks

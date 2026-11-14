@@ -1536,6 +1536,9 @@ fn the_djs_hand_set_of_a_selection_asserts_the_tracks_that_already_had_it() {
 #[path = "service_host/bulk_ledger.rs"]
 mod bulk_ledger;
 
+#[path = "service_host/mytag_assertions.rs"]
+mod mytag_assertions;
+
 #[path = "service_host/shutdown_admission.rs"]
 mod shutdown_admission;
 

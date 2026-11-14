@@ -100,7 +100,10 @@ fn text(report: &Report) -> String {
         }
     }
     for (name, list) in [
-        ("Held for review", &report.held),
+        (
+            "Held, in this report only (MyTag changes do not reach Review yet)",
+            &report.held,
+        ),
         ("The DJ's MyTags kept", &report.kept),
         ("Nowhere to put", &report.blocked),
     ] {

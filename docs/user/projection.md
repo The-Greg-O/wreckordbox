@@ -126,12 +126,23 @@ apply = 0.8      # or "wait"; no section waits
   or in rekordbox, is kept. Your Library's existing MyTags have no record
   at all, so they are all yours: `wreckordbox schema convert` turns them
   into your Facts without writing the Library, and projecting straight
-  after it changes nothing. From then on a projection only adds MyTags
-  your Facts call for where none was ever set, and changes again only what
-  it put on or took off itself.
+  after it takes nothing off and changes nothing you set, with one
+  exception it lists: when most of your tracks carry a child genre with
+  its parent, the converted schema says parents are shown, so a track that
+  carries a child alone gets its parent added (an `implied` change). It
+  waits for you unless the policy's `[mytags]` section allows it. From
+  then on a projection only adds MyTags your Facts call for where none was
+  ever set, and changes again only what it put on or took off itself.
+- **Confirming a MyTag is a choice.** Ticking a MyTag a track already has
+  (or taking off one it does not have) in the window, in Intake's tag
+  panel, or with `wreckordbox mytags assign|unassign ... --source dj`, is
+  recorded as yours, though nothing changes: a projection keeps it from
+  then on. In a selection, only the tracks that changed are the Undo step.
+- **After an Undo**, a MyTag the Undo took off stays off: the projection
+  does not put it back.
 - **Applying** is one Run by `tool:projection` (never yours), one entry
   in the Ledger and one step of Undo. Everything it changes is checked
   again and written in one transaction: if anything was written since the
   dry run, nothing is written.
-- Held changes are listed in the report's `held`; they do not reach the
-  review queue yet.
+- Held changes are listed in the report's `held` only; they do not reach
+  the review queue yet, and nothing there can accept them.

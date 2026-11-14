@@ -934,3 +934,310 @@ fn stored_tags(s: &Sandbox, track: &str) -> Vec<String> {
     });
     names
 }
+
+/// `(track, tag label, add|remove, reason)` of what is kept, sorted.
+fn kept_of(report: &Value) -> Vec<(String, String, String, String)> {
+    let mut kept = listed(report, "kept");
+    kept.sort();
+    kept
+}
+
+fn row(track: &str, label: &str, change: &str, reason: &str) -> (String, String, String, String) {
+    (track.into(), label.into(), change.into(), reason.into())
+}
+
+/// The DJ confirming a MyTag as it is (on, or off) is the DJ's choice,
+/// recorded as an assertion of that one assignment: by `mytags assign` or
+/// `unassign` as the DJ (a selection's unchanged members too, while only
+/// its changes are the Undo step), and by an unchanged selection in
+/// Intake's tag panel. A projection never changes it afterwards. The same
+/// set by a client that is not the DJ asserts nothing.
+#[test]
+fn the_djs_confirmation_of_a_mytag_as_it_is_is_theirs_and_a_projection_keeps_it() {
+    let Deck { s, uplifting, .. } = tagged_by_hand();
+    write_schema(&s, &placed_schema());
+    policy(&s, "[mytags]\napply = 0.5\n");
+    for track in ["10004", "10005", "10007", "10008"] {
+        fact(&s, track, "mood", &["uplifting"], "agent:tagger");
+    }
+    ok(&s, &["project", "--mytags"]);
+    // 10007's agent changes its mind: the projection takes Uplifting off.
+    fact(&s, "10007", "mood", &["dark"], "agent:tagger");
+    ok(&s, &["project", "--mytags"]);
+    assert_eq!(tags_of(&s, "10007"), ["Mood: Dark"]);
+
+    // The DJ puts Uplifting on 10004 (it is on) and 10006 (it is not).
+    let mixed = ok(
+        &s,
+        &[
+            "mytags", "assign", &uplifting, "10004", "10006", "--source", "dj",
+        ],
+    );
+    assert_eq!(mixed["changed"], 1, "{mixed}");
+    let shown = ok(&s, &["runs", "show", &mixed["run"]["id"].to_string()]);
+    let entries = shown["entries"].as_array().unwrap();
+    let mut kinds: Vec<&str> = entries
+        .iter()
+        .map(|e| e["kind"].as_str().unwrap())
+        .collect();
+    kinds.sort_unstable();
+    assert_eq!(kinds, ["my_tag_assertion", "track_tags"], "{shown}");
+    let of = |kind: &str| entries.iter().find(|e| e["kind"] == kind).unwrap();
+    // The Undo step holds the change only; the assertion is no step.
+    let change = of("track_tags");
+    assert_eq!(change["payload"]["tags"].as_array().unwrap().len(), 1);
+    assert_eq!(change["payload"]["tags"][0]["track"], "10006");
+    let assertion = of("my_tag_assertion");
+    assert_eq!(assertion["reversible"], false);
+    assert_eq!(
+        assertion["payload"]["assertions"],
+        json!([{"track": "10004", "tag": uplifting, "on": true}])
+    );
+    // The DJ takes Uplifting off 10007, where it already is off.
+    ok(
+        &s,
+        &["mytags", "unassign", &uplifting, "10007", "--source", "dj"],
+    );
+    // The DJ's tag panel, Mood on 10005 as it is: Uplifting, not Dark.
+    let panel = ok(
+        &s,
+        &[
+            "intake",
+            "tag",
+            "10005",
+            "mood",
+            "uplifting",
+            "--source",
+            "dj",
+        ],
+    );
+    assert_eq!(panel["changed"], false, "{panel}");
+    // Someone other than the DJ "puts" Uplifting on 10008, where it is: no
+    // assertion, nothing recorded.
+    let runs = ok(&s, &["runs", "list"])["total"].clone();
+    ok(&s, &["mytags", "assign", &uplifting, "10008"]);
+    assert_eq!(ok(&s, &["runs", "list"])["total"], runs);
+
+    for track in ["10004", "10005", "10008"] {
+        fact(&s, track, "mood", &["dark"], "agent:tagger");
+    }
+    fact(&s, "10007", "mood", &["uplifting"], "agent:tagger");
+    let dry = ok(&s, &["project", "--mytags", "--dry-run"]);
+    assert_eq!(
+        kept_of(&dry),
+        [
+            row("10004", "Uplifting", "remove", "set_by_dj"),
+            row("10005", "Dark", "add", "set_by_dj"),
+            row("10005", "Uplifting", "remove", "set_by_dj"),
+            row("10007", "Uplifting", "add", "set_by_dj"),
+        ],
+        "{dry}"
+    );
+    let mut planned = changes(&dry);
+    planned.sort();
+    assert_eq!(
+        planned,
+        [
+            ("10004".into(), "Dark".into(), "add".into(), false),
+            // The projection's own Dark, which the DJ did not confirm.
+            ("10007".into(), "Dark".into(), "remove".into(), false),
+            ("10008".into(), "Dark".into(), "add".into(), false),
+            ("10008".into(), "Uplifting".into(), "remove".into(), false),
+        ]
+    );
+}
+
+/// A DJ's selection cut off after its change was recorded and before its
+/// assertion was: the intent the assertion was to settle stays, and
+/// recovery makes it a barrier bounded to the selection's tracks, so the
+/// confirmed member is not taken over and other tracks still project.
+#[test]
+fn an_assertion_cut_off_after_its_change_leaves_a_barrier_over_its_tracks_only() {
+    let Deck { s, uplifting, .. } = tagged_by_hand();
+    write_schema(&s, &placed_schema());
+    policy(&s, "[mytags]\napply = 0.5\n");
+    for track in ["10004", "10005"] {
+        fact(&s, track, "mood", &["uplifting"], "agent:tagger");
+    }
+    ok(&s, &["project", "--mytags"]);
+    stop_service(&s);
+    let cut = with_env(
+        &s,
+        &[("WRECKORDBOX_LEDGER_FAULTS", "abort_before_assert")],
+        &[
+            "mytags", "assign", &uplifting, "10004", "10006", "--source", "dj",
+        ],
+    );
+    assert!(!cut.status.success());
+    let barriers = ok(&s, &["projection", "barriers"]);
+    let listed = barriers["barriers"].as_array().unwrap();
+    assert_eq!(listed.len(), 1, "{barriers}");
+    let tracks = listed[0]["tracks"].as_array().unwrap();
+    assert!(
+        tracks.contains(&json!("10004")) && tracks.contains(&json!("10006")),
+        "{barriers}"
+    );
+    assert!(!tracks.contains(&json!("10005")), "{barriers}");
+    for track in ["10004", "10005"] {
+        fact(&s, track, "mood", &["dark"], "agent:tagger");
+    }
+    let dry = ok(&s, &["project", "--mytags", "--dry-run"]);
+    assert!(
+        listed_has(&dry, "kept", "10004", "Uplifting", "provenance_incomplete"),
+        "{dry}"
+    );
+    assert!(changes(&dry).contains(&("10005".into(), "Uplifting".into(), "remove".into(), false)));
+}
+
+/// A second projection killed after its write and before its Ledger entry:
+/// its mark is no evidence, because the write it names was never
+/// confirmed. The assignment is not the projection's, before the DJ clears
+/// the barrier and after (clearing never hands anything to a projection).
+#[test]
+fn a_crash_during_a_second_projection_leaves_its_assignments_the_djs_cleared_or_not() {
+    let Deck { s, .. } = tagged_by_hand();
+    write_schema(&s, &placed_schema());
+    policy(&s, "[mytags]\napply = 0.5\n");
+    fact(&s, "10004", "mood", &["uplifting"], "agent:tagger");
+    ok(&s, &["project", "--mytags"]);
+    fact(&s, "10004", "mood", &["dark"], "agent:tagger");
+    stop_service(&s);
+    let crashed = with_env(
+        &s,
+        &[("WRECKORDBOX_LEDGER_FAULTS", "abort_after_write")],
+        &["project", "--mytags"],
+    );
+    assert!(!crashed.status.success());
+    fact(&s, "10004", "mood", &["uplifting"], "agent:tagger");
+    let dry = ok(&s, &["project", "--mytags", "--dry-run"]);
+    assert_eq!(changes(&dry), [], "{dry}");
+    let kept = kept_of(&dry);
+    assert_eq!(kept.len(), 2, "{dry}");
+    assert!(kept
+        .iter()
+        .any(|(_, label, change, _)| label == "Uplifting" && change == "add"));
+
+    let barriers = ok(&s, &["projection", "barriers"]);
+    let barrier = barriers["barriers"][0]["seq"].to_string();
+    ok(
+        &s,
+        &["projection", "acknowledge", &barrier, "--source", "dj"],
+    );
+    let cleared = ok(&s, &["project", "--mytags", "--dry-run"]);
+    assert_eq!(changes(&cleared), [], "{cleared}");
+    assert_eq!(kept_of(&cleared).len(), 2, "{cleared}");
+    assert_eq!(tags_of(&s, "10004"), ["Mood: Dark"]);
+}
+
+/// A MyTag entry of the Ledger whose payload cannot be read is a barrier
+/// like any other: `projection barriers` lists it, the DJ can clear it,
+/// and then the empty assignments it concerned may be filled.
+#[test]
+fn an_unreadable_mytag_entry_is_listed_and_cleared_as_a_barrier() {
+    let Deck { s, .. } = tagged_by_hand();
+    write_schema(&s, &placed_schema());
+    policy(&s, "[mytags]\napply = 0.5\n");
+    fact(&s, "10004", "mood", &["uplifting"], "agent:tagger");
+    stop_service(&s);
+    {
+        use wreckordbox_sidecar::ledger::{Action, NewEntry, Store};
+        let sidecar = wreckordbox_sidecar::Sidecar::open(&s.sidecar_dir()).unwrap();
+        let dj = wreckordbox_sidecar::Source::new(wreckordbox_sidecar::SourceKind::Dj, "dj");
+        let run = sidecar.begin_run(&dj, "a damaged entry").unwrap();
+        let command = json!({"name": "mytags.assign", "args": {"tracks": ["10004"]}});
+        let payload = json!({"tags": "not a list"});
+        sidecar
+            .append(&NewEntry {
+                id: None,
+                run,
+                store: Store::Library,
+                source: &dj,
+                at: None,
+                action: Action::Edit,
+                kind: "track_tags",
+                label: "Track Edit",
+                command: Some(&command),
+                reverses: None,
+                part_of: None,
+                reversible: true,
+                format: 1,
+                payload: Some(&payload),
+            })
+            .unwrap();
+    }
+    let barriers = ok(&s, &["projection", "barriers"]);
+    let listed = barriers["barriers"].as_array().unwrap();
+    assert_eq!(listed.len(), 1, "{barriers}");
+    assert_eq!(listed[0]["what"], "unreadable");
+    assert_eq!(listed[0]["tracks"], json!(["10004"]));
+    let dry = ok(&s, &["project", "--mytags", "--dry-run"]);
+    assert!(
+        listed_has(&dry, "kept", "10004", "Uplifting", "provenance_incomplete"),
+        "{dry}"
+    );
+    let seq = listed[0]["seq"].to_string();
+    ok(&s, &["projection", "acknowledge", &seq, "--source", "dj"]);
+    let dry = ok(&s, &["project", "--mytags", "--dry-run"]);
+    assert_eq!(
+        changes(&dry),
+        [("10004".into(), "Uplifting".into(), "add".into(), false)]
+    );
+}
+
+/// The round trip's one exception, shown and gated: where most tracks
+/// carry a child with its parent, the schema says parents are shown, so a
+/// track carrying a child alone gets its parent, listed as an implied
+/// change; it waits for the DJ until the policy allows MyTags, then applies.
+#[test]
+fn converting_then_projecting_adds_a_missing_parent_only_as_a_listed_held_or_allowed_change() {
+    let s = Sandbox::new();
+    let [_, _, _, sub_genre] = s.four_categories();
+    let house = s.create_my_tag_in(&sub_genre, "House");
+    let deep = s.create_my_tag_in(&sub_genre, "> Deep");
+    let techno = s.create_my_tag_in(&sub_genre, "Techno");
+    let hypnotic = s.create_my_tag_in(&sub_genre, "> Hypnotic");
+    for (index, tags) in [
+        (1, vec![house.as_str(), deep.as_str()]),
+        (2, vec![techno.as_str(), hypnotic.as_str()]),
+        (3, vec![deep.as_str()]),
+    ] {
+        s.detail_track(
+            index,
+            &common::Details {
+                my_tags: &tags,
+                ..common::Details::default()
+            },
+        );
+    }
+    let converted = ok(&s, &["schema", "convert"]);
+    assert_eq!(
+        converted["implied_parents"],
+        json!({"with_parent": 2, "without_parent": 1, "tag_parents": true})
+    );
+    let held = ok(&s, &["project", "--mytags", "--dry-run"]);
+    assert_eq!(changes(&held), []);
+    assert_eq!(
+        listed(&held, "held"),
+        [row("10003", "House", "add", "waits_for_dj")]
+    );
+    assert_eq!(held["held"][0]["implied"], true);
+    let text = s.cli(&["project", "--mytags", "--dry-run"]);
+    assert!(
+        text.stdout
+            .contains("Held, in this report only (MyTag changes do not reach Review yet): 1."),
+        "{}",
+        text.stdout
+    );
+    assert!(!text.stdout.contains("Held for review"), "{}", text.stdout);
+
+    policy(&s, "[mytags]\napply = 0.5\n");
+    let allowed = ok(&s, &["project", "--mytags"]);
+    assert_eq!(
+        changes(&allowed),
+        [("10003".into(), "House".into(), "add".into(), true)]
+    );
+    assert_eq!(
+        tags_of(&s, "10003"),
+        ["Sub-genre: > Deep", "Sub-genre: House"]
+    );
+}

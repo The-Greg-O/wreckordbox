@@ -220,7 +220,7 @@ pub struct Assignment {
     pub source: Source,
     pub confidence: f64,
     /// Why it is held (`waits_for_dj`, `below_confidence`), kept
-    /// (`set_by_dj`, `set_by_other`, `no_record`, `unrecorded_write`,
+    /// (`set_by_dj`, `set_by_other`, `no_record`, `unrecorded_write`, `undone`,
     /// `written_since`, `provenance_incomplete`, `unknown`) or blocked
     /// (`no_category`, `no_my_tag`, `ambiguous_my_tag`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -843,6 +843,11 @@ fn not_owned(
     match state.map(|state| &state.owner) {
         // Never recorded: a tag taken off in rekordbox leaves its row.
         None if !on && rows.iter().any(|row| !row.live) => Some("unrecorded_write"),
+        // Back to before any record by an Undo, with rows left: what the
+        // Undo left cannot be told from a later add and remove in rekordbox
+        // (nothing keeps the Undo's own rows), so the absence is the DJ's;
+        // the Undo was the DJ's act too (wbx-29 review).
+        Some(Owner::Original) if !on && !rows.is_empty() => Some("undone"),
         None | Some(Owner::Original) if !on => fill(),
         None | Some(Owner::Original) => Some("no_record"),
         Some(Owner::Unknown) => Some("unknown"),
@@ -852,6 +857,13 @@ fn not_owned(
             let Some(mark) = mark else {
                 return Some("written_since");
             };
+            // Evidence only for the confirmed write it was made for: that
+            // entry must be the assignment's latest recorded write. A write
+            // cut off before its entry left a mark that proves nothing,
+            // whatever barrier is cleared (wbx-29 review).
+            if state.map(|state| state.entry) != Some(mark.entry) {
+                return Some("written_since");
+            }
             let same: Vec<_> = rows.iter().map(as_mark).collect();
             if mark.rows != same || mark.on != on {
                 Some("written_since")
@@ -976,6 +988,7 @@ fn write(
                         rows: rows.iter().map(as_mark).collect(),
                         on: *on,
                         seq: 0,
+                        entry: 0,
                     },
                 ));
             }
@@ -1040,8 +1053,14 @@ fn keep_marks(stems: &Stems, mut marks: Vec<((String, String), TagMark)>) -> Res
         .with_sidecar_wait(|open| -> Result<(), String> {
             let sidecar = open.ok_or("the Sidecar is not open")?;
             let seq = sidecar.ledger_position().map_err(|e| e.to_string())?;
+            // The entry this write's record will be: its intent's id.
+            let entry = sidecar
+                .open_intent_of(commands::APPLY)
+                .map_err(|e| e.to_string())?
+                .ok_or("this write has no intent in the Ledger")?;
             for (_, mark) in &mut marks {
                 mark.seq = seq;
+                mark.entry = entry;
             }
             sidecar.set_tag_marks(&marks).map_err(|e| e.to_string())
         })
