@@ -131,6 +131,9 @@ struct PolicyFile {
     #[allow(dead_code, reason = "read and checked by the Energy projection")]
     prep_colour: Option<toml::Value>,
     mytags: Option<Rule>,
+    /// The large-Run backup threshold (wbx-25), checked by `large_run`.
+    #[allow(dead_code, reason = "read and checked by `large_run`")]
+    backup: Option<toml::Value>,
 }
 
 fn invalid_policy(dir: &Path, why: &str) -> ServiceError {
@@ -243,6 +246,10 @@ pub struct Unusable {
 /// What a MyTag projection did, or in a dry run would do.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Report {
+    /// The large-Run check (wbx-25): tracks counted, the threshold in
+    /// force and the backup taken first; only on an apply that wrote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub large_run: Option<crate::large_run::Checked>,
     pub dry_run: bool,
     /// Names exactly these changes under this policy and schema: give it
     /// to `projection.mytags.apply` as `expect`.
@@ -425,14 +432,15 @@ pub(crate) fn answer(
     stems: &Stems,
     request: &Request,
 ) -> (Option<LibraryChanged>, Result<Value, ServiceError>) {
-    match plan_or_apply(library, stems, request) {
+    let (changed, result) = match plan_or_apply(library, stems, request) {
         Ok((report, changed)) => (
             changed,
             serde_json::to_value(&report)
                 .map_err(|e| ServiceError::new(service_codes::SERVICE_FAILED, e.to_string())),
         ),
         Err((changed, error)) => (changed, Err(error)),
-    }
+    };
+    (changed, crate::large_run::answered(result))
 }
 
 fn plan_or_apply(
@@ -480,7 +488,12 @@ fn plan_or_apply(
     if planned.is_empty() {
         return Ok((report, None));
     }
+    let tracks: Vec<String> = planned.iter().map(|p| p.track.clone()).collect();
+    crate::large_run::before_write(library, stems, tracks.iter().cloned()).map_err(early)?;
     crate::projection::pause();
+    // The backup, if one was taken, is still of the moment before the
+    // write; the gate is held from here through the write (reentrant).
+    let _gate = crate::large_run::bound(library, stems, &tracks).map_err(early)?;
     let (changed, warnings) = write(library, stems, &planned, watermark)?;
     let mut report = report;
     report.warnings = warnings;
@@ -540,6 +553,7 @@ fn plan(
     let (facts, provenance) = read_sidecar(stems, &kinds)?;
 
     let mut report = Report {
+        large_run: None,
         dry_run,
         plan: String::new(),
         policy_file: dir.join(POLICY_FILE),

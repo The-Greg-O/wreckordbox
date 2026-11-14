@@ -348,8 +348,15 @@ pub fn validate_destination(directory: &Path, location: &rbl_db::LibraryLocation
 #[allow(clippy::too_many_lines, reason = "one linear backup pipeline; splitting it would hide the order writes happen in")]
 pub(crate) fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&str, u64, u64, &str) -> AppResult<()>) -> AppResult<String> {
     let _gate = state.edit_gate().lock();
-    let _files = state.analysis_write().lock();
     let location = state.location()?;
+    let destination = state.backup_destination();
+    let root = destination.as_path();
+    // A backup folder on a Stick is a Stick write (wbx-45.11), held for the
+    // whole backup: refused on a protected Stick before anything is written.
+    // In the lock order every backup writer keeps (wbx-25): the Library
+    // edit gate (above), then the Stick, then the analysis-file lock.
+    let access = crate::stick_guard::enter(state.backup_dir(), root)?;
+    let _files = state.analysis_write().lock();
     if pending(state.backup_dir()) {
         state.with_closed_reader(|| recover(state.backup_dir(), &location))?;
     }
@@ -357,12 +364,6 @@ pub(crate) fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&s
     let tree = analysis(&location);
     let art = artwork(&location);
     let wal = rbl_backup::sidecar(&location.master_db, "-wal");
-    let destination = state.backup_destination();
-    let root = destination.as_path();
-    // A backup folder on a Stick is a Stick write (wbx-45.11), held for the
-    // whole backup: refused on a protected Stick before anything is written.
-    // In the lock order: the Library edit gate (above), then the Stick.
-    let access = crate::stick_guard::enter(state.backup_dir(), root)?;
     // Checked again at every step of the copy, not only before the backup
     // is named (wbx-45.14): a Stick locked, ejected or replaced mid-copy
     // stops it at the next file or chunk, and nothing more is written.

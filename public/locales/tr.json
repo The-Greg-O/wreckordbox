@@ -1106,7 +1106,7 @@
   "Delete the backup from {date}? This cannot be undone.": "{date} tarihli yedekleme silinsin mi? Bu geri alınamaz.",
   "Backup deleted.": "Yedekleme silindi.",
   "Restore a backup": "Bir yedeği geri yükleme",
-  "To restore, quit wreckordbox and open wreckordbox Restore. It shows what each backup holds and lets you restore all of it or only some parts.": "Geri yüklemek için wreckordbox'tan çıkın ve wreckordbox Geri Yükleme'yi açın. Her bir yedeğin neleri tuttuğunu gösterir ve tamamını veya yalnızca bazı parçalarını geri yüklemenize olanak tanır.",
+  "To restore, quit wreckordbox and run wreckordbox backup restore with the backup's file in a terminal. It puts back the Library and the Sidecar together. Do not use the separate Restore app: it leaves the Sidecar out.": "Geri yüklemek için wreckordbox'tan çıkın ve bir terminalde yedeğin dosyasıyla wreckordbox backup restore komutunu çalıştırın. Kitaplık ve Sidecar birlikte geri yüklenir. Ayrı Restore uygulamasını kullanmayın: Sidecar'ı dışarıda bırakır.",
   "blue": "mavi",
   "rgb": "RGB",
   "3band": "3 bant",

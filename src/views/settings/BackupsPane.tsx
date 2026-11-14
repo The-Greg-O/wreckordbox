@@ -133,7 +133,7 @@ export function BackupsPane() {
     <section className={`${styles.destination} ${styles.restoreFile}`} aria-label={t("Restore a backup")}>
       <div>
         <h4 className={styles.sectionHeading}>{t("Restore a backup")}</h4>
-        <p className={layout.help}>{t("To restore, quit wreckordbox and open wreckordbox Restore. It shows what each backup holds and lets you restore all of it or only some parts.")}</p>
+        <p className={layout.help}>{t("To restore, quit wreckordbox and run wreckordbox backup restore with the backup's file in a terminal. It puts back the Library and the Sidecar together. Do not use the separate Restore app: it leaves the Sidecar out.")}</p>
       </div>
     </section>
   </Section>;

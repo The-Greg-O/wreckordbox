@@ -1108,7 +1108,7 @@
   "Delete the backup from {date}? This cannot be undone.": "Διαγραφή του αντιγράφου ασφαλείας από {date}; Αυτό δεν μπορεί να αναιρεθεί.",
   "Backup deleted.": "Το αντίγραφο ασφαλείας διαγράφηκε.",
   "Restore a backup": "Επαναφέρετε ένα αντίγραφο ασφαλείας",
-  "To restore, quit wreckordbox and open wreckordbox Restore. It shows what each backup holds and lets you restore all of it or only some parts.": "Για επαναφορά, κλείστε το wreckordbox και ανοίξτε το wreckordbox Restore. Δείχνει τι περιέχει κάθε αντίγραφο ασφαλείας και σας επιτρέπει να το επαναφέρετε όλο ή μόνο ορισμένα μέρη.",
+  "To restore, quit wreckordbox and run wreckordbox backup restore with the backup's file in a terminal. It puts back the Library and the Sidecar together. Do not use the separate Restore app: it leaves the Sidecar out.": "Για επαναφορά, κλείστε το wreckordbox και εκτελέστε σε ένα τερματικό wreckordbox backup restore με το αρχείο του αντιγράφου. Επαναφέρει μαζί τη βιβλιοθήκη και το Sidecar. Μη χρησιμοποιείτε την ξεχωριστή εφαρμογή Restore: παραλείπει το Sidecar.",
   "blue": "μπλε",
   "rgb": "rgb",
   "3band": "3 μπάντα",
