@@ -1,0 +1,312 @@
+//! Projection (wbx-26) in a service a front end hosts on its own Library
+//! core: a projection the window asks for is still a tool's, in its own
+//! Run, and makes no DJ Fact; the host hears of it; the window's Undo and
+//! Redo take it back and put it back in one step; ownership follows Undo,
+//! Redo and unrecorded writes; and a change made while a projection is
+//! being applied refuses it whole.
+//!
+//! One test, in a test binary of its own: the Sidecar's folder and the
+//! projection's test pause come from the environment, the process's.
+#![allow(
+    clippy::pedantic,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use rbl_db::fixture::{self, Shape};
+use rbl_library::history::TRACK_EDIT;
+use rbl_library::{History, LibraryCore, NoHost, Touched};
+use serde_json::{json, Value};
+use wreckordbox_service::projection::PAUSE_ENV;
+use wreckordbox_service::stems::SIDECAR_DIR_ENV;
+use wreckordbox_service::{Client, Config, Service};
+
+/// The window's hand setter, as `set_track_rating` makes it: a track that
+/// already has `stars` is the DJ's assertion of them (wbx-26).
+fn rate(core: &LibraryCore, track: &str, stars: u8) {
+    core.asserting_edit(
+        &NoHost,
+        Touched::Metadata(vec![track.to_owned()]),
+        TRACK_EDIT,
+        |writer| {
+            let (_, recorded) = writer.set_rating_with_undo(track, stars)?;
+            Ok(((), vec![recorded]))
+        },
+    )
+    .unwrap();
+}
+
+/// A write no one names: a player's, an import's (no Ledger entry).
+fn unrecorded(core: &LibraryCore, track: &str, stars: u8) {
+    core.edit(
+        &NoHost,
+        History::Outside,
+        Touched::Metadata(vec![track.to_owned()]),
+        |writer| writer.set_rating(track, stars),
+    )
+    .unwrap();
+}
+
+fn stars(core: &LibraryCore, track: &str) -> u8 {
+    let index = core.library().unwrap();
+    index.rating[index.row_of(track).unwrap() as usize]
+}
+
+#[test]
+fn a_projection_the_window_asks_for_is_a_tools_and_undoes_in_one_step() {
+    assert!(rbl_db::test_mode(), "run with RBXPORT_TEST=1");
+    let dir = tempfile::tempdir().unwrap();
+    let library = dir.path().join("library");
+    std::fs::create_dir_all(&library).unwrap();
+    let location = fixture::build(
+        &library,
+        Shape {
+            tracks: 10,
+            ..Shape::default()
+        },
+    )
+    .unwrap();
+    let sidecar = dir.path().join("sidecar");
+    std::fs::create_dir_all(&sidecar).unwrap();
+    std::fs::write(
+        sidecar.join("projection-policy.toml"),
+        "[energy]\napply = 0.5\n",
+    )
+    .unwrap();
+    std::env::set_var(SIDECAR_DIR_ENV, &sidecar);
+    let config = Config {
+        runtime_dir: dir.path().join("run"),
+        idle_exit: None,
+        recovery_dir: dir.path().join("recovery"),
+    };
+    let core = Arc::new(LibraryCore::new(config.recovery_dir.clone()));
+    core.set_protection(false).unwrap();
+    let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
+    let (index, _) = rbl_index::load(&db).unwrap();
+    core.set_library(
+        &NoHost,
+        index,
+        false,
+        db.schema().db_version,
+        0,
+        location.clone(),
+    );
+    let host: Arc<dyn rbl_library::Host + Send + Sync> = Arc::new(NoHost);
+    let service = Service::host(&location, &config, &core, &host).unwrap();
+    let events = service.events();
+    let [a, b, c, d] = [1, 2, 3, 4].map(fixture::track_id);
+    let record = |track: &str, value: u8, confidence: f64| {
+        service
+            .call(
+                "facts.record",
+                json!({"source": {"kind": "agent", "name": "tagger"},
+                    "facts": [{"track": track, "kind": "energy", "value": value,
+                    "confidence": confidence}]}),
+            )
+            .unwrap();
+    };
+    let project = || service.call("projection.apply", json!({}));
+    let kept_for = |track: &str| -> Option<String> {
+        let plan = service.call("projection.plan", json!({})).unwrap();
+        plan["kept"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|k| k["track"] == track && k["field"] == "energy")
+            .and_then(|k| k["reason"].as_str().map(str::to_owned))
+    };
+    let drain = || while events.recv_timeout(Duration::from_millis(100)).is_ok() {};
+
+    // The window asks for a projection, with nothing said about a Run.
+    record(&a, 3, 0.6);
+    drain();
+    let applied = project().unwrap();
+    assert_eq!(applied["changes"].as_array().unwrap().len(), 1, "{applied}");
+    assert_eq!(stars(&core, &a), 3);
+    // The host is told, as of any change it did not make itself.
+    let told = events.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_eq!(told.event, "library_changed");
+    // A tool's Run of its own, not the DJ's window Run.
+    let runs = service.call("runs.list", json!({})).unwrap();
+    assert_eq!(
+        runs["runs"][0]["source"],
+        json!({"kind": "tool", "name": "projection"}),
+        "{runs}"
+    );
+    // No DJ Fact: the agent's answer still stands.
+    let standing = service
+        .call("facts.standing", json!({"id": a, "kind": "energy"}))
+        .unwrap();
+    assert_eq!(
+        standing["standing"]["source"]["kind"], "agent",
+        "{standing}"
+    );
+
+    // While the row is still at the revision the projection's write left,
+    // the value is the projection's: a better Fact replaces it.
+    record(&a, 4, 0.7);
+    let applied = project().unwrap();
+    assert_eq!(applied["changes"][0]["before"], 3, "{applied}");
+    assert_eq!(applied["changes"][0]["after"], 4, "{applied}");
+    // One Undo takes that projection back in one step, and one Redo puts it
+    // back. Either is a write the projection did not make: the row is at
+    // another revision, and the value is the DJ's from then on.
+    core.step_history(&NoHost, true).unwrap();
+    assert_eq!(stars(&core, &a), 3);
+    core.step_history(&NoHost, false).unwrap();
+    assert_eq!(stars(&core, &a), 4);
+    record(&a, 5, 0.8);
+    assert_eq!(kept_for(&a), Some("written_since".into()));
+    project().unwrap();
+    assert_eq!(stars(&core, &a), 4);
+
+    // A write no Ledger entry records (a player's) takes the field from the
+    // projection, even when it puts the projected value back.
+    record(&b, 2, 0.6);
+    project().unwrap();
+    assert_eq!(stars(&core, &b), 2);
+    unrecorded(&core, &b, 1);
+    unrecorded(&core, &b, 2);
+    record(&b, 4, 0.9);
+    assert_eq!(kept_for(&b), Some("written_since".into()));
+    project().unwrap();
+    assert_eq!(stars(&core, &b), 2);
+
+    // No clock decides it. The same value written by a player with a clock
+    // stepped back (an earlier `updated_at`), or at the very millisecond the
+    // projection's write has (an equal one): another revision either way.
+    let [h, i, j] = [7, 8, 9].map(fixture::track_id);
+    for track in [&h, &i, &j] {
+        record(track, 3, 0.6);
+    }
+    project().unwrap();
+    let rewrite = |track: &str, stamp: Option<&str>| {
+        core.edit(&NoHost, History::Outside, Touched::Metadata(vec![track.to_owned()]), |writer| {
+            let sql = match stamp {
+                Some(_) => "UPDATE djmdContent SET Rating = 3, rb_local_usn = rb_local_usn + 1, updated_at = ?2 WHERE ID = ?1",
+                None => "UPDATE djmdContent SET Rating = 3, rb_local_usn = rb_local_usn + 1 WHERE ID = ?1 AND ?2 IS NULL",
+            };
+            writer
+                .library()
+                .connection()
+                .execute(sql, rusqlite::params![track, stamp])
+                .map(|_| ())
+                .map_err(rbl_db::DbError::from)
+        })
+        .unwrap();
+    };
+    rewrite(&h, Some("2000-01-01 00:00:00.000 +00:00"));
+    rewrite(&i, None);
+    unrecorded(&core, &j, 3);
+    for track in [&h, &i, &j] {
+        record(track, 5, 0.9);
+        assert_eq!(kept_for(track), Some("written_since".into()), "{track}");
+    }
+    project().unwrap();
+    for track in [&h, &i, &j] {
+        assert_eq!(stars(&core, track), 3, "{track}");
+    }
+
+    // The window's edit made while a projection is being applied: the DJ
+    // rating the track to the value it already has (no row changes, but
+    // an assertion) refuses the whole apply, and nothing is written.
+    record(&c, 2, 0.6);
+    project().unwrap();
+    record(&c, 4, 0.9);
+    record(&d, 3, 0.9);
+    std::env::set_var(PAUSE_ENV, "600");
+    let mut client = Client::connect(&config.socket_path(&location)).unwrap();
+    let applying = std::thread::spawn(move || client.call::<Value>("projection.apply", json!({})));
+    std::thread::sleep(Duration::from_millis(250));
+    rate(&core, &c, 2);
+    let refused = applying.join().unwrap().unwrap_err();
+    std::env::remove_var(PAUSE_ENV);
+    assert_eq!(refused.code, "projection_changed", "{refused:?}");
+    assert_eq!(stars(&core, &c), 2);
+    assert_eq!(stars(&core, &d), 0);
+    // And afterwards the DJ's 2 is kept: the assertion made it the DJ's
+    // Fact, which stands.
+    let standing = service
+        .call("facts.standing", json!({"id": c, "kind": "energy"}))
+        .unwrap();
+    assert_eq!(standing["standing"]["source"]["kind"], "dj", "{standing}");
+    assert_eq!(standing["standing"]["value"], 2, "{standing}");
+    let plan = service.call("projection.plan", json!({})).unwrap();
+    assert!(
+        plan["kept"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|k| k["track"] == c.as_str() && k["reason"] == "dj_fact"),
+        "{plan}"
+    );
+
+    // An in-process resend of the value the Library already holds, with no
+    // `assert`, is no assertion: no Run, no DJ Fact, and the projection's
+    // value stays the projection's to replace.
+    let g = fixture::track_id(6);
+    record(&g, 3, 0.6);
+    project().unwrap();
+    let runs_before = service.call("runs.list", json!({})).unwrap()["total"].clone();
+    service
+        .call("tracks.rate", json!({"id": g, "rating": 3}))
+        .unwrap();
+    assert_eq!(
+        service.call("runs.list", json!({})).unwrap()["total"],
+        runs_before
+    );
+    let standing = service
+        .call("facts.standing", json!({"id": g, "kind": "energy"}))
+        .unwrap();
+    assert_eq!(
+        standing["standing"]["source"]["kind"], "agent",
+        "{standing}"
+    );
+    record(&g, 4, 0.9);
+    let applied = project().unwrap();
+    assert!(
+        applied["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["track"] == g.as_str() && c["after"] == 4),
+        "{applied}"
+    );
+
+    // Undo and Redo, three times over: a projection's value never becomes
+    // the DJ's Fact, however long the chain; a DJ's edit stays the DJ's.
+    let (e, f) = (fixture::track_id(5), fixture::track_id(0));
+    let source_of = |track: &str| -> Value {
+        service
+            .call("facts.standing", json!({"id": track, "kind": "energy"}))
+            .unwrap()["standing"]["source"]["kind"]
+            .clone()
+    };
+    record(&e, 4, 0.9);
+    project().unwrap();
+    assert_eq!(stars(&core, &e), 4);
+    for cycle in 1..=3 {
+        core.step_history(&NoHost, true).unwrap();
+        assert_eq!(stars(&core, &e), 0, "undo {cycle}");
+        assert_eq!(source_of(&e), "agent", "after undo {cycle}");
+        core.step_history(&NoHost, false).unwrap();
+        assert_eq!(stars(&core, &e), 4, "redo {cycle}");
+        assert_eq!(source_of(&e), "agent", "after redo {cycle}");
+    }
+    rate(&core, &f, 2);
+    assert_eq!(source_of(&f), "dj");
+    for cycle in 1..=3 {
+        core.step_history(&NoHost, true).unwrap();
+        assert!(
+            source_of(&f).is_null(),
+            "the DJ's Fact withdrawn by undo {cycle}"
+        );
+        core.step_history(&NoHost, false).unwrap();
+        assert_eq!(source_of(&f), "dj", "the DJ's Fact back after redo {cycle}");
+    }
+    drop(service);
+}
