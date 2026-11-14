@@ -31,6 +31,7 @@
 //! `from`, `at_least`: every waiting Fact that matches all given), or
 //! `all: true`; for a reopening, also `rejection`.
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use rbl_db::write::checked::{CheckedField, Revision};
@@ -378,7 +379,10 @@ fn digest(rows: &[Held]) -> String {
 /// The token of a listing: its filter, hex-encoded, and its rows' digest.
 fn token_of(filter: &Selection, rows: &[Held]) -> String {
     let filter = serde_json::to_vec(&filter_of(filter)).unwrap_or_default();
-    let hex: String = filter.iter().map(|b| format!("{b:02x}")).collect();
+    let hex = filter.iter().fold(String::new(), |mut hex, b| {
+        let _ = write!(hex, "{b:02x}");
+        hex
+    });
     format!("{hex}.{}", digest(rows))
 }
 
@@ -687,43 +691,7 @@ fn accept(
         let mut done = Vec::with_capacity(chosen.len());
         let mut failure: Option<DbError> = None;
         for (at, held) in chosen.iter().enumerate() {
-            let expect = expected.get(&held.track).cloned();
-            let now = read_row(writer.library(), &held.track);
-            let unchanged = now == expect;
-            // Test: after the last comparison, before the write.
-            hold("write");
-            let wrote = match (unchanged, expect.as_ref()) {
-                (false, _) | (_, None) => Err(refused(format!(
-                    "track {} was written while the accept was being made",
-                    held.track
-                ))),
-                _ if fails_at(at + 1) => Err(DbError::WriteRefused(
-                    "a test failure (review fail-at)".into(),
-                )),
-                (true, Some(row)) => {
-                    let after = u8::try_from(native_number(&held.after)).unwrap_or(0);
-                    let field = match held.field {
-                        Field::Energy => CheckedField::Rating(after),
-                        Field::PrepColour => CheckedField::Colour(after),
-                    };
-                    // The comparison and the write in one transaction: a
-                    // write committed after the check above is never
-                    // overwritten.
-                    writer
-                        .set_track_if_unchanged(
-                            &held.track,
-                            field,
-                            &Revision {
-                                usn: row.usn,
-                                updated_at: row.updated_at.clone(),
-                            },
-                        )
-                        .map_err(|e| match e {
-                            DbError::Conflict(why) => refused(why),
-                            other => other,
-                        })
-                }
-            };
+            let wrote = write_one(writer, held, expected.get(&held.track), at + 1);
             match wrote {
                 Ok((_, edit)) => {
                     done.push(edit);
@@ -776,6 +744,56 @@ fn accept(
         ))),
         Err(e) => Err(early(e)),
     }
+}
+
+/// Writes the `n`-th chosen value through the checked setter: only while
+/// its row is at the revision `expected` read, compared again here and
+/// then compared and written in one transaction, so a write committed by
+/// another connection after the last read is never overwritten.
+fn write_one(
+    writer: &mut rbl_db::write::Writer,
+    held: &Held,
+    expected: Option<&Row>,
+    n: usize,
+) -> Result<(rbl_db::write::Changed, rbl_db::write::TrackEdit), DbError> {
+    let changed = || {
+        DbError::WriteRefused(format!(
+            "{CHANGED_MARK}track {} was written while the accept was being made",
+            held.track
+        ))
+    };
+    let Some(row) = expected else {
+        return Err(changed());
+    };
+    let unchanged = read_row(writer.library(), &held.track).as_ref() == Some(row);
+    // Test: after the last comparison, before the write's transaction.
+    hold("write");
+    if !unchanged {
+        return Err(changed());
+    }
+    if fails_at(n) {
+        return Err(DbError::WriteRefused(
+            "a test failure (review fail-at)".into(),
+        ));
+    }
+    let after = u8::try_from(native_number(&held.after)).unwrap_or(0);
+    let field = match held.field {
+        Field::Energy => CheckedField::Rating(after),
+        Field::PrepColour => CheckedField::Colour(after),
+    };
+    writer
+        .set_track_if_unchanged(
+            &held.track,
+            field,
+            &Revision {
+                usn: row.usn,
+                updated_at: row.updated_at.clone(),
+            },
+        )
+        .map_err(|e| match e {
+            DbError::Conflict(why) => DbError::WriteRefused(format!("{CHANGED_MARK}{why}")),
+            other => other,
+        })
 }
 
 /// Every Fact of the chosen fields on the chosen tracks, as it stands:
