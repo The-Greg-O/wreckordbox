@@ -310,7 +310,8 @@ function HoldDialog({ path, name, spare, protection, title, lines, answer }: Ask
     if (wasInterrupted) setInterrupted(true);
   }, []);
 
-  useEffect(() => { cancelButton.current?.focus(); }, []);
+  // A Gig stick asks for its name first: the field has the focus (wbx-cbh).
+  useEffect(() => { (dialog.current?.querySelector<HTMLElement>("[data-stick-unlock-name]") ?? cancelButton.current)?.focus(); }, []);
   // Settled as cancelled if the dialog goes without an answer (replaced, or
   // the window closing). Checked a moment later, so that React's own
   // unmount-and-mount of a new component in development is not taken for one.
