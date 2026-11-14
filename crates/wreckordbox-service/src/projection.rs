@@ -24,7 +24,8 @@
 //! another revision, and the value is then the DJ's. An empty field nothing
 //! recorded wrote may be filled. Incomplete provenance (an unsettled
 //! intent, an unconfirmed write, an unreadable entry) that could concern a
-//! track is a barrier: its fields are the DJ's. Everything that is not the
+//! track is a barrier: its fields are the DJ's (the DJ may clear one,
+//! `projection_barriers`, after which only its empty fields may be filled). Everything that is not the
 //! projection's is kept and, when a Fact disagrees, reported. Ownership is
 //! checked again under the edit gate: if a track's row or its Ledger
 //! provenance changed since the plan, the whole apply is refused and
@@ -409,7 +410,8 @@ struct Planned {
     change: Change,
     /// The track row's `updated_at` and USN when the plan was made.
     row: RowStamp,
-    /// The track's mark then, whose other fields a new mark keeps.
+    /// The track's mark then, holding only the fields a new mark may keep
+    /// ([`carried`]).
     mark: Option<Mark>,
 }
 
@@ -478,10 +480,23 @@ fn plan_or_apply(
     Ok((report, Some(changed)))
 }
 
-/// The test pause between plan and write ([`PAUSE_ENV`]).
+/// A folder in which `projection.apply`, between making its plan and
+/// writing it, makes a file `paused` and then waits until a file `go`
+/// appears (at most 30 seconds), so a test can change something at exactly
+/// that point and then let it go on. Read only in test mode.
+pub const GATE_ENV: &str = "WRECKORDBOX_PROJECTION_GATE";
+
+/// The test pause between plan and write ([`GATE_ENV`], [`PAUSE_ENV`]).
 fn pause() {
     if !rbl_db::test_mode() {
         return;
+    }
+    if let Some(gate) = std::env::var_os(GATE_ENV).map(PathBuf::from) {
+        let _ = std::fs::write(gate.join("paused"), b"");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !gate.join("go").exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
     }
     if let Some(ms) = std::env::var(PAUSE_ENV)
         .ok()
@@ -667,7 +682,10 @@ fn plan(
                 planned.push(Planned {
                     change,
                     row: stamp,
-                    mark: provenance.marks.get(&track).cloned(),
+                    mark: provenance
+                        .marks
+                        .get(&track)
+                        .map(|mark| carried(mark, &track, &provenance.barriers)),
                 });
             }
         }
@@ -705,13 +723,19 @@ struct One<'a> {
 /// account for came after it. Anything else is the DJ's. No clock is read:
 /// a revision is equal or it is not.
 fn not_owned(one: &One<'_>) -> Option<&'static str> {
-    let barred = |after: i64| {
-        one.barriers
-            .iter()
-            .any(|barrier| barrier.seq > after && barrier.concerns(one.track))
+    // Whether a barrier after `after` could concern the track; with
+    // `cleared`, counting those the DJ cleared too.
+    let barred = |after: i64, cleared: bool| {
+        one.barriers.iter().any(|barrier| {
+            barrier.seq > after
+                && barrier.concerns(one.track)
+                && (cleared || barrier.cleared.is_none())
+        })
     };
+    // An empty field may be filled once the DJ has cleared every barrier
+    // that could concern it (wbx-xme); clearing makes nothing else fillable.
     let empty = || {
-        if barred(0) {
+        if barred(0, false) {
             Some("provenance_incomplete")
         } else {
             None
@@ -737,7 +761,9 @@ fn not_owned(one: &One<'_>) -> Option<&'static str> {
                     mark.fields.get(one.field.column()) == Some(&native_number(&one.native));
                 if !same_revision || !same_value {
                     Some("written_since")
-                } else if barred(mark.seq) {
+                } else if barred(mark.seq_of(one.field.column()), true) {
+                    // Cleared or not: the cleared write may have been made
+                    // after this projection, so the value is the DJ's.
                     Some("provenance_incomplete")
                 } else {
                     None
@@ -1041,6 +1067,32 @@ fn write(
     }
 }
 
+/// What of `mark` a refreshed mark may keep: each field with its own
+/// position, and only while no barrier after that position could concern
+/// `track`, cleared or not. A field a barrier came after is the DJ's from
+/// then on; carrying it into a newer mark would hand it back (wbx-xme
+/// review: filling an empty Prep colour after a cleared barrier must not
+/// make the Energy under it the projection's again).
+fn carried(mark: &Mark, track: &str, barriers: &[Barrier]) -> Mark {
+    let mut kept = Mark {
+        fields: BTreeMap::new(),
+        field_seqs: BTreeMap::new(),
+        ..mark.clone()
+    };
+    for (column, value) in &mark.fields {
+        let at = mark.seq_of(column);
+        if barriers
+            .iter()
+            .any(|barrier| barrier.seq > at && barrier.concerns(track))
+        {
+            continue;
+        }
+        kept.fields.insert(column.clone(), *value);
+        kept.field_seqs.insert(column.clone(), at);
+    }
+    kept
+}
+
 /// Keeps a [`Mark`] for each track `written` changed: the row's revision as
 /// read back on the writer's connection, the Ledger position, and the
 /// values written, with the fields of the track's earlier mark when the row
@@ -1051,6 +1103,7 @@ fn keep_marks(
     written: &[Planned],
 ) -> Result<(), String> {
     let mut marks: BTreeMap<String, Mark> = BTreeMap::new();
+    let mut written_now: Vec<(String, String)> = Vec::new();
     for p in written {
         let track = &p.change.track;
         if !marks.contains_key(track) {
@@ -1069,11 +1122,12 @@ fn keep_marks(
                     },
                 )
                 .map_err(|e| e.to_string())?;
-            let fields = p
+            // Only what `carried` kept, each with its own position.
+            let (fields, field_seqs) = p
                 .mark
                 .as_ref()
                 .filter(|mark| mark.usn == p.row.usn && mark.updated_at == p.row.updated_at)
-                .map(|mark| mark.fields.clone())
+                .map(|mark| (mark.fields.clone(), mark.field_seqs.clone()))
                 .unwrap_or_default();
             marks.insert(
                 track.clone(),
@@ -1082,20 +1136,28 @@ fn keep_marks(
                     updated_at: row.updated_at,
                     seq: 0,
                     fields,
+                    field_seqs,
                 },
             );
         }
         if let Some(mark) = marks.get_mut(track) {
-            mark.fields.insert(
-                p.change.field.column().to_owned(),
-                native_number(&p.change.after),
-            );
+            let column = p.change.field.column().to_owned();
+            mark.fields
+                .insert(column.clone(), native_number(&p.change.after));
+            // Written now: its position is set below, under the gate.
+            mark.field_seqs.remove(&column);
+            written_now.push((track.clone(), column));
         }
     }
     stems
         .with_sidecar_wait(|open| -> Result<(), String> {
             let sidecar = open.ok_or("the Sidecar is not open")?;
             let seq = sidecar.ledger_position().map_err(|e| e.to_string())?;
+            for (track, column) in &written_now {
+                if let Some(mark) = marks.get_mut(track) {
+                    mark.field_seqs.insert(column.clone(), seq);
+                }
+            }
             let marks: Vec<(String, Mark)> = marks
                 .into_iter()
                 .map(|(track, mark)| (track, Mark { seq, ..mark }))
