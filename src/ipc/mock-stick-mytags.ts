@@ -1,4 +1,4 @@
-import type { RowDto, TagCategory, TagPick } from "./types";
+import type { RowDto, RowMyTag, TagCategory, TagPick } from "./types";
 
 /**
  * The mock Stick's own MyTags (wbx-45.12), in both of its libraries, as the
@@ -40,4 +40,16 @@ export function passesStickTags(row: RowDto, picks: readonly TagPick[] | undefin
     const has = (tag: string) => category !== undefined && category.tags.includes(tag) && carried.includes(`${category.name}: ${tag}`);
     return pick.any ? pick.tags.some(has) : pick.tags.every(has);
   });
+}
+
+/**
+ * A Stick row's `myTags` field (wbx-f7y), as the Rust side sends it: each
+ * of the Stick's own tags the track carries, with an id and its category,
+ * in the Stick's order.
+ */
+export function stickRowMyTags(row: RowDto): RowMyTag[] {
+  const carried = CARRIED.get(row.title) ?? [];
+  return STICK_MY_TAGS.flatMap((category, at) => category.tags
+    .filter((tag) => carried.includes(`${category.name}: ${tag}`))
+    .map((tag) => ({ id: `stick-${at}-${category.tags.indexOf(tag)}`, name: tag, category: category.name })));
 }

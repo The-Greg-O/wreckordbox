@@ -42,7 +42,7 @@ pub struct DeviceRow {
     /// Cues read from this device library when the view was opened.
     pub cues: Vec<Cue>,
     /// The ids of the Stick's own `MyTags` the track carries, read beside the
-    /// Stick's library when a filter picks tags (wbx-45.12).
+    /// Stick's library (wbx-45.12); named by [`DeviceView::tags`] (wbx-f7y).
     pub my_tags: Vec<i32>,
 }
 
@@ -50,6 +50,18 @@ pub struct DeviceRow {
 #[derive(Debug, Default)]
 pub struct DeviceView {
     pub rows: Vec<DeviceRow>,
+    /// The Stick's own `MyTags` in its order, which name the ids its rows
+    /// carry (wbx-f7y); empty where they were not read.
+    pub tags: Vec<DeviceTag>,
+}
+
+/// One of a Stick's own `MyTags`, as its list names it (wbx-f7y).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceTag {
+    pub id: i32,
+    pub name: String,
+    /// The name of its category.
+    pub category: String,
 }
 
 impl DeviceView {
@@ -85,7 +97,7 @@ impl DeviceView {
         if spec.descending {
             rows.reverse();
         }
-        Self { rows }
+        Self { rows, tags: Vec::new() }
     }
 
     /// [`open`](Self::open), narrowed first by the view shell's Track Filter
