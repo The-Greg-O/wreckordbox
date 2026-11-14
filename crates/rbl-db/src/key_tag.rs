@@ -240,8 +240,8 @@ fn temp_beside(path: &Path) -> PathBuf {
 }
 
 fn temp_at(path: &Path, stamp: u128) -> PathBuf {
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let counter = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     path.with_file_name(format!(".{name}{TEMP_TAG}{}-{stamp}-{counter}.tmp", std::process::id()))
 }

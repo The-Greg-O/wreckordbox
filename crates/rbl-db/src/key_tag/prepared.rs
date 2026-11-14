@@ -22,6 +22,12 @@ pub enum Outcome {
     Skipped(KeySwap),
 }
 
+#[derive(Clone, Copy)]
+enum Expected<'a> {
+    Any,
+    Value(Option<&'a str>),
+}
+
 pub struct Prepared {
     requested: PathBuf,
     path: PathBuf,
@@ -76,7 +82,13 @@ pub fn prepare_checked(
     key: Option<&str>,
     authorize: impl Fn() -> io::Result<()>,
 ) -> Result<Outcome> {
-    prepare_inner(path, expected, key, authorize, None)
+    prepare_inner(
+        path,
+        expected.map_or(Expected::Any, Expected::Value),
+        key,
+        authorize,
+        None,
+    )
 }
 
 /// Simulates a filesystem without exchange during off-gate preparation.
@@ -88,12 +100,18 @@ pub fn prepare_with_exchange_error_for_test(
     kind: io::ErrorKind,
 ) -> Result<Outcome> {
     assert!(crate::test_mode());
-    prepare_inner(path, expected, key, || Ok(()), Some(kind))
+    prepare_inner(
+        path,
+        expected.map_or(Expected::Any, Expected::Value),
+        key,
+        || Ok(()),
+        Some(kind),
+    )
 }
 
 fn prepare_inner(
     path: &Path,
-    expected: Option<Option<&str>>,
+    expected: Expected<'_>,
     key: Option<&str>,
     authorize: impl Fn() -> io::Result<()>,
     exchange_error: Option<io::ErrorKind>,
@@ -117,7 +135,7 @@ fn prepare_inner(
         ));
     }
     let before = read_key(&path)?;
-    if expected.is_some_and(|expected| expected != before.as_deref()) {
+    if matches!(expected, Expected::Value(value) if value != before.as_deref()) {
         return Ok(Outcome::Skipped(KeySwap::Changed { found: before }));
     }
     cleanup::cleanup_stale_checked(&path, &authorize)?;
