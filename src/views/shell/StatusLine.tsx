@@ -5,6 +5,7 @@ import { useTranslation } from "@/i18n";
 import { useServiceActivity } from "./useServiceActivity";
 import styles from "./StatusLine.module.css";
 import { ThemeFileStatus } from "./ThemeFileStatus";
+import { UnderrunCount } from "@/views/topbar/UnderrunCount";
 
 /** Shared by all four views, so a view switch never resets background work. */
 export function StatusLine(props: StatusBarProps) {
@@ -33,6 +34,7 @@ export function StatusLine(props: StatusBarProps) {
       {runText && <span className={styles.runs} title={runs.map(run => run.description).join("\n")}>{runText}</span>}
       </span>
       {problem && <span className={styles.problem} role="alert" title={problem}>{t(problem)}</span>}
+      <UnderrunCount />
       {(props.sticks ?? []).map((stick) => <button type="button" key={stick.path} className={styles.clip}
         data-stick-protection={stick.protected ? "protected" : "unlocked"}
         title={stick.protected ? t("Nothing is written to {name} until it is unlocked", { name: stick.name }) : t("{name} is unlocked until it is ejected or removed", { name: stick.name })}

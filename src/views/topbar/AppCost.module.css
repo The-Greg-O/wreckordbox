@@ -1,5 +1,0 @@
-/* The underrun count turns to the error colour once the device has lost any
-   audio, so a stutter is visible at a glance. */
-.underruns[data-lost="true"] {
-  color: var(--c-error);
-}

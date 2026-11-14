@@ -17,6 +17,7 @@ import type { VuDisplay } from "@/lib/vuMeter";
  */
 import { GearIcon } from "@/components/icons";
 import { useAppCost } from "@/store/useDiagnostics";
+import { UnderrunCount } from "./UnderrunCount";
 import { VolumeKnob } from "./VolumeKnob";
 import type { PlayerLayout } from "@/lib/layout";
 import { LayoutMenu } from "./LayoutMenu";
@@ -116,6 +117,7 @@ export function TopBar({
       </div>
 
       <AudioDropoutMeter audioLoad={audioLoad} />
+      <UnderrunCount />
 
       <span className={styles.clock} data-testid="clock">{clock}</span>
     </header>
