@@ -33,6 +33,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+use rbl_db::write::checked::{CheckedField, Revision};
 use rbl_db::DbError;
 use rbl_library::Touched;
 use serde::{Deserialize, Serialize};
@@ -691,24 +692,36 @@ fn accept(
             let unchanged = now == expect;
             // Test: after the last comparison, before the write.
             hold("write");
-            let wrote = if !unchanged {
-                Err(refused(format!(
+            let wrote = match (unchanged, expect.as_ref()) {
+                (false, _) | (_, None) => Err(refused(format!(
                     "track {} was written while the accept was being made",
                     held.track
-                )))
-            } else if fails_at(at + 1) {
-                Err(DbError::WriteRefused(
+                ))),
+                _ if fails_at(at + 1) => Err(DbError::WriteRefused(
                     "a test failure (review fail-at)".into(),
-                ))
-            } else {
-                let after = native_number(&held.after);
-                match held.field {
-                    Field::Energy => {
-                        writer.set_rating_with_undo(&held.track, u8::try_from(after).unwrap_or(0))
-                    }
-                    Field::PrepColour => {
-                        writer.set_color_with_undo(&held.track, Some(&after.to_string()))
-                    }
+                )),
+                (true, Some(row)) => {
+                    let after = u8::try_from(native_number(&held.after)).unwrap_or(0);
+                    let field = match held.field {
+                        Field::Energy => CheckedField::Rating(after),
+                        Field::PrepColour => CheckedField::Colour(after),
+                    };
+                    // The comparison and the write in one transaction: a
+                    // write committed after the check above is never
+                    // overwritten.
+                    writer
+                        .set_track_if_unchanged(
+                            &held.track,
+                            field,
+                            &Revision {
+                                usn: row.usn,
+                                updated_at: row.updated_at.clone(),
+                            },
+                        )
+                        .map_err(|e| match e {
+                            DbError::Conflict(why) => refused(why),
+                            other => other,
+                        })
                 }
             };
             match wrote {
