@@ -101,6 +101,8 @@ fn watched(root: &Path) -> Vec<PathBuf> {
         let export = root.join(name);
         for file in [
             "rekordbox/export.pdb",
+            // The Device Library's MyTags (wbx-45.12).
+            "rekordbox/exportExt.pdb",
             "rekordbox/exportLibrary.db",
             "rekordbox/exportLibrary.db-wal",
             "DEVSETTING.DAT",
