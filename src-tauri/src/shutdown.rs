@@ -28,8 +28,12 @@
 //! every write with [`CLOSING`], checked under the edit gate, so an edit
 //! queued behind another is refused too), the window cannot host a service
 //! again ([`AppState::host_service`] refuses), and no new service command
-//! is handed a caller. Edits already under way finish, with the Ledger
-//! still attached, before the service is let go.
+//! is handed a caller, no direct writer (anything holding a `StickAccess`:
+//! an export, a sync, a backup, a key tag, a saved file) is admitted
+//! (`write_admission`). Edits already under way finish, with the Ledger
+//! still attached, and every direct writer admitted before the latch
+//! finishes, before the service is let go; an exit asked for while one
+//! runs is held, as for a load.
 
 use std::sync::Arc;
 
@@ -136,7 +140,8 @@ pub fn exit_requested(
         // Held until the drain under way is over; it asks for the exit then.
         return preventable;
     }
-    if (inner.loads == 0 && !inner.draining) || !preventable {
+    let writing = crate::write_admission::running(state.backup_dir()) > 0;
+    if (inner.loads == 0 && !inner.draining && !writing) || !preventable {
         // Nothing to wait for, or it cannot be held: the final `Exit`
         // (`on_exit`) drains.
         return false;

@@ -48,6 +48,12 @@ pub const SHUTDOWN_CLOSED: &str = "shutdown.closed";
 /// (each write it makes checks the Stick first; wbx-45.14, round 1).
 pub const BACKUP_COMPRESSING: &str = "backup.compressing";
 
+/// A playlist export to a Stick has let the Library go and not yet begun
+/// writing (wbx-45.14, round 1).
+pub const EXPORT_WRITING: &str = "export.writing";
+/// Closing waits for direct writers admitted before it (wbx-45.14, round 1).
+pub const SHUTDOWN_AWAITING_WRITERS: &str = "shutdown.awaiting_writers";
+
 static ANY: AtomicBool = AtomicBool::new(false);
 static POINTS: Mutex<Option<Points>> = Mutex::new(None);
 static CHANGED: Condvar = Condvar::new();

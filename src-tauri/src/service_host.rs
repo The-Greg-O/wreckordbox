@@ -230,9 +230,15 @@ impl AppState {
             if self.shutdown.close() {
                 self.core().refuse_writes(Some(crate::shutdown::CLOSING.to_owned()));
             }
+            // The direct writers (exports, syncs, backups, tags, saved
+            // files: everything holding a `StickAccess`), in the same step.
+            crate::write_admission::close(self.backup_dir());
         }
         crate::test_holds::point(crate::test_holds::SHUTDOWN_CLOSED, self.backup_dir());
         drop(self.core().edit_gate().lock());
+        // Every direct writer admitted before the latch finishes, however
+        // long: an export publishing, a backup copying (wbx-45.14, round 1).
+        crate::write_admission::wait_idle(self.backup_dir());
     }
 
     /// A handle to the service this window hosts, to call without holding
