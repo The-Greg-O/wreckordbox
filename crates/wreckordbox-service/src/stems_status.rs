@@ -113,6 +113,11 @@ fn status(stems: &Stems, found: &ParentAudio) -> StemsStatus {
             return answer;
         }
     };
+    // Staleness as the audio says now, not as last stored (wbx-t3p).
+    let sets: Vec<StemSet> = sets
+        .into_iter()
+        .map(|set| crate::stems_show::as_now(set, Some(&audio)))
+        .collect();
     let describe = |answer: &mut StemsStatus, set: &StemSet, state| {
         answer.state = state;
         answer.made_at = Some(set.recorded_at);
