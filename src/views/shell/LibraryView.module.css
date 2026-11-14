@@ -46,3 +46,16 @@
 .crumbSep { color: var(--c-text-dim); font-weight: normal; }
 .crumbCaret { flex: none; margin-left: auto; color: var(--c-text-dim); }
 
+/* The open playlist's count and length after its name (wbx-6wz). It takes
+   nearly all of the shrinking, so it gives way before the name and the
+   folders do, and once it is cut short it is not drawn (it keeps its place,
+   so its fit is still measured). */
+.crumbTally {
+  flex: 0 1000 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  color: var(--c-text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.crumbTally[data-cut] { visibility: hidden; }

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { useTranslation } from "@/i18n";
 import { runCommand } from "@/lib/commands";
@@ -16,12 +16,16 @@ import styles from "./LibraryView.module.css";
  * it: its selection, filter and scroll stay, and the window's copy of its
  * selection never outlives what it shows.
  */
-export function LibraryView({ list, target, crumb }: { list: ReactNode; target?: ReactNode; crumb?: readonly string[] | undefined }) {
+export function LibraryView({ list, target, crumb, tally }: {
+  list: ReactNode; target?: ReactNode; crumb?: readonly string[] | undefined;
+  /** The open playlist's count and length ("30 · 2h24m", wbx-6wz), or "" for a list with no tally. */
+  tally?: string | undefined;
+}) {
   return (
     <div className={styles.two}>
       <div className={styles.source}>
         {/* Always rendered (drawn only at half width), so the list beside it is never remounted. */}
-        <LibraryCrumb crumb={crumb ?? []} />
+        <LibraryCrumb crumb={crumb ?? []} tally={tally ?? ""} />
         {list}
       </div>
       {target ?? null}
@@ -34,17 +38,22 @@ export function LibraryView({ list, target, crumb }: { list: ReactNode; target?:
  * library "Sizes": "no tree (the playlist name becomes a breadcrumb)"): its
  * folders, then its name. Pressing it is "Go to the Tree": the tree, drawn
  * over the view, to open another list. It owns Space and Enter.
+ *
+ * After the name, the open playlist's count and length (wbx-6wz). It gives
+ * way first: it shrinks before the name does (CSS) and, once it no longer
+ * fits whole, is not drawn at all rather than cut short (`useWhole`).
  */
-function LibraryCrumb({ crumb }: { crumb: readonly string[] }) {
+function LibraryCrumb({ crumb, tally }: { crumb: readonly string[]; tally: string }) {
   const t = useTranslation();
   const path = crumb.join(" / ");
+  const [tallyRef, whole] = useWhole(tally);
   return (
     <button
       type="button"
       className={styles.crumb}
       data-shell-crumb=""
       data-own-activation=""
-      aria-label={`${t("Open the tree")}: ${path}`}
+      aria-label={`${t("Open the tree")}: ${path}${tally ? `, ${tally}` : ""}`}
       title={t("Open the tree to choose another list")}
       onClick={() => { runCommand("goToTree"); }}
     >
@@ -54,7 +63,36 @@ function LibraryCrumb({ crumb }: { crumb: readonly string[] }) {
           <span data-crumb="">{part}</span>
         </span>
       ))}
-      <span className={styles.crumbCaret} aria-hidden>▾</span>
+      {tally ? (
+        <span ref={tallyRef} className={styles.crumbTally} data-crumb-tally="" data-cut={whole ? undefined : ""} aria-hidden>
+          {tally}
+        </span>
+      ) : null}
+      <span className={styles.crumbCaret} data-crumb-caret="" aria-hidden>▾</span>
     </button>
   );
+}
+
+/**
+ * Whether an element shows all of its text: false once it is squeezed
+ * narrower than its content. Rechecked on each resize of the element (the
+ * window, the scale, the name beside it) and when the text changes.
+ */
+function useWhole(text: string): [(element: HTMLElement | null) => void, boolean] {
+  const [element, setElement] = useState<HTMLElement | null>(null);
+  const [whole, setWhole] = useState(true);
+  const last = useRef(true);
+  useLayoutEffect(() => {
+    if (!element) return;
+    const check = () => {
+      const fits = element.scrollWidth <= element.clientWidth + 0.5;
+      if (fits !== last.current) { last.current = fits; setWhole(fits); }
+    };
+    check();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(check);
+    observer.observe(element);
+    return () => { observer.disconnect(); };
+  }, [element, text]);
+  return [setElement, whole];
 }
