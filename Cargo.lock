@@ -3944,6 +3944,7 @@ dependencies = [
  "rbl-anlz",
  "rbl-core",
  "rusqlite",
+ "rustix",
  "serde",
  "serde_json",
  "sysinfo",

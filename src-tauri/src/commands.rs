@@ -3642,8 +3642,8 @@ fn step_history_without_grid(state: &AppState, undo: bool) -> AppResult<(EditHis
 
 fn step_history_with(state: &AppState, editor: Option<&crate::grid::GridEditor>, undo: bool) -> AppResult<(EditHistoryDto, Stepped)> {
     use rbl_library::history::StepError;
-    // Held past the step, so what is reported is what this step left.
-    let _gate = state.edit_gate().lock();
+    // Keep grid selection and publication together; audio staging below releases it.
+    let gate = state.edit_gate().lock();
     // A grid entry is stepped by the grid editor, which writes its files
     // under the file-edit guard and moves the entry once they are written
     // (wbx-64); everything else by the core.
@@ -3658,6 +3658,9 @@ fn step_history_with(state: &AppState, editor: Option<&crate::grid::GridEditor>,
         let generation = state.core().generation();
         return Ok((history_dto(generation, &state.edit_history().lock()), Stepped::Grid { track, bpm_changed: outcome.bpm_changed }));
     }
+    // The core stages audio without holding the Library gate. Grid steps
+    // above keep their existing serialization.
+    drop(gate);
     match state.core().step_history(state, undo) {
         Ok(step) => {
             let stepped = match step.touched {

@@ -342,6 +342,10 @@ pub mod stored {
     pub fn store(edit: &LibraryEdit) -> Option<Value> {
         match edit {
             LibraryEdit::Track(edits) => Some(json!({ "edits": track_edits(edits) })),
+            LibraryEdit::KeyEdit { tracks, files } => Some(json!({
+                "edits":track_edits(tracks),"files":files.ledger_values(),
+                "not_reversible_reason":"Unwind does not restore audio key tags; window Undo and Redo retain this edit",
+            })),
             LibraryEdit::TrackTags { tags, comments } => Some(json!({
                 "tags": tags
                     .iter()
@@ -519,6 +523,15 @@ pub mod stored {
         };
         match kind {
             "track" => values.extend(list("edits").iter().map(column)),
+            "key_edit" => {
+                values.extend(list("edits").iter().map(column));
+                values.extend(list("files").iter().map(|file| ValueChange {
+                    subject: format!("file {}", file["path"].as_str().unwrap_or("?")),
+                    field: "audio key tag".into(),
+                    before: field(file, "before"),
+                    after: field(file, "after"),
+                }));
+            }
             "track_tags" => {
                 values.extend(list("tags").iter().map(|edit| ValueChange {
                     subject: track(edit),
@@ -1805,7 +1818,8 @@ impl Keeper {
             }
             let at = now();
             // An assertion of MyTags changed nothing: nothing to take back.
-            let reversible = draft.payload.is_some() && draft.kind != TAG_ASSERTION_KIND;
+            let reversible = draft.payload.is_some()
+                && !matches!(draft.kind, "key_edit" | "audio_key_tag_partial" | TAG_ASSERTION_KIND);
             let (follow, unworked) = match draft.follow {
                 Ok(follow) => (follow, None),
                 Err(why) => (wreckordbox_sidecar::mutant_follow::Follow::default(), Some(why)),
@@ -2028,6 +2042,22 @@ impl rbl_library::ledger::Ledger for Keeper {
             std::process::abort();
         }
         Ok(())
+    }
+
+    fn files_unrestored(&self, values: &Value, why: &str) {
+        let mut payload = values.clone();
+        payload["not_reversible_reason"] = Value::from("An audio publication could not be rolled back after the native step failed; inspect the named files before editing again");
+        self.append(Draft {
+            action: Action::Write,
+            kind: "audio_key_tag_partial",
+            label: why,
+            reverses: None,
+            part_of: None,
+            payload: Some(payload),
+            follow: Ok(wreckordbox_sidecar::mutant_follow::Follow::default()),
+            plan: None,
+            asserted: false,
+        });
     }
 
     fn file_written(&self, kind: &str, track: &str) {

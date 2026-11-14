@@ -13,7 +13,8 @@
 //!   Alphanumeric; an emptied key empties the tag's.
 //!
 //! A file rekordbox cannot write is passed over without a message on screen.
-//! Here it is said in the log, with every other reason a file kept its tag.
+//! Unsupported formats stay Library-only. A refused publication is reported;
+//! the forward edit reconciles each row with the file it actually published.
 //!
 //! rekordbox has no library Undo (see `docs/reference/library-undo.md`), so
 //! nothing it does settles what Undo of a key edit does to the file. Here
@@ -21,9 +22,13 @@
 //! file the edit wrote and the key it held, and Undo and Redo put the file's
 //! key back with the library's, or refuse and change neither.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use rbl_db::key_tag::{swap_key, write_key, KeySwap, KeyTagOutcome};
+use rbl_db::key_tag::{swap_key, KeySwap};
+
+mod prepared;
+pub(crate) use prepared::prepare_key_edit;
+pub use prepared::write_analysis_key_tag;
 
 /// The key display format, which decides the name analysis writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
@@ -53,65 +58,14 @@ impl DetectedKey {
     }
 }
 
-/// Writes `key` into the file at `path` and logs what became of it. Never
-/// fails the caller: the library edit or analysis it follows has already
-/// been saved, as rekordbox's has when it writes the tag.
-pub fn write_logged(state_dir: &Path, track_id: &str, path: &str, key: &str) {
-    if path.is_empty() {
-        tracing::warn!(track_id, "key not written to the file's tag: the track has no file path");
-        return;
-    }
-    // A file on a Stick is written only while that Stick is unlocked (wbx-45.11).
-    let _access = match crate::stick_guard::enter_files(state_dir, [Path::new(path)]) {
-        Ok(access) => access,
-        Err(refused) => {
-            tracing::warn!(track_id, path, %refused, "key not written to the file's tag: it is on a protected Stick");
-            return;
-        }
-    };
-    match write_key(Path::new(path), key) {
-        Ok(KeyTagOutcome::Written) => tracing::info!(track_id, path, key, "key written to the file's tag"),
-        Ok(KeyTagOutcome::Unsupported) => tracing::info!(
-            track_id, path,
-            "key not written to the file's tag: rekordbox writes a key only into MP3, AIFF and FLAC files"
-        ),
-        Ok(KeyTagOutcome::ReadOnly) => tracing::warn!(track_id, path, "key not written to the file's tag: the file is read-only"),
-        Err(error) => tracing::warn!(track_id, path, %error, "key not written to the file's tag; the file is unchanged"),
-    }
-}
-
-/// Test hold: an Undo or Redo of a key edit has written its files' tags
-/// and not yet the Library (wbx-45.14).
-pub const TAGS_STEPPED: &str = "key_tag.tags_stepped";
-/// Puts back, last first, the tags a key edit wrote before it was stopped
-/// (wbx-45.14), each only while its own Stick may still be written;
-/// answers, for each of `written` in order, whether it was put back.
-pub(crate) fn put_back(access: &crate::stick_guard::StickAccess, written: &[KeyTagWrite]) -> Vec<bool> {
-    let mut restored: Vec<bool> = written
-        .iter()
-        .rev()
-        .map(|file| {
-            access.recheck_for(&file.path).is_ok()
-                && matches!(
-                    swap_key(&file.path, Some(Some(file.after.as_str())), file.before.as_deref()),
-                    Ok(KeySwap::Written { .. })
-                )
-        })
-        .collect();
-    restored.reverse();
-    restored
-}
-
-/// Test hold: a key edit has written one file's tag (wbx-45.14).
-pub const TAG_WRITTEN: &str = "key_tag.tag_written";
-/// Test hold: a key edit has written the Library's key and not yet the
-/// files' tags (wbx-45.14).
 pub const LIBRARY_KEY_WRITTEN: &str = "key_tag.library_key_written";
+pub const TAG_WRITTEN: &str = "key_tag.tag_written";
+pub const TAGS_STEPPED: &str = "key_tag.tags_stepped";
 
 /// One audio file a key edit wrote its key into (#507): the key the tag
 /// held before (`None`: no key) and the key written.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct KeyTagWrite {
+pub struct KeyTagWrite {
     pub(crate) path: PathBuf,
     pub(crate) before: Option<String>,
     pub(crate) after: String,
@@ -148,6 +102,27 @@ fn protected(undo: bool, label: &str, refused: &crate::error::AppError) -> rbl_d
 }
 
 impl rbl_library::history::OutsideSteps for KeyTagWrites {
+    fn ledger_values(&self) -> Option<serde_json::Value> {
+        Some(serde_json::Value::Array(
+            self.files
+                .iter()
+                .map(|file| {
+                    serde_json::json!({
+                        "path":file.path,"before":file.before,"after":file.after,
+                    })
+                })
+                .collect(),
+        ))
+    }
+    fn prepare(
+        &self,
+        undo: bool,
+        label: &str,
+    ) -> Result<Option<std::sync::Arc<dyn rbl_library::history::OutsideSteps>>, rbl_db::DbError>
+    {
+        prepared::prepare_key_history(self, undo, label).map(Some)
+    }
+
     fn is_empty(&self) -> bool {
         self.files.is_empty()
     }
@@ -179,59 +154,6 @@ impl rbl_library::history::OutsideSteps for KeyTagWrites {
         let written: Vec<_> = if undo { self.files.iter().rev().collect() } else { self.files.iter().collect() };
         (revert(&access, &written, undo), self.files.len())
     }
-}
-
-/// [`write_logged`] for an Info panel key edit, keeping what the history
-/// needs to put each file back (#507): only the files whose tag this wrote.
-/// A file passed over (no path, a format rekordbox writes no key into, a
-/// read-only file, a write that failed) is left out, so Undo of it stays a
-/// library-only Undo.
-///
-/// `access`: Stick Protection's leave for every file the edit may write,
-/// taken before the Library's key was written and held until the tags are
-/// (wbx-45.14), so a Stick cannot be locked between the two.
-///
-/// `Err`: the file's Stick was ejected or replaced since (wbx-45.14, round
-/// 1): unlike a file passed over, the caller must undo the Library's key,
-/// so the two stores agree.
-pub(crate) fn write_recorded(
-    access: &crate::stick_guard::StickAccess,
-    track_id: &str,
-    path: &str,
-    key: &str,
-) -> Result<Option<KeyTagWrite>, crate::error::AppError> {
-    if path.is_empty() {
-        tracing::warn!(track_id, "key not written to the file's tag: the track has no file path");
-        return Ok(None);
-    }
-    // Still the same mount, still unlocked (the leave itself cannot be
-    // taken away; an eject or replacement can still happen).
-    if let Err(refused) = access.recheck_for(Path::new(path)) {
-        tracing::warn!(track_id, path, %refused, "key not written to the file's tag: its Stick was ejected or replaced");
-        return Err(refused);
-    }
-    Ok(match swap_key(Path::new(path), None, Some(key)) {
-        Ok(KeySwap::Written { before }) => {
-            tracing::info!(track_id, path, key, "key written to the file's tag");
-            Some(KeyTagWrite { path: PathBuf::from(path), before, after: key.to_owned() })
-        }
-        Ok(KeySwap::Unsupported) => {
-            tracing::info!(
-                track_id, path,
-                "key not written to the file's tag: rekordbox writes a key only into MP3, AIFF and FLAC files"
-            );
-            None
-        }
-        Ok(KeySwap::ReadOnly) => {
-            tracing::warn!(track_id, path, "key not written to the file's tag: the file is read-only");
-            None
-        }
-        Ok(KeySwap::Changed { .. }) => None,
-        Err(error) => {
-            tracing::warn!(track_id, path, %error, "key not written to the file's tag; the file is unchanged");
-            None
-        }
-    })
 }
 
 fn verb(undo: bool) -> &'static str {
