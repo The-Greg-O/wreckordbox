@@ -240,6 +240,7 @@ fn plan_load(
     playlists: &[String],
     audio: native_stems::Audio,
 ) -> Result<Planned, ServiceError> {
+    crate::preview_fingerprints::inject_for_test(state_dir);
     let share = library.share_root();
     let selection = ExportSelection::from_playlists(library, index, &share, playlists, false)
         .map_err(planning)?;
@@ -952,6 +953,7 @@ pub(crate) fn load(
     let mut written_fact = None;
     let total = planned.stems.len();
     for (done, set) in planned.stems.into_iter().enumerate() {
+        crate::preview_fingerprints::inject_for_test(state_dir);
         let track = TrackLine {
             id: set.found.track().id.clone(),
             title: set.found.track().title.clone(),

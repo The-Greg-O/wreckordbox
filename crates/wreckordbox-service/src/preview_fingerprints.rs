@@ -9,6 +9,14 @@
 //! The change time cannot be set back by anyone rewriting the file, so audio
 //! changed behind a restored size and modification time is read again.
 //!
+//! That check is best-effort, not a proof the audio is unchanged: a file
+//! system with coarse timestamps can let a rewrite within one tick keep
+//! every field, and a remount (or another volume mounted at the same path)
+//! can reproduce device, inode, size and both times for other content. Then
+//! a preview answers from an old fingerprint. That is safe only because a
+//! load never uses this: it reads every fingerprint afresh and refuses when
+//! the result differs from what the preview approved.
+//!
 //! Kept in memory for the service's life, not in the Sidecar's cache table
 //! or the app's state: a dry run writes nothing at all, and filling a stored
 //! cache would be a write. The cost is one read of each track with Stems
@@ -68,6 +76,37 @@ fn kept() -> MutexGuard<'static, Kept> {
     KEPT.get_or_init(Default::default)
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Test mode only: a file of this name in the service's state folder, one
+/// `<fingerprint>\t<path>` per line, is read and removed by the next Stick
+/// dry run or load, and each fingerprint kept for its path under the file's
+/// identity at that moment, as if a preview had read it. So a test can plant
+/// a wrong kept fingerprint that no identity check would catch.
+pub const TEST_INJECT_FILE: &str = "test-preview-fingerprints";
+
+/// Applies [`TEST_INJECT_FILE`] if it is there, in test mode only.
+pub(crate) fn inject_for_test(state_dir: &Path) {
+    if std::env::var_os(rbl_devices::TEST_MODE).is_none_or(|v| v != "1") {
+        return;
+    }
+    let file = state_dir.join(TEST_INJECT_FILE);
+    let Ok(text) = std::fs::read_to_string(&file) else {
+        return;
+    };
+    let _ = std::fs::remove_file(&file);
+    for line in text.lines() {
+        let Some((fingerprint, path)) = line.split_once('\t') else {
+            continue;
+        };
+        let path = Path::new(path);
+        if let Some(now) = identity(path) {
+            kept().insert(
+                path.to_path_buf(),
+                (now, Fingerprint::from_stored(fingerprint.to_owned())),
+            );
+        }
+    }
 }
 
 /// The fingerprint of the audio at `path`, for a preview: the kept one while

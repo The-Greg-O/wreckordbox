@@ -15,9 +15,13 @@
 )]
 
 use crate::common;
+// The independent Native stems reader, as `stems_write` also includes it.
+#[allow(clippy::duplicate_mod)]
+#[path = "../../../wreckordbox-native-stems/tests/deck/mod.rs"]
+mod deck;
 
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use common::Sandbox;
 use serde_json::Value;
@@ -164,8 +168,8 @@ fn write_wav(path: &Path, seconds: u32, level: i16) {
     std::fs::write(path, out).unwrap();
 }
 
-/// A stereo 16-bit 44.1 kHz tone of `frames`.
-fn write_tone(path: &Path, frames: u32, hertz: f64) {
+/// A stereo 16-bit 44.1 kHz tone of `frames`, peaking at `amplitude`.
+fn write_tone(path: &Path, frames: u32, hertz: f64, amplitude: f64) {
     let data_len = frames * 4;
     let mut out = Vec::new();
     out.extend_from_slice(b"RIFF");
@@ -182,16 +186,28 @@ fn write_tone(path: &Path, frames: u32, hertz: f64) {
     out.extend_from_slice(&data_len.to_le_bytes());
     for frame in 0..frames {
         let t = f64::from(frame) / 44_100.0;
-        let sample = ((t * hertz * std::f64::consts::TAU).sin() * 12_000.0) as i16;
+        let sample = ((t * hertz * std::f64::consts::TAU).sin() * amplitude) as i16;
         out.extend_from_slice(&sample.to_le_bytes());
         out.extend_from_slice(&sample.to_le_bytes());
     }
     std::fs::write(path, out).unwrap();
 }
 
+/// How loud each role's tone is in an ordinary synthetic set: vocals,
+/// other, bass, drums.
+const LEVELS: [f64; 4] = [12_000.0, 12_000.0, 12_000.0, 12_000.0];
+
 /// Records four synthetic Stems of `seconds` for the track whose audio is
-/// `audio`, made from that audio as it is now. Before any service starts.
-fn record_stems(sandbox: &Sandbox, track: &str, audio: &Path, seconds: u32) {
+/// `audio`, made from that audio as it is now, each role's tone at its
+/// level in `levels` (so two sets can be told apart once encoded). Answers
+/// the set's Fact id. Before any service starts.
+fn record_stems(
+    sandbox: &Sandbox,
+    track: &str,
+    audio: &Path,
+    seconds: u32,
+    levels: [f64; 4],
+) -> i64 {
     use wreckordbox_sidecar::stems::{NewStems, Role};
     use wreckordbox_sidecar::{Sidecar, Source, SourceKind};
     let frames = seconds * 44_100;
@@ -204,14 +220,15 @@ fn record_stems(sandbox: &Sandbox, track: &str, audio: &Path, seconds: u32) {
     let files: Vec<(Role, PathBuf)> = Role::ALL
         .into_iter()
         .zip([880.0, 660.0, 110.0, 220.0])
-        .map(|(role, hertz)| {
+        .zip(levels)
+        .map(|((role, hertz), level)| {
             let path = workspace.join(format!("{role}.wav"));
-            write_tone(&path, frames, hertz);
+            write_tone(&path, frames, hertz, level);
             (role, path)
         })
         .collect();
     let fingerprint = wreckordbox_sidecar::fingerprint_file(audio).unwrap();
-    sidecar
+    let set = sidecar
         .record_stems(&NewStems {
             track_id: track,
             fingerprint: &fingerprint,
@@ -224,6 +241,98 @@ fn record_stems(sandbox: &Sandbox, track: &str, audio: &Path, seconds: u32) {
         })
         .unwrap();
     sidecar.finish_run(run, "recorded").unwrap();
+    set.fact_id
+}
+
+/// Plants `fingerprint` as the service's kept preview fingerprint of
+/// `path`, under the file's identity when the next dry run or load reads it
+/// (test mode): a wrong kept value no identity check would catch.
+fn inject_preview_fingerprint(sandbox: &Sandbox, path: &Path, fingerprint: &str) {
+    std::fs::write(
+        sandbox
+            .state_dir()
+            .join(wreckordbox_service::preview_fingerprints::TEST_INJECT_FILE),
+        format!("{fingerprint}\t{}\n", path.display()),
+    )
+    .unwrap();
+}
+
+/// Starts a load that pauses at `stage` and waits until it has.
+fn paused_load(rig: &Rig, stage: &str, plan: &str) -> std::process::Child {
+    let state = rig.sandbox.state_dir();
+    std::fs::write(
+        state.join(wreckordbox_service::stick_load::TEST_PAUSE_AT_FILE),
+        stage,
+    )
+    .unwrap();
+    let child = rig
+        .sandbox
+        .command()
+        .args([
+            "--json",
+            "stick",
+            "load",
+            rig.stick(),
+            &rig.set,
+            "--plan",
+            plan,
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let paused = state.join(wreckordbox_service::stick_load::TEST_PAUSED_FILE);
+    let until = Instant::now() + Duration::from_secs(60);
+    while !paused.exists() {
+        assert!(Instant::now() < until, "the load never reached {stage}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    child
+}
+
+fn release_pause(rig: &Rig) {
+    std::fs::remove_file(
+        rig.sandbox
+            .state_dir()
+            .join(wreckordbox_service::stick_load::TEST_PAUSE_AT_FILE),
+    )
+    .unwrap();
+}
+
+fn finished(child: std::process::Child) -> Value {
+    let mut child = child;
+    let until = Instant::now() + Duration::from_secs(60);
+    while child.try_wait().unwrap().is_none() {
+        if Instant::now() >= until {
+            let _ = child.kill();
+            panic!("the load did not end");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let output = child.wait_with_output().unwrap();
+    serde_json::from_slice(&output.stdout)
+        .unwrap_or_else(|_| panic!("no JSON: {}", String::from_utf8_lossy(&output.stderr)))
+}
+
+/// Every file under `dir`, relative, for "nothing was written there".
+fn files_under(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(next) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&next) else {
+            continue;
+        };
+        for entry in entries {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                out.push(path.strip_prefix(dir).unwrap().to_path_buf());
+            }
+        }
+    }
+    out.sort();
+    out
 }
 
 /// Rewrites `path` with other audio of the same length, then puts its
@@ -275,7 +384,7 @@ fn a_spare_stick_dry_run_reads_no_audio_of_tracks_without_stems() {
 fn audio_changed_behind_its_size_and_mtime_is_not_previewed_as_current() {
     let rig = Rig::new(3, 2);
     let (alpha, alpha_audio) = &rig.tracks[0];
-    record_stems(&rig.sandbox, alpha, alpha_audio, 2);
+    record_stems(&rig.sandbox, alpha, alpha_audio, 2, LEVELS);
     let first = rig.dry_run();
     assert_eq!(titles(&first["changes"]["native_stems"]), ["Track 0000"]);
 
@@ -293,7 +402,7 @@ fn audio_changed_behind_its_size_and_mtime_is_not_previewed_as_current() {
 fn audio_changed_behind_its_size_and_mtime_after_the_dry_run_is_refused_at_load() {
     let rig = Rig::new(3, 2);
     let (alpha, alpha_audio) = &rig.tracks[0];
-    record_stems(&rig.sandbox, alpha, alpha_audio, 2);
+    record_stems(&rig.sandbox, alpha, alpha_audio, 2, LEVELS);
     rig.unlock();
     let dry = rig.dry_run();
     assert_eq!(titles(&dry["changes"]["native_stems"]), ["Track 0000"]);
@@ -317,10 +426,85 @@ fn audio_changed_behind_its_size_and_mtime_after_the_dry_run_is_refused_at_load(
 }
 
 #[test]
-fn a_load_after_repeated_previews_writes_exactly_the_stems_it_approved() {
+fn a_wrong_kept_fingerprint_is_refused_when_the_load_plans_again() {
     let rig = Rig::new(3, 2);
     let (alpha, alpha_audio) = &rig.tracks[0];
-    record_stems(&rig.sandbox, alpha, alpha_audio, 2);
+    let made_from = wreckordbox_sidecar::fingerprint_file(alpha_audio).unwrap();
+    record_stems(&rig.sandbox, alpha, alpha_audio, 2, LEVELS);
+    rig.unlock();
+    // The audio changes, so the Stems are stale; the kept fingerprint, under
+    // the file's complete identity as it is now, still says the old audio.
+    write_wav(alpha_audio, 2, 1_000);
+    inject_preview_fingerprint(&rig.sandbox, alpha_audio, made_from.as_str());
+    let dry = rig.dry_run();
+    assert_eq!(
+        titles(&dry["changes"]["native_stems"]),
+        ["Track 0000"],
+        "the preview is fooled: {dry}"
+    );
+
+    let before = files_under(&rig.stick);
+
+    let refused = rig.load(dry["plan"].as_str().unwrap());
+
+    assert!(!refused.status.success(), "{}", refused.stdout);
+    let error = &refused.error_json()["error"];
+    assert_eq!(error["code"], "stick_load_changed", "{}", refused.stderr);
+    assert!(
+        error["message"].as_str().unwrap().contains("native_stems"),
+        "{error}"
+    );
+    assert_eq!(
+        files_under(&rig.stick),
+        before,
+        "nothing written to the Stick"
+    );
+}
+
+#[test]
+fn a_wrong_kept_fingerprint_is_refused_by_the_check_before_each_stem_set() {
+    let rig = Rig::new(3, 2);
+    let (alpha, alpha_audio) = &rig.tracks[0];
+    let made_from = wreckordbox_sidecar::fingerprint_file(alpha_audio).unwrap();
+    record_stems(&rig.sandbox, alpha, alpha_audio, 2, LEVELS);
+    rig.unlock();
+    let dry = rig.dry_run();
+    assert_eq!(titles(&dry["changes"]["native_stems"]), ["Track 0000"]);
+    // The load has planned and copied the audio; before its Native stems,
+    // the track's audio changes while a wrong kept fingerprint says it has
+    // not.
+    let child = paused_load(&rig, "publishing", dry["plan"].as_str().unwrap());
+    write_wav(alpha_audio, 2, 1_000);
+    inject_preview_fingerprint(&rig.sandbox, alpha_audio, made_from.as_str());
+    release_pause(&rig);
+
+    let load = finished(child);
+
+    assert_eq!(load["native_stems"][0]["outcome"], "not_written", "{load}");
+    assert!(
+        load["native_stems"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("changed since the dry run"),
+        "{load}"
+    );
+    assert!(
+        files_under(&rig.stick.join("STEMS")).is_empty(),
+        "no Stems published: {:?}",
+        files_under(&rig.stick)
+    );
+}
+
+#[test]
+fn a_load_after_repeated_previews_publishes_exactly_the_stems_it_approved() {
+    let rig = Rig::new(3, 2);
+    let (alpha, alpha_audio) = &rig.tracks[0];
+    // An earlier set, superseded, loud where the approved one is quiet.
+    let earlier = [16_000.0, 12_000.0, 8_000.0, 4_000.0];
+    let approved_levels = [4_000.0, 8_000.0, 12_000.0, 16_000.0];
+    let superseded = record_stems(&rig.sandbox, alpha, alpha_audio, 2, earlier);
+    let approved = record_stems(&rig.sandbox, alpha, alpha_audio, 2, approved_levels);
+    assert_ne!(superseded, approved);
     rig.unlock();
     rig.dry_run();
     let dry = rig.dry_run();
@@ -331,18 +515,23 @@ fn a_load_after_repeated_previews_writes_exactly_the_stems_it_approved() {
     assert!(run.status.success(), "{}", run.stderr);
     let load = run.json();
     assert_eq!(load["outcome"], "loaded", "{load}");
-    assert_eq!(
-        titles(&Value::Array(
-            load["native_stems"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|set| set["track"].clone())
-                .collect()
-        )),
-        ["Track 0000"]
-    );
     assert_eq!(load["native_stems"][0]["outcome"], "written", "{load}");
+    assert_eq!(load["native_stems"][0]["stems_fact"], approved, "{load}");
+    // What the Stick holds, decoded by the independent reader: each role at
+    // the approved set's level, not the superseded set's.
+    let folder = rig.stick.join("STEMS").join("Track 0000");
+    for (file, level) in ["vocals.ogg", "other.ogg", "bass.ogg", "drums.ogg"]
+        .into_iter()
+        .zip(approved_levels)
+    {
+        let decoded = deck::decode(&folder.join(file))
+            .unwrap_or_else(|| panic!("{file} does not decode: {:?}", files_under(&rig.stick)));
+        let peak = f64::from(decoded.peak(0, decoded.frames));
+        assert!(
+            (peak - level).abs() < level * 0.15,
+            "{file} peaks at {peak}, the approved set's tone is {level}"
+        );
+    }
 }
 
 /// The measurement the ticket asks for, not a check: run it by name with
@@ -353,7 +542,7 @@ fn a_load_after_repeated_previews_writes_exactly_the_stems_it_approved() {
 fn measure_a_two_thousand_track_spare_stick_dry_run() {
     let rig = Rig::new(2_000, 2);
     for (id, audio) in rig.tracks.iter().step_by(400) {
-        record_stems(&rig.sandbox, id, audio, 2);
+        record_stems(&rig.sandbox, id, audio, 2, LEVELS);
     }
     let audio = rig.audio_bytes();
     let (first, cold, cold_time) = rig.measured_dry_run();
