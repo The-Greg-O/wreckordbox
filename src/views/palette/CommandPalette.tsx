@@ -429,7 +429,11 @@ export function CommandPaletteButton({ platform, className }: { platform: Platfo
       title={t("Command palette")}
       onClick={() => openCommandPalette()}
     >
-      <span>{t("Commands")}</span>
+      {/* At the shell's narrowest (wbx-45.22) a prompt glyph stands in for the word; the name stays. */}
+      <svg className={styles.openerGlyph} viewBox="0 0 12 10" aria-hidden>
+        <path d="M1 1.5 4.5 5 1 8.5M6 8.5h5" stroke="currentColor" strokeWidth="1.3" fill="none" />
+      </svg>
+      <span className={styles.openerWord}>{t("Commands")}</span>
       <kbd className={styles.key}>{key}</kbd>
     </button>
   );
