@@ -293,6 +293,7 @@ struct Session {
     faults: super::Faults,
     begun: AtomicBool,
     spill: std::path::PathBuf,
+    lease: Mutex<Option<super::spill_lease::Lease>>,
 }
 pub(super) fn make(keeper: &Keeper, kind: Kind) -> Arc<dyn Recorder> {
     let (kind, description, source) = match kind {
@@ -342,6 +343,7 @@ pub(super) fn make(keeper: &Keeper, kind: Kind) -> Arc<dyn Recorder> {
         left: Condvar::new(),
         faults: super::Faults::from_env(),
         begun: AtomicBool::new(false),
+        lease: Mutex::new(super::spill_lease::Lease::take(&spill).ok()),
         spill,
     })))
 }
@@ -529,6 +531,7 @@ impl Session {
         }
         if !self.begun.load(Ordering::Acquire) {
             state.ended = true;
+            self.lease.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
             return None;
         }
         self.flush(&mut state);
@@ -595,6 +598,7 @@ impl Session {
             );
         }
         state.ended = true;
+        self.lease.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
         state.warning.clone()
     }
 }

@@ -87,6 +87,12 @@ fn undo_and_redo_name_the_change_they_step_across_a_kept_entry_and_a_stop_waits_
         sidecar_dir.join("ledger-spill.jsonl").is_file(),
         "the entry was kept"
     );
+    let before_spill = std::fs::read(sidecar_dir.join("ledger-spill.jsonl")).unwrap();
+    let live = service.call(commands::RUNS_LIST, json!({})).unwrap();
+    let shown = service.call(commands::RUNS_SHOW,json!({"id":live["runs"][0]["id"]})).unwrap();
+    assert_eq!(shown["pending_recording"]["total"],1,"the accepted edit must be visible before another write");
+    assert_eq!(shown["pending_recording"]["records"][0]["result"]["payload"]["edits"][0]["after"],4);
+    assert_eq!(std::fs::read(sidecar_dir.join("ledger-spill.jsonl")).unwrap(),before_spill,"inspection never replays");
     core.step_history(&NoHost, true).unwrap();
     core.step_history(&NoHost, false).unwrap();
     assert_eq!(rating_of(&core, &track), 4);
