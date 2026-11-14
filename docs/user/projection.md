@@ -34,6 +34,48 @@ Run names the hash of the policy it was made under (`policy_hash`, and the
 Run's description), so a changed policy is visible afterwards, but it is
 not prevented. Keep the file under version control if this matters to you.
 
+## A backup before a large Run
+
+Before a Run that will change more tracks than a threshold, wreckordbox
+backs up the Library and the Sidecar first, as a second way back besides
+unwinding the Run. The threshold is in the same policy file:
+
+```toml
+[backup]
+above_tracks = 200   # back up before a Run that changes more than 200 tracks
+```
+
+With no `[backup]` section the threshold is 200. It applies to applying a
+projection (`wreckordbox project`, `project --mytags`) and to accepting
+waiting Facts in review (`wreckordbox review accept`). A dry run never
+backs up and writes nothing. Recording Facts (one or many) and converting
+the Tag schema change only the Sidecar, not your tracks, and take no backup.
+
+- **What is counted** is the tracks the Run is about to write, worked out by
+  the Run itself, not by an earlier dry run: if anything changed since, the
+  Run is refused with nothing written, so the Run that writes is the one
+  counted.
+- **Where it goes:** the backup folder Preferences › Backups saves to (by
+  default the app's backup folder), named `rbexport-<date>-<time>-run-<id>.zip`.
+  It is an ordinary backup: `wreckordbox backup list` and Preferences show
+  it, and `wreckordbox backup restore` restores it. It does not carry the
+  restore scripts the window's own backups add.
+- **The Run names it:** every Ledger entry of the Run's write carries
+  `large_run` in its command (`wreckordbox runs show`): the number of
+  tracks, the threshold in force, and the backup's path, time and size (or
+  `null` when none was needed). The answer of the apply carries the same.
+- **A backup that cannot be made stops the Run** before anything changes and
+  before a Run is recorded: a full disk or another failure
+  (`run_backup_failed`), a backup folder on a Stick you have not unlocked
+  (`stick_protected`), or Library Protection on (`library_protected`).
+- **A backup with no Run:** if wreckordbox stops after the backup and before
+  the first change, or the Run is then refused, the backup stays in the
+  folder like any other and nothing in the Library changed. Nothing deletes
+  it for you; delete it in Preferences › Backups if you do not want it.
+- **Trust:** like the rest of the file, the threshold is not protected from
+  an agent; a raised threshold is visible in the policy hash and in each
+  Run's `large_run`.
+
 ## Your values are never overwritten
 
 A projection replaces a value only when the last recorded write to that
