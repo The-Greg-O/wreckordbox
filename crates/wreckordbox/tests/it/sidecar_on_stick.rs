@@ -162,3 +162,20 @@ fn stems_status_reads_a_sidecar_on_a_protected_stick_and_writes_nothing() {
     assert_eq!(status["state"], "none", "{status}");
     assert_eq!(snapshot(&sidecar), before, "nothing written");
 }
+
+#[test]
+fn stems_show_reads_a_sidecar_on_a_protected_stick_and_writes_nothing() {
+    let (sandbox, track) = sidecar_on_an_unlocked_stick();
+    let sidecar = sandbox.sidecar_dir();
+    assert!(sandbox
+        .cli(&["stick", "lock", sidecar.to_str().unwrap()])
+        .status
+        .success());
+    let before = snapshot(&sidecar);
+    let run = sandbox.cli(&["--json", "stems", "show", &track]);
+    assert!(run.status.success(), "not refused: {}", run.stdout);
+    let shown = run.json();
+    assert_eq!(shown["stems"], serde_json::Value::Null, "{shown}");
+    assert_eq!(shown["previous"], serde_json::json!([]), "{shown}");
+    assert_eq!(snapshot(&sidecar), before, "nothing written");
+}

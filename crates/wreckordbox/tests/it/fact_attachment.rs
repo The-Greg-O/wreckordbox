@@ -283,6 +283,10 @@ fn stems_reattach_without_separating_again() {
     service.kill().unwrap();
     service.wait().unwrap();
     let next = readd(&s, &id);
+    // `stems show` only reads (wbx-t3p); asking to separate observes the
+    // audio, re-attaches the Stems and reuses them.
+    let separated = ok(&s, &["stems", "separate", &next]);
+    assert_eq!(separated["reused"], true);
     let shown = ok(&s, &["stems", "show", &next]);
     assert_eq!(shown["stems"]["fact_id"], made["stems"]["fact_id"]);
     assert_eq!(shown["stems"]["track_id"], next);
