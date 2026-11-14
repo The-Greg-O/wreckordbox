@@ -1171,6 +1171,20 @@ export interface Backend {
    * row a deck loads for it.
    */
   intakeQueue(queue: import("@/lib/intakeQueue").IntakeQueueName, offset: number, limit: number): Promise<import("@/lib/intakeQueue").IntakeQueuePage>;
+  /** The mounted Sticks, as the Library service lists them (wbx-71; `sticks.list`). Reads only. */
+  stickViewSticks(): Promise<import("@/lib/stickLoad").LoadStick[]>;
+  /** What loading these playlists onto the Stick would do now (`sticks.dry_run`); writes nothing. */
+  stickViewDryRun(stick: string, playlists: string[]): Promise<import("@/lib/stickLoad").LoadPlan>;
+  /**
+   * The load (`sticks.load`): `plan` is the dry run's plan id, `approval`
+   * the hold's token for a sync of exactly these playlists. Refused on a
+   * protected Stick and without the hold.
+   */
+  stickViewLoad(stick: string, playlists: string[], plan: string, approval?: string, operation?: string): Promise<import("@/lib/stickLoad").LoadOutcome>;
+  /** Stick load reports the shell kept (a load cut short by closing the window, a failure), not yet dismissed. */
+  stickLoadReports(): Promise<import("@/lib/stickLoad").KeptLoadReport[]>;
+  /** The DJ has read a kept report. */
+  stickLoadReportDismiss(id: string): Promise<void>;
   /** How many tracks wait in Intake and in Problems (the Intake tab). */
   intakeCounts(): Promise<import("@/lib/intakeQueue").IntakeCounts>;
   /** The DJ's eight Prep colours, and which mean Clean and Problem (wbx-63; the service's `intake.colours`). */

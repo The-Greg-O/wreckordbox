@@ -9,7 +9,7 @@
  * chooser is greyed with the reason Preferences gives. It is worked by
  * pointer and keyboard in every view, owns Space and Enter (the deck does
  * not start), stays inside the top bar at 1280, 900, 640 and 436 px and
- * 0.8, 1, 1.25 (giving way at 436 and 125%, where the bar is already full),
+ * 0.8, 1, 1.25 (at the narrowest as a glyph, wbx-45.22: `top-bar-narrow.spec.ts`),
  * and reads under a light theme.
  */
 import { expect, test, type Locator, type Page } from "@playwright/test";
@@ -147,7 +147,8 @@ test("while the theme file sets the waveform it is shown greyed with the reason,
 type Box = { x: number; y: number; width: number; height: number };
 const box = async (l: Locator): Promise<Box> => (await l.boundingBox())!;
 const within = (a: Box, b: Box) => a.x >= b.x - 0.5 && a.y >= b.y - 0.5 && a.x + a.width <= b.x + b.width + 0.5 && a.y + a.height <= b.y + b.height + 0.5;
-const apart = (a: Box, b: Box) => a.x + a.width <= b.x + 0.5 || b.x + b.width <= a.x + 0.5;
+/** Not drawn over each other (the narrowest bar may wrap to two rows, wbx-45.22). */
+const apart = (a: Box, b: Box) => a.x + a.width <= b.x + 0.5 || b.x + b.width <= a.x + 0.5 || a.y + a.height <= b.y + 0.5 || b.y + b.height <= a.y + 0.5;
 
 for (const width of [1280, 900, 640, 436]) {
   for (const scale of [{ stop: 2, factor: 0.8 }, { stop: 4, factor: 1 }, { stop: 6, factor: 1.25 }]) {
@@ -156,14 +157,6 @@ for (const width of [1280, 900, 640, 436]) {
       await open(page, "", { uiScale: scale.stop });
       const opener = topBar(page).getByRole("button", { name: "Command palette" });
       const layout = width / scale.factor;
-      if (layout <= 400) {
-        // 436 at 125%: the tabs and the opener already fill the bar (follow-up bead); the chooser gives way
-        // and leaves the opener where it was, inside the window.
-        await expect(chooser(page)).toBeHidden();
-        const o = await box(opener);
-        expect(o.x + o.width).toBeLessThanOrEqual(width + 0.5);
-        return;
-      }
       await expect(chooser(page)).toBeVisible();
       const bar = await box(topBar(page));
       const c = await box(chooser(page));
@@ -176,7 +169,7 @@ for (const width of [1280, 900, 640, 436]) {
       expect(o.x + o.width).toBeLessThanOrEqual(width + 0.5);
       for (const tab of await page.getByRole("tablist", { name: "Views" }).getByRole("tab").all()) expect(apart(await box(tab), c)).toBe(true);
       // Where it has room its name is drawn whole; elsewhere the glyph stands in.
-      const named = layout > 720 || layout <= 600;
+      const named = layout > 720 || (layout <= 600 && layout > 460);
       await expect(chooser(page).locator("[data-wave-name]")).toBeVisible({ visible: named });
 
       await chooser(page).click();

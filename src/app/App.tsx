@@ -78,7 +78,7 @@ import { WaveformThemeChooser } from "@/views/shell/WaveformThemeChooser";
 import { breadcrumbOf } from "@/lib/shellTreeOverlay";
 import { crumbTally } from "@/lib/crumbTally";
 import { useTargetList } from "@/views/shell/useTargetList";
-import { IntakeView } from "@/views/shell/IntakeView";
+import { IntakeOnDemand, preloadShellViews, StickLoadOnDemand } from "@/views/shell/shellOnDemand";
 import { useIntakeCounts } from "@/views/shell/useIntakeCounts";
 import { useStickOutlines } from "@/store/useStickOutlines";
 import { useStickProtection } from "@/store/useStickProtection";
@@ -594,6 +594,8 @@ function AppBody() {
   // Set during render, before any effect of this commit can read it.
   stickReadBack.current = !shellOn;
   const intakeCounts = useIntakeCounts(shellOn);
+  // The views loaded on demand (wbx-45.13): fetched once the shell has painted.
+  useEffect(() => { if (shellOn) { const at = setTimeout(preloadShellViews, 0); return () => clearTimeout(at); } return undefined; }, [shellOn]);
   // The shell's tree reads each Stick's playlists without writing to it
   // (ticket #52); only drawn, so only read, with the shell on.
   // Read in both layouts: the Stick write gate checks every Stick write against them (wbx-45.4).
@@ -4013,13 +4015,14 @@ function AppBody() {
           intakeQueue={shellTree.intakeQueue}
           tabCounts={{ intake: intakeCounts?.intake ?? null }}
           intake={(queue) => (
-            <IntakeView
+            <IntakeOnDemand.View
               queue={queue} onQueue={shellTree.showQueue} counts={intakeCounts}
               loadedTrackId={playerTrack?.id ?? null} onLoad={loadFromIntake} onProblem={reportIntakeProblem}
               onEdit={writeEdit} protectLibrary={advancedPrefs.protectLibrary} platform={platform} keyOverrides={keyOverrides}
             />
           )}
-          stick={selectedDevice ? library : undefined}
+          stick={<StickLoadOnDemand.View devices={devices} selected={selectedDevice?.path ?? null} library={tree} revision={deviceLibraries.revision} panel={selectedDevice ? library : undefined} />}
+          stickHoldsLibrary={selectedDevice !== null}
           library={library}
           libraryTarget={targetList.pane}
           libraryCrumb={libraryCrumb}
