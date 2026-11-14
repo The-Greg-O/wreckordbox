@@ -64,9 +64,30 @@
   flex: 1 1 100%;
 }
 
+/* The Gig stick's name field (wbx-cbh). The reset leaves an input with no
+   ground and no edge, so it draws its own: a well on the deepest ground, an
+   edge mixed from the text (3:1 against the panel under dark and light
+   themes), a placeholder and a caret that read on the well, and a ring. */
 .protection input {
-  flex: 1 1 8em;
-  min-width: 0;
+  flex: 1 1 12em;
+  min-width: 8em;
+  padding: 3px 6px;
+  font: inherit;
+  color: var(--c-text);
+  caret-color: var(--c-text);
+  background: var(--c-black);
+  border: var(--s-shell-border, 1px) solid color-mix(in srgb, var(--c-text) 70%, var(--c-panel));
+  border-radius: var(--s-shell-radius, 0);
+}
+
+.protection input::placeholder {
+  color: color-mix(in srgb, var(--c-text) 75%, var(--c-black));
+  opacity: 1;
+}
+
+.protection input:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 1px;
 }
 
 .unlockError {

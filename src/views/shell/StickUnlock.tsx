@@ -56,6 +56,9 @@ export function StickUnlock({ path, protection, onChange }: {
       {protection.spare ? null : (
         <input
           aria-label={`Type ${name} to unlock it`}
+          placeholder="The Stick's name"
+          data-stick-unlock-name=""
+          data-own-activation=""
           value={typed}
           autoComplete="off"
           spellCheck={false}
