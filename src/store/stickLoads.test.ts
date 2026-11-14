@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fromServiceLoad, type LoadOutcome } from "@/lib/stickLoad";
 import {
   receiveStickLoadProgress, resetStickLoads, restoreStickLoad, runStickLoad, shrinkStickLoad, stickIdentity, stickLoads,
-  subscribeStickLoads, takeWantedStick, showStickLoad, ejectStick, stickRemovals, stickSeenWritten,
+  subscribeStickLoads, takeWantedStick, showStickLoad, ejectStick, stickRemovals, stickDevicesSeen,
 } from "./stickLoads";
 
 const A = { identity: stickIdentity("/media/A", "dev:1"), path: "/media/A", name: "A" };
@@ -162,7 +162,7 @@ describe("removal readiness (wbx-72 review)", () => {
     await runStickLoad(A, async (run) => { await run(() => Promise.resolve(outcome())); return true; });
     expect(stickRemovals()).toEqual([]);
     let done: () => void = () => undefined;
-    const ejecting = ejectStick(A, "w1", () => new Promise<void>((resolve) => { done = resolve; }));
+    const ejecting = ejectStick(A, () => new Promise<void>((resolve) => { done = resolve; }));
     expect(stickRemovals().map((r) => r.state)).toEqual(["ejecting"]);
     done();
     await ejecting;
@@ -171,17 +171,32 @@ describe("removal readiness (wbx-72 review)", () => {
   });
 
   it("a failed eject is said, never ready", async () => {
-    await ejectStick(A, "w1", () => Promise.reject(new Error("busy")));
+    await ejectStick(A, () => Promise.reject(new Error("busy")));
     expect(stickRemovals().map((r) => [r.state, r.error])).toEqual([["failed", "busy"]]);
   });
 
-  it("seen mounted and written again, or loaded again, it is no longer ready", async () => {
-    await ejectStick(A, "w1", () => Promise.resolve());
-    stickSeenWritten(A.identity, "w1");
-    expect(stickRemovals()).toHaveLength(1);
-    stickSeenWritten(A.identity, "w2");
+  it("seen mounted again, with the same export fingerprint, it is no longer ready: readiness ends with the eject's mount", async () => {
+    await ejectStick(A, () => Promise.resolve());
+    // Gone from the listing: still ready.
+    stickDevicesSeen([{ path: "/media/B", volumeId: "dev:2" }]);
+    expect(stickRemovals().map((r) => r.state)).toEqual(["ejected"]);
+    // Back at its place, same volume, nothing written: not ready any more.
+    stickDevicesSeen([{ path: "/media/A", volumeId: "dev:1" }]);
     expect(stickRemovals()).toEqual([]);
-    await ejectStick(A, "w2", () => Promise.resolve());
+  });
+
+  it("by path when the volume is not known; another volume at a known Stick's place is another Stick", async () => {
+    const unknown = { identity: stickIdentity("/media/C", null), path: "/media/C", name: "C" };
+    await ejectStick(unknown, () => Promise.resolve());
+    await ejectStick(A, () => Promise.resolve());
+    stickDevicesSeen([{ path: "/media/A", volumeId: "dev:9" }]);
+    expect(stickRemovals().map((r) => r.name)).toEqual(["C", "A"]);
+    stickDevicesSeen([{ path: "/media/C", volumeId: "dev:5" }]);
+    expect(stickRemovals().map((r) => r.name)).toEqual(["A"]);
+  });
+
+  it("loaded again, it is no longer ready", async () => {
+    await ejectStick(A, () => Promise.resolve());
     await runStickLoad(A, async (run) => { await run(() => Promise.resolve(outcome())); return true; });
     expect(stickRemovals()).toEqual([]);
   });

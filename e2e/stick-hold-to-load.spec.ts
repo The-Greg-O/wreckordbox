@@ -71,7 +71,7 @@ test("a short press does nothing; letting go before the hold is full writes noth
   await expect(progress(page)).toHaveCount(0);
 });
 
-test("a full hold starts the load: a plain bar names the track being written, and it ends safe to remove with a summary", async ({ page }) => {
+test("a full hold starts the load: a plain bar names the track being written, and it ends with what it wrote", async ({ page }) => {
   await ready(page);
   await call(page, "__holdStickLoads");
   await pressFor(page, 2300);
@@ -344,4 +344,21 @@ test("a late progress event from an earlier load never touches a later one", asy
   await page.waitForTimeout(400);
   await expect(progress(page)).not.toContainText("Burst track");
   await call(page, "__releaseStickLoads");
+});
+
+test("safe to remove goes when the same Stick is seen mounted again, though nothing on it changed", async ({ page }) => {
+  await ready(page);
+  await pressFor(page, 2300);
+  await view(page).getByTestId("stick-finished").getByRole("button", { name: "Eject DJ STICK" }).click();
+  await expect(page.getByTestId("stick-safe-to-remove")).toHaveText(/DJ STICK is safe to remove/);
+  // The same volume at the same place, its export unchanged, while the Library view shows.
+  await tab(page, "Library").click();
+  await page.evaluate((path) => {
+    (window as unknown as { __remountDevice: (p: string) => void }).__remountDevice(path);
+    window.dispatchEvent(new Event("focus"));
+  }, DJ);
+  await expect(page.getByTestId("shell-tree").getByRole("group", { name: "Stick DJ STICK" })).toBeVisible();
+  await tab(page, "Stick").click();
+  await expect(view(page).getByTestId("stick-name")).toBeVisible();
+  await expect(page.getByTestId("stick-safe-to-remove")).toHaveCount(0);
 });

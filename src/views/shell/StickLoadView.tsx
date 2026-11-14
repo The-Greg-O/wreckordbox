@@ -52,7 +52,7 @@ import { StickUnlock } from "./StickUnlock";
 import { StickHoldButton } from "./StickHoldButton";
 import { LoadProgressPanel, ShrunkLoad } from "./StickLoadProgress";
 import {
-  dismissStickLoad, dismissStickRemoval, ejectStick, machineOf, readKeptStickLoads, runStickLoad, stickIdentity, stickSeenWritten,
+  dismissStickLoad, dismissStickRemoval, ejectStick, machineOf, readKeptStickLoads, runStickLoad, stickIdentity,
   takeWantedStick, useStickLoads, useStickRemovals, type StickLoad, type StickRemoval,
 } from "@/store/stickLoads";
 
@@ -235,12 +235,6 @@ export function StickLoadView({ devices, selected, library, revision, panel, onE
   const kept = allLoads.filter((l) => l.kept);
   // Removal readiness, apart from any load's outcome: only a succeeded eject says "safe to remove".
   const removals = useStickRemovals();
-  // A Stick seen mounted and written again since its eject is no longer ready to remove.
-  useEffect(() => {
-    for (const d of devices) {
-      stickSeenWritten(stickIdentity(d.path, d.volumeId), `${d.export?.written ?? ""}\u0000${d.export?.tracks ?? ""}`);
-    }
-  }, [devices]);
   const removalNotes = removals.length > 0 ? <Removals removals={removals} /> : null;
   const keptReports = kept.length > 0 || removalNotes !== null
     ? <>{removalNotes}{kept.length > 0 ? <KeptReports loads={kept} mounted={(path) => devices.some((d) => d.path === path)} /> : null}</>
@@ -306,7 +300,7 @@ export function StickLoadView({ devices, selected, library, revision, panel, onE
   // The window's existing eject: it waits out and keeps out every writer to the Stick, then flushes and ejects.
   const eject = () => {
     if (stick === null || identity === null) return;
-    void ejectStick({ identity, path: stick.path, name: stick.name }, `${device?.export?.written ?? ""}\u0000${device?.export?.tracks ?? ""}`,
+    void ejectStick({ identity, path: stick.path, name: stick.name },
       async (path) => { await (await getBackend()).ejectDevice(path); })
       .finally(() => { onEjected?.(); });
   };

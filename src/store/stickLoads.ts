@@ -303,9 +303,12 @@ export function machineOf(load: StickLoad | null): LoadMachine {
  * safe to remove (another writer may start; a failed load proves nothing
  * about flushing). Only the window's existing eject (`eject_device`: it
  * takes the Stick's execution lock, so no writer runs, flushes and ejects)
- * makes a Stick `ejected`, ready to remove; a failed eject is `failed`. The
- * record goes when that Stick is seen mounted and written again, or a new
- * load starts on it.
+ * makes a Stick `ejected`, ready to remove; a failed eject is `failed`.
+ * Readiness belongs to the mount the eject ended: the record goes the
+ * moment the window's device listing shows that Stick again (by its volume,
+ * or by its path when the volume is not known), whatever its contents
+ * (`stickDevicesSeen`, fed by the window above every view), or a new load
+ * starts on it.
  */
 export interface StickRemoval {
   identity: string;
@@ -313,8 +316,6 @@ export interface StickRemoval {
   name: string;
   state: "ejecting" | "ejected" | "failed";
   error: string | null;
-  /** What the window last saw written on it when the eject was asked. */
-  written: string;
 }
 
 let removals: readonly StickRemoval[] = [];
@@ -339,10 +340,9 @@ export function useStickRemovals(): readonly StickRemoval[] {
 /** Ejects the Stick through `eject` (the window's `ejectDevice`); ready to remove only if it succeeds. */
 export async function ejectStick(
   stick: { identity: string; path: string; name: string },
-  written: string,
   eject: (path: string) => Promise<void>,
 ): Promise<void> {
-  const record: StickRemoval = { ...stick, state: "ejecting", error: null, written };
+  const record: StickRemoval = { ...stick, state: "ejecting", error: null };
   setRemovals((all) => [...all.filter((r) => r.identity !== stick.identity), record]);
   try {
     await eject(stick.path);
@@ -353,10 +353,19 @@ export async function ejectStick(
   }
 }
 
-/** The Stick is mounted with `written` as what it holds: written again since the eject, it is no longer ready. */
-export function stickSeenWritten(identity: string, written: string): void {
-  const found = removals.find((r) => r.identity === identity);
-  if (found !== undefined && found.state !== "ejecting" && found.written !== written) dropRemoval(identity);
+/**
+ * The window's device listing changed: an ejected Stick in it is mounted
+ * again, so it is no longer ready to remove (another client could unlock
+ * and write it). Matched by volume (`stickIdentity`), or by path when the
+ * eject did not know the volume. Called above the views (App), so a remount
+ * while another view shows is not missed.
+ */
+export function stickDevicesSeen(devices: readonly { path: string; volumeId?: string | null }[]): void {
+  const back = removals.filter((r) => r.state === "ejected" && devices.some((d) => {
+    const [path, volume] = r.identity.split("\u0000");
+    return volume ? stickIdentity(d.path, d.volumeId) === r.identity : d.path === (path ?? r.path);
+  }));
+  if (back.length > 0) setRemovals((all) => all.filter((r) => !back.includes(r)));
 }
 
 /** The DJ has read it. */

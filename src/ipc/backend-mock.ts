@@ -3092,6 +3092,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     ejectDevice: async (path) => {
       const index = devices.findIndex(device => device.path === path);
       if (index < 0) throw new Error("That device is no longer connected.");
+      // Kept, so `__remountDevice` can put the same volume back (wbx-72 review).
+      unmounted.set(path, devices[index] as Device);
       devices.splice(index, 1);
       await wait(undefined);
     },

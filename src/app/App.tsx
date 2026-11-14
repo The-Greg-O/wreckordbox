@@ -13,6 +13,7 @@ import { reportStartupPaint } from "@/lib/startup";
 import { useShowWindowWhenReady } from "@/lib/windowReady";
 import { waveformKindOf } from "@/canvas";
 import { useAutoJoinLink } from "@/store/useAutoJoinLink";
+import { stickDevicesSeen } from "@/store/stickLoads";
 import { useEventCallback } from "@/store/useEventCallback";
 import { useCommands } from "@/store/useCommands";
 /**
@@ -224,6 +225,8 @@ function AppBody() {
   // Connected volumes. Asked for, never polled: a 1 Hz scan of every mount
   // point is exactly the kind of idle work the budgets forbid.
   const [devices, setDevices] = useState<readonly Device[]>([]);
+  // A Stick ejected from the Stick view and seen mounted again is no longer "safe to remove" (wbx-72), whichever view shows.
+  useEffect(() => { stickDevicesSeen(devices); }, [devices]);
   // What each stick's own libraries hold, read when a stick is opened.
   // Off in the view shell: Stick edits never read back through the recovering path (wbx-45.4).
   const stickReadBack = useRef(true);
