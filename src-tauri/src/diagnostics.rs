@@ -69,7 +69,7 @@ impl Diagnostics {
         self.audio_xruns = health.xruns;
         self.audio_underruns = health.underruns;
         self.audio_latency_ms =
-            (!health.latency.is_zero()).then(|| health.latency.as_secs_f64() * 1000.0);
+            (!health.latency.is_zero()).then_some(health.latency.as_secs_f64() * 1000.0);
         self
     }
 }
