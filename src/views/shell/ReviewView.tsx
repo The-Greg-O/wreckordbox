@@ -28,7 +28,7 @@ import {
   type Board, type DecisionOutcome, type ListingChanges, type RejectedFact, type ReviewRun, type ShownGroup,
 } from "@/lib/reviewQueue";
 
-import { readReviewNow, requestReviewRead, useReviewRead } from "./reviewQueueStore";
+import { readReviewNow, requestReviewRead, restartReviewRead, useReviewRead } from "./reviewQueueStore";
 import { useServiceActivity } from "./useServiceActivity";
 import styles from "./ReviewView.module.css";
 
@@ -254,14 +254,18 @@ export function ReviewView({ onListen, loadedTrackId = null }: ReviewViewProps) 
     void refreshAfter(verb, applied);
   }, [board, busy, rejectedOpen, loadRejected, refreshAfter]);
 
-  /** The DJ asked for a fresh read: shown at once, wherever the pointer is. */
+  /**
+   * The DJ asked for a fresh read (a new one, whatever a stalled read is
+   * doing). Shown at once, wherever the pointer is, unless the list is held
+   * after a refusal: then only "Show the list as it is now" replaces it.
+   */
   const retry = async () => {
-    const fresh = await readReviewNow();
+    const fresh = await restartReviewRead();
     const listing = fresh.listing;
     if (fresh.error === null && listing) {
       seen.current = listing;
       setRefreshProblem(null);
-      setBoard((b) => showLatest(received(b, listing)));
+      setBoard((b) => (b.held ? received(b, listing) : showLatest(received(b, listing))));
     }
   };
 

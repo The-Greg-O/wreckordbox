@@ -33,11 +33,21 @@ let current: ReviewRead = { listing: null, error: null, at: null };
 const listeners = new Set<Listener>();
 let running = false;
 let pending = false;
+/**
+ * Which read is the current one. A read that does not settle within
+ * `READ_DEADLINE_MS` is given up (said as a failure) and a restart
+ * (`restartReviewRead`) begins a new one at once; whatever an older read
+ * answers later is ignored.
+ */
+let generation = 0;
 /** Resolved when a read that began after they asked has finished. */
 let waitingForNext: (() => void)[] = [];
 let waitingForThis: (() => void)[] = [];
 let stops: (() => void)[] = [];
 let watchers = 0;
+
+/** The longest one read is waited on. */
+export const READ_DEADLINE_MS = 10_000;
 
 function tell(next: ReviewRead) {
   current = next;
@@ -45,25 +55,52 @@ function tell(next: ReviewRead) {
 }
 
 function start() {
+  generation += 1;
+  const mine = generation;
   running = true;
   pending = false;
   waitingForThis = waitingForNext;
   waitingForNext = [];
+  let settled = false;
+  const settle = (next: ReviewRead) => {
+    if (settled || mine !== generation) return;
+    settled = true;
+    tell(next);
+    running = false;
+    const done = waitingForThis;
+    waitingForThis = [];
+    for (const resolve of done) resolve();
+    if (pending || waitingForNext.length > 0) start();
+  };
+  const deadline = setTimeout(() => {
+    settle({ ...current, error: `no answer within ${READ_DEADLINE_MS / 1000} s`, at: Date.now() });
+  }, READ_DEADLINE_MS);
   void (async () => {
     try {
       const backend = await getBackend();
       const listing = await backend.reviewWaiting();
-      tell({ listing, error: null, at: Date.now() });
+      settle({ listing, error: null, at: Date.now() });
     } catch (error) {
-      tell({ ...current, error: error instanceof Error ? error.message : String(error), at: Date.now() });
+      settle({ ...current, error: error instanceof Error ? error.message : String(error), at: Date.now() });
     } finally {
-      running = false;
-      const done = waitingForThis;
-      waitingForThis = [];
-      for (const resolve of done) resolve();
-      if (pending || waitingForNext.length > 0) start();
+      clearTimeout(deadline);
     }
   })();
+}
+
+/**
+ * Starts a new read now, giving up the one running if there is one (its
+ * answer, should it ever come, is ignored); resolves with what the new
+ * read found. What Retry runs.
+ */
+export function restartReviewRead(): Promise<ReviewRead> {
+  return new Promise((resolve) => {
+    const abandoned = running ? waitingForThis : [];
+    waitingForThis = [];
+    waitingForNext.push(...abandoned, () => resolve(current));
+    running = false;
+    start();
+  });
 }
 
 /** Asks for a read: now if none runs, else once after the one running. */

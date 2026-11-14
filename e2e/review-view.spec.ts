@@ -330,7 +330,10 @@ for (const width of [1280, 900, 640, 436]) {
   });
 }
 
-test("after a refusal, a second click of the same gesture or any later click sends nothing until the DJ shows the list as it is now", async ({ page }) => {
+const readsDone = async (page: Page) => (await hook<{ waiting: number; done: number }>(page, "__reviewReads")).done;
+const centre = async (target: Locator) => { const b = (await target.boundingBox())!; return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; };
+
+test("after a refusal and the read that follows it has COMPLETED, the second click of the gesture and any later click send nothing until the DJ shows the list", async ({ page }) => {
   await openReview(page);
   const tagging = run(page, 41);
   const bulk = tagging.getByTestId("review-bulk-accept");
@@ -339,36 +342,136 @@ test("after a refusal, a second click of the same gesture or any later click sen
     .filter((e) => Number((e.children[5] as HTMLElement).innerText.match(/\d\.\d\d/)![0]) >= 0.8)
     .map((e) => Number(e.getAttribute("data-fact"))));
   await bulk.hover();
-  // One of the five changes, and more qualifying rows arrive, while the
-  // pointer rests on the control.
   await hook(page, "__reviewChange", chosen[0], 5);
   await hook(page, "__reviewArrive", 4);
   await expect(view(page).getByTestId("review-pending")).toBeVisible();
+  // The read after the refusal is held, so its completion can be watched.
+  await hook(page, "__holdReviewReads");
+  const { x, y } = await centre(bulk);
 
-  // The first click of a double-click: sent with the shown rows, refused.
-  const box = (await bulk.boundingBox())!;
-  const x = box.x + box.width / 2, y = box.y + box.height / 2;
   await page.mouse.click(x, y);
   await expect(view(page).getByTestId("review-outcome")).toHaveAttribute("data-code", "review_changed");
-  // The follow-up read has completed.
-  await expect.poll(async () => (await hook<{ waiting: number }>(page, "__reviewReads")).waiting).toBeGreaterThan(1);
-  await page.waitForTimeout(300);
+  const done = await readsDone(page);
+  await hook(page, "__releaseReviewReads");
+  await expect.poll(() => readsDone(page)).toBeGreaterThan(done);
+  // The refreshed listing (6 would qualify now) has arrived; it is not shown.
+  await expect(view(page).getByTestId("review-pending")).toContainText("4 new, 1 changed");
 
-  // The second click of the same gesture, then a fresh click: neither sends.
-  await page.mouse.click(x, y, { clickCount: 2 });
+  await page.mouse.down({ clickCount: 2 });
+  await page.mouse.up({ clickCount: 2 });
   await page.mouse.click(x, y);
   await page.waitForTimeout(300);
   const asked = await calls(page);
   expect(asked).toHaveLength(1);
   expect([...asked[0]!.facts].sort()).toEqual([...chosen].sort());
-
-  // What is under the pointer did not change.
   await expect(bulk).toHaveText("Accept ≥ 0.80 · 5");
-  // Shown on the DJ's word, with the changed rows marked; then a decision is possible again.
+
   await view(page).getByRole("button", { name: "Show the list as it is now" }).click();
   await expect(view(page).locator('[role="row"][data-marked="changed"]')).toHaveCount(1);
   await expect(view(page).locator('[role="row"][data-marked="added"]')).toHaveCount(4);
   await expect(bulk).toBeEnabled();
+});
+
+test("the second click of a double-click on an enabled Accept is ignored; a single click acts", async ({ page }) => {
+  await openReview(page, "?writable");
+  const accept = rows(run(page, 41)).nth(1).getByRole("button", { name: /^Accept / });
+  await expect(accept).toBeEnabled();
+  const { x, y } = await centre(accept);
+  await page.mouse.move(x, y);
+  await page.mouse.down({ clickCount: 2 });
+  await page.mouse.up({ clickCount: 2 });
+  await page.waitForTimeout(300);
+  expect(await calls(page)).toEqual([]);
+  await page.mouse.click(x, y);
+  await expect.poll(async () => (await calls(page)).length).toBe(1);
+});
+
+test("a held Enter that reaches an enabled decision control does not activate it; a fresh press does", async ({ page }) => {
+  await openReview(page, "?writable");
+  const tagging = run(page, 41);
+  const bulk = tagging.getByTestId("review-bulk-accept");
+  await expect(bulk).toBeEnabled();
+  // Enter goes down in the threshold field and is held while the focus
+  // moves to the bulk control: what reaches it are the key's repeats.
+  await tagging.getByRole("spinbutton").focus();
+  await page.keyboard.down("Enter");
+  await bulk.focus();
+  for (let i = 0; i < 4; i += 1) await page.keyboard.down("Enter");
+  await page.keyboard.up("Enter");
+  await page.waitForTimeout(300);
+  expect(await calls(page)).toEqual([]);
+  await page.keyboard.press("Enter");
+  await expect.poll(async () => (await calls(page)).length).toBe(1);
+});
+
+test("a held Space that ends on an enabled decision control does not activate it", async ({ page }) => {
+  await openReview(page, "?writable");
+  const tagging = run(page, 41);
+  await tagging.getByRole("spinbutton").focus();
+  await page.keyboard.down(" ");
+  await tagging.getByTestId("review-bulk-reject").focus();
+  for (let i = 0; i < 4; i += 1) await page.keyboard.down(" ");
+  await page.keyboard.up(" ");
+  await page.waitForTimeout(300);
+  expect(await calls(page)).toEqual([]);
+});
+
+test("a decision the service never answers is said after 20 s, and nothing more can be decided until the DJ shows the list", async ({ page }) => {
+  test.setTimeout(60_000);
+  await openReview(page);
+  await hook(page, "__stallReviewDecisions", true);
+  const first = rows(run(page, 41)).first();
+  await first.getByRole("button", { name: /^Accept / }).click();
+  const outcome = view(page).getByTestId("review-outcome");
+  await expect(outcome).toHaveAttribute("data-code", "no_answer", { timeout: 30_000 });
+  await expect(outcome).toContainText("may or may not have been made");
+  await expect(rows(run(page, 41)).nth(1).getByRole("button", { name: /^Accept / })).toBeDisabled();
+  await hook(page, "__stallReviewDecisions", false);
+  await view(page).getByRole("button", { name: "Show the list as it is now" }).click();
+  await expect(rows(run(page, 41)).nth(1).getByRole("button", { name: /^Accept / })).toBeEnabled();
+  expect((await calls(page)).length).toBe(1);
+});
+
+test("a successful Retry while the list is held after a refusal keeps it as the DJ saw it", async ({ page }) => {
+  await openReview(page);
+  const first = rows(run(page, 41)).first();
+  const fact = Number(await first.getAttribute("data-fact"));
+  const proposed = first.getByRole("cell").nth(4);
+  const before = await proposed.innerText();
+  await first.hover();
+  await hook(page, "__reviewChange", fact, 5);
+  await hook(page, "__holdReviewReads");
+  await first.getByRole("button", { name: /^Accept / }).click();
+  await expect(view(page).getByTestId("review-outcome")).toHaveAttribute("data-code", "review_changed");
+  await expect(view(page).getByTestId("review-refresh-failed")).toBeVisible({ timeout: 10_000 });
+  await hook(page, "__releaseReviewReads");
+
+  await view(page).getByTestId("review-refresh-failed").getByRole("button", { name: "Retry" }).click();
+
+  await expect(view(page).getByTestId("review-refresh-failed")).toHaveCount(0);
+  await expect(view(page).getByTestId("review-pending")).toContainText("The list is as you saw it");
+  await expect(proposed).toHaveText(before);
+  await expect(first.getByRole("button", { name: /^Accept / })).toBeDisabled();
+  await view(page).getByRole("button", { name: "Show the list as it is now" }).click();
+  await expect(proposed).toHaveText("5");
+});
+
+test("a read that never settles is said, Retry starts a new one, and the late answer of the old one is ignored", async ({ page }) => {
+  test.setTimeout(60_000);
+  await openReview(page);
+  await expect(rows(view(page))).toHaveCount(14);
+  await page.mouse.move(2, 2);
+  await hook(page, "__stallNextReviewRead");
+  await hook(page, "__reviewArrive", 2);
+  await expect(view(page).getByTestId("review-read-failed")).toContainText("no answer", { timeout: 20_000 });
+  await view(page).getByTestId("review-read-failed").getByRole("button", { name: "Retry" }).click();
+  await expect(rows(view(page))).toHaveCount(16);
+  await expect(view(page).getByTestId("review-read-failed")).toHaveCount(0);
+  // The stalled read answers now, with the queue as it was (14 rows): ignored.
+  await hook(page, "__releaseStalledRead");
+  await page.waitForTimeout(500);
+  await expect(rows(view(page))).toHaveCount(16);
+  await expect(tabCount(page)).toHaveText("16");
 });
 
 test("a decision's result is shown as soon as it returns, and a follow-up read that never comes is said, not waited on", async ({ page }) => {

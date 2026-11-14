@@ -26,7 +26,10 @@
  * Run; `__reviewCalls()` lists every decision asked (command, facts,
  * token, source); `__reviewNext(code)` answers the next accept with that
  * refusal (`"review_partial"` applies the first chosen Fact only);
- * `__reviewReads()` counts reads; `__holdReviewReads()` /
+ * `__reviewReads()` counts reads asked (`waiting`) and answered (`done`);
+ * `__stallNextReviewRead()` makes the next read never settle until
+ * `__releaseStalledRead()` (then it answers the queue as it was);
+ * `__stallReviewDecisions(on)` leaves every accept and reject unanswered; `__holdReviewReads()` /
  * `__releaseReviewReads()`; `__failReviewReads(on)`; `__reviewOtherReject(fact)`
  * rejects as another client would (told, no Library change).
  */
@@ -102,7 +105,15 @@ export function createMockReview(source: MockReviewSource) {
   let version = 1;
   const calls: Call[] = [];
   let refuseNext: string | null = null;
-  const reads = { waiting: 0 };
+  const reads = { waiting: 0, done: 0 };
+  let stallNext = false;
+  let stalled: (() => void) | null = null;
+  let stallDecisions = false;
+  /** A decision the service never answers; still logged as asked. */
+  const never = <T,>(what: unknown): Promise<T> => {
+    calls.push({ command: "stalled", facts: Array.isArray(what) ? what.map((w) => (typeof w === "number" ? w : (w as { fact: number }).fact)) : [], source: { kind: "dj" } });
+    return new Promise<T>(() => {});
+  };
   let holding = false;
   let failing = false;
   let held: (() => void)[] = [];
@@ -253,18 +264,32 @@ export function createMockReview(source: MockReviewSource) {
     hooks.__failReviewReads = (on: boolean) => { failing = on; };
     hooks.__reviewOtherReject = (fact: number) => reject([fact], "other");
     hooks.__reviewWaiting = () => waiting.map((h) => h.fact);
+    hooks.__stallNextReviewRead = () => { stallNext = true; };
+    hooks.__releaseStalledRead = () => { stalled?.(); stalled = null; };
+    hooks.__stallReviewDecisions = (on: boolean) => { stallDecisions = on; };
   }
 
   return {
     reviewWaiting: async (): Promise<ReviewListing> => {
       reads.waiting += 1;
+      if (stallNext) {
+        // Never settles until `__releaseStalledRead()`, and then answers
+        // the queue as it was when it was asked.
+        stallNext = false;
+        const then = answer();
+        await new Promise<void>((resolve) => { stalled = resolve; });
+        reads.done += 1;
+        return fromServiceListing(then);
+      }
       if (holding) await new Promise<void>((resolve) => held.push(resolve));
       if (!source.ready()) throw new Error("The Library has not finished loading.");
       if (failing) throw new Error("The Facts waiting for you could not be read: the Sidecar is being written by another program");
-      return fromServiceListing(await source.wait(answer()));
+      const listing = fromServiceListing(await source.wait(answer()));
+      reads.done += 1;
+      return listing;
     },
-    reviewAccept: accept,
-    reviewReject: (facts: number[]) => reject(facts),
+    reviewAccept: (rows: { fact: number; token: string }[]) => (stallDecisions ? never<DecisionOutcome>(rows) : accept(rows)),
+    reviewReject: (facts: number[]) => (stallDecisions ? never<DecisionOutcome>(facts) : reject(facts)),
     reviewRejected: async (): Promise<RejectedFact[]> =>
       fromServiceRejected(await source.wait({
         rejected: rejected.map((r) => ({
