@@ -52,6 +52,18 @@ fn missing_manifest(case: &str, restart: bool, test: &str) {
             },
         )
         .unwrap();
+    if case=="active" {
+        let listed=f.service.call("runs.spills.list",json!({})).unwrap();
+        let id=&listed["spills"][0]["id"];
+        for command in ["runs.spills.replay","runs.spills.discard"] {
+            let refused=f.service.call(command,json!({"id":id,"source":{"kind":"dj","name":"dj"},"reason":"fixture"})).unwrap_err();
+            assert!(refused.message.contains("still being written"),"{refused:?}");
+        }
+        assert_eq!(f.service.call("runs.spills.show",json!({"id":id})).unwrap()["pending"]["total"],128);
+        assert!(operation.finish().is_some());
+        f.service.stop();
+        return;
+    }
     assert!(operation.finish().unwrap().contains("accepted"));
     drop(operation);
     let ledger_root = std::fs::read_dir(f.dir.path().join("recovery/ledger"))
@@ -79,7 +91,7 @@ fn missing_manifest(case: &str, restart: bool, test: &str) {
         std::fs::write(spill.join("manifest.tmp"), b"{\"intent\":").unwrap();
     }
     let Fixture { core, service, dir } = f;
-    let service = if restart {
+    let mut service = if restart {
         service.stop();
         service.stopped().wait();
         drop(service);
@@ -179,7 +191,7 @@ fn missing_manifest(case: &str, restart: bool, test: &str) {
                 assert_eq!(refused.code, "bad_request");
                 assert_eq!(std::fs::read(&batch).unwrap(), accepted);
             }
-            if case == "batches-discard-failure" {
+            if case.starts_with("batches-discard-failure") {
                 let writable = rusqlite::Connection::open(dir.path().join("library/wreckordbox-sidecar/sidecar.db")).unwrap();
                 writable.execute_batch("CREATE TRIGGER refuse_discard BEFORE INSERT ON ledger WHEN NEW.kind='ledger_spill_discard' BEGIN SELECT RAISE(ABORT,'fixture refusal'); END;").unwrap();
                 assert!(service.call("runs.spills.discard", json!({"id":id,"source":{"kind":"dj","name":"dj"},"reason":"explicit fixture discard"})).is_err());
@@ -189,9 +201,17 @@ fn missing_manifest(case: &str, restart: bool, test: &str) {
                 assert_eq!(read["discard_pending"],true);
                 assert_eq!(std::fs::read(spill.join("discard.json")).unwrap(),receipt);
                 assert!(service.call("runs.spills.replay",json!({"id":id,"manifest":manifest})).is_err());
+                if case.ends_with("restart") {
+                    service.stop(); service.stopped().wait();
+                    service=Service::start(rbl_db::LibraryLocation { master_db:dir.path().join("library/master.db"),share_root:dir.path().join("library/share"),passphrase:fixture::FIXTURE_PASSPHRASE.into(),is_real_install:false },&Config { runtime_dir:dir.path().join("run"),recovery_dir:dir.path().join("recovery"),idle_exit:None }).unwrap();
+                    assert_eq!(std::fs::read(&batch).unwrap(),accepted,"startup must not finish a discard");
+                    assert_eq!(std::fs::read(spill.join("discard.json")).unwrap(),receipt);
+                    assert_eq!(service.call("runs.spills.show",json!({"id":id})).unwrap()["discard_pending"],true);
+                    assert_eq!(sidecar.query_row("SELECT COUNT(*) FROM ledger WHERE kind='ledger_spill_discard'",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+                }
                 writable.execute_batch("DROP TRIGGER refuse_discard").unwrap();
             }
-            service.call("runs.spills.discard", json!({"id":id,"source":{"kind":"dj","name":"dj"},"reason":"I choose to discard these accepted-write records"})).unwrap();
+            service.call("runs.spills.discard", json!({"id":id,"source":{"kind":"dj"},"reason":"I choose to discard these accepted-write records"})).unwrap();
             assert!(!spill.exists());
             let recorded: i64 = sidecar.query_row("SELECT COUNT(*) FROM ledger WHERE kind='ledger_spill_discard' AND source_kind='dj'", [], |r|r.get(0)).unwrap();
             assert_eq!(recorded, 1);
@@ -271,4 +291,14 @@ fn orphan_discard_is_a_recorded_explicit_dj_act() {
 #[test]
 fn discard_recording_failure_preserves_bytes_and_retries_once() {
     missing_manifest("batches-discard-failure",false,"orphans::discard_recording_failure_preserves_bytes_and_retries_once");
+}
+
+#[test]
+fn explicit_recovery_refuses_an_operation_still_writing_its_spill() {
+    missing_manifest("active",false,"orphans::explicit_recovery_refuses_an_operation_still_writing_its_spill");
+}
+
+#[test]
+fn startup_preserves_a_pending_discard_until_the_dj_explicitly_retries() {
+    missing_manifest("batches-discard-failure-restart",false,"orphans::startup_preserves_a_pending_discard_until_the_dj_explicitly_retries");
 }

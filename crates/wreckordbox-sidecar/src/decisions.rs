@@ -322,7 +322,8 @@ impl Sidecar {
             }
         }
         let candidates = candidates_of(new.question_type, new.candidates)?;
-        let db = self.db();
+        let mut owned = self.db();
+        let db = owned.transaction()?;
         db.execute(
             "INSERT INTO decision (question_type, question, context, candidates, track_id, run_id, created_at, topic)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -338,7 +339,10 @@ impl Sidecar {
             ],
         )?;
         let id = db.last_insert_rowid();
-        read_decision(&db, id)?.ok_or(SidecarError::NoDecision(id))
+        crate::native_history::record(&db,crate::native_history::Table::Decision,id)?;
+        let decision=read_decision(&db, id)?.ok_or(SidecarError::NoDecision(id))?;
+        db.commit()?;
+        Ok(decision)
     }
 
     /// Records one Decider's answer to a Decision and answers the Decision
@@ -484,7 +488,9 @@ fn insert_answer(
             now(),
         ],
     )?;
-    Ok(tx.last_insert_rowid())
+    let id=tx.last_insert_rowid();
+    crate::native_history::record(tx,crate::native_history::Table::Answer,id)?;
+    Ok(id)
 }
 
 /// A Decision and the answer just written to it, read inside the

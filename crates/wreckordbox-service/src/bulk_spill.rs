@@ -194,13 +194,45 @@ pub(super) fn replay(
     if !dir.exists() {
         return Ok(());
     }
-    if dir.join("discard.json").exists() { return Err("An explicit DJ discard is pending; use runs.spills.discard to finish it".into()); }
+    if dir.join("discard.json").exists() {
+        return Err(
+            "An explicit DJ discard is pending; use runs.spills.discard to finish it".into(),
+        );
+    }
     local(dir)?;
     let mut manifest = match header(dir)? {
         Header::Ready(manifest) => manifest,
         Header::Empty => return remove_empty(dir),
         Header::Orphaned(error) => return Err(error),
     };
+    for path in files(dir)? {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        if name == "manifest.json" || name == "manifest.tmp" {
+            continue;
+        }
+        if !name.starts_with("batch-") || path.extension().is_none_or(|ext| ext != "json") {
+            return Err(format!(
+                "Spill has an unrecognized file {}; inspect it before recovery",
+                path.display()
+            ));
+        }
+        let records = read_batch(&path)?;
+        if manifest.run.is_none() {
+            for record in records {
+                if let Some(id) = record.id {
+                    if let Some(entry) = sidecar.ledger_entry(id).map_err(|e| e.to_string())? {
+                        if entry.source != manifest.source {
+                            return Err(
+                                "Spill source does not match an already recorded entry".into()
+                            );
+                        }
+                        manifest.run = Some(entry.run);
+                        break;
+                    }
+                }
+            }
+        }
+    }
     let header = dir.join("manifest.json");
     if manifest.run.is_none() {
         manifest.run = Some(
@@ -209,8 +241,8 @@ pub(super) fn replay(
                 .map_err(|e| e.to_string())?,
         );
         // Persist the Run before any entry: an interrupted replay keeps one Run.
-        write(&header, &manifest)?;
     }
+    write(&header, &manifest)?;
     for path in files(dir)?.into_iter().filter(|p| {
         p.file_name()
             .is_some_and(|n| n.to_string_lossy().starts_with("batch-"))
@@ -251,6 +283,9 @@ pub(super) fn replay(
                 .map_err(|e| e.to_string())?;
         }
     }
+    if dir.join("manifest.tmp").exists() {
+        std::fs::remove_file(dir.join("manifest.tmp")).map_err(|e| e.to_string())?;
+    }
     std::fs::remove_file(header).map_err(|e| e.to_string())?;
     std::fs::remove_dir(dir).map_err(|e| e.to_string())?;
     Ok(())
@@ -262,7 +297,12 @@ pub(super) fn exists(root: &Path) -> bool {
 /// it and return a diagnostic separately so unrelated writes can still proceed.
 pub(super) fn recover(dir: &Path, sidecar: &Sidecar) -> Result<Option<String>, String> {
     let _lease = super::spill_lease::Lease::take(dir)?;
-    if dir.join("discard.json").exists() { return Ok(Some(format!("Spill {} has an explicit discard pending; only runs.spills.discard may finish it",dir.display()))); }
+    if dir.join("discard.json").exists() {
+        return Ok(Some(format!(
+            "Spill {} has an explicit discard pending; only runs.spills.discard may finish it",
+            dir.display()
+        )));
+    }
     if let Header::Orphaned(error) = header(dir)? {
         return Ok(Some(error));
     }
@@ -295,8 +335,7 @@ pub(super) fn pending(
         }
         let manifest = match header(&dir)? {
             Header::Ready(manifest) => manifest,
-            Header::Empty => continue,
-            Header::Orphaned(_) => continue,
+            Header::Empty | Header::Orphaned(_) => continue,
         };
         if manifest.run.map(|id| id.0) != run {
             continue;
@@ -334,8 +373,12 @@ pub(super) fn bind_run(dir: &Path, current: &Manifest) -> Result<(), String> {
 
 /// Disk reads remain bounded even if a spill was damaged or edited externally.
 pub(super) fn read_batch(path: &Path) -> Result<Vec<Record>, String> {
-    if std::fs::metadata(path).map_err(|e|e.to_string())?.len() > 16 * 1024 * 1024 { return Err(format!("Oversized spill batch {}",path.display())); }
-    let records:Vec<Record> = read(path)?;
-    if records.len() > 128 { return Err(format!("Oversized spill batch {}",path.display())); }
+    if std::fs::metadata(path).map_err(|e| e.to_string())?.len() > 16 * 1024 * 1024 {
+        return Err(format!("Oversized spill batch {}", path.display()));
+    }
+    let records: Vec<Record> = read(path)?;
+    if records.len() > 128 {
+        return Err(format!("Oversized spill batch {}", path.display()));
+    }
     Ok(records)
 }

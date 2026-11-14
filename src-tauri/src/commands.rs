@@ -672,11 +672,12 @@ where
     let event = touched.event();
     let (generation, history) = blocking(name, move || {
         let _gate = state.edit_gate().lock();
-        let generation = state.write_history_then(action, |db, ()| refresh_after_edit(&state, db, touched)).map_err(write_error)?;
+        let refreshed = state.write_history_then(action, |db, ()| Ok(refresh_after_edit(&state, db, touched))).map_err(write_error)?;
         // Any non-recorded edit after an undo starts a new branch.
         let mut history = state.edit_history().lock();
         // The Ledger is told which command it was; the history keeps nothing.
         history.unrecorded(Some(name));
+        let generation = refreshed.map_err(write_error)?;
         Ok((generation, history_dto(generation, &history)))
     }).await?;
     let _ = tauri::Emitter::emit(&app, event, generation);
@@ -700,11 +701,12 @@ where
     let event = touched.event();
     let (generation, history) = blocking(name, move || {
         let _gate = state.edit_gate().lock();
-        let generation = state.write_history_then(action, |db, ()| refresh_after_edit(&state, db, touched))
+        let refreshed = state.write_history_then(action, |db, ()| Ok(refresh_after_edit(&state, db, touched)))
             .map_err(write_error)?;
         let mut history = state.edit_history().lock();
         // The Ledger is told which command it was; the history is emptied.
         history.permanent(Some(name));
+        let generation = refreshed.map_err(write_error)?;
         Ok((generation, history_dto(generation, &history)))
     }).await?;
     let _ = tauri::Emitter::emit(&app, event, generation);
@@ -5103,3 +5105,7 @@ mod tests {
         assert!(rbl_export::recovery_pending(&stick));
     }
 }
+
+#[cfg(test)]
+#[path = "command_ledger_failures.rs"]
+mod ledger_failures;

@@ -128,6 +128,14 @@ pub mod commands {
     pub const RUNS_LIST: &str = "runs.list";
     /// One Run and what it changed.
     pub const RUNS_SHOW: &str = "runs.show";
+    /// Read-only inventory of retained accepted-write spills.
+    pub const SPILLS_LIST: &str = "runs.spills.list";
+    /// Read a spill and one bounded page of its accepted records.
+    pub const SPILLS_SHOW: &str = "runs.spills.show";
+    /// Explicitly replay a completed spill with its original attribution.
+    pub const SPILLS_REPLAY: &str = "runs.spills.replay";
+    /// The DJ's explicit, Ledger-recorded discard of retained records.
+    pub const SPILLS_DISCARD: &str = "runs.spills.discard";
 }
 
 /// The name of the `tool` source a client's edit has when the client names
@@ -835,6 +843,13 @@ fn entry(entry: wreckordbox_sidecar::ledger::Entry) -> LedgerEntry {
                 .map_or(Value::Null, |replaced| replaced.value.clone()),
             after: fact.value.clone(),
         }],
+        (None, Some(payload)) if matches!(entry.kind.as_str(),"mutant_change"|"decision"|"decision_answer") => vec![ValueChange {
+            subject: format!("{} {}", entry.kind, payload["row"]["id"]),
+            field: "record".into(), before: Value::Null, after: payload["row"].clone(),
+        }],
+        (None, Some(payload)) if entry.kind=="ledger_spill_discard" => vec![ValueChange {
+            subject: format!("Ledger spill {}",payload["spill"]),field:"discard decision".into(),before:Value::Null,after:payload.clone(),
+        }],
         (None, Some(payload)) if entry.store == Store::Library => stored::values(
             &entry.kind,
             entry.format,
@@ -1059,6 +1074,10 @@ struct Faults {
 }
 
 impl Faults {
+    #[cfg(not(feature = "test-faults"))]
+    fn from_env() -> Self { Self::default() }
+
+    #[cfg(feature = "test-faults")]
     fn from_env() -> Self {
         let mut faults = Self::default();
         if std::env::var("RBXPORT_TEST").as_deref() != Ok("1") {
@@ -1464,7 +1483,7 @@ impl Keeper {
         }
         self.write_waiting(sidecar, state)?;
         for error in bulk_spill::replay_all(&self.stems.bulk_recovery_dir(), sidecar)? {
-            Self::bulk_recovery_error(state, error);
+            Self::bulk_recovery_error(&error);
         }
         for open in sidecar.open_intents().map_err(|e| e.to_string())? {
             // What the unconfirmed write did to entries: the Library as it
@@ -1516,7 +1535,7 @@ impl Keeper {
         Ok(())
     }
 
-    fn bulk_recovery_error(_state: &mut State, error: String) {
+    fn bulk_recovery_error(error: &str) {
         tracing::error!(%error, "accepted writes await explicit spill recovery; inspect runs.spills.list");
     }
 
@@ -1526,14 +1545,14 @@ impl Keeper {
     fn write_waiting(&self, sidecar: &Sidecar, state: &mut State) -> Result<(), String> {
         while let Some(dir) = state.bulk_waiting.first() {
             if let Some(error) = bulk_spill::recover(dir, sidecar)? {
-                Self::bulk_recovery_error(state, error);
+                Self::bulk_recovery_error(&error);
             }
             state.bulk_waiting.remove(0);
         }
         while let Some(waiting) = state.unwritten.first() {
             let run = match waiting.run {
                 Some(run) => RunId(run),
-                None => late_run(sidecar, &waiting.source, &waiting.description)?,
+                None => RunId(0),
             };
             let reconciled = waiting.dj_facts.is_none();
             let facts = match &waiting.dj_facts {
@@ -1556,7 +1575,7 @@ impl Keeper {
                 &waiting.follow
             };
             let (_, followed) = sidecar
-                .append_following(
+                .append_recovered_following(
                     &NewEntry {
                         id: waiting.id,
                         run,
@@ -1576,6 +1595,7 @@ impl Keeper {
                     &facts,
                     reconciled,
                     follow,
+                    waiting.run.is_none().then_some(waiting.description.as_str()),
                 )
                 .map_err(|e| e.to_string())?;
             crate::mutant_follow::announce(&self.stems, &followed);
@@ -2123,15 +2143,17 @@ impl rbl_library::ledger::Ledger for Keeper {
         if let Some(active) = bulk::active(self).filter(|active| active.imports()) {
             active.written(wrote);
         }
-        if let Some(op) = self.state().op.as_mut() {
-            op.wrote = Some(wrote);
-            // A hand set that changed nothing still has its assertion to
-            // tell: its intent stays until then (wbx-26).
-            if !wrote && !op.asserting {
-                if let Ok(sidecar) = self.stems.sidecar() {
-                    if let Err(error) = sidecar.settle_intents(&[op.id]) {
-                        tracing::error!(%error, "could not clear a failed Library write's intent");
-                    }
+        let settle = {
+            let mut state = self.state();
+            state.op.as_mut().and_then(|op| {
+                op.wrote = Some(wrote);
+                (!wrote && !op.asserting).then_some(op.id)
+            })
+        };
+        if let Some(id) = settle {
+            if let Ok(sidecar) = self.stems.sidecar() {
+                if let Err(error) = sidecar.settle_intents(&[id]) {
+                    tracing::error!(%error, "could not clear a failed Library write's intent");
                 }
             }
         }

@@ -11,6 +11,7 @@
 //! being kept.
 
 mod prepared;
+mod cue_group;
 
 use std::sync::Arc;
 
@@ -789,7 +790,10 @@ impl crate::LibraryCore {
         action: impl FnOnce(&mut rbl_db::write::Writer) -> Result<T, DbError>,
     ) -> Result<(T, crate::Change), DbError> {
         let _gate = self.edit_gate().lock();
-        let done = self.edit(host, crate::History::Caller, touched, action)?;
+        let kind = touched.change_kind();
+        let (value, refreshed) = self.write_then(host, crate::History::Caller, action, |db, value| {
+            Ok((value, self.refresh_after_edit(host, db, touched)))
+        })?;
         let had = {
             let mut history = self.history.lock();
             let had = history.undo_label().is_some() || history.redo_label().is_some();
@@ -799,7 +803,8 @@ impl crate::LibraryCore {
         if had {
             host.history_changed();
         }
-        Ok(done)
+        let generation = refreshed?;
+        Ok((value, crate::Change { kind, generation }))
     }
 
     /// Runs the next Undo (`undo`) or Redo entry of the history, and

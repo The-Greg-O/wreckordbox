@@ -643,3 +643,6 @@ fn generated_import_records_leave_the_writer_gate_and_name_all_three_hundred_row
         json!([])
     );
 }
+
+#[path = "support/ordinary_failures.rs"]
+mod ordinary_failures;

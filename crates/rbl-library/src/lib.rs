@@ -10,6 +10,7 @@
 //! opens an [`rbl_db::write::Writer`], which refuses while rekordbox is
 //! running and, under `RBXPORT_TEST`, for a detected real Library.
 
+mod committed_write;
 pub mod entry_copy;
 pub mod entry_order;
 pub mod history;
@@ -441,17 +442,26 @@ impl LibraryCore {
         if history == History::Caller {
             if let Some(ledger) = &ledger { ledger.prepare(writer.library(), preparation); }
         }
+        let observer = match committed_write::Observer::open(location) {
+            Ok(observer) => observer,
+            Err(error) => {
+                if let Some(ledger) = &ledger { ledger.written(false); }
+                return Err(error);
+            }
+        };
         let open_ms = started.elapsed().as_millis();
         let result = edit(&mut writer);
         let edit_ms = started.elapsed().as_millis();
-        // Counted before the refresh, which only reads. A failed edit that
-        // changed rows before it stopped counts too: its rows may not all
-        // have been put back.
-        let wrote = writer.library().connection().total_changes() > 0;
-        // Told before the refresh, which may fail with the change made.
-        if let Some(ledger) = &ledger {
-            ledger.written(wrote);
-        }
+        // A committed prefix counts even when a later transaction rolls back.
+        // If visibility itself cannot be read, leave the intent uncertain.
+        let wrote = match observer.changed() {
+            Ok(wrote) => wrote,
+            Err(error) => {
+                if history == History::Outside { self.history.lock().clear_redo(); }
+                return Err(error);
+            }
+        };
+        if let Some(ledger) = &ledger { ledger.written(wrote); }
         let result = result.and_then(|value| refresh(writer.library(), value));
         tracing::debug!(gate_ms, open_ms = open_ms - gate_ms,
             edit_ms = edit_ms - open_ms, refresh_ms = started.elapsed().as_millis() - edit_ms,

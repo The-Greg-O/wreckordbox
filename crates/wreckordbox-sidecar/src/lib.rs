@@ -183,3 +183,5 @@ pub mod bulk;
 mod fingerprint_bounds;
 mod fingerprint_format;
 mod query_reads;
+
+mod native_history;
