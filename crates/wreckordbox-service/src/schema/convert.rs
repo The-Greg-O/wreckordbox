@@ -284,7 +284,10 @@ static CONVERTING: Mutex<()> = Mutex::new(());
 /// Numbers the working files, so no two are ever the same one.
 static WORKING_FILES: AtomicU64 = AtomicU64::new(0);
 
-#[allow(clippy::too_many_lines, reason = "keep preview, observation, and the coordinated conversion commit in order")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "keep preview, observation, and the coordinated conversion commit in order"
+)]
 pub(super) fn convert(
     stems: &Stems,
     convert: &Convert,
