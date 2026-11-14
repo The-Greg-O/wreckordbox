@@ -39,6 +39,25 @@ fn make(s: &Sandbox, playlist: &str) -> String {
     )["mutant"]["id"]
         .to_string()
 }
+
+/// Makes a Mutant as [`make`] does, with a second client subscribed
+/// before it, and consumes the one event the making sends that client
+/// (wbx-377): what the client hears next comes from what follows, without
+/// waiting for a moment of quiet.
+fn watched_make(s: &Sandbox, playlist: &str) -> (wreckordbox_service::Client, String) {
+    ok(s, &["status"]);
+    let mut watcher = s.client();
+    watcher.subscribe().unwrap();
+    let id = make(s, playlist);
+    let made = watcher
+        .next_event(std::time::Duration::from_secs(30))
+        .unwrap()
+        .expect("the new Mutant was not announced");
+    assert_eq!(made.event, "sidecar_changed", "{made:?}");
+    assert_eq!(made.data["action"], "created", "{made:?}");
+    assert_eq!(made.data["mutant_id"].to_string(), id, "{made:?}");
+    (watcher, id)
+}
 fn edit(s: &Sandbox, id: &str, edits: Value) -> Value {
     ok(
         s,
@@ -109,15 +128,8 @@ fn reads_do_not_create_a_sidecar() {
 fn refusals_are_atomic_and_have_stable_codes() {
     let s = Sandbox::new();
     let playlist = s.create_playlist("Set", &[2]);
-    let id = make(&s, &playlist);
+    let (mut watcher, id) = watched_make(&s, &playlist);
     let before = ok(&s, &["mutants", "show", &id]);
-    let mut watcher = s.client();
-    watcher.subscribe().unwrap();
-    while watcher
-        .next_event(std::time::Duration::from_millis(100))
-        .unwrap()
-        .is_some()
-    {}
     for (edits, code) in [
         (json!({"key_shift":7}), "mutant_key_shift_limit"),
         (json!({"key_shift":-7}), "mutant_key_shift_limit"),
@@ -267,7 +279,7 @@ fn stems_are_verified_and_stale_edits_remain_clearable() {
 fn edits_notify_a_second_client_and_preserve_run_provenance() {
     let s = Sandbox::new();
     let playlist = s.create_playlist("Set", &[2]);
-    let id = make(&s, &playlist);
+    let (mut watcher, id) = watched_make(&s, &playlist);
     let run = ok(
         &s,
         &[
@@ -280,13 +292,6 @@ fn edits_notify_a_second_client_and_preserve_run_provenance() {
         ],
     )["id"]
         .to_string();
-    let mut watcher = s.client();
-    watcher.subscribe().unwrap();
-    while watcher
-        .next_event(std::time::Duration::from_millis(100))
-        .unwrap()
-        .is_some()
-    {}
     let edited = ok(
         &s,
         &[
@@ -615,15 +620,8 @@ fn concurrent_patches_preserve_both_edits() {
 fn an_edit_that_cannot_commit_changes_nothing_and_announces_nothing() {
     let s = Sandbox::new();
     let playlist = s.create_playlist("Set", &[2]);
-    let id = make(&s, &playlist);
+    let (mut watcher, id) = watched_make(&s, &playlist);
     let before = ok(&s, &["mutants", "show", &id]);
-    let mut watcher = s.client();
-    watcher.subscribe().unwrap();
-    while watcher
-        .next_event(std::time::Duration::from_millis(100))
-        .unwrap()
-        .is_some()
-    {}
     let db = rusqlite::Connection::open(s.sidecar_dir().join("sidecar.db")).unwrap();
     db.execute_batch("CREATE TRIGGER refuse_ending BEFORE UPDATE OF finished_at ON run BEGIN SELECT RAISE(ABORT,'injected failure'); END;").unwrap();
     assert_eq!(
@@ -755,7 +753,7 @@ fn review_outdated_edits_are_isolated_and_repairable() {
 fn review_noop_edits_leave_no_run_change_or_event() {
     let s = Sandbox::new();
     let playlist = s.create_playlist("Set", &[2]);
-    let id = make(&s, &playlist);
+    let (mut watcher, id) = watched_make(&s, &playlist);
     let before = ok(&s, &["mutants", "show", &id]);
     let db = rusqlite::Connection::open(s.sidecar_dir().join("sidecar.db")).unwrap();
     let counts = || {
@@ -767,13 +765,6 @@ fn review_noop_edits_leave_no_run_change_or_event() {
         .unwrap()
     };
     let old_counts = counts();
-    let mut watcher = s.client();
-    watcher.subscribe().unwrap();
-    while watcher
-        .next_event(std::time::Duration::from_millis(100))
-        .unwrap()
-        .is_some()
-    {}
     for edits in [
         json!({}),
         json!({"key_shift":null}),

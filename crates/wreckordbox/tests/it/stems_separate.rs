@@ -429,10 +429,7 @@ fn progress_is_printed_by_hand_and_sent_to_other_clients_as_events_that_are_not_
         "loading model: 0%\nseparating: 10%\nwriting: 90%\n"
     );
 
-    let mut events = Vec::new();
-    while let Some(event) = watcher.next_event(Duration::from_millis(500)).unwrap() {
-        events.push(event);
-    }
+    let events = common::barrier::heard_exactly(&mut watcher, 4, Duration::from_millis(500));
     let names: Vec<&str> = events.iter().map(|event| event.event.as_str()).collect();
     assert_eq!(
         names,

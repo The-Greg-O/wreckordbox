@@ -627,13 +627,8 @@ fn another_client_is_told_when_the_command_finds_the_stems_stale() {
     let run = rig.write(&track, true);
 
     assert_eq!(run.error_json()["error"]["code"], "no_current_stems");
-    let mut events = Vec::new();
-    while let Some(event) = watcher
-        .next_event(std::time::Duration::from_millis(500))
-        .unwrap()
-    {
-        events.push(event);
-    }
+    let events =
+        common::barrier::heard_exactly(&mut watcher, 1, std::time::Duration::from_millis(500));
     assert_eq!(events.len(), 1, "{events:?}");
     assert_eq!(events[0].event, "sidecar_changed");
     assert_eq!(events[0].data["track_id"], track.as_str());
