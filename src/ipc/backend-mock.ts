@@ -2578,6 +2578,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     intakeSetTags: async (track, dimension, terms, version, dropUnmapped) =>
       fromServiceTagsSet(await tagPanel.intakeSetTags(track, dimension, terms, version, dropUnmapped)),
     onSidecarChanged: tagPanel.onSidecarChanged,
+    onStickLoadProgress: stickLoad.onStickLoadProgress,
     rekordboxBrowseSettings: () => Promise.resolve(null),
     librarySummary: () =>
       ready

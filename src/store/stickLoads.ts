@@ -18,6 +18,7 @@
 import { useSyncExternalStore } from "react";
 
 import { getBackend } from "@/ipc/client";
+import { fromServiceProgress, IDLE, loadStep, type LoadEvent, type LoadMachine, type LoadProgress } from "@/lib/holdToLoad";
 import type { KeptLoadReport, LoadOutcome } from "@/lib/stickLoad";
 
 export interface StickLoad {
@@ -34,6 +35,11 @@ export interface StickLoad {
   reportId: string;
   /** Kept from before the window last closed (not this session's). */
   kept: boolean;
+  /**
+   * The load's state machine (wbx-72, `holdToLoad.ts`): loading (full or
+   * shrunk to the status line, with its latest progress), finished, failed.
+   */
+  machine: LoadMachine;
 }
 
 /** One Stick as mounted now: another volume at the same path is another Stick. */
@@ -54,19 +60,27 @@ function update(id: number, patch: Partial<StickLoad>): void {
   set((all) => all.map((load) => (load.id === id ? { ...load, ...patch } : load)));
 }
 
+/** One step of a load's state machine. */
+function step(id: number, event: LoadEvent): void {
+  const found = loads.find((load) => load.id === id);
+  if (found === undefined) return;
+  const machine = loadStep(found.machine, event);
+  if (machine !== found.machine) update(id, { machine });
+}
+
+/** Listens for every change to the loads (for the store's own hook, and tests). */
+export function subscribeStickLoads(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+
 /** Every load the window knows of, newest last. */
 export function stickLoads(): readonly StickLoad[] {
   return loads;
 }
 
 export function useStickLoads(): readonly StickLoad[] {
-  return useSyncExternalStore(
-    (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    () => loads,
-  );
+  return useSyncExternalStore(subscribeStickLoads, () => loads);
 }
 
 /**
@@ -81,7 +95,12 @@ export async function runStickLoad(
 ): Promise<void> {
   const id = next++;
   const operation = operationId();
-  set((all) => [...all, { id, ...stick, state: "confirming", outcome: null, error: null, reportId: operation, kept: false }]);
+  listenForProgress();
+  // Created once the hold is full: the machine is loading from here.
+  set((all) => [...all, {
+    id, ...stick, state: "confirming", outcome: null, error: null, reportId: operation, kept: false,
+    machine: { state: "loading", shrunk: false, progress: null },
+  }]);
   let ran = false;
   try {
     await stage(async (load) => {
@@ -90,15 +109,20 @@ export async function runStickLoad(
       try {
         const outcome = await load(operation);
         update(id, { state: "done", outcome });
+        step(id, { type: "finished", outcome });
         // Shown here in full: the shell's copy of a load that completed is not kept twice.
         if (outcome.outcome === "loaded") void forget(operation);
       } catch (error) {
-        update(id, { state: "failed", error: error instanceof Error ? error.message : String(error) });
+        const why = error instanceof Error ? error.message : String(error);
+        update(id, { state: "failed", error: why });
+        step(id, { type: "failed", error: why });
       }
     });
   } catch (error) {
     if (!ran) {
-      update(id, { state: "failed", error: error instanceof Error ? error.message : String(error) });
+      const why = error instanceof Error ? error.message : String(error);
+      update(id, { state: "failed", error: why });
+      step(id, { type: "failed", error: why });
       ran = true;
     }
   }
@@ -158,6 +182,9 @@ export async function readKeptStickLoads(): Promise<void> {
         error: report.outcome === null ? report.error : null,
         reportId: report.id,
         kept: true,
+        machine: report.outcome === null
+          ? { state: "failed", outcome: null, error: report.error }
+          : loadStep({ state: "loading", shrunk: false, progress: null }, { type: "finished", outcome: report.outcome }),
       })),
     ...all,
   ]);
@@ -166,5 +193,91 @@ export async function readKeptStickLoads(): Promise<void> {
 /** For tests: forget every load. */
 export function resetStickLoads(): void {
   keptRead = false;
+  wanted = null;
+  pending.clear();
+  if (flushing !== null) clearTimeout(flushing);
+  flushing = null;
   set(() => []);
+}
+
+/** Shrinks a running load to the status line; it keeps running. */
+export function shrinkStickLoad(id: number): void {
+  step(id, { type: "shrink" });
+}
+
+/** Brings a shrunk load back to fill the Stick view. */
+export function restoreStickLoad(id: number): void {
+  step(id, { type: "restore" });
+}
+
+let wanted: string | null = null;
+
+/**
+ * The status line's load, clicked: brought back, and the Stick view asked
+ * to show its Stick (`takeWantedStick`), whichever it showed before.
+ */
+export function showStickLoad(id: number): void {
+  const found = loads.find((load) => load.id === id);
+  if (found === undefined) return;
+  wanted = found.path;
+  step(id, { type: "restore" });
+  // Told even when the machine did not move (it was not shrunk), so the view picks the Stick.
+  for (const listener of listeners) listener();
+}
+
+/** The Stick the status line asked the view to show, once. */
+export function takeWantedStick(): string | null {
+  const path = wanted;
+  wanted = null;
+  return path;
+}
+
+/** How long a burst of progress is gathered before the view hears it. */
+const PROGRESS_FLUSH_MS = 100;
+const pending = new Map<string, LoadProgress>();
+let flushing: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * One `stick_load_progress` event. A burst is coalesced: the latest for
+ * each Stick is kept, and the loads change (and the views draw) at most
+ * once per `PROGRESS_FLUSH_MS`. Progress for a Stick with no running load,
+ * or one that already ended, changes nothing.
+ */
+export function receiveStickLoadProgress(data: unknown): void {
+  const event = fromServiceProgress(data);
+  if (event === null) return;
+  pending.set(event.stick, event.progress);
+  flushing ??= setTimeout(flushProgress, PROGRESS_FLUSH_MS);
+}
+
+function flushProgress(): void {
+  flushing = null;
+  const latest = new Map(pending);
+  pending.clear();
+  let changed = false;
+  const next = loads.map((load) => {
+    const progress = latest.get(load.path);
+    if (progress === undefined || load.kept) return load;
+    const machine = loadStep(load.machine, { type: "progress", progress });
+    if (machine === load.machine) return load;
+    changed = true;
+    return { ...load, machine };
+  });
+  if (changed) set(() => next);
+}
+
+let listening = false;
+
+/** Hears the window's `stick-load:progress` events, once per page. */
+function listenForProgress(): void {
+  if (listening) return;
+  listening = true;
+  void getBackend()
+    .then((backend) => { backend.onStickLoadProgress(receiveStickLoadProgress); })
+    .catch(() => { listening = false; });
+}
+
+/** The machine to draw for a Stick: its latest load's, or idle. */
+export function machineOf(load: StickLoad | null): LoadMachine {
+  return load?.machine ?? IDLE;
 }

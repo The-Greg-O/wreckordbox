@@ -670,6 +670,7 @@ async function realBackend(): Promise<Backend> {
         track, dimension, terms: [...terms], version, dropUnmapped: [...dropUnmapped], comments,
       })),
     onSidecarChanged: (listener) => subscribe("sidecar:changed", (payload) => listener(payload as { trackId: string; kind: string })),
+    onStickLoadProgress: (listener) => subscribe<unknown>("stick-load:progress", listener),
     devicePlaylistCollectionTracks: (path, format, tracks) =>
       invoke<(string | null)[]>("device_playlist_collection_tracks", { path, format, tracks }),
     devicePlaylistEdit: (path, format, edit, approval) =>

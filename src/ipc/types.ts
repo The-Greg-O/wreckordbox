@@ -1211,6 +1211,8 @@ export interface Backend {
   intakeSetTags(track: string, dimension: string, terms: readonly string[], version: string, dropUnmapped: readonly string[], comments: boolean): Promise<import("@/lib/tagPanel").TagsSet>;
   /** A Fact changed in the Sidecar (any client): `{ trackId, kind }`. */
   onSidecarChanged(listener: (change: { trackId: string; kind: string }) => void): () => void;
+  /** A Stick load moved on (wbx-72): the service's `stick_load_progress`, as it is (`fromServiceProgress`). */
+  onStickLoadProgress(listener: (progress: unknown) => void): () => void;
   /** Maps collection track ids to rows already in one of a stick's libraries. */
   devicePlaylistCollectionTracks(path: string, format: DeviceFormat, tracks: string[]): Promise<(string | null)[]>;
   /**
