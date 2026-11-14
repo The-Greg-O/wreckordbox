@@ -51,7 +51,7 @@ fn rejected(db: &Connection) -> Result<HashSet<i64>> {
     )?;
     let ids = statement
         .query_map([REJECTED_KIND], |row| row.get::<_, Option<i64>>(0))?
-        .filter_map(|id| id.transpose())
+        .filter_map(std::result::Result::transpose)
         .collect::<rusqlite::Result<HashSet<i64>>>()?;
     Ok(ids)
 }

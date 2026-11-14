@@ -476,6 +476,10 @@ impl Shared {
     }
 
     /// The one place a command name becomes behaviour.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one arm per command group; each arm hands off to its module"
+    )]
     fn dispatch(
         &self,
         connection: Option<&Connection>,
@@ -646,15 +650,7 @@ impl Shared {
                 crate::projection_barriers::answer(&self.stems, request)
             }
             projection if crate::projection::answers(projection) => self.project(request),
-            // Reviewing waiting Facts (wbx-27): an accept is the DJ's edit.
-            review if crate::review::answers(review) => {
-                let (changed, result) = self
-                    .with_library(|library| crate::review::answer(library, &self.stems, request))?;
-                if let Some(changed) = changed {
-                    self.tell_host(&changed.event());
-                }
-                result
-            }
+            review if crate::review::answers(review) => self.review(request),
             intake if crate::intake::answers(intake) => {
                 let (result, changed) = self.with_library(|library| {
                     crate::intake::answer(library, &self.stems, request)
@@ -671,6 +667,17 @@ impl Shared {
                 format!("unknown command: {unknown}"),
             )),
         }
+    }
+
+    /// `review.waiting`, `review.accept` and `review.reject` (wbx-27). The
+    /// host is told of an accept's Library change.
+    fn review(&self, request: &Request) -> Result<Value, ServiceError> {
+        let (changed, result) =
+            self.with_library(|library| crate::review::answer(library, &self.stems, request))?;
+        if let Some(changed) = changed {
+            self.tell_host(&changed.event());
+        }
+        result
     }
 
     /// `projection.plan` and `projection.apply` (wbx-26). The host is told

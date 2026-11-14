@@ -7,7 +7,7 @@ use serde_json::json;
 use wreckordbox_service::facts::SourceArg;
 use wreckordbox_service::projection::{Field, Held};
 use wreckordbox_service::review::{commands, Decided, Selection, Waiting};
-use wreckordbox_service::{Client, ServiceError};
+use wreckordbox_service::{Config, ServiceError};
 
 use crate::facts::{parse_source, source_text};
 
@@ -89,10 +89,16 @@ fn selection(facts: &[i64], filter: &Filter, all: bool, source: Option<&SourceAr
 }
 
 pub fn run(
-    client: &mut Client,
+    config: &Config,
     as_json: bool,
     command: &ReviewCommands,
 ) -> Result<String, ServiceError> {
+    // Only an accept edits the Library, so only it takes a Run; a
+    // rejection names its own source.
+    if let ReviewCommands::Accept { run, .. } = command {
+        crate::ledger::begin(run, as_json);
+    }
+    let client = &mut crate::connect(config)?;
     match command {
         ReviewCommands::Waiting { filter } => {
             let listed: Waiting = client.call(
