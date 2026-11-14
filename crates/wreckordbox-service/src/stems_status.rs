@@ -1,12 +1,11 @@
 //! Whether a track has Stems, for a reader that must not write (wbx-67).
 //!
-//! `stems.show` observes the track's audio before it answers: it marks
-//! Stems of other audio stale, re-attaches Facts, and opens (so makes) the
-//! Sidecar. A window that asks each time the DJ loads a track must not
-//! write anything by asking, so `stems.status` answers the same question
-//! by reading only: it fingerprints the track's file, compares it with the
-//! recorded sets, and leaves every set as it was. A Sidecar never made
-//! stays unmade; the answer is then "none".
+//! A window that asks each time the DJ loads a track must not write
+//! anything by asking, so `stems.status` reads only: it fingerprints the
+//! track's file, compares it with the recorded sets (staleness as the audio
+//! says now, not as last stored), and leaves every set as it was. A Sidecar
+//! never made stays unmade; the answer is then "none". `stems.show` reads
+//! the same way since wbx-t3p (`stems_show`).
 //!
 //! It also says which track is being separated now, by any client, so a
 //! window that did not start the separation (or was reloaded) can show it.
