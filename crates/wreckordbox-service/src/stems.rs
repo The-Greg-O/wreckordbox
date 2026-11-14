@@ -570,7 +570,11 @@ impl Stems {
                     .iter()
                     .filter_map(|(name, file)| Some((Role::named(name)?, file.clone())))
                     .collect();
+                // Observed and recorded under one hold: no accept between
+                // (wbx-j8k).
+                let _facts = self.hold_facts();
                 self.before_record(found, Some(fingerprint), Some(run))?;
+                crate::fact_hold::about_to_commit("stems");
                 sidecar
                     .record_stems(&NewStems {
                         track_id: &parent.id,
