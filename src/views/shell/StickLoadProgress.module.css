@@ -60,6 +60,10 @@
   transition: width 120ms linear;
 }
 
+/* Light: the bar fills in the ink variant of the tab line's end (see
+   StickHoldButton.module.css), which stands out from its light track. */
+:global(:root[data-theme-mode="light"]) .bar > span { background: var(--role-tab-to-ink, var(--role-accent)); }
+
 .shrunk { display: grid; gap: var(--s-shell-space-3); justify-items: stretch; }
 .shrunk button { justify-self: start; }
 
@@ -89,6 +93,14 @@
   color: var(--c-error);
   font: inherit;
   cursor: pointer;
+}
+/* Light: the alarm red is under 4.5:1 as text on a light ground; the
+   failure is a red pill written in black (4.9:1). */
+:global(:root[data-theme-mode="light"]) .statusFailed {
+  padding: 0 var(--s-shell-space-3);
+  border-radius: var(--s-shell-radius);
+  background: var(--c-error);
+  color: #000000;
 }
 .status:focus-visible { outline: var(--s-shell-border) solid var(--role-accent); }
 @container shell (max-width: 640px) {

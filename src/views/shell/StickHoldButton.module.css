@@ -38,6 +38,10 @@
   stroke-dasharray: 100;
   stroke-dashoffset: 100;
 }
+/* Under a light theme the tab line's end can be as light as the ground
+   (Catppuccin Latte's yellow, 2:1): the ring fills in its ink variant
+   (legibleRoles.ts writtenIn), which reads at 3:1 on the track and the button. */
+:global(:root[data-theme-mode="light"]) .fill { stroke: var(--role-tab-to-ink, var(--role-accent)); }
 .hold .button[data-holding] .fill {
   stroke-dashoffset: 0;
   transition: stroke-dashoffset var(--hold-ms) linear;
