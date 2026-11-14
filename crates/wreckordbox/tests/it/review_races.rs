@@ -70,7 +70,7 @@ fn stop_service(s: &Sandbox) {
 }
 
 /// A service of this test's, stopped and waited for when dropped.
-struct Serving(Child);
+pub(crate) struct Serving(Child);
 
 impl Drop for Serving {
     fn drop(&mut self) {
@@ -131,7 +131,7 @@ fn finished(child: Child) -> (bool, Value) {
 }
 
 /// What the Library file holds, read past the service's index.
-fn db_rating(s: &Sandbox, id: &str) -> i64 {
+pub(crate) fn db_rating(s: &Sandbox, id: &str) -> i64 {
     let db = rbl_db::Library::open(s.location().clone(), rbl_db::OpenMode::ReadOnly).unwrap();
     db.connection()
         .query_row(
@@ -211,7 +211,7 @@ fn an_accept_bound_to_the_djs_listing_refuses_a_superseded_fact_by_name() {
     assert_eq!(db_rating(&s, "10001"), 0);
 }
 
-fn describe(s: &Sandbox, id: &str) {
+pub(crate) fn describe(s: &Sandbox, id: &str) {
     s.edit(|w| {
         w.set_field(id, TrackField::Title, "Night Journey (Original Mix)")
             .unwrap();
@@ -223,7 +223,7 @@ fn describe(s: &Sandbox, id: &str) {
 /// The track removed and its music added again, with the service stopped;
 /// then a service, and the reading that reattaches its Facts. Answers the
 /// new track and the service.
-fn readd(s: &Sandbox, id: &str) -> (String, Serving) {
+pub(crate) fn readd(s: &Sandbox, id: &str) -> (String, Serving) {
     stop_service(s);
     let mut next = String::new();
     s.edit(|w| {

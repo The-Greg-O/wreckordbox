@@ -138,6 +138,44 @@ pub(crate) fn library_changes(s: &Sandbox, watcher: &mut wreckordbox_service::Cl
     }
 }
 
+/// Every event the watcher was sent before two ordered barriers, the
+/// barriers' own events left out (wbx-74 review): Library Protection
+/// turned on and off (the queue of Library changes and protection turns,
+/// as [`library_changes`]) and an unprojected Fact recorded on another
+/// track (`vocals` on 10003 from `tool:barrier`: the Sidecar's queue, which
+/// carries `sidecar_changed` and `review_decided`). An event either queue
+/// was given before the barriers arrives before them, so a late or
+/// duplicate notice is caught, never missed by a quiet window. Leaves
+/// protection off; the barrier Fact never waits for the DJ.
+pub(crate) fn events_before_barriers(
+    s: &Sandbox,
+    watcher: &mut wreckordbox_service::Client,
+) -> Vec<(String, Value)> {
+    ok(s, &["protection", "on"]);
+    let off = ok(s, &["protection", "off"]);
+    let marker = fact(s, "10003", "vocals", "Instrumental", "tool:barrier", "1");
+    let (mut library_seen, mut sidecar_seen) = (false, false);
+    let mut heard = Vec::new();
+    while !(library_seen && sidecar_seen) {
+        let event = watcher
+            .next_event(Duration::from_secs(30))
+            .unwrap()
+            .unwrap_or_else(|| panic!("the barriers never arrived; heard {heard:?}"));
+        match event.event.as_str() {
+            "protection_changed" => {
+                if event.data["protect_library"] == false
+                    && event.data["revision"] == off["revision"]
+                {
+                    library_seen = true;
+                }
+            }
+            "sidecar_changed" if event.data["fact_id"] == marker => sidecar_seen = true,
+            _ => heard.push((event.event, event.data)),
+        }
+    }
+    heard
+}
+
 #[test]
 fn facts_held_back_by_policy_are_listed_with_track_value_source_and_confidence_and_reading_writes_nothing(
 ) {
@@ -327,6 +365,8 @@ fn rejecting_records_the_djs_decision_writes_nothing_to_the_library_and_is_never
     let library_before = std::fs::read(s.master_db()).unwrap();
     let mut watcher = s.client();
     watcher.subscribe().unwrap();
+    // What the recording above still sends arrives before the reject.
+    events_before_barriers(&s, &mut watcher);
 
     // Not the DJ's: refused, nothing recorded.
     let runs = ok(&s, &["runs", "list"]);
@@ -352,13 +392,13 @@ fn rejecting_records_the_djs_decision_writes_nothing_to_the_library_and_is_never
     let entries = shown["entries"].as_array().unwrap();
     assert_eq!(entries.len(), 1, "{shown}");
     assert_eq!(entries[0]["store"], "sidecar");
-    // The Library is not written, and no client hears of a Library change.
+    // The Library is not written, and no client hears of a Library change:
+    // only the decision itself (`review_decided`, wbx-74) is told.
     assert_eq!(std::fs::read(s.master_db()).unwrap(), library_before);
     assert_eq!(rating(&s, "10001"), 0);
-    assert!(watcher
-        .next_event(Duration::from_millis(300))
-        .unwrap()
-        .is_none());
+    let heard = events_before_barriers(&s, &mut watcher);
+    let names: Vec<&str> = heard.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, vec!["review_decided"], "heard: {heard:?}");
 
     // Never offered again, never projected, even under a policy that would
     // apply it; a second rejection of it is refused.

@@ -81,6 +81,8 @@ export interface ViewShellProps {
   stickHoldsLibrary?: boolean | undefined;
   /** The number waiting, drawn on a view's tab ("Intake 23"); absent or `null` draws none. */
   tabCounts?: Partial<Record<ShellView, number | null>> | undefined;
+  /** The Review view (wbx-74), loaded on demand by the window; absent, the empty placeholder. */
+  review?: ReactNode | undefined;
   /** The Intake view: given the queue it shows, so the shell stays out of its data. */
   intake?: ((queue: IntakeQueue) => ReactNode) | undefined;
 }
@@ -90,7 +92,7 @@ function tabId(view: ShellView): string {
 }
 
 export function ViewShell({
-  view, onViewChange, tree, player, status, library, libraryTarget, libraryCrumb, libraryTally, topBarEnd, platform, keyOverrides, intakeQueue, stick, stickHoldsLibrary, tabCounts, intake,
+  view, onViewChange, tree, player, status, library, libraryTarget, libraryCrumb, libraryTally, topBarEnd, platform, keyOverrides, intakeQueue, stick, stickHoldsLibrary, tabCounts, intake, review,
 }: ViewShellProps) {
   const t = useTranslation();
 
@@ -242,7 +244,7 @@ export function ViewShell({
             </div>
           ) : null}
           {view === "intake" ? intake?.(intakeQueue ?? "intake") ?? null : null}
-          {view === "review" ? <ReviewView /> : null}
+          {view === "review" ? review ?? <ReviewView /> : null}
           {view === "stick" ? <StickView stick={stick} /> : null}
         </main>
         <footer className={styles.status} data-testid="shell-status">{status}</footer>

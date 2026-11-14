@@ -1,0 +1,218 @@
+/* The Review view (wbx-74): docs/design/screens/review. Chrome colours are
+   the theme's roles. A low confidence (below 0.6) is the design's yellow,
+   drawn as the bar's fill and the row's edge with the word "low" beside it,
+   never as text in yellow, so it reads on a light ground too. */
+
+.view {
+  --rv-low: var(--c-comment-yellow);
+  --rv-sure: var(--c-energy-1);
+  --rv-yes: var(--c-energy-3);
+  --rv-no: var(--c-energy-5);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  font-family: var(--f-shell);
+  font-size: var(--f-size-shell);
+  font-variant-numeric: tabular-nums;
+  color: var(--role-text);
+  background: var(--role-working);
+  overflow: hidden;
+}
+
+.head {
+  display: flex;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+  overflow: hidden;
+  align-items: baseline;
+  gap: var(--s-shell-space-2) var(--s-shell-space-5);
+  padding: var(--s-shell-space-4) var(--s-shell-space-5);
+  border-bottom: var(--s-shell-border) solid var(--role-hairline);
+}
+.title {
+  margin: 0;
+  font-size: var(--f-size-shell-title);
+  font-weight: 700;
+  color: var(--role-text-bright);
+}
+.summary, .readAt, .dim { color: var(--role-text-dim); }
+.summary, .readAt { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.readAt { margin-left: auto; }
+
+.body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.foot { flex: none; max-height: 45%; overflow: auto; border-top: var(--s-shell-border) solid var(--role-hairline); }
+.foot:empty { display: none; }
+
+.note, .done, .failed, .pending, .chosen {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-shell-space-2) var(--s-shell-space-4);
+  margin: 0;
+  padding: var(--s-shell-space-3) var(--s-shell-space-5);
+  border-bottom: var(--s-shell-border) solid var(--role-hairline);
+  overflow-wrap: anywhere;
+}
+.failed { border-left: calc(3 * var(--s-shell-border)) solid var(--rv-no); background: var(--role-panel); }
+.failed strong { color: var(--role-text-bright); }
+.done { border-left: calc(3 * var(--s-shell-border)) solid var(--rv-yes); }
+.pending { border-left: calc(3 * var(--s-shell-border)) solid var(--role-accent); background: var(--role-panel); }
+.chosen { background: var(--role-panel); }
+
+.list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  /* Rows never shift sideways under the pointer. */
+  scrollbar-gutter: stable;
+}
+
+.run { border-bottom: var(--s-shell-border) solid var(--role-ground); }
+.runHead {
+  /* A fixed shape: a count changing never re-wraps it and moves the rows. */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--s-shell-space-2) var(--s-shell-space-4);
+  padding: var(--s-shell-space-3) var(--s-shell-space-5);
+  background: var(--role-panel);
+  border-bottom: var(--s-shell-border) solid var(--role-hairline);
+}
+.runInfo { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.runTitle { color: var(--role-text-bright); }
+.working { color: var(--role-text); }
+.bulk { display: flex; flex-wrap: nowrap; align-items: center; gap: var(--s-shell-space-3); justify-self: end; }
+.bulk > button { min-width: 17ch; }
+.threshold { display: inline-flex; align-items: center; gap: var(--s-shell-space-2); color: var(--role-text-dim); }
+.threshold input {
+  width: 8ch;
+  font: inherit;
+  color: var(--role-text);
+  background: var(--role-working);
+  border: var(--s-shell-border) solid var(--role-border);
+  border-radius: var(--s-shell-radius);
+  padding: 1px var(--s-shell-space-2);
+}
+
+.button, .accept, .icon, .yes, .no {
+  font: inherit;
+  color: var(--role-text);
+  background: var(--role-control);
+  border: var(--s-shell-border) solid var(--role-border);
+  border-radius: var(--s-shell-radius);
+  padding: var(--s-shell-space-1) var(--s-shell-space-4);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.accept { border-color: var(--rv-yes); color: var(--role-text-bright); }
+.button:disabled, .accept:disabled, .icon:disabled, .yes:disabled, .no:disabled { opacity: 0.45; cursor: default; }
+:is(.button, .accept, .icon, .yes, .no, .threshold input, .pick input):focus-visible {
+  outline: calc(2 * var(--s-shell-border)) solid var(--role-accent);
+  outline-offset: 1px;
+}
+.icon, .yes, .no { padding: 0 var(--s-shell-space-3); min-width: 24px; }
+.yes { box-shadow: inset 0 -2px 0 var(--rv-yes); }
+.no { box-shadow: inset 0 -2px 0 var(--rv-no); }
+
+.table { min-width: 0; }
+.header, .row {
+  display: grid;
+  grid-template-columns:
+    24px minmax(9ch, 2.2fr) minmax(7ch, 1fr) minmax(5ch, 1fr) minmax(6ch, 1.4fr)
+    minmax(13ch, 1fr) minmax(9ch, 1fr) auto;
+  align-items: center;
+  column-gap: var(--s-shell-space-4);
+  padding: 0 var(--s-shell-space-5) 0 calc(var(--s-shell-space-5) - 3 * var(--s-shell-border));
+  border-left: calc(3 * var(--s-shell-border)) solid transparent;
+}
+.header {
+  height: var(--s-shell-heading-h, 22px);
+  font-size: var(--f-size-shell-label);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--role-text-dim);
+}
+.row { min-height: var(--s-shell-row-h, 24px); }
+.row > * { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.row:hover { background: color-mix(in srgb, var(--role-selection) 45%, transparent); }
+.row[aria-selected="true"] { background: var(--role-selection); }
+.row[data-low] { border-left-color: var(--rv-low); }
+.row[data-loaded] .track { text-decoration: underline; text-underline-offset: 3px; }
+.row[data-ghost] { opacity: 0.55; }
+.row[data-marked] { outline: var(--s-shell-border) dashed var(--role-accent); outline-offset: -1px; }
+.track { color: var(--role-text-bright); }
+.proposed { color: var(--role-text-bright); }
+.sure { display: inline-flex; align-items: center; gap: var(--s-shell-space-3); }
+.bar {
+  flex: 0 0 auto;
+  width: 48px;
+  height: 6px;
+  background: var(--role-hairline);
+  border-radius: 1px;
+  overflow: hidden;
+  box-shadow: 0 0 0 0.5px var(--c-meaning-edge, transparent);
+}
+.fill { display: block; height: 100%; background: var(--rv-sure); }
+.row[data-low] .fill { background: var(--rv-low); }
+.lowTag {
+  padding: 0 var(--s-shell-space-2);
+  border: var(--s-shell-border) solid var(--role-border);
+  border-radius: var(--s-shell-radius);
+  font-size: var(--f-size-shell-label);
+  text-transform: uppercase;
+  color: var(--role-text);
+}
+.decide { display: inline-flex; gap: var(--s-shell-space-2); justify-content: flex-end; overflow: visible; }
+.ghostTag { color: var(--role-text-dim); font-style: italic; }
+.rejectedRow[data-ghost] { opacity: 0.55; }
+/* What will be replaced, on its own line under a row: drawn only where the
+   Field and Now columns give way. */
+.fieldNow { display: none; }
+.pick { display: inline-flex; justify-content: center; }
+.hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+
+.empty { padding: var(--s-shell-space-6) var(--s-shell-space-5); }
+.emptyTitle { margin: 0 0 var(--s-shell-space-3); font-size: var(--f-size-shell-title); color: var(--role-text-bright); }
+.emptyNote { margin: 0; color: var(--role-text-dim); }
+
+.rejected { padding: var(--s-shell-space-3) var(--s-shell-space-5); }
+.rejectedSummary { cursor: pointer; color: var(--role-text-dim); }
+.rejectedList { list-style: none; margin: var(--s-shell-space-3) 0 0; padding: 0; }
+.rejectedRow { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-shell-space-2) var(--s-shell-space-4); padding: var(--s-shell-space-1) 0; }
+
+/* Narrower than the design draws (Review's narrow layout is not designed;
+   it must not break): the reason and the value now give way first, then
+   the field and the bar. Same container as the shell's breakpoint. */
+@container shell (max-width: 1000px) {
+  .why { display: none; }
+  .header, .row {
+    grid-template-columns: 24px minmax(9ch, 2.2fr) minmax(7ch, 1fr) minmax(5ch, 1fr) minmax(6ch, 1.4fr) minmax(10ch, 1fr) auto;
+  }
+}
+@container shell (max-width: 700px) {
+  .now { display: none; }
+  .row > .fieldNow {
+    display: block;
+    grid-column: 2 / -1;
+    padding-bottom: var(--s-shell-space-1);
+    color: var(--role-text-dim);
+    overflow: visible;
+    white-space: normal;
+  }
+  .bar { display: none; }
+  .header, .row {
+    grid-template-columns: 24px minmax(8ch, 2fr) minmax(6ch, 1fr) minmax(5ch, 1.2fr) minmax(4ch, auto) auto;
+  }
+  .runHead { grid-template-columns: minmax(0, 1fr); }
+  .bulk { justify-self: start; }
+  .bulk > button { min-width: 0; }
+}
+@container shell (max-width: 480px) {
+  .header, .row {
+    grid-template-columns: 22px minmax(6ch, 1fr) minmax(5ch, 1fr) minmax(4ch, auto) auto;
+    column-gap: var(--s-shell-space-3);
+    padding-right: var(--s-shell-space-3);
+  }
+  .row > :nth-child(3), .header > :nth-child(3) { display: none; }
+}
