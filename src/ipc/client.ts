@@ -19,6 +19,7 @@ import type {
   PlaylistEntry, SelectionDetails, TrackDetails, TrackLookups, RelatedPlaylist, StickOutline,
 } from "./types";
 import { tauriInvoke } from "./invoke";
+import { importRecordingWarning } from "./importRecording";
 import { liftMyTags } from "./rowMyTags";
 import { fromServiceColours, type ServiceColours } from "@/lib/intakeEdits";
 import { fromServicePanel, fromServiceTagsSet } from "@/lib/tagPanel";
@@ -153,8 +154,9 @@ export async function importReplacing(
 ): Promise<XmlImportReport | null> {
   const invoke = await tauriInvoke();
   const first = await invoke<XmlImportReport>(command, args);
-  return !first.sameNamed?.length ? first
-    : await confirmReplace(first.sameNamed) ? invoke<XmlImportReport>(command, { ...args, replace: true }) : null;
+  if (!first.sameNamed?.length) return importRecordingWarning(first);
+  if (!await confirmReplace(first.sameNamed)) return null;
+  return importRecordingWarning(await invoke<XmlImportReport>(command, { ...args, replace: true }));
 }
 
 /** Keep the native Edit menu in sync with the focused editor's history. */
@@ -290,7 +292,7 @@ async function realBackend(): Promise<Backend> {
     importFolderPlaylist: (path, parent, replace, at, copy) =>
       invoke<FolderPlaylistReport>("import_folder_playlist", {
         path, parent, replace: replace ?? null, at: at ?? null, copy: copy ?? null,
-      }),
+      }).then(importRecordingWarning),
     exportLoopWav: async (track, title, inMs, outMs) => {
       const { save } = await import("@tauri-apps/plugin-dialog");
       const picked = await save({
@@ -686,7 +688,7 @@ async function realBackend(): Promise<Backend> {
     devicePlaylistDuplicates: (path, format, playlist, tracks) =>
       invoke<string[]>("device_playlist_duplicates", { path, format, playlist, tracks }),
     devicePlaylistImport: (path, format, id, missing, destination) =>
-      invoke<DevicePlaylistImportResult>("device_playlist_import", { path, format, id, missing, destination: destination ?? null }),
+      invoke<DevicePlaylistImportResult>("device_playlist_import", { path, format, id, missing, destination: destination ?? null }).then(importRecordingWarning),
     devicePlaylistImportPlan: (path, format, id, destination) =>
       invoke<DevicePlaylistImportPlan>("device_playlist_import_plan", { path, format, id, destination: destination ?? null }),
     onLibraryChanged: (listener) => {

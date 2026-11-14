@@ -355,6 +355,8 @@ pub struct ImportReportDto {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FolderPlaylistDto {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recording_warning: Option<String>,
     /// The folder's name, which is the playlist's unless `renamed` says so.
     pub name: String,
     /// The name the playlist was given instead, when it was imported as a
@@ -553,6 +555,8 @@ pub struct SyncProgressDto {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct XmlImportReportDto {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recording_warning: Option<String>,
     pub imported: u32,
     pub existing: u32,
     pub skipped: Vec<String>,

@@ -1564,6 +1564,8 @@ export type DeviceImportMissing = "copy" | "matched" | "cancel";
 
 /** What Import Playlist did with a stick's playlist. */
 export interface DevicePlaylistImportResult {
+  /** The import was accepted, but some Ledger recording is pending. */
+  recordingWarning?: string;
   /** The collection playlist made, or null when nothing was imported. */
   id: string | null;
   /** The name it was given (the stick's name when nothing was made). */
@@ -1986,6 +1988,8 @@ export interface ImportReport {
 
 /** What dropping one folder onto the playlist tree did. */
 export interface FolderPlaylistReport {
+  /** The import was accepted, but some Ledger recording is pending. */
+  recordingWarning?: string;
   /** The folder's name, which is the playlist's unless `renamed` says so. */
   name: string;
   /** The name the playlist took instead, as a copy beside a same-named list. */
@@ -2024,6 +2028,8 @@ export interface ItunesLibrary {
 }
 
 export interface XmlImportReport {
+  /** The import was accepted, but some Ledger recording is pending. */
+  recordingWarning?: string;
   imported: number;
   /** Tracks whose file was already in the library, reused as they are. */
   existing: number;

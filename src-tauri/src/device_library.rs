@@ -602,6 +602,8 @@ pub enum MissingTracks {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceImportResultDto {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recording_warning: Option<String>,
     /// The collection playlist made; `None` when nothing was imported.
     pub id: Option<String>,
     /// The name it was given, or the device's name when nothing was made.
@@ -714,6 +716,7 @@ pub async fn device_playlist_import<R: tauri::Runtime>(
     let reading = Arc::clone(&state);
     let plan = blocking("device_playlist_import", move || read_plan(&reading, &path, &format, &id)).await?;
     let none = |cancelled: bool| DeviceImportResultDto {
+        recording_warning: None,
         id: None,
         name: plan.name.clone(),
         renamed: false,
@@ -755,17 +758,13 @@ pub async fn device_playlist_import<R: tauri::Runtime>(
         }
     };
 
-    let made: Arc<parking_lot::Mutex<Option<rbl_db::write::ImportedPlaylist>>> = Arc::default();
-    let slot = Arc::clone(&made);
+    let operation = rbl_library::bulk::Operation::new(state.core(), rbl_library::bulk::Kind::Import);
+    let recording = operation.clone();
+    let writing = Arc::clone(&state);
     let name = plan.name.clone();
-    let written = crate::commands::edit(app.clone(), state.clone(), "device_playlist_import", crate::commands::Touched::Playlists, move |w| {
-        *slot.lock() = Some(w.import_device_playlist_entries(&name, &entries)?);
-        Ok(())
-    })
-    .await;
-    let made = written.and_then(|_| {
-        made.lock().take().ok_or_else(|| AppError::new(ErrorKind::Internal, "The playlist could not be imported."))
-    });
+    let made = blocking("device_playlist_import", move || {
+        crate::import_recording::import_device_rows_recorded(&writing, &recording, &name, &entries)
+    }).await;
     let made = match made {
         Ok(made) => made,
         Err(error) => {
@@ -778,23 +777,30 @@ pub async fn device_playlist_import<R: tauri::Runtime>(
                     tracing::warn!(error = %left, "could not remove the copies of a failed device import");
                 }
             }
+            // A failed recording worker must not skip cleanup of a refused import.
+            crate::import_recording::end_import_recording(app.clone(), operation).await?;
             return Err(error);
         }
     };
-    let (mut analysed, mut analysis_failed) = (0_usize, 0_usize);
-    if !made.added.is_empty() {
+    let carried_result = if made.added.is_empty() {
+        Ok((0, 0))
+    } else {
         let added = made.added.clone();
         let mount = plan.mount.clone();
         let writing = Arc::clone(&state);
-        (analysed, analysis_failed) = blocking("device_playlist_import_analysis", move || {
-            Ok(carry_all(&writing, &mount, &added, &carried))
-        })
-        .await?;
-        // New tracks: the collection changed as well as the tree.
-        crate::commands::reload(app, Arc::clone(&state)).await?;
-    }
+        let recording = operation.clone();
+        blocking("device_playlist_import_analysis", move || {
+            Ok(carry_all_recorded(&writing, &mount, &added, &carried, &recording))
+        }).await
+    };
+    let recording_warning = crate::import_recording::end_import_recording(app.clone(), operation).await?;
+    let (analysed, analysis_failed) = carried_result?;
+    // One final refresh/event for the playlist and all carried track metadata.
+    crate::commands::reload(app.clone(), Arc::clone(&state)).await?;
+    crate::commands::announce_history(&app, &state);
     tracing::info!(tracks = made.tracks, missing = plan.missing(), copied = made.added.len(), analysed, analysis_failed, "imported a device playlist");
     Ok(DeviceImportResultDto {
+        recording_warning,
         id: Some(made.id),
         renamed: made.name != plan.name,
         name: made.name,
@@ -911,11 +917,20 @@ fn copy_missing(
 /// `added` as the writer gives it and `carried` as [`copy_missing`] does.
 /// Says how many were given the stick's analysis and how many could not be;
 /// one that fails is left as the bare file the import added.
+#[cfg(test)]
 fn carry_all(state: &AppState, mount: &Path, added: &[(String, PathBuf)], carried: &[(PathBuf, MissingFile)]) -> (usize, usize) {
+    carry_all_recorded(state, mount, added, carried, &rbl_library::bulk::Operation::default())
+}
+
+fn carry_all_recorded(state: &AppState, mount: &Path, added: &[(String, PathBuf)], carried: &[(PathBuf, MissingFile)], operation: &rbl_library::bulk::Operation) -> (usize, usize) {
     let mut counts = (0, 0);
     for (content, file) in added {
         let Some((_, stick)) = carried.iter().find(|(copy, _)| copy == file) else { continue };
-        match carry_stick_analysis(state, mount, content, file, stick) {
+        match operation.run(
+            serde_json::json!({"track":content,"operation":"device_analysis"}),
+            || carry_stick_analysis(state, mount, content, file, stick),
+            |()| vec![serde_json::json!({"track":content,"operation":"device_analysis","path":file,"bpm_x100":stick.bpm_x100,"key":stick.key})],
+        ) {
             Ok(()) => counts.0 += 1,
             Err(error) => {
                 counts.1 += 1;

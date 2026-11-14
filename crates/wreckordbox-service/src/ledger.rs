@@ -76,8 +76,9 @@
 //!
 //! Bulk analysis and local-file imports use `rbl_library::bulk::Operation`:
 //! one operation intent and lazy Run, with confirmed results flushed in bounded
-//! batches. Only writes outside Undo history join it; recorded playlist edits
-//! retain their ordinary preparation and transactional Mutant Follows. See
+//! batches. Imported rows and kept replacement history share the initiator's
+//! Run without deriving DJ Facts; replacement preparation and transactional
+//! Mutant Follows remain on the native history path. See
 //! `bulk_ledger.rs` for bounded degradation when recording fails.
 //!
 //! # Locks
@@ -1700,6 +1701,9 @@ impl Keeper {
     /// Answers the entry's identifier: the one reserved for the write it
     /// records, which it keeps even when it has to be written later.
     fn append(&self, draft: Draft) -> Option<i64> {
+        let imported = bulk::active(self)
+            .filter(|active| active.imports())
+            .map(|active| active.import_target());
         CURRENT.with(|current| {
             let mut current = current.borrow_mut();
             let mut state = self.state();
@@ -1714,7 +1718,9 @@ impl Keeper {
             let player = fresh.is_some_and(|op| files::is_link(op.command.as_ref()));
             // Which Run and whose change, as far as can be told even when
             // the Sidecar cannot be written.
-            let (run, source, description) = if player {
+            let (run, source, description) = if let Some(target) = imported.clone() {
+                target
+            } else if player {
                 let run = match &sidecar {
                     Ok(sidecar) => self.player_run(sidecar, &mut state),
                     Err(error) => Err(error.message.clone()),
@@ -1753,7 +1759,7 @@ impl Keeper {
                 .op
                 .as_mut()
                 .and_then(|op| claim(op, sidecar.as_deref().ok(), draft.asserted));
-            let mut dj_facts = if source.kind == SourceKind::Dj && draft.action != Action::Undo {
+            let mut dj_facts = if imported.is_none() && source.kind == SourceKind::Dj && draft.action != Action::Undo {
                 crate::dj_facts::derive(&self.location, &self.stems, draft.kind, draft.payload.as_ref(), draft.asserted)
             } else { wreckordbox_sidecar::dj_facts::NativeFacts::default() };
             if source.kind == SourceKind::Dj {
@@ -1847,6 +1853,9 @@ impl Keeper {
 
 impl Keeper {
     fn begin_operation(&self, file: Option<Value>) -> Result<(), String> {
+        let imported = bulk::active(self)
+            .filter(|active| active.imports())
+            .map(|active| active.import_target());
         let sidecar = self.stems.sidecar().map_err(|e| e.message)?;
         let mut state = self.state();
         if state.closed {
@@ -1862,6 +1871,9 @@ impl Keeper {
         let (window, run, source, description, command) = CURRENT.with(|current| {
             let current = current.borrow();
             let command = file.or_else(|| current.as_ref().map(|scope| scope.command.clone()));
+            if let Some((run, source, description)) = imported {
+                return (false, run.ok(), source, description, command);
+            }
             if files::is_link(command.as_ref()) {
                 return (
                     false,
@@ -1948,6 +1960,9 @@ impl rbl_library::ledger::Ledger for Keeper {
     fn begin(&self) -> Result<(), String> {
         if let Some(active) = bulk::active(self) {
             active.set_bulk(false);
+            if active.imports() {
+                active.begin()?;
+            }
         }
         self.begin_operation(None)
     }
@@ -2014,6 +2029,9 @@ impl rbl_library::ledger::Ledger for Keeper {
 
     fn prepare(&self, db: &rbl_db::Library, targets: &rbl_library::ledger::Preparation) {
         self.plan_mutants(db, targets);
+        if bulk::active(self).is_some_and(|active| active.imports()) {
+            return;
+        }
         let mut state = self.state();
         if targets.asserting {
             if let Some(op) = state.op.as_mut() {
@@ -2046,6 +2064,9 @@ impl rbl_library::ledger::Ledger for Keeper {
                 std::process::abort();
             }
             return;
+        }
+        if let Some(active) = bulk::active(self).filter(|active| active.imports()) {
+            active.written(wrote);
         }
         if let Some(op) = self.state().op.as_mut() {
             op.wrote = Some(wrote);

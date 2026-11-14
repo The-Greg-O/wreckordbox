@@ -101,12 +101,35 @@ fn a_dry_run_lists_exactly_what_applying_then_does_as_one_run_and_twice_changes_
     s.dj_prep_colours();
     policy(&s, "[energy]\napply = 0.8\n\n[prep_colour]\napply = 0.5\n");
     ok(&s, &["status"]);
-    let energy = fact(&s, "10001", "energy", "4", "agent:tagger", "0.9");
-    fact(&s, "10002", "energy", "2", "tool:meter", "0.8");
-    fact(&s, "10003", "prep_colour", "Green", "agent:tagger", "0.6");
     let mut watcher = s.client();
     watcher.subscribe().unwrap();
+    let energy = fact(&s, "10001", "energy", "4", "agent:tagger", "0.9");
+    let second = fact(&s, "10002", "energy", "2", "tool:meter", "0.8");
+    let third = fact(&s, "10003", "prep_colour", "Green", "agent:tagger", "0.6");
+    // Fact replies finish their Runs, but their notifications use a separate
+    // broadcaster. Observe those exact setup events before testing silence;
+    // subscribing after the replies can still receive an older queued event.
+    for recorded in [&energy, &second, &third] {
+        let event = watcher
+            .next_event(Duration::from_secs(2))
+            .unwrap()
+            .expect("setup Fact notification");
+        assert_eq!(event.event, "sidecar_changed");
+        assert_eq!(
+            event.data,
+            json!({"track_id":recorded["track_id"],"kind":recorded["kind"],"fact_id":recorded["id"],"stale":[]})
+        );
+    }
     let runs_before = ok(&s, &["runs", "list"]);
+    assert_eq!(runs_before["total"], 3);
+    assert!(
+        runs_before["runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|run| !run["finished_at"].is_null() && run["changes"] == 1),
+        "setup Runs are already complete: {runs_before}"
+    );
 
     let dry = ok(&s, &["project", "--dry-run"]);
     assert_eq!(dry["dry_run"], true);
@@ -133,11 +156,16 @@ fn a_dry_run_lists_exactly_what_applying_then_does_as_one_run_and_twice_changes_
     assert_eq!(first["source"], json!({"kind": "agent", "name": "tagger"}));
     // A dry run writes nothing: no Library change, no Run, no event.
     assert_eq!(track(&s, "10001")["rating"], 0);
-    assert_eq!(ok(&s, &["runs", "list"]), runs_before);
-    assert!(watcher
-        .next_event(Duration::from_millis(300))
-        .unwrap()
-        .is_none());
+    let runs_after_dry = ok(&s, &["runs", "list"]);
+    assert_eq!(
+        runs_after_dry,
+        runs_before,
+        "dry-run Run lists differ\nBEFORE: {}\nAFTER: {}",
+        serde_json::to_string_pretty(&runs_before).unwrap(),
+        serde_json::to_string_pretty(&runs_after_dry).unwrap()
+    );
+    let after_dry_event = watcher.next_event(Duration::from_millis(300)).unwrap();
+    assert!(after_dry_event.is_none(), "unexpected event after dry run: {after_dry_event:?}\nBEFORE: {runs_before}\nAFTER: {runs_after_dry}");
 
     let applied = ok(&s, &["project"]);
     assert_eq!(applied["dry_run"], false);
