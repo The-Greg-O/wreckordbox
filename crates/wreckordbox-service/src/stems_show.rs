@@ -27,7 +27,12 @@ pub(crate) fn show(stems: &Stems, found: &ParentAudio) -> Result<TrackStems, Ser
         .into_iter()
         .filter_map(|fact| StemSet::from_fact(&dir, fact))
         .map(|set| as_now(set, audio.as_ref()))
-        .partition(|set| set.is_current() && audio.as_ref() == Some(&set.fingerprint));
+        .partition(|set| {
+            set.is_current()
+                && audio
+                    .as_ref()
+                    .is_some_and(|audio| audio.matches_stored(&set.fingerprint))
+        });
     Ok(TrackStems {
         track: found.parent().clone(),
         // Stems whose audio files are missing or are not the ones recorded
@@ -41,7 +46,7 @@ pub(crate) fn show(stems: &Stems, found: &ParentAudio) -> Result<TrackStems, Ser
 /// every reader of Stems judges currency this way, not by the stored mark.
 pub(crate) fn as_now(mut set: StemSet, audio: Option<&Fingerprint>) -> StemSet {
     if let Some(audio) = audio {
-        set.stale = set.fingerprint != *audio;
+        set.stale = !audio.matches_stored(&set.fingerprint);
     }
     set
 }

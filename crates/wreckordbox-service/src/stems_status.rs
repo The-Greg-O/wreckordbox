@@ -123,14 +123,13 @@ fn status(stems: &Stems, found: &ParentAudio) -> StemsStatus {
         answer.fact_id = Some(set.fact_id);
     };
     // Newest first: the newest current set of this audio with its files.
-    if let Some(set) = sets
-        .iter()
-        .find(|set| set.is_current() && set.fingerprint == audio && set.audio_present())
-    {
+    if let Some(set) = sets.iter().find(|set| {
+        set.is_current() && audio.matches_stored(&set.fingerprint) && set.audio_present()
+    }) {
         describe(&mut answer, set, StemsState::Current);
     } else if let Some(set) = sets
         .iter()
-        .find(|set| set.stale || (!set.superseded && set.fingerprint != audio))
+        .find(|set| set.stale || (!set.superseded && !audio.matches_stored(&set.fingerprint)))
     {
         describe(&mut answer, set, StemsState::Stale);
     }

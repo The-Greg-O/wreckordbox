@@ -37,5 +37,8 @@ lewton = "0.10"
 rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
 serde_json = { workspace = true }
 tempfile = "3"
+
+# Real tag round trips beside the prepared key-tag writer.
+lofty = { version = "0.22", default-features = false }
 # A listener that never accepts, its backlog full (`service_exit`).
 socket2 = { version = "0.6", features = ["all"] }

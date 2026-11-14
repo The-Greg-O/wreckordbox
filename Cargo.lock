@@ -7123,6 +7123,7 @@ version = "1.10.0"
 dependencies = [
  "clap",
  "lewton",
+ "lofty",
  "rbl-anlz",
  "rbl-backup",
  "rbl-db",

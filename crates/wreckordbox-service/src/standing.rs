@@ -86,7 +86,11 @@ pub(crate) fn answer(
         let fingerprint = stems::fingerprint(found.parent(), found.path())?;
         for fact in &mut stored {
             if fact.nature == Nature::Measurement {
-                fact.stale_at = (fact.fingerprint.as_ref() != Some(&fingerprint)).then_some(0);
+                fact.stale_at = (!fact
+                    .fingerprint
+                    .as_ref()
+                    .is_some_and(|stored| fingerprint.matches_stored(stored)))
+                .then_some(0);
             }
         }
     }

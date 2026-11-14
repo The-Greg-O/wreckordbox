@@ -752,7 +752,10 @@ impl Measuring<'_> {
             return Ok(None);
         };
         crate::fact_hold::about_to_commit("intensity-reuse");
-        Ok(self.record(parent, fingerprint, &value)?.map(|recorded| {
+        // Re-alignment reuses the original evidence; it cannot strengthen
+        // a legacy measurement into a v2 measurement without decoding.
+        let evidence = fact.fingerprint.as_ref().unwrap_or(fingerprint);
+        Ok(self.record(parent, evidence, &value)?.map(|recorded| {
             changed(self.stems, &parent.id, Some(recorded.id), &[]);
             TrackOutcome {
                 reused_from: Some(fact.id),
@@ -906,7 +909,10 @@ fn show(stems: &Stems, target: Target) -> Result<TrackIntensity, ServiceError> {
         let aligned = valid(&fact);
         let mut measurement = Measurement::from(fact);
         if let Some(audio) = &audio {
-            measurement.stale = measurement.fingerprint.as_ref() != Some(audio);
+            measurement.stale = !measurement
+                .fingerprint
+                .as_ref()
+                .is_some_and(|stored| audio.matches_stored(stored));
         }
         if audio.is_some() && !measurement.superseded && !measurement.stale {
             // Alignment is an answer, not a new Fact. measure still records
@@ -1003,7 +1009,12 @@ fn reusable(
     fingerprint: &Fingerprint,
 ) -> Result<Option<(Fact, Intensity)>, ServiceError> {
     let own = ours(sidecar, track_id)?.into_iter().filter(|fact| {
-        fact.is_live() && !fact.is_stale() && fact.fingerprint.as_ref() == Some(fingerprint)
+        fact.is_live()
+            && !fact.is_stale()
+            && fact
+                .fingerprint
+                .as_ref()
+                .is_some_and(|stored| fingerprint.matches_stored(stored))
     });
     let anywhere = sidecar
         .facts_of_audio(fingerprint, INTENSITY.name)

@@ -173,7 +173,7 @@ fn identities(
 ) -> Result<Vec<Identity>> {
     let mut statement = tx.prepare(
         "SELECT track_id, fingerprint, title, artist, mix_name, duration FROM track_identity
-         WHERE (fingerprint = ?1 OR
+         WHERE (fingerprint IN (?1, ?7) OR
              (?2 <> '' AND ?3 <> '' AND duration > 0 AND title = ?2 AND artist = ?3 AND mix_name = ?4 AND duration BETWEEN ?5 AND ?6))
          AND EXISTS (SELECT 1 FROM fact_track WHERE fact_track.track_id = track_identity.track_id)
          ORDER BY track_id",
@@ -186,7 +186,8 @@ fn identities(
                 normalize(&fields.artist),
                 normalize(&fields.mix_name),
                 fields.duration.saturating_sub(2),
-                fields.duration.saturating_add(2)
+                fields.duration.saturating_add(2),
+                fingerprint.map(|f| f.legacy().to_string())
             ],
             |row| {
                 Ok(Identity {
@@ -295,8 +296,11 @@ pub(crate) fn observe_in(
             .iter()
             .copied()
             .filter(|candidate| {
-                fingerprint.is_some()
-                    && candidate.fingerprint.as_deref() == fingerprint.map(Fingerprint::as_str)
+                fingerprint.is_some_and(|audio| {
+                    candidate.fingerprint.as_ref().is_some_and(|stored| {
+                        audio.matches_stored(&Fingerprint::from_stored(stored.clone()))
+                    })
+                })
             })
             .collect();
         if exact.len() == 1 && !occupied {
