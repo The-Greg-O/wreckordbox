@@ -35,6 +35,7 @@ pub mod protocol;
 pub mod reading;
 pub mod render_stems;
 pub mod review;
+pub mod review_runs;
 pub mod run_status;
 pub mod schema;
 mod separation;

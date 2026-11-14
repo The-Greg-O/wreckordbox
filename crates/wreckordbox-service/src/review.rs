@@ -168,6 +168,10 @@ pub struct Waiting {
     /// Fact, its track, field, values, source, confidence and why it
     /// waits): what `review.accept` requires.
     pub token: String,
+    /// The Runs the listed Facts were recorded in (wbx-74), each with its
+    /// Facts; not covered by the token.
+    #[serde(default)]
+    pub runs: Vec<crate::review_runs::WaitingRun>,
 }
 
 /// The answer of `review.accept` and `review.reject`.
@@ -323,6 +327,7 @@ fn waiting(library: &OpenLibrary, stems: &Stems, asked: &Selection) -> Result<Va
     Ok(json!(Waiting {
         count: waiting.len(),
         token: token_of(asked, &waiting),
+        runs: crate::review_runs::of(stems, &waiting)?,
         waiting,
         library_protected,
     }))
@@ -891,11 +896,15 @@ fn reject(
         .sidecar_if_made()?
         .ok_or_else(|| failed("there is no Sidecar to record the rejection in"))?;
     match sidecar.reject(&rows, &source, &command).map_err(failed)? {
-        Ok(rejection) => Ok(json!(Decided {
-            count: chosen.len(),
-            decided: chosen,
-            rejection: Some(rejection),
-        })),
+        Ok(rejection) => {
+            let facts: Vec<i64> = chosen.iter().map(|h| h.fact).collect();
+            crate::review_runs::decided(stems, "rejected", &facts);
+            Ok(json!(Decided {
+                count: chosen.len(),
+                decided: chosen,
+                rejection: Some(rejection),
+            }))
+        }
         Err(NotRecorded::NotTheDj | NotRecorded::Nothing) => {
             Err(not_the_dj("rejecting a waiting Fact"))
         }
@@ -994,11 +1003,15 @@ fn reopen(stems: &Stems, request: &Request, asked: &Selection) -> Result<Value, 
         .sidecar_if_made()?
         .ok_or_else(|| failed("there is no Sidecar to record the reopening in"))?;
     match sidecar.reopen(&rows, &source, &command).map_err(failed)? {
-        Ok(reopening) => Ok(json!(Reopened {
-            count: chosen.len(),
-            reopened: chosen,
-            reopening: Some(reopening),
-        })),
+        Ok(reopening) => {
+            let facts: Vec<i64> = chosen.iter().map(|r| r.offered.fact).collect();
+            crate::review_runs::decided(stems, "reopened", &facts);
+            Ok(json!(Reopened {
+                count: chosen.len(),
+                reopened: chosen,
+                reopening: Some(reopening),
+            }))
+        }
         Err(_) => Err(not_the_dj("reopening a rejection")),
     }
 }
