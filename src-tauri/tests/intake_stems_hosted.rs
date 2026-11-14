@@ -382,3 +382,65 @@ fn a_window_that_hosts_no_service_says_so() {
         error.message
     );
 }
+
+// ---------------------------------------------------------------------------
+// A Sidecar kept on a Stick (wbx-45.14): a temporary folder carrying the
+// stand-in marker stands for the Stick.
+
+impl Window {
+    /// Puts the Sidecar's folder on a Stick; unlocked when `unlocked`.
+    fn sidecar_on_stick(&self, unlocked: bool) {
+        let sidecar = self.sidecar();
+        std::fs::create_dir_all(&sidecar).unwrap();
+        std::fs::write(sidecar.join(wreckordbox_stick_protection::STAND_IN_MARKER), b"").unwrap();
+        if unlocked {
+            let name = sidecar.file_name().unwrap().to_str().unwrap().to_owned();
+            wreckordbox_stick_protection::unlock(&self.dir.path().join("backups"), &sidecar, Some(&name)).unwrap();
+        }
+    }
+}
+
+#[test]
+fn the_windows_split_is_refused_for_a_sidecar_on_a_stick_with_or_without_again() {
+    let window = hosting_window();
+    window.sidecar_on_stick(true);
+    let (track, audio) = window.tracks[0].clone();
+    let before = window.sidecar_files();
+    for again in [false, true] {
+        let answer =
+            intake_stems::separate(window.app.handle(), &window.state(), &track, again).unwrap();
+        assert_eq!(answer["ok"], false, "again {again}: {answer}");
+        assert_eq!(answer["error"]["code"], "sidecar_on_stick", "again {again}: {answer}");
+    }
+    assert_eq!(engine_runs(&audio), 0, "the engine was never asked");
+    assert_eq!(window.sidecar_files(), before, "the Sidecar on the Stick is untouched");
+}
+
+#[test]
+fn stems_status_reads_a_sidecar_on_a_stick_without_writing_or_being_refused() {
+    let window = hosting_window();
+    let (track, _) = window.tracks[0].clone();
+    // A Sidecar holding this track's Stems, made while it was on this
+    // computer; then its folder is a Stick (protected, then unlocked).
+    let split = intake_stems::separate(window.app.handle(), &window.state(), &track, false).unwrap();
+    assert_eq!(split["ok"], true, "{split}");
+    for unlocked in [false, true] {
+        window.sidecar_on_stick(unlocked);
+        let before = window.sidecar_files();
+        let status = intake_stems::status(&window.state(), &track).unwrap();
+        assert_eq!(status["unavailable"], Value::Null, "unlocked {unlocked}: {status}");
+        assert_eq!(status["state"], "current", "unlocked {unlocked}: {status}");
+        assert_eq!(window.sidecar_files(), before, "unlocked {unlocked}: nothing written");
+    }
+}
+
+#[test]
+fn a_split_asked_for_once_the_window_is_closing_is_refused_and_runs_nothing() {
+    let window = hosting_window();
+    let (track, audio) = window.tracks[0].clone();
+    rbxport_lib::shutdown::on_exit(&window.state());
+    let error = intake_stems::separate(window.app.handle(), &window.state(), &track, false)
+        .expect_err("no service command once closing");
+    assert!(error.message.contains("Library service"), "{}", error.message);
+    assert_eq!(engine_runs(&audio), 0);
+}

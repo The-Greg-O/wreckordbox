@@ -32,13 +32,22 @@ pub trait OutsideSteps: Send + Sync {
     /// [`DbError::Conflict`], as a changed row is.
     fn check(&self, undo: bool, label: &str) -> Result<(), DbError>;
 
-    /// Undoes (`undo`) or redoes every change, or none.
-    fn step(&self, undo: bool, label: &str) -> Result<(), DbError>;
+    /// Undoes (`undo`) or redoes every change, or none. The answer is the
+    /// leave the step wrote under (Stick Protection's, for a file on a
+    /// Stick: wbx-45.14), held through the Library's own step and, when
+    /// that fails, through [`Self::revert`], so nothing can take it away
+    /// between the two (a Stick locked mid-step waits for both).
+    fn step(&self, undo: bool, label: &str) -> Result<OutsideHold, DbError>;
 
     /// Puts back what [`Self::step`] changed, after the Library's own step
-    /// failed; answers `(could not be put back, of how many)`.
-    fn revert(&self, undo: bool) -> (usize, usize);
+    /// failed, under the leave that step answered; answers `(could not be
+    /// put back, of how many)`.
+    fn revert(&self, held: OutsideHold, undo: bool) -> (usize, usize);
 }
+
+/// What [`OutsideSteps::step`] wrote under, held until the entry's Library
+/// step is made or reverted. Opaque to the core.
+pub type OutsideHold = Box<dyn std::any::Any + Send>;
 
 /// One reversible library operation. The window's grid edits are entries too
 /// (`Grid`), stepped by its grid editor because they also rewrite analysis
@@ -262,12 +271,13 @@ impl LibraryEdit {
             // it wrote and leaves the library as it was; a failure in the library
             // puts the files and the tracks already written back (#507).
             Self::KeyEdit { tracks, files } => {
-                files.step(undo, TRACK_EDIT)?;
+                // Held to the end of the Library's step, or of the revert.
+                let held = files.step(undo, TRACK_EDIT)?;
                 let error = match step_track_edits(writer, tracks, undo) {
                     Ok(()) => return Ok(()),
                     Err(error) => error,
                 };
-                let (stranded, of) = files.revert(undo);
+                let (stranded, of) = files.revert(held, undo);
                 if stranded == 0 {
                     return Err(error);
                 }

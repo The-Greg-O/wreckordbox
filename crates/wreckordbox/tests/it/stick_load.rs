@@ -1228,3 +1228,6 @@ fn stopping_the_service_waits_past_its_patience_for_a_load_and_its_report() {
     );
     assert!(!rig.paths[0].join(".rbxport-publication").exists());
 }
+
+#[path = "stick_load/identity.rs"]
+mod identity;

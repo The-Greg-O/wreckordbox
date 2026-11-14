@@ -708,12 +708,10 @@ fn a_protected_stick_with_an_unfinished_export_is_not_settled_or_written() {
     let (rig, track) = Rig::ready("Half Done.wav");
     let stick = rig.stick().to_str().unwrap().to_owned();
     assert!(rig.sandbox.cli(&["stick", "lock", &stick]).status.success());
-    // The journal an interrupted publication leaves.
-    std::fs::write(
-        rig.stick().join(".rbxport-publication"),
-        b"{\"interrupted\":true}",
-    )
-    .unwrap();
+    // A genuine publication interrupted right after it was committed: a
+    // settle would publish another export (wbx-45.14), so a write that
+    // recovered it before Stick Protection's check would change the Stick.
+    let _settled = wreckordbox_stick_outline::testing::interrupt(rig.stick());
     let before = deck::snapshot(rig.stick());
 
     let run = rig.write(&track, true);

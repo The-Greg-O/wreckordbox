@@ -90,20 +90,22 @@ fn status(stems: &Stems, found: &ParentAudio) -> StemsStatus {
         message: error.message,
     };
     let audio = fingerprint(found.parent(), found.path());
-    let sets = match stems.sidecar_if_made() {
-        Ok(None) => Vec::new(),
-        Ok(Some(sidecar)) => match sidecar.stems(&found.parent().id) {
-            Ok(sets) => sets,
+    // Read without the Sidecar's writer (the writer's own connection when
+    // it is open, else an immutable snapshot): nothing is opened, made or
+    // written, so a Sidecar kept on a Stick, protected or not, is read and
+    // left as it is (wbx-45.14).
+    let dir = stems.sidecar_dir().to_path_buf();
+    let sets: Vec<StemSet> =
+        match crate::mutant_reads::inspect(stems, |store| store.stem_facts(&found.parent().id)) {
+            Ok(facts) => facts
+                .into_iter()
+                .filter_map(|fact| StemSet::from_fact(&dir, fact))
+                .collect(),
             Err(error) => {
-                answer.unavailable = Some(unavailable(crate::stems::sidecar_error(&error)));
+                answer.unavailable = Some(unavailable(error));
                 return answer;
             }
-        },
-        Err(error) => {
-            answer.unavailable = Some(unavailable(error));
-            return answer;
-        }
-    };
+        };
     let audio = match audio {
         Ok(audio) => audio,
         Err(error) => {

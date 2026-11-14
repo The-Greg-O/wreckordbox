@@ -37,6 +37,9 @@ use crate::error::{AppError, AppResult, ErrorKind};
 #[derive(Debug)]
 pub struct StickAccess {
     held: Vec<Authorization>,
+    /// Counted as a running writer of its window until dropped, so closing
+    /// the window waits for it (wbx-45.14); none for a test's ordinary leave.
+    _admitted: Option<crate::write_admission::Admitted>,
 }
 
 impl StickAccess {
@@ -57,6 +60,15 @@ impl StickAccess {
     pub fn recheck(&self) -> AppResult<()> {
         self.held
             .iter()
+            .try_for_each(|held| held.recheck().map_err(|e| refused(&e)))
+    }
+
+    /// [`Self::recheck`] for the one Stick holding `path` (none for a path
+    /// on an ordinary folder): a write to that file may go on (wbx-45.14).
+    pub fn recheck_for(&self, path: &Path) -> AppResult<()> {
+        self.held
+            .iter()
+            .filter(|held| held.stick().is_some_and(|root| path.starts_with(root)))
             .try_for_each(|held| held.recheck().map_err(|e| refused(&e)))
     }
 }
@@ -84,20 +96,22 @@ fn gone() -> AppError {
 
 /// A write to `destination`, which may be on a Stick: see the module.
 pub fn enter(state_dir: &Path, destination: &Path) -> AppResult<StickAccess> {
+    let admitted = crate::write_admission::admit(state_dir)?;
     let held =
         wreckordbox_stick_protection::authorize(state_dir, destination).map_err(|e| refused(&e))?;
-    Ok(StickAccess { held: vec![held] })
+    Ok(StickAccess { held: vec![held], _admitted: Some(admitted) })
 }
 
 /// A write to the Stick whose root is `root` (its playlists, settings,
 /// format, settle): always a Stick, whatever its volume says.
 pub fn enter_stick(state_dir: &Path, root: &Path) -> AppResult<StickAccess> {
+    let admitted = crate::write_admission::admit(state_dir)?;
     if !root.is_dir() {
         return Err(gone());
     }
     let held =
         wreckordbox_stick_protection::authorize_stick(state_dir, root).map_err(|e| refused(&e))?;
-    Ok(StickAccess { held: vec![held] })
+    Ok(StickAccess { held: vec![held], _admitted: Some(admitted) })
 }
 
 /// Leave to write, or recover, the Library at `location` (wbx-45.11): a
@@ -162,6 +176,7 @@ pub fn enter_files<'a>(
     state_dir: &Path,
     paths: impl IntoIterator<Item = &'a Path>,
 ) -> AppResult<StickAccess> {
+    let admitted = crate::write_admission::admit(state_dir)?;
     let roots: std::collections::BTreeSet<PathBuf> =
         paths.into_iter().filter_map(stick_of).collect();
     let mut held = Vec::with_capacity(roots.len());
@@ -171,7 +186,7 @@ pub fn enter_files<'a>(
                 .map_err(|e| refused(&e))?,
         );
     }
-    Ok(StickAccess { held })
+    Ok(StickAccess { held, _admitted: Some(admitted) })
 }
 
 /// Whether the Stick at `path` is protected (wbx-45.11).
@@ -278,7 +293,7 @@ pub(crate) mod testing {
 
     /// Leave to write to an ordinary folder, for helpers tested directly.
     pub(crate) fn ordinary() -> super::StickAccess {
-        super::StickAccess { held: Vec::new() }
+        super::StickAccess { held: Vec::new(), _admitted: None }
     }
 
     pub(crate) fn app(state: crate::state::AppState) -> tauri::App<tauri::test::MockRuntime> {

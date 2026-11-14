@@ -132,6 +132,10 @@ impl AppState {
         front: Arc<dyn FrontEnd>,
     ) -> Result<(), ServiceError> {
         let mut slot = self.service.lock();
+        // Closing (wbx-45.14): never hosted again, and writes stay refused.
+        if self.shutdown.is_closed() {
+            return Err(ServiceError::new(codes::SERVICE_NOT_RUNNING, crate::shutdown::CLOSING));
+        }
         let master_db = location.master_db.canonicalize().unwrap_or_else(|_| location.master_db.clone());
         if slot.as_ref().is_some_and(|hosted| hosted.master_db == master_db) {
             return Ok(());
@@ -211,17 +215,51 @@ impl AppState {
         });
     }
 
+    /// The window is closing (wbx-45.14): latched for good, under the
+    /// hosting lock so a hosting under way finishes before and none starts
+    /// after. No new core write starts (the core refuses with
+    /// [`crate::shutdown::CLOSING`], under the edit gate), no new service
+    /// command is handed out, the service is never hosted again. Then
+    /// every edit already under way finishes (the edit gate taken once)
+    /// while the service, and so the Ledger, is still attached. Called by
+    /// the shutdown lifecycle before it drains; never with the gate held by
+    /// another thread this one waits for.
+    pub fn close_for_shutdown(&self) {
+        {
+            let _slot = self.service.lock();
+            if self.shutdown.close() {
+                self.core().refuse_writes(Some(crate::shutdown::CLOSING.to_owned()));
+            }
+            // The direct writers (exports, syncs, backups, tags, saved
+            // files: everything holding a `StickAccess`), in the same step.
+            crate::write_admission::close(self.backup_dir());
+        }
+        crate::test_holds::point(crate::test_holds::SHUTDOWN_CLOSED, self.backup_dir());
+        drop(self.core().edit_gate().lock());
+        // Every direct writer admitted before the latch finishes, however
+        // long: an export publishing, a backup copying (wbx-45.14, round 1).
+        crate::write_admission::wait_idle(self.backup_dir());
+    }
+
     /// A handle to the service this window hosts, to call without holding
     /// the hosting lock (a Stick load runs for minutes; closing the window
     /// must reach it). `None` when the window hosts no service.
     pub fn service_caller(&self) -> Option<wreckordbox_service::Caller> {
-        self.service.lock().as_ref().map(|hosted| hosted.service.caller())
+        let slot = self.service.lock();
+        if self.shutdown.is_closed() {
+            return None;
+        }
+        slot.as_ref().map(|hosted| hosted.service.caller())
     }
 
     /// Runs `use_it` on the service this window hosts, when it hosts one.
     /// Never call it with the edit gate held.
     pub fn with_service<T>(&self, use_it: impl FnOnce(&Service) -> T) -> Option<T> {
-        self.service.lock().as_ref().map(|hosted| use_it(&hosted.service))
+        let slot = self.service.lock();
+        if self.shutdown.is_closed() {
+            return None;
+        }
+        slot.as_ref().map(|hosted| use_it(&hosted.service))
     }
 
     /// Why this window cannot change the Library, when it is not the
