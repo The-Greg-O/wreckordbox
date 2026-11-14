@@ -428,7 +428,7 @@ impl Sidecar {
         Ok(self
             .stems(track_id)?
             .into_iter()
-            .find(|set| set.is_current() && set.fingerprint == *fingerprint)
+            .find(|set| set.is_current() && fingerprint.matches_stored(&set.fingerprint))
             .filter(StemSet::audio_present))
     }
 

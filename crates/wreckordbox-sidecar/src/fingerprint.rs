@@ -2,7 +2,7 @@
 //!
 //! A fingerprint names the audio, not the file: it is a hash of the encoded
 //! audio inside the file (every packet of the file's audio stream, in
-//! order, with the stream's sample rate and channel count), found by
+//! order, with the stream's codec, sample format and decoding parameters), found by
 //! demultiplexing the container without decoding anything. So:
 //!
 //! - moving or renaming the file changes nothing (no path, name or
@@ -13,16 +13,16 @@
 //!   master, a replacement file.
 //!
 //! Hashing the encoded packets rather than decoded samples keeps it fast
-//! (one read of the file) and independent of decoder versions, which do not
+//! (normally one audio pass) and independent of decoder versions, which do not
 //! always agree to the last sample.
 //!
 //! A file whose container is not recognised is hashed whole instead, which
 //! still survives a move or a rename. The text form says which was done and
-//! under which version of the scheme: `a1:<hex>` for the audio stream,
+//! under which version of the scheme: `a2:<decoding hash>` for the audio stream,
 //! `f1:<hex>` for the whole file.
 
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -34,28 +34,68 @@ use symphonia::core::probe::Hint;
 
 use crate::{io, Result};
 
-/// The fingerprint of a track's audio, as text: `a1:<64 hex>` or
-/// `f1:<64 hex>`. Compare for equality; nothing else about it is promised.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// The fingerprint of a track's audio. New stream fingerprints are
+/// `a2:<64 hex>`. A freshly read value also carries ephemeral a1 evidence,
+/// never serialized: that old digest can include AIFF/FLAC trailing tags.
+/// Stored a1 and f1 fingerprints remain supported; use `matches_stored`
+/// to verify older stored evidence. Equality and hashing use only identity.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct Fingerprint(String);
+pub struct Fingerprint {
+    identity: String,
+    #[serde(skip)]
+    legacy: Option<String>,
+}
+impl PartialEq for Fingerprint {
+    fn eq(&self, other: &Self) -> bool {
+        self.identity == other.identity
+    }
+}
+impl Eq for Fingerprint {}
+impl std::hash::Hash for Fingerprint {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.identity.hash(state);
+    }
+}
 
 impl Fingerprint {
     #[must_use]
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.identity
     }
 
     /// A fingerprint read back from where one was stored.
     #[must_use]
     pub fn from_stored(text: String) -> Self {
-        Self(text)
+        Self {
+            identity: text,
+            legacy: None,
+        }
+    }
+
+    /// Compare freshly observed audio with the version of stored evidence.
+    /// This deliberately is NOT Eq: two a2 identities can have the same a1
+    /// digest while decoding differently. Never use compatibility as a key.
+    #[must_use]
+    pub fn matches_stored(&self, stored: &Self) -> bool {
+        self == stored
+            || ((stored.identity.starts_with("a1:") || stored.identity.starts_with("f1:"))
+                && self.legacy() == *stored)
+    }
+
+    /// The original algorithm's digest carried by a freshly observed value.
+    /// Deserialized/stored fingerprints carry only their own identity.
+    #[must_use]
+    pub fn legacy(&self) -> Self {
+        self.legacy
+            .as_ref()
+            .map_or_else(|| self.clone(), |old| Self::from_stored(old.clone()))
     }
 }
 
 impl std::fmt::Display for Fingerprint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(&self.identity)
     }
 }
 
@@ -63,7 +103,8 @@ impl std::fmt::Display for Fingerprint {
 /// never collide with this one.
 const AUDIO_DOMAIN: &[u8] = b"wreckordbox audio fingerprint 1\0";
 
-/// Fingerprints the audio in the file at `path`. Reads the whole file once.
+/// Fingerprints the audio in the file at `path`. Ordinarily one audio pass;
+/// raw FLAC/M4A trailers require an additional original-view legacy pass.
 pub fn fingerprint_file(path: &Path) -> Result<Fingerprint> {
     let before = crate::stems::file_stamp(path);
     let result = read_fingerprint(path)?;
@@ -109,9 +150,28 @@ pub fn fingerprint_cached(path: &Path) -> Result<Fingerprint> {
 }
 
 fn read_fingerprint(path: &Path) -> Result<Fingerprint> {
-    if let Some(audio) = audio_stream_hash(path)? {
-        return Ok(Fingerprint(format!("a1:{}", audio.to_hex())));
+    let mut file = File::open(path).map_err(io("could not open", path))?;
+    let end =
+        crate::fingerprint_bounds::stream_end(&mut file).map_err(io("could not inspect", path))?;
+    if let Some((audio, old)) = audio_stream_hash(path, end)? {
+        let legacy = if end.is_some() {
+            // The original demuxer can omit the last FLAC frame or reject an
+            // M4A with trailers. Preserve precisely that old evidence rule.
+            match audio_stream_hash(path, None)? {
+                Some((_, old)) => format!("a1:{}", old.to_hex()),
+                None => whole_file(path)?,
+            }
+        } else {
+            format!("a1:{}", old.to_hex())
+        };
+        return Ok(Fingerprint {
+            identity: format!("a2:{}", audio.to_hex()),
+            legacy: Some(legacy),
+        });
     }
+    Ok(Fingerprint::from_stored(whole_file(path)?))
+}
+fn whole_file(path: &Path) -> Result<String> {
     let mut file = File::open(path).map_err(io("could not open", path))?;
     let mut hasher = blake3::Hasher::new();
     let mut buffer = vec![0_u8; 64 * 1024];
@@ -122,14 +182,27 @@ fn read_fingerprint(path: &Path) -> Result<Fingerprint> {
         }
         hasher.update(&buffer[..read]);
     }
-    Ok(Fingerprint(format!("f1:{}", hasher.finalize().to_hex())))
+    Ok(format!("f1:{}", hasher.finalize().to_hex()))
 }
 
 /// The hash of the file's audio stream, or `None` when the file cannot be
 /// read as a container this build knows, start to finish.
-fn audio_stream_hash(path: &Path) -> Result<Option<blake3::Hash>> {
-    let file = File::open(path).map_err(io("could not open", path))?;
-    let stream = MediaSourceStream::new(Box::new(file), MediaSourceStreamOptions::default());
+fn audio_stream_hash(
+    path: &Path,
+    end: Option<u64>,
+) -> Result<Option<(blake3::Hash, blake3::Hash)>> {
+    let mut file = File::open(path).map_err(io("could not open", path))?;
+    // Read only chunk/footer headers before demuxing. Legacy still sees the
+    // original packets; only a2 excludes bytes outside the audio payload.
+    let mut remaining =
+        crate::fingerprint_bounds::audio_bytes(&mut file).map_err(io("could not inspect", path))?;
+    file.seek(SeekFrom::Start(0))
+        .map_err(io("could not seek", path))?;
+    let source: Box<dyn symphonia::core::io::MediaSource> = match end {
+        Some(end) => Box::new(crate::fingerprint_bounds::Bounded { file, end }),
+        None => Box::new(file),
+    };
+    let stream = MediaSourceStream::new(source, MediaSourceStreamOptions::default());
     // No hint from the file's name: a rename must not change the answer.
     let Ok(probed) = symphonia::default::get_probe().format(
         &Hint::new(),
@@ -152,11 +225,24 @@ fn audio_stream_hash(path: &Path) -> Result<Option<blake3::Hash>> {
         .channels
         .map_or(0, symphonia::core::audio::Channels::count);
     hasher.update(&u32::try_from(channels).unwrap_or(u32::MAX).to_le_bytes());
+    let mut current = crate::fingerprint_format::hash(&track.codec_params);
     let mut packets = 0_u64;
     loop {
         match format.next_packet() {
             Ok(packet) if packet.track_id() == track_id => {
                 hasher.update(&packet.data);
+                let take = remaining.map_or(packet.data.len(), |left| {
+                    usize::try_from(left.min(packet.data.len() as u64)).unwrap_or(packet.data.len())
+                });
+                if let Some(left) = &mut remaining {
+                    *left -= take as u64;
+                }
+                if take > 0 {
+                    current.update(&packet.trim_start().to_le_bytes());
+                    current.update(&packet.trim_end().to_le_bytes());
+                    current.update(&(take as u64).to_le_bytes());
+                    current.update(&packet.data[..take]);
+                }
                 packets += 1;
             }
             Ok(_) => {}
@@ -168,5 +254,5 @@ fn audio_stream_hash(path: &Path) -> Result<Option<blake3::Hash>> {
             Err(_) => return Ok(None),
         }
     }
-    Ok((packets > 0).then(|| hasher.finalize()))
+    Ok((packets > 0).then(|| (current.finalize(), hasher.finalize())))
 }

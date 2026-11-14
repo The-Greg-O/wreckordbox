@@ -502,10 +502,13 @@ impl Sidecar {
     pub fn facts_of_audio(&self, fingerprint: &Fingerprint, kind: &str) -> Result<Vec<Fact>> {
         let db = self.db();
         let mut statement = db.prepare(&select(
-            "WHERE fact.fingerprint = ?1 AND fact.kind = ?2 ORDER BY fact.id DESC",
+            "WHERE fact.fingerprint IN (?1, ?3) AND fact.kind = ?2 ORDER BY fact.id DESC",
         ))?;
         let facts = statement
-            .query_map(params![fingerprint.as_str(), kind], read_fact)?
+            .query_map(
+                params![fingerprint.as_str(), kind, fingerprint.legacy().as_str()],
+                read_fact,
+            )?
             .collect::<rusqlite::Result<Vec<Fact>>>()?;
         Ok(facts)
     }
@@ -753,10 +756,13 @@ pub(crate) fn mark_stale_in(
         let mut query = tx.prepare(
             "UPDATE fact SET stale_at = NULL
                  WHERE id IN (SELECT fact_id FROM fact_track WHERE track_id = ?1)
-                 AND stale_at IS NOT NULL AND fingerprint = ?2
+                 AND stale_at IS NOT NULL AND fingerprint IN (?2, ?3)
                  AND kind IN (SELECT name FROM kind WHERE nature = 'measurement') RETURNING id",
         )?;
-        let rows = query.query_map(params![track_id, current.as_str()], |row| row.get(0))?;
+        let rows = query.query_map(
+            params![track_id, current.as_str(), current.legacy().as_str()],
+            |row| row.get(0),
+        )?;
         rows.collect::<rusqlite::Result<Vec<i64>>>()?
     };
     restored.sort_unstable();
@@ -764,12 +770,14 @@ pub(crate) fn mark_stale_in(
         let mut statement = tx.prepare(
                 "UPDATE fact SET stale_at = ?1
                  WHERE id IN (SELECT fact_id FROM fact_track WHERE track_id = ?2) AND stale_at IS NULL
-                   AND fingerprint IS NOT NULL AND fingerprint <> ?3
+                   AND fingerprint IS NOT NULL AND fingerprint NOT IN (?3, ?4)
                    AND kind IN (SELECT name FROM kind WHERE nature = 'measurement')
                  RETURNING id",
             )?;
-        let marked =
-            statement.query_map(params![now(), track_id, current.as_str()], |row| row.get(0))?;
+        let marked = statement.query_map(
+            params![now(), track_id, current.as_str(), current.legacy().as_str()],
+            |row| row.get(0),
+        )?;
         marked.collect::<rusqlite::Result<Vec<i64>>>()?
     };
     ids.sort_unstable();

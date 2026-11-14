@@ -22,6 +22,11 @@
 //! cache would be a write. The cost is one read of each track with Stems
 //! per service start.
 //!
+//! The cached value is the complete versioned fingerprint returned by the
+//! same `fingerprint_file` routine used for fresh verification. Both callers
+//! compare it with the Stem Fact using that stored evidence's version; a
+//! cache fill never upgrades legacy evidence.
+//!
 //! Never for a load. A load plans again under the Stick's lock with a fresh
 //! fingerprint (`stems::fingerprint`); a wrong entry here can at worst make
 //! a preview differ from the load, which the load's bound check refuses.

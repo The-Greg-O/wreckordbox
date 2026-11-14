@@ -1,0 +1,45 @@
+{
+  "aiff": {
+    "a1": "a1:20c6864c925b66bf72890349daa1d5a4ccf6287429e4bcffc7552506f76a8526",
+    "a2": "a2:5c9f8d9969aeed69cb49ba4f68066a2eb2c7bd62b7add26074e9043d306b52eb",
+    "stem_fact": 7,
+    "stem_frames": 4414,
+    "ape_legacy": "a1:2eaa7b37c61766c7ff57656532bab04ef41c3aaab27c39fa025b21113caebd15",
+    "key_legacy": "a1:33b654e739a36ef3fdbaac2976db7945f4042e2370cde5cf5115ecf077a24bc5"
+  },
+  "flac": {
+    "a1": "a1:a925e723d25f4748929928c74ecd88990a6941c7392a218d89db002d6bcb0069",
+    "a2": "a2:40d971cead05b0d5c04c1bee82a6fb9ddef5203c8bc50e45335df972bf2c9ab2",
+    "stem_fact": 5,
+    "stem_frames": 11025,
+    "ape_legacy": "a1:e8a142b73abaee2dbbbb675ced609d44d90daef904db5ea0aceddb6278a03a52"
+  },
+  "m4a": {
+    "a1": "a1:5414253530162d57f70ddbcd78a45eb65d5accbcc0e410ff0eb50b75d1b0235e",
+    "a2": "a2:56b9fa50728d87db9c41cf43ebde72461d46908ee405e365edea34106a38b87f",
+    "stem_fact": 11,
+    "stem_frames": 88200,
+    "ape_legacy": "f1:29b65b23663e4451313ff8526542b19e8e829cf300ef403b899333410339d1c8"
+  },
+  "mp3-cbr": {
+    "a1": "a1:6f6f98dffb797172f3b4e5497823b82980b251b41a351763d4dc47afecb8c878",
+    "a2": "a2:46e54f7d70729ab3b2fe9f8e2c95e70b2d30b6816569e33c27adb5351ffb0083",
+    "stem_fact": 3,
+    "stem_frames": 89856,
+    "ape_legacy": "a1:6f6f98dffb797172f3b4e5497823b82980b251b41a351763d4dc47afecb8c878"
+  },
+  "mp3-xing": {
+    "a1": "a1:6f6f98dffb797172f3b4e5497823b82980b251b41a351763d4dc47afecb8c878",
+    "a2": "a2:88e697e7e8cf87047976bd2884907b9fd6bbb971ef96870b0126cfdd2ff71c6f",
+    "stem_fact": 1,
+    "stem_frames": 89856,
+    "ape_legacy": "a1:6f6f98dffb797172f3b4e5497823b82980b251b41a351763d4dc47afecb8c878"
+  },
+  "wav": {
+    "a1": "a1:ae9e7a2d397873a12f052eb0c87df0a250591e9c9ff8687dbb00fab7842eac3a",
+    "a2": "a2:0fd327013dd5997dc275156f789dbffcda7fbb7c651802b7e83f1cce2a369c13",
+    "stem_fact": 9,
+    "stem_frames": 4410,
+    "ape_legacy": "a1:ae9e7a2d397873a12f052eb0c87df0a250591e9c9ff8687dbb00fab7842eac3a"
+  }
+}

@@ -25,7 +25,7 @@ fn moving_or_renaming_a_file_does_not_change_its_fingerprint() {
     std::fs::rename(&original, &moved).unwrap();
 
     assert_eq!(fingerprint_file(&moved).unwrap(), before);
-    assert!(before.as_str().starts_with("a1:"), "{before}");
+    assert!(before.as_str().starts_with("a2:"), "{before}");
 }
 
 #[test]
