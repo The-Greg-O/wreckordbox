@@ -710,6 +710,9 @@ pub(crate) fn load(
 ) -> Result<Load, ServiceError> {
     let args: LoadArgs = arguments(request)?;
     chosen(&args.playlists)?;
+    // The service's own id for this load, before anything is read or
+    // written; a name another running load carries is refused (wbx-45.14).
+    let identity = loads.ids.begin(args.operation.as_deref())?;
     let root = stick_root(&args.stick)?;
     if loads.stopping() {
         return Err(ServiceError::new(
@@ -794,7 +797,7 @@ pub(crate) fn load(
         stems.publish(
             events::STICK_LOAD_PROGRESS,
             json!({
-                "stick": path, "operation": operation, "volume": volume,
+                "stick": path, "load": identity.id, "operation": operation, "volume": volume,
                 "stage": stage, "done": done, "total": total, "track": track,
             }),
         );
@@ -1007,6 +1010,7 @@ pub(crate) fn load(
     drop(authorized);
     let (written, not_written, unchanged) = report;
     Ok(Load {
+        load: identity.id.clone(),
         stick: sticks::describe(state_dir, &root),
         outcome: outcome.to_owned(),
         error,
