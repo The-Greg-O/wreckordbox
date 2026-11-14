@@ -140,7 +140,8 @@ test("holding L loads; a tap of L, L in a text field, L with a dialog open and a
   await tab(page, "Library").click();
   await page.keyboard.down("l");
   await tab(page, "Stick").click();
-  for (let at = 0; at < 12; at += 1) {
+  await expect(holdButton(page)).toBeEnabled();
+  for (let at = 0; at < 14; at += 1) {
     await page.keyboard.down("l");
     await page.waitForTimeout(200);
   }
