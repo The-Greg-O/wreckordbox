@@ -813,10 +813,10 @@ where
     recorded_edit_preparing(app, state, name, touched, None, action, record).await
 }
 
-/// [`asserting_edit`] for the DJ's hand set of MyTags (wbx-29): `action`
+/// [`asserting_edit`] for the DJ's hand set of My Tags (wbx-29): `action`
 /// answers the edit (only its changes become the Undo step) and each
 /// assignment of `tracks` it left as it was, the DJ's assertion of it. The
-/// write's intent keeps `tracks`' MyTags as its evidence until the
+/// write's intent keeps `tracks`' My Tags as its evidence until the
 /// assertion is told.
 pub(crate) async fn asserting_tag_edit<R: tauri::Runtime, F>(
     app: tauri::AppHandle<R>,
@@ -836,7 +836,7 @@ where
         if !reversible.is_empty() {
             history.record(reversible, label);
         }
-        history.assert_tags(asserted, label);
+        history.assert_tags(&asserted, label);
     }).await
 }
 

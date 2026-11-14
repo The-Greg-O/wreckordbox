@@ -499,7 +499,7 @@ mod tests {
             let state = &found.assignments[&("1".to_owned(), tag.to_owned())];
             assert_eq!((&state.owner, &state.value), (&Owner::Dj, &Value::Bool(on)));
         }
-        assert!(found.barriers.is_empty());
+        assert_eq!(found.barriers, Vec::new());
         assert!(sidecar.tags_written_since(0, &["1".into()]).unwrap());
     }
 

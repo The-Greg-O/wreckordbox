@@ -283,7 +283,7 @@ impl OpenLibrary {
         self.change(|core, host| core.asserting_edit(host, touched, label, action))
     }
 
-    /// [`Self::recorded_edit`] for the DJ's hand set of MyTags (wbx-29):
+    /// [`Self::recorded_edit`] for the DJ's hand set of My Tags (wbx-29):
     /// the assignments `action` left as they were are the DJ's assertion
     /// ([`LibraryCore::asserting_tag_edit`]), no step of the history.
     pub(crate) fn asserting_tag_edit<T>(
@@ -293,10 +293,8 @@ impl OpenLibrary {
         label: &'static str,
         action: impl FnOnce(
             &mut rbl_db::write::Writer,
-        ) -> Result<
-            (T, LibraryEdit, Vec<rbl_library::ledger::TagAssertion>),
-            DbError,
-        >,
+        )
+            -> Result<(T, LibraryEdit, Vec<rbl_library::ledger::TagAssertion>), DbError>,
     ) -> Result<(T, LibraryChanged), ServiceError> {
         self.change(|core, host| core.asserting_tag_edit(host, touched, tracks, label, action))
     }

@@ -61,7 +61,7 @@ pub struct Link {
     pub part_of: Option<i64>,
 }
 
-/// One MyTag assignment the DJ set by hand to the state it already had
+/// One My Tag assignment the DJ set by hand to the state it already had
 /// (wbx-29): `tag` on `track` (`on`) or off it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TagAssertion {
@@ -201,8 +201,8 @@ pub trait Ledger: Send + Sync {
         None
     }
 
-    /// Records an explicit assertion of MyTag assignments (wbx-29): the DJ
-    /// deliberately setting each of `assertions` (one track, one MyTag, on
+    /// Records an explicit assertion of My Tag assignments (wbx-29): the DJ
+    /// deliberately setting each of `assertions` (one track, one My Tag, on
     /// or off) to the state it already has. No step of the history; told
     /// only by a caller that means it, never because a write changed
     /// nothing. Told even when empty, so a kept intent is settled. By

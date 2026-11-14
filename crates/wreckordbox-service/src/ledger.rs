@@ -677,7 +677,7 @@ pub mod stored {
 
 /// Whether `command` changes the Library, and so takes a Run on its
 /// request and answers with the Run its changes are in.
-/// The Ledger kind of the DJ's assertion of MyTag assignments (wbx-29):
+/// The Ledger kind of the DJ's assertion of My Tag assignments (wbx-29):
 /// payload `{"assertions": [{"track", "tag", "on"}]}`, not reversible.
 pub const TAG_ASSERTION_KIND: &str = wreckordbox_sidecar::mytag_projection::ASSERTION_KIND;
 
