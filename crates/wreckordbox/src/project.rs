@@ -23,6 +23,11 @@ pub struct ProjectArgs {
     /// out.
     #[arg(long = "track", value_name = "TRACK_ID")]
     tracks: Vec<String>,
+    /// Project the Tag schema's deck view to native MyTags instead
+    /// (wbx-29): each track's MyTags from the standing Facts of the
+    /// dimensions on the deck, under the policy's `[mytags]` section.
+    #[arg(long)]
+    mytags: bool,
 }
 
 impl ProjectArgs {
@@ -32,6 +37,18 @@ impl ProjectArgs {
 }
 
 pub fn run(client: &mut Client, as_json: bool, args: &ProjectArgs) -> Result<String, ServiceError> {
+    if args.mytags {
+        return crate::project_mytags::run(
+            client,
+            as_json,
+            args.dry_run,
+            Wanted {
+                tracks: args.tracks.clone(),
+                expect: args.expect.clone(),
+                policy_hash: None,
+            },
+        );
+    }
     let command = if args.dry_run {
         commands::PROJECTION_PLAN
     } else {

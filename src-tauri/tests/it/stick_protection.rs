@@ -1527,6 +1527,7 @@ const SERVICE_NOT_STICK_WRITERS: &[&str] = &[
     // Projection writes the Library through the core, whose write guard
     // refuses a Library on a protected Stick; it writes no Stick itself.
     "projection.apply", "projection.plan",
+    "projection.mytags.apply", "projection.mytags.plan",
     // Barriers: a read and a Sidecar entry; no Library or Stick write.
     "projection.acknowledge", "projection.barriers",
     "protection.get", "protection.set",

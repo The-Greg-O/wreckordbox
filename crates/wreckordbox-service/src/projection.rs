@@ -116,13 +116,20 @@ pub(crate) fn answers(command: &str) -> bool {
 /// The source a Projection's Run is by when the request names none; `None`
 /// for any other command.
 pub(crate) fn default_source(command: &str) -> Option<Source> {
-    (command == commands::PROJECTION_APPLY).then(|| Source::new(SourceKind::Tool, SOURCE_NAME))
+    applies(command).then(|| Source::new(SourceKind::Tool, SOURCE_NAME))
+}
+
+/// Whether `command` applies a projection: Energy and Prep colour's, or
+/// the Tag schema's to MyTags (wbx-29). Either is a tool's Run, never the
+/// DJ's.
+pub(crate) fn applies(command: &str) -> bool {
+    command == commands::PROJECTION_APPLY || command == crate::mytag_projection::commands::APPLY
 }
 
 /// Refuses a projection attributed to the DJ: by the source it names or by
 /// the Run it would join. Any other command passes.
 pub(crate) fn attribution(command: &str, source: &Source) -> Result<(), ServiceError> {
-    if command == commands::PROJECTION_APPLY && source.kind == SourceKind::Dj {
+    if applies(command) && source.kind == SourceKind::Dj {
         return Err(ServiceError::new(
             codes::NOT_THE_DJ,
             "a Projection's edits are never recorded as the DJ's, nor in the DJ's Run: name a tool or an agent, or no source",
@@ -133,9 +140,14 @@ pub(crate) fn attribution(command: &str, source: &Source) -> Result<(), ServiceE
 
 /// What a projection's own Run is called: it names the policy in force.
 pub(crate) fn description(request: &Request) -> Option<String> {
-    (request.command == commands::PROJECTION_APPLY).then(|| {
+    applies(&request.command).then(|| {
         format!(
-            "Projection under policy {}",
+            "{} under policy {}",
+            if request.command == commands::PROJECTION_APPLY {
+                "Projection"
+            } else {
+                "MyTag projection"
+            },
             request.args["policy_hash"].as_str().unwrap_or("unknown")
         )
     })
@@ -145,7 +157,8 @@ pub(crate) fn description(request: &Request) -> Option<String> {
 /// (`policy_hash`), unless the request already names one; `None` for any
 /// other request. The plan refuses if the file it then reads differs.
 pub(crate) fn stamped(request: &Request, stems: &Stems) -> Option<Request> {
-    if !answers(&request.command) || request.args.get("policy_hash").is_some() {
+    let projects = answers(&request.command) || crate::mytag_projection::answers(&request.command);
+    if !projects || request.args.get("policy_hash").is_some() {
         return None;
     }
     let hash = policy_bytes(stems.sidecar_dir())
@@ -236,6 +249,9 @@ pub struct Rule {
 struct PolicyFile {
     energy: Option<Rule>,
     prep_colour: Option<Rule>,
+    /// The MyTag projection's section (wbx-29), checked there.
+    #[allow(dead_code, reason = "read and checked by `mytag_projection`")]
+    mytags: Option<toml::Value>,
 }
 
 /// The policy in force, per field; a field the file does not name waits.
@@ -246,7 +262,7 @@ pub struct Policy {
 }
 
 /// The policy file's bytes; none (an empty file's) when there is no file.
-fn policy_bytes(dir: &Path) -> Result<Vec<u8>, std::io::Error> {
+pub(crate) fn policy_bytes(dir: &Path) -> Result<Vec<u8>, std::io::Error> {
     let path = dir.join(POLICY_FILE);
     match std::fs::read(&path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound && path.symlink_metadata().is_err() => {
@@ -491,7 +507,7 @@ fn plan_or_apply(
 pub const GATE_ENV: &str = "WRECKORDBOX_PROJECTION_GATE";
 
 /// The test pause between plan and write ([`GATE_ENV`], [`PAUSE_ENV`]).
-fn pause() {
+pub(crate) fn pause() {
     if !rbl_db::test_mode() {
         return;
     }

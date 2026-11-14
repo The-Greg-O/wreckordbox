@@ -652,6 +652,7 @@ impl Shared {
                 crate::projection_barriers::answer(&self.stems, request)
             }
             projection if crate::projection::answers(projection) => self.project(request),
+            mytags if crate::mytag_projection::answers(mytags) => self.project_mytags(request),
             review if crate::review::answers(review) => self.review(request),
             intake if crate::intake::answers(intake) => {
                 let (result, changed) = self.with_library(|library| {
@@ -689,6 +690,21 @@ impl Shared {
     fn project(&self, request: &Request) -> Result<Value, ServiceError> {
         let (changed, result) =
             self.with_library(|library| crate::projection::answer(library, &self.stems, request))?;
+        if let Some(changed) = changed {
+            self.tell_host(&changed.event());
+        }
+        result
+    }
+
+    /// `projection.mytags.plan` and `projection.mytags.apply` (wbx-29). An
+    /// apply holds the Fact coordination first (before the Library, as
+    /// Review does), so no Fact is recorded between its plan and its write.
+    fn project_mytags(&self, request: &Request) -> Result<Value, ServiceError> {
+        let _facts = (request.command == crate::mytag_projection::commands::APPLY)
+            .then(|| self.stems.hold_facts());
+        let (changed, result) = self.with_library(|library| {
+            crate::mytag_projection::answer(library, &self.stems, request)
+        })?;
         if let Some(changed) = changed {
             self.tell_host(&changed.event());
         }

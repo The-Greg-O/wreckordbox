@@ -670,12 +670,24 @@ pub(crate) fn takes_run(command: &str) -> bool {
         || command == crate::tag_panel::commands::INTAKE_SET_TAGS
         || crate::mytag_edits::answers(command)
         || crate::playlist_edits::answers(command)
-        || command == crate::projection::commands::PROJECTION_APPLY
+        || crate::projection::applies(command)
         || command == crate::review::commands::REVIEW_ACCEPT
 }
 
 pub(crate) fn answers(command: &str) -> bool {
     matches!(command, commands::RUNS_LIST | commands::RUNS_SHOW)
+}
+
+/// Names `tracks` in the command being answered on this thread
+/// (`args.ids`), before its write begins: the write's intent, and its entry,
+/// then say which tracks it could concern, so a write cut off part-way is a
+/// barrier bounded to them (wbx-29). Nothing when no command is answered.
+pub(crate) fn name_tracks(tracks: &[String]) {
+    CURRENT.with(|current| {
+        if let Some(scope) = current.borrow_mut().as_mut() {
+            scope.command["args"]["ids"] = json!(tracks);
+        }
+    });
 }
 
 /// Answers `runs.list` and `runs.show`. Reading never makes a Sidecar:
