@@ -29,6 +29,7 @@ import {
 } from "@/lib/reviewQueue";
 
 import { readReviewNow, requestReviewRead, restartReviewRead, useReviewRead } from "./reviewQueueStore";
+import { useReviewRowKeys } from "./reviewRowKeys";
 import { useServiceActivity } from "./useServiceActivity";
 import styles from "./ReviewView.module.css";
 
@@ -284,13 +285,20 @@ export function ReviewView({ onListen, loadedTrackId = null }: ReviewViewProps) 
   const total = shown?.facts.length ?? 0;
   const selected = [...board.selected];
 
+  // Y and N on the focused row (wbx-mvr): the same decision as its ✓ and ✕.
+  const rowKeys = useReviewRowKeys({
+    shown, held: stale, busy, protectedLibrary,
+    decide: (verb, facts) => void decide(verb, facts),
+  });
+
   const listen = (track: string) => {
     const row = shown?.decks[track];
     if (row && onListen) onListen(row);
   };
 
   return (
-    <section className={styles.view} data-testid="review-view" data-own-activation="" aria-label="Review" onKeyDownCapture={stopRepeats}>
+    <section className={styles.view} data-testid="review-view" data-own-activation="" aria-label="Review" onKeyDownCapture={stopRepeats}
+      onFocusCapture={rowKeys.onFocusCapture} onKeyDown={rowKeys.onKeyDown}>
       {working ? <RunsFinishing /> : null}
       <header className={styles.head}>
         <h2 className={styles.title}><span className={styles.hidden}>Review: </span>Waiting for you</h2>
@@ -381,6 +389,13 @@ export function ReviewView({ onListen, loadedTrackId = null }: ReviewViewProps) 
           <p className={styles.note} data-testid="review-protected">
             Library Protection is on: nothing can be accepted until you turn it off. Rejecting writes only the Sidecar.
           </p>
+        ) : null}
+
+        {rowKeys.refused !== null ? (
+          <div className={styles.note} role="status" data-testid="review-key-refused">
+            <span>{rowKeys.refused}</span>
+            <button type="button" className={styles.button} onClick={rowKeys.dismiss}>Dismiss</button>
+          </div>
         ) : null}
 
         {said ? <Outcome said={said} onDismiss={() => setSaid(null)} /> : null}
