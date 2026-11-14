@@ -44,6 +44,7 @@ mod stems_write;
 mod stick;
 mod stick_library;
 mod stick_load;
+mod stick_preview_fingerprints;
 mod tag_schema;
 mod track_filter;
 mod tracks_list;

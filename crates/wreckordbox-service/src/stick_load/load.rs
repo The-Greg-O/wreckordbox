@@ -238,7 +238,9 @@ fn plan_load(
     index: &Arc<rbl_index::Library>,
     root: &Path,
     playlists: &[String],
+    audio: native_stems::Audio,
 ) -> Result<Planned, ServiceError> {
+    crate::preview_fingerprints::inject_for_test(state_dir);
     let share = library.share_root();
     let selection = ExportSelection::from_playlists(library, index, &share, playlists, false)
         .map_err(planning)?;
@@ -262,7 +264,7 @@ fn plan_load(
             let Ok(found) = native_stems::parent(library, &track.id.to_string()) else {
                 continue;
             };
-            if let Some(current) = native_stems::current_stems_read_only(stems, &found) {
+            if let Some(current) = native_stems::current_stems_read_only(stems, &found, audio) {
                 planned_stems.push(PlannedStems {
                     replaced_bytes: replaced_set_bytes(state_dir, root, track.id),
                     found,
@@ -644,7 +646,16 @@ pub(crate) fn dry_run(
             return Err(unfinished());
         }
         let (index, generation) = library.index_at_generation()?;
-        let planned = plan_load(state_dir, library, stems, &index, &root, &args.playlists)?;
+        // A preview may reuse fingerprints of unchanged files (wbx-cne).
+        let planned = plan_load(
+            state_dir,
+            library,
+            stems,
+            &index,
+            &root,
+            &args.playlists,
+            native_stems::Audio::Preview,
+        )?;
         // A plan that could not be worked out in full is never executable.
         let (plan, not_loadable) = if planned.changes.audio_estimated {
             let id = approval::propose_bound(
@@ -730,7 +741,16 @@ pub(crate) fn load(
             .map_err(|refused| protection_refused(&refused))?;
         let (index, generation) = library.index_at_generation()?;
         // What the load would write now, worked out again under the lock.
-        let planned = plan_load(state_dir, library, stems, &index, &root, &args.playlists)?;
+        // Every fingerprint read afresh: never a preview's (wbx-cne).
+        let planned = plan_load(
+            state_dir,
+            library,
+            stems,
+            &index,
+            &root,
+            &args.playlists,
+            native_stems::Audio::Fresh,
+        )?;
         // The confirmation: the dry run's plan id, for exactly this load, on
         // the Stick and the Library as they were planned, and for exactly
         // the result it reported. Used up here, whatever follows.
@@ -933,6 +953,7 @@ pub(crate) fn load(
     let mut written_fact = None;
     let total = planned.stems.len();
     for (done, set) in planned.stems.into_iter().enumerate() {
+        crate::preview_fingerprints::inject_for_test(state_dir);
         let track = TrackLine {
             id: set.found.track().id.clone(),
             title: set.found.track().title.clone(),
@@ -944,7 +965,12 @@ pub(crate) fn load(
                 "not_written",
                 Some("the Library service was stopped".to_owned()),
             )
-        } else if native_stems::current_stems_read_only(stems, &set.found).map(|now| now.identity)
+        } else if native_stems::current_stems_read_only(
+            stems,
+            &set.found,
+            native_stems::Audio::Fresh,
+        )
+        .map(|now| now.identity)
             != Some(set.current.identity.clone())
         {
             (
