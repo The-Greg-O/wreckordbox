@@ -752,10 +752,7 @@ fn a_second_client_is_told_of_mutant_changes_as_sidecar_changes_not_library_chan
     );
     assert_eq!(removed["mutant"]["removed"], true);
 
-    let mut events = Vec::new();
-    while let Some(event) = watcher.next_event(Duration::from_millis(500)).unwrap() {
-        events.push(event);
-    }
+    let events = common::barrier::heard_exactly(&mut watcher, 2, Duration::from_millis(500));
     let heard: Vec<(&str, Value)> = events
         .iter()
         .map(|event| (event.event.as_str(), event.data.clone()))
@@ -833,16 +830,15 @@ fn a_mutant_change_the_sidecar_cannot_finish_is_not_kept_announced_or_answered_a
     let sandbox = Sandbox::new();
     let playlist = sandbox.create_playlist("Friday", &[2, 3]);
     let entry = entry_at(&sandbox, &playlist, 1);
-    let kept = mutate(&sandbox, &entry_at(&sandbox, &playlist, 2));
-    let kept_id = kept["mutant"]["id"].as_i64().unwrap().to_string();
+    let kept_entry = entry_at(&sandbox, &playlist, 2);
     let mut watcher = sandbox.client();
     watcher.subscribe().unwrap();
-    // The kept Mutant's own event may still be on its way.
-    while watcher
-        .next_event(Duration::from_millis(500))
-        .unwrap()
-        .is_some()
-    {}
+    let kept = mutate(&sandbox, &kept_entry);
+    let kept_id = kept["mutant"]["id"].as_i64().unwrap().to_string();
+    // The kept Mutant's own event, consumed: what follows is heard alone.
+    let made = common::barrier::heard_exactly(&mut watcher, 1, Duration::ZERO);
+    assert_eq!(made[0].data["action"], "created", "{made:?}");
+    assert_eq!(made[0].data["mutant_id"].to_string(), kept_id, "{made:?}");
 
     // The Sidecar refuses to end a Run: the Run made for a command is the
     // last thing its transaction writes.
@@ -879,13 +875,11 @@ fn a_mutant_change_the_sidecar_cannot_finish_is_not_kept_announced_or_answered_a
     assert!(!made["run"]["finished_at"].is_null());
     let removed = ok(&sandbox, &remove);
     assert_eq!(removed["mutant"]["removed"], true);
-    let heard: Vec<String> = std::iter::from_fn(|| {
-        watcher
-            .next_event(Duration::from_millis(500))
-            .unwrap()
+    let heard: Vec<String> =
+        common::barrier::heard_exactly(&mut watcher, 2, Duration::from_millis(500))
+            .into_iter()
             .map(|event| event.data["action"].as_str().unwrap_or("").to_owned())
-    })
-    .collect();
+            .collect();
     assert_eq!(heard, ["created", "removed"]);
 }
 

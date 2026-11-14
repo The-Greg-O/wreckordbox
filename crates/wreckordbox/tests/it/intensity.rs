@@ -173,6 +173,41 @@ fn events(client: &mut wreckordbox_service::Client) -> Vec<wreckordbox_service::
     seen
 }
 
+/// Every event a client is sent up to the progress event that settles the
+/// last of `total` tracks, each waited for as long as it takes (wbx-377):
+/// an exact count that does not end at the first quiet moment.
+fn until_settled(
+    client: &mut wreckordbox_service::Client,
+    total: u64,
+) -> Vec<wreckordbox_service::Event> {
+    let mut seen = Vec::new();
+    loop {
+        let event = client
+            .next_event(Duration::from_secs(30))
+            .unwrap()
+            .unwrap_or_else(|| panic!("the last of {total} tracks was never settled: {seen:?}"));
+        let last = event.event == "intensity_progress"
+            && event.data["total"] == total
+            && event.data["done"] == total
+            && event.data["status"] != "measuring";
+        seen.push(event);
+        if last {
+            return seen;
+        }
+    }
+}
+
+/// [`until_settled`], then whatever else comes in the window [`events`]
+/// has always allowed.
+fn settled_then_events(
+    client: &mut wreckordbox_service::Client,
+    total: u64,
+) -> Vec<wreckordbox_service::Event> {
+    let mut seen = until_settled(client, total);
+    seen.extend(events(client));
+    seen
+}
+
 #[test]
 fn measuring_a_track_stores_a_summary_and_a_curve_that_rises_where_the_audio_does() {
     let sandbox = Sandbox::new();
@@ -290,7 +325,7 @@ fn measuring_a_track_stores_a_summary_and_a_curve_that_rises_where_the_audio_doe
 
     // The watcher was told how it went, and that the Sidecar changed; the
     // Library never did.
-    let seen = events(&mut watcher);
+    let seen = settled_then_events(&mut watcher, 1);
     let progress: Vec<&Value> = seen
         .iter()
         .filter(|event| event.event == "intensity_progress")
@@ -537,10 +572,13 @@ fn a_playlist_is_measured_in_one_run_with_progress_and_a_bad_track_does_not_stop
             )
             .unwrap();
     });
-    // One was measured before.
-    measure(&sandbox, &[&second]);
+    // One was measured before, with the watcher already listening: what
+    // that measuring sends is consumed, not left to reach it late.
+    sandbox.status();
     let mut watcher = sandbox.client();
     watcher.subscribe().unwrap();
+    measure(&sandbox, &[&second]);
+    until_settled(&mut watcher, 1);
 
     let run = sandbox.cli(&["--json", "intensity", "measure", "--playlist", "Warm up"]);
     assert!(run.status.success(), "{}", run.stderr);
@@ -577,7 +615,7 @@ fn a_playlist_is_measured_in_one_run_with_progress_and_a_bad_track_does_not_stop
     assert_eq!(show(&sandbox, &third)["intensity"]["run"], run_id);
 
     // Progress: every track is reported once it is settled, counting up.
-    let seen = events(&mut watcher);
+    let seen = settled_then_events(&mut watcher, 4);
     let settled: Vec<&Value> = seen
         .iter()
         .filter(|event| event.event == "intensity_progress" && event.data["status"] != "measuring")

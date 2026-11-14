@@ -183,18 +183,14 @@ fn facts_held_back_by_policy_are_listed_with_track_value_source_and_confidence_a
     s.dj_prep_colours();
     policy(&s, "[energy]\napply = 0.8\n");
     ok(&s, &["status"]);
+    let mut watcher = s.client();
+    watcher.subscribe().unwrap();
     let low = fact(&s, "10001", "energy", "4", "agent:tagger", "0.6");
     let colour = fact(&s, "10002", "prep_colour", "Green", "tool:meter", "0.9");
     // Above the threshold: it would apply, it is not waiting.
-    fact(&s, "10003", "energy", "2", "agent:tagger", "0.95");
-    let mut watcher = s.client();
-    watcher.subscribe().unwrap();
-    // Whatever the recordings above still send arrives before the read.
-    while watcher
-        .next_event(Duration::from_millis(300))
-        .unwrap()
-        .is_some()
-    {}
+    let applying = fact(&s, "10003", "energy", "2", "agent:tagger", "0.95");
+    // What the recordings above send, consumed before the read.
+    common::barrier::facts_announced(&mut watcher, &[low, colour, applying]);
     let runs_before = ok(&s, &["runs", "list"]);
     let bytes_before = sidecar_bytes(&s);
     let library_before = std::fs::read(s.master_db()).unwrap();

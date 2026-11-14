@@ -87,14 +87,6 @@ fn changes(report: &Value, key: &str) -> Vec<(String, String, Value, Value)> {
     list
 }
 
-fn drain(watcher: &mut wreckordbox_service::Client) {
-    while watcher
-        .next_event(Duration::from_millis(300))
-        .unwrap()
-        .is_some()
-    {}
-}
-
 #[test]
 fn a_dry_run_lists_exactly_what_applying_then_does_as_one_run_and_twice_changes_nothing() {
     let s = Sandbox::new();
@@ -207,7 +199,9 @@ fn a_dry_run_lists_exactly_what_applying_then_does_as_one_run_and_twice_changes_
     let standing = ok(&s, &["facts", "standing", "10001", "energy"]);
     assert_eq!(standing["standing"]["source"]["kind"], "agent");
 
-    drain(&mut watcher);
+    // The apply's one event was all: nothing more before the ordered
+    // barrier, so what follows is heard from a quiet start.
+    common::barrier::told_nothing(&mut watcher);
     let runs_after = ok(&s, &["runs", "list"]);
     let again = ok(&s, &["project"]);
     assert_eq!(again["changes"], json!([]));
@@ -675,6 +669,8 @@ fn stop_service(s: &Sandbox) {
         wreckordbox_service::Client::connect(&socket).is_err()
     });
     assert!(gone, "the service did not stop");
+    // It answers `stop` before it lets go of the Library.
+    common::released::wait_until_released(s, "the stopped service");
 }
 
 /// The review's case: the DJ's assertion of a projected value is begun (its
