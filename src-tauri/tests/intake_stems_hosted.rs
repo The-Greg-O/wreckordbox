@@ -207,7 +207,8 @@ fn a_split_from_the_window_reports_progress_and_then_the_track_has_stems() {
     let (track, audio) = window.tracks[0].clone();
     let heard = hear_progress(&window);
 
-    let outcome = intake_stems::separate(window.app.handle(), &window.state(), &track).unwrap();
+    let outcome =
+        intake_stems::separate(window.app.handle(), &window.state(), &track, false).unwrap();
 
     assert_eq!(outcome["ok"], true, "{outcome}");
     assert_eq!(outcome["status"]["state"], "current", "{outcome}");
@@ -243,8 +244,9 @@ fn asking_twice_for_one_track_separates_it_once() {
 
     let handle = window.app.handle().clone();
     let (first_state, first_track) = (Arc::clone(&state), track.clone());
-    let first =
-        std::thread::spawn(move || intake_stems::separate(&handle, &first_state, &first_track));
+    let first = std::thread::spawn(move || {
+        intake_stems::separate(&handle, &first_state, &first_track, false)
+    });
     // The first is running: the status says so, to any reader.
     let mut separating = Value::Null;
     for _ in 0..100 {
@@ -255,16 +257,40 @@ fn asking_twice_for_one_track_separates_it_once() {
         std::thread::sleep(Duration::from_millis(20));
     }
     assert_eq!(separating, track.as_str());
-    let second = intake_stems::separate(window.app.handle(), &state, &track).unwrap();
+    let second = intake_stems::separate(window.app.handle(), &state, &track, false).unwrap();
     let first = first.join().unwrap().unwrap();
 
     assert_eq!(first["ok"], true, "{first}");
     assert_eq!(second["ok"], true, "{second}");
     assert_eq!(engine_runs(&audio), 1, "one separation for both requests");
     // And once there are Stems, asking again uses them.
-    let third = intake_stems::separate(window.app.handle(), &state, &track).unwrap();
+    let third = intake_stems::separate(window.app.handle(), &state, &track, false).unwrap();
     assert_eq!(third["reused"], true, "{third}");
     assert_eq!(engine_runs(&audio), 1);
+}
+
+#[test]
+fn current_stems_are_split_again_only_when_asked_to() {
+    let window = hosting_window();
+    let (track, audio) = window.tracks[0].clone();
+    let state = window.state();
+    let first = intake_stems::separate(window.app.handle(), &state, &track, false).unwrap();
+    let made_at = first["status"]["made_at"].as_i64().unwrap();
+    std::thread::sleep(Duration::from_millis(5));
+
+    let reused = intake_stems::separate(window.app.handle(), &state, &track, false).unwrap();
+    assert_eq!(reused["reused"], true, "{reused}");
+    assert_eq!(engine_runs(&audio), 1);
+
+    let again = intake_stems::separate(window.app.handle(), &state, &track, true).unwrap();
+    assert_eq!(again["ok"], true, "{again}");
+    assert_eq!(again["reused"], false, "{again}");
+    assert_eq!(engine_runs(&audio), 2, "split again when asked to");
+    assert_eq!(again["status"]["state"], "current", "{again}");
+    assert!(
+        again["status"]["made_at"].as_i64().unwrap() > made_at,
+        "{again}"
+    );
 }
 
 #[test]
@@ -276,7 +302,7 @@ fn another_track_asked_for_while_one_is_split_is_told_it_is_busy() {
     let handle = window.app.handle().clone();
     let running_state = Arc::clone(&state);
     let running =
-        std::thread::spawn(move || intake_stems::separate(&handle, &running_state, &first));
+        std::thread::spawn(move || intake_stems::separate(&handle, &running_state, &first, false));
     for _ in 0..100 {
         if !intake_stems::status(&state, &second).unwrap()["separating"].is_null() {
             break;
@@ -284,7 +310,7 @@ fn another_track_asked_for_while_one_is_split_is_told_it_is_busy() {
         std::thread::sleep(Duration::from_millis(20));
     }
 
-    let busy = intake_stems::separate(window.app.handle(), &state, &second).unwrap();
+    let busy = intake_stems::separate(window.app.handle(), &state, &second, false).unwrap();
 
     assert_eq!(busy["ok"], false, "{busy}");
     assert_eq!(busy["error"]["code"], "separation_busy", "{busy}");
@@ -297,7 +323,8 @@ fn a_failed_split_answers_its_reason_and_records_nothing() {
     let window = hosting_window();
     let track = window.no_audio.clone();
 
-    let failed = intake_stems::separate(window.app.handle(), &window.state(), &track).unwrap();
+    let failed =
+        intake_stems::separate(window.app.handle(), &window.state(), &track, false).unwrap();
 
     assert_eq!(failed["ok"], false, "{failed}");
     assert_eq!(failed["error"]["code"], "track_file_missing", "{failed}");
@@ -321,7 +348,7 @@ fn stems_of_audio_since_changed_read_as_stale_and_reading_marks_nothing() {
     let window = hosting_window();
     let (track, audio) = window.tracks[0].clone();
     let state = window.state();
-    let made = intake_stems::separate(window.app.handle(), &state, &track).unwrap();
+    let made = intake_stems::separate(window.app.handle(), &state, &track, false).unwrap();
     assert_eq!(made["ok"], true, "{made}");
 
     // The audio file is replaced by other audio.
@@ -348,7 +375,7 @@ fn a_window_that_hosts_no_service_says_so() {
         "{}",
         error.message
     );
-    let error = intake_stems::separate(app.handle(), &state, "1").unwrap_err();
+    let error = intake_stems::separate(app.handle(), &state, "1", false).unwrap_err();
     assert!(
         error.message.contains("Library service"),
         "{}",

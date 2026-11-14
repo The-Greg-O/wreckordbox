@@ -232,7 +232,12 @@ pub(crate) fn answer(
     })?;
     let found = lookup(&track.id)?;
     let answer = match request.command.as_str() {
-        commands::STEMS_SEPARATE => serde_json::to_value(stems.separate(found)?),
+        commands::STEMS_SEPARATE => {
+            // `again`: separate even when current Stems exist (the DJ
+            // confirmed it, wbx-67). A run for the track is still joined.
+            let again = request.args.get("again").and_then(Value::as_bool) == Some(true);
+            serde_json::to_value(stems.separate(found, again)?)
+        }
         _ => serde_json::to_value(stems.show(found)?),
     };
     answer.map_err(|e| ServiceError::new(service_codes::SERVICE_FAILED, e.to_string()))
@@ -436,7 +441,11 @@ impl Stems {
         });
     }
 
-    fn separate(self: &Arc<Self>, found: ParentAudio) -> Result<Separated, ServiceError> {
+    fn separate(
+        self: &Arc<Self>,
+        found: ParentAudio,
+        again: bool,
+    ) -> Result<Separated, ServiceError> {
         let fingerprint = fingerprint(found.parent(), found.path())?;
         let (_, marked_stale) = self.before_record(&found, Some(&fingerprint), None)?;
         let parent = found.parent().clone();
@@ -461,7 +470,8 @@ impl Stems {
                     .current_stems(&parent.id, &fingerprint)
                     .map_err(|e| sidecar_error(&e))?
                     // Stems whose files have been removed are not Stems.
-                    .filter(|set| set.stems.iter().all(|stem| stem.path.is_file()));
+                    .filter(|set| set.stems.iter().all(|stem| stem.path.is_file()))
+                    .filter(|_| !again);
                 if let Some(stems) = current {
                     return Ok(Separated {
                         track: parent,

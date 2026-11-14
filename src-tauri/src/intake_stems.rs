@@ -62,7 +62,14 @@ pub fn status(state: &AppState, id: &str) -> AppResult<Value> {
 
 /// Separates the track's Stems through the hosted service and waits for
 /// the answer, telling the window the separation's progress on the way.
-pub fn separate<R: Runtime>(app: &AppHandle<R>, state: &AppState, id: &str) -> AppResult<Value> {
+/// Current Stems are answered as they are unless `again` (the DJ
+/// confirmed splitting them again).
+pub fn separate<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    id: &str,
+    again: bool,
+) -> AppResult<Value> {
     // Listen before asking, so no early progress is missed.
     let (caller, heard) = state
         .with_service(|service| (service.caller(), service.events()))
@@ -112,7 +119,10 @@ pub fn separate<R: Runtime>(app: &AppHandle<R>, state: &AppState, id: &str) -> A
             }
         })
     };
-    let answer = caller.call(commands::STEMS_SEPARATE, json!({ "id": id }));
+    let answer = caller.call(
+        commands::STEMS_SEPARATE,
+        json!({ "id": id, "again": again }),
+    );
     done.store(true, Ordering::Release);
     let _ = forwarder.join();
     Ok(match answer {
@@ -151,7 +161,11 @@ pub async fn intake_stems_separate<R: Runtime>(
     app: AppHandle<R>,
     state: tauri::State<'_, Arc<AppState>>,
     id: String,
+    again: Option<bool>,
 ) -> AppResult<Value> {
     let state = Arc::clone(&state);
-    blocking("intake_stems_separate", move || separate(&app, &state, &id)).await
+    blocking("intake_stems_separate", move || {
+        separate(&app, &state, &id, again.unwrap_or(false))
+    })
+    .await
 }
