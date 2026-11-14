@@ -1423,6 +1423,11 @@ impl Keeper {
     /// Settles what an earlier service left, when there is a Sidecar:
     /// asked as the service starts. Queries never call this or open a writer.
     pub(crate) fn recover(&self) -> Result<(), ServiceError> {
+        // Settling intents into entries is the Ledger's own housekeeping:
+        // kept on a Stick while it is unlocked (wbx-8yh). On a locked one
+        // the writer is not opened, so nothing is begun; the first edit
+        // after an unlock settles first.
+        let _ledger = crate::sidecar_stick::ledger_scope();
         let result = (|| {
             let sidecar = if bulk_spill::exists(&self.stems.bulk_recovery_dir()) {
                 Some(self.stems.sidecar()?)
@@ -1478,6 +1483,7 @@ impl Keeper {
     /// service has stopped and every write it saw is over. Entries still
     /// waiting stay in the spill file for the next service.
     pub(crate) fn close(&self) {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         self.stopping.store(true, Ordering::Release);
         let mut state = self.state();
         state.closed = true;
@@ -1567,6 +1573,14 @@ impl Keeper {
             .finish_owned_runs("wreckordbox stopped without ending it")
             .map_err(|e| e.to_string())?;
         state.settled = true;
+        // A start that found its Stick locked is over once this is done.
+        if state
+            .recovery_error
+            .as_ref()
+            .is_some_and(|error| error.code == service_codes::STICK_PROTECTED)
+        {
+            state.recovery_error = None;
+        }
         Ok(())
     }
 

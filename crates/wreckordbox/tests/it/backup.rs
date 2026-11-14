@@ -395,3 +395,52 @@ fn a_restore_stopped_after_its_files_are_in_place_is_recorded_in_the_ledger_once
     assert_eq!(restore_entries(&sandbox), 1);
     assert_eq!(facts(&sandbox), before);
 }
+
+/// The restore's Ledger entry is written into a Sidecar kept on a Stick
+/// only while the Stick is unlocked (wbx-8yh): locked, the next owner says
+/// so and keeps the journal owed; unlocked, the entry is written once.
+#[test]
+fn a_restore_entry_owed_to_a_sidecar_on_a_locked_stick_waits_for_the_unlock() {
+    let (sandbox, archive, _) = backed_up();
+    rbl_backup::restore::restore_owing(
+        &rbl_backup::restore::Request {
+            archive: &archive,
+            parts: rbl_backup::restore::Parts::ALL,
+            location: sandbox.location(),
+            state_dir: &sandbox.state_dir(),
+            sizes: None,
+        },
+        Some(owed(&sandbox, &archive)),
+        &|| Ok(()),
+        &mut |_, _, _, _| Ok(()),
+    )
+    .unwrap();
+    let folder = sidecar_dir(&sandbox);
+    std::fs::write(
+        folder.join(wreckordbox_stick_protection::STAND_IN_MARKER),
+        b"",
+    )
+    .unwrap();
+
+    let failed = cli(&sandbox, &["--json", "status"]);
+    assert!(!failed.status.success(), "{}", failed.stdout);
+    let error = failed.error_json()["error"].clone();
+    assert_eq!(error["code"], "restore_unrecorded", "{error}");
+    assert!(
+        error["message"].as_str().unwrap().contains("unlock"),
+        "{error}"
+    );
+    assert!(rbl_backup::journal::pending(&sandbox.state_dir()));
+    assert_eq!(restore_entries(&sandbox), 0);
+
+    let name = folder.file_name().unwrap().to_str().unwrap().to_owned();
+    let unlocked = cli(
+        &sandbox,
+        &["stick", "unlock", folder.to_str().unwrap(), "--name", &name],
+    );
+    assert!(unlocked.status.success(), "{}", unlocked.stderr);
+    let status = cli(&sandbox, &["--json", "status"]);
+    assert!(status.status.success(), "{}", status.stderr);
+    assert!(!rbl_backup::journal::pending(&sandbox.state_dir()));
+    assert_eq!(restore_entries(&sandbox), 1);
+}

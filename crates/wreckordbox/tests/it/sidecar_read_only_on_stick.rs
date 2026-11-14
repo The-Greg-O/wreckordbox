@@ -39,6 +39,7 @@ const RECORDS: &[&str] = &[
     "review.accept",
     "review.reject",
     "review.reopen",
+    "runs.start",
     "schema.convert",
     "stems.separate",
 ];
@@ -61,7 +62,6 @@ const LIBRARY_EDITS: &[&str] = &[
     "playlists.reorder",
     "protection.set",
     "runs.finish",
-    "runs.start",
     "tracks.rate",
     "tracks.remove_from_collection",
     "tracks.set_prep_colour",
@@ -297,6 +297,7 @@ fn record_args(command: &str, track: &str) -> Value {
         }
         "projection.apply" | "projection.mytags.apply" => json!({ "source": { "kind": "dj" } }),
         "projection.acknowledge" => json!({ "barrier": 1, "source": { "kind": "dj" } }),
+        "runs.start" => json!({ "source": { "kind": "dj" }, "description": "tidy" }),
         _ => json!({ "id": 1, "entry": "1", "source": { "kind": "dj" } }),
     }
 }
@@ -310,6 +311,11 @@ fn assert_refused(sandbox: &Sandbox, command: &str, track: &str) {
         .call::<Value>(command, record_args(command, track))
         .expect_err(command);
     assert_eq!(error.code, "sidecar_on_stick", "{command}: {error:?}");
+    assert!(
+        error.message.contains(&format!("`{command}`")),
+        "{command}: the refusal names the command: {}",
+        error.message
+    );
     assert!(
         error.message.contains("Stick")
             && error.message.contains("Nothing was written")
@@ -512,4 +518,175 @@ fn a_command_let_in_earlier_cannot_write_once_its_sidecar_is_on_a_stick() {
         "not a byte of the Sidecar changed after the hold"
     );
     assert_eq!(facts_in_sidecar(&sandbox, &track, "intensity"), 0);
+}
+
+const TAG_SCHEMA: &str = r#"
+version = 1
+
+[genre]
+terms = [
+  { id = "house", name = "House" },
+  { id = "techno", name = "Techno" },
+]
+
+[dimensions.situation]
+terms = [
+  { id = "peak", name = "Peak" },
+  { id = "warm-up", name = "Warm-up" },
+]
+
+[deck]
+categories = [{ dimension = "situation", label = "Situation" }]
+"#;
+
+/// Setting a tag of a dimension that is not on the deck is pure Fact
+/// recording (a Judgements-only edit: the Library does not change), so it
+/// is refused like every other recording command; a deck dimension's tag
+/// is an ordinary MyTag edit of the Library and is still made.
+#[test]
+fn a_tag_that_is_only_a_fact_is_refused_and_a_deck_tag_is_still_set() {
+    let (sandbox, track) = with_facts();
+    std::fs::write(sandbox.sidecar_dir().join("tag-schema.toml"), TAG_SCHEMA).unwrap();
+    an_unlocked_stick(&sandbox, &sandbox.sidecar_dir());
+
+    let sidecar = sandbox.sidecar_dir();
+    let before = snapshot(&sidecar);
+    let library = std::fs::read(sandbox.master_db()).unwrap();
+    // As the DJ, which is what records a DJ Fact.
+    let run = sandbox.cli(&[
+        "--json", "intake", "tag", &track, "genre", "techno", "--source", "dj",
+    ]);
+    assert!(
+        !run.status.success(),
+        "a Fact-only tag is refused: {}",
+        run.stdout
+    );
+    let error = run.error_json()["error"].clone();
+    assert_eq!(error["code"], "sidecar_on_stick", "{error}");
+    let message = error["message"].as_str().unwrap();
+    assert!(
+        message.contains("Nothing was written") && message.contains("this computer"),
+        "{message}"
+    );
+    assert_eq!(
+        snapshot(&sidecar),
+        before,
+        "not a byte of the Sidecar changed"
+    );
+    assert_eq!(std::fs::read(sandbox.master_db()).unwrap(), library);
+    let shown = ok(&sandbox, &["facts", "show", &track]);
+    assert!(
+        !shown.to_string().contains("techno"),
+        "no genre Fact was recorded: {shown}"
+    );
+
+    // The deck dimension: the Library's MyTags change.
+    ok(
+        &sandbox,
+        &[
+            "intake",
+            "tag",
+            &track,
+            "situation",
+            "peak",
+            "--source",
+            "dj",
+        ],
+    );
+    let tags = ok(&sandbox, &["mytags", "show", &track]);
+    assert!(tags.to_string().contains("Peak"), "{tags}");
+}
+
+/// A DJ Fact derived from an ordinary Library edit (the DJ's rating) is
+/// part of that edit's record: kept with it on an unlocked Stick.
+#[test]
+fn the_djs_fact_derived_from_a_rating_is_kept_with_the_edit() {
+    let (sandbox, track) = with_facts();
+    an_unlocked_stick(&sandbox, &sandbox.sidecar_dir());
+    ok(&sandbox, &["tracks", "rate", &track, "3", "--source", "dj"]);
+    assert_eq!(ok(&sandbox, &["tracks", "show", &track])["rating"], 3);
+    assert_eq!(
+        ok(&sandbox, &["facts", "standing", &track, "energy"])["standing"]["value"],
+        3
+    );
+}
+
+/// What an earlier service left (an intent no entry settled) and a
+/// service starting on a Library whose Sidecar is on a Stick.
+fn with_an_unsettled_intent() -> Sandbox {
+    let sandbox = Sandbox::new();
+    {
+        let sidecar = wreckordbox_sidecar::Sidecar::open(&sandbox.sidecar_dir()).unwrap();
+        let source = wreckordbox_sidecar::Source::new(wreckordbox_sidecar::SourceKind::Dj, "dj");
+        sidecar
+            .begin_intent(
+                &wreckordbox_sidecar::ledger::Intent {
+                    source: &source,
+                    run: None,
+                    description: "An edit an earlier service began",
+                    command: None,
+                    at: 1,
+                },
+                &[],
+            )
+            .unwrap();
+    }
+    sandbox
+}
+
+#[test]
+fn a_service_starting_on_an_unlocked_stick_brings_its_ledger_up_to_date() {
+    let sandbox = with_an_unsettled_intent();
+    an_unlocked_stick(&sandbox, &sandbox.sidecar_dir());
+    let runs = ok(&sandbox, &["runs", "list"]);
+    assert!(
+        runs.to_string()
+            .contains("An edit an earlier service began"),
+        "the intent was settled into an entry: {runs}"
+    );
+}
+
+#[test]
+fn a_service_starting_on_a_locked_stick_waits_to_bring_its_ledger_up_to_date() {
+    let sandbox = with_an_unsettled_intent();
+    let sidecar = sandbox.sidecar_dir();
+    std::fs::write(
+        sidecar.join(wreckordbox_stick_protection::STAND_IN_MARKER),
+        b"",
+    )
+    .unwrap();
+    let before = snapshot(&sidecar);
+    // Starts the service; the Ledger is not brought up to date, and says so.
+    let run = sandbox.cli(&["--json", "runs", "list"]);
+    assert!(!run.status.success(), "{}", run.stdout);
+    let error = run.error_json();
+    assert_eq!(error["error"]["code"], "stick_protected", "{error}");
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unlock"),
+        "{error}"
+    );
+    assert_eq!(snapshot(&sidecar), before, "nothing half-done on the Stick");
+
+    // Unlocked, the next edit brings it up to date first.
+    let name = sidecar.file_name().unwrap().to_str().unwrap().to_owned();
+    assert!(sandbox
+        .cli(&[
+            "stick",
+            "unlock",
+            sidecar.to_str().unwrap(),
+            "--name",
+            &name
+        ])
+        .status
+        .success());
+    ok(&sandbox, &["tracks", "rate", "10003", "2"]);
+    let runs = ok(&sandbox, &["runs", "list"]);
+    assert!(
+        runs.to_string()
+            .contains("An edit an earlier service began"),
+        "{runs}"
+    );
 }

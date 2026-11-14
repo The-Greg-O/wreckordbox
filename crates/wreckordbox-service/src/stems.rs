@@ -448,8 +448,8 @@ impl Stems {
         let open = Arc::new(Sidecar::open(&self.sidecar_dir).map_err(|e| sidecar_error(&e))?);
         // Every later write of this handle passes it (wbx-8yh).
         open.set_write_admission(crate::sidecar_stick::admission(
-            self.library_dir.clone(),
-            self.sidecar_dir.clone(),
+            &self.library_dir,
+            &self.sidecar_dir,
             self.state_dir.clone(),
         ));
         *sidecar = Some(Arc::clone(&open));

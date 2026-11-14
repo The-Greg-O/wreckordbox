@@ -43,6 +43,7 @@ pub(crate) const RECORDS: &[&str] = &[
     "review.accept",
     "review.reject",
     "review.reopen",
+    "runs.start",
     "schema.convert",
     "stems.separate",
 ];
@@ -92,8 +93,8 @@ pub(crate) fn refuse_records(
     }
 }
 
-/// Refuses `what` (a separation, a measurement) for a Library hosted on a
-/// Stick, wherever it is asked from.
+/// Refuses `what` (a separation, a measurement, a tag that is only a DJ
+/// Fact) for a Library hosted on a Stick, wherever it is asked from.
 pub(crate) fn refuse_background_work(
     library_dir: &Path,
     sidecar_dir: &Path,
@@ -127,14 +128,18 @@ impl Drop for LedgerScope {
     }
 }
 
-/// The admission the service installs on its Sidecar handle.
+/// The admission the service installs on its Sidecar handle. Each folder's
+/// volume is read once per handle (an open file stays on the filesystem it
+/// was opened on); a mount table that cannot be read counts as a Stick.
 pub(crate) fn admission(
-    library_dir: PathBuf,
-    sidecar_dir: PathBuf,
+    library_dir: &Path,
+    sidecar_dir: &Path,
     state_dir: PathBuf,
 ) -> wreckordbox_sidecar::WriteAdmission {
+    let sidecar = wreckordbox_stick_protection::HeldVolume::new(sidecar_dir);
+    let library = wreckordbox_stick_protection::HeldVolume::new(library_dir);
     std::sync::Arc::new(move || {
-        let Some(root) = stick_of(&library_dir, &sidecar_dir) else {
+        let Some(root) = sidecar.stick_root().or_else(|| library.stick_root()) else {
             return Ok(());
         };
         if LEDGER.with(Cell::get) == 0 {

@@ -288,15 +288,26 @@ Stick: it is never unlocked on its own.
   says why and what you can do) and nothing written: applying a Projection
   (Energy, Prep colour and MyTags), accepting, rejecting or reopening in
   Review, recording a Fact (by you, an agent or a tool, a Decision's answer
-  included), Mutants, converting the Tag schema, stem separation and
-  Intensity measurement. A Stick must stay free to lock and eject, and
+  included, and a tag of a dimension that is not on the deck, which is only
+  a Fact), starting a Run, Mutants, converting the Tag schema, stem
+  separation and Intensity measurement. A Stick must stay free to lock and eject, and
   nothing recorded there should outlive your unlock. Still allowed:
   reading everything (every query, Review's waiting list, Projection's and
   a Stick load's dry runs), and ordinary Library edits while the Stick is
   unlocked; an edit's own Ledger entry is written with it, and the edit is
-  refused, not left unrecorded, if the Stick is locked. The check is made
+  refused, not left unrecorded, if the Stick is locked. A Fact that an
+  ordinary edit makes of itself (your rating or Prep colour set in the
+  window or with `wreckordbox tracks rate`, a deck MyTag) is part of that
+  edit's record and is kept with it. A service starting on such a Library
+  brings its Ledger up to date (an unfinished change becomes an
+  "unconfirmed" entry) if the Stick is unlocked; if it is locked, nothing
+  is written and Ledger queries say the Stick must be unlocked, and the
+  first edit after you unlock it does it first. The check is made
   when each write would be kept, so work that started before is refused
   too. To record, copy the Library to this computer and open it from there.
+  If the app cannot read this computer's list of mounted volumes, it takes
+  the Library to be on a Stick. A limit: a folder of a Stick bind-mounted
+  somewhere else is not recognised as that Stick.
 - **Closing the window waits for every write under way**, a Stick load, an
   export, a sync or a backup, and starts no new one.
 

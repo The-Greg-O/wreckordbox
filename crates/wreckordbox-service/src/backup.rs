@@ -203,6 +203,15 @@ fn record_owed(recovery_dir: &Path) -> Result<Option<i64>, ServiceError> {
 fn write_entry(recovery_dir: &Path, folder: &Path, ledger: &mut Owed) -> Result<i64, String> {
     use wreckordbox_sidecar::ledger::{Action, Intent, NewEntry, Store};
     let sidecar = wreckordbox_sidecar::Sidecar::open(folder).map_err(|e| e.to_string())?;
+    // The restore's entry is the Ledger's own record of a Library change:
+    // on a Stick it is kept only while the Stick is unlocked (wbx-8yh); a
+    // refusal keeps the journal owed, for the next start to retry.
+    sidecar.set_write_admission(crate::sidecar_stick::admission(
+        folder.parent().unwrap_or(folder),
+        folder,
+        recovery_dir.to_path_buf(),
+    ));
+    let _ledger = crate::sidecar_stick::ledger_scope();
     let source = wreckordbox_sidecar::Source::new(wreckordbox_sidecar::SourceKind::Dj, "dj");
     let command =
         serde_json::json!({ "name": "backup.restore", "args": { "backup": ledger.backup } });

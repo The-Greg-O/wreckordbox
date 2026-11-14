@@ -211,6 +211,9 @@ pub struct VolumeFacts {
     pub export: Option<bool>,
 }
 
+mod held_volume;
+pub use held_volume::HeldVolume;
+
 /// The rule: a player export makes a Stick; a root that cannot be read is
 /// a Stick when the volume is removable (or may be) or under the media
 /// folders; anything else is not.
@@ -247,7 +250,13 @@ pub fn classify(path: &Path) -> Volume {
 
 /// The facts of the volume holding `resolved` (canonical).
 fn facts_of(resolved: &Path) -> Option<VolumeFacts> {
-    let mount = containing_mount(resolved)?;
+    let table = std::fs::read_to_string("/proc/self/mountinfo").ok()?;
+    facts_in(&table, resolved)
+}
+
+/// The facts of the volume holding `resolved`, from the mount table `table`.
+fn facts_in(table: &str, resolved: &Path) -> Option<VolumeFacts> {
+    let mount = containing_mount(table, resolved)?;
     let media = ["/run/media", "/media", "/Volumes"]
         .iter()
         .any(|dir| mount.point.starts_with(dir));
@@ -279,8 +288,7 @@ struct Mount {
 }
 
 /// The mount whose mount point is the longest prefix of `path`.
-fn containing_mount(path: &Path) -> Option<Mount> {
-    let table = std::fs::read_to_string("/proc/self/mountinfo").ok()?;
+fn containing_mount(table: &str, path: &Path) -> Option<Mount> {
     let mut best: Option<Mount> = None;
     for line in table.lines() {
         let fields: Vec<&str> = line.split(' ').collect();
