@@ -43,6 +43,7 @@ fn copy_tree_with_workers(
         &mut |bytes, _| progress(bytes),
         workers,
         false,
+        crate::backup_guard::UNCHECKED,
     )
 }
 
@@ -89,12 +90,19 @@ impl TreeCopyPlan {
     #[cfg(test)]
     pub fn copy(self, progress: &mut TreeProgress<'_>) -> io::Result<u64> {
         let workers = std::thread::available_parallelism().map_or(2, usize::from);
-        self.copy_with_workers(progress, workers, false)
+        self.copy_with_workers(progress, workers, false, crate::backup_guard::UNCHECKED)
     }
 
-    pub fn compress(self, progress: &mut TreeProgress<'_>) -> io::Result<u64> {
+    /// `check`: run by each worker before each write of its own (and before
+    /// each folder is made), not only by the progress consumer, so a Stick
+    /// locked or replaced stops every worker at its next write (wbx-45.14).
+    pub fn compress(
+        self,
+        progress: &mut TreeProgress<'_>,
+        check: crate::backup_guard::WriteCheck<'_>,
+    ) -> io::Result<u64> {
         let workers = std::thread::available_parallelism().map_or(2, usize::from);
-        self.copy_with_workers(progress, workers, true)
+        self.copy_with_workers(progress, workers, true, check)
     }
 
     fn copy_with_workers(
@@ -102,6 +110,7 @@ impl TreeCopyPlan {
         progress: &mut TreeProgress<'_>,
         workers: usize,
         compressed: bool,
+        check: crate::backup_guard::WriteCheck<'_>,
     ) -> io::Result<u64> {
         use std::sync::{
             atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -112,6 +121,7 @@ impl TreeCopyPlan {
         } = self;
         for directory in &directories {
             progress(0, None)?;
+            check()?;
             fs::create_dir_all(directory)?;
         }
         let next = AtomicUsize::new(0);
@@ -132,10 +142,12 @@ impl TreeCopyPlan {
                         let Some((source, target)) = files.get(index) else {
                             break;
                         };
-                        let operation = if compressed {
-                            crate::backup_zip::compress_file
-                        } else {
-                            copy_file
+                        let operation = |source: &Path, target: &Path, progress: &mut Progress<'_>| {
+                            if compressed {
+                                crate::backup_zip::compress_file(source, target, progress, check)
+                            } else {
+                                copy_file(source, target, progress)
+                            }
                         };
                         let result = operation(source, target, &mut |bytes| {
                             if stopped.load(Ordering::Acquire) {
@@ -178,6 +190,7 @@ impl TreeCopyPlan {
         // until every worker and every directory flush has finished.
         for directory in directories.iter().rev() {
             progress(0, None)?;
+            check()?;
             crate::durable::sync_dir(directory)?;
         }
         Ok(bytes)

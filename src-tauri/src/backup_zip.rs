@@ -47,20 +47,21 @@ fn named(relative: &str, e: impl std::fmt::Display, kind: io::ErrorKind) -> io::
     io::Error::new(kind, format!("{relative}: {e}"))
 }
 
+/// `check`: run before every write to `target`'s file (Stick Protection's
+/// recheck for a backup on a Stick, wbx-45.14); a refusal stops the copy
+/// and nothing more reaches the file, its unfinished archive included.
 pub fn compress_file(
     source: &Path,
     target: &Path,
     progress: &mut dyn FnMut(u64) -> io::Result<()>,
+    check: crate::backup_guard::WriteCheck<'_>,
 ) -> io::Result<u64> {
     progress(0)?;
     let meta = fs::symlink_metadata(source)?;
     if !meta.is_file() || meta.file_type().is_symlink() {
         return Err(io::Error::other("Expected a regular backup file"));
     }
-    let output = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(compressed_path(target))?;
+    let output = crate::backup_guard::create_new(&compressed_path(target), check)?;
     let mut zip = ZipWriter::new(output);
     zip.start_file(
         "data",
@@ -82,19 +83,18 @@ pub fn compress_file(
         copied += count as u64;
         progress(count as u64)?;
     }
-    zip.finish()?.sync_all()?;
+    crate::backup_guard::finish(zip.finish()?)?;
     Ok(copied)
 }
 
+/// `writes`: run before every write to `target` (as [`compress_file`]'s).
 pub fn assemble(
     root: &Path,
     target: &Path,
     check: &mut dyn FnMut() -> io::Result<()>,
+    writes: crate::backup_guard::WriteCheck<'_>,
 ) -> io::Result<()> {
-    let output = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(target)?;
+    let output = crate::backup_guard::create_new(target, writes)?;
     let mut zip = ZipWriter::new(output);
     let mut pending = vec![root.to_path_buf()];
     while let Some(directory) = pending.pop() {
@@ -148,7 +148,7 @@ pub fn assemble(
             }
         }
     }
-    zip.finish()?.sync_all()
+    crate::backup_guard::finish(zip.finish()?)
 }
 
 #[cfg(test)]
@@ -163,11 +163,11 @@ mod tests {
         let source = dir.path().join("source");
         let data = vec![7; 1024 * 1024];
         fs::write(&source, &data).unwrap();
-        compress_file(&source, &stage.join("analysis/ANLZ.DAT"), &mut |_| Ok(())).unwrap();
+        compress_file(&source, &stage.join("analysis/ANLZ.DAT"), &mut |_| Ok(()), crate::backup_guard::UNCHECKED).unwrap();
         fs::write(stage.join("manifest.json"), b"{}").unwrap();
         fs::write(stage.join("summary.json"), b"{\"version\":1}").unwrap();
         let archive = dir.path().join("backup.zip");
-        assemble(&stage, &archive, &mut || Ok(())).unwrap();
+        assemble(&stage, &archive, &mut || Ok(()), crate::backup_guard::UNCHECKED).unwrap();
         assert!(fs::metadata(&archive).unwrap().len() < 10_000);
         let mut zip = ZipArchive::new(fs::File::open(&archive).unwrap()).unwrap();
         let mut read = |name: &str| {
@@ -187,13 +187,13 @@ mod tests {
         fs::create_dir_all(stage.join("analysis")).unwrap();
         let source = dir.path().join("source");
         fs::write(&source, b"data").unwrap();
-        compress_file(&source, &stage.join("analysis/ANLZ.DAT"), &mut |_| Ok(())).unwrap();
+        compress_file(&source, &stage.join("analysis/ANLZ.DAT"), &mut |_| Ok(()), crate::backup_guard::UNCHECKED).unwrap();
         fs::write(stage.join("manifest.json"), b"{}").unwrap();
         for junk in ["._manifest.json", "._master.db.zip", ".DS_Store", "analysis/._ANLZ.DAT", "Thumbs.db", "desktop.ini"] {
             fs::write(stage.join(junk), b"\0\x05\x16\x07junk").unwrap();
         }
         let archive = dir.path().join("backup.zip");
-        assemble(&stage, &archive, &mut || Ok(())).unwrap();
+        assemble(&stage, &archive, &mut || Ok(()), crate::backup_guard::UNCHECKED).unwrap();
         let zip = ZipArchive::new(fs::File::open(&archive).unwrap()).unwrap();
         let mut names: Vec<_> = zip.file_names().map(str::to_owned).collect();
         names.sort();
@@ -206,7 +206,7 @@ mod tests {
         let stage = dir.path().join("stage");
         fs::create_dir_all(&stage).unwrap();
         fs::write(stage.join("stray.bin"), b"x").unwrap();
-        let err = assemble(&stage, &dir.path().join("b.zip"), &mut || Ok(())).unwrap_err();
+        let err = assemble(&stage, &dir.path().join("b.zip"), &mut || Ok(()), crate::backup_guard::UNCHECKED).unwrap_err();
         assert!(err.to_string().contains("Uncompressed"));
         assert!(err.to_string().contains("stray.bin"), "{err}");
     }
@@ -218,12 +218,12 @@ mod tests {
         fs::create_dir_all(stage.join("analysis")).unwrap();
         let source = dir.path().join("source");
         fs::write(&source, b"real").unwrap();
-        compress_file(&source, &stage.join("analysis/._ANLZ.DAT"), &mut |_| Ok(())).unwrap();
+        compress_file(&source, &stage.join("analysis/._ANLZ.DAT"), &mut |_| Ok(()), crate::backup_guard::UNCHECKED).unwrap();
         // Zero-length companions that a FAT/exFAT volume leaves behind.
         fs::write(stage.join("._empty"), b"").unwrap();
         fs::write(stage.join("analysis/._empty.zip"), b"").unwrap();
         let archive = dir.path().join("backup.zip");
-        assemble(&stage, &archive, &mut || Ok(())).unwrap();
+        assemble(&stage, &archive, &mut || Ok(()), crate::backup_guard::UNCHECKED).unwrap();
         let zip = ZipArchive::new(fs::File::open(&archive).unwrap()).unwrap();
         let mut names: Vec<_> = zip.file_names().map(str::to_owned).collect();
         names.sort();
@@ -237,7 +237,7 @@ mod tests {
             let stage = dir.path().join("stage");
             fs::create_dir_all(stage.join("analysis")).unwrap();
             fs::write(stage.join("analysis/ANLZ.DAT.zip"), bytes).unwrap();
-            let err = assemble(&stage, &dir.path().join("b.zip"), &mut || Ok(())).unwrap_err();
+            let err = assemble(&stage, &dir.path().join("b.zip"), &mut || Ok(()), crate::backup_guard::UNCHECKED).unwrap_err();
             assert!(err.to_string().contains("analysis/ANLZ.DAT.zip"), "{label}: {err}");
         }
     }
@@ -249,12 +249,12 @@ mod tests {
         let stage = dir.path().join("stage");
         fs::create_dir_all(&stage).unwrap();
         std::os::unix::fs::symlink(dir.path().join("gone"), stage.join("link.zip")).unwrap();
-        let err = assemble(&stage, &dir.path().join("b.zip"), &mut || Ok(())).unwrap_err();
+        let err = assemble(&stage, &dir.path().join("b.zip"), &mut || Ok(()), crate::backup_guard::UNCHECKED).unwrap_err();
         assert!(err.to_string().contains("link.zip"), "{err}");
         // Cancellation keeps its kind.
         let err = assemble(&stage, &dir.path().join("c.zip"), &mut || {
             Err(io::Error::new(io::ErrorKind::Interrupted, "stop"))
-        })
+        }, crate::backup_guard::UNCHECKED)
         .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::Interrupted);
     }
@@ -270,7 +270,7 @@ mod tests {
             } else {
                 Ok(())
             }
-        });
+        }, crate::backup_guard::UNCHECKED);
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Interrupted);
         assert_eq!(fs::metadata(source).unwrap().len(), 3 * 1024 * 1024);
     }

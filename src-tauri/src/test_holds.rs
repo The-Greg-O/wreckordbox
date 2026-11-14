@@ -44,6 +44,10 @@ pub const EXPORT_CONFIRMED: &str = "export.confirmed";
 /// waited for the edits under way nor let the service go (wbx-45.14).
 pub const SHUTDOWN_CLOSED: &str = "shutdown.closed";
 
+/// A backup's compression worker is about to write to the backup folder
+/// (each write it makes checks the Stick first; wbx-45.14, round 1).
+pub const BACKUP_COMPRESSING: &str = "backup.compressing";
+
 static ANY: AtomicBool = AtomicBool::new(false);
 static POINTS: Mutex<Option<Points>> = Mutex::new(None);
 static CHANGED: Condvar = Condvar::new();

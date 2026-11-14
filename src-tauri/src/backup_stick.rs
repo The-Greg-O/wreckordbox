@@ -1,58 +1,57 @@
 //! A backup whose folder is on a Stick that was locked, ejected or replaced
 //! while it copied (wbx-45.14).
 //!
-//! The backup checks the Stick's authorization and identity at every file
-//! and chunk it copies (`backups::create_with_progress`), so it stops at the
-//! next one. Nothing more is written and nothing is cleaned up (a cleanup is
-//! a write too); the DJ is told what is on the Stick.
+//! Every write the backup makes to its folder is checked first, on every
+//! thread (`backup_guard`), so it stops at the next one. Nothing more is
+//! written and nothing is cleaned up (a cleanup is a write too); the DJ is
+//! told what is on the Stick. What it made there is accounted as it was
+//! made, on the Stick as it was entered: after a replacement the folder now
+//! mounted at that place is another Stick's and is never read for this.
 
-use std::path::Path;
+use std::path::PathBuf;
 
 use crate::error::AppError;
 
 /// `stopped`, the error a backup ended with, said with what it left on the
-/// Stick when the reason is the Stick's authorization; any other error is
-/// answered as it is.
+/// Stick when the reason is the Stick's authorization (that refusal's kind
+/// and words); any other error is answered as it is. `made`: what the
+/// backup created in its folder, in order; `copied`: bytes copied so far.
 pub(crate) fn stopped(
     stopped: AppError,
     access: &crate::stick_guard::StickAccess,
-    root: &Path,
-    leftovers: &[&Path],
+    made: &[PathBuf],
     copied: u64,
 ) -> AppError {
     let Some(stick) = access.stick() else {
         return stopped;
     };
-    if access.recheck().is_ok() {
+    let Err(refused) = access.recheck() else {
         return stopped;
-    }
+    };
     let name = stick.file_name().map_or_else(
         || stick.display().to_string(),
         |n| n.to_string_lossy().into_owned(),
     );
-    // Looked at on the Stick, which is only read: on a replaced Stick these
-    // names are simply not there.
-    let left: Vec<String> = leftovers
+    let left: Vec<String> = made
         .iter()
-        .filter(|path| path.starts_with(root) && std::fs::symlink_metadata(path).is_ok())
         .filter_map(|path| {
             path.file_name()
                 .map(|n| format!("“{}”", n.to_string_lossy()))
         })
         .collect();
     let what = if left.is_empty() {
-        "nothing of it is left there".to_owned()
+        format!("nothing of it was written to {name}")
     } else {
         format!(
-            "its unfinished copy is left in the backup folder as {} (hidden; delete it once {name} is unlocked)",
+            "what it wrote stays in the backup folder on {name}, the Stick as it was when the backup began, as {} (hidden, unfinished; delete it once that Stick is back and unlocked)",
             left.join(" and ")
         )
     };
     AppError::new(
-        stopped.kind,
+        refused.kind,
         format!(
-            "{} The backup to {name} stopped after copying {}; {what}. Nothing else on {name} was changed.",
-            stopped.message.trim_end(),
+            "{} The backup to {name} stopped after copying {}; {what}. Nothing else was changed.",
+            refused.message.trim_end(),
             size(copied),
         ),
     )
@@ -179,6 +178,59 @@ mod tests {
                 .to_string_lossy()
                 .starts_with("rbexport-")),
             "no backup was named"
+        );
+    }
+
+    /// wbx-45.14 round 1 (b): the compression workers write to the Stick
+    /// themselves; each write checks it. The Stick is replaced while every
+    /// worker is held before a write: from then on not a byte changes on
+    /// either Stick (no worker's write, no unfinished archive finalized), and
+    /// the report names what is on the original one.
+    #[test]
+    fn a_stick_replaced_while_the_compression_workers_write_gets_not_a_byte_more() {
+        let (dir, state, stick) = fixture();
+        let location = state.location().unwrap();
+        let tree = rbl_backup::analysis_dir(&location);
+        for i in 0..12_u8 {
+            let folder = tree.join(format!("P{i:03}"));
+            fs::create_dir_all(&folder).unwrap();
+            let bytes: Vec<u8> = (0..300_000_u32)
+                .map(|n| (n.wrapping_mul(31) ^ u32::from(i)) as u8)
+                .collect();
+            fs::write(folder.join("ANLZ0000.DAT"), bytes).unwrap();
+        }
+        let old = dir.path().join("sticks/GIG-taken-out");
+        let held =
+            crate::test_holds::arm(crate::test_holds::BACKUP_COMPRESSING, state.backup_dir());
+        let (result, at_replacement, new_stick) = std::thread::scope(|scope| {
+            let backing_up = scope.spawn(|| crate::backups::create(&state));
+            held.reached();
+            fs::rename(&stick, &old).unwrap();
+            fs::create_dir_all(&stick).unwrap();
+            fs::write(
+                stick.join(wreckordbox_stick_protection::STAND_IN_MARKER),
+                b"",
+            )
+            .unwrap();
+            let at_replacement = walk(&old);
+            let new_stick = walk(&stick);
+            held.release();
+            (backing_up.join().unwrap(), at_replacement, new_stick)
+        });
+
+        let error = result.expect_err("the backup stops");
+        assert_eq!(error.kind, crate::error::ErrorKind::NotFound, "{error:?}");
+        assert_eq!(
+            walk(&old),
+            at_replacement,
+            "not a byte more on the original Stick"
+        );
+        assert_eq!(walk(&stick), new_stick, "nor on the one put in its place");
+        assert!(error.message.contains(".partial-"), "{}", error.message);
+        assert!(
+            error.message.contains("as it was when the backup began"),
+            "{}",
+            error.message
         );
     }
 
