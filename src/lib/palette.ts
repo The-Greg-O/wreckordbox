@@ -182,6 +182,12 @@ const EXPLICIT_ENTRIES: readonly PaletteEntry[] = [
     ...(entry.writes ? { writes: true } : {}),
   })),
 
+  // The large player's Stems control (wbx-67): live while it offers a split.
+  {
+    id: "intake-splitstems", label: "Split Stems", group: "Intake", keywords: ["stems", "separate", "split", "vocals"],
+    run: { kind: "command", action: "intakeSplitStems" },
+  },
+
   // wreckordbox (the application menu).
   {
     id: "settings", label: "Preferences", group: "wreckordbox", keywords: ["settings", "options"],

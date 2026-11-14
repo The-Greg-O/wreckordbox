@@ -5,6 +5,8 @@
  * so the IPC surface stays auditable and the mock can stand in wholesale.
  */
 import { detectPlatform } from "@/lib/shortcuts";
+import { fromServiceStatus } from "@/lib/stemsStatus";
+import type { SplitOutcome, StemsProgress } from "@/lib/stemSplits";
 import { confirmHandler } from "./confirmHost";
 import type {
   AnalysisStageDescriptor, AnalysisResult, AudioDevices, Backend, Backup, BackupProgress, BackupSizes, ConfirmReplace, Cue, SyncEstimate, StickWritePlan, StickProtection, DeckEvent, Device, DeviceLibrary,
@@ -674,6 +676,9 @@ async function realBackend(): Promise<Backend> {
       })),
     onSidecarChanged: (listener) => subscribe("sidecar:changed", (payload) => listener(payload as { trackId: string; kind: string })),
     onStickLoadProgress: (listener) => subscribe<unknown>("stick-load:progress", listener),
+    stemsStatus: async (id) => fromServiceStatus(await invoke<unknown>("intake_stems_status", { id })),
+    stemsSeparate: (id, again) => invoke<SplitOutcome>("intake_stems_separate", { id, again }),
+    onStemsProgress: (listener) => subscribe<StemsProgress>("stems:progress", listener),
     devicePlaylistCollectionTracks: (path, format, tracks) =>
       invoke<(string | null)[]>("device_playlist_collection_tracks", { path, format, tracks }),
     devicePlaylistEdit: (path, format, edit, approval) =>
