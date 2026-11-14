@@ -37,3 +37,5 @@ lewton = "0.10"
 rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
 serde_json = { workspace = true }
 tempfile = "3"
+# A listener that never accepts, its backlog full (`service_exit`).
+socket2 = { version = "0.6", features = ["all"] }
