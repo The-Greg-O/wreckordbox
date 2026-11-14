@@ -230,6 +230,12 @@ pub struct Assign {
     /// tags, as the window rewrites them. Off when left out.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub comments: bool,
+    /// A deliberate hand set (wbx-29): each named track that already is in
+    /// the wanted state is the DJ's assertion of it, recorded when the
+    /// command is the DJ's (no step of the history). An ordinary resend
+    /// leaves it out and asserts nothing.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub assert: bool,
 }
 
 /// What `mytags.assign` and `mytags.unassign` answer.
@@ -577,15 +583,29 @@ fn assign(
     let comments = request.comments;
     // One entry for every track, as the window's My Tag panel records a
     // tick: one Undo takes the tag off them all (or puts it back).
-    let ((), changed) = library.recorded_edit(Touched::Tracks, TRACK_EDIT, move |writer| {
-        let tags = my_tags::put_on_tracks(writer, &ids, &tag, on)?;
-        let comments = if comments {
-            my_tags::refresh_comments(writer, &ids, &tags)?
-        } else {
-            Vec::new()
-        };
-        Ok(((), LibraryEdit::TrackTags { tags, comments }))
-    })?;
+    let ((), changed) = if request.assert {
+        let named = ids.clone();
+        library.asserting_tag_edit(Touched::Tracks, &named, TRACK_EDIT, move |writer| {
+            let tags = my_tags::put_on_tracks(writer, &ids, &tag, on)?;
+            let comments = if comments {
+                my_tags::refresh_comments(writer, &ids, &tags)?
+            } else {
+                Vec::new()
+            };
+            let assertions = my_tags::unchanged(&ids, &tags, &tag, on);
+            Ok(((), LibraryEdit::TrackTags { tags, comments }, assertions))
+        })?
+    } else {
+        library.recorded_edit(Touched::Tracks, TRACK_EDIT, move |writer| {
+            let tags = my_tags::put_on_tracks(writer, &ids, &tag, on)?;
+            let comments = if comments {
+                my_tags::refresh_comments(writer, &ids, &tags)?
+            } else {
+                Vec::new()
+            };
+            Ok(((), LibraryEdit::TrackTags { tags, comments }))
+        })?
+    };
     let assigned = Assigned {
         my_tag,
         changed: tracks.iter().filter(|named| named.changed).count(),

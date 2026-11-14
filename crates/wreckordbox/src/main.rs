@@ -15,6 +15,7 @@ mod mutants;
 mod mytag_edits;
 mod playlist_edits;
 mod project;
+mod project_mytags;
 use playlist_edits as edits;
 mod protection;
 mod reading;

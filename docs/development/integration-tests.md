@@ -73,6 +73,7 @@ other suites, and some deliberately leave overrides set until process exit.
 | `intensity_hosted` | Changes the Sidecar path, Intensity pause hook and test-mode environment. |
 | `ledger_hosted` | Changes the Sidecar path and window Run pause environment. |
 | `projection_hosted` | Changes the Sidecar path and the Projection pause environment. |
+| `mytag_projection_hosted` | Changes the Sidecar path (wbx-29: the window's MyTag projection, Undo/Redo, an Undo's absence). |
 | `review_hosted` | Changes the Sidecar path (wbx-27: the window's accept, Undo, reject). |
 | `projection_crash` | Changes the Sidecar path and Ledger faults; re-executes its own exact-named test as the crashing child. |
 | `ledger_recovery` | Changes the Sidecar path, test mode and Ledger failure injection. |

@@ -116,13 +116,20 @@ pub(crate) fn answers(command: &str) -> bool {
 /// The source a Projection's Run is by when the request names none; `None`
 /// for any other command.
 pub(crate) fn default_source(command: &str) -> Option<Source> {
-    (command == commands::PROJECTION_APPLY).then(|| Source::new(SourceKind::Tool, SOURCE_NAME))
+    applies(command).then(|| Source::new(SourceKind::Tool, SOURCE_NAME))
+}
+
+/// Whether `command` applies a projection: Energy and Prep colour's, or
+/// the Tag schema's to MyTags (wbx-29). Either is a tool's Run, never the
+/// DJ's.
+pub(crate) fn applies(command: &str) -> bool {
+    command == commands::PROJECTION_APPLY || command == crate::mytag_projection::commands::APPLY
 }
 
 /// Refuses a projection attributed to the DJ: by the source it names or by
 /// the Run it would join. Any other command passes.
 pub(crate) fn attribution(command: &str, source: &Source) -> Result<(), ServiceError> {
-    if command == commands::PROJECTION_APPLY && source.kind == SourceKind::Dj {
+    if applies(command) && source.kind == SourceKind::Dj {
         return Err(ServiceError::new(
             codes::NOT_THE_DJ,
             "a Projection's edits are never recorded as the DJ's, nor in the DJ's Run: name a tool or an agent, or no source",
@@ -133,9 +140,14 @@ pub(crate) fn attribution(command: &str, source: &Source) -> Result<(), ServiceE
 
 /// What a projection's own Run is called: it names the policy in force.
 pub(crate) fn description(request: &Request) -> Option<String> {
-    (request.command == commands::PROJECTION_APPLY).then(|| {
+    applies(&request.command).then(|| {
         format!(
-            "Projection under policy {}",
+            "{} under policy {}",
+            if request.command == commands::PROJECTION_APPLY {
+                "Projection"
+            } else {
+                "MyTag projection"
+            },
             request.args["policy_hash"].as_str().unwrap_or("unknown")
         )
     })
@@ -145,7 +157,8 @@ pub(crate) fn description(request: &Request) -> Option<String> {
 /// (`policy_hash`), unless the request already names one; `None` for any
 /// other request. The plan refuses if the file it then reads differs.
 pub(crate) fn stamped(request: &Request, stems: &Stems) -> Option<Request> {
-    if !answers(&request.command) || request.args.get("policy_hash").is_some() {
+    let projects = answers(&request.command) || crate::mytag_projection::answers(&request.command);
+    if !projects || request.args.get("policy_hash").is_some() {
         return None;
     }
     let hash = policy_bytes(stems.sidecar_dir())
@@ -236,6 +249,9 @@ pub struct Rule {
 struct PolicyFile {
     energy: Option<Rule>,
     prep_colour: Option<Rule>,
+    /// The MyTag projection's section (wbx-29), checked there.
+    #[allow(dead_code, reason = "read and checked by `mytag_projection`")]
+    mytags: Option<toml::Value>,
 }
 
 /// The policy in force, per field; a field the file does not name waits.
@@ -246,7 +262,7 @@ pub struct Policy {
 }
 
 /// The policy file's bytes; none (an empty file's) when there is no file.
-fn policy_bytes(dir: &Path) -> Result<Vec<u8>, std::io::Error> {
+pub(crate) fn policy_bytes(dir: &Path) -> Result<Vec<u8>, std::io::Error> {
     let path = dir.join(POLICY_FILE);
     match std::fs::read(&path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound && path.symlink_metadata().is_err() => {
@@ -358,6 +374,9 @@ pub struct Kept {
     /// it, recorded or not, this field or another), `provenance_incomplete`
     /// (a write the Ledger cannot account for, an unsettled intent, an
     /// unconfirmed write or an unreadable entry, could concern the track),
+    /// `predates_confirmed_marks` (the projection's value, but its mark was
+    /// kept by a version before marks named the write they were made for,
+    /// so it proves nothing),
     /// `unknown` (an Undo the Ledger cannot follow), or `dj_fact` (the DJ's
     /// own standing Fact is what the Library holds).
     pub reason: String,
@@ -491,7 +510,7 @@ fn plan_or_apply(
 pub const GATE_ENV: &str = "WRECKORDBOX_PROJECTION_GATE";
 
 /// The test pause between plan and write ([`GATE_ENV`], [`PAUSE_ENV`]).
-fn pause() {
+pub(crate) fn pause() {
     if !rbl_db::test_mode() {
         return;
     }
@@ -795,6 +814,26 @@ fn not_owned(one: &One<'_>) -> Option<&'static str> {
                 let Some(mark) = one.mark else {
                     return Some("written_since");
                 };
+                // The mark proves ownership only for the confirmed write it
+                // was made for: that entry must be the field's latest
+                // recorded write. A projection cut off after its write and
+                // before its entry left a mark that proves nothing, whatever
+                // barrier is cleared (wbx-29 review).
+                let column = one.field.column();
+                match mark.entry_of(column) {
+                    // A mark kept before marks named their write (wbx-29
+                    // review): it holds the field but not the write, so it
+                    // is no evidence and the value is the DJ's. Deliberately
+                    // not migrated: inferring ownership from the old
+                    // evidence is the risk. (A field a barrier dropped from
+                    // a refreshed mark is not in it at all: `written_since`.)
+                    None if mark.fields.contains_key(column) => {
+                        return Some("predates_confirmed_marks")
+                    }
+                    None => return Some("written_since"),
+                    Some(entry) if entry != state.entry => return Some("written_since"),
+                    Some(_) => {}
+                }
                 let same_revision = one
                     .row
                     .is_some_and(|row| row.usn == mark.usn && row.updated_at == mark.updated_at);
@@ -1147,6 +1186,7 @@ fn carried(mark: &Mark, track: &str, barriers: &[Barrier]) -> Mark {
     let mut kept = Mark {
         fields: BTreeMap::new(),
         field_seqs: BTreeMap::new(),
+        field_entries: BTreeMap::new(),
         ..mark.clone()
     };
     for (column, value) in &mark.fields {
@@ -1159,6 +1199,9 @@ fn carried(mark: &Mark, track: &str, barriers: &[Barrier]) -> Mark {
         }
         kept.fields.insert(column.clone(), *value);
         kept.field_seqs.insert(column.clone(), at);
+        if let Some(entry) = mark.entry_of(column) {
+            kept.field_entries.insert(column.clone(), entry);
+        }
     }
     kept
 }
@@ -1193,11 +1236,17 @@ fn keep_marks(
                 )
                 .map_err(|e| e.to_string())?;
             // Only what `carried` kept, each with its own position.
-            let (fields, field_seqs) = p
+            let (fields, field_seqs, field_entries) = p
                 .mark
                 .as_ref()
                 .filter(|mark| mark.usn == p.row.usn && mark.updated_at == p.row.updated_at)
-                .map(|mark| (mark.fields.clone(), mark.field_seqs.clone()))
+                .map(|mark| {
+                    (
+                        mark.fields.clone(),
+                        mark.field_seqs.clone(),
+                        mark.field_entries.clone(),
+                    )
+                })
                 .unwrap_or_default();
             marks.insert(
                 track.clone(),
@@ -1207,6 +1256,7 @@ fn keep_marks(
                     seq: 0,
                     fields,
                     field_seqs,
+                    field_entries,
                 },
             );
         }
@@ -1214,8 +1264,10 @@ fn keep_marks(
             let column = p.change.field.column().to_owned();
             mark.fields
                 .insert(column.clone(), native_number(&p.change.after));
-            // Written now: its position is set below, under the gate.
+            // Written now: its position and entry are set below, under the
+            // gate.
             mark.field_seqs.remove(&column);
+            mark.field_entries.remove(&column);
             written_now.push((track.clone(), column));
         }
     }
@@ -1223,9 +1275,15 @@ fn keep_marks(
         .with_sidecar_wait(|open| -> Result<(), String> {
             let sidecar = open.ok_or("the Sidecar is not open")?;
             let seq = sidecar.ledger_position().map_err(|e| e.to_string())?;
+            // The entry this write's record will be: its intent's id.
+            let entry = sidecar
+                .open_intent_of(commands::PROJECTION_APPLY)
+                .map_err(|e| e.to_string())?
+                .ok_or("this write has no intent in the Ledger")?;
             for (track, column) in &written_now {
                 if let Some(mark) = marks.get_mut(track) {
                     mark.field_seqs.insert(column.clone(), seq);
+                    mark.field_entries.insert(column.clone(), entry);
                 }
             }
             let marks: Vec<(String, Mark)> = marks

@@ -11,7 +11,7 @@ use std::sync::Arc;
 use serde::Serialize;
 use tauri::{Manager, State};
 
-use crate::commands::{blocking, each_track, edit, recorded_edit, write_error, Touched};
+use crate::commands::{asserting_tag_edit, blocking, each_track, edit, recorded_edit, write_error, Touched};
 use crate::error::{AppError, AppResult, ErrorKind};
 use crate::state::{AppState, LibraryEdit};
 
@@ -349,10 +349,14 @@ pub async fn put_my_tag<R: tauri::Runtime>(
     on: bool,
     comments: Option<bool>,
 ) -> AppResult<crate::dto::EditHistoryDto> {
-    recorded_edit(app, state, "put_my_tag", Touched::Tracks, "Track Edit", move |w| {
+    // A tick is the DJ's hand set: the selected tracks already in that
+    // state are the DJ's assertion of it (wbx-29); Undo holds the changes.
+    let named = tracks.clone();
+    asserting_tag_edit(app, state, "put_my_tag", &named, "Track Edit", move |w| {
         let edits = rbl_library::my_tags::put_on_tracks(w, &tracks, &tag, on)?;
         let comments = if comments.unwrap_or(false) { rbl_library::my_tags::refresh_comments(w, &tracks, &edits)? } else { Vec::new() };
-        Ok(LibraryEdit::TrackTags { tags: edits, comments })
+        let asserted = rbl_library::my_tags::unchanged(&tracks, &edits, &tag, on);
+        Ok((LibraryEdit::TrackTags { tags: edits, comments }, asserted))
     }).await
 }
 

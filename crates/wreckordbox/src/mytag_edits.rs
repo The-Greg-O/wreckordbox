@@ -270,6 +270,9 @@ fn assign(
             id: tag.to_owned(),
             tracks: track_ids.to_vec(),
             comments,
+            // Typed at the command line: the DJ's deliberate set, when the
+            // command is the DJ's (wbx-29).
+            assert: true,
         }),
     )?;
     let did = if on { "Put" } else { "Took" };
