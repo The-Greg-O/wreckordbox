@@ -62,7 +62,7 @@ export function LoadProgressPanel({ load, progress }: { load: StickLoad; progres
       </header>
       <p className={styles.percent} aria-hidden>{percent === null ? "…" : `${percent}%`}</p>
       <Bar progress={progress} label={`Loading ${load.name}`} />
-      <p className={styles.note}>Do not remove {load.name} until it says it is safe to.</p>
+      <p className={styles.note}>Do not remove {load.name} while it is loading.</p>
     </section>
   );
 }
@@ -78,12 +78,37 @@ export function ShrunkLoad({ load, progress }: { load: StickLoad; progress: Load
   );
 }
 
-/** The status line's part: every running load, a click away from the Stick view. */
+/**
+ * The status line's part: every running load, a click away from the Stick
+ * view; and every load of this session that failed or did not finish,
+ * until the DJ acknowledges its report (wbx-72 review), so a failure that
+ * ends while the load is shrunk or another view shows is never missed.
+ */
 export function StatusStickLoad() {
-  const loads = useStickLoads().filter((load) => !load.kept && load.machine.state === "loading");
+  const loads = useStickLoads().filter((load) => !load.kept && (load.machine.state === "loading" || load.machine.state === "failed"));
   return (
     <>
       {loads.map((load) => {
+        const show = () => {
+          showStickLoad(load.id);
+          runCommand("viewStick");
+        };
+        if (load.machine.state === "failed") {
+          const what = load.machine.outcome?.outcome === "incomplete" ? "the load did not finish" : "the load failed";
+          return (
+            <button
+              key={load.id}
+              type="button"
+              className={styles.statusFailed}
+              data-testid="status-stick-load"
+              data-state="failed"
+              title={`${load.name}: ${what}. Show the report.`}
+              onClick={show}
+            >
+              {load.name}: {what} · show the report
+            </button>
+          );
+        }
         const progress = load.machine.state === "loading" ? load.machine.progress : null;
         const counts = progress !== null && progress.total > 0 ? `${Math.min(progress.done, progress.total)}/${progress.total}` : progressLine(progress);
         return (
@@ -92,11 +117,9 @@ export function StatusStickLoad() {
             type="button"
             className={styles.status}
             data-testid="status-stick-load"
+            data-state="loading"
             title={`${progressLine(progress)}. Show the load.`}
-            onClick={() => {
-              showStickLoad(load.id);
-              runCommand("viewStick");
-            }}
+            onClick={show}
           >
             <span>Loading {load.name}</span>
             <Bar progress={progress} label={`Loading ${load.name}`} />

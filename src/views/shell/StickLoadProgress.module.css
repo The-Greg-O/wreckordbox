@@ -80,6 +80,16 @@
 }
 .status > span:first-child { overflow: hidden; text-overflow: ellipsis; }
 .status .bar { width: 120px; height: 6px; flex: none; }
+.statusFailed {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--c-error);
+  font: inherit;
+  cursor: pointer;
+}
 .status:focus-visible { outline: var(--s-shell-border) solid var(--role-accent); }
 @container shell (max-width: 640px) {
   .status .bar { width: 48px; }

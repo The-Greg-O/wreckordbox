@@ -241,9 +241,10 @@ test("a plan refreshed during the hold (another client edits the Library) cancel
   expect(await loadCalls(page)).toEqual([]);
   await expect(holdButton(page)).not.toHaveAttribute("data-holding");
   // A fresh, full hold approves the plan now shown, and only it.
+  const now = (await call<string[]>(page, "__stickLoadPlans")).at(-1);
   await pressFor(page, 2300);
   await expect(view(page).getByTestId("stick-finished")).toBeVisible();
-  expect(await approvals(page)).toEqual([(await call<string[]>(page, "__stickLoadPlans")).at(-1)]);
+  expect(await approvals(page)).toEqual([now]);
 });
 
 test("an L hold stops when the palette opens or a text field takes focus, and does not come back without a fresh press", async ({ page }) => {
@@ -332,6 +333,8 @@ test("a late progress event from an earlier load never touches a later one", asy
   await view(page).getByTestId("stick-finished").getByRole("button", { name: "Done" }).click();
   await view(page).getByTestId("stick-choose").locator("label").filter({ hasNotText: "(folder" }).nth(1).getByRole("checkbox").check();
   await expect(view(page).getByTestId("stick-summary")).toBeVisible();
+  // Let the reads after the first load settle: a plan refreshed mid-hold would (rightly) cancel it.
+  await page.waitForTimeout(1000);
   await call(page, "__holdStickLoads");
   await pressFor(page, 2300);
   await expect(progress(page)).toBeVisible();

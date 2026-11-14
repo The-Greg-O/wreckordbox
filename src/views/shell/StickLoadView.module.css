@@ -138,6 +138,15 @@
 .finished { padding: var(--s-shell-space-4); border: var(--s-shell-border) solid var(--c-energy-3); }
 .failed { padding: var(--s-shell-space-4); border: var(--s-shell-border) solid var(--c-error); }
 .failed ul { margin: 0; padding-left: var(--s-shell-space-5); }
+.done {
+  margin: 0;
+  font-size: var(--f-size-shell-title);
+  font-weight: 700;
+  color: var(--role-text-bright);
+  overflow-wrap: anywhere;
+}
+.view .eject { border-color: var(--role-accent); font-weight: 700; padding: var(--s-shell-space-3) var(--s-shell-space-5); }
+.safeToRemove { display: grid; gap: var(--s-shell-space-3); justify-items: start; padding: var(--s-shell-space-4); border: var(--s-shell-border) solid var(--c-energy-3); }
 .safe {
   margin: 0;
   font-size: calc(var(--f-size-shell-title) * 1.4);

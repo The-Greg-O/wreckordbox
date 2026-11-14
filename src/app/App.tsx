@@ -4021,7 +4021,7 @@ function AppBody() {
               onEdit={writeEdit} protectLibrary={advancedPrefs.protectLibrary} platform={platform} keyOverrides={keyOverrides}
             />
           )}
-          stick={<StickLoadOnDemand.View devices={devices} selected={selectedDevice?.path ?? null} library={tree} revision={deviceLibraries.revision} panel={selectedDevice ? library : undefined} />}
+          stick={<StickLoadOnDemand.View devices={devices} selected={selectedDevice?.path ?? null} library={tree} revision={deviceLibraries.revision} panel={selectedDevice ? library : undefined} onEjected={refreshDevices} />}
           stickHoldsLibrary={selectedDevice !== null}
           library={library}
           libraryTarget={targetList.pane}

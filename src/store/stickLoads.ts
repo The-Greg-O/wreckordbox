@@ -98,6 +98,8 @@ export async function runStickLoad(
   const id = next++;
   const operation = operationId();
   listenForProgress();
+  // A new load on this Stick: whatever an earlier eject said no longer holds.
+  dropRemoval(stick.identity);
   // Created once the hold is full: the machine is loading from here.
   set((all) => [...all, {
     id, ...stick, state: "confirming", outcome: null, error: null, reportId: operation, kept: false,
@@ -195,6 +197,7 @@ export async function readKeptStickLoads(): Promise<void> {
 /** For tests: forget every load. */
 export function resetStickLoads(): void {
   keptRead = false;
+  removals = [];
   wanted = null;
   pending.clear();
   if (flushing !== null) clearTimeout(flushing);
@@ -292,4 +295,71 @@ function listenForProgress(): void {
 /** The machine to draw for a Stick: its latest load's, or idle. */
 export function machineOf(load: StickLoad | null): LoadMachine {
   return load?.machine ?? IDLE;
+}
+
+/**
+ * Whether a Stick may be pulled out (wbx-72 review), kept apart from any
+ * load's outcome: a finished load says what it wrote, not that the Stick is
+ * safe to remove (another writer may start; a failed load proves nothing
+ * about flushing). Only the window's existing eject (`eject_device`: it
+ * takes the Stick's execution lock, so no writer runs, flushes and ejects)
+ * makes a Stick `ejected`, ready to remove; a failed eject is `failed`. The
+ * record goes when that Stick is seen mounted and written again, or a new
+ * load starts on it.
+ */
+export interface StickRemoval {
+  identity: string;
+  path: string;
+  name: string;
+  state: "ejecting" | "ejected" | "failed";
+  error: string | null;
+  /** What the window last saw written on it when the eject was asked. */
+  written: string;
+}
+
+let removals: readonly StickRemoval[] = [];
+
+function setRemovals(change: (all: readonly StickRemoval[]) => readonly StickRemoval[]): void {
+  removals = change(removals);
+  for (const listener of listeners) listener();
+}
+
+function dropRemoval(identity: string): void {
+  if (removals.some((r) => r.identity === identity)) setRemovals((all) => all.filter((r) => r.identity !== identity));
+}
+
+export function stickRemovals(): readonly StickRemoval[] {
+  return removals;
+}
+
+export function useStickRemovals(): readonly StickRemoval[] {
+  return useSyncExternalStore(subscribeStickLoads, () => removals);
+}
+
+/** Ejects the Stick through `eject` (the window's `ejectDevice`); ready to remove only if it succeeds. */
+export async function ejectStick(
+  stick: { identity: string; path: string; name: string },
+  written: string,
+  eject: (path: string) => Promise<void>,
+): Promise<void> {
+  const record: StickRemoval = { ...stick, state: "ejecting", error: null, written };
+  setRemovals((all) => [...all.filter((r) => r.identity !== stick.identity), record]);
+  try {
+    await eject(stick.path);
+    setRemovals((all) => all.map((r) => (r.identity === stick.identity ? { ...r, state: "ejected" } : r)));
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error);
+    setRemovals((all) => all.map((r) => (r.identity === stick.identity ? { ...r, state: "failed", error: why } : r)));
+  }
+}
+
+/** The Stick is mounted with `written` as what it holds: written again since the eject, it is no longer ready. */
+export function stickSeenWritten(identity: string, written: string): void {
+  const found = removals.find((r) => r.identity === identity);
+  if (found !== undefined && found.state !== "ejecting" && found.written !== written) dropRemoval(identity);
+}
+
+/** The DJ has read it. */
+export function dismissStickRemoval(identity: string): void {
+  dropRemoval(identity);
 }

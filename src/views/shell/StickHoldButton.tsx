@@ -43,10 +43,20 @@ function isHoldKey(event: KeyboardEvent): boolean {
   return (event.key === "l" || event.key === "L") && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
 }
 
+/** Input types that take no typing: a focused tick box or button keeps `L` the view's. */
+const NOT_TYPED = new Set(["checkbox", "radio", "button", "submit", "reset", "range", "color", "file", "image"]);
+
+/** Whether `target` is a field the DJ types into (where `L` is a letter). */
+function isTextField(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target instanceof HTMLInputElement) return !NOT_TYPED.has(target.type);
+  return isTyping(target);
+}
+
 /** Whether a text field, a dialog or the palette has the input now. */
 function inputElsewhere(): boolean {
   const active = typeof document === "undefined" ? null : document.activeElement;
-  return isTyping(active as HTMLElement | null) || dialogHasInput(active);
+  return isTextField(active) || dialogHasInput(active);
 }
 
 export function StickHoldButton({ name, kind, enabled, why, binding, onHeld }: {
@@ -130,7 +140,7 @@ export function StickHoldButton({ name, kind, enabled, why, binding, onHeld }: {
     const check = () => { if (inputElsewhere()) sender.current({ type: "interrupt" }); };
     const focused = (event: FocusEvent) => {
       const to = event.target;
-      if (isTyping(to as HTMLElement | null) || dialogHasInput(to)) sender.current({ type: "interrupt" });
+      if (isTextField(to) || dialogHasInput(to)) sender.current({ type: "interrupt" });
     };
     document.addEventListener("focusin", focused, true);
     // A dialog drawn without taking the focus.
@@ -148,7 +158,7 @@ export function StickHoldButton({ name, kind, enabled, why, binding, onHeld }: {
   // `L`, heard on the way down ahead of the deck; the window losing focus or hidden interrupts.
   useEffect(() => {
     const down = (event: KeyboardEvent) => {
-      if (!isHoldKey(event) || isTyping(event.target as HTMLElement | null) || dialogHasInput(event.target)) return;
+      if (!isHoldKey(event) || isTextField(event.target) || dialogHasInput(event.target)) return;
       event.preventDefault();
       event.stopPropagation();
       if (event.repeat || !allowed.current) return;

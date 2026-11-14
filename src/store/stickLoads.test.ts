@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fromServiceLoad, type LoadOutcome } from "@/lib/stickLoad";
 import {
   receiveStickLoadProgress, resetStickLoads, restoreStickLoad, runStickLoad, shrinkStickLoad, stickIdentity, stickLoads,
-  subscribeStickLoads, takeWantedStick, showStickLoad,
+  subscribeStickLoads, takeWantedStick, showStickLoad, ejectStick, stickRemovals, stickSeenWritten,
 } from "./stickLoads";
 
 const A = { identity: stickIdentity("/media/A", "dev:1"), path: "/media/A", name: "A" };
@@ -152,5 +152,37 @@ describe("a running load (wbx-72)", () => {
     expect(takeWantedStick()).toBeNull();
     load.finish(outcome());
     await load.done;
+  });
+});
+
+describe("removal readiness (wbx-72 review)", () => {
+  beforeEach(() => { resetStickLoads(); });
+
+  it("a Stick is ready to remove only once its eject succeeded; the load's outcome is kept apart", async () => {
+    await runStickLoad(A, async (run) => { await run(() => Promise.resolve(outcome())); return true; });
+    expect(stickRemovals()).toEqual([]);
+    let done: () => void = () => undefined;
+    const ejecting = ejectStick(A, "w1", () => new Promise<void>((resolve) => { done = resolve; }));
+    expect(stickRemovals().map((r) => r.state)).toEqual(["ejecting"]);
+    done();
+    await ejecting;
+    expect(stickRemovals().map((r) => [r.name, r.state])).toEqual([["A", "ejected"]]);
+    expect(stickLoads()[0]!.machine.state).toBe("finished");
+  });
+
+  it("a failed eject is said, never ready", async () => {
+    await ejectStick(A, "w1", () => Promise.reject(new Error("busy")));
+    expect(stickRemovals().map((r) => [r.state, r.error])).toEqual([["failed", "busy"]]);
+  });
+
+  it("seen mounted and written again, or loaded again, it is no longer ready", async () => {
+    await ejectStick(A, "w1", () => Promise.resolve());
+    stickSeenWritten(A.identity, "w1");
+    expect(stickRemovals()).toHaveLength(1);
+    stickSeenWritten(A.identity, "w2");
+    expect(stickRemovals()).toEqual([]);
+    await ejectStick(A, "w2", () => Promise.resolve());
+    await runStickLoad(A, async (run) => { await run(() => Promise.resolve(outcome())); return true; });
+    expect(stickRemovals()).toEqual([]);
   });
 });
