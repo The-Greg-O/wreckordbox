@@ -9,7 +9,7 @@
  * report stays until the DJ starts another load on the same Stick or
  * dismisses it; a failure is never dropped by a view change.
  *
- * Each load has an operation id the shell keeps its report under, in the
+ * Each load has a report id the shell issues and reserves (`stickLoadReportReserve`) and keeps its report under, in the
  * app's state folder (`stick_load_reports`), so a load cut short by closing
  * the window, or one that failed, is reported again at the next start
  * (`readKeptStickLoads`, once per page) until dismissed. A load that completed and
@@ -18,6 +18,7 @@
 import { useSyncExternalStore } from "react";
 
 import { getBackend } from "@/ipc/client";
+import { fromServiceProgress, IDLE, loadStep, type LoadEvent, type LoadMachine, type LoadProgress } from "@/lib/holdToLoad";
 import type { KeptLoadReport, LoadOutcome } from "@/lib/stickLoad";
 
 export interface StickLoad {
@@ -34,6 +35,13 @@ export interface StickLoad {
   reportId: string;
   /** Kept from before the window last closed (not this session's). */
   kept: boolean;
+  /** The volume this load's progress events named first; an event naming another is not this load's. */
+  volume?: string | null;
+  /**
+   * The load's state machine (wbx-72, `holdToLoad.ts`): loading (full or
+   * shrunk to the status line, with its latest progress), finished, failed.
+   */
+  machine: LoadMachine;
 }
 
 /** One Stick as mounted now: another volume at the same path is another Stick. */
@@ -54,19 +62,27 @@ function update(id: number, patch: Partial<StickLoad>): void {
   set((all) => all.map((load) => (load.id === id ? { ...load, ...patch } : load)));
 }
 
+/** One step of a load's state machine. */
+function step(id: number, event: LoadEvent): void {
+  const found = loads.find((load) => load.id === id);
+  if (found === undefined) return;
+  const machine = loadStep(found.machine, event);
+  if (machine !== found.machine) update(id, { machine });
+}
+
+/** Listens for every change to the loads (for the store's own hook, and tests). */
+export function subscribeStickLoads(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+
 /** Every load the window knows of, newest last. */
 export function stickLoads(): readonly StickLoad[] {
   return loads;
 }
 
 export function useStickLoads(): readonly StickLoad[] {
-  return useSyncExternalStore(
-    (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    () => loads,
-  );
+  return useSyncExternalStore(subscribeStickLoads, () => loads);
 }
 
 /**
@@ -80,25 +96,41 @@ export async function runStickLoad(
   stage: (run: (load: (operation: string) => Promise<LoadOutcome>) => Promise<void>) => Promise<boolean>,
 ): Promise<void> {
   const id = next++;
-  const operation = operationId();
-  set((all) => [...all, { id, ...stick, state: "confirming", outcome: null, error: null, reportId: operation, kept: false }]);
+  // Until the shell issues the load's report id (just before it runs), a local placeholder.
+  let operation = operationId();
+  listenForProgress();
+  // A new load on this Stick: whatever an earlier eject said no longer holds.
+  dropRemoval(stick.identity);
+  // Created once the hold is full: the machine is loading from here.
+  set((all) => [...all, {
+    id, ...stick, state: "confirming", outcome: null, error: null, reportId: operation, kept: false,
+    machine: { state: "loading", shrunk: false, progress: null },
+  }]);
   let ran = false;
   try {
     await stage(async (load) => {
       ran = true;
       update(id, { state: "running" });
       try {
+        // The shell names the report (and the progress) itself: an id it reserved for this load.
+        operation = await (await getBackend()).stickLoadReportReserve();
+        update(id, { reportId: operation });
         const outcome = await load(operation);
         update(id, { state: "done", outcome });
+        step(id, { type: "finished", outcome });
         // Shown here in full: the shell's copy of a load that completed is not kept twice.
         if (outcome.outcome === "loaded") void forget(operation);
       } catch (error) {
-        update(id, { state: "failed", error: error instanceof Error ? error.message : String(error) });
+        const why = error instanceof Error ? error.message : String(error);
+        update(id, { state: "failed", error: why });
+        step(id, { type: "failed", error: why });
       }
     });
   } catch (error) {
     if (!ran) {
-      update(id, { state: "failed", error: error instanceof Error ? error.message : String(error) });
+      const why = error instanceof Error ? error.message : String(error);
+      update(id, { state: "failed", error: why });
+      step(id, { type: "failed", error: why });
       ran = true;
     }
   }
@@ -158,6 +190,9 @@ export async function readKeptStickLoads(): Promise<void> {
         error: report.outcome === null ? report.error : null,
         reportId: report.id,
         kept: true,
+        machine: report.outcome === null
+          ? { state: "failed", outcome: null, error: report.error }
+          : loadStep({ state: "loading", shrunk: false, progress: null }, { type: "finished", outcome: report.outcome }),
       })),
     ...all,
   ]);
@@ -166,5 +201,178 @@ export async function readKeptStickLoads(): Promise<void> {
 /** For tests: forget every load. */
 export function resetStickLoads(): void {
   keptRead = false;
+  removals = [];
+  wanted = null;
+  pending.clear();
+  if (flushing !== null) clearTimeout(flushing);
+  flushing = null;
   set(() => []);
+}
+
+/** Shrinks a running load to the status line; it keeps running. */
+export function shrinkStickLoad(id: number): void {
+  step(id, { type: "shrink" });
+}
+
+/** Brings a shrunk load back to fill the Stick view. */
+export function restoreStickLoad(id: number): void {
+  step(id, { type: "restore" });
+}
+
+let wanted: string | null = null;
+
+/**
+ * The status line's load, clicked: brought back, and the Stick view asked
+ * to show its Stick (`takeWantedStick`), whichever it showed before.
+ */
+export function showStickLoad(id: number): void {
+  const found = loads.find((load) => load.id === id);
+  if (found === undefined) return;
+  wanted = found.path;
+  step(id, { type: "restore" });
+  // Told even when the machine did not move (it was not shrunk), so the view picks the Stick.
+  for (const listener of listeners) listener();
+}
+
+/** The Stick the status line asked the view to show, once. */
+export function takeWantedStick(): string | null {
+  const path = wanted;
+  wanted = null;
+  return path;
+}
+
+/** How long a burst of progress is gathered before the view hears it. */
+const PROGRESS_FLUSH_MS = 100;
+/** The latest progress per operation, with the volume it named. */
+const pending = new Map<string, { stick: string; volume: string | null; progress: LoadProgress }>();
+let flushing: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * One `stick_load_progress` event. A burst is coalesced: the latest for
+ * each Stick is kept, and the loads change (and the views draw) at most
+ * once per `PROGRESS_FLUSH_MS`. An event is matched on its load's
+ * operation id (the window's, which the service echoes), never on the
+ * mount path alone: one without an operation, or for another load, a late
+ * one from an earlier load among them, changes nothing; so does one naming
+ * a volume other than the one this load's events named first, and progress
+ * after the load ended.
+ */
+export function receiveStickLoadProgress(data: unknown): void {
+  const event = fromServiceProgress(data);
+  if (event === null || event.operation === null) return;
+  // Kept per operation and volume: a swap mid-burst is not hidden by the newer event.
+  const before = pending.get(event.operation);
+  if (before !== undefined && (before.volume !== event.volume || before.stick !== event.stick)) return;
+  pending.set(event.operation, { stick: event.stick, volume: event.volume, progress: event.progress });
+  flushing ??= setTimeout(flushProgress, PROGRESS_FLUSH_MS);
+}
+
+function flushProgress(): void {
+  flushing = null;
+  const latest = new Map(pending);
+  pending.clear();
+  let changed = false;
+  const next = loads.map((load) => {
+    const heard = latest.get(load.reportId);
+    if (heard === undefined || load.kept || heard.stick !== load.path) return load;
+    const known = load.volume ?? null;
+    if (known !== null && heard.volume !== known) return load;
+    const machine = loadStep(load.machine, { type: "progress", progress: heard.progress });
+    if (machine === load.machine) return load;
+    changed = true;
+    return { ...load, machine, volume: known ?? heard.volume };
+  });
+  if (changed) set(() => next);
+}
+
+let listening = false;
+
+/** Hears the window's `stick-load:progress` events, once per page. */
+function listenForProgress(): void {
+  if (listening) return;
+  listening = true;
+  void getBackend()
+    .then((backend) => { backend.onStickLoadProgress(receiveStickLoadProgress); })
+    .catch(() => { listening = false; });
+}
+
+/** The machine to draw for a Stick: its latest load's, or idle. */
+export function machineOf(load: StickLoad | null): LoadMachine {
+  return load?.machine ?? IDLE;
+}
+
+/**
+ * Whether a Stick may be pulled out (wbx-72 review), kept apart from any
+ * load's outcome: a finished load says what it wrote, not that the Stick is
+ * safe to remove (another writer may start; a failed load proves nothing
+ * about flushing). Only the window's existing eject (`eject_device`: it
+ * takes the Stick's execution lock, so no writer runs, flushes and ejects)
+ * makes a Stick `ejected`, ready to remove; a failed eject is `failed`.
+ * Readiness belongs to the mount the eject ended: the record goes the
+ * moment the window's device listing shows that Stick again (by its volume,
+ * or by its path when the volume is not known), whatever its contents
+ * (`stickDevicesSeen`, fed by the window above every view), or a new load
+ * starts on it.
+ */
+export interface StickRemoval {
+  identity: string;
+  path: string;
+  name: string;
+  state: "ejecting" | "ejected" | "failed";
+  error: string | null;
+}
+
+let removals: readonly StickRemoval[] = [];
+
+function setRemovals(change: (all: readonly StickRemoval[]) => readonly StickRemoval[]): void {
+  removals = change(removals);
+  for (const listener of listeners) listener();
+}
+
+function dropRemoval(identity: string): void {
+  if (removals.some((r) => r.identity === identity)) setRemovals((all) => all.filter((r) => r.identity !== identity));
+}
+
+export function stickRemovals(): readonly StickRemoval[] {
+  return removals;
+}
+
+export function useStickRemovals(): readonly StickRemoval[] {
+  return useSyncExternalStore(subscribeStickLoads, () => removals);
+}
+
+/** Ejects the Stick through `eject` (the window's `ejectDevice`); ready to remove only if it succeeds. */
+export async function ejectStick(
+  stick: { identity: string; path: string; name: string },
+  eject: (path: string) => Promise<void>,
+): Promise<void> {
+  const record: StickRemoval = { ...stick, state: "ejecting", error: null };
+  setRemovals((all) => [...all.filter((r) => r.identity !== stick.identity), record]);
+  try {
+    await eject(stick.path);
+    setRemovals((all) => all.map((r) => (r.identity === stick.identity ? { ...r, state: "ejected" } : r)));
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error);
+    setRemovals((all) => all.map((r) => (r.identity === stick.identity ? { ...r, state: "failed", error: why } : r)));
+  }
+}
+
+/**
+ * The window's device listing changed: an ejected Stick in it is mounted
+ * again, so it is no longer ready to remove (another client could unlock
+ * and write it). Matched by volume (`stickIdentity`), or by path when the
+ * eject did not know the volume. Called above the views (App), so a remount
+ * while another view shows is not missed.
+ */
+export function stickDevicesSeen(devices: readonly { path: string; volumeId?: string | null }[]): void {
+  const back = removals.filter((r) => r.state === "ejected" && devices.some((d) => {
+    const [path, volume] = r.identity.split("\u0000");
+    return volume ? stickIdentity(d.path, d.volumeId) === r.identity : d.path === (path ?? r.path);
+  }));
+  if (back.length > 0) setRemovals((all) => all.filter((r) => !back.includes(r)));
+}
+
+/** The DJ has read it. */
+export function dismissStickRemoval(identity: string): void {
+  dropRemoval(identity);
 }

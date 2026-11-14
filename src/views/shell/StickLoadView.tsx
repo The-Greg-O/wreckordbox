@@ -10,8 +10,17 @@
  * write. The load is staged through the window's Stick write gate like
  * every other Stick write (its plan, Stick Protection unlocked in place,
  * the hold: longer for a Gig stick), and the backend refuses it without
- * that hold's token or on a protected Stick (`stick_view.rs`). The big
- * hold-to-load button, its key and the progress display are wbx-72/73.
+ * that hold's token or on a protected Stick (`stick_view.rs`).
+ *
+ * wbx-72: the hold is the view's own big button or `L`
+ * (`StickHoldButton`), for exactly the plan shown; the gate approves that
+ * plan without a dialog of its own. The load's state machine
+ * (`holdToLoad.ts`) lives with the load in `src/store/stickLoads.ts`: while
+ * it runs it fills this view with a plain progress bar (`Esc` shrinks it to
+ * the status line), and it ends with what was written (or, failed, with
+ * what was and was not) and an Eject. "Safe to remove" is said only once
+ * that eject (the window's existing `eject_device`) has succeeded for that
+ * Stick, never from a load's outcome (wbx-72 review).
  *
  * Reads are coalesced (one in flight, one pending) and every answer is
  * checked against what is asked now, so a late answer for another Stick or
@@ -40,7 +49,12 @@ import {
 import styles from "./StickLoadView.module.css";
 import { useStickWriteGateContext } from "./StickWriteGate";
 import { StickUnlock } from "./StickUnlock";
-import { dismissStickLoad, readKeptStickLoads, runStickLoad, stickIdentity, useStickLoads, type StickLoad } from "@/store/stickLoads";
+import { StickHoldButton } from "./StickHoldButton";
+import { LoadProgressPanel, ShrunkLoad } from "./StickLoadProgress";
+import {
+  dismissStickLoad, dismissStickRemoval, ejectStick, machineOf, readKeptStickLoads, runStickLoad, stickIdentity,
+  takeWantedStick, useStickLoads, useStickRemovals, type StickLoad, type StickRemoval,
+} from "@/store/stickLoads";
 
 /** The playlists a load can include: the Library's playlists and folders, in tree order. */
 export interface LoadablePlaylist {
@@ -86,7 +100,7 @@ const message = (error: unknown) => (error instanceof Error ? error.message : St
 
 type Read<T> = { state: "reading" } | { state: "read"; value: T } | { state: "failed"; error: string };
 
-export function StickLoadView({ devices, selected, library, revision, panel }: {
+export function StickLoadView({ devices, selected, library, revision, panel, onEjected }: {
   /** The mounted volumes the window lists; the Sticks are read again when they change. */
   devices: readonly Device[];
   /** The Stick chosen in the tree, by its mount path. */
@@ -100,6 +114,8 @@ export function StickLoadView({ devices, selected, library, revision, panel }: {
    * settles an unfinished write: wbx-45.5), shown under the load.
    */
   panel?: ReactNode;
+  /** A Stick was ejected from here: the window reads its mounted volumes again. */
+  onEjected?: () => void;
 }) {
   const gate = useStickWriteGateContext();
   const [sticks, setSticks] = useState<Read<LoadStick[]>>({ state: "reading" });
@@ -217,12 +233,21 @@ export function StickLoadView({ devices, selected, library, revision, panel }: {
   // Reports the shell kept before this session (a load cut short by closing the window).
   useEffect(() => { void readKeptStickLoads(); }, []);
   const kept = allLoads.filter((l) => l.kept);
-  const keptReports = kept.length > 0
-    ? <KeptReports loads={kept} mounted={(path) => devices.some((d) => d.path === path)} />
+  // Removal readiness, apart from any load's outcome: only a succeeded eject says "safe to remove".
+  const removals = useStickRemovals();
+  const removalNotes = removals.length > 0 ? <Removals removals={removals} /> : null;
+  const keptReports = kept.length > 0 || removalNotes !== null
+    ? <>{removalNotes}{kept.length > 0 ? <KeptReports loads={kept} mounted={(path) => devices.some((d) => d.path === path)} /> : null}</>
     : null;
+  // The status line asked for a load's Stick: shown, whichever was before.
+  useEffect(() => {
+    const wanted = takeWantedStick();
+    if (wanted !== null) setPicked(wanted);
+  }, [allLoads]);
   const current = identity === null ? null : [...allLoads].reverse().find((l) => l.identity === identity) ?? null;
   const others = allLoads.filter((l) => !l.kept && l.identity !== identity && l.state !== "confirming");
-  const loading = current !== null && (current.state === "running" || current.state === "confirming");
+  const machine = machineOf(current);
+  const loading = machine.state === "loading";
   const outcome = current?.state === "done" ? current.outcome : null;
   const loadError = current?.state === "failed" ? current.error : null;
 
@@ -232,8 +257,14 @@ export function StickLoadView({ devices, selected, library, revision, panel }: {
     : ready === null ? (chosen.length === 0 ? "Choose at least one playlist to load." : null)
     : loadBlocked(ready, chosen.length);
 
-  const load = () => {
+  // What a hold confirms: this Stick as mounted, its kind, and the plan shown.
+  const binding = stick === null || identity === null || ready === null || ready.plan === null
+    ? null
+    : JSON.stringify([identity, stick.kind, ready.plan]);
+  const load = (bound: string) => {
     if (stick === null || identity === null || ready === null || ready.plan === null || loading) return;
+    // Held for exactly what is shown now, or nothing happens.
+    if (bound !== binding) return;
     const servicePlan = ready.plan;
     const path = stick.path;
     const name = stick.name;
@@ -254,6 +285,8 @@ export function StickLoadView({ devices, selected, library, revision, panel }: {
         lines,
         plan: { kind: "sync", playlists: ids },
         planned,
+        // Held on this view's own button or `L`, for exactly this plan.
+        held: true,
         run: (approval) => run(async (operation) => (await getBackend()).stickViewLoad(path, ids, servicePlan, approval, operation)),
       });
     }).finally(() => {
@@ -261,6 +294,15 @@ export function StickLoadView({ devices, selected, library, revision, panel }: {
       stickReads.current?.request();
       dryRuns.current?.request();
     });
+  };
+
+  const removalOf = (id: string) => removals.find((r) => r.identity === id) ?? null;
+  // The window's existing eject: it waits out and keeps out every writer to the Stick, then flushes and ejects.
+  const eject = () => {
+    if (stick === null || identity === null) return;
+    void ejectStick({ identity, path: stick.path, name: stick.name },
+      async (path) => { await (await getBackend()).ejectDevice(path); })
+      .finally(() => { onEjected?.(); });
   };
 
   if (sticks.state === "reading") {
@@ -287,6 +329,16 @@ export function StickLoadView({ devices, selected, library, revision, panel }: {
     );
   }
 
+  if (current !== null && machine.state === "loading" && !machine.shrunk) {
+    return (
+      <div className={styles.view} data-testid="stick-view" data-stick={stick.path} {...{ [OWN_ACTIVATION]: "" }}>
+        <LoadProgressPanel load={current} progress={machine.progress} />
+      </div>
+    );
+  }
+
+  // Why the hold cannot be made now: what blocks the load, else the Stick still protected.
+  const why = blocked ?? (stick.protected ? `Unlock ${stick.name} first.` : null);
   const space = ready?.space ?? null;
   const shortfall = space === null ? null : shortfallLine(space);
   const lines = ready === null ? [] : summaryLines(ready);
@@ -404,25 +456,39 @@ export function StickLoadView({ devices, selected, library, revision, panel }: {
       </section>
 
       <aside className={styles.side} aria-label="Load">
-        <p className={styles.note}>
-          Nothing is written until you hold to confirm. {stick.kind === "spare" ? "A Spare stick takes a 1 s hold." : "A Gig stick takes a 2 s hold."}
-        </p>
-        <button
-          type="button"
-          className={styles.load}
-          data-testid="stick-load"
-          disabled={blocked !== null || ready === null || loading}
-          aria-describedby={blocked !== null ? "stick-load-why" : undefined}
-          onClick={load}
-        >
-          {current?.state === "running" ? "Loading…" : `Load ${stick.name}`}
-        </button>
-        {blocked !== null ? <p id="stick-load-why" className={styles.note} data-testid="stick-load-why">{blocked}</p> : null}
-        {loadError !== null ? <p className={styles.problem} role="alert" data-testid="stick-load-error">The load did not finish: {loadError}</p> : null}
-        {outcome !== null ? <Outcome outcome={outcome} /> : null}
-        {current !== null && (loadError !== null || (outcome !== null && outcome.outcome !== "loaded")) ? (
-          <button type="button" data-testid="stick-dismiss" onClick={() => { dismissStickLoad(current.id); }}>Dismiss this report</button>
-        ) : null}
+        {current !== null && machine.state === "loading" ? (
+          <ShrunkLoad load={current} progress={machine.progress} />
+        ) : current !== null && machine.state === "finished" ? (
+          <section className={styles.finished} data-testid="stick-finished" role="status" aria-label="Load finished">
+            <h3 className={styles.done}>The load of {current.name} finished</h3>
+            <Outcome outcome={machine.outcome} />
+            <EjectButton name={current.name} removal={removalOf(current.identity)} onEject={eject} />
+            <button type="button" onClick={() => { dismissStickLoad(current.id); }}>Done</button>
+          </section>
+        ) : current !== null && machine.state === "failed" ? (
+          <section className={styles.failed} data-testid="stick-failed" aria-label="Load failed">
+            {loadError !== null ? <p className={styles.problem} role="alert" data-testid="stick-load-error">The load did not finish: {loadError}</p> : null}
+            {outcome !== null ? <Outcome outcome={outcome} /> : null}
+            {outcome === null ? <ul><li>Nothing was written</li></ul> : null}
+            <EjectButton name={current.name} removal={removalOf(current.identity)} onEject={eject} />
+            <button type="button" data-testid="stick-dismiss" onClick={() => { dismissStickLoad(current.id); }}>Dismiss this report</button>
+          </section>
+        ) : (
+          <>
+            <p className={styles.note}>
+              Nothing is written until you hold the button.
+            </p>
+            <StickHoldButton
+              name={stick.name}
+              kind={stick.kind === "spare" ? "spare" : "gig"}
+              enabled={why === null && ready !== null && ready.plan !== null && !loading}
+              why={why}
+              binding={binding}
+              onHeld={load}
+            />
+            {why !== null ? <p id="stick-load-why" className={styles.note} data-testid="stick-load-why">{why}</p> : null}
+          </>
+        )}
         {others.length > 0 ? (
           <OtherLoads loads={others} mounted={(l) => devices.some((d) => stickIdentity(d.path, d.volumeId) === l.identity)} show={setPicked} />
         ) : null}
@@ -536,6 +602,36 @@ function Outcome({ outcome }: { outcome: LoadOutcome }) {
         </section>
       ) : null}
     </div>
+  );
+}
+
+/** The eject offered beside a finished or failed load. */
+function EjectButton({ name, removal, onEject }: { name: string; removal: StickRemoval | null; onEject: () => void }) {
+  return (
+    <button type="button" className={styles.eject} data-testid="stick-eject" disabled={removal?.state === "ejecting"} onClick={onEject}>
+      {removal?.state === "ejecting" ? `Ejecting ${name}…` : `Eject ${name}`}
+    </button>
+  );
+}
+
+/** What each eject asked from here came to: ready to remove only once it succeeded. */
+function Removals({ removals }: { removals: readonly StickRemoval[] }) {
+  return (
+    <>
+      {removals.map((removal) => (
+        removal.state === "ejected" ? (
+          <section key={removal.identity} className={styles.safeToRemove} role="status">
+            <h3 className={styles.safe} data-testid="stick-safe-to-remove">{removal.name} is safe to remove</h3>
+            <button type="button" onClick={() => { dismissStickRemoval(removal.identity); }}>OK</button>
+          </section>
+        ) : removal.state === "failed" ? (
+          <section key={removal.identity} className={styles.failed} role="alert" data-testid="stick-eject-failed">
+            <p className={styles.problem}>{removal.name} could not be ejected, so do not remove it yet: {removal.error}</p>
+            <button type="button" onClick={() => { dismissStickRemoval(removal.identity); }}>Dismiss</button>
+          </section>
+        ) : null
+      ))}
+    </>
   );
 }
 

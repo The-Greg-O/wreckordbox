@@ -1,0 +1,96 @@
+/* A running Stick load (wbx-72): the plain display, filling the Stick view,
+   and its shrunk form in the status line. docs/design/screens/stick. */
+
+.panel {
+  grid-column: 1 / -1;
+  min-width: 0;
+  padding: var(--s-shell-space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-shell-space-5);
+  background: var(--role-ground);
+}
+
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--s-shell-space-4);
+}
+
+.title {
+  margin: 0;
+  font-size: var(--f-size-shell-label);
+  font-weight: 400;
+  letter-spacing: var(--f-tracking-shell-label);
+  text-transform: uppercase;
+  color: var(--role-text-dim);
+}
+
+.line { margin: 0; color: var(--role-text); overflow-wrap: anywhere; }
+.note { margin: 0; color: var(--role-text-dim); overflow-wrap: anywhere; }
+
+.panel .shrink kbd, .status kbd {
+  font: inherit;
+  padding: 0 var(--s-shell-space-2);
+  border: var(--s-shell-border) solid var(--role-accent);
+  border-radius: var(--s-shell-radius);
+}
+
+.percent {
+  margin: auto 0 0;
+  font-size: clamp(48px, 14cqw, 160px);
+  line-height: 1;
+  font-weight: 700;
+  color: var(--role-text-bright);
+}
+
+.bar {
+  position: relative;
+  height: 14px;
+  min-width: 48px;
+  background: var(--role-control);
+  overflow: hidden;
+}
+.bar > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--role-tab-to);
+  transition: width 120ms linear;
+}
+
+.shrunk { display: grid; gap: var(--s-shell-space-3); justify-items: stretch; }
+.shrunk button { justify-self: start; }
+
+/* In the status line: one line, the bar small. */
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-shell-space-3);
+  min-width: 0;
+  max-width: 100%;
+  padding: 0 var(--s-shell-space-3);
+  border: 0;
+  background: transparent;
+  color: var(--role-text-bright);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.status > span:first-child { overflow: hidden; text-overflow: ellipsis; }
+.status .bar { width: 120px; height: 6px; flex: none; }
+.statusFailed {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--c-error);
+  font: inherit;
+  cursor: pointer;
+}
+.status:focus-visible { outline: var(--s-shell-border) solid var(--role-accent); }
+@container shell (max-width: 640px) {
+  .status .bar { width: 48px; }
+}
