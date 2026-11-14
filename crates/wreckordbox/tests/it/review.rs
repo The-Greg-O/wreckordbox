@@ -380,7 +380,11 @@ fn bulk_decisions_by_filter_and_all_empty_the_queue_in_one_undo_step() {
     assert_eq!(rejected["count"], 2, "{rejected}");
     assert!(facts_waiting(&s).is_empty());
     let text = s.cli(&["review", "waiting"]);
-    assert!(text.stdout.contains("Nothing is waiting"), "{}", text.stdout);
+    assert!(
+        text.stdout.contains("Nothing is waiting"),
+        "{}",
+        text.stdout
+    );
     // Deciding all of an empty queue does nothing.
     let runs = ok(&s, &["runs", "list"]);
     assert_eq!(

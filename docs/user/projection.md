@@ -84,3 +84,8 @@ There is no way yet to give such a value back to Projection. Clearing the
 field by hand does not do it: your clear is recorded as yours, so
 Projection keeps the empty field as your choice and does not fill it. If a
 Fact says the value should change, set it yourself.
+
+## What waits for you
+
+Changes the policy holds back wait in the review queue: see
+[review.md](review.md) to list them and accept or reject them.
