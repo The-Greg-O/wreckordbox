@@ -503,7 +503,7 @@ fn a_batch_that_fails_part_way_records_what_it_applied_and_says_which_were_not()
     // What was applied is in the index, recorded, the DJ's and told.
     assert_eq!(rating(&s, "10001"), 4);
     assert_eq!(rating(&s, "10002"), 0);
-    assert_eq!(library_changes(&mut watcher), 1);
+    assert_eq!(library_changes(&s, &mut watcher), 1);
     assert_eq!(standing(&s, "10001")["source"]["kind"], "dj");
     let runs = ok(&s, &["runs", "list"]);
     let dj: Vec<&Value> = runs["runs"]

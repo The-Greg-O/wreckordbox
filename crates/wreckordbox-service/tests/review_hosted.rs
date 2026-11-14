@@ -104,8 +104,22 @@ fn the_windows_accept_is_the_djs_and_one_undo_step_puts_the_facts_back_in_the_qu
         .unwrap();
     assert_eq!(accepted["count"], 2, "{accepted}");
     assert_eq!((stars(&core, &a), stars(&core, &b)), (4, 2));
-    let told = events.recv_timeout(Duration::from_secs(2)).unwrap();
-    assert_eq!(told.event, "library_changed");
+    // Told exactly once: every event the host is told before a barrier
+    // published after the accept answered (wbx-j8k), not a quiet spell.
+    service.publish(&wreckordbox_service::protocol::Event {
+        event: "test_barrier".to_owned(),
+        data: Value::Null,
+    });
+    let mut told = 0;
+    loop {
+        let event = events.recv_timeout(Duration::from_secs(30)).unwrap();
+        match event.event.as_str() {
+            "library_changed" => told += 1,
+            "test_barrier" => break,
+            _ => {}
+        }
+    }
+    assert_eq!(told, 1);
     assert_eq!(standing_kind(&a), "dj");
     assert_eq!(standing_kind(&b), "dj");
     assert_eq!(waiting(), 0);

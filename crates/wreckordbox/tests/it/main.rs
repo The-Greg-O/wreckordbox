@@ -16,6 +16,7 @@ mod decisions;
 mod dj_facts;
 mod dj_facts_review;
 mod fact_attachment;
+mod fact_producers_hold;
 mod facts;
 mod intake;
 mod intake_tags;
