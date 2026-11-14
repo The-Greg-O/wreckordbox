@@ -174,6 +174,11 @@ export interface ViewPreferences {
   viewShell: boolean;
   /** The view shell's compact player: the beat jump size on its selector (#51). */
   shellJumpBeats: CompactJumpBeats;
+  /**
+   * The Stick view's running load drawn as the loud display (wbx-73), or,
+   * off, as the plain progress bar.
+   */
+  loudStickLoad: boolean;
   /** Key display format: `Ebm` or `2A`. */
   keyDisplay: KeyDisplay;
   /** How the browser's Key column is ordered. */
@@ -432,6 +437,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
     browseLineSpace: BROWSE_SCALE_DEFAULT,
     uiScale: UI_SCALE_DEFAULT,
     viewShell: false,
+    loudStickLoad: true,
     shellJumpBeats: COMPACT_JUMP_DEFAULT,
     keyDisplay: "alphanumeric",
     keySort: "auto",
@@ -619,6 +625,7 @@ export function sanitisePreferences(value: unknown): Preferences {
       // a build with a different set of stops is not a size anyone chose.
       uiScale: isUiScaleStop(view.uiScale) ? view.uiScale : d.view.uiScale,
       viewShell: bool(view.viewShell, d.view.viewShell),
+      loudStickLoad: bool(view.loudStickLoad, d.view.loudStickLoad),
       shellJumpBeats: compactJumpBeats(view.shellJumpBeats),
       keyDisplay: oneOf(view.keyDisplay, KEY_DISPLAYS, d.view.keyDisplay),
       keySort: oneOf(
