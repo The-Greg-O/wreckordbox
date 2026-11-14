@@ -19,6 +19,7 @@ mod file_ledger_tests;
 mod grid_history_tests;
 pub mod analysis;
 pub mod bulk_writes;
+mod player_ledger;
 mod analysis_extensions;
 mod analysis_pipeline;
 pub mod commands;
@@ -601,6 +602,7 @@ pub fn run() {
             stick_view::stick_view_load,
             stick_view::stick_load_reports,
             stick_view::stick_load_report_dismiss,
+            stick_view::stick_load_report_reserve,
             mutant_window::collection_removal_mutants,
             intake_view::intake_counts,
             intake_view::intake_colours,

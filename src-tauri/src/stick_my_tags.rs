@@ -7,6 +7,7 @@
 //! pick resolved to the Stick's tag ids with the Library's own rule
 //! (`rbl_index::tag_picks_in`), and the ids each row carries.
 
+use rbl_index::device::{DeviceRow, DeviceTag};
 use rbl_index::{TagCategory, TagFilter};
 use wreckordbox_stick_outline::StickMyTags;
 
@@ -65,4 +66,33 @@ pub fn carried(tags: Option<&StickMyTags>, id: u32) -> Vec<i32> {
     tags.and_then(|t| t.tracks.get(&id))
         .map(|held| held.iter().copied().map(wide).collect())
         .unwrap_or_default()
+}
+
+/// Every tag of the Stick, named with its category, in the Stick's order:
+/// what a Stick list's `MyTags` column draws (wbx-f7y).
+#[must_use]
+pub fn named(tags: &StickMyTags) -> Vec<DeviceTag> {
+    tags.categories
+        .iter()
+        .flat_map(|c| {
+            c.tags.iter().map(|t| DeviceTag {
+                id: wide(t.id),
+                name: t.name.clone(),
+                category: c.name.clone(),
+            })
+        })
+        .collect()
+}
+
+/// The `myTags` field of a Stick row, shaped as a Library row's
+/// (`row_my_tags`): each tag the row carries with its id, name and
+/// category, in the Stick's order.
+#[must_use]
+pub fn row_field(tags: &[DeviceTag], row: &DeviceRow) -> serde_json::Value {
+    serde_json::Value::Array(
+        tags.iter()
+            .filter(|t| row.my_tags.contains(&t.id))
+            .map(|t| serde_json::json!({ "id": t.id.to_string(), "name": t.name, "category": t.category }))
+            .collect(),
+    )
 }

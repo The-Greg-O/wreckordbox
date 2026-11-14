@@ -27,7 +27,14 @@
  * - `__failNextStickLoad(path, message)`, `__nextStickLoadIncomplete(path, reason)`:
  *   the next load fails before writing / writes all but one track and one
  *   Native stems set (that one's reason given).
- * - `__holdStickLoads()` / `__releaseStickLoads()`: loads wait to finish.
+ * - `__holdStickLoads()` / `__releaseStickLoads()`: loads wait to finish
+ *   (having said they are checking the Stick and copying the first track).
+ * - Progress (wbx-72): a load sends `stick_load_progress` events as the
+ *   service does (`checking`, `copying` each new track, `done`);
+ *   `__emitStickLoadProgress(path, count, operation?)` sends a burst of
+ *   `count` copying events (for the load running there, or `operation`),
+ *   the last naming "Burst track <count>"; `__stickLoadOperations()`: every
+ *   load's operation id. Events carry `operation` and `volume` as the service's do.
  * - `__playlistTracks(id)`: a Library playlist's tracks.
  * - `__swapStickAt(path, freeBytes)`: another Stick at the same path (a new
  *   volume id, empty, with that free space); the window sees it on its next
@@ -99,6 +106,16 @@ export function createMockStickLoad(source: MockStickLoadSource) {
   let failDryRuns: string | null = null;
   let holding: (() => void)[] | null = null;
   let loadsHeld: (() => void)[] | null = null;
+  const progressListeners = new Set<(progress: unknown) => void>();
+  // Each load's operation id, in order; the one running on each Stick.
+  const operations: string[] = [];
+  // Report ids the shell issued and no load has used yet (as `stick_load_reports` reserves them).
+  const reserved = new Set<string>();
+  const runningOn = new Map<string, string>();
+  const progress = (stick: string, stage: string, done: number, total: number, track: { id: string; title: string } | null, operation = runningOn.get(stick) ?? null) => {
+    const volume = source.devices().find((d) => d.path === stick)?.volumeId ?? null;
+    for (const listener of [...progressListeners]) listener({ stick, operation, volume, stage, done, total, track });
+  };
   const failNext = new Map<string, string>();
   const incompleteNext = new Map<string, string>();
   const issued: string[] = [];
@@ -267,6 +284,10 @@ export function createMockStickLoad(source: MockStickLoadSource) {
       for (const go of waiting) go();
     };
     hooks.__playlistTracks = (id: string) => [...source.tracksOf(id)];
+    hooks.__emitStickLoadProgress = (path: string, count: number, operation?: string) => {
+      for (let at = 1; at <= count; at += 1) progress(path, "copying", at, count, { id: `burst-${at}`, title: `Burst track ${at}` }, operation);
+    };
+    hooks.__stickLoadOperations = () => [...operations];
     hooks.__swapStickAt = (path: string, free: number) => {
       const device = source.devices().find((d) => d.path === path) as { volumeId: string } | undefined;
       if (device) device.volumeId = `${device.volumeId}-swapped-${Date.now()}`;
@@ -277,6 +298,10 @@ export function createMockStickLoad(source: MockStickLoadSource) {
   }
 
   return {
+    onStickLoadProgress: (listener: (progress: unknown) => void): (() => void) => {
+      progressListeners.add(listener);
+      return () => { progressListeners.delete(listener); };
+    },
     stickViewSticks: async (): Promise<unknown> => {
       reads.sticks += 1;
       return source.wait({ sticks: source.devices().map((d) => stickJson(d.path)) });
@@ -301,6 +326,11 @@ export function createMockStickLoad(source: MockStickLoadSource) {
       return source.wait(answer);
     },
     stickLoadReports: (): Promise<unknown[]> => source.wait(keptReports()),
+    stickLoadReportReserve: (): Promise<string> => {
+      const id = `op-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      reserved.add(id);
+      return source.wait(id);
+    },
     stickLoadReportDismiss: (id: string): Promise<void> => {
       keepReports(keptReports().filter((r) => (r as { id?: string }).id !== id));
       return source.wait(undefined);
@@ -311,7 +341,8 @@ export function createMockStickLoad(source: MockStickLoadSource) {
      * the shell keeps it, under `operation`.
      */
     stickViewLoad: async (stick: string, playlists: string[], plan: string, operation?: string): Promise<unknown> => {
-      const id = operation ?? `op-${Date.now()}`;
+      // The shell names the report: an id it reserved and nobody used, else one of its own.
+      const id = operation !== undefined && reserved.delete(operation) ? operation : `op-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const keep = (report: unknown, error: { code: string; message: string } | null) => {
         const device = source.devices().find((d) => d.path === stick);
         keepReports([...keptReports().filter((r) => (r as { id?: string }).id !== id), {
@@ -319,6 +350,8 @@ export function createMockStickLoad(source: MockStickLoadSource) {
           finished: new Date().toISOString(), report, error,
         }]);
       };
+      operations.push(id);
+      runningOn.set(stick, id);
       try {
         const report = await loadNow(stick, playlists, plan) as Record<string, unknown>;
         keep(report, null);
@@ -327,12 +360,22 @@ export function createMockStickLoad(source: MockStickLoadSource) {
         const detail = (error as { detail?: string }).detail ?? "stick_load_failed";
         keep(null, { code: detail, message: error instanceof Error ? error.message : String(error) });
         throw error;
+      } finally {
+        if (runningOn.get(stick) === id) runningOn.delete(stick);
       }
     },
   };
 
   async function loadNow(stick: string, playlists: string[], plan: string): Promise<unknown> {
       loadCalls.push({ stick, playlists: [...playlists], plan });
+      const copying = (() => {
+        const held = new Set(stateOf(stick).playlists.flatMap((p) => p.tracks));
+        const chosen = new Set(playlists);
+        const ids = [...new Set(source.tree().filter((n) => chosen.has(n.id)).flatMap((n) => [...source.tracksOf(n.id)]))];
+        return ids.filter((id) => !held.has(id));
+      })();
+      progress(stick, "checking", 0, 0, null);
+      if (copying.length > 0) progress(stick, "copying", 0, copying.length, line(copying[0]!));
       if (loadsHeld !== null) await new Promise<void>((go) => { loadsHeld?.push(go); });
       const failure = failNext.get(stick);
       failNext.delete(stick);
@@ -349,6 +392,9 @@ export function createMockStickLoad(source: MockStickLoadSource) {
       if (planned.space.shortfall_bytes !== null) {
         throw Object.assign(new Error("The load does not fit on the Stick."), { kind: "conflict", detail: "stick_too_small" });
       }
+      copying.forEach((id, at) => { progress(stick, "copying", at + 1, copying.length, line(id)); });
+      progress(stick, "database", 0, 0, null);
+      progress(stick, "done", copying.length, copying.length, null);
       const state = stateOf(stick);
       const before = new Set(state.playlists.flatMap((p) => p.tracks));
       const beforePlaylists = new Map(state.playlists.map((p) => [p.id, p.tracks.join()]));

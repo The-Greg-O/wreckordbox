@@ -114,7 +114,7 @@ pub struct PlayerDto {
 #[serde(rename_all = "camelCase")]
 pub struct LinkStatusDto {
     pub on: bool,
-    /// Why it could not be turned on, when it could not.
+    /// Why it could not be turned on, or an incomplete recording while on.
     pub problem: Option<String>,
     pub interface: Option<InterfaceDto>,
     pub players: Vec<PlayerDto>,
@@ -171,6 +171,7 @@ struct StateSource(
     LibraryEvents,
     rbl_prolink::DeviceSettings,
     rbl_link::KeyOrder,
+    Arc<parking_lot::Mutex<Option<String>>>,
 );
 
 impl Source for StateSource {
@@ -206,71 +207,33 @@ impl Source for StateSource {
     }
 
     fn edit(&self, edit: &rbl_link::Edit) -> bool {
+        // Grid-offset files already have a player-attributed file record.
+        if matches!(edit, rbl_link::Edit::GridOffset { .. }) {
+            return self.edit_player(edit, &mut serde_json::Value::Null, None);
+        }
         let Some(state) = self.0.upgrade() else { return false; };
-        if let rbl_link::Edit::SaveCue { track, cue } | rbl_link::Edit::DeleteCue { track, cue } = edit {
-            let save = matches!(edit, rbl_link::Edit::SaveCue { .. });
-            return match player_cue_edit(&state, &track.to_string(), &player_cue(cue), save) {
-                Ok(()) => { (self.1)("cues:changed", track.to_string().into()); true }
-                Err(error) => { tracing::warn!(%error, ?edit, "player cue edit refused"); false }
-            };
-        }
-        if let rbl_link::Edit::GridOffset { track, offset_ms } = edit {
-            return match save_grid_offset(&state, &track.to_string(), *offset_ms) {
-                Ok(()) => true,
-                Err(error) => { tracing::warn!(%error, ?edit, "player grid edit refused"); false }
-            };
-        }
-        let touched = match edit {
-            rbl_link::Edit::Tag { .. } | rbl_link::Edit::ClearTags => crate::commands::Touched::TagList,
-            rbl_link::Edit::Rating { track, .. } => crate::commands::Touched::Metadata(vec![track.to_string()]),
-            rbl_link::Edit::GridOffset { .. } => unreachable!("handled above"),
-            rbl_link::Edit::HotCueBankCue { .. } => crate::commands::Touched::Metadata(Vec::new()),
-            // The catalog keeps the link session's history and writes it
-            // through the methods below.
-            rbl_link::Edit::HistoryAdd { .. } | rbl_link::Edit::HistoryRemove { .. } | rbl_link::Edit::HistoryDelete { .. } | rbl_link::Edit::SaveCue { .. } | rbl_link::Edit::DeleteCue { .. } => return false,
-        };
-        let event = crate::commands::ChangeEvent::event(&touched);
-        let result = state.write_then(|writer| match edit {
-            rbl_link::Edit::Tag { track, add: true } => writer.tag_list_add(&[track.to_string()]),
-            rbl_link::Edit::Tag { track, add: false } => writer.tag_list_remove(&[track.to_string()]),
-            rbl_link::Edit::ClearTags => writer.tag_list_clear(),
-            rbl_link::Edit::Rating { track, stars } => writer.set_rating(&track.to_string(), *stars),
-            rbl_link::Edit::HotCueBankCue { bank, cue } => writer.set_hot_cue_bank_cue(&bank.to_string(), &rbl_db::details::HotCueBankCue {
-                slot: cue.slot,
-                content: cue.content,
-                in_ms: cue.in_ms,
-                out_ms: cue.out_ms,
-                color: cue.color,
-                color_table_index: cue.color_table_index,
-                active_loop: cue.active_loop,
-                beat_loop_size: cue.beat_loop_size,
-                cue_microsec: cue.cue_microsec,
-            }),
-            rbl_link::Edit::GridOffset { .. }
-            | rbl_link::Edit::HistoryAdd { .. }
-            | rbl_link::Edit::HistoryRemove { .. }
-            | rbl_link::Edit::HistoryDelete { .. }
-            | rbl_link::Edit::SaveCue { .. }
-            | rbl_link::Edit::DeleteCue { .. } => unreachable!("handled above"),
-        }, |db, _| crate::commands::refresh_after_edit(&state, db, touched));
-        match result {
-            Ok(generation) => { (self.1)(event, generation.into()); true }
-            Err(error) => { tracing::warn!(%error, ?edit, "player library edit or refresh failed"); false }
-        }
+        let operation = rbl_library::bulk::Operation::new(state.core(), rbl_library::bulk::Kind::Link);
+        let record = crate::player_ledger::link_edit(edit);
+        let result = operation.run(record.clone(), || {
+            let mut record = record;
+            if self.edit_player(edit, &mut record, Some(&operation)) { Ok(record) } else { Err("Player edit or refresh failed") }
+        }, |record| vec![record.clone()]);
+        self.recording_warning(operation.finish());
+        result.is_ok()
     }
 
     fn new_link_history(&self) -> Option<u32> {
-        let id = self.history_write(Vec::new(), rbl_db::write::Writer::new_link_history)?;
+        let id = self.history_write(Vec::new(), rbl_db::write::Writer::new_link_history, |id| serde_json::json!({"operation":"history_create","history":id}))?;
         id.parse().ok()
     }
 
     fn add_to_history(&self, history: u32, track: u32) -> bool {
         let track = track.to_string();
-        self.history_write(vec![track.clone()], |writer| writer.add_to_history(&history.to_string(), &track)).is_some()
+        self.history_write(vec![track.clone()], |writer| writer.add_to_history(&history.to_string(), &track), |_| serde_json::json!({"operation":"history_add","history":history,"track":track})).is_some()
     }
 
     fn remove_from_history(&self, history: u32, track: u32) -> bool {
-        self.history_write(Vec::new(), |writer| writer.remove_from_history(&history.to_string(), &[track.to_string()])).is_some()
+        self.history_write(Vec::new(), |writer| writer.remove_from_history(&history.to_string(), &[track.to_string()]), |_| serde_json::json!({"operation":"history_remove","history":history,"track":track.to_string()})).is_some()
     }
 
     fn played_changed(&self) {
@@ -372,15 +335,83 @@ fn player_cue_edit(state: &AppState, track: &str, cue: &rbl_db::write::PlayerCue
 }
 
 impl StateSource {
+    fn recording_warning(&self, warning: Option<String>) {
+        if let Some(warning) = warning {
+            *self.4.lock() = Some(warning);
+        }
+    }
+    fn edit_player(&self, edit: &rbl_link::Edit, record: &mut serde_json::Value, operation: Option<&rbl_library::bulk::Operation>) -> bool {
+        let Some(state) = self.0.upgrade() else { return false; };
+        if let rbl_link::Edit::SaveCue { track, cue } | rbl_link::Edit::DeleteCue { track, cue } = edit {
+            let save = matches!(edit, rbl_link::Edit::SaveCue { .. });
+            return match player_cue_edit(&state, &track.to_string(), &player_cue(cue), save) {
+                Ok(()) => { (self.1)("cues:changed", track.to_string().into()); true }
+                Err(error) => { tracing::warn!(%error, ?edit, "player cue edit refused"); false }
+            };
+        }
+        if let rbl_link::Edit::GridOffset { track, offset_ms } = edit {
+            return match save_grid_offset(&state, &track.to_string(), *offset_ms) {
+                Ok(()) => true,
+                Err(error) => { tracing::warn!(%error, ?edit, "player grid edit refused"); false }
+            };
+        }
+        let touched = match edit {
+            rbl_link::Edit::Tag { .. } | rbl_link::Edit::ClearTags => crate::commands::Touched::TagList,
+            rbl_link::Edit::Rating { track, .. } => crate::commands::Touched::Metadata(vec![track.to_string()]),
+            rbl_link::Edit::GridOffset { .. } => unreachable!("handled above"),
+            rbl_link::Edit::HotCueBankCue { .. } => crate::commands::Touched::Metadata(Vec::new()),
+            // The catalog keeps the link session's history and writes it
+            // through the methods below.
+            rbl_link::Edit::HistoryAdd { .. } | rbl_link::Edit::HistoryRemove { .. } | rbl_link::Edit::HistoryDelete { .. } | rbl_link::Edit::SaveCue { .. } | rbl_link::Edit::DeleteCue { .. } => return false,
+        };
+        let event = crate::commands::ChangeEvent::event(&touched);
+        let result = state.write_then(|writer| match edit {
+            rbl_link::Edit::Tag { track, add: true } => writer.tag_list_add(&[track.to_string()]),
+            rbl_link::Edit::Tag { track, add: false } => writer.tag_list_remove(&[track.to_string()]),
+            rbl_link::Edit::ClearTags => writer.tag_list_clear(),
+            rbl_link::Edit::Rating { track, stars } => {
+                let (changed, edit) = writer.set_rating_with_undo(&track.to_string(), *stars)?;
+                if edit.is_empty() {
+                    if let Some(operation) = operation { operation.assert_player_fields(); }
+                }
+                *record = crate::player_ledger::rating(edit);
+                Ok(changed)
+            },
+            rbl_link::Edit::HotCueBankCue { bank, cue } => writer.set_hot_cue_bank_cue(&bank.to_string(), &rbl_db::details::HotCueBankCue {
+                slot: cue.slot,
+                content: cue.content,
+                in_ms: cue.in_ms,
+                out_ms: cue.out_ms,
+                color: cue.color,
+                color_table_index: cue.color_table_index,
+                active_loop: cue.active_loop,
+                beat_loop_size: cue.beat_loop_size,
+                cue_microsec: cue.cue_microsec,
+            }),
+            rbl_link::Edit::GridOffset { .. }
+            | rbl_link::Edit::HistoryAdd { .. }
+            | rbl_link::Edit::HistoryRemove { .. }
+            | rbl_link::Edit::HistoryDelete { .. }
+            | rbl_link::Edit::SaveCue { .. }
+            | rbl_link::Edit::DeleteCue { .. } => unreachable!("handled above"),
+        }, |db, _| crate::commands::refresh_after_edit(&state, db, touched));
+        match result {
+            Ok(generation) => { (self.1)(event, generation.into()); true }
+            Err(error) => { tracing::warn!(%error, ?edit, "player library edit or refresh failed"); false }
+        }
+    }
+
     /// A write to the history tree for a player, then the histories read
     /// again — with the play counts of `tracks` — and the window told.
-    fn history_write<T>(&self, tracks: Vec<String>, edit: impl FnOnce(&mut rbl_db::write::Writer) -> Result<T, rbl_db::DbError>) -> Option<T> {
+    fn history_write<T>(&self, tracks: Vec<String>, edit: impl FnOnce(&mut rbl_db::write::Writer) -> Result<T, rbl_db::DbError>, values: impl FnOnce(&T) -> serde_json::Value) -> Option<T> {
         let state = self.0.upgrade()?;
         let touched = crate::commands::Touched::Histories(tracks);
         let event = crate::commands::ChangeEvent::event(&touched);
-        let result = state.write_then(edit, |db, value| {
+        let operation = rbl_library::bulk::Operation::new(state.core(), rbl_library::bulk::Kind::Link);
+        let result = operation.run(serde_json::json!({"operation":"history"}), || state.write_then(edit, |db, value| {
             crate::commands::refresh_after_edit(&state, db, touched).map(|generation| (value, generation))
-        });
+        }), |(value, _)| vec![values(value)]);
+        self.recording_warning(operation.finish());
         match result {
             Ok((value, generation)) => {
                 (self.1)(event, generation.into());
@@ -433,6 +464,7 @@ pub(crate) fn save_grid_offset(state: &AppState, track: &str, offset_ms: i16) ->
 
 /// A running LINK session: the export, and the thread that reports it.
 pub struct Session {
+    recording_warning: Arc<parking_lot::Mutex<Option<String>>>,
     rx3_activation: Option<crate::rx3_link::Activation>,
     export: Option<LinkExport>,
     stop: Arc<AtomicBool>,
@@ -506,11 +538,13 @@ impl Session {
         })?;
         tracing::info!(interface = %chosen.name, address = %chosen.address, "LINK running on an interface");
 
+        let recording_warning = Arc::default();
         let source: Arc<dyn Source> = Arc::new(StateSource(
             Arc::downgrade(state),
             library_changed,
             device_settings,
             key_order,
+            Arc::clone(&recording_warning),
         ));
         let export = LinkExport::start_with_unsupported_command_reporter(
             source,
@@ -536,7 +570,7 @@ impl Session {
         let reporter = {
             let stop = Arc::clone(&stop);
             std::thread::spawn(move || {
-                let mut last: Option<(String, Option<u8>, Vec<PlayerDto>)> = None;
+                let mut last = None;
                 while !stop.load(Ordering::Relaxed) {
                     std::thread::sleep(REPORT_EVERY);
                     let Some(state) = weak.upgrade() else { return };
@@ -553,7 +587,7 @@ impl Session {
                         report(LinkStatusDto::off(status.problem));
                         return;
                     }
-                    let now = (status.state.clone(), status.number, status.players.clone());
+                    let now = (status.state.clone(), status.number, status.players.clone(), status.problem.clone());
                     if last.as_ref() != Some(&now) {
                         last = Some(now);
                         report(status);
@@ -561,7 +595,7 @@ impl Session {
                 }
             })
         };
-        Ok(Self { rx3_activation, export: Some(export), stop, reporter: Some(reporter) })
+        Ok(Self { recording_warning, rx3_activation, export: Some(export), stop, reporter: Some(reporter) })
     }
 
     /// The session as the window shows it, with the loaded tracks named
@@ -580,7 +614,7 @@ impl Session {
         };
         LinkStatusDto {
             on: true,
-            problem,
+            problem: problem.or_else(|| self.recording_warning.lock().clone()),
             interface: Some(InterfaceDto::from(&snapshot.interface)),
             players: players(library, &snapshot),
             interfaces: interfaces(),
@@ -895,6 +929,7 @@ mod grid_offset_tests {
             }),
             rbl_prolink::DeviceSettings::default(),
             rbl_link::KeyOrder::Musical,
+            Arc::default(),
         );
         let spec = |source| rbl_index::ViewSpec { source, sort: rbl_index::SortColumn::Title, descending: false, query: String::new(), filter: rbl_index::TrackFilter::default() };
         let id = rbl_db::fixture::track_id(1);
@@ -956,6 +991,7 @@ mod grid_offset_tests {
             }),
             rbl_prolink::DeviceSettings::default(),
             rbl_link::KeyOrder::Musical,
+            Arc::default(),
         );
         let catalog = rbl_link::IndexCatalog::new(Arc::new(source), rbl_link::Played::default()).with_colour(state.link_played());
         // The fixture's own histories are not the menu.
@@ -1014,6 +1050,7 @@ mod grid_offset_tests {
             }),
             rbl_prolink::DeviceSettings::default(),
             rbl_link::KeyOrder::Musical,
+            Arc::default(),
         );
         let catalog = Arc::new(rbl_link::IndexCatalog::new(Arc::new(source), rbl_link::Played::default()));
         let mut session = rbl_dbserver::session::CatalogHandler::new(catalog).open();
@@ -1097,6 +1134,7 @@ mod grid_offset_tests {
             Arc::new(|_, _| {}),
             rbl_prolink::DeviceSettings::default(),
             rbl_link::KeyOrder::Musical,
+            Arc::default(),
         );
 
         assert_eq!(source.matching_ids(first.parse().unwrap()), [second.parse::<u32>().unwrap()]);
@@ -1157,6 +1195,7 @@ mod grid_offset_tests {
             Arc::new(|_, _| {}),
             rbl_prolink::DeviceSettings::default(),
             rbl_link::KeyOrder::Musical,
+            Arc::default(),
         );
         let track = rbl_db::fixture::track_id(1);
 
@@ -1211,6 +1250,7 @@ mod history_tests {
             Arc::new(|_, _| {}),
             rbl_prolink::DeviceSettings::default(),
             rbl_link::KeyOrder::Musical,
+            Arc::default(),
         );
         let id = rbl_db::fixture::track_id(1);
         let track: u32 = id.parse().unwrap();
@@ -1246,3 +1286,7 @@ mod history_tests {
         assert_eq!(name(&state), original);
     }
 }
+
+#[cfg(test)]
+#[path = "player_ledger_tests.rs"]
+mod player_ledger_tests;

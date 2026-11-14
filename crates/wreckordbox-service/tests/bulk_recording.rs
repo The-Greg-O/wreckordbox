@@ -270,6 +270,7 @@ fn library_protection_refuses_both_bulk_writes_without_a_run() {
                             )
                             .map(|_| ()),
                         Kind::Import => w.import_files(&paths).map(|_| ()),
+                        Kind::Link | Kind::RoundTrip => unreachable!("tested separately"),
                     },
                     |_, v| Ok(v),
                 )
@@ -465,3 +466,6 @@ mod review;
 
 #[path = "support/bulk_orphans.rs"]
 mod orphans;
+
+#[path = "support/player_bulk.rs"]
+mod player;

@@ -58,6 +58,13 @@ export interface StickWriteQuestion {
    * dialog shows `lines` alone. Without it the write is planned here.
    */
   planned?: StickWritePlan;
+  /**
+   * The hold was already made, on the Stick view's own hold-to-load button
+   * or its key (wbx-72), for exactly `planned`: no dialog is shown, and the
+   * plan id is approved at once. Only with `planned`; a protected Stick is
+   * refused (it is unlocked in the view, before the hold can be made).
+   */
+  held?: boolean;
 }
 
 export interface StagedStickWrite extends StickWriteQuestion {
@@ -187,6 +194,26 @@ export function useStickWriteGate({ sticks, refresh, refuse }: {
     const spare = stick?.outline?.spare === true && plan.spare;
     const lines = question.planned ? [...question.lines] : [...question.lines, ...describeStickPlan(plan)];
     const protection: StickProtection = { protected: plan.protected, spare: plan.spare, name: plan.stickName, revision: 0 };
+    // Held for: the plan id exchanged for the write's token.
+    const approveHeld = async (): Promise<string | null> => {
+      const backend = await getBackend();
+      let token: string;
+      try {
+        token = await backend.stickWriteApprove(planId);
+      } catch (error) {
+        refuse(error instanceof Error ? error.message : "The write could not be confirmed, so nothing was written.");
+        return null;
+      }
+      setChecking((current) => new Map(current).set(path, stick?.outline ?? null));
+      return token;
+    };
+    if (question.held === true && question.planned !== undefined) {
+      if (plan.protected) {
+        refuse(`Nothing was written: unlock ${plan.stickName} first.`);
+        return null;
+      }
+      return approveHeld();
+    }
     const yes = await new Promise<boolean>((answer) => {
       const entry: Asking = { id, path, name: stick?.name ?? path, spare, protection, title: question.title, lines, answer };
       shown.current = entry;
@@ -196,20 +223,11 @@ export function useStickWriteGate({ sticks, refresh, refuse }: {
       shown.current = null;
       setAsking(null);
     }
-    const backend = await getBackend();
     if (!yes) {
-      void backend.stickWriteRevoke(planId).catch(() => undefined);
+      void (await getBackend()).stickWriteRevoke(planId).catch(() => undefined);
       return null;
     }
-    let token: string;
-    try {
-      token = await backend.stickWriteApprove(planId);
-    } catch (error) {
-      refuse(error instanceof Error ? error.message : "The write could not be confirmed, so nothing was written.");
-      return null;
-    }
-    setChecking((current) => new Map(current).set(path, stick?.outline ?? null));
-    return token;
+    return approveHeld();
   }, [refresh, refuse]);
 
   /** A Stick just mounted or opened may not be read yet: its first outline is waited for, briefly. */

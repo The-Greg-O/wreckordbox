@@ -5,13 +5,14 @@
  * one press away; too little space said and the load disabled; no Stick
  * said. Showing the view, choosing and the dry run write nothing; the load
  * goes through the window's Stick write gate (plan, Stick Protection, hold).
+ * Since wbx-72 the hold is the view's own big button (`stick-hold-to-load.spec.ts`):
+ * a protected Stick is unlocked in the view first, and there is no dialog.
  *
  * Mock hooks: `src/ipc/mock-stick-load.ts` and `mock-stick-safety.ts`.
  */
 import { expect, test, type Page } from "@playwright/test";
 
 import { open, pauseButton, player, titles } from "./compactPlayer";
-import { confirmStickWrite } from "./helpers";
 
 const tab = (page: Page, name: string) => page.getByRole("tablist", { name: "Views" }).getByRole("tab", { name });
 const view = (page: Page) => page.getByTestId("stick-view");
@@ -67,7 +68,9 @@ test("the view shows the Stick's name, kind, protection, last load and space; ch
   await expect(summary.locator('[data-change="playlists"]')).toHaveText(/^1\s*playlist created$/);
   // Space before and after, from the dry run.
   await expect(view(page).getByTestId("stick-space-line")).toHaveText(/^Free now 25\.8 GB of 34\.4 GB · after this load 25\.\d GB$/);
-  await expect(loadButton(page)).toBeEnabled();
+  // Ready, but the Gig stick is protected: it is unlocked before the hold can be made.
+  await expect(loadButton(page)).toBeDisabled();
+  await expect(view(page).getByTestId("stick-load-why")).toHaveText("Unlock DJ STICK first.");
   expect(await writes(page)).toEqual([]);
   expect(await call(page, "__stickRecoveringCalls")).toEqual([]);
 });
@@ -79,7 +82,7 @@ test("a Spare stick is shown as one, and another mounted Stick can be chosen", a
   await view(page).getByRole("group", { name: "Mounted Sticks" }).getByRole("button", { name: "TEST" }).click();
   await expect(view(page).getByTestId("stick-name")).toHaveText("TEST");
   await expect(view(page).getByTestId("stick-kind")).toHaveText("Spare stick");
-  await expect(view(page)).toContainText("A Spare stick takes a 1 s hold.");
+  await expect(loadButton(page)).toContainText("hold 1 s · Spare stick");
 });
 
 test("the DJ chooses the playlists, the summary follows, and every change opens from it", async ({ page }) => {
@@ -132,29 +135,21 @@ test("with no Stick mounted the view says so", async ({ page }) => {
   await expect(view(page).getByTestId("stick-none")).toContainText("No Stick is mounted");
 });
 
-test("a load is staged through the hold: cancelling writes nothing; holding unlocks the Gig stick by name and loads it", async ({ page }) => {
+test("a load needs the Gig stick unlocked by name and the full hold; the Stick is read again after it", async ({ page }) => {
   await openStick(page);
   const name = await chooseFirst(page);
-  await expect(loadButton(page)).toBeEnabled();
-
-  // The gate's dialog: which Stick, Gig, protected; Cancel writes nothing.
-  await loadButton(page).click();
-  const dialog = page.getByRole("alertdialog", { name: "Write to DJ STICK" });
-  await expect(dialog).toContainText("DJ STICK · Gig stick");
-  await expect(dialog).toContainText("Load 1 playlist onto DJ STICK");
-  await expect(dialog.getByRole("button", { name: /Hold to write \(2 s\)/ })).toBeDisabled();
-  await page.waitForTimeout(450);
-  await dialog.getByRole("button", { name: "Cancel" }).click();
-  await expect(dialog).toHaveCount(0);
+  // Protected: no hold can be made, and nothing is written.
+  await expect(loadButton(page)).toBeDisabled();
   expect(await writes(page)).toEqual([]);
   expect(await call(page, "__stickProtected", DJ)).toBe(true);
 
-  await loadButton(page).click();
-  await confirmStickWrite(page);
+  await holdToLoad(page);
   await expect(view(page).getByTestId("stick-outcome")).toHaveAttribute("data-outcome", "loaded");
   await expect(view(page).getByTestId("stick-outcome")).toContainText(/Loaded DJ STICK\..*DJ STICK now holds \d+ tracks in 1 playlist/);
   expect((await writes(page)).map((w) => [w.method, w.path])).toEqual([["stickViewLoad", DJ]]);
   expect((await call<{ playlists: string[] }>(page, "__stickHeld", DJ)).playlists).toEqual([name]);
+  // No dialog of the gate's: the hold was the view's own.
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
   // Read again after the load: unlocked, last loaded today, nothing left to do.
   await expect(view(page).getByTestId("stick-protection")).toHaveText("Unlocked");
   await expect(view(page).getByTestId("stick-meta")).toContainText(/Last loaded [A-Z][a-z]{2} \d\d/);
@@ -164,7 +159,7 @@ test("a load is staged through the hold: cancelling writes nothing; holding unlo
 test("a load without the hold is refused by the backend and writes nothing", async ({ page }) => {
   await openStick(page);
   await chooseFirst(page);
-  await expect(loadButton(page)).toBeEnabled();
+  await expect(view(page).getByTestId("stick-summary")).toBeVisible();
   await call(page, "__setStickUnlocked", DJ, true);
   const last = await call<{ stick: string; playlists: string[] }>(page, "__stickLoadLastDryRun");
   // A script calling the load straight, with the dry run's plan but no token.
@@ -266,10 +261,26 @@ test("a Stick with an unfinished write says so, is not dry-run or loaded, and it
 
 // ---- Review of wbx-71 -------------------------------------------------
 
-/** Holds for the staged load, as the DJ does (the Gig stick unlocked by name in the dialog). */
+/**
+ * Holds for the load, as the DJ does (wbx-72): an earlier load's end state
+ * put away, the Stick unlocked in the view (a Gig stick by name), then the
+ * big button held for longer than a Gig stick's hold.
+ */
 async function holdToLoad(page: Page): Promise<void> {
-  await loadButton(page).click();
-  await confirmStickWrite(page);
+  const done = view(page).getByTestId("stick-finished").getByRole("button", { name: "Done" });
+  if (await done.count() > 0) await done.click();
+  const dismiss = view(page).getByTestId("stick-dismiss");
+  if (await dismiss.count() > 0) await dismiss.click();
+  const name = (await view(page).getByTestId("stick-name").innerText()).trim();
+  const field = view(page).getByRole("textbox", { name: `Type ${name} to unlock it` });
+  if (await field.count() > 0) await field.fill(name);
+  const unlock = view(page).getByRole("button", { name: `Unlock ${name}` });
+  if (await unlock.count() > 0) await unlock.click();
+  await expect(loadButton(page)).toBeEnabled();
+  await loadButton(page).hover();
+  await page.mouse.down();
+  await page.waitForTimeout(2200);
+  await page.mouse.up();
 }
 
 test("the hold approves exactly the plan shown: an approval for one dry run never confirms another", async ({ page }) => {
@@ -337,10 +348,12 @@ test("a load keeps running when the DJ leaves the view or picks another Stick; i
   const name = await chooseFirst(page);
   await call(page, "__holdStickLoads");
   await holdToLoad(page);
-  await expect(loadButton(page)).toHaveText("Loading…");
+  await expect(view(page).getByTestId("stick-progress")).toBeVisible();
   await tab(page, "Library").click();
   await tab(page, "Stick").click();
-  await expect(loadButton(page)).toHaveText("Loading…");
+  await expect(view(page).getByTestId("stick-progress")).toBeVisible();
+  // Shrunk to the status line, so another Stick can be shown.
+  await page.keyboard.press("Escape");
   // Another Stick: its own controls, and no word of the first one's result beside them.
   await view(page).getByRole("group", { name: "Mounted Sticks" }).getByRole("button", { name: "TEST" }).click();
   await expect(view(page).getByTestId("stick-name")).toHaveText("TEST");

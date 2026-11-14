@@ -139,16 +139,27 @@ pub async fn stick_view_load(
                 "This write to the Stick was not confirmed. Nothing was written: hold to confirm the load shown.",
             ));
         };
-        let operation = operation
-            .filter(|id| crate::stick_load_reports::valid_id(id))
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        // The report's name is the shell's: an id it reserved for this load
+        // (`stick_load_report_reserve`), else a fresh one it reserves now.
+        // Never a caller's own, so no load can replace a kept report.
+        let operation = match operation {
+            Some(id) if crate::stick_load_reports::claim_report(state.backup_dir(), &id) => id,
+            _ => {
+                let id = crate::stick_load_reports::reserve_report(state.backup_dir()).map_err(|e| {
+                    AppError::new(ErrorKind::Internal, "The load could not be started: its report has nowhere to go. Nothing was written.")
+                        .with_detail(e.to_string())
+                })?;
+                crate::stick_load_reports::claim_report(state.backup_dir(), &id);
+                id
+            }
+        };
         // Counted until the report is kept: closing the window waits for it.
         let _running = state.shutdown.load_running();
         let volume = crate::stick_approval::volume_identity(root).ok();
         let report = ask(
             &state,
             commands::STICKS_LOAD,
-            json!({ "stick": stick, "playlists": playlists, "plan": plan, "approval": approval }),
+            json!({ "stick": stick, "playlists": playlists, "plan": plan, "approval": approval, "operation": operation }),
         );
         let name = report
             .as_ref()
@@ -185,6 +196,25 @@ pub async fn stick_load_reports(state: tauri::State<'_, Arc<AppState>>) -> AppRe
     let state = Arc::clone(&state);
     blocking("stick_load_reports", move || {
         Ok(crate::stick_load_reports::kept_reports(state.backup_dir()))
+    })
+    .await
+}
+
+/// A report id for the next load, issued and reserved by the shell
+/// (wbx-72): the window names its load with it, so its progress and its
+/// kept report are matched to it. Writes only the app's state folder.
+#[tauri::command]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "a command is handed its state by value"
+)]
+pub async fn stick_load_report_reserve(state: tauri::State<'_, Arc<AppState>>) -> AppResult<String> {
+    let state = Arc::clone(&state);
+    blocking("stick_load_report_reserve", move || {
+        crate::stick_load_reports::reserve_report(state.backup_dir()).map_err(|e| {
+            AppError::new(ErrorKind::Internal, "The load could not be started: its report has nowhere to go.")
+                .with_detail(e.to_string())
+        })
     })
     .await
 }

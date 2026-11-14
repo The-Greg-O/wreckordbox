@@ -34,7 +34,7 @@ import { MY_TAG_LIMIT, newMyTagName } from "@/lib/myTags";
 import { fromServicePanel, fromServiceTagsSet } from "@/lib/tagPanel";
 import { referenceDeviceSettings } from "./mock-device-settings";
 import { createMockDeviceLibraries, type MockImportEntry } from "./mock-device-library";
-import { STICK_MY_TAGS, passesStickTags } from "./mock-stick-mytags";
+import { STICK_MY_TAGS, passesStickTags, stickRowMyTags } from "./mock-stick-mytags";
 import { createMockIntake } from "./mock-intake";
 import { createMockStickLoad } from "./mock-stick-load";
 import { fromKeptReport, fromServiceDryRun, fromServiceLoad, fromServiceSticks } from "@/lib/stickLoad";
@@ -732,6 +732,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
   // thousand at most on a disk, which is why the real backend keeps the list
   // and pages it out rather than sending it.
   const folderViews = new Map<number, RowDto[]>();
+  // Which of them list a Stick, whose rows carry the Stick's own MyTags (wbx-f7y).
+  const stickViews = new Set<number>();
   let nextViewId = 1;
 
   const listeners = new Set<(generation: number) => void>();
@@ -2589,6 +2591,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       fromServiceLoad(await stickLoad.stickViewLoad(stick, playlists, plan, operation)),
     stickLoadReports: async () => (await stickLoad.stickLoadReports()).map(fromKeptReport),
     stickLoadReportDismiss: (id) => stickLoad.stickLoadReportDismiss(id),
+    stickLoadReportReserve: () => stickLoad.stickLoadReportReserve(),
     intakeQueue: intake.intakeQueue,
     intakeCounts: intake.intakeCounts,
     intakeColours: intake.intakeColours,
@@ -2597,6 +2600,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     intakeSetTags: async (track, dimension, terms, version, dropUnmapped) =>
       fromServiceTagsSet(await tagPanel.intakeSetTags(track, dimension, terms, version, dropUnmapped)),
     onSidecarChanged: tagPanel.onSidecarChanged,
+    onStickLoadProgress: stickLoad.onStickLoadProgress,
     rekordboxBrowseSettings: () => Promise.resolve(null),
     librarySummary: () =>
       ready
@@ -2651,6 +2655,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
         }
         const viewId = nextViewId++;
         folderViews.set(viewId, rows);
+        stickViews.add(viewId);
         return wait<ViewHandle>({ viewId, len: rows.length, gen: 1 });
       }
       if (spec.source.kind === "folder") {
@@ -2727,7 +2732,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     fetchRows: (viewId, offset, len, extraColumns = []) => {
       // `myTags`: each of the track's MyTags with its id and category, from
       // the same record the My Tag panel edits.
-      const myTagsOf = (row: RowDto): RowMyTag[] => (row.id.startsWith("file:") ? [] : detailsOf(row).myTags)
+      const myTagsOf = (row: RowDto): RowMyTag[] => stickViews.has(viewId) ? stickRowMyTags(row) : (row.id.startsWith("file:") ? [] : detailsOf(row).myTags)
         .flatMap((id) => myTagCategories.flatMap((category) => category.tags
           .filter((tag) => tag.id === id)
           .map((tag) => ({ id: tag.id, name: tag.name, category: category.name }))));
@@ -3093,6 +3098,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     ejectDevice: async (path) => {
       const index = devices.findIndex(device => device.path === path);
       if (index < 0) throw new Error("That device is no longer connected.");
+      // Kept, so `__remountDevice` can put the same volume back (wbx-72 review).
+      unmounted.set(path, devices[index] as Device);
       devices.splice(index, 1);
       await wait(undefined);
     },

@@ -10,6 +10,13 @@
 //! (outcome, what was written, not written, unchanged, every Native stems
 //! outcome and reason, its error), `error` the refusal or failure when the
 //! service gave no report (`{ code, message }`).
+//!
+//! The shell owns a report's name (wbx-72 verification review): it issues
+//! each id itself (`reserve_report`, a fresh UUID reserved with create-new
+//! semantics before the load runs), a load may use only an id the shell
+//! reserved and nobody has used (`claim_report`), and keeping a report
+//! never replaces a file that is there: a second load can never overwrite a
+//! kept, undismissed report, or a running load's.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -28,7 +35,51 @@ pub(crate) fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
-/// Keeps `kept` (its `id` names the file), durably, before returning.
+fn reserved(dir: &Path, id: &str) -> PathBuf {
+    dir.join(format!(".{id}.reserved"))
+}
+
+fn running(dir: &Path, id: &str) -> PathBuf {
+    dir.join(format!(".{id}.running"))
+}
+
+/// A fresh report id, reserved here (created new; never one that exists).
+pub fn reserve_report(state_dir: &Path) -> std::io::Result<String> {
+    let dir = folder(state_dir);
+    std::fs::create_dir_all(&dir)?;
+    loop {
+        let id = uuid::Uuid::new_v4().to_string();
+        if dir.join(format!("{id}.json")).exists() || running(&dir, &id).exists() {
+            continue;
+        }
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(reserved(&dir, &id))
+        {
+            Ok(_) => return Ok(id),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// Takes reservation `id` for one load: true only when the shell reserved
+/// it and no load has used it (the reservation is moved, so a second claim
+/// of the same id fails).
+pub fn claim_report(state_dir: &Path, id: &str) -> bool {
+    if !valid_id(id) {
+        return false;
+    }
+    let dir = folder(state_dir);
+    if dir.join(format!("{id}.json")).exists() {
+        return false;
+    }
+    std::fs::rename(reserved(&dir, id), running(&dir, id)).is_ok()
+}
+
+/// Keeps `kept` (its `id` names the file), durably, before returning; an
+/// existing report of that name is never replaced (an error instead).
 pub(crate) fn keep_report(state_dir: &Path, kept: &Value) -> std::io::Result<()> {
     let id = kept["id"]
         .as_str()
@@ -47,7 +98,11 @@ pub(crate) fn keep_report(state_dir: &Path, kept: &Value) -> std::io::Result<()>
         file.write_all(&serde_json::to_vec_pretty(kept).unwrap_or_default())?;
         file.sync_all()?;
     }
-    std::fs::rename(&temporary, dir.join(format!("{id}.json")))?;
+    // Linked into place, which fails if the name is taken: never renamed over.
+    let linked = std::fs::hard_link(&temporary, dir.join(format!("{id}.json")));
+    let _ = std::fs::remove_file(&temporary);
+    linked?;
+    let _ = std::fs::remove_file(running(&dir, id));
     if let Ok(dir) = std::fs::File::open(&dir) {
         let _ = dir.sync_all();
     }
