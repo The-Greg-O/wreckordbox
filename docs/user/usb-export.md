@@ -273,6 +273,17 @@ Stick: it is never unlocked on its own.
   and a write that finds its Stick replaced stops. When the app cannot tell
   this mount of the Stick from another, it stays protected.
 - `wreckordbox stick status <path>` says whether it is protected.
+- **A write keeps its unlock to the end.** A key edit that writes the tag of
+  a file on the Stick keeps the Stick unlocked until the Library has the
+  key too, or the edit is undone, so the tag never disagrees with the
+  Library. A backup to a Stick checks it at every file it copies: locked,
+  ejected or replaced mid-copy, the backup stops, says how much it copied
+  and names the unfinished copy it left there.
+- **Stem separation and Intensity measurement are never done for a Sidecar
+  kept on a Stick**, locked or unlocked (`sidecar_on_stick`): they write the
+  Sidecar for minutes, and a Stick must stay free to lock and eject. Keep
+  the Library on this computer for them. Shorter Sidecar writes (a Fact, a
+  Decision) work while the Stick is unlocked.
 
 The plan and the hold-to-confirm button before a Stick write are an
 interface confirmation: they show what will change and ask you to mean it.
