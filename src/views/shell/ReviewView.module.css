@@ -86,7 +86,7 @@
 .bulk > button { min-width: 17ch; }
 .threshold { display: inline-flex; align-items: center; gap: var(--s-shell-space-2); color: var(--role-text-dim); }
 .threshold input {
-  width: 5.5ch;
+  width: 8ch;
   font: inherit;
   color: var(--role-text);
   background: var(--role-working);

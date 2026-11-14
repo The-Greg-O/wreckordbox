@@ -191,7 +191,7 @@ export function ReviewView({ onListen, loadedTrackId = null }: ReviewViewProps) 
     <section className={styles.view} data-testid="review-view" data-own-activation="" aria-label="Review">
       {working ? <RunsFinishing /> : null}
       <header className={styles.head}>
-        <h2 className={styles.title}>Waiting for you</h2>
+        <h2 className={styles.title}><span className={styles.hidden}>Review: </span>Waiting for you</h2>
         <span className={styles.summary} data-testid="review-summary">
           {shown ? `${factWord(total)} in ${groups.filter((g) => g.rows.some((r) => !r.ghost)).length} Run${groups.length === 1 ? "" : "s"}` : "Reading…"}
         </span>
