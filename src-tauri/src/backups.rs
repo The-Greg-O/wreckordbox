@@ -380,10 +380,6 @@ pub(crate) fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&s
         })
     };
     let state_dir = state.backup_dir().to_path_buf();
-    let worker_check = || -> std::io::Result<()> {
-        crate::test_holds::point(crate::test_holds::BACKUP_COMPRESSING, &state_dir);
-        write_check()
-    };
     let progress = &mut |phase: &str, done: u64, total: u64, item: &str| -> AppResult<()> {
         // Counted before the check: what was copied so far is reported.
         copied_to_stick.set(copied_to_stick.get().max(done));
@@ -399,6 +395,16 @@ pub(crate) fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&s
     let created_at = millis();
     let id = uuid::Uuid::new_v4();
     let partial = root.join(format!(".partial-{id}"));
+    let worker_check = || -> std::io::Result<()> {
+        // Test hold: at a compression worker's write, once one has put
+        // output in the folder (every folder is made before the workers start).
+        if crate::test_holds::is_armed(crate::test_holds::BACKUP_COMPRESSING, &state_dir)
+            && worker_output_begun(&partial)
+        {
+            crate::test_holds::point(crate::test_holds::BACKUP_COMPRESSING, &state_dir);
+        }
+        write_check()
+    };
     let target = root.join(format!("rbexport-{}.zip", rbl_core::time::local_backup_stamp()));
     if target.try_exists().map_err(error)? {
         return Err(error("A backup for this minute already exists. Try again in the next minute."));
@@ -631,6 +637,25 @@ pub(crate) fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&s
     let made = made.into_inner();
     result.map_err(|stopped| crate::backup_stick::stopped(stopped, &access, &made, copied_to_stick.get()))
 }
+/// Whether a compression worker has written a file of the analysis or
+/// artwork copy yet (for the test hold above only).
+fn worker_output_begun(partial: &Path) -> bool {
+    ["analysis", "artwork"].iter().any(|part| {
+        let mut todo = vec![partial.join(part)];
+        while let Some(dir) = todo.pop() {
+            let Ok(entries) = fs::read_dir(&dir) else { continue };
+            for entry in entries.flatten() {
+                match entry.metadata() {
+                    Ok(meta) if meta.is_dir() => todo.push(entry.path()),
+                    Ok(meta) if meta.len() > 0 => return true,
+                    _ => {}
+                }
+            }
+        }
+        false
+    })
+}
+
 /// Every problem SQLite's `quick_check` reports, not just the first row.
 fn integrity_problems(db: &rbl_db::Library) -> AppResult<Vec<String>> {
     let mut statement = db.connection().prepare("PRAGMA quick_check").map_err(error)?;

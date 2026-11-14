@@ -205,6 +205,14 @@ mod tests {
         let (result, at_replacement, new_stick) = std::thread::scope(|scope| {
             let backing_up = scope.spawn(|| crate::backups::create(&state));
             held.reached();
+            // Held at a worker's write with compression under way: an
+            // analysis file's output is already on the Stick.
+            assert!(
+                walk(&stick).iter().any(|(path, bytes)| {
+                    path.to_string_lossy().contains("/analysis/") && !bytes.is_empty()
+                }),
+                "compression had begun"
+            );
             fs::rename(&stick, &old).unwrap();
             fs::create_dir_all(&stick).unwrap();
             fs::write(

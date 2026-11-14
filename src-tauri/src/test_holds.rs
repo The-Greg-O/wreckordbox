@@ -100,6 +100,14 @@ pub fn point(name: &str, scope: &Path) {
     CHANGED.notify_all();
 }
 
+/// Whether a test has armed `name` for `scope` and no writer stands there
+/// yet (cheap when nothing is armed): for a writer that holds only once a
+/// condition of its own is met.
+pub fn is_armed(name: &str, scope: &Path) -> bool {
+    ANY.load(Ordering::Acquire)
+        && with(|p| p.armed.get(&key(name, scope)).is_some_and(|s| !s.reached))
+}
+
 /// Whether the step `name` is to fail, once (armed by [`arm_failure`]).
 pub fn fails(name: &str, scope: &Path) -> bool {
     ANY.load(Ordering::Acquire) && with(|p| p.failures.remove(&key(name, scope)))
