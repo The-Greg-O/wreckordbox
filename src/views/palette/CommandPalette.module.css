@@ -122,3 +122,12 @@
 @container shell (max-width: 600px) {
   .opener .key { display: none; }
 }
+.openerGlyph { display: none; width: 1em; height: 1em; flex: none; }
+/* The shell's narrowest (wbx-45.22, 460 px and below, e.g. 400 px at 125%):
+   a prompt glyph in place of the word, so the four tabs, the waveform
+   chooser and the opener share one row as long as they can. */
+@container shell (max-width: 460px) {
+  .opener { padding: 0 var(--s-shell-space-3); }
+  .opener .openerWord { display: none; }
+  .opener .openerGlyph { display: block; }
+}

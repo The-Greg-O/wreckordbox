@@ -222,3 +222,22 @@
   .tab { padding: 0 var(--s-shell-space-4); }
   .tab .key { display: none; }
 }
+
+/* The narrowest (wbx-45.22: 460 px and below, e.g. 436 at 100%, 400 and 360
+   at 125%): the tabs tighten, the opener and the waveform chooser are glyphs
+   (their own stylesheets), and when even that does not fit (a long Intake
+   count at 288 px) the bar wraps: the opener and the chooser go to a second
+   row at the right instead of running over the tabs or off the window. */
+@container shell (max-width: 460px) {
+  .frame {
+    grid-template-rows:
+      minmax(var(--s-shell-top-bar-h), auto)
+      minmax(var(--s-shell-player-h), auto)
+      minmax(0, 1fr)
+      minmax(var(--s-shell-status-h), auto);
+  }
+  .topBar { flex-wrap: wrap; column-gap: var(--s-shell-space-1); row-gap: 0; padding: 0 var(--s-shell-space-2); }
+  .tabs { flex: none; gap: 0; min-height: var(--s-shell-top-bar-h); }
+  .tab { padding: 0 var(--s-shell-space-2); gap: var(--s-shell-space-2); }
+  .topBarEnd { gap: var(--s-shell-space-2); min-height: var(--s-shell-top-bar-h); }
+}

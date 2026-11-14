@@ -79,9 +79,7 @@
    has no room for the name, a waveform glyph stands in for it (the name stays
    in the accessible name, the tooltip and the menu): 601-720 px, where the
    tabs' key caps and the palette opener's key are still drawn (they go at
-   600 px, wbx-69). Under 400 px (436 at 125%) the tabs and the opener already
-   overrun the bar without it, so it gives way altogether there and the bar
-   is as it was (follow-up bead); Preferences still chooses. */
+   600 px, wbx-69), and 460 px and below (wbx-45.22, with the opener's glyph). */
 @container shell (max-width: 800px) {
   .word { display: none; }
 }
@@ -94,6 +92,7 @@
   .name { display: inline; }
   .glyph { display: none; }
 }
-@container shell (max-width: 400px) {
-  .box { display: none; }
+@container shell (max-width: 460px) {
+  .name { display: none; }
+  .glyph { display: block; }
 }
