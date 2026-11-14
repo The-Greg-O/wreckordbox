@@ -13,7 +13,7 @@
 const STATIC_IMPORT = /\bimport\s*(?:[\w$]+\s*,?\s*)?(?:\{[^}]*\}|\*\s*as\s*[\w$]+)?\s*(?:from\s*)?["']\.\/([\w.-]+\.js)["']/g;
 
 function staticImports(code: string): string[] {
-  return [...code.matchAll(STATIC_IMPORT)].map((m) => m[1]);
+  return [...code.matchAll(STATIC_IMPORT)].map((m) => m[1]!);
 }
 
 /**
@@ -36,7 +36,7 @@ export function startupChunks(
     if (matches.length !== 1) {
       throw new Error(`expected one built chunk named ${name} (awaited before first render); found ${matches.length}`);
     }
-    roots.push(matches[0]);
+    roots.push(matches[0]!);
   }
   const seen = new Set<string>();
   const visit = (file: string) => {

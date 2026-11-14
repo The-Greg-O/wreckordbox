@@ -25,9 +25,9 @@ const code: Record<string, string> = {};
 for (const f of readdirSync(dir).filter((f) => f.endsWith(".js"))) code[f] = readFileSync(join(dir, f), "utf8");
 const indexHtml = readFileSync(root("dist/index.html"), "utf8");
 const startup = new Set(startupChunks(indexHtml, code, AWAITED_BEFORE_FIRST_RENDER));
-const entry = /<script\s+type="module"[^>]*\ssrc="\/assets\/([\w.-]+\.js)"/.exec(indexHtml)![1];
+const entry = /<script\s+type="module"[^>]*\ssrc="\/assets\/([\w.-]+\.js)"/.exec(indexHtml)![1]!;
 
-const gz = (f: string) => gzipSync(code[f]).length / 1024;
+const gz = (f: string) => gzipSync(code[f]!).length / 1024;
 let startupKb = 0, onDemandKb = 0;
 const rows: string[] = [];
 for (const f of Object.keys(code).sort()) {
