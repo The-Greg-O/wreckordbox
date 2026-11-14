@@ -1008,7 +1008,9 @@ struct Draft<'a> {
 /// before its entry), `fail_append=N` (the next N entries are refused by
 /// the Sidecar), `abort_in_replay` (the process dies once the first kept
 /// entry is written back, before the rest) and `delay_after_begin_ms=N`
-/// (every Library write waits N ms once begun).
+/// (every Library write waits N ms once begun) and `hold_after_begin=DIR`
+/// (every Library write, once begun, makes `DIR/begun` and waits until
+/// `DIR/go` exists, at most a minute: a test's explicit handshake).
 pub const FAULTS_ENV: &str = "WRECKORDBOX_LEDGER_FAULTS";
 
 #[derive(Default)]
@@ -1025,6 +1027,7 @@ struct Faults {
     fail_append: AtomicUsize,
     abort_in_replay: bool,
     delay_after_begin: Option<Duration>,
+    hold_after_begin: Option<std::path::PathBuf>,
 }
 
 impl Faults {
@@ -1047,6 +1050,9 @@ impl Faults {
                     faults.fail_append = AtomicUsize::new(usize::try_from(number).unwrap_or(1));
                 }
                 "abort_in_replay" => faults.abort_in_replay = true,
+                "hold_after_begin" => {
+                    faults.hold_after_begin = Some(std::path::PathBuf::from(value));
+                }
                 "delay_after_begin_ms" => {
                     faults.delay_after_begin = Some(Duration::from_millis(number));
                 }
@@ -1920,6 +1926,13 @@ impl Keeper {
         drop(state);
         if let Some(delay) = self.faults.delay_after_begin {
             std::thread::sleep(delay);
+        }
+        if let Some(dir) = &self.faults.hold_after_begin {
+            let _ = std::fs::write(dir.join("begun"), b"");
+            let deadline = std::time::Instant::now() + Duration::from_secs(60);
+            while !dir.join("go").exists() && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(5));
+            }
         }
         Ok(())
     }

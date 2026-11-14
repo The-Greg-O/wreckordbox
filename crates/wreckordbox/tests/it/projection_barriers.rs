@@ -371,7 +371,8 @@ fn clearing_is_refused_in_a_run_without_the_djs_name_and_while_the_write_is_in_p
 
     // A write in progress is listed, and cannot be cleared.
     stop_service(&s);
-    let mut service = serve_with_faults(&s, "delay_after_begin_ms=3000");
+    let hold = tempfile::tempdir().unwrap();
+    let mut service = serve_with_faults(&s, &format!("hold_after_begin={}", hold.path().display()));
     let rating = s
         .command()
         .args(["--json", "tracks", "rate", "10002", "1", "--source", "dj"])
@@ -379,22 +380,24 @@ fn clearing_is_refused_in_a_run_without_the_djs_name_and_while_the_write_is_in_p
         .stderr(std::process::Stdio::null())
         .spawn()
         .unwrap();
+    // Held once its intent is saved, until this test lets it go.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while !hold.path().join("begun").exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the rating never began"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
     let mut watcher = s.client();
-    let in_progress = (0..200)
-        .find_map(|_| {
-            let listed: Value = watcher.call("projection.barriers", json!({})).unwrap();
-            let found = listed["barriers"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|b| b["what"] == "in_progress")
-                .cloned();
-            if found.is_none() {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            found
-        })
-        .expect("the write in progress was never listed");
+    let listed: Value = watcher.call("projection.barriers", json!({})).unwrap();
+    let in_progress = listed["barriers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["what"] == "in_progress")
+        .cloned()
+        .unwrap_or_else(|| panic!("the held write is not listed: {listed}"));
     assert_eq!(in_progress["tracks"], json!(["10002"]), "{in_progress}");
     assert_eq!(
         refused_code(
@@ -403,6 +406,7 @@ fn clearing_is_refused_in_a_run_without_the_djs_name_and_while_the_write_is_in_p
         ),
         "barrier_in_progress"
     );
+    std::fs::write(hold.path().join("go"), b"").unwrap();
     let mut rating = rating;
     assert!(rating.wait().unwrap().success());
     stop_service(&s);
@@ -411,4 +415,70 @@ fn clearing_is_refused_in_a_run_without_the_djs_name_and_while_the_write_is_in_p
     let after = ok(&s, &["projection", "barriers"]);
     assert_eq!(after["barriers"].as_array().unwrap().len(), 1, "{after}");
     assert_eq!(after["standing"], 1);
+}
+
+/// The cross-model review's case, on ONE track: a projection sets Energy;
+/// the DJ asserts the same Energy and the service dies before the
+/// assertion is recorded (a barrier on that track); the DJ clears the
+/// barrier; an apply fills the track's empty Prep colour; a later apply
+/// proposing another Energy must still keep the DJ's: filling one field
+/// gives the projection back no other field.
+#[test]
+fn filling_an_empty_field_after_a_cleared_barrier_gives_the_projection_back_no_other_field() {
+    let s = Sandbox::new();
+    s.dj_prep_colours();
+    policy(&s, "[energy]\napply = 0.5\n\n[prep_colour]\napply = 0.5\n");
+    ok(&s, &["status"]);
+    fact(&s, "10001", "3", "agent:tagger", "0.6");
+    ok(&s, &["project"]);
+    assert_eq!(rating(&s, "10001"), 3);
+    stop_service(&s);
+
+    // The DJ's same-value set, cut off before its assertion is recorded.
+    let mut service = serve_with_faults(&s, "abort_before_assert");
+    let rated = s.cli(&["--json", "tracks", "rate", "10001", "3", "--source", "dj"]);
+    assert!(!rated.status.success(), "the service should have died");
+    service.wait().unwrap();
+
+    let listed = ok(&s, &["projection", "barriers"]);
+    let barriers = listed["barriers"].as_array().unwrap();
+    assert_eq!(barriers.len(), 1, "{listed}");
+    assert_eq!(barriers[0]["tracks"], json!(["10001"]));
+    let seq = barriers[0]["seq"].as_i64().unwrap().to_string();
+    ok(&s, &["projection", "acknowledge", &seq, "--source", "dj"]);
+
+    // The empty Prep colour is filled, as clearing allows.
+    ok(
+        &s,
+        &[
+            "facts",
+            "record",
+            "10001",
+            "prep_colour",
+            "Green",
+            "--source",
+            "agent:tagger",
+            "--confidence",
+            "0.6",
+        ],
+    );
+    let filled = ok(&s, &["project"]);
+    let fields: Vec<&str> = filled["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["field"].as_str().unwrap())
+        .collect();
+    assert_eq!(fields, vec!["prep_colour"], "{filled}");
+
+    // The Energy the DJ asserted stays the DJ's: the barrier came after the
+    // projection wrote it, so the refreshed mark did not keep it.
+    fact(&s, "10001", "4", "agent:other", "0.9");
+    let applied = ok(&s, &["project"]);
+    assert_eq!(changes(&applied), vec![], "{applied}");
+    assert_eq!(
+        kept(&applied),
+        vec![("10001".to_owned(), "written_since".to_owned())]
+    );
+    assert_eq!(rating(&s, "10001"), 3);
 }

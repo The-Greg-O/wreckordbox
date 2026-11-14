@@ -92,6 +92,23 @@ pub struct Mark {
     /// The columns as a projection left them (`Rating`, `ColorID`), as whole
     /// numbers.
     pub fields: BTreeMap<String, i64>,
+    /// Per column, the Ledger's order position when the projection wrote
+    /// THAT field: a barrier after it is newer than the field's ownership.
+    /// A column missing here (a mark kept before wbx-xme) is at `seq`. A
+    /// field is carried into a later mark only with its own position, and
+    /// only while no barrier after it could concern the track, cleared or
+    /// not, so filling one field never moves another's position past a
+    /// barrier (wbx-xme review).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub field_seqs: BTreeMap<String, i64>,
+}
+
+impl Mark {
+    /// The Ledger's order position at which `column`'s value was written.
+    #[must_use]
+    pub fn seq_of(&self, column: &str) -> i64 {
+        self.field_seqs.get(column).copied().unwrap_or(self.seq)
+    }
 }
 
 /// The provenance of native fields.
@@ -549,6 +566,7 @@ mod tests {
             updated_at: "2026-11-13 10:00:00.000 +00:00".into(),
             seq: 3,
             fields: BTreeMap::from([("Rating".to_owned(), 4)]),
+            field_seqs: BTreeMap::new(),
         };
         sidecar
             .set_projection_marks(&[("10001".into(), mark.clone())])

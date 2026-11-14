@@ -663,7 +663,10 @@ fn an_interrupted_assertion_makes_its_tracks_value_the_djs_and_no_other() {
     ok(&s, &["project"]);
     stop_service(&s);
 
-    let mut service = serve_with_faults(&s, "delay_after_begin_ms=4000");
+    // The rating is held once its intent is saved, until released; it
+    // never is: the service is killed while it holds.
+    let hold = tempfile::tempdir().unwrap();
+    let mut service = serve_with_faults(&s, &format!("hold_after_begin={}", hold.path().display()));
     let rating = s
         .command()
         .args(["--json", "tracks", "rate", "10001", "3", "--source", "dj"])
@@ -671,25 +674,13 @@ fn an_interrupted_assertion_makes_its_tracks_value_the_djs_and_no_other() {
         .stderr(std::process::Stdio::null())
         .spawn()
         .unwrap();
-    // Killed while the write is held after its intent was saved: once the
-    // service lists it as a write in progress, not after a guessed time.
-    let mut watcher = s.client();
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    loop {
-        let listed: Value = watcher.call("projection.barriers", json!({})).unwrap();
-        if listed["barriers"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|b| b["what"] == "in_progress" && b["tracks"] == json!(["10001"]))
-        {
-            break;
-        }
+    while !hold.path().join("begun").exists() {
         assert!(
             std::time::Instant::now() < deadline,
             "the rating never began"
         );
-        std::thread::sleep(Duration::from_millis(10));
+        std::thread::sleep(Duration::from_millis(5));
     }
     service.kill().unwrap();
     service.wait().unwrap();

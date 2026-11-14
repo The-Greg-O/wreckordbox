@@ -76,5 +76,11 @@ may have been written without a record.
 field the barrier concerned, one no recorded write touched. Nothing else
 changes. A value the cleared write may have left has no record, so it is
 yours and is kept; a value a projection wrote before the barrier stays
-yours too, because the cleared write may have changed it afterwards. To
-let Projection manage such a value again, clear the field by hand.
+yours too, because the cleared write may have changed it afterwards.
+Filling one field of a track never hands another field of it back to
+Projection.
+
+There is no way yet to give such a value back to Projection. Clearing the
+field by hand does not do it: your clear is recorded as yours, so
+Projection keeps the empty field as your choice and does not fill it. If a
+Fact says the value should change, set it yourself.
