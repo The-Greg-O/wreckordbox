@@ -7,8 +7,9 @@
 //!   its `token` and, since wbx-74, its `runs`) and adds the deck's row of
 //!   each listed track, built from the window's own index, so the view can
 //!   load a track without opening a list. A read: nothing written.
-//! - `review_accept {facts, token}` is `review.accept` with the Facts the DJ
-//!   chose, the token of the listing the view SHOWS, and the DJ declared.
+//! - `review_accept {rows}` is `review.accept` with the rows the DJ chose,
+//!   each with the row token of the listing the view SHOWS (wbx-74 review:
+//!   an unrelated arrival does not refuse it), and the DJ declared.
 //!   Never re-listed or retried here: a refusal (`review_changed`,
 //!   `review_not_waiting`, `library_protected`) or a part-way accept
 //!   (`review_partial`, with the Facts applied and not applied) is an
@@ -31,7 +32,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Runtime};
-use wreckordbox_service::review::commands;
+use wreckordbox_service::review::{commands, RowToken};
 use wreckordbox_service::ServiceError;
 
 use crate::commands::blocking;
@@ -143,13 +144,12 @@ pub fn waiting(state: &Arc<AppState>) -> AppResult<ReviewListing> {
     })
 }
 
-/// The DJ's acceptance of `facts`, chosen in the listing whose token is
-/// `token`.
-pub fn accept(state: &Arc<AppState>, facts: &[i64], token: &str) -> AppResult<Value> {
+/// The DJ's acceptance of the shown `rows`, each with its row token.
+pub fn accept(state: &Arc<AppState>, rows: &[RowToken]) -> AppResult<Value> {
     Ok(decision(ask(
         state,
         commands::REVIEW_ACCEPT,
-        json!({ "facts": facts, "token": token, "source": dj() }),
+        json!({ "rows": rows, "source": dj() }),
     )?))
 }
 
@@ -265,11 +265,10 @@ pub async fn review_waiting(
 )]
 pub async fn review_accept(
     state: tauri::State<'_, Arc<AppState>>,
-    facts: Vec<i64>,
-    token: String,
+    rows: Vec<RowToken>,
 ) -> AppResult<Value> {
     let state = Arc::clone(&state);
-    blocking("review_accept", move || accept(&state, &facts, &token)).await
+    blocking("review_accept", move || accept(&state, &rows)).await
 }
 
 /// Rejects the chosen Facts.

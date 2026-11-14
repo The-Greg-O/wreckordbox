@@ -25,6 +25,7 @@ use rbxport_lib::state::AppState;
 use serde_json::{json, Value};
 use tauri::test::MockRuntime;
 use tauri::{Listener, Manager};
+use wreckordbox_service::review::RowToken;
 use wreckordbox_service::Config;
 
 struct Window {
@@ -128,45 +129,54 @@ fn the_waiting_facts_come_with_their_runs_and_each_tracks_deck_row() {
     assert_eq!(ids, vec![track_id(1).as_str(), track_id(2).as_str()]);
 }
 
+fn row(listing: &Value, fact: i64) -> RowToken {
+    RowToken {
+        fact,
+        token: listing["row_tokens"][fact.to_string()]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+    }
+}
+
 #[test]
-fn an_accept_with_the_shown_token_sets_the_value_and_one_with_an_older_listing_is_refused() {
+fn an_accept_of_the_shown_rows_sets_the_value_and_a_changed_row_is_refused() {
     let window = hosting_window();
     let state = window.state();
     let a = window.propose(1, 4, 0.9);
-    let shown = review_view::waiting(&state).unwrap();
-    let token = shown.listing["token"].as_str().unwrap().to_owned();
+    let shown = review_view::waiting(&state).unwrap().listing;
 
-    // Something arrives after the DJ's listing: the accept is refused,
-    // nothing written, and the answer says so (the view shows the change).
-    let late = window.propose(2, 3, 0.8);
-    let refused = review_view::accept(&state, &[a], &token).unwrap();
+    // The same source changes its mind about track 1 after the DJ's
+    // listing: the shown row is refused, nothing written, and said.
+    let late = window.propose(1, 3, 0.8);
+    let refused = review_view::accept(&state, &[row(&shown, a)]).unwrap();
     assert_eq!(refused["ok"], false, "{refused}");
     assert_eq!(refused["error"]["code"], "review_changed");
     assert_eq!(window.rating(1), 0);
     assert_eq!(
         facts_of(&review_view::waiting(&state).unwrap().listing),
-        vec![a, late]
+        vec![late]
     );
 
+    // An unrelated arrival (another track) does not refuse the shown row.
+    let shown = review_view::waiting(&state).unwrap().listing;
+    let other = window.propose(2, 2, 0.7);
+
     // Library Protection: refused, still waiting.
-    let shown = review_view::waiting(&state).unwrap();
-    let token = shown.listing["token"].as_str().unwrap().to_owned();
     window.protect(true);
-    let protected = review_view::accept(&state, &[a], &token).unwrap();
+    let protected = review_view::accept(&state, &[row(&shown, late)]).unwrap();
     assert_eq!(protected["ok"], false, "{protected}");
     assert_eq!(protected["error"]["code"], "library_protected");
     assert_eq!(window.rating(1), 0);
     window.protect(false);
 
-    // The listing the DJ sees: accepted, the value is the Library's now and
-    // the Fact no longer waits.
-    let accepted = review_view::accept(&state, &[a], &token).unwrap();
+    let accepted = review_view::accept(&state, &[row(&shown, late)]).unwrap();
     assert_eq!(accepted["ok"], true, "{accepted}");
     assert_eq!(accepted["count"], 1);
-    assert_eq!(window.rating(1), 4);
+    assert_eq!(window.rating(1), 3);
     assert_eq!(
         facts_of(&review_view::waiting(&state).unwrap().listing),
-        vec![late]
+        vec![other]
     );
 }
 

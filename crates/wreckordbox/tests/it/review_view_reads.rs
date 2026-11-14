@@ -12,12 +12,10 @@
 )]
 use crate::common;
 
-use std::time::Duration;
-
 use common::Sandbox;
 use serde_json::{json, Value};
 
-use super::review::{fact, ok};
+use super::review::{events_before_barriers, fact, ok};
 
 fn sidecar_bytes(s: &Sandbox) -> Vec<(String, Vec<u8>)> {
     let mut out = Vec::new();
@@ -35,23 +33,9 @@ fn sidecar_bytes(s: &Sandbox) -> Vec<(String, Vec<u8>)> {
     out
 }
 
-fn quiet(watcher: &mut wreckordbox_service::Client) {
-    while watcher
-        .next_event(Duration::from_millis(300))
-        .unwrap()
-        .is_some()
-    {}
-}
-
-/// The events that arrive before the line is quiet, by name.
-fn heard(watcher: &mut wreckordbox_service::Client) -> Vec<(String, Value)> {
-    let mut out = Vec::new();
-    let mut wait = Duration::from_secs(2);
-    while let Some(event) = watcher.next_event(wait).unwrap() {
-        out.push((event.event, event.data));
-        wait = Duration::from_millis(300);
-    }
-    out
+/// Drains what was sent before (an ordered barrier, not a quiet window).
+fn quiet(s: &Sandbox, watcher: &mut wreckordbox_service::Client) {
+    events_before_barriers(s, watcher);
 }
 
 #[test]
@@ -95,7 +79,7 @@ fn each_waiting_fact_names_its_run_and_the_listing_lists_those_runs_writing_noth
     let alone = fact(&s, "10003", "prep_colour", "Green", "tool:meter", "0.8");
     let mut watcher = s.client();
     watcher.subscribe().unwrap();
-    quiet(&mut watcher);
+    quiet(&s, &mut watcher);
     let bytes_before = sidecar_bytes(&s);
     let library_before = std::fs::read(s.master_db()).unwrap();
 
@@ -143,8 +127,8 @@ fn each_waiting_fact_names_its_run_and_the_listing_lists_those_runs_writing_noth
     // A read: no Sidecar byte, no Library byte, no event.
     assert_eq!(sidecar_bytes(&s), bytes_before);
     assert_eq!(std::fs::read(s.master_db()).unwrap(), library_before);
-    let stray = watcher.next_event(Duration::from_millis(300)).unwrap();
-    assert!(stray.is_none(), "{stray:?}");
+    let stray = events_before_barriers(&s, &mut watcher);
+    assert!(stray.is_empty(), "{stray:?}");
 
     // Finishing the Run is seen by the next listing.
     ok(&s, &["runs", "finish", &run_id.to_string()]);
@@ -169,13 +153,13 @@ fn a_rejection_and_a_reopening_are_told_to_every_client_and_nothing_else_is() {
     let energy = fact(&s, "10001", "energy", "4", "agent:tagger", "0.7");
     let mut watcher = s.client();
     watcher.subscribe().unwrap();
-    quiet(&mut watcher);
+    quiet(&s, &mut watcher);
 
     let rejected = ok(
         &s,
         &["review", "reject", &energy.to_string(), "--source", "dj"],
     );
-    let events = heard(&mut watcher);
+    let events = events_before_barriers(&s, &mut watcher);
     let decided: Vec<&Value> = events
         .iter()
         .filter(|(name, _)| name == "review_decided")
@@ -201,7 +185,7 @@ fn a_rejection_and_a_reopening_are_told_to_every_client_and_nothing_else_is() {
             "dj",
         ],
     );
-    let events = heard(&mut watcher);
+    let events = events_before_barriers(&s, &mut watcher);
     let decided: Vec<&Value> = events
         .iter()
         .filter(|(name, _)| name == "review_decided")
@@ -214,6 +198,140 @@ fn a_rejection_and_a_reopening_are_told_to_every_client_and_nothing_else_is() {
     // A refused decision tells nobody.
     let refused = s.cli(&["--json", "review", "reject", &energy.to_string()]);
     assert!(!refused.status.success());
-    let stray = watcher.next_event(Duration::from_millis(300)).unwrap();
-    assert!(stray.is_none(), "{stray:?}");
+    let stray = events_before_barriers(&s, &mut watcher);
+    assert!(stray.is_empty(), "{stray:?}");
+}
+
+/// The listing's per-row tokens (wbx-74 review): `row_tokens[fact]`.
+fn row_token(listing: &Value, fact: i64) -> String {
+    listing["row_tokens"][fact.to_string()]
+        .as_str()
+        .unwrap_or_else(|| panic!("no row token for {fact}: {listing}"))
+        .to_owned()
+}
+
+fn accept_rows(s: &Sandbox, rows: Value) -> Result<Value, wreckordbox_service::ServiceError> {
+    s.client().call::<Value>(
+        "review.accept",
+        json!({ "rows": rows, "source": {"kind": "dj"} }),
+    )
+}
+
+#[test]
+fn an_accept_of_rows_by_their_own_tokens_is_not_refused_by_an_unrelated_arrival() {
+    let s = Sandbox::new();
+    s.dj_prep_colours();
+    ok(&s, &["status"]);
+    let a = fact(&s, "10001", "energy", "4", "agent:tagger", "0.9");
+    let shown = ok(&s, &["review", "waiting"]);
+    let token = row_token(&shown, a);
+    // Another Run records a Fact for another track: the whole listing's
+    // token is stale now, the row's is not.
+    fact(&s, "10002", "energy", "2", "agent:other", "0.7");
+    let whole = s.cli(&[
+        "--json",
+        "review",
+        "accept",
+        &a.to_string(),
+        "--token",
+        shown["token"].as_str().unwrap(),
+        "--source",
+        "dj",
+    ]);
+    assert!(
+        !whole.status.success(),
+        "the whole-list token still binds the CLI"
+    );
+
+    let accepted = accept_rows(&s, json!([{ "fact": a, "token": token }])).unwrap();
+
+    assert_eq!(accepted["count"], 1, "{accepted}");
+    assert_eq!(super::review::rating(&s, "10001"), 4);
+}
+
+#[test]
+fn a_stale_row_is_refused_by_name_and_no_selected_row_is_applied() {
+    let s = Sandbox::new();
+    s.dj_prep_colours();
+    ok(&s, &["status"]);
+    let a = fact(&s, "10001", "energy", "4", "agent:tagger", "0.9");
+    let b = fact(&s, "10002", "energy", "2", "agent:tagger", "0.9");
+    let shown = ok(&s, &["review", "waiting"]);
+    let rows = json!([
+        { "fact": a, "token": row_token(&shown, a) },
+        { "fact": b, "token": row_token(&shown, b) },
+    ]);
+    // The same source changes its mind about track 10002: Fact b is
+    // superseded, no longer waiting.
+    fact(&s, "10002", "energy", "5", "agent:tagger", "0.9");
+
+    let refused = accept_rows(&s, rows).unwrap_err();
+
+    assert_eq!(refused.code, "review_changed", "{refused:?}");
+    assert!(
+        refused.message.contains(&format!("Fact {b}")),
+        "{}",
+        refused.message
+    );
+    assert!(
+        !refused.message.contains(&format!("Fact {a} ")),
+        "{}",
+        refused.message
+    );
+    // All or nothing: a, whose row is unchanged, was not applied either.
+    assert_eq!(super::review::rating(&s, "10001"), 0);
+    let waiting = super::review::facts_waiting(&s);
+    assert!(waiting.contains(&a), "{waiting:?}");
+
+    // A row whose value changed (not just gone) is named as it is now.
+    let shown = ok(&s, &["review", "waiting"]);
+    let c = waiting.iter().copied().find(|f| *f != a).unwrap();
+    let stale = json!([{ "fact": c, "token": "0000" }]);
+    let refused = accept_rows(&s, stale).unwrap_err();
+    assert_eq!(refused.code, "review_changed");
+    assert!(
+        refused.message.contains(&format!("Fact {c} is now")),
+        "{}",
+        refused.message
+    );
+    let _ = shown;
+}
+
+#[test]
+fn rows_are_for_an_accept_only_and_never_with_another_selection() {
+    let s = Sandbox::new();
+    s.dj_prep_colours();
+    ok(&s, &["status"]);
+    let a = fact(&s, "10001", "energy", "4", "agent:tagger", "0.9");
+    let shown = ok(&s, &["review", "waiting"]);
+    let row = json!([{ "fact": a, "token": row_token(&shown, a) }]);
+    let mut client = s.client();
+    for (command, args) in [
+        (
+            "review.reject",
+            json!({ "rows": row, "source": {"kind": "dj"} }),
+        ),
+        (
+            "review.reopen",
+            json!({ "rows": row, "source": {"kind": "dj"} }),
+        ),
+        ("review.waiting", json!({ "rows": row })),
+        (
+            "review.accept",
+            json!({ "rows": row, "token": shown["token"], "source": {"kind": "dj"} }),
+        ),
+        (
+            "review.accept",
+            json!({ "rows": row, "facts": [a], "source": {"kind": "dj"} }),
+        ),
+    ] {
+        let refused = client.call::<Value>(command, args).unwrap_err();
+        assert_eq!(refused.code, "bad_request", "{command}: {refused:?}");
+    }
+    // Without the DJ declared: refused as before.
+    let refused = client
+        .call::<Value>("review.accept", json!({ "rows": row }))
+        .unwrap_err();
+    assert_eq!(refused.code, "review_not_the_djs");
+    assert_eq!(super::review::facts_waiting(&s), vec![a]);
 }

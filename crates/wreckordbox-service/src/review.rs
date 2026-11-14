@@ -128,6 +128,20 @@ pub struct Selection {
     /// Who decides: must be the DJ.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<SourceArg>,
+    /// For `review.accept` only (wbx-74): exactly these listed rows, each
+    /// with its own `row_tokens` entry from `review.waiting`, in place of
+    /// `token` and any other selection. Every row is checked as it is now;
+    /// any row changed or gone refuses the whole accept, naming it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub rows: Vec<RowToken>,
+}
+
+/// One listed row and the token `review.waiting` gave it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RowToken {
+    pub fact: i64,
+    pub token: String,
 }
 
 impl Selection {
@@ -143,6 +157,7 @@ impl Selection {
             + usize::from(self.filtered())
             + usize::from(self.all)
             + usize::from(self.rejection.is_some())
+            + usize::from(!self.rows.is_empty())
     }
 
     fn matches(&self, track: &str, field: Field, source: &Source, confidence: f64) -> bool {
@@ -172,6 +187,10 @@ pub struct Waiting {
     /// Facts; not covered by the token.
     #[serde(default)]
     pub runs: Vec<crate::review_runs::WaitingRun>,
+    /// Each listed Fact's own token (wbx-74), for an accept of chosen rows
+    /// (`rows`) that an unrelated arrival does not refuse.
+    #[serde(default)]
+    pub row_tokens: std::collections::BTreeMap<i64, String>,
 }
 
 /// The answer of `review.accept` and `review.reject`.
@@ -281,6 +300,9 @@ pub(crate) fn answer(
             Err(error) => return (None, Err(error)),
         }
     };
+    if !asked.rows.is_empty() && request.command != commands::REVIEW_ACCEPT {
+        return (None, Err(bad_request("rows are for review.accept only")));
+    }
     match request.command.as_str() {
         commands::REVIEW_WAITING => (None, waiting(library, stems, &asked)),
         commands::REVIEW_ACCEPT => match accept(library, stems, &asked) {
@@ -328,6 +350,7 @@ fn waiting(library: &OpenLibrary, stems: &Stems, asked: &Selection) -> Result<Va
         count: waiting.len(),
         token: token_of(asked, &waiting),
         runs: crate::review_runs::of(stems, &waiting)?,
+        row_tokens: waiting.iter().map(|h| (h.fact, row_token(h))).collect(),
         waiting,
         library_protected,
     }))
@@ -380,6 +403,11 @@ fn digest(rows: &[Held]) -> String {
         })
         .collect();
     crate::projection::hash_of(&serde_json::to_vec(&named).unwrap_or_default())
+}
+
+/// One row's own token: the digest of that row alone.
+fn row_token(h: &Held) -> String {
+    digest(std::slice::from_ref(h))
 }
 
 /// The token of a listing: its filter, hex-encoded, and its rows' digest.
@@ -442,6 +470,14 @@ fn listed(
             "name exactly one of: the Facts (facts), a filter (tracks, field, from, at_least), or all",
         ));
     }
+    if !asked.rows.is_empty() {
+        if asked.token.is_some() {
+            return Err(bad_request(
+                "rows carry their own tokens: no listing token with them",
+            ));
+        }
+        return listed_rows(library, stems, &asked.rows);
+    }
     let Some(token) = &asked.token else {
         return Err(bad_request(
             "an accept needs the token of the listing the DJ was shown: list with `wreckordbox review waiting` and pass its token",
@@ -498,6 +534,41 @@ fn listed(
             ),
         ));
     }
+    Ok((chosen, watermark))
+}
+
+/// The rows the DJ chose (`rows`), each as it was shown (its own token),
+/// and the watermark they were read at; refused, naming every row changed
+/// or gone, when any is: nothing is applied then (one accept stays one
+/// Undo step and one Ledger entry).
+fn listed_rows(
+    library: &OpenLibrary,
+    stems: &Stems,
+    asked: &[RowToken],
+) -> Result<(Vec<Held>, i64), ServiceError> {
+    let (rows, _, watermark) = listing(library, stems, &Selection::default())?;
+    let mut stale = Vec::new();
+    for row in asked {
+        match rows.iter().find(|h| h.fact == row.fact) {
+            Some(h) if row_token(h) == row.token => {}
+            Some(h) => stale.push(shown_row(h)),
+            None => stale.push(format!("Fact {} is no longer waiting", row.fact)),
+        }
+    }
+    if !stale.is_empty() {
+        return Err(ServiceError::new(
+            codes::CHANGED,
+            format!(
+                "rows the DJ was shown have changed since: {}; nothing was written; list the waiting Facts again and decide again",
+                stale.join("; ")
+            ),
+        ));
+    }
+    let named: HashSet<i64> = asked.iter().map(|r| r.fact).collect();
+    let chosen = rows
+        .into_iter()
+        .filter(|h| named.contains(&h.fact))
+        .collect();
     Ok((chosen, watermark))
 }
 
