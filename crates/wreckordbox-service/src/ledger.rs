@@ -342,6 +342,10 @@ pub mod stored {
     pub fn store(edit: &LibraryEdit) -> Option<Value> {
         match edit {
             LibraryEdit::Track(edits) => Some(json!({ "edits": track_edits(edits) })),
+            LibraryEdit::KeyEdit { tracks, files } => Some(json!({
+                "edits":track_edits(tracks),"files":files.ledger_values(),
+                "not_reversible_reason":"Unwind does not restore audio key tags; window Undo and Redo retain this edit",
+            })),
             LibraryEdit::TrackTags { tags, comments } => Some(json!({
                 "tags": tags
                     .iter()
@@ -519,6 +523,15 @@ pub mod stored {
         };
         match kind {
             "track" => values.extend(list("edits").iter().map(column)),
+            "key_edit" => {
+                values.extend(list("edits").iter().map(column));
+                values.extend(list("files").iter().map(|file| ValueChange {
+                    subject: format!("file {}", file["path"].as_str().unwrap_or("?")),
+                    field: "audio key tag".into(),
+                    before: field(file, "before"),
+                    after: field(file, "after"),
+                }));
+            }
             "track_tags" => {
                 values.extend(list("tags").iter().map(|edit| ValueChange {
                     subject: track(edit),
@@ -1767,7 +1780,7 @@ impl Keeper {
                 if draft.action == Action::Redo { dj_facts.redo_of = draft.reverses; }
             }
             let at = now();
-            let reversible = draft.payload.is_some();
+            let reversible = draft.payload.is_some() && draft.kind != "key_edit";
             let (follow, unworked) = match draft.follow {
                 Ok(follow) => (follow, None),
                 Err(why) => (wreckordbox_sidecar::mutant_follow::Follow::default(), Some(why)),

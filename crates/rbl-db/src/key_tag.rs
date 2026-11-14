@@ -33,6 +33,8 @@
 //! replacement would split them off, where the in-place write keeps them),
 //! and a file another user owns that cannot be handed back to them.
 
+pub mod prepared;
+
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};

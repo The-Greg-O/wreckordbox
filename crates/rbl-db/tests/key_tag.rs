@@ -702,3 +702,6 @@ fn a_swap_of_a_read_only_or_unsupported_file_says_so_and_writes_nothing() {
     std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/silent.m4a"), &m4a).unwrap();
     assert_eq!(swap_key(&m4a, None, Some("Am")).unwrap(), KeySwap::Unsupported);
 }
+
+#[path = "key_tag/prepared.rs"]
+mod prepared;

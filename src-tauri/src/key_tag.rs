@@ -21,9 +21,12 @@
 //! file the edit wrote and the key it held, and Undo and Redo put the file's
 //! key back with the library's, or refuse and change neither.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use rbl_db::key_tag::{swap_key, write_key, KeySwap, KeyTagOutcome};
+use rbl_db::key_tag::{swap_key, KeySwap};
+
+mod prepared;
+pub(crate) use prepared::{prepare_key_edit, write_analysis_key_tag};
 
 /// The key display format, which decides the name analysis writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
@@ -53,31 +56,20 @@ impl DetectedKey {
     }
 }
 
-/// Writes `key` into the file at `path` and logs what became of it. Never
-/// fails the caller: the library edit or analysis it follows has already
-/// been saved, as rekordbox's has when it writes the tag.
-pub fn write_logged(state_dir: &Path, track_id: &str, path: &str, key: &str) {
-    if path.is_empty() {
-        tracing::warn!(track_id, "key not written to the file's tag: the track has no file path");
-        return;
+/// Guarded auxiliary key-tag write for hosts. The state is required so even
+/// callers outside an analysis batch use Library Protection and the Ledger.
+/// Returns a visible warning while preserving any earlier accepted row edit.
+pub fn write_logged(
+    state: &crate::state::AppState,
+    track: &str,
+    path: &str,
+    key: &str,
+) -> Option<String> {
+    let (_, warning) = write_analysis_key_tag(state, track, path, key);
+    if let Some(warning) = &warning {
+        tracing::warn!(track,%warning);
     }
-    // A file on a Stick is written only while that Stick is unlocked (wbx-45.11).
-    let _access = match crate::stick_guard::enter_files(state_dir, [Path::new(path)]) {
-        Ok(access) => access,
-        Err(refused) => {
-            tracing::warn!(track_id, path, %refused, "key not written to the file's tag: it is on a protected Stick");
-            return;
-        }
-    };
-    match write_key(Path::new(path), key) {
-        Ok(KeyTagOutcome::Written) => tracing::info!(track_id, path, key, "key written to the file's tag"),
-        Ok(KeyTagOutcome::Unsupported) => tracing::info!(
-            track_id, path,
-            "key not written to the file's tag: rekordbox writes a key only into MP3, AIFF and FLAC files"
-        ),
-        Ok(KeyTagOutcome::ReadOnly) => tracing::warn!(track_id, path, "key not written to the file's tag: the file is read-only"),
-        Err(error) => tracing::warn!(track_id, path, %error, "key not written to the file's tag; the file is unchanged"),
-    }
+    warning
 }
 
 /// One audio file a key edit wrote its key into (#507): the key the tag
@@ -120,6 +112,27 @@ fn protected(undo: bool, label: &str, refused: &crate::error::AppError) -> rbl_d
 }
 
 impl rbl_library::history::OutsideSteps for KeyTagWrites {
+    fn ledger_values(&self) -> Option<serde_json::Value> {
+        Some(serde_json::Value::Array(
+            self.files
+                .iter()
+                .map(|file| {
+                    serde_json::json!({
+                        "path":file.path,"before":file.before,"after":file.after,
+                    })
+                })
+                .collect(),
+        ))
+    }
+    fn prepare(
+        &self,
+        undo: bool,
+        label: &str,
+    ) -> Result<Option<std::sync::Arc<dyn rbl_library::history::OutsideSteps>>, rbl_db::DbError>
+    {
+        prepared::prepare_key_history(self, undo, label).map(Some)
+    }
+
     fn is_empty(&self) -> bool {
         self.files.is_empty()
     }
@@ -146,48 +159,6 @@ impl rbl_library::history::OutsideSteps for KeyTagWrites {
         };
         let written: Vec<_> = if undo { self.files.iter().rev().collect() } else { self.files.iter().collect() };
         (revert(&access, &written, undo), self.files.len())
-    }
-}
-
-/// [`write_logged`] for an Info panel key edit, keeping what the history
-/// needs to put each file back (#507): only the files whose tag this wrote.
-/// A file passed over (no path, a format rekordbox writes no key into, a
-/// read-only file, a write that failed) is left out, so Undo of it stays a
-/// library-only Undo.
-pub(crate) fn write_recorded(state_dir: &Path, track_id: &str, path: &str, key: &str) -> Option<KeyTagWrite> {
-    if path.is_empty() {
-        tracing::warn!(track_id, "key not written to the file's tag: the track has no file path");
-        return None;
-    }
-    // A file on a Stick is written only while that Stick is unlocked (wbx-45.11).
-    let _access = match crate::stick_guard::enter_files(state_dir, [Path::new(path)]) {
-        Ok(access) => access,
-        Err(refused) => {
-            tracing::warn!(track_id, path, %refused, "key not written to the file's tag: it is on a protected Stick");
-            return None;
-        }
-    };
-    match swap_key(Path::new(path), None, Some(key)) {
-        Ok(KeySwap::Written { before }) => {
-            tracing::info!(track_id, path, key, "key written to the file's tag");
-            Some(KeyTagWrite { path: PathBuf::from(path), before, after: key.to_owned() })
-        }
-        Ok(KeySwap::Unsupported) => {
-            tracing::info!(
-                track_id, path,
-                "key not written to the file's tag: rekordbox writes a key only into MP3, AIFF and FLAC files"
-            );
-            None
-        }
-        Ok(KeySwap::ReadOnly) => {
-            tracing::warn!(track_id, path, "key not written to the file's tag: the file is read-only");
-            None
-        }
-        Ok(KeySwap::Changed { .. }) => None,
-        Err(error) => {
-            tracing::warn!(track_id, path, %error, "key not written to the file's tag; the file is unchanged");
-            None
-        }
     }
 }
 

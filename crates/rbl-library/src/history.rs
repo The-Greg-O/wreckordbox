@@ -10,6 +10,8 @@
 //! Undo and Redo, so the durable record does not depend on the history
 //! being kept.
 
+mod prepared;
+
 use std::sync::Arc;
 
 use rbl_db::DbError;
@@ -26,6 +28,19 @@ pub const TRACK_EDIT: &str = "Track Edit";
 pub trait OutsideSteps: Send + Sync {
     /// Nothing outside the Library was changed.
     fn is_empty(&self) -> bool;
+
+    /// Cheap file metadata already retained by the history, for the Ledger.
+    /// Reading this must never perform I/O.
+    fn ledger_values(&self) -> Option<serde_json::Value> {
+        None
+    }
+
+    /// Stage expensive file work without holding the Library edit gate. The
+    /// returned steps must only validate metadata and publish or restore the
+    /// staged files. The original history entry remains the durable description.
+    fn prepare(&self, _undo: bool, _label: &str) -> Result<Option<Arc<dyn OutsideSteps>>, DbError> {
+        Ok(None)
+    }
 
     /// Refuses, before anything is written, an Undo (`undo`) or Redo when
     /// what was changed no longer holds what the step expects:
@@ -727,8 +742,10 @@ impl crate::LibraryCore {
     ///
     /// Blocking.
     pub fn step_history(&self, host: &(impl crate::Host + ?Sized), undo: bool) -> Result<Stepped, StepError> {
-        let _gate = self.edit_gate().lock();
-        let entry = self.history.lock().next(undo).cloned().ok_or(StepError::Nothing)?;
+        // Tuple fields drop in declaration order: release the gate before any
+        // staged audio temporaries are cleaned up.
+        let prepared = self.prepare_history_step(undo)?;
+        let (_, entry, executable) = &prepared;
         // The window's grid editor steps a grid entry (its files are not the
         // core's to write): refused before any write or Ledger intent, and
         // the entry stays.
@@ -743,8 +760,8 @@ impl crate::LibraryCore {
             crate::History::Caller,
             &preparation,
             |w| {
-                entry.edit.check(w, undo)?;
-                entry.edit.apply(w, undo)
+                executable.check(w, undo)?;
+                executable.apply(w, undo)
             },
             // Kept aside: the step is made by then and is recorded whatever
             // the refresh says.
@@ -755,7 +772,7 @@ impl crate::LibraryCore {
             Ok(refreshed) => {
                 history.drop_next(undo);
                 let label = entry.label;
-                history.stepped(entry, undo);
+                history.stepped(entry.clone(), undo);
                 let generation = refreshed.map_err(StepError::Write)?;
                 Ok(Stepped { label, touched, generation })
             }

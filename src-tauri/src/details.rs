@@ -556,40 +556,65 @@ pub async fn set_track_field<R: tauri::Runtime>(
     // @0x100371814; #279], so a file whose key already matched, or a cleared
     // key on a track that had none, is not rewritten.
     //
-    // The files are written under the edit gate, right after the library,
-    // and the history entry keeps each one written with the key its tag
-    // held, so Undo and Redo put the file back with the library (#507).
+    // Stage and verify audio before entering the ordinary row-edit path.
+    // Only publication runs under the gate; history keeps cheap tag values.
     let key_tag = which == rbl_db::write::TrackField::Key && write_key_tag == Some(true);
-    let library = if key_tag { Some(state.library()?) } else { None };
     let state_dir = state.backup_dir().to_path_buf();
-    // A key written into files on a protected Stick is refused before
-    // anything changes, the Library's key included (wbx-45.11).
-    if let Some(library) = &library {
-        let files: Vec<&std::path::Path> = tracks
-            .iter()
-            .filter_map(|track| library.row_of(track))
-            .map(|row| std::path::Path::new(library.folder_path.get(row as usize)))
-            .filter(|path| !path.as_os_str().is_empty())
-            .collect();
-        drop(crate::stick_guard::enter_files(&state_dir, files)?);
-    }
-    let key = value.trim().to_owned();
-    recorded_edit(app, state, "set_track_field", Touched::Tracks, crate::commands::TRACK_EDIT, move |w| {
-        let edit = each_track(w, &tracks, |w, track| w.set_field_with_undo(track, which, &value))?;
-        let (Some(library), LibraryEdit::Track(steps)) = (library, &edit) else { return Ok(edit) };
-        let files: Vec<_> = steps
-            .iter()
-            .filter_map(|step| {
-                let track = step.content();
-                let row = library.row_of(track)?;
-                crate::key_tag::write_recorded(&state_dir, track, library.folder_path.get(row as usize), &key)
+    let prepared = if key_tag {
+        let library = state.library()?;
+        let preparing = Arc::clone(&state);
+        let ids = tracks.clone();
+        let key = value.trim().to_owned();
+        Some(
+            blocking("prepare_key_tags", move || {
+                crate::key_tag::prepare_key_edit(&preparing, &library, &ids, &key)
             })
-            .collect();
-        if files.is_empty() {
-            return Ok(edit);
-        }
-        let LibraryEdit::Track(tracks) = edit else { return Ok(edit) };
-        Ok(LibraryEdit::KeyEdit { tracks, files: Arc::new(crate::key_tag::KeyTagWrites { files, state_dir }) })
-    })
-    .await
+            .await?,
+        )
+    } else {
+        None
+    };
+    let publishing = prepared.clone();
+    let warning = Arc::new(parking_lot::Mutex::new(None));
+    let noticed = warning.clone();
+    let result = recorded_edit(
+        app,
+        state,
+        "set_track_field",
+        Touched::Tracks,
+        crate::commands::TRACK_EDIT,
+        move |w| {
+            if let Some(files) = &publishing {
+                files.check_key_edit(w)?;
+            }
+            let edit = each_track(w, &tracks, |w, track| {
+                w.set_field_with_undo(track, which, &value)
+            })?;
+            let (Some(prepared), LibraryEdit::Track(steps)) = (publishing, &edit) else {
+                return Ok(edit);
+            };
+            let (files, problem) = prepared.publish_changed(steps);
+            *noticed.lock() = problem;
+            if files.is_empty() {
+                return Ok(edit);
+            }
+            let LibraryEdit::Track(tracks) = edit else {
+                return Ok(edit);
+            };
+            Ok(LibraryEdit::KeyEdit {
+                tracks,
+                files: Arc::new(crate::key_tag::KeyTagWrites { files, state_dir }),
+            })
+        },
+    )
+    .await;
+    // Final copies are discarded after the row edit and its gate have ended.
+    drop(prepared);
+    let dto = result?;
+    if let Some(warning) = warning.lock().take() {
+        return Err(AppError::internal(format!(
+            "The Library key was saved, but an audio key tag was not written: {warning}"
+        )));
+    }
+    Ok(dto)
 }

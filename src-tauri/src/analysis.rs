@@ -218,22 +218,23 @@ pub async fn analyse_track<R: tauri::Runtime>(
                     notation,
                 )?;
                 // After the Library has the key, and only with the preference on.
-                if let (Some(notation), Some(key)) = (key_tag, result.detected_key.as_ref()) {
+                let (tag, tag_warning) = if let (Some(notation), Some(key)) = (key_tag, result.detected_key.as_ref()) {
                     let path = library
                         .row_of(&track_id)
                         .map_or("", |row| library.folder_path.get(row as usize));
-                    crate::key_tag::write_logged(
-                        state.backup_dir(),
+                    crate::key_tag::write_analysis_key_tag(
+                        &state,
                         &track_id,
                         path,
                         key.name_for(notation),
-                    );
-                }
-                Ok::<_, AppError>(result)
+                    )
+                } else { (None, None) };
+                Ok::<_, AppError>((result, tag, tag_warning))
             },
-            |result| {
+            |(result, tag, _)| {
                 vec![serde_json::json!({
                     "track": result.track_id,
+                    "audio_key_tag": tag.as_ref().map(|tag| serde_json::json!({"path":tag.path,"before":tag.before,"after":tag.after})),
                     "after": {
                         "bpm_x100": result.bpm_x100,
                         "key": result.key,
@@ -243,8 +244,8 @@ pub async fn analyse_track<R: tauri::Runtime>(
                 })]
             },
         );
-        let (mut result, warning) = recording.finish(result)?;
-        result.recording_warning = warning;
+        let ((mut result, _, tag_warning), warning) = recording.finish(result)?;
+        result.recording_warning = crate::bulk_writes::join_warning(warning, tag_warning);
         Ok(result)
     }).await;
     // Finished or failed, the drawing is over: from here a deck reads the
