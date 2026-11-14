@@ -5,6 +5,7 @@
 //! `--json` as JSON; errors go to standard error with a non-zero status.
 
 mod backup;
+mod barriers;
 mod decisions;
 mod facts;
 mod intake;
@@ -178,6 +179,12 @@ enum Commands {
         run: ledger::RunOptions,
         #[command(flatten)]
         args: project::ProjectArgs,
+    },
+    /// See Projection's barriers (writes the Ledger cannot account for),
+    /// and clear one as the DJ.
+    Projection {
+        #[command(subcommand)]
+        command: barriers::ProjectionCommands,
     },
     /// Restore and list backups of the Library and its Sidecar.
     Backup {
@@ -399,6 +406,7 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
         Commands::Project { args, .. } => {
             print(&project::run(&mut connect(&config)?, cli.json, args)?);
         }
+        Commands::Projection { command } => print(&barriers::run(&config, cli.json, command)?),
         Commands::Backup { command } => print(&backup::run(&config, cli.json, command)?),
         Commands::Stop => stop(&config, cli.json)?,
         Commands::Serve { spawned: true } => {

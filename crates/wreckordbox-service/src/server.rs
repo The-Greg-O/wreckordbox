@@ -641,6 +641,10 @@ impl Shared {
                 }
                 Ok(result)
             }
+            // Seeing and clearing barriers: the Sidecar's alone (wbx-xme).
+            barriers if crate::projection_barriers::answers(barriers) => {
+                crate::projection_barriers::answer(&self.stems, request)
+            }
             projection if crate::projection::answers(projection) => self.project(request),
             intake if crate::intake::answers(intake) => {
                 let (result, changed) = self.with_library(|library| {
