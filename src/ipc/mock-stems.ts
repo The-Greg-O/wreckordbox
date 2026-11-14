@@ -46,7 +46,8 @@ export function createMockStems(deps: {
   let failReads = false;
   let other: string | null = null;
   let nextRun = 900;
-  const params = typeof window === "undefined" ? new URLSearchParams() : new URLSearchParams(window.location.search);
+  // As `readFlagFromUrl`: a unit test may stand a bare object in for `window`.
+  const params = new URLSearchParams(typeof location === "undefined" ? "" : location.search);
   const delay = Number(params.get("stemsDelay") ?? 1500);
   for (const seed of (params.get("stems") ?? "").split(",").filter(Boolean)) {
     const [id, state] = seed.split(":");

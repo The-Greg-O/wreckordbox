@@ -74,8 +74,11 @@ test("Split starts a separation shown as a Run with progress in the status line,
   const bar = stems(page).getByRole("progressbar", { name: "Splitting Stems" });
   await expect(bar).toBeVisible();
   await expect(stemsState(page)).toHaveText(/^Splitting: (loading model|separating|writing) \d+%$/);
-  await expect(statusLine(page)).toContainText(`Separate track ${track.id} "${track.title}" into Stems`);
+  // One split, named once: the window's own item with its progress, not also the service's Run of it.
   await expect(statusLine(page).getByTestId("status-stems-running")).toContainText(`Stems · ${track.title} ·`);
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __serviceActivityReads?: number }).__serviceActivityReads ?? 0)).toBeGreaterThan(1);
+  await expect(statusLine(page)).not.toContainText("into Stems");
+  await expect(statusLine(page).getByText(track.title)).toHaveCount(1);
   await expect.poll(async () => Number(await bar.getAttribute("aria-valuenow"))).toBeGreaterThan(20);
 
   await expect(stems(page)).toHaveAttribute("data-state", "current", { timeout: 10_000 });
@@ -261,6 +264,10 @@ test("a Stems read that fails is shown with Retry, not as an old state", async (
 for (const width of [1280, 900, 640, 436]) {
   test(`at ${width}px the Stems control and the status line stay within the window`, async ({ page }) => {
     await page.setViewportSize({ width, height: 800 });
+    // A count that matters, so the underruns readout shows at half width too (a zero hides there).
+    await page.addInitScript(() => {
+      (window as unknown as { __mockAudioHealth?: unknown }).__mockAudioHealth = { underruns: 3, latencyMs: null };
+    });
     await openIntake(page);
     if (width <= 800) {
       // The queue is a counter here: the loaded track comes from it.
@@ -298,6 +305,17 @@ for (const width of [1280, 900, 640, 436]) {
     expect(line.x + line.width).toBeLessThanOrEqual(width + 0.5);
     const item = (await running.boundingBox())!;
     expect(item.x + item.width).toBeLessThanOrEqual(width + 0.5);
+    await expect(statusLine(page)).not.toContainText("into Stems");
+    // The underruns readout and the Stick states beside it stay inside too.
+    for (const beside of [statusLine(page).getByTestId("underrun-count"), statusLine(page).locator("[data-stick-protection]")]) {
+      expect(await beside.count()).toBeGreaterThan(0);
+      for (const one of await beside.all()) {
+        await expect(one).toBeVisible();
+        const box = (await one.boundingBox())!;
+        expect(box.x).toBeGreaterThanOrEqual(0);
+        expect(box.x + box.width).toBeLessThanOrEqual(width + 0.5);
+      }
+    }
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
     await call(page, "__releaseStems");
   });

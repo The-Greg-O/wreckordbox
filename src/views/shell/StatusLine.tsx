@@ -7,6 +7,8 @@ import styles from "./StatusLine.module.css";
 import { ThemeFileStatus } from "./ThemeFileStatus";
 import { StatusStickLoad } from "./StickLoadProgress";
 import { StatusStemSplits } from "./StatusStemSplits";
+import { isShownSplitRun } from "@/lib/stemSplits";
+import { useStemSplits } from "@/store/stemSplits";
 import { UnderrunCount } from "@/views/topbar/UnderrunCount";
 
 /** Shared by all four views, so a view switch never resets background work. */
@@ -14,7 +16,9 @@ export function StatusLine(props: StatusBarProps) {
   const t = useTranslation();
   const service = useServiceActivity();
   const problem = service?.problem;
-  const runs = problem ? [] : service?.runs ?? [];
+  // A split the window shows itself (with its progress or failure) is not named twice.
+  const splits = useStemSplits();
+  const runs = (problem ? [] : service?.runs ?? []).filter((run) => !isShownSplitRun(run.description, splits));
   const runText = runs.length === 1 ? runs[0]!.description
     : runs.length > 1 ? t("{count} Runs in progress", { count: runs.length }) : "";
   const analysis = props.analysisProgress;

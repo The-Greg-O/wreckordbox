@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createStemSplits, splitLine, type SplitOutcome, type StemsProgress } from "./stemSplits";
+import { createStemSplits, isShownSplitRun, splitLine, type SplitOutcome, type StemsProgress } from "./stemSplits";
 
 /** A separation the test answers by hand, and the progress it reports. */
 function rig() {
@@ -116,5 +116,18 @@ describe("stem splits", () => {
     expect(splitLine({ trackId: "a", title: "A", phase: "queued", behind: "Beta", stage: null, fraction: null, reason: null })).toBe("Queued behind “Beta”");
     expect(splitLine({ trackId: "a", title: "A", phase: "running", behind: null, stage: null, fraction: null, reason: null })).toBe("Splitting: starting");
     expect(splitLine({ trackId: "a", title: "A", phase: "done", behind: null, stage: null, fraction: null, reason: null })).toBe("Split done");
+  });
+});
+
+describe("isShownSplitRun", () => {
+  const split = (trackId: string, phase: "running" | "queued" | "done" | "failed") =>
+    ({ trackId, title: "T", phase, behind: null, stage: null, fraction: null, reason: null });
+  it("is the Run of a split the window shows running or failed, and no other", () => {
+    const run = 'Separate track 10 "T" into Stems';
+    expect(isShownSplitRun(run, [split("10", "running")])).toBe(true);
+    expect(isShownSplitRun(run, [split("10", "failed")])).toBe(true);
+    expect(isShownSplitRun(run, [split("1", "running")])).toBe(false);
+    expect(isShownSplitRun(run, [split("10", "done")])).toBe(false);
+    expect(isShownSplitRun("Tag 12 tracks", [split("10", "running")])).toBe(false);
   });
 });

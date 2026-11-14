@@ -178,3 +178,14 @@ export function splitLine(split: Split): string {
     case "failed": return `Split failed: ${split.reason ?? "unknown reason"}`;
   }
 }
+
+/**
+ * Whether a Run the service lists is the separation of a split the window
+ * already shows (its own line carries the progress and any failure), so the
+ * status line names one split once. The service describes it as
+ * `Separate track <id> "<title>" into Stems`.
+ */
+export function isShownSplitRun(description: string, splits: readonly Split[]): boolean {
+  return splits.some((split) => (split.phase === "running" || split.phase === "failed")
+    && description.startsWith(`Separate track ${split.trackId} `) && description.endsWith(" into Stems"));
+}
