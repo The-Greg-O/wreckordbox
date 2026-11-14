@@ -391,3 +391,183 @@ fn an_accept_waits_while_a_tag_schema_conversion_records_the_djs_tags() {
     assert_eq!(facts_in_sidecar(&s, "10001", "mood"), 1);
     assert_eq!(db_rating(&s, "10002"), 4);
 }
+
+/// A fixture Library with a track to separate, a playlist "Set" of another
+/// on a stand-in Stick the DJ unlocked, and an Energy policy: an agent's
+/// answer on 10001 applies (0.9), its answer on 10002 waits (0.6).
+struct Rig {
+    s: Sandbox,
+    _sticks: tempfile::TempDir,
+    stick: std::path::PathBuf,
+    separated: String,
+    set: String,
+}
+
+impl Rig {
+    fn new() -> Self {
+        let mut s = Sandbox::new();
+        let sticks = tempfile::tempdir().unwrap();
+        let stick = sticks.path().join("FRIDAY");
+        std::fs::create_dir(&stick).unwrap();
+        std::fs::write(
+            stick.join(wreckordbox_stick_protection::STAND_IN_MARKER),
+            b"",
+        )
+        .unwrap();
+        s.sticks = vec![stick.clone()];
+        let separated = s.import_track("Night Bus.wav", 1);
+        let loaded = s.import_track("Alpha.wav", 1);
+        let mut set = String::new();
+        s.edit(|writer| {
+            set = writer.create_playlist("Set", "root").unwrap();
+            writer.add_tracks(&set, &[loaded.clone()]).unwrap();
+        });
+        crate::review::policy(&s, "[energy]\napply = 0.8\n");
+        Self {
+            s,
+            _sticks: sticks,
+            stick,
+            separated,
+            set,
+        }
+    }
+
+    fn stick(&self) -> &str {
+        self.stick.to_str().unwrap()
+    }
+
+    /// The DJ unlocks the Stick by name and dry-runs the load: its plan.
+    fn unlock_and_plan(&self) -> String {
+        let run = self
+            .s
+            .cli(&["stick", "unlock", self.stick(), "--name", "FRIDAY"]);
+        assert!(run.status.success(), "{}", run.stderr);
+        let dry = crate::review::ok(&self.s, &["stick", "dry-run", self.stick(), &self.set]);
+        dry["plan"].as_str().unwrap().to_owned()
+    }
+
+    fn load(&self, plan: &str) -> Child {
+        spawn(
+            &self.s,
+            &["stick", "load", self.stick(), &self.set, "--plan", plan],
+        )
+    }
+
+    /// Facts: one that Projection applies, one that waits; the token.
+    fn facts(&self) -> (i64, String) {
+        fact(&self.s, "10001", "energy", "3", "agent:tagger", "0.9");
+        let waiting = fact(&self.s, "10002", "energy", "4", "agent:tagger", "0.6");
+        (waiting, token(&self.s))
+    }
+
+    /// A separation held between its observation and its commit.
+    fn held_separation(&self, gate: &Gate) -> Child {
+        gate.hold("producer-stems");
+        let child = spawn(&self.s, &["stems", "separate", &self.separated]);
+        gate.reached("at-producer-stems");
+        child
+    }
+
+    fn stems_recorded(&self) -> i64 {
+        facts_in_sidecar(&self.s, &self.separated, "stems")
+    }
+}
+
+#[test]
+fn while_a_producer_holds_its_commit_projection_applies_and_a_stick_loads_and_only_an_accept_waits(
+) {
+    let rig = Rig::new();
+    let gate = Gate::new();
+    let _service = gated(&rig.s, &gate);
+    let (waiting, t) = rig.facts();
+    let separating = rig.held_separation(&gate);
+
+    // Neither needs the Fact coordination: both finish with it held.
+    let (projected, answer) = finished(spawn(&rig.s, &["project"]));
+    assert!(projected, "{answer}");
+    assert_eq!(db_rating(&rig.s, "10001"), 3);
+    // (A load is confirmed against the Library as it is after the apply.)
+    let plan = rig.unlock_and_plan();
+    let (loaded, answer) = finished(rig.load(&plan));
+    assert!(loaded, "{answer}");
+    assert_eq!(rig.stems_recorded(), 0);
+    let mut accepting = accept(&rig.s, waiting, &t);
+    kept_waiting(&gate, &mut accepting);
+
+    gate.go("producer-stems");
+    let (separated, answer) = finished(separating);
+    assert!(separated, "{answer}");
+    let (accepted, answer) = finished(accepting);
+    assert!(accepted, "{answer}");
+    assert_eq!(rig.stems_recorded(), 1);
+    assert_eq!(db_rating(&rig.s, "10002"), 4);
+}
+
+#[test]
+fn a_producer_commits_while_projection_holds_the_library_and_an_accept_queued_behind_it_finishes(
+) {
+    let rig = Rig::new();
+    let gate = Gate::new();
+    let projection = tempfile::tempdir().unwrap();
+    let _service = serve_with(
+        &rig.s,
+        &[
+            ("WRECKORDBOX_REVIEW_GATE", gate.path()),
+            ("WRECKORDBOX_PROJECTION_GATE", projection.path()),
+        ],
+    );
+    let (waiting, t) = rig.facts();
+    let separating = rig.held_separation(&gate);
+    // Projection's apply stops between its plan and its write, holding
+    // the Library and the edit gate.
+    let projecting = spawn(&rig.s, &["project"]);
+    let paused = projection.path().join("paused");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !paused.exists() {
+        assert!(Instant::now() < deadline, "the apply never paused");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    // The producer's commit needs neither: it is recorded meanwhile.
+    gate.go("producer-stems");
+    let (separated, answer) = finished(separating);
+    assert!(separated, "{answer}");
+    assert_eq!(rig.stems_recorded(), 1);
+    // An accept takes the coordination and waits for the Library.
+    let accepting = accept(&rig.s, waiting, &t);
+    std::fs::write(projection.path().join("go"), b"").unwrap();
+    let (projected, answer) = finished(projecting);
+    assert!(projected, "{answer}");
+    let (accepted, answer) = finished(accepting);
+    assert!(accepted, "{answer}");
+    assert_eq!(db_rating(&rig.s, "10001"), 3);
+    assert_eq!(db_rating(&rig.s, "10002"), 4);
+}
+
+#[test]
+fn a_producer_commits_while_a_stick_load_is_part_way_and_both_finish() {
+    let rig = Rig::new();
+    let gate = Gate::new();
+    let _service = gated(&rig.s, &gate);
+    let plan = rig.unlock_and_plan();
+    let separating = rig.held_separation(&gate);
+    // The load stops part-way, after its native step, before reading back.
+    let state = rig.s.state_dir();
+    let pause = state.join(wreckordbox_service::stick_load::TEST_PAUSE_AT_FILE);
+    std::fs::write(&pause, "read_back").unwrap();
+    let loading = rig.load(&plan);
+    let paused = state.join(wreckordbox_service::stick_load::TEST_PAUSED_FILE);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !paused.exists() {
+        assert!(Instant::now() < deadline, "the load never paused");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    gate.go("producer-stems");
+    let (separated, answer) = finished(separating);
+    assert!(separated, "{answer}");
+    assert_eq!(rig.stems_recorded(), 1);
+    std::fs::remove_file(&pause).unwrap();
+    let (loaded, answer) = finished(loading);
+    assert!(loaded, "{answer}");
+}
