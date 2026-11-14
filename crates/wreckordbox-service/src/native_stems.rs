@@ -188,14 +188,33 @@ impl Found {
 /// snapshot (`mutant_reads::inspect`), so nothing is created, migrated,
 /// tidied or marked stale. `None` when there is none, or the Sidecar cannot
 /// be read safely now.
-pub(crate) fn current_stems_read_only(stems: &Stems, found: &Found) -> Option<CurrentStems> {
+///
+/// The Stem Facts are read first: a track with none is not fingerprinted,
+/// so its audio is not read at all (wbx-cne). `audio` says how a track with
+/// Stems is fingerprinted: [`Audio::Fresh`] reads it now, as a load must;
+/// [`Audio::Preview`] may reuse a fingerprint while the file's identity is
+/// unchanged (`preview_fingerprints`), for a dry run only.
+pub(crate) fn current_stems_read_only(
+    stems: &Stems,
+    found: &Found,
+    audio: Audio,
+) -> Option<CurrentStems> {
     let track = found.audio.parent();
-    let fingerprint = stems::fingerprint(track, found.audio.path()).ok()?;
     let dir = stems.sidecar_dir().to_path_buf();
     let facts = crate::mutant_reads::inspect(stems, |store| store.stem_facts(&track.id)).ok()?;
-    let set = facts
+    let sets: Vec<StemSet> = facts
         .into_iter()
         .filter_map(|fact| StemSet::from_fact(&dir, fact))
+        .collect();
+    if sets.is_empty() {
+        return None;
+    }
+    let fingerprint = match audio {
+        Audio::Fresh => stems::fingerprint(track, found.audio.path()).ok()?,
+        Audio::Preview => crate::preview_fingerprints::for_preview(found.audio.path())?,
+    };
+    let set = sets
+        .into_iter()
         // Staleness as the audio says now, not as last stored (wbx-t3p).
         .map(|set| crate::stems_show::as_now(set, Some(&fingerprint)))
         .find(|set| set.is_current() && set.fingerprint == fingerprint && set.audio_present())?;
@@ -228,6 +247,16 @@ pub(crate) fn current_stems_read_only(stems: &Stems, found: &Found) -> Option<Cu
         ),
         samples: set.samples,
     })
+}
+
+/// How [`current_stems_read_only`] fingerprints a track's audio.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Audio {
+    /// Read now, whatever was read before: a load, under the Stick's lock.
+    Fresh,
+    /// May reuse a fingerprint read earlier while the file is unchanged:
+    /// a dry run, never a load.
+    Preview,
 }
 
 /// A file's modification time, to the nanosecond, for an identity.

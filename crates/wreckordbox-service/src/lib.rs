@@ -29,6 +29,7 @@ pub mod mutants;
 pub mod mytag_edits;
 pub mod native_stems;
 pub mod playlist_edits;
+pub mod preview_fingerprints;
 pub mod projection;
 pub mod projection_barriers;
 pub mod protection;
