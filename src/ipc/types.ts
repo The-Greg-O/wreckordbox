@@ -2382,6 +2382,8 @@ export interface Edits {
   gridRedo(track: string, deck?: DeckId): Promise<GridState>;
   /** Locks or unlocks the grid against editing. */
   gridLock(track: string, on: boolean): Promise<GridState>;
+  /** One atomic native edit and one Undo step for the whole selection. */
+  gridLockSelection(tracks: readonly string[], on: boolean): Promise<void>;
 }
 
 /** One change to a beat grid, as `rbl_anlz::grid::Edit` spells them. */

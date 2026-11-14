@@ -98,6 +98,7 @@ use crate::{is_rekordbox_running, DbError, Library, OpenMode, Result};
 
 pub mod checked;
 pub mod stored;
+mod analysis_lock;
 
 /// Tables whose `rb_local_usn` participates in the shared counter.
 const USN_TABLES: &[&str] = &[
@@ -208,6 +209,8 @@ const WRITABLE_COLUMNS: &[&str] = &[
     "Name", "Rating", "Commnt", "ColorID", "FolderPath", "FileNameL", "SmartList",
     // The tempo, which a grid edit changes with the `.DAT`'s grid.
     "BPM",
+    // The native lock setter keeps the whole flag value for conflict-safe Undo.
+    "Analysed",
     // The information panel's Info tab.
     "Title", "Lyricist", "ReleaseYear", "TrackNo", "DiscNo", "DJPlayCount", "KeyID", "BPM", "ImagePath",
     "ArtistID", "OrgArtistID", "ComposerID", "RemixerID", "AlbumID", "GenreID", "LabelID",
