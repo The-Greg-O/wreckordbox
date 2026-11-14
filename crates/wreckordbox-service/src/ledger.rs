@@ -955,6 +955,9 @@ struct Op {
     /// stays until the assertion is told, which claims the reserved
     /// identifier and settles it in the same transaction.
     asserting: bool,
+    /// A hand set's changes were given an entry (under an intent of their
+    /// own), so an assertion with nothing to record may settle the write's.
+    changes_recorded: bool,
 }
 
 #[derive(Default)]
@@ -1739,11 +1742,30 @@ impl Keeper {
             // The identifier its write reserved, for the first entry of
             // that write; another (there should be none) takes the next.
             // A hand set's changes leave its intent for the assertion that
-            // follows: only that claims the identifier (wbx-26).
+            // follows: only that claims the identifier (wbx-26). The changes
+            // take a reserved identifier of their own, so a kept entry is
+            // still written once when replayed.
             let id = match state.op.as_mut() {
                 Some(op) if !op.recorded && (!op.asserting || draft.asserted) => {
                     op.recorded = true;
                     Some(op.id)
+                }
+                Some(op) if !op.recorded && op.asserting => {
+                    op.changes_recorded = true;
+                    sidecar.as_ref().ok().and_then(|sidecar| {
+                        sidecar
+                            .begin_intent(
+                                &Intent {
+                                    source: &op.source,
+                                    run: op.run,
+                                    description: &op.description,
+                                    command: op.command.as_ref(),
+                                    at: now(),
+                                },
+                                &[],
+                            )
+                            .ok()
+                    })
                 }
                 _ => None,
             };
@@ -1917,6 +1939,7 @@ impl Keeper {
             dj_snapshot,
             mutant_plan: None,
             asserting: false,
+            changes_recorded: false,
         });
         drop(state);
         if let Some(delay) = self.faults.delay_after_begin {
@@ -2061,7 +2084,11 @@ impl rbl_library::ledger::Ledger for Keeper {
         let nothing = matches!(edit, LibraryEdit::Track(edits) if edits.is_empty());
         if !by_the_dj() || nothing {
             let mut state = self.state();
-            if let Some(op) = state.op.as_mut().filter(|op| op.asserting && !op.recorded) {
+            // Not a write that changed rows and recorded nothing: that stays
+            // for the next write to record as unconfirmed.
+            if let Some(op) = state.op.as_mut().filter(|op| {
+                op.asserting && !op.recorded && (op.wrote != Some(true) || op.changes_recorded)
+            }) {
                 op.recorded = true;
                 if let Ok(sidecar) = self.stems.sidecar() {
                     if let Err(error) = sidecar.settle_intents(&[op.id]) {

@@ -840,11 +840,17 @@ where
             asserting,
             ..rbl_library::ledger::Preparation::touched(&touched)
         };
-        let (refreshed, reversible) = state.core().write_then_prepared(
+        let written = state.core().write_then_prepared(
             state.as_ref(), rbl_library::History::Caller, &preparation,
             action,
             |db, reversible| Ok((refresh_after_edit(&state, db, touched), reversible)),
-        ).map_err(write_error)?;
+        );
+        if written.is_err() && asserting {
+            // Nothing to assert: the Ledger settles the intent it kept for
+            // the assertion, unless the failed write changed rows (wbx-26).
+            state.edit_history().lock().assert(Vec::new(), name);
+        }
+        let (refreshed, reversible) = written.map_err(write_error)?;
         let mut history = state.edit_history().lock();
         record(&mut history, reversible);
         let generation = refreshed.map_err(write_error)?;
