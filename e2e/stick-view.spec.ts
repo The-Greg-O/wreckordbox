@@ -414,3 +414,76 @@ test("after a Stick is chosen with the buttons, choosing one in the tree still s
   await page.getByTestId("shell-tree").getByRole("group", { name: "Stick DJ STICK" }).getByRole("treeitem", { name: "DJ STICK", exact: true }).click();
   await expect(view(page).getByTestId("stick-name")).toHaveText("DJ STICK");
 });
+
+// ---- Reports kept across a close (wbx-71 verification review) ----------
+
+const KEPT = "rbl.mock.stickLoadReports";
+
+test("a load report kept when the window closed is shown at the next start, with its Stick not mounted, until dismissed", async ({ page }) => {
+  const kept = {
+    id: "op-closed-during-copying",
+    stick: { path: "/Volumes/OLD GIG", name: "OLD GIG", volume: "dev 9 ino 9" },
+    finished: "2026-11-13 21:04:00.000 +00:00",
+    report: {
+      stick: { path: "/Volumes/OLD GIG", name: "OLD GIG", kind: "gig", protected: false, tracks: null, playlists: null },
+      outcome: "failed",
+      error: { code: "service_failed", message: "the load stopped because the Library service was stopped" },
+      written: { tracks: [], playlists: [] },
+      not_written: { tracks: [{ id: "1", title: "Alpha" }, { id: "2", title: "Bravo" }], playlists: ["Set"] },
+      unchanged: { tracks: [], playlists: [] },
+      native_stems: [{ track: { id: "1", title: "Alpha" }, outcome: "not_written", reason: "the export failed first", stems_fact: null }],
+    },
+    error: null,
+  };
+  await page.addInitScript(([key, record]) => {
+    if (sessionStorage.getItem(`${key}.seeded`) === null) {
+      sessionStorage.setItem(key, JSON.stringify([record]));
+      sessionStorage.setItem(`${key}.seeded`, "1");
+    }
+  }, [KEPT, kept] as const);
+  await open(page);
+  await page.evaluate(([a, b]) => {
+    const hooks = window as unknown as { __unmountDevice: (path: string) => void };
+    hooks.__unmountDevice(a!);
+    hooks.__unmountDevice(b!);
+    window.dispatchEvent(new Event("focus"));
+  }, [DJ, TEST]);
+  await tab(page, "Stick").click();
+  await expect(view(page).getByTestId("stick-none")).toBeVisible();
+
+  const earlier = view(page).getByTestId("stick-kept-reports");
+  await expect(earlier).toContainText("OLD GIG (not mounted)");
+  await expect(earlier).toContainText("The load failed");
+  await expect(earlier).toContainText("the load stopped because the Library service was stopped");
+  await expect(earlier).toContainText("Nothing was written");
+  await expect(earlier).toContainText("Not written: 2 tracks, 1 playlist");
+  await expect(earlier.getByRole("list", { name: "Native stems" })).toContainText("Alpha: not_written (the export failed first)");
+
+  await earlier.getByRole("button", { name: "Dismiss the report for OLD GIG" }).click();
+  await expect(view(page).getByTestId("stick-kept-reports")).toHaveCount(0);
+  await page.reload();
+  await tab(page, "Stick").click();
+  await expect(view(page).getByTestId("stick-name")).toBeVisible();
+  await expect(view(page).getByTestId("stick-kept-reports")).toHaveCount(0);
+});
+
+test("a failed load is kept: after a reload it is still reported until dismissed; a completed one is not kept twice", async ({ page }) => {
+  await openStick(page);
+  await chooseFirst(page);
+  await holdToLoad(page);
+  await expect(view(page).getByTestId("stick-outcome")).toHaveAttribute("data-outcome", "loaded");
+  await expect.poll(() => page.evaluate((key) => (JSON.parse(sessionStorage.getItem(key) ?? "[]") as unknown[]).length, KEPT)).toBe(0);
+
+  await call(page, "__failNextStickLoad", DJ, "The Stick was removed during the export.");
+  await playlistRows(page).nth(1).getByRole("checkbox").check();
+  await expect(view(page).getByTestId("stick-summary")).toBeVisible();
+  await holdToLoad(page);
+  await expect(view(page).getByTestId("stick-load-error")).toContainText("The Stick was removed during the export.");
+  await page.reload();
+  await tab(page, "Stick").click();
+  const earlier = view(page).getByTestId("stick-kept-reports");
+  await expect(earlier).toContainText("DJ STICK");
+  await expect(earlier).toContainText("The Stick was removed during the export.");
+  await earlier.getByRole("button", { name: "Dismiss the report for DJ STICK" }).click();
+  await expect(view(page).getByTestId("stick-kept-reports")).toHaveCount(0);
+});

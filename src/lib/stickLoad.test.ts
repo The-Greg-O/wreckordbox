@@ -237,6 +237,20 @@ describe("fromServiceLoad", () => {
     ]);
   });
 
+  it("a load that failed before its first write says nothing was written, not that nothing needed writing", () => {
+    const failed = report({
+      outcome: "failed", error: { code: "service_failed", message: "The load stopped." },
+      written: { tracks: [], playlists: [] },
+      not_written: { tracks: [{ id: "1", title: "Alpha" }, { id: "2", title: "Beta" }], playlists: ["Friday warm-up"] },
+      unchanged: { tracks: [], playlists: [] },
+      native_stems: [],
+    });
+    const lines = outcomeLines(failed);
+    expect(lines[0]).toBe("Nothing was written");
+    expect(lines).not.toContain("Nothing needed writing");
+    expect(lines).toContain("Not written: 2 tracks, 1 playlist");
+  });
+
   it("a repeat load says nothing needed writing and still says what the Stick holds", () => {
     const repeat = report({
       outcome: "loaded", error: null,

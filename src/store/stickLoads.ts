@@ -8,10 +8,17 @@
  * same path is another identity, so an old report never sits beside it. A
  * report stays until the DJ starts another load on the same Stick or
  * dismisses it; a failure is never dropped by a view change.
+ *
+ * Each load has an operation id the shell keeps its report under, in the
+ * app's state folder (`stick_load_reports`), so a load cut short by closing
+ * the window, or one that failed, is reported again at the next start
+ * (`readKeptStickLoads`, once per page) until dismissed. A load that completed and
+ * was shown here is not kept twice: its kept copy is dismissed at once.
  */
 import { useSyncExternalStore } from "react";
 
-import type { LoadOutcome } from "@/lib/stickLoad";
+import { getBackend } from "@/ipc/client";
+import type { KeptLoadReport, LoadOutcome } from "@/lib/stickLoad";
 
 export interface StickLoad {
   /** The operation: one per load the DJ asked for. */
@@ -23,6 +30,10 @@ export interface StickLoad {
   state: "confirming" | "running" | "done" | "failed";
   outcome: LoadOutcome | null;
   error: string | null;
+  /** The id the shell keeps its report under. */
+  reportId: string;
+  /** Kept from before the window last closed (not this session's). */
+  kept: boolean;
 }
 
 /** One Stick as mounted now: another volume at the same path is another Stick. */
@@ -66,17 +77,21 @@ export function useStickLoads(): readonly StickLoad[] {
  */
 export async function runStickLoad(
   stick: { identity: string; path: string; name: string },
-  stage: (run: (load: () => Promise<LoadOutcome>) => Promise<void>) => Promise<boolean>,
+  stage: (run: (load: (operation: string) => Promise<LoadOutcome>) => Promise<void>) => Promise<boolean>,
 ): Promise<void> {
   const id = next++;
-  set((all) => [...all, { id, ...stick, state: "confirming", outcome: null, error: null }]);
+  const operation = operationId();
+  set((all) => [...all, { id, ...stick, state: "confirming", outcome: null, error: null, reportId: operation, kept: false }]);
   let ran = false;
   try {
     await stage(async (load) => {
       ran = true;
       update(id, { state: "running" });
       try {
-        update(id, { state: "done", outcome: await load() });
+        const outcome = await load(operation);
+        update(id, { state: "done", outcome });
+        // Shown here in full: the shell's copy of a load that completed is not kept twice.
+        if (outcome.outcome === "loaded") void forget(operation);
       } catch (error) {
         update(id, { state: "failed", error: error instanceof Error ? error.message : String(error) });
       }
@@ -92,16 +107,64 @@ export async function runStickLoad(
     set((all) => all.filter((load) => load.id !== id));
     return;
   }
-  // The newest report for a Stick replaces its older ones.
-  set((all) => all.filter((load) => load.id === id || load.identity !== stick.identity || load.id > id));
+  // The newest report for a Stick replaces its older ones of this session.
+  set((all) => all.filter((load) => load.id === id || load.kept || load.identity !== stick.identity || load.id > id));
 }
 
-/** The DJ has read the report. */
+function operationId(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `op-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+async function forget(reportId: string): Promise<void> {
+  try {
+    await (await getBackend()).stickLoadReportDismiss(reportId);
+  } catch {
+    // Still kept: it is shown again at the next start, to be dismissed then.
+  }
+}
+
+/** The DJ has read the report: gone here and from the shell's kept reports. */
 export function dismissStickLoad(id: number): void {
+  const found = loads.find((load) => load.id === id);
   set((all) => all.filter((load) => load.id !== id));
+  if (found) void forget(found.reportId);
+}
+
+let keptRead = false;
+
+/** The reports the shell kept before this session (once per page). */
+export async function readKeptStickLoads(): Promise<void> {
+  if (keptRead) return;
+  keptRead = true;
+  let kept: KeptLoadReport[];
+  try {
+    kept = await (await getBackend()).stickLoadReports();
+  } catch {
+    keptRead = false;
+    return;
+  }
+  set((all) => [
+    ...kept
+      .filter((report) => !all.some((load) => load.reportId === report.id))
+      .map((report): StickLoad => ({
+        id: next++,
+        identity: `kept\u0000${report.id}`,
+        path: report.stick.path,
+        name: report.stick.name,
+        state: report.outcome === null ? "failed" : "done",
+        outcome: report.outcome,
+        error: report.outcome === null ? report.error : null,
+        reportId: report.id,
+        kept: true,
+      })),
+    ...all,
+  ]);
 }
 
 /** For tests: forget every load. */
 export function resetStickLoads(): void {
+  keptRead = false;
   set(() => []);
 }

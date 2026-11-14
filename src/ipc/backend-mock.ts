@@ -35,7 +35,7 @@ import { referenceDeviceSettings } from "./mock-device-settings";
 import { createMockDeviceLibraries, type MockImportEntry } from "./mock-device-library";
 import { createMockIntake } from "./mock-intake";
 import { createMockStickLoad } from "./mock-stick-load";
-import { fromServiceDryRun, fromServiceLoad, fromServiceSticks } from "@/lib/stickLoad";
+import { fromKeptReport, fromServiceDryRun, fromServiceLoad, fromServiceSticks } from "@/lib/stickLoad";
 import { mockCueHooks } from "./mock-cue-pads";
 import { createMockTagPanel } from "./mock-tag-panel";
 import { keyLightRows } from "./mock-key-lights";
@@ -2566,7 +2566,10 @@ export function createMockBackend(options: MockOptions = {}): Backend {
   return withStickSafetyLog({
     stickViewSticks: async () => fromServiceSticks(await stickLoad.stickViewSticks()),
     stickViewDryRun: async (stick, playlists) => fromServiceDryRun(await stickLoad.stickViewDryRun(stick, playlists)),
-    stickViewLoad: async (stick, playlists, plan) => fromServiceLoad(await stickLoad.stickViewLoad(stick, playlists, plan)),
+    stickViewLoad: async (stick, playlists, plan, _approval, operation) =>
+      fromServiceLoad(await stickLoad.stickViewLoad(stick, playlists, plan, operation)),
+    stickLoadReports: async () => (await stickLoad.stickLoadReports()).map(fromKeptReport),
+    stickLoadReportDismiss: (id) => stickLoad.stickLoadReportDismiss(id),
     intakeQueue: intake.intakeQueue,
     intakeCounts: intake.intakeCounts,
     intakeColours: intake.intakeColours,

@@ -95,6 +95,19 @@ export interface LoadOutcome {
   holds: { tracks: number | null; playlists: number | null };
   /** Every Native stems set: `written`, `skipped` or `failed`, and why. */
   nativeStems: { title: string; outcome: string; reason: string | null }[];
+  /** The id the shell kept this report under (`stick_load_reports`), when it did. */
+  reportId: string | null;
+}
+
+/** A load report the shell kept in the app's state folder, not yet dismissed. */
+export interface KeptLoadReport {
+  id: string;
+  stick: { path: string; name: string };
+  finished: string;
+  /** The service's report; null when it gave none (refused or failed first). */
+  outcome: LoadOutcome | null;
+  /** Why, when there is no report. */
+  error: string | null;
 }
 
 type Raw = Record<string, unknown>;
@@ -208,10 +221,25 @@ export function fromServiceLoad(value: unknown): LoadOutcome {
     notWritten: held(raw.not_written),
     unchanged: held(raw.unchanged),
     holds: { tracks: maybeNumber(record(raw.stick).tracks), playlists: maybeNumber(record(raw.stick).playlists) },
+    reportId: maybeText(raw.report_id),
     nativeStems: list(raw.native_stems).map((entry) => {
       const s = record(entry);
       return { title: track(s.track).title, outcome: text(s.outcome), reason: maybeText(s.reason) };
     }),
+  };
+}
+
+export function fromKeptReport(value: unknown): KeptLoadReport {
+  const raw = record(value);
+  const stick = record(raw.stick);
+  const report = raw.report === null || raw.report === undefined ? null : fromServiceLoad(raw.report);
+  const error = raw.error === null || raw.error === undefined ? null : text(record(raw.error).message) || null;
+  return {
+    id: text(raw.id),
+    stick: { path: text(stick.path), name: text(stick.name) || text(stick.path) },
+    finished: text(raw.finished),
+    outcome: report === null ? null : { ...report, reportId: text(raw.id) },
+    error,
   };
 }
 
@@ -322,7 +350,9 @@ const items = (tracks: number, playlists: number) =>
 export function outcomeLines(outcome: LoadOutcome): string[] {
   const lines: string[] = [];
   const written = items(outcome.written.tracks.length, outcome.written.playlists.length);
-  lines.push(written === "" ? "Nothing needed writing" : `Written: ${written}`);
+  // "Needed" only for a load that succeeded with nothing to do.
+  const none = outcome.outcome === "loaded" ? "Nothing needed writing" : "Nothing was written";
+  lines.push(written === "" ? none : `Written: ${written}`);
   const unchanged = items(outcome.unchanged.tracks.length, outcome.unchanged.playlists.length);
   if (unchanged !== "") lines.push(`Already as planned: ${unchanged}`);
   const missed = items(outcome.notWritten.tracks.length, outcome.notWritten.playlists.length);

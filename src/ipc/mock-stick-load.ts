@@ -33,6 +33,10 @@
  *   volume id, empty, with that free space); the window sees it on its next
  *   device listing.
  *
+ * - Kept reports (the shell's `stick_load_reports`): every load's report
+ *   or error, in `sessionStorage["rbl.mock.stickLoadReports"]`, so they
+ *   survive a reload as the shell's survive a restart.
+ *
  * Each dry run is worked out when it is asked, so an answer held back and
  * let go late is the answer for the Stick as it was then.
  */
@@ -66,6 +70,25 @@ const TRACK_BYTES = 10_000_000;
 const STEMS_BYTES = 4_000_000;
 
 const nameOf = (path: string) => path.split("/").filter(Boolean).at(-1) ?? path;
+
+const KEPT = "rbl.mock.stickLoadReports";
+
+function keptReports(): unknown[] {
+  try {
+    const raw = typeof sessionStorage === "undefined" ? null : sessionStorage.getItem(KEPT);
+    return raw === null ? [] : JSON.parse(raw) as unknown[];
+  } catch {
+    return [];
+  }
+}
+
+function keepReports(reports: readonly unknown[]): void {
+  try {
+    sessionStorage.setItem(KEPT, JSON.stringify(reports));
+  } catch {
+    // No storage: reports last as long as the page.
+  }
+}
 
 export function createMockStickLoad(source: MockStickLoadSource) {
   const sticks = new Map<string, StickState>();
@@ -277,8 +300,38 @@ export function createMockStickLoad(source: MockStickLoadSource) {
       if (answer instanceof Error) throw answer;
       return source.wait(answer);
     },
-    /** Reached only through `mock-stick-safety.ts`: protected Sticks and loads without the hold never get here. */
-    stickViewLoad: async (stick: string, playlists: string[], plan: string): Promise<unknown> => {
+    stickLoadReports: (): Promise<unknown[]> => source.wait(keptReports()),
+    stickLoadReportDismiss: (id: string): Promise<void> => {
+      keepReports(keptReports().filter((r) => (r as { id?: string }).id !== id));
+      return source.wait(undefined);
+    },
+    /**
+     * Reached only through `mock-stick-safety.ts`: protected Sticks and loads
+     * without the hold never get here. Its report, or its error, is kept as
+     * the shell keeps it, under `operation`.
+     */
+    stickViewLoad: async (stick: string, playlists: string[], plan: string, operation?: string): Promise<unknown> => {
+      const id = operation ?? `op-${Date.now()}`;
+      const keep = (report: unknown, error: { code: string; message: string } | null) => {
+        const device = source.devices().find((d) => d.path === stick);
+        keepReports([...keptReports().filter((r) => (r as { id?: string }).id !== id), {
+          id, stick: { path: stick, name: device?.name ?? nameOf(stick), volume: device?.volumeId ?? null },
+          finished: new Date().toISOString(), report, error,
+        }]);
+      };
+      try {
+        const report = await loadNow(stick, playlists, plan) as Record<string, unknown>;
+        keep(report, null);
+        return { ...report, report_id: id };
+      } catch (error) {
+        const detail = (error as { detail?: string }).detail ?? "stick_load_failed";
+        keep(null, { code: detail, message: error instanceof Error ? error.message : String(error) });
+        throw error;
+      }
+    },
+  };
+
+  async function loadNow(stick: string, playlists: string[], plan: string): Promise<unknown> {
       loadCalls.push({ stick, playlists: [...playlists], plan });
       if (loadsHeld !== null) await new Promise<void>((go) => { loadsHeld?.push(go); });
       const failure = failNext.get(stick);
@@ -328,6 +381,5 @@ export function createMockStickLoad(source: MockStickLoadSource) {
         unchanged: { tracks: all.filter((id) => before.has(id)).map(line), playlists: samePlaylists.map((p) => p.name) },
         native_stems: stems,
       });
-    },
-  };
+  }
 }

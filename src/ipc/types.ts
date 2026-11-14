@@ -1180,7 +1180,11 @@ export interface Backend {
    * the hold's token for a sync of exactly these playlists. Refused on a
    * protected Stick and without the hold.
    */
-  stickViewLoad(stick: string, playlists: string[], plan: string, approval?: string): Promise<import("@/lib/stickLoad").LoadOutcome>;
+  stickViewLoad(stick: string, playlists: string[], plan: string, approval?: string, operation?: string): Promise<import("@/lib/stickLoad").LoadOutcome>;
+  /** Stick load reports the shell kept (a load cut short by closing the window, a failure), not yet dismissed. */
+  stickLoadReports(): Promise<import("@/lib/stickLoad").KeptLoadReport[]>;
+  /** The DJ has read a kept report. */
+  stickLoadReportDismiss(id: string): Promise<void>;
   /** How many tracks wait in Intake and in Problems (the Intake tab). */
   intakeCounts(): Promise<import("@/lib/intakeQueue").IntakeCounts>;
   /** The DJ's eight Prep colours, and which mean Clean and Problem (wbx-63; the service's `intake.colours`). */

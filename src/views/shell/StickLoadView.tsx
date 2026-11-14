@@ -40,7 +40,7 @@ import {
 import styles from "./StickLoadView.module.css";
 import { useStickWriteGateContext } from "./StickWriteGate";
 import { StickUnlock } from "./StickUnlock";
-import { runStickLoad, stickIdentity, useStickLoads, type StickLoad } from "@/store/stickLoads";
+import { dismissStickLoad, readKeptStickLoads, runStickLoad, stickIdentity, useStickLoads, type StickLoad } from "@/store/stickLoads";
 
 /** The playlists a load can include: the Library's playlists and folders, in tree order. */
 export interface LoadablePlaylist {
@@ -214,8 +214,14 @@ export function StickLoadView({ devices, selected, library, revision, panel }: {
   if (stick !== null && chosen.length === 0 && !choosing) setChoosing(true);
   // Loads live above the view (`stickLoads`): this Stick's latest, and the others'.
   const allLoads = useStickLoads();
+  // Reports the shell kept before this session (a load cut short by closing the window).
+  useEffect(() => { void readKeptStickLoads(); }, []);
+  const kept = allLoads.filter((l) => l.kept);
+  const keptReports = kept.length > 0
+    ? <KeptReports loads={kept} mounted={(path) => devices.some((d) => d.path === path)} />
+    : null;
   const current = identity === null ? null : [...allLoads].reverse().find((l) => l.identity === identity) ?? null;
-  const others = allLoads.filter((l) => l.identity !== identity && l.state !== "confirming");
+  const others = allLoads.filter((l) => !l.kept && l.identity !== identity && l.state !== "confirming");
   const loading = current !== null && (current.state === "running" || current.state === "confirming");
   const outcome = current?.state === "done" ? current.outcome : null;
   const loadError = current?.state === "failed" ? current.error : null;
@@ -248,7 +254,7 @@ export function StickLoadView({ devices, selected, library, revision, panel }: {
         lines,
         plan: { kind: "sync", playlists: ids },
         planned,
-        run: (approval) => run(async () => (await getBackend()).stickViewLoad(path, ids, servicePlan, approval)),
+        run: (approval) => run(async (operation) => (await getBackend()).stickViewLoad(path, ids, servicePlan, approval, operation)),
       });
     }).finally(() => {
       // Whoever is showing now reads again (a view gone stops its reads).
@@ -264,6 +270,7 @@ export function StickLoadView({ devices, selected, library, revision, panel }: {
     return (
       <div className={styles.view} data-testid="stick-view" {...{ [OWN_ACTIVATION]: "" }}>
         <p className={styles.problem} role="alert">The Sticks could not be read: {sticks.error}</p>
+        {keptReports}
         <div className={styles.buttons}><button type="button" onClick={readSticks}>Try again</button></div>
       </div>
     );
@@ -274,6 +281,7 @@ export function StickLoadView({ devices, selected, library, revision, panel }: {
         <div className={styles.empty} data-testid="stick-none">
           <h2 className={styles.title}>No Stick is mounted</h2>
           <p className={styles.note}>Plug in a Stick to see what a load would put on it.</p>
+          {keptReports}
         </div>
       </div>
     );
@@ -287,6 +295,7 @@ export function StickLoadView({ devices, selected, library, revision, panel }: {
   return (
     <div className={styles.view} data-testid="stick-view" data-stick={stick.path} {...{ [OWN_ACTIVATION]: "" }}>
       <section className={styles.main} aria-label={`Stick ${stick.name}`}>
+        {keptReports}
         {list.length > 1 ? (
           <div className={styles.sticks} role="group" aria-label="Mounted Sticks">
             {list.map((s) => (
@@ -411,6 +420,9 @@ export function StickLoadView({ devices, selected, library, revision, panel }: {
         {blocked !== null ? <p id="stick-load-why" className={styles.note} data-testid="stick-load-why">{blocked}</p> : null}
         {loadError !== null ? <p className={styles.problem} role="alert" data-testid="stick-load-error">The load did not finish: {loadError}</p> : null}
         {outcome !== null ? <Outcome outcome={outcome} /> : null}
+        {current !== null && (loadError !== null || (outcome !== null && outcome.outcome !== "loaded")) ? (
+          <button type="button" data-testid="stick-dismiss" onClick={() => { dismissStickLoad(current.id); }}>Dismiss this report</button>
+        ) : null}
         {others.length > 0 ? (
           <OtherLoads loads={others} mounted={(l) => devices.some((d) => stickIdentity(d.path, d.volumeId) === l.identity)} show={setPicked} />
         ) : null}
@@ -524,6 +536,31 @@ function Outcome({ outcome }: { outcome: LoadOutcome }) {
         </section>
       ) : null}
     </div>
+  );
+}
+
+/** Reports kept from before the window last closed, until the DJ dismisses each (also for a Stick not mounted). */
+function KeptReports({ loads, mounted }: { loads: readonly StickLoad[]; mounted: (path: string) => boolean }) {
+  return (
+    <section className={styles.kept} data-testid="stick-kept-reports" aria-label="Loads reported since the window last closed">
+      <h3 className={styles.label}>Earlier loads</h3>
+      {loads.map((load) => (
+        <div key={load.id} className={styles.keptReport} data-report={load.reportId}>
+          <h4>{load.name}{mounted(load.path) ? "" : " (not mounted)"}</h4>
+          {load.outcome !== null
+            ? <Outcome outcome={load.outcome} />
+            : (
+              <div className={styles.outcome} role="status">
+                <p className={styles.problem}>The load failed: {load.error ?? "no reason was given"}</p>
+                <ul><li>Nothing was written</li></ul>
+              </div>
+            )}
+          <button type="button" aria-label={`Dismiss the report for ${load.name}`} onClick={() => { dismissStickLoad(load.id); }}>
+            Dismiss
+          </button>
+        </div>
+      ))}
+    </section>
   );
 }
 
