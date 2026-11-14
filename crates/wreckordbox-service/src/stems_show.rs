@@ -18,7 +18,7 @@ use crate::protocol::ServiceError;
 use crate::stems::{fingerprint, Fingerprint, ParentAudio, StemSet, Stems, TrackStems};
 
 /// Answers `stems.show` for a track found in the Library. Writes nothing.
-pub(crate) fn show(stems: &Stems, found: ParentAudio) -> Result<TrackStems, ServiceError> {
+pub(crate) fn show(stems: &Stems, found: &ParentAudio) -> Result<TrackStems, ServiceError> {
     // Missing audio: the sets cannot be told current, so none is.
     let audio = fingerprint(found.parent(), found.path()).ok();
     let dir = stems.sidecar_dir().to_path_buf();

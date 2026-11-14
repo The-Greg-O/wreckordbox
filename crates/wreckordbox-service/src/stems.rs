@@ -246,7 +246,7 @@ pub(crate) fn answer(
             serde_json::to_value(stems.separate(found, again)?)
         }
         // Reads only (wbx-t3p).
-        _ => serde_json::to_value(crate::stems_show::show(stems, found)?),
+        _ => serde_json::to_value(crate::stems_show::show(stems, &found)?),
     };
     answer.map_err(|e| ServiceError::new(service_codes::SERVICE_FAILED, e.to_string()))
 }
