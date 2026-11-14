@@ -18,13 +18,40 @@
 use std::sync::Arc;
 
 use rbxport_lib::commands;
+use rbxport_lib::dto::ViewSpecDto;
 use rbxport_lib::filter_playlist::{self, SaveFilterDto};
+use rbxport_lib::state::spec_from_wire;
 use rbxport_lib::state::AppState;
 use rbxport_lib::{AppError, ErrorKind};
 use serde_json::{json, Value};
+use tauri::test::MockRuntime;
 use tauri::Manager;
 
+type App = tauri::App<MockRuntime>;
+
 use crate::track_filter_agrees::{hosting_window, Window};
+
+/// The track ids the window's list shows for this `ViewSpec`.
+fn listed(app: &App, spec: Value) -> Vec<String> {
+    let dto: ViewSpecDto = serde_json::from_value(spec).unwrap();
+    let library = app.state::<Arc<AppState>>().library().unwrap();
+    let view = library.open_view(&spec_from_wire(&library, &dto));
+    view.rows
+        .iter()
+        .map(|&row| library.ids[row as usize].to_string())
+        .collect()
+}
+
+/// What the Track Filter shows on All Tracks for this list filter.
+fn filtered(app: &App, filter: Value) -> Vec<String> {
+    let mut spec = json!({
+        "source": { "kind": "collection" }, "sort": "trackNo", "descending": false, "query": ""
+    });
+    if !filter.is_null() {
+        spec["filter"] = filter;
+    }
+    listed(app, spec)
+}
 
 fn run<T>(fut: impl std::future::Future<Output = T>) -> T {
     tauri::async_runtime::block_on(fut)
@@ -38,39 +65,42 @@ fn window() -> Window {
 }
 
 fn save(
-    window: &Window,
+    app: &App,
     name: &str,
     filter: Value,
 ) -> Result<filter_playlist::SavedFilterPlaylistDto, AppError> {
     let filter: SaveFilterDto = serde_json::from_value(filter).unwrap();
     run(filter_playlist::save_filter_playlist(
-        window.app.handle().clone(),
-        window.app.state::<Arc<AppState>>(),
+        app.handle().clone(),
+        app.state::<Arc<AppState>>(),
         name.to_owned(),
         filter,
     ))
 }
 
 /// The Library's playlists and folders by name, as the tree lists them.
-fn tree_names(window: &Window) -> Vec<String> {
-    run(commands::playlist_tree(window.app.state::<Arc<AppState>>()))
+fn tree_names(app: &App) -> Vec<String> {
+    run(commands::playlist_tree(app.state::<Arc<AppState>>()))
         .unwrap()
         .into_iter()
         .map(|node| node.name)
         .collect()
 }
 
-fn tree_node(window: &Window, id: &str) -> Option<rbxport_lib::dto::TreeNodeDto> {
-    run(commands::playlist_tree(window.app.state::<Arc<AppState>>()))
+fn tree_node(app: &App, id: &str) -> Option<rbxport_lib::dto::TreeNodeDto> {
+    run(commands::playlist_tree(app.state::<Arc<AppState>>()))
         .unwrap()
         .into_iter()
         .find(|node| node.id == id)
 }
 
-fn playlist_tracks(window: &Window, id: &str) -> Vec<String> {
-    window.listed(json!({
-        "source": { "kind": "playlist", "id": id }, "sort": "trackNo", "descending": false, "query": ""
-    }))
+fn playlist_tracks(app: &App, id: &str) -> Vec<String> {
+    listed(
+        app,
+        json!({
+            "source": { "kind": "playlist", "id": id }, "sort": "trackNo", "descending": false, "query": ""
+        }),
+    )
 }
 
 /// What the window sends for a case: the service form of the filter, with
@@ -136,10 +166,10 @@ fn every_case_saves_a_playlist_listing_the_filters_tracks_or_is_refused_with_the
     let mut saved = 0;
     for case in file["cases"].as_array().unwrap() {
         let name = case["name"].as_str().unwrap();
-        let before = tree_names(&window);
-        match (outcome(name), save(&window, name, request_for(case))) {
+        let before = tree_names(&window.app);
+        match (outcome(name), save(&window.app, name, request_for(case))) {
             (Ok(()), Ok(made)) => {
-                let node = tree_node(&window, &made.id)
+                let node = tree_node(&window.app, &made.id)
                     .unwrap_or_else(|| panic!("{name}: not in the tree"));
                 assert_eq!(
                     (node.name.as_str(), node.kind),
@@ -156,11 +186,18 @@ fn every_case_saves_a_playlist_listing_the_filters_tracks_or_is_refused_with_the
                     !expected.is_empty(),
                     "{name}: a case that lists nothing proves little"
                 );
+                // The filter's own list, as the bar shows it on All Tracks.
                 assert_eq!(
-                    playlist_tracks(&window, &made.id),
-                    expected,
-                    "{name}: the playlist's tracks"
+                    case["window"]["query"], "",
+                    "{name}: a saved case has no text"
                 );
+                let shown = filtered(&window.app, case["window"]["filter"].clone());
+                let tracks = playlist_tracks(&window.app, &made.id);
+                assert_eq!(
+                    tracks, shown,
+                    "{name}: the playlist lists what the filter showed"
+                );
+                assert_eq!(tracks, expected, "{name}: the playlist's tracks");
                 saved += 1;
             }
             (Err(reason), Err(error)) => {
@@ -175,7 +212,11 @@ fn every_case_saves_a_playlist_listing_the_filters_tracks_or_is_refused_with_the
                     "{name}: {:?} does not say {reason:?}",
                     error.message
                 );
-                assert_eq!(tree_names(&window), before, "{name}: nothing was written");
+                assert_eq!(
+                    tree_names(&window.app),
+                    before,
+                    "{name}: nothing was written"
+                );
             }
             (Ok(()), Err(error)) => panic!("{name}: refused: {}", error.message),
             (Err(reason), Ok(_)) => panic!("{name}: saved, but should be refused for {reason:?}"),
@@ -193,8 +234,8 @@ fn a_field_of_one_choice_alone_is_saved_as_any_of_its_spellings() {
         "source": { "kind": "collection" }, "sort": "trackNo", "descending": false, "query": "",
         "filter": { "keyIdentities": ["8A"] }
     }));
-    let made = save(&window, "Every 8A", json!({ "keys": ["8A"] })).unwrap();
-    assert_eq!(playlist_tracks(&window, &made.id), shown);
+    let made = save(&window.app, "Every 8A", json!({ "keys": ["8A"] })).unwrap();
+    assert_eq!(playlist_tracks(&window.app, &made.id), shown);
     assert!(shown.len() > 3, "{shown:?}");
 
     // Two Prep colours alone, likewise.
@@ -203,19 +244,19 @@ fn a_field_of_one_choice_alone_is_saved_as_any_of_its_spellings() {
         "filter": { "colors": ["Green", "Red"] }
     }));
     let made = save(
-        &window,
+        &window.app,
         "Green or Red",
         json!({ "prep_colours": ["Green", "Red"] }),
     )
     .unwrap();
-    assert_eq!(playlist_tracks(&window, &made.id), shown);
+    assert_eq!(playlist_tracks(&window.app, &made.id), shown);
 }
 
 #[test]
 fn a_key_spelled_more_than_one_way_cannot_join_another_field_and_the_reason_names_the_spellings() {
     let window = window();
     let error = save(
-        &window,
+        &window.app,
         "8A Green",
         json!({ "keys": ["8A"], "prep_colours": ["Green"] }),
     )
@@ -232,15 +273,15 @@ fn a_key_spelled_more_than_one_way_cannot_join_another_field_and_the_reason_name
 #[test]
 fn an_empty_filter_and_a_tag_no_longer_in_the_library_are_refused() {
     let window = window();
-    let before = tree_names(&window);
-    let error = save(&window, "Nothing", json!({})).unwrap_err();
+    let before = tree_names(&window.app);
+    let error = save(&window.app, "Nothing", json!({})).unwrap_err();
     assert!(
         error.message.contains("Nothing is picked"),
         "{}",
         error.message
     );
     let error = save(
-        &window,
+        &window.app,
         "Gone",
         json!({ "my_tag_picks": [{ "category": "Situation", "tags": ["Afterhours"], "any": false }] }),
     )
@@ -252,17 +293,17 @@ fn an_empty_filter_and_a_tag_no_longer_in_the_library_are_refused() {
         "{}",
         error.message
     );
-    let error = save(&window, "   ", json!({ "prep_colours": ["Green"] })).unwrap_err();
+    let error = save(&window.app, "   ", json!({ "prep_colours": ["Green"] })).unwrap_err();
     assert!(error.message.contains("needs a name"), "{}", error.message);
-    assert_eq!(tree_names(&window), before);
+    assert_eq!(tree_names(&window.app), before);
 }
 
 #[test]
 fn saving_is_one_undo_step_recorded_in_the_ledger_as_the_djs() {
     let window = window();
     let filter = json!({ "energies": ["3..5"], "my_tag_picks": [{ "category": "Situation", "tags": ["Peak time"], "any": false }] });
-    let made = save(&window, "Peak 3+", filter).unwrap();
-    let listed = playlist_tracks(&window, &made.id);
+    let made = save(&window.app, "Peak 3+", filter).unwrap();
+    let listed = playlist_tracks(&window.app, &made.id);
     assert!(!listed.is_empty());
     let history = commands::current_history(&window.state());
     assert_eq!(
@@ -305,7 +346,7 @@ fn saving_is_one_undo_step_recorded_in_the_ledger_as_the_djs() {
         undone.redo_label.as_deref(),
         Some("Save Filter as Intelligent Playlist")
     );
-    assert!(tree_node(&window, &made.id).is_none());
+    assert!(tree_node(&window.app, &made.id).is_none());
     assert!(!undone.can_undo, "one step, nothing more");
     run(commands::redo_edit(
         window.app.handle().clone(),
@@ -313,25 +354,271 @@ fn saving_is_one_undo_step_recorded_in_the_ledger_as_the_djs() {
     ))
     .unwrap();
     assert_eq!(
-        tree_node(&window, &made.id).map(|node| node.name),
+        tree_node(&window.app, &made.id).map(|node| node.name),
         Some("Peak 3+".to_owned())
     );
-    assert_eq!(playlist_tracks(&window, &made.id), listed);
+    assert_eq!(playlist_tracks(&window.app, &made.id), listed);
 }
 
 #[test]
 fn under_library_protection_a_save_is_refused_with_nothing_written() {
     let window = window();
     window.state().core().set_protection(true).unwrap();
-    let before = tree_names(&window);
-    let error = save(&window, "Protected", json!({ "prep_colours": ["Green"] })).unwrap_err();
+    let before = tree_names(&window.app);
+    let error = save(
+        &window.app,
+        "Protected",
+        json!({ "prep_colours": ["Green"] }),
+    )
+    .unwrap_err();
     assert!(
         error.message.contains("Library Protection"),
         "{}",
         error.message
     );
-    assert_eq!(tree_names(&window), before);
+    assert_eq!(tree_names(&window.app), before);
     assert!(commands::current_history(&window.state())
         .undo_label
         .is_none());
+}
+
+// ------------------------------------------------- a Library of its own
+
+/// A window over eight fixture tracks with keys, tempos and a MyTag set
+/// for the cases the shared fixture cannot hold: keys stored in spellings
+/// the writer would not make (`mystery` beside `Mystery`, `8A ` with a
+/// trailing space, as an imported Library can hold them), tempos exactly
+/// at and just past a range's bounds, and a MyTag id above `i32::MAX`.
+///
+/// Track i (id `track_id(i)`): 0 `Mystery`, 1 `mystery`, 2 `8A `, 3 `8A`,
+/// the rest `5A`; BPM 120.49, 120.50, 122.49, 122.50 for 4 to 7, 130.00
+/// otherwise; the MyTag "Big id" (id 3000000000) on 0 and 4.
+struct Own {
+    _dir: tempfile::TempDir,
+    app: App,
+}
+
+const BIG_TAG_ID: &str = "3000000000";
+
+fn own_window() -> Own {
+    use rbl_db::fixture::{self, track_id, Shape};
+    use rbl_db::write::{TrackField, Writer};
+
+    let dir = tempfile::tempdir().unwrap();
+    let library = dir.path().join("library");
+    std::fs::create_dir_all(&library).unwrap();
+    let location = fixture::build(
+        &library,
+        Shape {
+            tracks: 8,
+            ..Shape::default()
+        },
+    )
+    .unwrap();
+    let mut writer = Writer::open(location.clone(), dir.path().join("backups")).unwrap();
+    writer.disable_automatic_backups();
+    let keys = [
+        "Mystery",
+        "KEY-LOWER",
+        "KEY-SPACED",
+        "8A",
+        "5A",
+        "5A",
+        "5A",
+        "5A",
+    ];
+    for name in ["Mystery", "KEY-LOWER", "KEY-SPACED", "8A", "5A"] {
+        writer.ensure_detected_key(name).unwrap();
+    }
+    let tempos = [
+        13_000, 13_000, 13_000, 13_000, 12_049, 12_050, 12_249, 12_250,
+    ];
+    for i in 0..8 {
+        let id = track_id(i);
+        writer.set_field(&id, TrackField::Key, keys[i]).unwrap();
+        writer.set_bpm_x100(&id, tempos[i]).unwrap();
+    }
+    let tag = writer.create_my_tag(fixture::MY_TAG_CATEGORY).unwrap();
+    writer.rename_my_tag(&tag.id, "Big id").unwrap();
+    for i in [0, 4] {
+        writer
+            .set_my_tags(&track_id(i), std::slice::from_ref(&tag.id))
+            .unwrap();
+    }
+    writer
+        .library()
+        .connection()
+        .execute_batch(&format!(
+            "UPDATE djmdKey SET ScaleName = 'mystery' WHERE ScaleName = 'KEY-LOWER';
+             UPDATE djmdKey SET ScaleName = '8A ' WHERE ScaleName = 'KEY-SPACED';
+             UPDATE djmdMyTag SET ID = '{BIG_TAG_ID}' WHERE ID = '{old}';
+             UPDATE djmdSongMyTag SET MyTagID = '{BIG_TAG_ID}' WHERE MyTagID = '{old}';",
+            old = tag.id
+        ))
+        .unwrap();
+    drop(writer);
+
+    let state = AppState::with_backups(dir.path().join("backups"));
+    state.core().set_protection(false).unwrap();
+    let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
+    let (index, _) = rbl_index::load(&db).unwrap();
+    state.set_library(index, false, db.schema().db_version, 0, location);
+    let app = tauri::test::mock_app();
+    app.manage(Arc::new(state));
+    Own { _dir: dir, app }
+}
+
+fn ids(indices: &[usize]) -> Vec<String> {
+    indices
+        .iter()
+        .map(|&i| rbl_db::fixture::track_id(i))
+        .collect()
+}
+
+/// A key filter the rule cannot keep exactly is refused, naming the key;
+/// the filter's own list is what the playlist would have had to match.
+fn refused_naming_key(own: &Own, identity: &str, shown: &[usize]) {
+    let filter = filtered(&own.app, json!({ "keyIdentities": [identity] }));
+    assert_eq!(filter, ids(shown), "the filter's own list for {identity:?}");
+    let before = tree_names(&own.app);
+    match save(&own.app, "Key", json!({ "keys": [identity] })) {
+        Ok(made) => panic!(
+            "saved {identity:?}: the playlist lists {:?}, the filter showed {filter:?}",
+            playlist_tracks(&own.app, &made.id)
+        ),
+        Err(error) => {
+            assert_eq!(error.kind, ErrorKind::Malformed);
+            assert!(
+                error
+                    .message
+                    .contains(&format!("the key {identity} exactly")),
+                "{}",
+                error.message
+            );
+        }
+    }
+    assert_eq!(tree_names(&own.app), before, "nothing was written");
+}
+
+#[test]
+fn a_key_whose_spellings_differ_only_in_case_is_refused_because_the_rule_would_admit_both() {
+    // The filter matches a name off the wheel exactly: `Mystery` alone.
+    // The rule compares names whatever their case: it would add `mystery`.
+    let own = own_window();
+    refused_naming_key(&own, "Mystery", &[0]);
+}
+
+#[test]
+fn a_key_stored_with_a_trailing_space_is_refused_because_the_rule_would_leave_it_out() {
+    // The filter takes `8A ` as 8A; the rule compares the stored name as it
+    // is, space and all, so `8A` would leave that track out.
+    let own = own_window();
+    refused_naming_key(&own, "8A", &[2, 3]);
+}
+
+#[test]
+fn a_key_spelled_one_way_is_saved_and_lists_exactly_what_the_filter_showed() {
+    let own = own_window();
+    let shown = filtered(&own.app, json!({ "keyIdentities": ["5A"] }));
+    assert_eq!(shown, ids(&[4, 5, 6, 7]));
+    let made = save(&own.app, "5A", json!({ "keys": ["5A"] })).unwrap();
+    assert_eq!(playlist_tracks(&own.app, &made.id), shown);
+}
+
+#[test]
+fn tracks_exactly_at_both_bpm_bounds_are_in_and_those_just_past_them_are_not() {
+    let own = own_window();
+    let shown = filtered(
+        &own.app,
+        json!({ "bpm": { "values": [], "tolerancePct": 0, "masterBpmX100": null, "rangesX100": [[12050, 12249]] } }),
+    );
+    assert_eq!(shown, ids(&[5, 6]));
+    let made = save(
+        &own.app,
+        "121 to 122",
+        json!({ "bpm_ranges": ["120.50..122.49"] }),
+    )
+    .unwrap();
+    assert_eq!(playlist_tracks(&own.app, &made.id), shown);
+}
+
+#[test]
+fn a_mytag_whose_id_is_above_the_signed_32_bit_range_is_saved_and_lists_its_tracks() {
+    let own = own_window();
+    let library = own.app.state::<Arc<AppState>>().library().unwrap();
+    let (at, category) = library
+        .my_tags()
+        .iter()
+        .enumerate()
+        .find(|(_, c)| c.tags.iter().any(|t| t == "Big id"))
+        .map(|(at, c)| (at, c.name.clone()))
+        .unwrap();
+    drop(library);
+    let shown = filtered(
+        &own.app,
+        json!({ "tags": [{ "category": at, "any": false, "tags": ["Big id"] }] }),
+    );
+    assert_eq!(shown, ids(&[0, 4]));
+    let made = save(
+        &own.app,
+        "Big",
+        json!({ "my_tag_picks": [{ "category": category, "tags": ["Big id"], "any": false }] }),
+    )
+    .unwrap();
+    assert_eq!(playlist_tracks(&own.app, &made.id), shown);
+}
+
+#[test]
+fn a_bpm_range_is_written_byte_for_byte_in_the_form_rekordbox_writes() {
+    // `rules_are_written_byte_for_byte_as_rekordbox_writes_them`
+    // (rbl-index): rekordbox 7.2.14's own BPM 120 to 126.5 rule.
+    let own = own_window();
+    let library = own.app.state::<Arc<AppState>>().library().unwrap();
+    let filter: SaveFilterDto =
+        serde_json::from_value(json!({ "bpm_ranges": ["120.00..126.50"] })).unwrap();
+    let rule = filter_playlist::rule_for(&library, &filter).unwrap();
+    assert_eq!(
+        rule.to_xml(3_213_900_474),
+        r#"<NODE Id="-1081066822" LogicalOperator="1" AutomaticUpdate="0"><CONDITION PropertyName="bpm" Operator="5" ValueUnit="0" ValueLeft="12000" ValueRight="12650"/></NODE>"#
+    );
+}
+
+#[test]
+fn names_are_kept_as_given_a_name_saved_twice_is_two_playlists_and_undo_takes_only_the_second() {
+    let own = own_window();
+    let filter = || json!({ "keys": ["5A"] });
+    let first = save(&own.app, "Twice", filter()).unwrap();
+    let second = save(&own.app, "Twice", filter()).unwrap();
+    assert_ne!(first.id, second.id);
+    run(commands::undo_edit(
+        own.app.handle().clone(),
+        own.app.state::<Arc<AppState>>(),
+    ))
+    .unwrap();
+    assert!(
+        tree_node(&own.app, &second.id).is_none(),
+        "the second is gone"
+    );
+    assert_eq!(
+        tree_node(&own.app, &first.id).map(|n| n.name),
+        Some("Twice".to_owned())
+    );
+    assert_eq!(playlist_tracks(&own.app, &first.id), ids(&[4, 5, 6, 7]));
+
+    let long = "Long name ".repeat(60);
+    let made = save(&own.app, &long, filter()).unwrap();
+    assert_eq!(
+        tree_node(&own.app, &made.id).map(|n| n.name),
+        Some(long.trim().to_owned())
+    );
+    let made = save(&own.app, "Sets/2026\\Peak", filter()).unwrap();
+    assert_eq!(
+        tree_node(&own.app, &made.id).map(|n| n.name),
+        Some("Sets/2026\\Peak".to_owned())
+    );
+
+    let before = tree_names(&own.app);
+    let error = save(&own.app, "", filter()).unwrap_err();
+    assert!(error.message.contains("needs a name"), "{}", error.message);
+    assert_eq!(tree_names(&own.app), before);
 }

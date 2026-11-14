@@ -146,14 +146,18 @@ struct Clause {
     choices: Vec<Condition>,
 }
 
-fn condition(property: Property, operator: Operator, left: String, right: &str) -> Condition {
-    Condition {
-        property,
-        operator,
-        left,
-        right: right.to_owned(),
-        unit: String::new(),
-    }
+/// A condition as the intelligent-playlist editor stores one
+/// (`Condition::from_editor`): the forms rekordbox's own dialog writes,
+/// a BPM in hundredths with `ValueUnit="0"`, a single rating with
+/// `ValueRight="0"`. `left` and `right` are the editor's values (a BPM in
+/// BPM).
+fn condition(property: Property, operator: Operator, left: &str, right: &str) -> Condition {
+    Condition::from_editor(property, operator, left, right, "")
+}
+
+/// Hundredths as the editor writes a BPM: `12050` is `120.50`.
+fn bpm_text(hundredths: u32) -> String {
+    format!("{}.{:02}", hundredths / 100, hundredths % 100)
 }
 
 /// The rule that admits exactly what `filter` shows on All Tracks, or why
@@ -196,7 +200,7 @@ pub fn rule_for(library: &Library, filter: &SaveFilterDto) -> Result<SmartRule, 
     }
 
     let mut clauses = Vec::new();
-    if let Some(clause) = keys(library, &filter.keys) {
+    if let Some(clause) = keys(library, &filter.keys)? {
         clauses.push(clause);
     }
     if let Some(clause) = colours(&filter.prep_colours)? {
@@ -212,8 +216,8 @@ pub fn rule_for(library: &Library, filter: &SaveFilterDto) -> Result<SmartRule, 
             choices: vec![condition(
                 Property::Bpm,
                 Operator::InRange,
-                low.to_string(),
-                &high.to_string(),
+                &bpm_text(low),
+                &bpm_text(high),
             )],
         });
     }
@@ -261,26 +265,38 @@ fn join_and(parts: &[&str]) -> String {
     }
 }
 
-/// Every spelling the Library holds of the picked keys, each a choice.
-fn keys(library: &Library, identities: &[String]) -> Option<Clause> {
+/// Every spelling the Library holds of the picked keys, each a choice,
+/// exactly as stored.
+///
+/// The Track Filter takes a key by identity and the tracks by key row
+/// (`key_ids_identified`: every spelling of a key on the wheel, a name off
+/// it exactly); the rule compares the stored name with each condition's
+/// name ignoring case and the spaces around the condition. The two can
+/// disagree (`mystery` beside a picked `Mystery`, a stored `8A `), so each
+/// picked key's conditions are evaluated against the Library here, and a
+/// key whose conditions would not admit exactly the filter's tracks is
+/// refused, naming it.
+fn keys(library: &Library, identities: &[String]) -> Result<Option<Clause>, String> {
     if identities.is_empty() {
-        return None;
+        return Ok(None);
     }
     let mut spellings: Vec<String> = Vec::new();
     let mut per_key: Vec<(String, Vec<String>)> = Vec::new();
     for identity in identities {
+        let rows = library.key_ids_identified(std::slice::from_ref(identity));
         let mut names: Vec<String> = Vec::new();
-        for id in library.key_ids_identified(std::slice::from_ref(identity)) {
-            let name = library.keys.name(id).trim().to_owned();
+        for &id in &rows {
+            let name = library.keys.name(id).to_owned();
             if !name.is_empty() && !names.contains(&name) {
                 names.push(name);
             }
         }
         // No track can be in a key the Library does not hold: the rule
-        // names it as picked, and admits none, as the filter does.
+        // names it as picked; the check below confirms it admits none.
         if names.is_empty() {
             names.push(identity.clone());
         }
+        same_tracks(library, identity, &rows, &names)?;
         for name in &names {
             if !spellings.contains(name) {
                 spellings.push(name.clone());
@@ -297,13 +313,58 @@ fn keys(library: &Library, identities: &[String]) -> Option<Clause> {
     } else {
         format!("{} keys ({})", identities.len(), identities.join(", "))
     };
-    Some(Clause {
+    Ok(Some(Clause {
         what,
         choices: spellings
-            .into_iter()
+            .iter()
             .map(|name| condition(Property::Key, Operator::Equal, name, ""))
             .collect(),
-    })
+    }))
+}
+
+/// Refuses a picked key whose `key equal` conditions would admit other
+/// tracks than the Track Filter's key rows `key_rows` do.
+fn same_tracks(
+    library: &Library,
+    identity: &str,
+    key_rows: &[u32],
+    names: &[String],
+) -> Result<(), String> {
+    let rule = SmartRule {
+        root: Group {
+            logic: Logic::Any,
+            items: names
+                .iter()
+                .map(|name| Item::Condition(condition(Property::Key, Operator::Equal, name, "")))
+                .collect(),
+        },
+    };
+    let admitted = rule.evaluate(library);
+    let shown: Vec<rbl_index::Row> = (0..library.len())
+        .filter_map(|row| u32::try_from(row).ok())
+        .filter(|&row| {
+            library
+                .key
+                .get(row as usize)
+                .is_some_and(|key| key_rows.contains(key))
+        })
+        .collect();
+    if admitted == shown {
+        return Ok(());
+    }
+    let mut spelled: Vec<String> = Vec::new();
+    for &row in admitted.iter().chain(&shown) {
+        if let Some(&key) = library.key.get(row as usize) {
+            let name = format!("\"{}\"", library.keys.name(key));
+            if !spelled.contains(&name) {
+                spelled.push(name);
+            }
+        }
+    }
+    Err(format!(
+        "An intelligent playlist cannot hold the key {identity} exactly: it compares key names ignoring case and the spaces around them, and the Library spells it {}, so the playlist would not list the tracks the filter shows. Save the filter without this key.",
+        join_and(&spelled.iter().map(String::as_str).collect::<Vec<_>>())
+    ))
 }
 
 fn colours(names: &[String]) -> Result<Option<Clause>, String> {
@@ -327,7 +388,7 @@ fn colours(names: &[String]) -> Result<Option<Clause>, String> {
         choices.push(condition(
             Property::Color,
             Operator::Equal,
-            id.to_string(),
+            &id.to_string(),
             "",
         ));
     }
@@ -378,12 +439,12 @@ fn energy(texts: &[String]) -> Result<Option<Clause>, String> {
         .into_iter()
         .map(|(low, high)| {
             if low == high {
-                condition(Property::Rating, Operator::Equal, low.to_string(), "0")
+                condition(Property::Rating, Operator::Equal, &low.to_string(), "")
             } else {
                 condition(
                     Property::Rating,
                     Operator::InRange,
-                    low.to_string(),
+                    &low.to_string(),
                     &high.to_string(),
                 )
             }
@@ -416,7 +477,7 @@ fn tags(library: &Library, pick: &MyTagPick) -> Result<Vec<Clause>, String> {
         }
         let choices: Vec<Condition> = ids
             .iter()
-            .map(|id| condition(Property::MyTag, Operator::Contains, id.to_string(), ""))
+            .map(|id| condition(Property::MyTag, Operator::Contains, &id.to_string(), ""))
             .collect();
         per_tag.push((tag, choices));
     }
