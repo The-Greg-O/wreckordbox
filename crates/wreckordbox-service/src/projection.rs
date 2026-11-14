@@ -479,10 +479,23 @@ fn plan_or_apply(
     Ok((report, Some(changed)))
 }
 
-/// The test pause between plan and write ([`PAUSE_ENV`]).
+/// A folder in which `projection.apply`, between making its plan and
+/// writing it, makes a file `paused` and then waits until a file `go`
+/// appears (at most 30 seconds), so a test can change something at exactly
+/// that point and then let it go on. Read only in test mode.
+pub const GATE_ENV: &str = "WRECKORDBOX_PROJECTION_GATE";
+
+/// The test pause between plan and write ([`GATE_ENV`], [`PAUSE_ENV`]).
 fn pause() {
     if !rbl_db::test_mode() {
         return;
+    }
+    if let Some(gate) = std::env::var_os(GATE_ENV).map(PathBuf::from) {
+        let _ = std::fs::write(gate.join("paused"), b"");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !gate.join("go").exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
     }
     if let Some(ms) = std::env::var(PAUSE_ENV)
         .ok()
