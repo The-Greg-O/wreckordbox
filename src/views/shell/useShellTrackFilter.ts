@@ -17,14 +17,17 @@ export interface ShellTrackFilter {
   onChange: (next: ShellFilter) => void;
   /** What the window's list is sent: `ViewSpec.filter`. */
   viewFilter: TrackFilter | undefined;
-  /** The keys the open list offers (a Stick's own on a Stick list), or why not. */
+  /**
+   * The keys and MyTags the open list offers (a Stick's own on a Stick
+   * list), or why not; `null` until read for the open list.
+   */
   values: FilterValues | null;
   valuesError: string | null;
-  /** The Library's MyTag categories, whatever list is open. */
+  /** The MyTag categories the bar offers: the Library's, or on a Stick list the Stick's own. */
   categories: FilterValues["tags"];
   /** Picks the Library no longer holds, left out of the filter, as the service names them. */
   dropped: string[];
-  /** Whether the open list is a Stick's, where MyTags cannot be read. */
+  /** Whether the open list is a Stick's, narrowed by the Stick's own MyTags. */
   onStick: boolean;
   /** Whether anything narrows the open list now. */
   filtering: boolean;
@@ -48,8 +51,11 @@ const COLLECTION: ViewSpec = { source: { kind: "collection" }, sort: "trackNo", 
  *   list's): a picked tag or category the Library no longer holds is dropped
  *   from the bar and named in `dropped`, as the service drops and names it.
  * - `loaded` is the track Key match and BPM ±6% follow.
- * - On a Stick list MyTag picks are not sent (a Stick's MyTags are not read);
- *   the bar says so.
+ * - On a Stick list the categories are the Stick's own (wbx-45.12), read with
+ *   the list's choices; a pick is sent by its category's place among them,
+ *   and a pick the Stick does not hold is left out (the bar names it) but
+ *   kept for the Library. Until the Stick's categories are read for this
+ *   list, the count reads; if they cannot be read, it says why.
  *
  * Reads settle for `SETTLE_MS` after a change; an answer for an earlier
  * state is dropped, and a read that fails is shown as failed rather than
@@ -68,7 +74,7 @@ export function useShellTrackFilter({
 }): ShellTrackFilter {
   const [picks, setPicks] = useState<ShellFilter>(EMPTY_SHELL_FILTER);
   const model = useMemo(() => ({ ...picks, text: query }), [picks, query]);
-  const [values, setValues] = useState<FilterValues | null>(null);
+  const [answered, setValues] = useState<{ base: string; values: FilterValues } | null>(null);
   const [valuesError, setValuesError] = useState<string | null>(null);
   const [library, setLibrary] = useState<FilterValues | null>(null);
   const [dropped, setDropped] = useState<string[]>([]);
@@ -76,21 +82,24 @@ export function useShellTrackFilter({
   const [narrowed, setNarrowed] = useState<FilterCount>({ state: "reading" });
 
   const onStick = base.source.kind === "device";
-  const categories = useMemo(() => library?.tags ?? [], [library]);
+  const baseKey = JSON.stringify(base);
+  // Choices read for another list are not this list's.
+  const values = answered?.base === baseKey ? answered.values : null;
+  // A Stick's own categories, once read for this list (null until then).
+  const stickTags = onStick && values !== null && valuesError === null ? values.tags : null;
+  const categories = useMemo(() => (onStick ? stickTags ?? [] : library?.tags ?? []), [onStick, stickTags, library]);
   const categoryNames = useMemo(() => categories.map((c) => c.name), [categories]);
   const loadedKey = loaded.key;
   const loadedBpm = loaded.bpmX100;
+  // On a Stick, the picks it holds; the rest wait for the Library.
+  const tagsPending = onStick && stickTags === null && picks.myTags.length > 0;
   const viewFilter = useMemo(() => {
+    const sent = !onStick ? picks : stickTags === null ? { ...picks, myTags: [] } : dropStale(picks, stickTags).filter;
     // Picks only: the text reaches the list through `query`.
-    const filter = toViewFilter({ ...picks, text: "" }, categoryNames, { key: loadedKey, bpmX100: loadedBpm }).filter;
-    if (!filter || !onStick || !filter.tags) return filter;
-    const { tags: _notOnAStick, ...rest } = filter;
-    return Object.keys(rest).length > 0 ? rest : undefined;
-  }, [picks, categoryNames, loadedKey, loadedBpm, onStick]);
-  // What is actually sent: on a Stick, MyTag picks are not.
+    return toViewFilter({ ...sent, text: "" }, categoryNames, { key: loadedKey, bpmX100: loadedBpm }).filter;
+  }, [picks, categoryNames, loadedKey, loadedBpm, onStick, stickTags]);
   const filtering = query.trim() !== "" || viewFilter !== undefined;
 
-  const baseKey = JSON.stringify(base);
   const filterKey = JSON.stringify(viewFilter ?? null);
 
   // The Library's categories, for the bar's MyTag controls and stale picks.
@@ -110,13 +119,15 @@ export function useShellTrackFilter({
 
   // One stale-pick policy with the service: what the Library no longer
   // holds leaves the filter, and the bar says what left.
+  // On a Stick list the Stick's categories decide what is sent, and the
+  // Library's picks are kept for when a Library list is open again.
   useEffect(() => {
-    if (!library) return;
+    if (!library || onStick) return;
     const { filter, dropped: gone } = dropStale(picks, library.tags);
     if (gone.length === 0) return;
     setPicks(filter);
     setDropped(gone);
-  }, [library, picks]);
+  }, [library, picks, onStick]);
 
   // The keys the open list offers, for the list and the search alone.
   useEffect(() => {
@@ -128,7 +139,7 @@ export function useShellTrackFilter({
         try {
           const answer = await (await getBackend()).filterValues(spec);
           if (!live) return;
-          setValues(answer);
+          setValues({ base: baseKey, values: answer });
           setValuesError(null);
         } catch (error) {
           if (!live) return;
@@ -181,9 +192,13 @@ export function useShellTrackFilter({
     };
   }, [enabled, filtering, baseKey, filterKey, query, generation, tagListRevision]);
 
-  const count: FilterCount = total.state !== "known"
+  const count: FilterCount = tagsPending && valuesError !== null
+    ? { state: "failed", message: `this Stick's MyTags could not be read: ${valuesError}` }
+    : total.state !== "known"
     ? total
-    : !filtering
+    : tagsPending
+      ? { state: "reading" }
+      : !filtering
       ? total
       : narrowed.state !== "known"
         ? narrowed
