@@ -551,7 +551,8 @@ fn parent_length(audio: &Path) -> Option<u64> {
 }
 
 /// The track's Stems made from the audio it has now, with all four files
-/// in the Sidecar. Currency is computed without recording observations.
+/// in the Sidecar. The explicit write records an audio observation before
+/// using the shared read-only currency check.
 ///
 /// Before audio goes to a Stick, every Stem file is hashed again and must
 /// be the audio recorded with the set, whatever an earlier look found.
