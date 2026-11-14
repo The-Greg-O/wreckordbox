@@ -12,6 +12,7 @@ mod review_view;
 mod save_filter_playlist;
 mod scrub_meters;
 mod service_host;
+mod stick_hardening;
 mod stick_protection;
 mod stick_view;
 mod track_filter_agrees;

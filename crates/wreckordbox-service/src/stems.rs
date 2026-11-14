@@ -245,7 +245,8 @@ pub(crate) fn answer(
             let again = request.args.get("again").and_then(Value::as_bool) == Some(true);
             serde_json::to_value(stems.separate(found, again)?)
         }
-        _ => serde_json::to_value(stems.show(found)?),
+        // Reads only (wbx-t3p).
+        _ => serde_json::to_value(crate::stems_show::show(stems, &found)?),
     };
     answer.map_err(|e| ServiceError::new(service_codes::SERVICE_FAILED, e.to_string()))
 }
@@ -460,6 +461,9 @@ impl Stems {
         found: ParentAudio,
         again: bool,
     ) -> Result<Separated, ServiceError> {
+        // Before anything is written, the fingerprint's Facts included, and
+        // whether or not `again` (wbx-45.14).
+        crate::sidecar_stick::refuse_background_work(&self.sidecar_dir, "Stem separation")?;
         let fingerprint = fingerprint(found.parent(), found.path())?;
         let (_, marked_stale) = self.before_record(&found, Some(&fingerprint), None)?;
         let parent = found.parent().clone();
@@ -602,27 +606,6 @@ impl Stems {
             reused: false,
             stems,
             marked_stale,
-        })
-    }
-
-    fn show(&self, found: ParentAudio) -> Result<TrackStems, ServiceError> {
-        let fingerprint = fingerprint(found.parent(), found.path()).ok();
-        self.observe_audio(&found, fingerprint.as_ref())?;
-        let ParentAudio { parent, .. } = found;
-        let sidecar = self.sidecar()?;
-        let (current, previous): (Vec<StemSet>, Vec<StemSet>) = sidecar
-            .stems(&parent.id)
-            .map_err(|e| sidecar_error(&e))?
-            .into_iter()
-            .partition(|set| set.is_current() && fingerprint.as_ref() == Some(&set.fingerprint));
-        Ok(TrackStems {
-            track: parent,
-            // Stems whose audio files are missing or are not the ones
-            // recorded (a restored Sidecar can rewind Run identifiers, so
-            // a later separation may have written other audio at the same
-            // path) are not Stems: the track reads as needing separation.
-            stems: current.into_iter().find(StemSet::audio_present),
-            previous,
         })
     }
 

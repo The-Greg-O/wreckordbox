@@ -101,7 +101,7 @@ export function loadStep(machine: LoadMachine, event: LoadEvent): LoadMachine {
 }
 
 /** The service's `stick_load_progress` event, or null when it is not one. */
-export function fromServiceProgress(data: unknown): { stick: string; operation: string | null; volume: string | null; progress: LoadProgress } | null {
+export function fromServiceProgress(data: unknown): { stick: string; operation: string | null; load: string | null; volume: string | null; progress: LoadProgress } | null {
   if (typeof data !== "object" || data === null) return null;
   const event = data as Record<string, unknown>;
   if (typeof event.stick !== "string" || typeof event.stage !== "string") return null;
@@ -111,6 +111,8 @@ export function fromServiceProgress(data: unknown): { stick: string; operation: 
     stick: event.stick,
     // Which load (the caller's operation id) and which volume it writes.
     operation: typeof event.operation === "string" ? event.operation : null,
+    // The service's own id for that load (wbx-45.14): unique, where the operation is only a label.
+    load: typeof event.load === "string" ? event.load : null,
     volume: typeof event.volume === "string" ? event.volume : null,
     progress: {
       stage: event.stage,

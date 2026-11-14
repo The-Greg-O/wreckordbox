@@ -53,6 +53,9 @@ pub mod codes {
     /// The Stick is protected (wbx-45.11): nothing is written to it until
     /// the DJ unlocks it, in the window or with `wreckordbox stick unlock`.
     pub const STICK_PROTECTED: &str = "stick_protected";
+    /// Long background work (stem separation, Intensity measurement) is
+    /// refused for a Sidecar kept on a Stick, locked or not (wbx-45.14).
+    pub const SIDECAR_ON_STICK: &str = "sidecar_on_stick";
     /// The Library's database is locked by another program.
     pub const LIBRARY_LOCKED: &str = "library_locked";
     /// The Library is there and cannot be read as one.

@@ -38,6 +38,12 @@ export interface StickLoad {
   /** The volume this load's progress events named first; an event naming another is not this load's. */
   volume?: string | null;
   /**
+   * The service's own id for this load, learnt from its first progress
+   * event (wbx-45.14): an event with this load's operation label and
+   * another id is another load's, which reused the label.
+   */
+  serviceLoad?: string | null;
+  /**
    * The load's state machine (wbx-72, `holdToLoad.ts`): loading (full or
    * shrunk to the status line, with its latest progress), finished, failed.
    */
@@ -243,8 +249,8 @@ export function takeWantedStick(): string | null {
 
 /** How long a burst of progress is gathered before the view hears it. */
 const PROGRESS_FLUSH_MS = 100;
-/** The latest progress per operation, with the volume it named. */
-const pending = new Map<string, { stick: string; volume: string | null; progress: LoadProgress }>();
+/** The latest progress per operation and service load id, with the volume it named; in the order first heard. */
+const pending = new Map<string, { operation: string; load: string | null; stick: string; volume: string | null; progress: LoadProgress }>();
 let flushing: ReturnType<typeof setTimeout> | null = null;
 
 /**
@@ -260,10 +266,12 @@ let flushing: ReturnType<typeof setTimeout> | null = null;
 export function receiveStickLoadProgress(data: unknown): void {
   const event = fromServiceProgress(data);
   if (event === null || event.operation === null) return;
-  // Kept per operation and volume: a swap mid-burst is not hidden by the newer event.
-  const before = pending.get(event.operation);
+  // Kept per operation, service load and volume: a swap mid-burst, or
+  // another load reusing the label, is not hidden by the newer event.
+  const key = `${event.operation}\u0000${event.load ?? ""}`;
+  const before = pending.get(key);
   if (before !== undefined && (before.volume !== event.volume || before.stick !== event.stick)) return;
-  pending.set(event.operation, { stick: event.stick, volume: event.volume, progress: event.progress });
+  pending.set(key, { operation: event.operation, load: event.load, stick: event.stick, volume: event.volume, progress: event.progress });
   flushing ??= setTimeout(flushProgress, PROGRESS_FLUSH_MS);
 }
 
@@ -273,14 +281,19 @@ function flushProgress(): void {
   pending.clear();
   let changed = false;
   const next = loads.map((load) => {
-    const heard = latest.get(load.reportId);
-    if (heard === undefined || load.kept || heard.stick !== load.path) return load;
+    if (load.kept) return load;
+    // This load's own events: its label, and the service's id it is bound
+    // to (the first heard binds it), never another load's that reused it.
+    const bound = load.serviceLoad ?? null;
+    const heard = [...latest.values()].find((h) =>
+      h.operation === load.reportId && h.stick === load.path && (bound === null || h.load === bound));
+    if (heard === undefined) return load;
     const known = load.volume ?? null;
     if (known !== null && heard.volume !== known) return load;
     const machine = loadStep(load.machine, { type: "progress", progress: heard.progress });
     if (machine === load.machine) return load;
     changed = true;
-    return { ...load, machine, volume: known ?? heard.volume };
+    return { ...load, machine, volume: known ?? heard.volume, serviceLoad: bound ?? heard.load };
   });
   if (changed) set(() => next);
 }

@@ -1,12 +1,11 @@
 //! Whether a track has Stems, for a reader that must not write (wbx-67).
 //!
-//! `stems.show` observes the track's audio before it answers: it marks
-//! Stems of other audio stale, re-attaches Facts, and opens (so makes) the
-//! Sidecar. A window that asks each time the DJ loads a track must not
-//! write anything by asking, so `stems.status` answers the same question
-//! by reading only: it fingerprints the track's file, compares it with the
-//! recorded sets, and leaves every set as it was. A Sidecar never made
-//! stays unmade; the answer is then "none".
+//! A window that asks each time the DJ loads a track must not write
+//! anything by asking, so `stems.status` reads only: it fingerprints the
+//! track's file, compares it with the recorded sets (staleness as the audio
+//! says now, not as last stored), and leaves every set as it was. A Sidecar
+//! never made stays unmade; the answer is then "none". `stems.show` reads
+//! the same way since wbx-t3p (`stems_show`).
 //!
 //! It also says which track is being separated now, by any client, so a
 //! window that did not start the separation (or was reloaded) can show it.
@@ -90,20 +89,22 @@ fn status(stems: &Stems, found: &ParentAudio) -> StemsStatus {
         message: error.message,
     };
     let audio = fingerprint(found.parent(), found.path());
-    let sets = match stems.sidecar_if_made() {
-        Ok(None) => Vec::new(),
-        Ok(Some(sidecar)) => match sidecar.stems(&found.parent().id) {
-            Ok(sets) => sets,
+    // Read without the Sidecar's writer (the writer's own connection when
+    // it is open, else an immutable snapshot): nothing is opened, made or
+    // written, so a Sidecar kept on a Stick, protected or not, is read and
+    // left as it is (wbx-45.14).
+    let dir = stems.sidecar_dir().to_path_buf();
+    let sets: Vec<StemSet> =
+        match crate::mutant_reads::inspect(stems, |store| store.stem_facts(&found.parent().id)) {
+            Ok(facts) => facts
+                .into_iter()
+                .filter_map(|fact| StemSet::from_fact(&dir, fact))
+                .collect(),
             Err(error) => {
-                answer.unavailable = Some(unavailable(crate::stems::sidecar_error(&error)));
+                answer.unavailable = Some(unavailable(error));
                 return answer;
             }
-        },
-        Err(error) => {
-            answer.unavailable = Some(unavailable(error));
-            return answer;
-        }
-    };
+        };
     let audio = match audio {
         Ok(audio) => audio,
         Err(error) => {
@@ -111,6 +112,11 @@ fn status(stems: &Stems, found: &ParentAudio) -> StemsStatus {
             return answer;
         }
     };
+    // Staleness as the audio says now, not as last stored (wbx-t3p).
+    let sets: Vec<StemSet> = sets
+        .into_iter()
+        .map(|set| crate::stems_show::as_now(set, Some(&audio)))
+        .collect();
     let describe = |answer: &mut StemsStatus, set: &StemSet, state| {
         answer.state = state;
         answer.made_at = Some(set.recorded_at);

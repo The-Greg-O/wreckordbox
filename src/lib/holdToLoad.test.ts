@@ -135,10 +135,10 @@ describe("the load", () => {
 
 describe("what the progress says", () => {
   it("reads the service's event", () => {
-    expect(fromServiceProgress({ stick: "/media/GIG", operation: "op-1", volume: "dev 1 ino 2", stage: "copying", done: 2, total: 5, track: { id: "9", title: "Kiln" } }))
-      .toEqual({ stick: "/media/GIG", operation: "op-1", volume: "dev 1 ino 2", progress: { stage: "copying", done: 2, total: 5, track: { id: "9", title: "Kiln" } } });
+    expect(fromServiceProgress({ stick: "/media/GIG", load: "load-1", operation: "op-1", volume: "dev 1 ino 2", stage: "copying", done: 2, total: 5, track: { id: "9", title: "Kiln" } }))
+      .toEqual({ stick: "/media/GIG", operation: "op-1", load: "load-1", volume: "dev 1 ino 2", progress: { stage: "copying", done: 2, total: 5, track: { id: "9", title: "Kiln" } } });
     expect(fromServiceProgress({ stick: "/media/GIG", stage: "database", done: 0, total: 0, track: null }))
-      .toEqual({ stick: "/media/GIG", operation: null, volume: null, progress: { stage: "database", done: 0, total: 0, track: null } });
+      .toEqual({ stick: "/media/GIG", operation: null, load: null, volume: null, progress: { stage: "database", done: 0, total: 0, track: null } });
     expect(fromServiceProgress({ stage: "copying" })).toBeNull();
   });
 
