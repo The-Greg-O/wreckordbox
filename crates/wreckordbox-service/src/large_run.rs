@@ -4,7 +4,7 @@
 //! # Which Runs
 //!
 //! Covered: applying a projection of Energy and Prep colour
-//! (`projection.apply`), of the Tag schema to MyTags
+//! (`projection.apply`), of the Tag schema to `MyTags`
 //! (`projection.mytags.apply`), and Review's accept of waiting Facts
 //! (`review.accept`). Each calls [`before_write`] with the tracks of the
 //! plan it is about to execute, after making that plan and before its
@@ -59,7 +59,7 @@
 //! # Locks
 //!
 //! Taken under the service's Library lock (one command at a time) and, for
-//! MyTags and Review, the Fact coordination, which the apply already holds;
+//! `MyTags` and Review, the Fact coordination, which the apply already holds;
 //! never under the edit gate. During the copy the analysis-file lock is
 //! held (as the window's backup holds it) so the trees are not half
 //! written; lock order: Stick, then the analysis lock, then nothing.
@@ -205,12 +205,12 @@ pub(crate) fn answered(result: Result<Value, ServiceError>) -> Result<Value, Ser
 }
 
 fn take(library: &OpenLibrary, stems: &Stems) -> Result<Taken, ServiceError> {
-    let core = library.core();
-    let state_dir = core.recovery_dir().to_path_buf();
+    let (state_dir, location, analysis_files) = library.for_backup();
+    let state_dir = state_dir.to_path_buf();
     if crate::protection::is_on(&state_dir) {
         return Err(crate::protection::refusal());
     }
-    let location = core.location().map_err(|_| {
+    let location = location.ok_or_else(|| {
         ServiceError::new(
             service_codes::LIBRARY_LOADING,
             rbl_library::NOT_LOADED.to_owned(),
@@ -221,17 +221,17 @@ fn take(library: &OpenLibrary, stems: &Stems) -> Result<Taken, ServiceError> {
     // A backup folder on a Stick is a Stick write: refused unless the DJ
     // unlocked that very mount, and checked again before every write.
     let authorized =
-        wreckordbox_stick_protection::authorize(&state_dir, &destination).map_err(|refused| {
-            let code = match refused {
+        wreckordbox_stick_protection::authorize(&state_dir, &destination).map_err(|why| {
+            let kind = match &why {
                 wreckordbox_stick_protection::Refused::Protected { .. } => {
                     service_codes::STICK_PROTECTED
                 }
                 _ => codes::BACKUP_FAILED,
             };
             ServiceError::new(
-                code,
+                kind,
                 format!(
-                    "this Run would change more tracks than the backup threshold, and its backup could not be made: {refused}; nothing was changed"
+                    "this Run would change more tracks than the backup threshold, and its backup could not be made: {why}; nothing was changed"
                 ),
             )
         })?;
@@ -264,7 +264,7 @@ fn take(library: &OpenLibrary, stems: &Stems) -> Result<Taken, ServiceError> {
         app_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
     };
     let made = {
-        let _files = core.analysis_write().lock();
+        let _files = analysis_files.lock();
         rbl_backup::create::write(&request)
     }
     .map_err(|error| {

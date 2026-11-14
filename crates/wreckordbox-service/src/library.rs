@@ -40,10 +40,21 @@ pub(crate) struct OpenLibrary {
 }
 
 impl OpenLibrary {
-    /// The Library core, for the large-Run backup (wbx-25): its location,
-    /// state folder and analysis-file lock.
-    pub(crate) fn core(&self) -> &LibraryCore {
-        &self.core
+    /// What the backup before a large Run reads (wbx-25): the shared state
+    /// folder, the Library's location, and the analysis-file lock it holds
+    /// while it copies the trees. The core itself is not handed out.
+    pub(crate) fn for_backup(
+        &self,
+    ) -> (
+        &std::path::Path,
+        Option<rbl_db::LibraryLocation>,
+        &parking_lot::Mutex<()>,
+    ) {
+        (
+            self.core.recovery_dir(),
+            self.core.location().ok(),
+            self.core.analysis_write(),
+        )
     }
 
     /// Opens the Library and indexes it. Reading every row is also what
