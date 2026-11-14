@@ -54,6 +54,14 @@ pub const EXPORT_WRITING: &str = "export.writing";
 /// Closing waits for direct writers admitted before it (wbx-45.14, round 1).
 pub const SHUTDOWN_AWAITING_WRITERS: &str = "shutdown.awaiting_writers";
 
+/// A backup has named its archive and not yet made the folder durable
+/// (wbx-45.14).
+pub const BACKUP_PUBLISHED: &str = "backup.published";
+
+/// A backup's database copy has copied a chunk into the folder's archive
+/// and not yet reported it (wbx-45.14).
+pub const BACKUP_DATABASE_COPYING: &str = "backup.database_copying";
+
 static ANY: AtomicBool = AtomicBool::new(false);
 static POINTS: Mutex<Option<Points>> = Mutex::new(None);
 static CHANGED: Condvar = Condvar::new();

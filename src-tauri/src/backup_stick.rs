@@ -12,14 +12,26 @@ use std::path::PathBuf;
 
 use crate::error::AppError;
 
+/// What a backup made in its folder, as it stands now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Made {
+    /// Its unfinished copy or archive.
+    Unfinished,
+    /// Its staged copy, moved aside to be deleted.
+    SetAside,
+    /// The backup itself, named and complete.
+    Backup,
+}
+
 /// `stopped`, the error a backup ended with, said with what it left on the
 /// Stick when the reason is the Stick's authorization (that refusal's kind
 /// and words); any other error is answered as it is. `made`: what the
-/// backup created in its folder, in order; `copied`: bytes copied so far.
+/// backup made in its folder, by the name each has now; `copied`: bytes
+/// copied so far.
 pub(crate) fn stopped(
     stopped: AppError,
     access: &crate::stick_guard::StickAccess,
-    made: &[PathBuf],
+    made: &[(PathBuf, Made)],
     copied: u64,
 ) -> AppError {
     let Some(stick) = access.stick() else {
@@ -34,17 +46,21 @@ pub(crate) fn stopped(
     );
     let left: Vec<String> = made
         .iter()
-        .filter_map(|path| {
-            path.file_name()
-                .map(|n| format!("“{}”", n.to_string_lossy()))
+        .filter_map(|(path, what)| {
+            let shown = path.file_name()?.to_string_lossy().into_owned();
+            Some(match what {
+                Made::Unfinished => format!("“{shown}” (unfinished)"),
+                Made::SetAside => format!("“{shown}” (unfinished, set aside to be deleted)"),
+                Made::Backup => format!("“{shown}” (the backup, complete)"),
+            })
         })
         .collect();
     let what = if left.is_empty() {
         format!("nothing of it was written to {name}")
     } else {
         format!(
-            "what it wrote stays in the backup folder on {name}, the Stick as it was when the backup began, as {} (hidden, unfinished; delete it once that Stick is back and unlocked)",
-            left.join(" and ")
+            "what it wrote stays in the backup folder on {name}, the Stick as it was when the backup began: {} (delete what is unfinished once that Stick is back and unlocked)",
+            left.join(", ")
         )
     };
     AppError::new(
@@ -238,6 +254,83 @@ mod tests {
         assert!(
             error.message.contains("as it was when the backup began"),
             "{}",
+            error.message
+        );
+    }
+
+    /// Takes the rig's Stick out and puts another in at the same place.
+    fn replace(stick: &Path, old: &Path) {
+        fs::rename(stick, old).unwrap();
+        fs::create_dir_all(stick).unwrap();
+        fs::write(
+            stick.join(wreckordbox_stick_protection::STAND_IN_MARKER),
+            b"",
+        )
+        .unwrap();
+    }
+
+    /// wbx-45.14 verification (3): replaced while the database is copied,
+    /// the report counts what the copy had done, never zero.
+    #[test]
+    fn a_stick_replaced_during_the_database_copy_reports_what_it_had_copied() {
+        let (dir, state, stick) = fixture();
+        let old = dir.path().join("sticks/GIG-taken-out");
+        let held = crate::test_holds::arm(
+            crate::test_holds::BACKUP_DATABASE_COPYING,
+            state.backup_dir(),
+        );
+        let result = std::thread::scope(|scope| {
+            let backing_up = scope.spawn(|| crate::backups::create(&state));
+            held.reached();
+            replace(&stick, &old);
+            held.release();
+            backing_up.join().unwrap()
+        });
+        let error = result.expect_err("the backup stops");
+        assert!(
+            !error.message.contains("after copying 0 bytes"),
+            "{}",
+            error.message
+        );
+        assert!(error.message.contains("(unfinished)"), "{}", error.message);
+    }
+
+    /// wbx-45.14 verification (3): replaced after the backup was named, the
+    /// report names what is on the original Stick now: the complete backup
+    /// and the staged copy set aside, not their obsolete unfinished names.
+    #[test]
+    fn a_stick_replaced_after_the_backup_is_named_reports_the_names_it_has_now() {
+        let (dir, state, stick) = fixture();
+        let old = dir.path().join("sticks/GIG-taken-out");
+        let held = crate::test_holds::arm(crate::test_holds::BACKUP_PUBLISHED, state.backup_dir());
+        let result = std::thread::scope(|scope| {
+            let backing_up = scope.spawn(|| crate::backups::create(&state));
+            held.reached();
+            replace(&stick, &old);
+            held.release();
+            backing_up.join().unwrap()
+        });
+        let error = result.expect_err("the backup stops before its folder is made durable");
+        let named = fs::read_dir(&old)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .find(|name| name.starts_with("rbexport-"))
+            .expect("the backup is on the original Stick");
+        assert!(
+            error
+                .message
+                .contains(&format!("“{named}” (the backup, complete)")),
+            "{}",
+            error.message
+        );
+        assert!(
+            error.message.contains("set aside to be deleted"),
+            "{}",
+            error.message
+        );
+        assert!(
+            !error.message.contains(".partial-"),
+            "no obsolete names: {}",
             error.message
         );
     }

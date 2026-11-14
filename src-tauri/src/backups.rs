@@ -205,11 +205,15 @@ fn delete_in_background(state_dir: &Path, root: &Path, paths: Vec<PathBuf>) {
 ///
 /// `access`: the capability, Stick Protection's leave to write to `root`
 /// (wbx-45.11), for the renames.
-fn discard(access: &crate::stick_guard::StickAccess, state_dir: &Path, root: &Path, paths: &[&Path]) {
+/// Answers where each of `paths` that was there now is (its set-aside
+/// name, or itself when it could not be moved); nothing on a refusal.
+fn discard(access: &crate::stick_guard::StickAccess, state_dir: &Path, root: &Path, paths: &[&Path]) -> Vec<PathBuf> {
     if access.recheck().is_err() {
-        return;
+        return Vec::new();
     }
-    delete_in_background(state_dir, root, set_aside(root, paths));
+    let aside = set_aside(root, paths);
+    delete_in_background(state_dir, root, aside.clone());
+    aside
 }
 
 /// Deletes unfinished backups set aside by an earlier run, for example one
@@ -366,7 +370,7 @@ pub(crate) fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&s
     // What this backup made in its folder, on the Stick as it was entered:
     // reported from here after a refusal, never read back from whatever
     // is mounted there by then (wbx-45.14, round 1).
-    let made = std::cell::RefCell::new(Vec::<PathBuf>::new());
+    let made = std::cell::RefCell::new(Vec::<(PathBuf, crate::backup_stick::Made)>::new());
     // Every write to the folder, from every thread, checks first: the
     // compression workers and the ZIP writers too (`backup_guard`).
     let stick_refused = std::sync::atomic::AtomicBool::new(false);
@@ -413,7 +417,7 @@ pub(crate) fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&s
     let result = (|| {
         write_check().map_err(error)?;
         fs::create_dir(&partial).map_err(error)?;
-        made.borrow_mut().push(partial.clone());
+        made.borrow_mut().push((partial.clone(), crate::backup_stick::Made::Unfinished));
         let mut refused = None;
         let plan = if tree.exists() {
             let prepared = crate::backup_copy::TreeCopyPlan::prepare(&tree, &partial.join("analysis"), &mut |_| {
@@ -475,8 +479,14 @@ pub(crate) fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&s
         progress("validating", 0, total, "Checking database · master.db")?;
         validate_database(&local_db, &location)?;
         let mut refused = None;
-        let compressed = crate::backup_zip::compress_file(&local_db, &partial.join("master.db"), &mut |_| {
-            progress("copying", 0, total, "Database · master.db").map_err(|e| {
+        // Counted as it goes, so a stop part-way says what it had copied.
+        let mut database_copied = 0;
+        let compressed = crate::backup_zip::compress_file(&local_db, &partial.join("master.db"), &mut |delta| {
+            database_copied += delta;
+            if delta > 0 {
+                crate::test_holds::point(crate::test_holds::BACKUP_DATABASE_COPYING, &state_dir);
+            }
+            progress("copying", database_copied, total, "Database · master.db").map_err(|e| {
                 refused = Some(e);
                 std::io::Error::new(std::io::ErrorKind::Interrupted, "Backup stopped")
             })
@@ -611,7 +621,7 @@ pub(crate) fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&s
         .map_err(error)?;
         progress("validating", bytes, total, "Finishing backup · manifest.json")?;
         let mut refused = None;
-        made.borrow_mut().push(archive.clone());
+        made.borrow_mut().push((archive.clone(), crate::backup_stick::Made::Unfinished));
         let packed = crate::backup_zip::assemble(&partial, &archive, &mut || {
             progress("compressing", bytes, total, "Finishing ZIP archive").map_err(|e| {
                 refused = Some(e);
@@ -621,12 +631,21 @@ pub(crate) fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&s
         if let Some(error) = refused { return Err(error); }
         packed.map_err(error)?;
         // The archive holds everything now; the staged copies go in the background.
-        discard(&access, state.backup_dir(), root, &[&partial]);
+        let aside = discard(&access, state.backup_dir(), root, &[&partial]);
+        // What is on the Stick now goes by its new name (wbx-45.14).
+        if let Some(aside) = aside.into_iter().next() {
+            made.borrow_mut().retain(|(path, _)| *path != partial);
+            made.borrow_mut().push((aside, crate::backup_stick::Made::SetAside));
+        }
         // Still the same Stick, still unlocked, before the backup is named.
         access.recheck()?;
         // A backup folder on an external exFAT or FAT32 drive has no
         // exclusive rename on macOS; `persist_new` still never replaces one.
         rbl_core::durable::persist_new(tempfile::TempPath::try_from_path(&archive).map_err(error)?, &target).map_err(error)?;
+        for entry in made.borrow_mut().iter_mut().filter(|(path, _)| *path == archive) {
+            *entry = (target.clone(), crate::backup_stick::Made::Backup);
+        }
+        crate::test_holds::point(crate::test_holds::BACKUP_PUBLISHED, state.backup_dir());
         write_check().map_err(error)?;
         crate::durable::sync_dir(root).map_err(error)?;
         Ok(target.to_string_lossy().into_owned())
