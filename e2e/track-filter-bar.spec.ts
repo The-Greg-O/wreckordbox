@@ -247,14 +247,11 @@ test("Key match and BPM ±6% follow the loaded track, and do nothing without one
   await expect(rows(page).locator('[data-col="title"]')).toHaveText(["Lost Without You"]);
 });
 
-test("a Stick playlist is narrowed by the Stick's own fields; its MyTags say they cannot narrow it", async ({ page }) => {
+// The Stick's own MyTags: track-filter-stick-mytags.spec.ts (wbx-45.12).
+test("a Stick playlist is narrowed by the Stick's own fields", async ({ page }) => {
   await open(page);
-  await pick(page, "Situation", "Situation tags", "Peak");
   await tree(page).getByRole("group", { name: "Stick TEST" }).getByRole("treeitem", { name: "Now Playing Test" }).click();
   await expect(page.getByTestId("browser-title")).toContainText("Now Playing Test");
-  // The MyTag pick is left out here, and said so.
-  await expect(bar(page)).toContainText("A Stick's MyTags are not read");
-  await expect(control(page, "Situation Peak")).toHaveAttribute("aria-disabled", "true");
   await expect(count(page)).toHaveText("4 tracks");
 
   await energy(page, "5", "5");
