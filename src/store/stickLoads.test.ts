@@ -116,6 +116,26 @@ describe("a running load (wbx-72)", () => {
     await second.done;
   });
 
+  it("progress is bound to the service's own load id: another load reusing the label never moves this one (wbx-45.14)", async () => {
+    // The service answered load A and freed its label; another caller
+    // reuses the label on the same Stick before the window has A's report.
+    const load = running();
+    await vi.advanceTimersByTimeAsync(0);
+    receiveStickLoadProgress({ ...event("/media/A", 3, "Mine"), load: "svc-A" });
+    await vi.advanceTimersByTimeAsync(200);
+    expect(stickLoads().at(-1)!.machine).toMatchObject({ progress: { done: 3, track: { title: "Mine" } } });
+    receiveStickLoadProgress({ ...event("/media/A", 9, "Theirs"), load: "svc-B" });
+    await vi.advanceTimersByTimeAsync(200);
+    expect(stickLoads().at(-1)!.machine).toMatchObject({ progress: { done: 3, track: { title: "Mine" } } });
+    // Overlapping in one burst, whichever comes last.
+    receiveStickLoadProgress({ ...event("/media/A", 4, "Mine again"), load: "svc-A" });
+    receiveStickLoadProgress({ ...event("/media/A", 10, "Theirs again"), load: "svc-B" });
+    await vi.advanceTimersByTimeAsync(200);
+    expect(stickLoads().at(-1)!.machine).toMatchObject({ progress: { done: 4, track: { title: "Mine again" } } });
+    load.finish(outcome());
+    await load.done;
+  });
+
   it("once a load's events name a volume, an event naming another volume changes nothing", async () => {
     const load = running();
     await vi.advanceTimersByTimeAsync(0);
