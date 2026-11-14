@@ -787,10 +787,16 @@ pub(crate) fn load(
 
     // The export, the window's own path, unchanged.
     let path = root.display().to_string();
+    // Which load and which volume: a late event is never taken for another load's.
+    let operation = args.operation.clone();
+    let volume = approval::volume_identity(&root).ok();
     let progress = |stage: &str, done: usize, total: usize, track: serde_json::Value| {
         stems.publish(
             events::STICK_LOAD_PROGRESS,
-            json!({ "stick": path, "stage": stage, "done": done, "total": total, "track": track }),
+            json!({
+                "stick": path, "operation": operation, "volume": volume,
+                "stage": stage, "done": done, "total": total, "track": track,
+            }),
         );
     };
     // The export names a track by title only: its id when one track loaded

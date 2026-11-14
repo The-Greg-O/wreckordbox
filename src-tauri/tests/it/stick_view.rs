@@ -809,3 +809,112 @@ fn closing_after_publication_before_native_stems_finish_keeps_every_stems_outcom
         "{report}"
     );
 }
+
+/// wbx-72: the service's `stick_load_progress` events reach the window as
+/// `stick-load:progress`, so the Stick view can show which track is being
+/// written: every one names the Stick, counts never run past the total, a
+/// track being written is named, and the last says the load is done.
+#[test]
+fn the_window_hears_a_hosted_load_progress_track_by_track() {
+    use std::sync::Mutex;
+    use tauri::Listener;
+
+    let window = hosting_window();
+    window.unlock(&window.spare);
+    let heard: Arc<Mutex<Vec<serde_json::Value>>> = Arc::default();
+    let into = Arc::clone(&heard);
+    window.app.listen("stick-load:progress", move |event| {
+        into.lock()
+            .unwrap()
+            .push(serde_json::from_str(event.payload()).unwrap());
+    });
+    let playlists = vec![playlist_id(0)];
+    let plan = window.plan(&window.spare, &playlists);
+    let token = window.held(&plan);
+
+    // wbx-72 review: each event names the load (the window's operation id)
+    // and the volume it writes, so a late event from an earlier load can
+    // never be taken for a later one.
+    // The id is the shell's: reserved for this load, as the window asks for it.
+    let operation = rbxport_lib::stick_load_reports::reserve_report(&window.state_dir()).unwrap();
+    let loaded = tauri::async_runtime::block_on(stick_view::stick_view_load(
+        window.app.handle().state(),
+        path(&window.spare),
+        playlists.clone(),
+        plan.clone(),
+        Some(token.clone()),
+        Some(operation.clone()),
+    ))
+    .unwrap();
+    assert_eq!(loaded["outcome"], "loaded", "{loaded}");
+
+    // Events are delivered on the forwarding thread: wait for the last.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let done = heard.lock().unwrap().iter().any(|e| e["stage"] == "done");
+        if done || std::time::Instant::now() > deadline {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let heard = heard.lock().unwrap().clone();
+    assert!(!heard.is_empty(), "the window heard no progress");
+    for event in &heard {
+        assert_eq!(event["stick"], path(&window.spare), "{event}");
+        assert_eq!(event["operation"], operation.as_str(), "{event}");
+        assert_eq!(
+            event["volume"].as_str(),
+            Some(
+                rbxport_lib::stick_approval::volume_identity(&window.spare)
+                    .unwrap()
+                    .as_str()
+            ),
+            "{event}"
+        );
+        assert!(
+            event["done"].as_u64().unwrap() <= event["total"].as_u64().unwrap(),
+            "{event}"
+        );
+    }
+    let titles: Vec<&str> = heard
+        .iter()
+        .filter_map(|e| e["track"]["title"].as_str())
+        .collect();
+    assert!(!titles.is_empty(), "no track was named: {heard:?}");
+    assert_eq!(heard.last().unwrap()["stage"], "done", "{heard:?}");
+}
+
+/// wbx-72 verification review: the shell owns a kept report's name. A
+/// second load sent with the id of a kept, undismissed report never
+/// replaces it: the shell names that load's report itself, and both are
+/// kept until the DJ dismisses each.
+#[test]
+fn a_second_load_cannot_replace_a_kept_report() {
+    let window = hosting_window();
+    window.unlock(&window.spare);
+    let playlists = vec![playlist_id(0)];
+    let fail = |operation: Option<String>| {
+        tauri::async_runtime::block_on(stick_view::stick_view_load(
+            window.app.handle().state(),
+            path(&window.spare),
+            playlists.clone(),
+            "plan-that-was-never-made".to_owned(),
+            Some("a-token".to_owned()),
+            operation,
+        ))
+    };
+    assert!(fail(None).is_err(), "a load with no plan of its own fails");
+    let kept = rbxport_lib::stick_load_reports::kept_reports(&window.state_dir());
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    let first = kept[0].clone();
+    let id = first["id"].as_str().unwrap().to_owned();
+
+    // A second load naming the kept report's id.
+    let _ = fail(Some(id.clone()));
+
+    let kept = rbxport_lib::stick_load_reports::kept_reports(&window.state_dir());
+    assert_eq!(kept.len(), 2, "both reports are kept: {kept:?}");
+    let again = kept.iter().find(|r| r["id"] == id.as_str()).unwrap();
+    assert_eq!(again, &first, "the first report is as it was");
+    assert_ne!(kept[0]["id"], kept[1]["id"]);
+}

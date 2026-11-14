@@ -249,7 +249,7 @@ pub async fn fetch_rows(
         );
     }
     if let Some(device) = state.device_view(view_id) {
-        return crate::device_library::fetch_rows(&device, offset, len);
+        return crate::device_library::fetch_rows(&device, offset, len, extra_columns.as_deref().unwrap_or_default());
     }
     let library = state.library()?;
     let extra_columns = extra_columns.unwrap_or_default();
@@ -2828,10 +2828,7 @@ pub async fn app_diagnostics(player: State<'_, std::sync::Arc<crate::player::Pla
     // readings, and a fresh `System` every second would always report zero.
     let health = player.opened().map(|engine| engine.audio_health()).unwrap_or_default();
     blocking("app_diagnostics", move || {
-        let mut sample = crate::diagnostics::sample_shared();
-        sample.audio_load = health.load;
-        sample.audio_xruns = health.xruns;
-        Ok(sample)
+        Ok(crate::diagnostics::sample_shared().with_audio(health))
     }).await
 }
 

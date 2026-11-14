@@ -1030,6 +1030,7 @@ const APP_FILE_WRITERS: &[&str] = &[
     "use_default_library",
     // Stick load reports kept in the app's state folder (wbx-71), never on a Stick.
     "stick_load_report_dismiss",
+    "stick_load_report_reserve",
     "stick_view_load",
 ];
 
@@ -1227,6 +1228,7 @@ const NOT_STICK_WRITERS: &[&str] = &[
     "stick_protection",
     "stick_unlock",
     "stick_load_report_dismiss",
+    "stick_load_report_reserve",
     "stick_load_reports",
     "stick_view_dry_run",
     "stick_view_sticks",

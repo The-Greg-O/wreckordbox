@@ -34,6 +34,7 @@ import { MY_TAG_LIMIT, newMyTagName } from "@/lib/myTags";
 import { fromServicePanel, fromServiceTagsSet } from "@/lib/tagPanel";
 import { referenceDeviceSettings } from "./mock-device-settings";
 import { createMockDeviceLibraries, type MockImportEntry } from "./mock-device-library";
+import { STICK_MY_TAGS, passesStickTags, stickRowMyTags } from "./mock-stick-mytags";
 import { createMockIntake } from "./mock-intake";
 import { createMockStickLoad } from "./mock-stick-load";
 import { fromKeptReport, fromServiceDryRun, fromServiceLoad, fromServiceSticks } from "@/lib/stickLoad";
@@ -731,6 +732,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
   // thousand at most on a disk, which is why the real backend keeps the list
   // and pages it out rather than sending it.
   const folderViews = new Map<number, RowDto[]>();
+  // Which of them list a Stick, whose rows carry the Stick's own MyTags (wbx-f7y).
+  const stickViews = new Set<number>();
   let nextViewId = 1;
 
   const listeners = new Set<(generation: number) => void>();
@@ -2588,6 +2591,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       fromServiceLoad(await stickLoad.stickViewLoad(stick, playlists, plan, operation)),
     stickLoadReports: async () => (await stickLoad.stickLoadReports()).map(fromKeptReport),
     stickLoadReportDismiss: (id) => stickLoad.stickLoadReportDismiss(id),
+    stickLoadReportReserve: () => stickLoad.stickLoadReportReserve(),
     intakeQueue: intake.intakeQueue,
     intakeCounts: intake.intakeCounts,
     intakeColours: intake.intakeColours,
@@ -2596,6 +2600,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     intakeSetTags: async (track, dimension, terms, version, dropUnmapped) =>
       fromServiceTagsSet(await tagPanel.intakeSetTags(track, dimension, terms, version, dropUnmapped)),
     onSidecarChanged: tagPanel.onSidecarChanged,
+    onStickLoadProgress: stickLoad.onStickLoadProgress,
     rekordboxBrowseSettings: () => Promise.resolve(null),
     librarySummary: () =>
       ready
@@ -2634,8 +2639,9 @@ export function createMockBackend(options: MockOptions = {}): Backend {
         try {
           rows = stickLibraries.rows(spec.source.path, spec.source.format, spec.source.playlist)
             .filter((row) => q === "" || matchesSearch(row, q, spec.searchField ?? "all"))
-            // The Stick's own fields; a Stick's library carries no MyTags.
-            .filter((row) => !spec.filter || passesFields(row, 0, spec.filter));
+            // The Stick's own fields and its own MyTags (wbx-45.12).
+            .filter((row) => !spec.filter || passesFields(row, 0, spec.filter))
+            .filter((row) => passesStickTags(row, spec.filter?.tags));
         } catch (error) {
           return Promise.reject(error instanceof Error ? error : new Error(String(error)));
         }
@@ -2649,6 +2655,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
         }
         const viewId = nextViewId++;
         folderViews.set(viewId, rows);
+        stickViews.add(viewId);
         return wait<ViewHandle>({ viewId, len: rows.length, gen: 1 });
       }
       if (spec.source.kind === "folder") {
@@ -2725,7 +2732,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     fetchRows: (viewId, offset, len, extraColumns = []) => {
       // `myTags`: each of the track's MyTags with its id and category, from
       // the same record the My Tag panel edits.
-      const myTagsOf = (row: RowDto): RowMyTag[] => (row.id.startsWith("file:") ? [] : detailsOf(row).myTags)
+      const myTagsOf = (row: RowDto): RowMyTag[] => stickViews.has(viewId) ? stickRowMyTags(row) : (row.id.startsWith("file:") ? [] : detailsOf(row).myTags)
         .flatMap((id) => myTagCategories.flatMap((category) => category.tags
           .filter((tag) => tag.id === id)
           .map((tag) => ({ id: tag.id, name: tag.name, category: category.name }))));
@@ -3091,6 +3098,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     ejectDevice: async (path) => {
       const index = devices.findIndex(device => device.path === path);
       if (index < 0) throw new Error("That device is no longer connected.");
+      // Kept, so `__remountDevice` can put the same volume back (wbx-72 review).
+      unmounted.set(path, devices[index] as Device);
       devices.splice(index, 1);
       await wait(undefined);
     },
@@ -3458,8 +3467,14 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       mockLogLine(failed ? "warn" : "info", "wreckordbox::status", text);
       return wait(undefined);
     },
-    appDiagnostics: () =>
-      wait({ audioLoad: 0, audioXruns: 0, cpu: 0, memoryMb: 0, threads: null, openFiles: null, gpu: null }),
+    // The engine's device health, settable by a spec: `window.__mockAudioHealth`.
+    appDiagnostics: () => {
+      const health = (window as unknown as { __mockAudioHealth?: { underruns?: number; latencyMs?: number | null } }).__mockAudioHealth;
+      return wait({
+        audioLoad: 0, audioXruns: 0, audioUnderruns: health?.underruns ?? 0, audioLatencyMs: health?.latencyMs ?? null,
+        cpu: 0, memoryMb: 0, threads: null, openFiles: null, gpu: null,
+      });
+    },
     // A browser has no Finder to open. Refusing is the truth; succeeding
     // silently made the menu item look as if it had done something.
     revealTrack: () =>
@@ -4168,7 +4183,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
           if (q !== "" && !matchesSearch(row, q, spec.searchField ?? "all")) continue;
           if (row.key !== "") keys.set(row.key, (keys.get(row.key) ?? 0) + 1);
         }
-        return wait<FilterValues>({ bpms: [], keys: [...keys].map(([value, count]) => ({ value, count })), tags: [] });
+        return wait<FilterValues>({ bpms: [], keys: [...keys].map(([value, count]) => ({ value, count })), tags: [...STICK_MY_TAGS] });
       }
       // Over the source and query alone, never the filter's own result.
       const bpms = new Map<number, number>();

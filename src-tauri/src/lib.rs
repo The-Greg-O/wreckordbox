@@ -41,6 +41,7 @@ mod new_library;
 mod diagnostics;
 mod explorer;
 pub mod device_library;
+mod stick_my_tags;
 mod stick_outline;
 pub mod stick_write_plan;
 pub mod stick_approval;
@@ -602,6 +603,7 @@ pub fn run() {
             stick_view::stick_view_load,
             stick_view::stick_load_reports,
             stick_view::stick_load_report_dismiss,
+            stick_view::stick_load_report_reserve,
             mutant_window::collection_removal_mutants,
             intake_view::intake_counts,
             intake_view::intake_colours,

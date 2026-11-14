@@ -1238,20 +1238,29 @@ pub async fn open_view(state: &State<'_, Arc<AppState>>, path: String, format: S
         filter: rbl_index::TrackFilter::default(),
     };
     let field = spec.search_field;
-    // The view shell's Track Filter over the Stick's own fields (wbx-57).
-    let filter = device_filter(&spec.filter);
+    // The view shell's Track Filter over the Stick's own fields (wbx-57)
+    // and its own MyTags (wbx-45.12).
+    let mut filter = device_filter(&spec.filter);
+    let tag_picks: Vec<crate::dto::TagPickDto> = spec.filter.tags.iter().filter(|t| !t.tags.is_empty()).cloned().collect();
     blocking("open_view", move || {
         let mount = connected(&path)?;
         let format = format_from(&format)?;
         let playlist = id_from(&playlist)?;
-        // The library and its OneLibrary cues in one read of the Stick that
-        // cannot recover or write anything (wbx-45.5).
-        let (library, one_cues) = wreckordbox_stick_outline::read(&mount, |stick| {
+        // The library, its OneLibrary cues and its MyTags in one read of the
+        // Stick that cannot recover or write anything (wbx-45.5). The tags
+        // also name the list's MyTags column (wbx-f7y): with none picked, a
+        // Stick whose tags cannot be read still opens, its column empty;
+        // the bar says they could not be read (`filter_values`).
+        let (library, one_cues, my_tags) = wreckordbox_stick_outline::read(&mount, |stick| {
             let library = stick.library(format)?;
             let cues = if format == Format::OneLibrary { one_library_cues(stick.root()) } else { HashMap::new() };
-            Ok((library, cues))
+            let my_tags = if tag_picks.is_empty() { stick.my_tags(format).ok() } else { Some(stick.my_tags(format)?) };
+            Ok((library, cues, my_tags))
         })
         .map_err(|error| crate::stick_recovery::read_error(&mount, error))?;
+        if let Some(tags) = my_tags.as_ref().filter(|_| !tag_picks.is_empty()) {
+            filter.tags = crate::stick_my_tags::filters(&tag_picks, tags);
+        }
         let ids: Vec<u32> = if playlist == 0 {
             library.tracks.iter().map(|t| t.id).collect()
         } else {
@@ -1260,10 +1269,11 @@ pub async fn open_view(state: &State<'_, Arc<AppState>>, path: String, format: S
         let rows: Vec<DeviceRow> = ids
             .iter()
             .enumerate()
-            .filter_map(|(at, id)| library.track(*id).map(|t| device_row(&mount, t, at)))
+            .filter_map(|(at, id)| library.track(*id).map(|t| DeviceRow { my_tags: crate::stick_my_tags::carried(my_tags.as_ref(), t.id), ..device_row(&mount, t, at) }))
             .collect();
         handle.remember_device_assets(&mount, library.tracks.iter().map(|t| assets_of(&mount, t)));
         let mut view = DeviceView::open_filtered(rows, &parsed, field, &filter);
+        view.tags = my_tags.as_ref().map(crate::stick_my_tags::named).unwrap_or_default();
         let mut remaining = MAX_BROWSER_EXT_VIEW_BYTES;
         for row in &mut view.rows {
             if let Some(track) = library.track(row.id) {
@@ -1277,8 +1287,8 @@ pub async fn open_view(state: &State<'_, Arc<AppState>>, path: String, format: S
 }
 
 /// The Track Filter as a Stick's rows can answer it (wbx-57): key, Energy,
-/// Prep colour and BPM. A Stick's library as read carries no tags of the DJ's, so tag
-/// picks are not applied here; the bar says so on a Stick playlist.
+/// Prep colour and BPM. Tag picks need the Stick's own categories, so `open_view`
+/// resolves them once it has read them (wbx-45.12).
 fn device_filter(dto: &crate::dto::TrackFilterDto) -> rbl_index::device::DeviceFilter {
     let keys = match (&dto.keys, &dto.key_identities) {
         (None, None) => None,
@@ -1289,17 +1299,20 @@ fn device_filter(dto: &crate::dto::TrackFilterDto) -> rbl_index::device::DeviceF
         ratings: dto.ratings.clone(),
         colors: dto.colors.as_ref().map(|names| crate::state::colour_ids(names)),
         bpm: dto.bpm.as_ref().map(crate::state::bpm_from_wire),
+        tags: Vec::new(),
     }
 }
 
 /// What the Track Filter bar offers on a Stick list: the keys and whole BPMs
-/// of the list's own rows, read the same way the list is (wbx-57).
+/// of the list's own rows, read the same way the list is (wbx-57), and the
+/// Stick's own `MyTag` categories (wbx-45.12).
 pub async fn filter_values(path: String, format: String, playlist: String, query: String, field: rbl_index::SearchField) -> AppResult<crate::dto::FilterValuesDto> {
     blocking("filter_values", move || {
         let mount = connected(&path)?;
         let format = format_from(&format)?;
         let playlist = id_from(&playlist)?;
-        let library = wreckordbox_stick_outline::read(&mount, |stick| stick.library(format))
+        // The Stick's own MyTag categories too (wbx-45.12), in the same read.
+        let (library, my_tags) = wreckordbox_stick_outline::read(&mount, |stick| Ok((stick.library(format)?, stick.my_tags(format)?)))
             .map_err(|error| crate::stick_recovery::read_error(&mount, error))?;
         let ids: Vec<u32> = if playlist == 0 {
             library.tracks.iter().map(|t| t.id).collect()
@@ -1319,7 +1332,7 @@ pub async fn filter_values(path: String, format: String, playlist: String, query
         Ok(crate::dto::FilterValuesDto {
             bpms: values.bpms.into_iter().map(|c| crate::dto::CountedDto { value: c.value, count: c.count }).collect(),
             keys: values.keys.into_iter().map(|c| crate::dto::CountedDto { value: c.value, count: c.count }).collect(),
-            tags: Vec::new(),
+            tags: crate::stick_my_tags::choices(&my_tags),
         })
     })
     .await
@@ -1345,6 +1358,7 @@ fn device_row(mount: &Path, track: &device::Track, at: usize) -> DeviceRow {
         analysed: !track.analysis_path.is_empty(),
         has_artwork: !track.artwork_path.is_empty(),
         cues: Vec::new(),
+        my_tags: Vec::new(),
     }
 }
 
@@ -1525,12 +1539,25 @@ fn assets_of(mount: &Path, track: &device::Track) -> (String, DeviceAssets) {
 
 /// A window of a device view's rows. Each is a track the deck can play from
 /// its file, as an Explorer file is.
-pub fn fetch_rows(view: &DeviceView, offset: u32, len: u32) -> AppResult<Vec<RowDto>> {
+pub fn fetch_rows(view: &DeviceView, offset: u32, len: u32, extra_columns: &[String]) -> AppResult<Vec<RowDto>> {
     if len > MAX_ROWS {
         return Err(AppError::new(ErrorKind::Malformed, "Too many rows requested at once.")
             .with_detail(format!("len {len} exceeds the {MAX_ROWS}-row cap")));
     }
-    Ok(view.window(offset as usize, len as usize).iter().map(row_dto).collect())
+    // The Stick's own MyTags for the list's column, as a Library row sends
+    // them (wbx-f7y); read when the view was opened, never written.
+    let my_tags = extra_columns.iter().any(|column| column == "myTags");
+    Ok(view
+        .window(offset as usize, len as usize)
+        .iter()
+        .map(|row| {
+            let mut dto = row_dto(row);
+            if my_tags {
+                dto.extra.get_or_insert_with(Default::default).insert("myTags".to_owned(), crate::stick_my_tags::row_field(&view.tags, row));
+            }
+            dto
+        })
+        .collect())
 }
 
 /// The row ids between two positions of a device view, for a shift-click.
@@ -2741,10 +2768,10 @@ mod tests {
             filter: rbl_index::TrackFilter::default(),
         };
         let view = DeviceView::open(rows, &spec, rbl_index::SearchField::All);
-        let page = fetch_rows(&view, 0, 10).unwrap();
+        let page = fetch_rows(&view, 0, 10, &[]).unwrap();
         assert_eq!(page.iter().map(|r| (r.title.as_str(), r.track_no)).collect::<Vec<_>>(), [("Track 2", 2), ("Track 1", 1)]);
         assert_eq!(ids_in_range(&view, 1, 0), vec![page[0].id.clone(), page[1].id.clone()]);
-        assert!(fetch_rows(&view, 0, MAX_ROWS + 1).is_err());
+        assert!(fetch_rows(&view, 0, MAX_ROWS + 1, &[]).is_err());
     }
     #[test]
     fn browsing_both_device_formats_reads_cues_without_changing_a_clean_stick() {
@@ -2812,7 +2839,7 @@ mod tests {
                 },
                 rbl_index::SearchField::All,
             );
-            let found = fetch_rows(&view, 0, 10).unwrap();
+            let found = fetch_rows(&view, 0, 10, &[]).unwrap();
             let cued = found.iter().find(|row| row.title == "Track 0").unwrap();
             assert_eq!(
                 cued.hot_cues
