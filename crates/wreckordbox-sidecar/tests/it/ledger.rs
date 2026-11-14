@@ -181,8 +181,16 @@ fn a_store_from_each_earlier_version_is_given_the_ledger_and_keeps_its_facts_in_
             .unwrap();
         // The Facts it held keep their order, before what is added now.
         let (entries, total) = sidecar.run_entries(run, 50, 0).unwrap();
-        assert_eq!(total, if version>=3 {4}else{3}, "from version {version}");
-        let ids: Vec<i64> = entries.iter().filter(|entry| entry.kind != "decision").map(|entry| entry.id).collect();
+        assert_eq!(
+            total,
+            if version >= 3 { 4 } else { 3 },
+            "from version {version}"
+        );
+        let ids: Vec<i64> = entries
+            .iter()
+            .filter(|entry| entry.kind != "decision")
+            .map(|entry| entry.id)
+            .collect();
         assert_eq!(ids, vec![facts[0], facts[1], id], "from version {version}");
         let stored: String = rusqlite::Connection::open(dir.path().join("sidecar.db"))
             .unwrap()

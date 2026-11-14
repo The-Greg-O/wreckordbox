@@ -531,7 +531,10 @@ impl Session {
         }
         if !self.begun.load(Ordering::Acquire) {
             state.ended = true;
-            self.lease.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+            self.lease
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
             return None;
         }
         self.flush(&mut state);
@@ -598,7 +601,10 @@ impl Session {
             );
         }
         state.ended = true;
-        self.lease.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+        self.lease
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
         state.warning.clone()
     }
 }

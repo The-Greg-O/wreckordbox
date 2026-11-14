@@ -339,8 +339,8 @@ impl Sidecar {
             ],
         )?;
         let id = db.last_insert_rowid();
-        crate::native_history::record(&db,crate::native_history::Table::Decision,id)?;
-        let decision=read_decision(&db, id)?.ok_or(SidecarError::NoDecision(id))?;
+        crate::native_history::record(&db, crate::native_history::Table::Decision, id)?;
+        let decision = read_decision(&db, id)?.ok_or(SidecarError::NoDecision(id))?;
         db.commit()?;
         Ok(decision)
     }
@@ -488,8 +488,8 @@ fn insert_answer(
             now(),
         ],
     )?;
-    let id=tx.last_insert_rowid();
-    crate::native_history::record(tx,crate::native_history::Table::Answer,id)?;
+    let id = tx.last_insert_rowid();
+    crate::native_history::record(tx, crate::native_history::Table::Answer, id)?;
     Ok(id)
 }
 

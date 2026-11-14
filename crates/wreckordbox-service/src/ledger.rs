@@ -734,20 +734,44 @@ pub(crate) fn answer(
     stems: &Stems,
     request: &Request,
 ) -> Result<Value, ServiceError> {
-    if spill_commands::answers(&request.command) { return spill_commands::answer(keeper,stems,request); }
+    if spill_commands::answers(&request.command) {
+        return spill_commands::answer(keeper, stems, request);
+    }
     let recovery_error = keeper.state().recovery_error.clone();
-    let offset = request.args["offset"].as_u64().and_then(|n|usize::try_from(n).ok()).unwrap_or(0);
-    let limit = request.args["limit"].as_u64().and_then(|n|usize::try_from(n).ok()).unwrap_or(DEFAULT_PAGE_LIMIT).min(1000);
-    let recovery = spill_commands::inventory(&stems.bulk_recovery_dir(),offset,limit)
-        .unwrap_or_else(|error|json!({"error":error}));
+    let offset = request.args["offset"]
+        .as_u64()
+        .and_then(|n| usize::try_from(n).ok())
+        .unwrap_or(0);
+    let limit = request.args["limit"]
+        .as_u64()
+        .and_then(|n| usize::try_from(n).ok())
+        .unwrap_or(DEFAULT_PAGE_LIMIT)
+        .min(1000);
+    let recovery = spill_commands::inventory(&stems.bulk_recovery_dir(), offset, limit)
+        .unwrap_or_else(|error| json!({"error":error}));
     // Complete all disk reads outside the Sidecar's ownership mutex.
-    let mut pending = bulk_spill::pending(&stems.bulk_recovery_dir(),request.args["id"].as_i64(),offset,limit)
-        .unwrap_or_else(|error|json!({"error":error}));
-    spill_commands::include_ordinary(keeper,request.args["id"].as_i64(),offset,limit,&mut pending);
+    let mut pending = bulk_spill::pending(
+        &stems.bulk_recovery_dir(),
+        request.args["id"].as_i64(),
+        offset,
+        limit,
+    )
+    .unwrap_or_else(|error| json!({"error":error}));
+    spill_commands::include_ordinary(
+        keeper,
+        request.args["id"].as_i64(),
+        offset,
+        limit,
+        &mut pending,
+    );
     stems.with_sidecar_wait(|sidecar| {
         if sidecar.is_none() && stems.sidecar_dir().join("sidecar.db").exists() {
-            return Err(recovery_error.unwrap_or_else(||ServiceError::new(crate::stems::codes::SIDECAR_FAILED,
-                "The Sidecar is not open; a Ledger query cannot open or recover it.")));
+            return Err(recovery_error.unwrap_or_else(|| {
+                ServiceError::new(
+                    crate::stems::codes::SIDECAR_FAILED,
+                    "The Sidecar is not open; a Ledger query cannot open or recover it.",
+                )
+            }));
         }
         let mut answer = read_ledger(sidecar, request)?;
         answer["recovery"] = recovery;
@@ -843,12 +867,24 @@ fn entry(entry: wreckordbox_sidecar::ledger::Entry) -> LedgerEntry {
                 .map_or(Value::Null, |replaced| replaced.value.clone()),
             after: fact.value.clone(),
         }],
-        (None, Some(payload)) if matches!(entry.kind.as_str(),"mutant_change"|"decision"|"decision_answer") => vec![ValueChange {
-            subject: format!("{} {}", entry.kind, payload["row"]["id"]),
-            field: "record".into(), before: Value::Null, after: payload["row"].clone(),
-        }],
-        (None, Some(payload)) if entry.kind=="ledger_spill_discard" => vec![ValueChange {
-            subject: format!("Ledger spill {}",payload["spill"]),field:"discard decision".into(),before:Value::Null,after:payload.clone(),
+        (None, Some(payload))
+            if matches!(
+                entry.kind.as_str(),
+                "mutant_change" | "decision" | "decision_answer"
+            ) =>
+        {
+            vec![ValueChange {
+                subject: format!("{} {}", entry.kind, payload["row"]["id"]),
+                field: "record".into(),
+                before: Value::Null,
+                after: payload["row"].clone(),
+            }]
+        }
+        (None, Some(payload)) if entry.kind == "ledger_spill_discard" => vec![ValueChange {
+            subject: format!("Ledger spill {}", payload["spill"]),
+            field: "discard decision".into(),
+            before: Value::Null,
+            after: payload.clone(),
         }],
         (None, Some(payload)) if entry.store == Store::Library => stored::values(
             &entry.kind,
@@ -1075,7 +1111,9 @@ struct Faults {
 
 impl Faults {
     #[cfg(not(feature = "test-faults"))]
-    fn from_env() -> Self { Self::default() }
+    fn from_env() -> Self {
+        Self::default()
+    }
 
     #[cfg(feature = "test-faults")]
     fn from_env() -> Self {
@@ -1595,7 +1633,10 @@ impl Keeper {
                     &facts,
                     reconciled,
                     follow,
-                    waiting.run.is_none().then_some(waiting.description.as_str()),
+                    waiting
+                        .run
+                        .is_none()
+                        .then_some(waiting.description.as_str()),
                 )
                 .map_err(|e| e.to_string())?;
             crate::mutant_follow::announce(&self.stems, &followed);

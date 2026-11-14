@@ -118,7 +118,10 @@ pub struct RecordOptions {
 #[derive(Subcommand)]
 pub enum RunCommands {
     /// Inspect or explicitly recover local accepted-write Ledger spills.
-    Spills { #[command(subcommand)] command: crate::spills::Commands },
+    Spills {
+        #[command(subcommand)]
+        command: crate::spills::Commands,
+    },
     /// Start a Run: one piece of work whose changes belong together. Prints
     /// its identifier, to pass as `--run`.
     Start {
@@ -259,7 +262,7 @@ pub fn runs(
     command: &RunCommands,
 ) -> Result<String, ServiceError> {
     let (run, did): (Run, &str) = match command {
-        RunCommands::Spills { command } => return crate::spills::run(client,command),
+        RunCommands::Spills { command } => return crate::spills::run(client, command),
         RunCommands::Start {
             source,
             description,

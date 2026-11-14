@@ -1,6 +1,6 @@
 //! The operation's Run is attached to its outstanding intent atomically.
 use crate::{Result, RunId, Sidecar, Source};
-use rusqlite::{params,OptionalExtension};
+use rusqlite::{params, OptionalExtension};
 impl Sidecar {
     /// Called on the first confirmed batch, not for refused/unchanged work.
     pub fn begin_bulk_run(
@@ -11,9 +11,17 @@ impl Sidecar {
     ) -> Result<RunId> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        if let Some(intent)=intent {
-            let existing:Option<Option<i64>>=tx.query_row("SELECT run_id FROM ledger_intent WHERE id=?1",[intent],|r|r.get(0)).optional()?;
-            if let Some(Some(run))=existing { return Ok(RunId(run)); }
+        if let Some(intent) = intent {
+            let existing: Option<Option<i64>> = tx
+                .query_row(
+                    "SELECT run_id FROM ledger_intent WHERE id=?1",
+                    [intent],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if let Some(Some(run)) = existing {
+                return Ok(RunId(run));
+            }
         }
         tx.execute(
             "INSERT INTO run (source_kind,source_name,description,started_at) VALUES (?1,?2,?3,?4)",

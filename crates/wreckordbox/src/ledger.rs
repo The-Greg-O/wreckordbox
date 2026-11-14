@@ -174,8 +174,13 @@ pub fn list(
 
 fn recovery_text(list: &RunList) -> String {
     if list.recovery["total"].as_u64().unwrap_or(0) > 0 || !list.recovery["error"].is_null() {
-        format!("\nAccepted-write spills await recording. Inspect with runs spills list.\n{}",list.recovery)
-    } else { String::new() }
+        format!(
+            "\nAccepted-write spills await recording. Inspect with runs spills list.\n{}",
+            list.recovery
+        )
+    } else {
+        String::new()
+    }
 }
 
 /// `runs show`.
@@ -205,10 +210,14 @@ pub fn show(
         counts_text(&shown.run),
     );
     if !shown.pending_recording["error"].is_null() {
-        let _ = write!(text, "\nPending recording could not be read: {}",shown.pending_recording["error"]);
+        let _ = write!(
+            text,
+            "\nPending recording could not be read: {}",
+            shown.pending_recording["error"]
+        );
     }
     if shown.recovery["total"].as_u64().unwrap_or(0) > 0 || !shown.recovery["error"].is_null() {
-        let _ = write!(text, "\nLedger recovery: {}",shown.recovery);
+        let _ = write!(text, "\nLedger recovery: {}", shown.recovery);
     }
     let pending = shown.pending_recording["total"].as_u64().unwrap_or(0);
     if pending > 0 {

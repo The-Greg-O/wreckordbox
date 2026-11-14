@@ -463,7 +463,10 @@ fn a_busy_stick_does_not_hold_up_the_accepted_write_for_recording() {
     );
     assert!(outcome.unwrap().is_some());
     let pending = f.service.call("runs.list", json!({})).unwrap();
-    assert_eq!(pending["pending_recording"]["records"][0]["result"]["track"], fixture::track_id(0));
+    assert_eq!(
+        pending["pending_recording"]["records"][0]["result"]["track"],
+        fixture::track_id(0)
+    );
     std::fs::remove_file(marker).unwrap();
     f.service
         .call("tracks.rate", json!({"id":fixture::track_id(0),"rating":4}))
@@ -493,9 +496,15 @@ fn an_unavailable_sidecar_parent_is_not_reported_as_an_empty_ledger() {
     let operation = Operation::new(&f.core, Kind::Analysis);
     register(&f, &operation, 0);
     assert!(operation.finish().is_some());
-    let pending = f.service.call("runs.list", json!({})).expect("spills without a Run must be inspectable");
+    let pending = f
+        .service
+        .call("runs.list", json!({}))
+        .expect("spills without a Run must be inspectable");
     assert_eq!(pending["pending_recording"]["total"], 1);
-    assert_eq!(pending["pending_recording"]["records"][0]["result"]["track"], fixture::track_id(0));
+    assert_eq!(
+        pending["pending_recording"]["records"][0]["result"]["track"],
+        fixture::track_id(0)
+    );
     assert!(sidecar.is_file(), "reads must not fix the obstruction");
     std::fs::remove_file(sidecar).unwrap();
     f.service

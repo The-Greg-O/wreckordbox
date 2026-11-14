@@ -89,10 +89,22 @@ fn undo_and_redo_name_the_change_they_step_across_a_kept_entry_and_a_stop_waits_
     );
     let before_spill = std::fs::read(sidecar_dir.join("ledger-spill.jsonl")).unwrap();
     let live = service.call(commands::RUNS_LIST, json!({})).unwrap();
-    let shown = service.call(commands::RUNS_SHOW,json!({"id":live["runs"][0]["id"]})).unwrap();
-    assert_eq!(shown["pending_recording"]["total"],1,"the accepted edit must be visible before another write");
-    assert_eq!(shown["pending_recording"]["records"][0]["result"]["payload"]["edits"][0]["after"],4);
-    assert_eq!(std::fs::read(sidecar_dir.join("ledger-spill.jsonl")).unwrap(),before_spill,"inspection never replays");
+    let shown = service
+        .call(commands::RUNS_SHOW, json!({"id":live["runs"][0]["id"]}))
+        .unwrap();
+    assert_eq!(
+        shown["pending_recording"]["total"], 1,
+        "the accepted edit must be visible before another write"
+    );
+    assert_eq!(
+        shown["pending_recording"]["records"][0]["result"]["payload"]["edits"][0]["after"],
+        4
+    );
+    assert_eq!(
+        std::fs::read(sidecar_dir.join("ledger-spill.jsonl")).unwrap(),
+        before_spill,
+        "inspection never replays"
+    );
     core.step_history(&NoHost, true).unwrap();
     core.step_history(&NoHost, false).unwrap();
     assert_eq!(rating_of(&core, &track), 4);
@@ -172,19 +184,25 @@ fn undo_and_redo_name_the_change_they_step_across_a_kept_entry_and_a_stop_waits_
     assert_eq!(last.action, wreckordbox_sidecar::ledger::Action::Edit);
     assert_eq!(last.payload.as_ref().unwrap()["edits"][0]["after"], 2);
     assert!(sidecar.open_intents().unwrap().is_empty());
-    let before_runs=sidecar.runs(100,0).unwrap().1;
+    let before_runs = sidecar.runs(100, 0).unwrap().1;
     drop(sidecar);
     service.stopped().wait();
     drop(service);
     // A replay interrupted after append still has its old run:null record.
-    let mut spilled:Value=serde_json::from_slice(&before_spill).unwrap();
-    spilled["run"]=Value::Null;
-    std::fs::write(sidecar_dir.join("ledger-spill.jsonl"),format!("{}\n",spilled)).unwrap();
+    let mut spilled: Value = serde_json::from_slice(&before_spill).unwrap();
+    spilled["run"] = Value::Null;
+    std::fs::write(
+        sidecar_dir.join("ledger-spill.jsonl"),
+        format!("{}\n", spilled),
+    )
+    .unwrap();
     std::env::remove_var(FAULTS_ENV);
-    let restarted=Service::start(location.clone(),&config).unwrap();
-    let recovered=restarted.call(commands::RUNS_LIST,json!({})).unwrap();
-    assert_eq!(recovered["total"],before_runs,"replaying an existing entry cannot create an empty Run");
+    let restarted = Service::start(location.clone(), &config).unwrap();
+    let recovered = restarted.call(commands::RUNS_LIST, json!({})).unwrap();
+    assert_eq!(
+        recovered["total"], before_runs,
+        "replaying an existing entry cannot create an empty Run"
+    );
     assert!(!sidecar_dir.join("ledger-spill.jsonl").exists());
     restarted.stop();
-
 }

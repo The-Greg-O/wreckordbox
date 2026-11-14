@@ -409,7 +409,11 @@ fn insert_change(
             at
         ],
     )?;
-    crate::native_history::record(tx,crate::native_history::Table::Mutant,tx.last_insert_rowid())?;
+    crate::native_history::record(
+        tx,
+        crate::native_history::Table::Mutant,
+        tx.last_insert_rowid(),
+    )?;
     Ok(())
 }
 

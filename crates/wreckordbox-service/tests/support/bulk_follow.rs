@@ -30,11 +30,23 @@ fn a_bulk_scope_preserves_the_replacement_imports_transactional_mutant_follow() 
         .unwrap();
     let entries = imported["entries"].as_array().unwrap();
     assert_eq!(
-        entries.len(),
+        entries
+            .iter()
+            .filter(|entry| entry["store"] == "library")
+            .count(),
         2,
         "the replacement history and imported result share one Run: {imported}"
     );
     assert!(entries.iter().any(|entry| entry["kind"] == "import"));
+    let changes: Vec<_> = entries
+        .iter()
+        .filter(|entry| entry["store"] == "sidecar")
+        .map(|entry| {
+            assert_eq!(entry["kind"], "mutant_change");
+            entry["payload"]["row"]["action"].as_str().unwrap()
+        })
+        .collect();
+    assert_eq!(changes, vec!["detached", "carried"]);
     let live = live_ids(&hosted);
     assert_eq!(live.len(), 1);
     assert_ne!(live[0], original);
