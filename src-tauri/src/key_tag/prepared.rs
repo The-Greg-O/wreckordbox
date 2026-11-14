@@ -103,7 +103,14 @@ pub(crate) fn prepare_key_edit(
         .filter(|p| !p.as_os_str().is_empty())
         .collect();
     let access = crate::stick_guard::enter_files(state.backup_dir(), all_paths)?;
-    let mut files: Vec<FilePlan> = Vec::new();
+    // Own staged copies immediately, so every early return authorizes cleanup
+    // too (including a later file refusing after this Stick was replaced).
+    let prepared = Arc::new(PreparedFiles {
+        state_dir: state.backup_dir().to_path_buf(),
+        files: parking_lot::Mutex::new(Vec::new()),
+        selected,
+    });
+    let mut files = prepared.files.lock();
     let mut warnings = Vec::new();
 
     for (track, requested) in candidates {
@@ -142,11 +149,8 @@ pub(crate) fn prepare_key_edit(
             format!("No keys changed: {}", warnings.join("; ")),
         ));
     }
-    Ok(Arc::new(PreparedFiles {
-        state_dir: state.backup_dir().to_path_buf(),
-        files: parking_lot::Mutex::new(files),
-        selected,
-    }))
+    drop(files);
+    Ok(prepared)
 }
 impl PreparedFiles {
     /// Before the row edit: validate the files and the selected tracks' paths.
@@ -189,7 +193,12 @@ pub(crate) fn prepare_key_history(
     .map_err(|e| super::protected(undo, label, &e))?;
     // Preserve the established conflict/refusal wording, outside the gate.
     super::check_restore(&files.files, undo, label)?;
-    let mut plans = Vec::new();
+    let prepared = Arc::new(PreparedFiles {
+        state_dir: files.state_dir.clone(),
+        files: parking_lot::Mutex::new(Vec::new()),
+        selected: Vec::new(),
+    });
+    let mut plans = prepared.files.lock();
     for file in &files.files {
         let (expected, key) = file.step(undo);
         match prepare_checked(&file.path, Some(expected), key, || {
@@ -224,12 +233,10 @@ pub(crate) fn prepare_key_history(
                 ))
             }
         }
+        crate::test_holds::point("key_tag.file_prepared", &files.state_dir);
     }
-    Ok(Arc::new(PreparedFiles {
-        state_dir: files.state_dir.clone(),
-        files: parking_lot::Mutex::new(plans),
-        selected: Vec::new(),
-    }))
+    drop(plans);
+    Ok(prepared)
 }
 impl OutsideSteps for PreparedFiles {
     fn unrestored_values(&self) -> Option<serde_json::Value> {
@@ -395,6 +402,71 @@ pub fn write_analysis_key_tag(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
+    #[test]
+    fn failed_preparation_retains_earlier_copies_on_a_replaced_stick() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join("state");
+        let stick = dir.path().join("SPARE");
+        std::fs::create_dir(&stick).unwrap();
+        std::fs::write(
+            stick.join(wreckordbox_stick_protection::STAND_IN_MARKER),
+            b"",
+        )
+        .unwrap();
+        let mut files = Vec::new();
+        for name in ["first.mp3", "second.mp3"] {
+            let path = stick.join(name);
+            let mut mp3 = Vec::new();
+            for _ in 0..40 {
+                mp3.extend([0xFF, 0xFB, 0x90, 0x64]);
+                mp3.extend([0; 413]);
+            }
+            std::fs::write(&path, mp3).unwrap();
+            rbl_db::key_tag::write_key(&path, "Fm").unwrap();
+            files.push(KeyTagWrite {
+                path,
+                before: Some("Cm".into()),
+                after: "Fm".into(),
+            });
+        }
+        wreckordbox_stick_protection::unlock(&state_dir, &stick, Some("SPARE")).unwrap();
+        let held = crate::test_holds::arm("key_tag.file_prepared", &state_dir);
+        let history = KeyTagWrites {
+            files,
+            state_dir: state_dir.clone(),
+        };
+        let worker =
+            std::thread::spawn(move || prepare_key_history(&history, true, "Undo").is_err());
+        held.reached();
+        let names: Vec<_> = std::fs::read_dir(&stick)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .filter(|n| n.to_string_lossy().contains(".rbx-key-"))
+            .collect();
+        assert_eq!(names.len(), 2);
+        let removed = dir.path().join("removed");
+        std::fs::rename(&stick, &removed).unwrap();
+        std::fs::create_dir(&stick).unwrap();
+        std::fs::write(
+            stick.join(wreckordbox_stick_protection::STAND_IN_MARKER),
+            b"",
+        )
+        .unwrap();
+        // A different Stick can contain the same names; they are not ours to delete.
+        for name in &names {
+            std::fs::write(stick.join(name), b"replacement's bytes").unwrap();
+        }
+        held.release();
+        assert!(worker.join().unwrap());
+        for name in &names {
+            assert_eq!(
+                std::fs::read(stick.join(name)).unwrap(),
+                b"replacement's bytes"
+            );
+            assert!(removed.join(name).exists());
+        }
+    }
+
     #[test]
     fn analysis_tag_takes_stick_authorization_before_the_analysis_lock() {
         let dir = tempfile::tempdir().unwrap();

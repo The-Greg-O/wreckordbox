@@ -400,6 +400,18 @@ fn a_failed_sqlite_step_with_an_unrestorable_file_is_named_in_the_ledger() {
         Some("Cm")
     );
     assert!(error.contains("could not be changed back"), "{error}");
+    let native_key: String = db
+        .connection()
+        .query_row(
+            "SELECT k.ScaleName FROM djmdContent c JOIN djmdKey k ON k.ID=c.KeyID WHERE c.ID=?1",
+            [&id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        native_key, "Fm",
+        "SQLite refused the native undo while audio remained Cm"
+    );
     let entries = all_entries(&window);
     let partial = entries
         .iter()
