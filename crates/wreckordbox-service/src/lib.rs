@@ -29,6 +29,7 @@ pub mod mytag_edits;
 pub mod native_stems;
 pub mod playlist_edits;
 pub mod projection;
+pub mod projection_barriers;
 pub mod protection;
 pub mod protocol;
 pub mod reading;

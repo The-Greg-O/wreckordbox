@@ -21,7 +21,7 @@ use rbl_db::fixture::{self, Shape};
 use rbl_library::history::TRACK_EDIT;
 use rbl_library::{History, LibraryCore, NoHost, Touched};
 use serde_json::{json, Value};
-use wreckordbox_service::projection::PAUSE_ENV;
+use wreckordbox_service::projection::GATE_ENV;
 use wreckordbox_service::stems::SIDECAR_DIR_ENV;
 use wreckordbox_service::{Client, Config, Service};
 
@@ -218,13 +218,24 @@ fn a_projection_the_window_asks_for_is_a_tools_and_undoes_in_one_step() {
     project().unwrap();
     record(&c, 4, 0.9);
     record(&d, 3, 0.9);
-    std::env::set_var(PAUSE_ENV, "600");
+    // The apply stops between its plan and its write and says so; the
+    // DJ's edit is made exactly then, and the apply let go on.
+    let gate = tempfile::tempdir().unwrap();
+    std::env::set_var(GATE_ENV, gate.path());
     let mut client = Client::connect(&config.socket_path(&location)).unwrap();
     let applying = std::thread::spawn(move || client.call::<Value>("projection.apply", json!({})));
-    std::thread::sleep(Duration::from_millis(250));
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while !gate.path().join("paused").exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the apply never paused"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
     rate(&core, &c, 2);
+    std::fs::write(gate.path().join("go"), b"").unwrap();
     let refused = applying.join().unwrap().unwrap_err();
-    std::env::remove_var(PAUSE_ENV);
+    std::env::remove_var(GATE_ENV);
     assert_eq!(refused.code, "projection_changed", "{refused:?}");
     assert_eq!(stars(&core, &c), 2);
     assert_eq!(stars(&core, &d), 0);
