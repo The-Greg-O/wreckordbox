@@ -4,7 +4,7 @@ use super::{
     bulk_spill::{self as spill, Manifest, Record},
     Keeper, Target, CURRENT,
 };
-use rbl_library::bulk::{Kind, Recorder, Step};
+use rbl_library::bulk::{GenerateRecords, Kind, Recorder, Step};
 use serde_json::{json, Value};
 use std::{
     cell::{Cell, RefCell},
@@ -14,7 +14,7 @@ use std::{
         Arc, Condvar, Mutex, Weak,
     },
 };
-use wreckordbox_sidecar::{bulk::OrderLease, ledger::Intent, Sidecar, Source, SourceKind};
+use wreckordbox_sidecar::{bulk::OrderLease, ledger::Intent, RunId, Sidecar, Source, SourceKind};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 const RECORDS: usize = 128;
@@ -44,6 +44,37 @@ pub(super) fn active(keeper: &Keeper) -> Option<Rc<Active>> {
     })
 }
 impl Active {
+    pub(super) fn imports(&self) -> bool {
+        self.session.kind == "import"
+    }
+    /// Kept replacement history uses the same operation owner/Run as the
+    /// imported rows. Its native intent and Mutant preparation remain intact.
+    pub(super) fn import_target(&self) -> (Result<RunId, String>, Source, String) {
+        let mut admission = self.session.admission();
+        let run = if let Some(run) = admission.run {
+            Ok(run)
+        } else {
+            self.session
+                .stems
+                .sidecar()
+                .map_err(|e| e.message)
+                .and_then(|sidecar| {
+                    sidecar
+                        .begin_bulk_run(
+                            admission.intent,
+                            &self.session.source,
+                            self.session.description,
+                        )
+                        .map_err(|e| e.to_string())
+                })
+                .inspect(|run| admission.run = Some(*run))
+        };
+        (
+            run,
+            self.session.source.clone(),
+            self.session.description.into(),
+        )
+    }
     pub(super) fn set_bulk(&self, bulk: bool) {
         self.bulk_write.set(bulk);
     }
@@ -141,6 +172,28 @@ impl Recorder for Handle {
     }
 }
 impl Step for Scope {
+    fn complete_generated(&mut self, generate: &mut GenerateRecords<'_>) {
+        self.completed = true;
+        let mut stamps = self.active.stamps.take();
+        let Some(last) = stamps.pop() else { return };
+        for stamp in stamps {
+            self.active.session.record(Record { id: stamp.ids.first().copied(), at: stamp.at,
+                value: json!({"target":self.target,"status":"accepted_native_step","not_reversible_reason":"Intermediate native write; its values were not retained"}) });
+        }
+        let mut index = 0;
+        generate(&mut |value| {
+            self.active.session.record(Record {
+                id: last.ids.get(index).copied(),
+                at: last.at,
+                value,
+            });
+            index += 1;
+        });
+        if index == 0 {
+            self.active.session.record(Record { id: last.ids.first().copied(), at: last.at,
+                value: json!({"target":self.target,"status":"accepted_native_step","not_reversible_reason":"The writer returned no result values"}) });
+        }
+    }
     fn complete(&mut self, mut records: Vec<Value>) {
         self.completed = true;
         let mut stamps = self.active.stamps.take();
@@ -210,6 +263,7 @@ struct Admission {
     lease: OrderLease,
     order_failed: bool,
     intent: Option<i64>,
+    run: Option<RunId>,
     warning: Option<String>,
 }
 #[derive(Default)]
@@ -369,11 +423,15 @@ impl Session {
         Stamp { at, ids }
     }
     fn manifest(&self, state: &mut State) -> Manifest {
+        let (intent, run) = {
+            let admission = self.admission();
+            (admission.intent, admission.run)
+        };
         state
             .manifest
             .get_or_insert_with(|| Manifest {
-                intent: self.admission().intent,
-                run: None,
+                intent,
+                run,
                 source: self.source.clone(),
                 description: self.description.into(),
                 kind: self.kind.into(),
@@ -424,11 +482,15 @@ impl Session {
             let _access = self.stems.bulk_access()?;
             let sidecar = self.stems.sidecar().map_err(|e| e.message)?;
             if manifest.run.is_none() {
-                manifest.run = Some(
-                    sidecar
+                let mut admission = self.admission();
+                let run = match admission.run {
+                    Some(run) => run,
+                    None => sidecar
                         .begin_bulk_run(manifest.intent, &manifest.source, &manifest.description)
                         .map_err(|e| e.to_string())?,
-                );
+                };
+                admission.run = Some(run);
+                manifest.run = Some(run);
             }
             state.manifest = Some(manifest.clone());
             spill::bind_run(&self.spill, &manifest)?;
@@ -516,6 +578,21 @@ impl Session {
                     }
                 }
             }
+        }
+        // Kept replacement history uses the ordinary durable spill (and its
+        // transactional Mutant Follow), but is still part of this operation.
+        // A successful bulk append must not conceal a waiting history entry.
+        if self.kind == "import"
+            && self.keeper.upgrade().is_some_and(|keeper| {
+                keeper.state().unwritten.iter().any(|entry| {
+                    entry.run == manifest.run.map(|run| run.0) && entry.source == self.source
+                })
+            })
+        {
+            self.warning(
+                &mut state,
+                "kept replacement history is waiting to be recorded",
+            );
         }
         state.ended = true;
         state.warning.clone()

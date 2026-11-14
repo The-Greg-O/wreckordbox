@@ -22,6 +22,13 @@ impl Fixture {
         Self::prepared(tracks, |_| {})
     }
     fn prepared(tracks: usize, prepare: impl FnOnce(&std::path::Path)) -> Self {
+        Self::with_host(tracks, prepare, |_| Arc::new(NoHost))
+    }
+    fn with_host(
+        tracks: usize,
+        prepare: impl FnOnce(&std::path::Path),
+        host: impl FnOnce(&Arc<LibraryCore>) -> Arc<dyn rbl_library::Host + Send + Sync>,
+    ) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("library");
         std::fs::create_dir_all(&root).unwrap();
@@ -51,7 +58,7 @@ impl Fixture {
             0,
             location.clone(),
         );
-        let host: Arc<dyn rbl_library::Host + Send + Sync> = Arc::new(NoHost);
+        let host = host(&core);
         let service = Service::host(&location, &config, &core, &host).unwrap();
         Self { core, service, dir }
     }
@@ -469,3 +476,170 @@ mod orphans;
 
 #[path = "support/player_bulk.rs"]
 mod player;
+
+#[test]
+fn an_import_keeps_its_callers_source_across_threads_without_dj_facts() {
+    struct Capture {
+        core: std::sync::Weak<LibraryCore>,
+        operation: Arc<std::sync::Mutex<Option<Operation>>>,
+    }
+    impl rbl_library::Host for Capture {
+        fn recover_interrupted_files(&self, _: &rbl_db::LibraryLocation) -> Result<(), String> {
+            *self.operation.lock().unwrap() =
+                Some(Operation::new(&self.core.upgrade().unwrap(), Kind::Import));
+            Ok(())
+        }
+    }
+    for source in [
+        json!({"kind":"agent","name":"importer"}),
+        json!({"kind":"dj","name":"dj"}),
+    ] {
+        let captured = Arc::new(std::sync::Mutex::new(None));
+        let f = Fixture::with_host(
+            3,
+            |_| {},
+            |core| {
+                Arc::new(Capture {
+                    core: Arc::downgrade(core),
+                    operation: captured.clone(),
+                })
+            },
+        );
+        let config = Config {
+            runtime_dir: f.dir.path().join("run"),
+            idle_exit: None,
+            recovery_dir: f.dir.path().join("recovery"),
+        };
+        let location = f.core.location().unwrap();
+        let mut caller =
+            wreckordbox_service::Client::connect(&config.socket_path(&location)).unwrap();
+        caller.in_run(Some(
+            serde_json::from_value(json!({"source":source})).unwrap(),
+        ));
+        caller
+            .call::<Value>("tracks.rate", json!({"id":fixture::track_id(0),"rating":5}))
+            .unwrap();
+        let operation = captured.lock().unwrap().take().unwrap();
+        let core = f.core.clone();
+        std::thread::spawn(move || {
+            operation
+                .run(
+                    json!({"track":fixture::track_id(1)}),
+                    || {
+                        core.recorded_edit(
+                            &NoHost,
+                            rbl_library::Touched::Tracks,
+                            "Imported rating",
+                            |w| {
+                                let (_, edit) = w.set_rating_with_undo(&fixture::track_id(1), 4)?;
+                                Ok(((), rbl_library::history::LibraryEdit::Track(vec![edit])))
+                            },
+                        )
+                    },
+                    |_| vec![json!({"track":fixture::track_id(1),"operation":"imported_metadata"})],
+                )
+                .unwrap();
+            assert_eq!(operation.finish(), None);
+        })
+        .join()
+        .unwrap();
+        let runs = f.runs();
+        assert_eq!(runs["total"], 2, "{runs}");
+        let shown = f
+            .service
+            .call("runs.show", json!({"id":runs["runs"][0]["id"]}))
+            .unwrap();
+        let entries = shown["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 2, "{shown}");
+        assert!(
+            entries.iter().all(|entry| entry["source"] == source),
+            "{shown}"
+        );
+        assert_eq!(
+            f.service
+                .call(
+                    "facts.of_track",
+                    json!({"id":fixture::track_id(1),"all":true})
+                )
+                .unwrap()["facts"],
+            json!([])
+        );
+    }
+}
+
+#[test]
+fn generated_import_records_leave_the_writer_gate_and_name_all_three_hundred_rows() {
+    let f = Fixture::new(300);
+    let operation = Operation::new(&f.core, Kind::Import);
+    operation
+        .run_generated(
+            json!({"operation":"fixture_import"}),
+            300,
+            || {
+                f.core.write_then(
+                    &NoHost,
+                    History::Outside,
+                    |w| {
+                        for i in 0..300 {
+                            w.set_rating(&fixture::track_id(i), 4)?;
+                        }
+                        Ok(())
+                    },
+                    |_, result| Ok(result),
+                )
+            },
+            |(), emit| {
+                let core = f.core.clone();
+                assert!(
+                    std::thread::spawn(move || core.edit_gate().try_lock().is_some())
+                        .join()
+                        .unwrap(),
+                    "record generation runs after releasing the Library gate"
+                );
+                for i in 0..300 {
+                    emit(json!({"track":fixture::track_id(i),"title":"metadata".repeat(128)}));
+                    if i == 199 {
+                        let runs = f.runs();
+                        assert_eq!(
+                            runs["total"], 1,
+                            "a bounded batch must be visible before generation ends: {runs}"
+                        );
+                        let written = runs["runs"][0]["changes"].as_u64().unwrap();
+                        assert!(
+                            written > 0 && written <= 200,
+                            "records must be flushed while producing them: {runs}"
+                        );
+                    }
+                }
+            },
+        )
+        .unwrap();
+    assert_eq!(operation.finish(), None);
+    let runs = f.runs();
+    assert_eq!(runs["total"], 1);
+    let shown = f
+        .service
+        .call(
+            "runs.show",
+            json!({"id":runs["runs"][0]["id"],"limit":1000}),
+        )
+        .unwrap();
+    assert_eq!(shown["total"], 300);
+    let tracks: std::collections::BTreeSet<_> = shown["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|e| e["payload"]["records"].as_array().unwrap())
+        .map(|r| r["track"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(tracks, (0..300).map(fixture::track_id).collect());
+    assert_eq!(
+        f.service
+            .call(
+                "facts.of_track",
+                json!({"id":fixture::track_id(1),"all":true})
+            )
+            .unwrap()["facts"],
+        json!([])
+    );
+}

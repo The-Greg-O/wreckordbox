@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { beforeEach, expect, it, vi } from "vitest";
 
-const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
+const { invoke, message } = vi.hoisted(() => ({ invoke: vi.fn(), message: vi.fn().mockResolvedValue(undefined) }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ message }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
 const report = { imported: 0, existing: 2, skipped: [], playlists: 0, cues: 0, tracks: [] };
@@ -9,6 +10,7 @@ const report = { imported: 0, existing: 2, skipped: [], playlists: 0, cues: 0, t
 beforeEach(() => {
   vi.resetModules();
   invoke.mockReset();
+  message.mockClear();
 });
 
 it("imports straight away when no list of the same name stands in the library", async () => {
@@ -43,3 +45,15 @@ it("replaces the same-named lists on OK", async () => {
   ).resolves.toMatchObject({ existing: 2 });
   expect(invoke).toHaveBeenLastCalledWith("import_itunes_selected", { path: "/L.xml", ids: ["itunes:1"], replace: true });
 });
+
+
+it.each(["import_xml", "import_itunes", "import_itunes_selected"]) (
+  "shows an accepted %s import's recording warning and still returns its tracks",
+  async (command) => {
+    const { importReplacing } = await import("./client");
+    const accepted = { ...report, imported: 1, tracks: [{ id: "new", title: "Imported" }], recordingWarning: "Import accepted; Ledger recording is incomplete." };
+    invoke.mockResolvedValueOnce(accepted);
+    await expect(importReplacing(command, { path: "/file.xml" }, vi.fn())).resolves.toEqual(accepted);
+    expect(message).toHaveBeenCalledWith(accepted.recordingWarning, { title: "Import recording", kind: "warning" });
+  },
+);
