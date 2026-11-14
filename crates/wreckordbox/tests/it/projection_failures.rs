@@ -60,15 +60,7 @@ fn stop_service(s: &Sandbox) {
 }
 
 fn wait_for_no_service(s: &Sandbox) {
-    let socket = s.config().socket_path(s.location());
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while wreckordbox_service::Client::connect(&socket)
-        .and_then(|mut client| client.status())
-        .is_ok()
-    {
-        assert!(Instant::now() < deadline, "the service did not die");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    common::released::wait_until_released(s, "the service that was made to die");
 }
 
 fn fact(s: &Sandbox, track: &str, value: &str, source: &str, confidence: &str) {
