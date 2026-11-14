@@ -37,6 +37,7 @@ pub mod projection_barriers;
 pub mod protection;
 pub mod protocol;
 pub mod reading;
+pub mod release_wait;
 pub mod render_stems;
 pub mod review;
 pub mod review_runs;

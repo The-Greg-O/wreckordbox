@@ -46,6 +46,8 @@ serde = { workspace = true }
 tracing = { workspace = true }
 serde_json = { workspace = true }
 dirs = "5"
+# A connect that cannot block: probing a socket whose backlog is full (wbx-1.2).
+socket2 = { version = "0.6", features = ["all"] }
 # The DJ's projection policy file (`projection-policy.toml`).
 toml = "0.8"
 # Only to tell a locked Library from a damaged one by SQLite's result code.
