@@ -79,7 +79,7 @@ test("Split starts a separation shown as a Run with progress in the status line,
   await expect.poll(async () => Number(await bar.getAttribute("aria-valuenow"))).toBeGreaterThan(20);
 
   await expect(stems(page)).toHaveAttribute("data-state", "current", { timeout: 10_000 });
-  await expect(stemsState(page)).toHaveText(/^Stems ready · made /);
+  await expect(stemsState(page)).toHaveText(/^Stems ready · made \S.*\d/);
   await expect(splitButton(page)).toHaveText("Split again…");
   await expect(statusLine(page).getByTestId("status-stems")).toHaveCount(0);
   await expect(statusLine(page)).not.toContainText("into Stems");
@@ -195,7 +195,7 @@ test("stale Stems are labelled and split without asking", async ({ page }) => {
   const track = await chooseSplittable(page);
   await call(page, "__setStems", track.id, "stale");
   await expect(stems(page)).toHaveAttribute("data-state", "stale");
-  await expect(stemsState(page)).toHaveText(/^Stale: the audio changed since these Stems were made/);
+  await expect(stemsState(page)).toHaveText(/^Stale: the audio changed since these Stems were made \([^)]*\d[^)]*\)$/);
   await expect(splitButton(page)).toHaveText("Split");
   await splitButton(page).click();
   await expect(stems(page)).toHaveAttribute("data-state", "current", { timeout: 10_000 });

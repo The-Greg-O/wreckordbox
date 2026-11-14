@@ -8,7 +8,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { getBackend } from "@/ipc/client";
 import { createStemSplits, type Split, type StemSplits } from "@/lib/stemSplits";
-import { fromServiceStatus, type StemsStatus } from "@/lib/stemsStatus";
+import type { StemsStatus } from "@/lib/stemsStatus";
 import { coalescedRefresh } from "@/lib/coalescedRefresh";
 
 let splits: StemSplits | null = null;
@@ -68,7 +68,7 @@ export function useStemsStatus(id: string | null, splitPhase: Split["phase"] | n
     const reader = coalescedRefresh(async () => {
       const backend = await getBackend();
       try {
-        const value = fromServiceStatus(await backend.stemsStatus(id));
+        const value = await backend.stemsStatus(id);
         if (live) setRead({ status: "read", value });
       } catch (error) {
         if (live) setRead({ status: "failed", message: error instanceof Error ? error.message : String(error) });
