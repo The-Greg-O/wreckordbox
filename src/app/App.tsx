@@ -74,6 +74,7 @@ import { libraryWidthOf } from "@/lib/libraryFit";
 import { libraryLookFor } from "@/views/shell/libraryFitLook";
 import { SHELL_PLAYER_LAYOUT, ViewShell } from "@/views/shell/ViewShell";
 import { useShellTree } from "@/views/shell/useShellTree";
+import { WaveformThemeChooser } from "@/views/shell/WaveformThemeChooser";
 import { breadcrumbOf } from "@/lib/shellTreeOverlay";
 import { crumbTally } from "@/lib/crumbTally";
 import { useTargetList } from "@/views/shell/useTargetList";
@@ -4026,7 +4027,7 @@ function AppBody() {
           libraryCrumb={libraryCrumb}
           libraryTally={crumbTally(listTotals)}
           status={<>{linkStrip}{statusBar}</>}
-          topBarEnd={<CommandPaletteButton platform={platform} />}
+          topBarEnd={<><WaveformThemeChooser /><CommandPaletteButton platform={platform} /></>}
         />
         {dialogs}
       </div>

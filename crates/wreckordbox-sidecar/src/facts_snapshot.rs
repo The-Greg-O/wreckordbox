@@ -107,6 +107,10 @@ impl FactsReader {
 }
 
 impl FactsReader {
+    pub(crate) fn connection(&self) -> &Connection {
+        &self.db
+    }
+
     /// Read Mutants through this immutable snapshot, without migration or cleanup.
     pub fn mutants(&self) -> crate::mutants::MutantReader<'_> {
         crate::mutants::MutantReader::new(&self.db)

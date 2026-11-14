@@ -395,6 +395,19 @@ impl EditHistory {
     /// window's or a service client's, passes through here once. (A later
     /// slice of one Add Tracks to Playlist extends the entry its first
     /// slice recorded here; see [`Self::record_addition`].)
+    /// Tells the Ledger of `edits`, each a deliberate hand set of a field
+    /// to the value it already holds, as the DJ's assertion (wbx-26). They
+    /// are no step of the history: Undo holds only what changed. The window's
+    /// hand setters and a command that says `assert` call it; nothing else
+    /// does, so a write that merely changed nothing asserts nothing.
+    pub fn assert(&mut self, edits: Vec<rbl_db::write::TrackEdit>, label: &'static str) {
+        // Told even with nothing to assert: the Ledger kept the hand set's
+        // intent open for this, and settles it now.
+        if let Some(ledger) = &self.ledger {
+            ledger.assert(&LibraryEdit::Track(edits), label);
+        }
+    }
+
     pub fn record(&mut self, edit: LibraryEdit, label: &'static str) {
         let ledger = self.ledger.as_ref().and_then(|ledger| ledger.record(Step::Edit, &edit, label, Link::default()));
         self.undo.push(HistoryEntry { edit, label, ledger });
@@ -600,11 +613,26 @@ impl crate::LibraryCore {
         label: &'static str,
         action: impl FnOnce(&mut rbl_db::write::Writer) -> Result<(T, LibraryEdit), DbError>,
     ) -> Result<(T, crate::Change), DbError> {
+        self.recorded_edit_preparing(host, touched, label, false, action)
+    }
+
+    /// [`Self::recorded_edit`], saying whether an assertion follows.
+    fn recorded_edit_preparing<T>(
+        &self,
+        host: &(impl crate::Host + ?Sized),
+        touched: Touched,
+        label: &'static str,
+        asserting: bool,
+        action: impl FnOnce(&mut rbl_db::write::Writer) -> Result<(T, LibraryEdit), DbError>,
+    ) -> Result<(T, crate::Change), DbError> {
         let _gate = self.edit_gate().lock();
         let kind = touched.change_kind();
         // The refresh's own failure is kept aside: the edit is made by then
         // and goes into the history (and the Ledger) whatever it says.
-        let preparation = crate::ledger::Preparation::touched(&touched);
+        let preparation = crate::ledger::Preparation {
+            asserting,
+            ..crate::ledger::Preparation::touched(&touched)
+        };
         let (value, reversible, refreshed) = self.write_then_prepared(host, crate::History::Caller, &preparation, action, |db, (value, reversible)| {
             Ok((value, reversible, self.refresh_after_edit(host, db, touched)))
         })?;
@@ -614,6 +642,47 @@ impl crate::LibraryCore {
         }
         let generation = refreshed?;
         Ok((value, crate::Change { kind, generation }))
+    }
+
+    /// [`Self::recorded_edit`] for a deliberate hand set (wbx-26): `action`
+    /// answers every track edit it made, changed or not. The changed ones are
+    /// one step of the history as usual; the unchanged ones, set to the
+    /// value they already held, are told to the Ledger as an assertion
+    /// ([`EditHistory::assert`]), no step of the history.
+    ///
+    /// Blocking.
+    pub fn asserting_edit<T>(
+        &self,
+        host: &(impl crate::Host + ?Sized),
+        touched: Touched,
+        label: &'static str,
+        action: impl FnOnce(
+            &mut rbl_db::write::Writer,
+        ) -> Result<(T, Vec<rbl_db::write::TrackEdit>), DbError>,
+    ) -> Result<(T, crate::Change), DbError> {
+        // Held across both, so the assertion follows its change with no
+        // other edit between (the gate is re-entrant).
+        let _gate = self.edit_gate().lock();
+        // The Ledger keeps the write's intent until the assertion is told,
+        // so a crash between the change and the assertion leaves evidence.
+        let made = self.recorded_edit_preparing(host, touched, label, true, |writer| {
+            let (value, edits) = action(writer)?;
+            let (unchanged, changed): (Vec<_>, Vec<_>) = edits
+                .into_iter()
+                .partition(rbl_db::write::TrackEdit::is_empty);
+            Ok(((value, unchanged), LibraryEdit::Track(changed)))
+        });
+        let ((value, unchanged), change) = match made {
+            Ok(made) => made,
+            Err(error) => {
+                // Nothing to assert: the Ledger settles the intent it kept,
+                // unless the failed write changed rows.
+                self.history.lock().assert(Vec::new(), label);
+                return Err(error);
+            }
+        };
+        self.history.lock().assert(unchanged, label);
+        Ok((value, change))
     }
 
     /// One edit that Undo must never traverse, whole: the guarded write and

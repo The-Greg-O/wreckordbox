@@ -1724,5 +1724,6 @@
   "Immediate": "Immediate",
   "1 ms": "1 ms",
   "2 ms": "2 ms",
-  "How play, pause, cue and beat jumps start and stop the sound. Immediate cuts the music where it is; 1 ms and 2 ms fade it in and out. Takes effect at once, while playing.": "How play, pause, cue and beat jumps start and stop the sound. Immediate cuts the music where it is; 1 ms and 2 ms fade it in and out. Takes effect at once, while playing."
+  "How play, pause, cue and beat jumps start and stop the sound. Immediate cuts the music where it is; 1 ms and 2 ms fade it in and out. Takes effect at once, while playing.": "How play, pause, cue and beat jumps start and stop the sound. Immediate cuts the music where it is; 1 ms and 2 ms fade it in and out. Takes effect at once, while playing.",
+  "wave": "wave"
 }

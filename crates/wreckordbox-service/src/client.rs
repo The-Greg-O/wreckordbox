@@ -126,6 +126,18 @@ impl Client {
         let edit = RateTrack {
             id: id.to_owned(),
             rating,
+            assert: false,
+        };
+        self.call(commands::TRACKS_RATE, json!(edit))
+    }
+
+    /// [`Self::rate_track`] as a deliberate hand set: a track that already has
+    /// `rating` is asserted, as the DJ's when the command is the DJ's.
+    pub fn assert_rating(&mut self, id: &str, rating: u8) -> Result<RatedTrack, ServiceError> {
+        let edit = RateTrack {
+            id: id.to_owned(),
+            rating,
+            assert: true,
         };
         self.call(commands::TRACKS_RATE, json!(edit))
     }

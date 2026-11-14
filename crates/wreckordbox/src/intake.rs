@@ -226,6 +226,8 @@ pub fn run(
                     id: id.clone(),
                     prep_colour: prep_colour.clone(),
                     colour_id: *colour_id,
+                    // Typed at the command line: a deliberate hand set.
+                    assert: true,
                 }),
             )?;
             Ok(if as_json {
