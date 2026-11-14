@@ -69,6 +69,7 @@ owner. Read requests do not settle intents, recover spills or publish files.
 | `usb_import::apply`, `usb_import::{ratings,cues}` | Round-trip ratings, cues/analysis/grid metadata and player history | Yes, one Round-trip Operation with bounded slices. Player rating assertions preserve same-value choices when the export baseline proves a change. Partial failure barriers name attempted tracks. Source Stick is read-only. | `tool:round-trip`, one Run per Round-trip |
 | `commands::{undo_edit,redo_edit}` / `LibraryCore::step_history` | The inverse/reapplication of each kept native edit and its supported file changes | Yes, same recording point, `undo`/`redo` and `reverses`; original payload direction preserved, shown values reversed for Undo. Audio preparation/cleanup is outside the Library gate. | Window, regardless of original edit's source |
 | Service `projection::write` (`projection.apply`) | Chosen supported Fact values in native fields | Yes, recorded track values/ownership marks in one Run. Dry run writes nothing. | Default `tool:projection`, or explicit non-DJ Caller; DJ attribution refused |
+| Service `review::accept` (`review.accept`) | Accepted waiting Facts written to Energy/Prep colour, including explicit same-value choices | Yes, asserted track values; one quick Undo step for the selection, with the applied prefix recorded on partial failure | Explicit DJ source in its own or a supplied DJ Run; the proposed Fact's source is not the acceptance source |
 | Scripting `cocoa` setters/playlist operations, `my_tags::{update,reorder}`, `collection::remove` | Same native mutations as their delegated window commands | Yes, same recorded/named/permanent path as those commands | Window/DJ; scripting does not supply a service caller source |
 
 ## Recovery and boundaries
@@ -82,6 +83,7 @@ owner. Read requests do not settle intents, recover spills or publish files.
 | No hosted Ledger / standalone low-level Writer consumer | **No durable Ledger.** Native guards/history alone do not install one. Production coverage above depends on the service owning the Library and attaching its Keeper. |
 | `wrote_outside_history`, history clearing and index reload | Bookkeeping only, not independent native writes. Their surrounding operation owns any accepted mutation. |
 | Backups, preferences, played markers, local grid editor settings, logging | Separate output/state, not Library row/audio publication. No Library Ledger entry claimed. |
+| Review reject/reopen | Sidecar-only DJ decisions, recorded in their own Runs; no native Library write. Waiting/rejected listings only read. Requests must explicitly declare the DJ, and agents cannot make these decisions without the DJ asking. |
 | Facts, Decisions, Stems, Mutants and tag-schema files | Sidecar/configuration paths with their own provenance, not native Library writes. Mutant Follows accompanying a native edit are coordinated with its Ledger entry. |
 | Export/sync/Stick edits, Native stems and rendered Stem/Mutant tracks on a Stick | Stick writes, outside this Library coverage audit. Existing held confirmation/Stick authorization remains mandatory; no change to those paths here. |
 
