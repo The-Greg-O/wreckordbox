@@ -111,6 +111,50 @@ test("a Y held from before the row had focus does nothing, says why, and a fresh
   expect((await calls(page))[1]!.facts).toEqual([fact]);
 });
 
+/**
+ * An engine whose auto-repeat does not mark the repeats (`repeat` false,
+ * no keyup between them): the key is still known to be down.
+ */
+async function unmarkedDown(page: Page, key: string): Promise<void> {
+  await page.evaluate((k) => {
+    const at = document.activeElement ?? document.body;
+    at.dispatchEvent(new KeyboardEvent("keydown", { key: k, code: `Key${k.toUpperCase()}`, bubbles: true, cancelable: true, repeat: false }));
+  }, key);
+}
+async function unmarkedUp(page: Page, key: string): Promise<void> {
+  await page.evaluate((k) => {
+    const at = document.activeElement ?? document.body;
+    at.dispatchEvent(new KeyboardEvent("keyup", { key: k, code: `Key${k.toUpperCase()}`, bubbles: true, cancelable: true }));
+  }, key);
+}
+
+test("a held Y whose repeats the engine does not mark still decides once", async ({ page }) => {
+  await openReview(page);
+  await tabInto(page, rows(run(page, 41)).first());
+  for (let i = 0; i < 5; i += 1) await unmarkedDown(page, "y");
+  await expect(view(page).getByTestId("review-outcome")).toContainText("Accepted 1 Fact");
+  await nothingAsked(page, 1);
+  await unmarkedUp(page, "y");
+});
+
+test("a Y held from before the row had focus, with unmarked repeats, does nothing and says why", async ({ page }) => {
+  await openReview(page);
+  const tagging = run(page, 41);
+  const first = rows(tagging).first();
+  const fact = await factOf(first);
+  // Down in the threshold field (typing: not the row's), then the focus
+  // moves to the row with the key still held.
+  await tagging.getByRole("spinbutton").focus();
+  await unmarkedDown(page, "y");
+  await tabInto(page, first);
+  for (let i = 0; i < 3; i += 1) await unmarkedDown(page, "y");
+  await expect(refusal(page)).toContainText("already held down");
+  await nothingAsked(page);
+  await unmarkedUp(page, "y");
+  await unmarkedDown(page, "y");
+  await expect.poll(async () => (await calls(page)).map((c) => c.facts)).toEqual([[fact]]);
+});
+
 test("a row that changed since it took focus is not decided, and the view says why", async ({ page }) => {
   await openReview(page);
   const first = rows(run(page, 41)).first();
@@ -195,8 +239,11 @@ test("N on a row never reaches the deck (it is the deck's Next memory cue)", asy
   await pauseButton(page).click();
   await page.waitForTimeout(200);
   const at = await elapsedSeconds(page);
+  // On the row's Listen button (from a checkbox the deck never takes a key).
   const target = rows(run(page, 38)).first();
   await tabInto(page, target);
+  await page.keyboard.press("Tab");
+  await expect(target.getByRole("button", { name: /^Listen to / })).toBeFocused();
   await page.keyboard.press("n");
   await expect(view(page).getByTestId("review-outcome")).toContainText("Rejected 1 Fact");
   await page.waitForTimeout(300);

@@ -150,13 +150,14 @@ export function useReviewRowKeys(state: RowKeysState): RowKeys {
     event.preventDefault();
     event.stopPropagation();
     const key = event.key.toLowerCase();
-    if (event.repeat || wasDown.current) return;
     const name = KEY_NAME[verb];
     const focus = atFocus.current;
     if (!focus || focus.held.has(key)) {
       setRefused(`${name} did nothing: it was already held down when this row took focus. Release it and press it again.`);
       return;
     }
+    // A held key's repeats, marked or not (some engines send them unmarked).
+    if (event.repeat || wasDown.current) return;
     if (row.hasAttribute("data-ghost")) return;
     const { shown, held, busy, protectedLibrary, decide } = live.current;
     const since = sinceFocus(focus.row, snapshot(row, shown));
