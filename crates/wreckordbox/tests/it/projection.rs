@@ -739,7 +739,11 @@ fn an_assertion_cut_off_after_its_write_said_nothing_changed_still_protects_the_
     );
     assert_eq!(
         reasons(&applied, "kept"),
-        vec![("10001".into(), "energy".into(), "provenance_incomplete".into())]
+        vec![(
+            "10001".into(),
+            "energy".into(),
+            "provenance_incomplete".into()
+        )]
     );
     assert_eq!(track(&s, "10001")["rating"], 3);
 }

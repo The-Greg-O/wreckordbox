@@ -665,13 +665,14 @@ impl crate::LibraryCore {
         let _gate = self.edit_gate().lock();
         // The Ledger keeps the write's intent until the assertion is told,
         // so a crash between the change and the assertion leaves evidence.
-        let ((value, unchanged), change) = self.recorded_edit_preparing(host, touched, label, true, |writer| {
-            let (value, edits) = action(writer)?;
-            let (unchanged, changed): (Vec<_>, Vec<_>) = edits
-                .into_iter()
-                .partition(rbl_db::write::TrackEdit::is_empty);
-            Ok(((value, unchanged), LibraryEdit::Track(changed)))
-        })?;
+        let ((value, unchanged), change) =
+            self.recorded_edit_preparing(host, touched, label, true, |writer| {
+                let (value, edits) = action(writer)?;
+                let (unchanged, changed): (Vec<_>, Vec<_>) = edits
+                    .into_iter()
+                    .partition(rbl_db::write::TrackEdit::is_empty);
+                Ok(((value, unchanged), LibraryEdit::Track(changed)))
+            })?;
         self.history.lock().assert(unchanged, label);
         Ok((value, change))
     }

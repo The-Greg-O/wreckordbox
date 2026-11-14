@@ -25,7 +25,8 @@ use serde_json::{json, Value};
 use wreckordbox_service::{ledger::FAULTS_ENV, stems::SIDECAR_DIR_ENV, Config, Service};
 
 const CRASH_ROOT: &str = "WBX26_CRASH_ROOT";
-const NAME: &str = "a_mixed_hand_set_cut_off_before_its_assertion_still_protects_the_unchanged_tracks";
+const NAME: &str =
+    "a_mixed_hand_set_cut_off_before_its_assertion_still_protects_the_unchanged_tracks";
 
 fn location(root: &Path) -> LibraryLocation {
     LibraryLocation {
@@ -48,7 +49,14 @@ fn hosted(root: &Path) -> (Service, Arc<LibraryCore>) {
     core.set_protection(false).unwrap();
     let db = Library::open(location.clone(), OpenMode::ReadOnly).unwrap();
     let (index, _) = rbl_index::load(&db).unwrap();
-    core.set_library(&NoHost, index, false, db.schema().db_version, 0, location.clone());
+    core.set_library(
+        &NoHost,
+        index,
+        false,
+        db.schema().db_version,
+        0,
+        location.clone(),
+    );
     let host: Arc<dyn rbl_library::Host + Send + Sync> = Arc::new(NoHost);
     let service = Service::host(&location, &config, &core, &host).unwrap();
     (service, core)
@@ -87,13 +95,18 @@ fn a_mixed_hand_set_cut_off_before_its_assertion_still_protects_the_unchanged_tr
         std::env::set_var(FAULTS_ENV, "abort_before_assert");
         let (_service, core) = hosted(root);
         let tracks = vec![a.clone(), b.clone()];
-        core.asserting_edit(&NoHost, Touched::Metadata(tracks.clone()), TRACK_EDIT, |writer| {
-            let mut edits = Vec::new();
-            for track in &tracks {
-                edits.push(writer.set_rating_with_undo(track, 3)?.1);
-            }
-            Ok(((), edits))
-        })
+        core.asserting_edit(
+            &NoHost,
+            Touched::Metadata(tracks.clone()),
+            TRACK_EDIT,
+            |writer| {
+                let mut edits = Vec::new();
+                for track in &tracks {
+                    edits.push(writer.set_rating_with_undo(track, 3)?.1);
+                }
+                Ok(((), edits))
+            },
+        )
         .unwrap();
         panic!("the fault did not abort");
     }
@@ -127,7 +140,10 @@ fn a_mixed_hand_set_cut_off_before_its_assertion_still_protects_the_unchanged_tr
 
     // The next service: B's change is there; A's assertion never was.
     let (service, core) = hosted(dir.path());
-    assert_eq!((stars(&core, &a), stars(&core, &b), stars(&core, &c)), (3, 3, 3));
+    assert_eq!(
+        (stars(&core, &a), stars(&core, &b), stars(&core, &c)),
+        (3, 3, 3)
+    );
     for track in [&a, &b, &c] {
         record(&service, track, 4, 0.9);
     }
@@ -141,5 +157,8 @@ fn a_mixed_hand_set_cut_off_before_its_assertion_still_protects_the_unchanged_tr
         .collect();
     assert_eq!(changed, [c.as_str()], "{applied}");
     // A and B are the DJ's: the DJ's chosen 3 stays.
-    assert_eq!((stars(&core, &a), stars(&core, &b), stars(&core, &c)), (3, 3, 4));
+    assert_eq!(
+        (stars(&core, &a), stars(&core, &b), stars(&core, &c)),
+        (3, 3, 4)
+    );
 }

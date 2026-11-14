@@ -929,6 +929,10 @@ struct WindowRun {
 
 /// The Library write begun last ([`Keeper::begin`]): its intent is in the
 /// Sidecar until an entry settles it.
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent facts about one write, each set at its own point"
+)]
 struct Op {
     /// The intent's identifier, which its entry takes.
     id: i64,
@@ -1005,6 +1009,10 @@ struct Draft<'a> {
 pub const FAULTS_ENV: &str = "WRECKORDBOX_LEDGER_FAULTS";
 
 #[derive(Default)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent test faults, each switched on by name"
+)]
 struct Faults {
     abort_after_write: bool,
     abort_before_file_publish: bool,
