@@ -65,6 +65,7 @@ mod sync_window;
 mod scripting;
 pub mod service_host;
 pub mod intake_tags;
+pub mod intake_stems;
 pub mod intake_view;
 pub mod stick_view;
 pub mod shutdown;
@@ -596,6 +597,8 @@ pub fn run() {
             commands::disable_read_only,
             new_library::library_problem,
             service_host::service_problem,
+            intake_stems::intake_stems_separate,
+            intake_stems::intake_stems_status,
             intake_view::intake_queue,
             stick_view::stick_view_sticks,
             stick_view::stick_view_dry_run,

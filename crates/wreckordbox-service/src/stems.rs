@@ -306,6 +306,11 @@ impl Stems {
         }
     }
 
+    /// The track being separated now, if any (`stems.status`, wbx-67).
+    pub(crate) fn separating(&self) -> Option<String> {
+        lock(&self.running).as_ref().map(|job| job.track_id.clone())
+    }
+
     /// Inspect an existing writer without opening it; retain the guard so a
     /// status snapshot cannot race an opening writer. Busy means unknown.
     pub(crate) fn with_current_sidecar<T>(

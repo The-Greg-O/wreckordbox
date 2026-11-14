@@ -569,6 +569,11 @@ impl Shared {
                     &self.loads,
                 )
             }
+            crate::stems_status::STEMS_STATUS => {
+                crate::stems_status::answer(&self.stems, request, &|id| {
+                    self.with_library(|library| crate::stems::parent(library, id))?
+                })
+            }
             stems if crate::stems::answers(stems) => {
                 // Only the lookup takes the Library; a separation runs
                 // with it free.
