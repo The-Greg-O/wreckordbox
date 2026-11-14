@@ -1741,34 +1741,10 @@ impl Keeper {
             }
             // The identifier its write reserved, for the first entry of
             // that write; another (there should be none) takes the next.
-            // A hand set's changes leave its intent for the assertion that
-            // follows: only that claims the identifier (wbx-26). The changes
-            // take a reserved identifier of their own, so a kept entry is
-            // still written once when replayed.
-            let id = match state.op.as_mut() {
-                Some(op) if !op.recorded && (!op.asserting || draft.asserted) => {
-                    op.recorded = true;
-                    Some(op.id)
-                }
-                Some(op) if !op.recorded && op.asserting => {
-                    op.changes_recorded = true;
-                    sidecar.as_ref().ok().and_then(|sidecar| {
-                        sidecar
-                            .begin_intent(
-                                &Intent {
-                                    source: &op.source,
-                                    run: op.run,
-                                    description: &op.description,
-                                    command: op.command.as_ref(),
-                                    at: now(),
-                                },
-                                &[],
-                            )
-                            .ok()
-                    })
-                }
-                _ => None,
-            };
+            let id = state
+                .op
+                .as_mut()
+                .and_then(|op| claim(op, sidecar.as_deref().ok(), draft.asserted));
             let mut dj_facts = if source.kind == SourceKind::Dj && draft.action != Action::Undo {
                 crate::dj_facts::derive(&self.location, &self.stems, draft.kind, draft.payload.as_ref(), draft.asserted)
             } else { wreckordbox_sidecar::dj_facts::NativeFacts::default() };
@@ -2189,6 +2165,33 @@ impl rbl_library::ledger::Ledger for Keeper {
             asserted: false,
         });
     }
+}
+
+/// The reserved identifier an entry of `op` takes, if any. The first entry
+/// claims the write's own. A hand set's changes leave that for the assertion
+/// that follows (wbx-26) and take one reserved for them, so a kept entry is
+/// still written once when replayed.
+fn claim(op: &mut Op, sidecar: Option<&Sidecar>, asserted: bool) -> Option<i64> {
+    if op.recorded {
+        return None;
+    }
+    if !op.asserting || asserted {
+        op.recorded = true;
+        return Some(op.id);
+    }
+    op.changes_recorded = true;
+    sidecar?
+        .begin_intent(
+            &Intent {
+                source: &op.source,
+                run: op.run,
+                description: &op.description,
+                command: op.command.as_ref(),
+                at: now(),
+            },
+            &[],
+        )
+        .ok()
 }
 
 /// What an unconfirmed entry keeps of the tracks its write was about, from
