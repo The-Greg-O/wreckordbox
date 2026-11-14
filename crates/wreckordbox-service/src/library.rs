@@ -40,6 +40,12 @@ pub(crate) struct OpenLibrary {
 }
 
 impl OpenLibrary {
+    /// The Library core, for the large-Run backup (wbx-25): its location,
+    /// state folder and analysis-file lock.
+    pub(crate) fn core(&self) -> &LibraryCore {
+        &self.core
+    }
+
     /// Opens the Library and indexes it. Reading every row is also what
     /// proves the file reads as a Library. `recovery_dir` is where the
     /// window keeps its recovery journals.

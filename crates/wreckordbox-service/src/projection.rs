@@ -252,6 +252,9 @@ struct PolicyFile {
     /// The MyTag projection's section (wbx-29), checked there.
     #[allow(dead_code, reason = "read and checked by `mytag_projection`")]
     mytags: Option<toml::Value>,
+    /// The large-Run backup threshold (wbx-25), checked by `large_run`.
+    #[allow(dead_code, reason = "read and checked by `large_run`")]
+    backup: Option<toml::Value>,
 }
 
 /// The policy in force, per field; a field the file does not name waits.
@@ -396,6 +399,10 @@ pub struct Unusable {
 /// What a projection did, or in a dry run would do.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Report {
+    /// The large-Run check (wbx-25): tracks counted, the threshold in
+    /// force and the backup taken first; only on an apply that wrote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub large_run: Option<crate::large_run::Checked>,
     pub dry_run: bool,
     /// Names exactly this list of changes under this policy: give it to
     /// `projection.apply` as `expect` to apply what was checked, or nothing.
@@ -452,10 +459,11 @@ pub(crate) fn answer(
     stems: &Stems,
     request: &Request,
 ) -> (Option<LibraryChanged>, Result<Value, ServiceError>) {
-    match plan_or_apply(library, stems, request) {
+    let (changed, result) = match plan_or_apply(library, stems, request) {
         Ok((report, changed)) => (changed, to_value(&report)),
         Err((changed, error)) => (changed, Err(error)),
-    }
+    };
+    (changed, crate::large_run::answered(result))
 }
 
 type Failure = (Option<LibraryChanged>, ServiceError);
@@ -496,6 +504,8 @@ fn plan_or_apply(
     if planned.is_empty() {
         return Ok((report, None));
     }
+    crate::large_run::before_write(library, stems, planned.iter().map(|p| p.change.track.clone()))
+        .map_err(early)?;
     pause();
     let (changed, warnings) = write(library, stems, &planned, watermark)?;
     let mut report = report;
@@ -673,6 +683,7 @@ fn plan(
         row_stamps(library)?
     };
     let mut report = Report {
+        large_run: None,
         dry_run,
         plan: String::new(),
         policy_file: dir.join(POLICY_FILE),

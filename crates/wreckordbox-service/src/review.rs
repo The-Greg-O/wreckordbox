@@ -196,6 +196,10 @@ pub struct Waiting {
 /// The answer of `review.accept` and `review.reject`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Decided {
+    /// The large-Run check (wbx-25): tracks counted, the threshold in
+    /// force and the backup taken first; only on an apply that wrote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub large_run: Option<crate::large_run::Checked>,
     /// The Facts accepted (their values now in the Library) or rejected.
     pub decided: Vec<Held>,
     pub count: usize,
@@ -305,10 +309,13 @@ pub(crate) fn answer(
     }
     match request.command.as_str() {
         commands::REVIEW_WAITING => (None, waiting(library, stems, &asked)),
-        commands::REVIEW_ACCEPT => match accept(library, stems, &asked) {
-            Ok((decided, changed)) => (changed, Ok(json!(decided))),
-            Err((changed, error)) => (changed, Err(error)),
-        },
+        commands::REVIEW_ACCEPT => {
+            let (changed, result) = match accept(library, stems, &asked) {
+                Ok((decided, changed)) => (changed, Ok(json!(decided))),
+                Err((changed, error)) => (changed, Err(error)),
+            };
+            (changed, crate::large_run::answered(result))
+        }
         commands::REVIEW_REJECT => (None, reject(library, stems, request, &asked)),
         commands::REVIEW_REJECTED => (None, rejected(stems, &asked)),
         _ => (None, reopen(stems, request, &asked)),
@@ -686,6 +693,15 @@ fn accept(
     if !crate::ledger::by_the_dj() {
         return Err(early(not_the_dj("accepting a waiting Fact")));
     }
+    // A large accept is backed up first (wbx-25), outside the edit gate:
+    // the selection read here is the one written below, since the listing
+    // must still digest to the token the DJ was shown (or each row to its
+    // own) under the gate, or nothing is written.
+    let (outside, _) = listed(library, stems, asked).map_err(early)?;
+    if !outside.is_empty() {
+        crate::large_run::before_write(library, stems, outside.into_iter().map(|h| h.track))
+            .map_err(early)?;
+    }
     // The list is read and written under one hold of the edit gate, so no
     // edit made through the edit path comes between them.
     let gate_lock = library.edit_gate();
@@ -694,6 +710,7 @@ fn accept(
     if chosen.is_empty() {
         return Ok((
             Decided {
+                large_run: None,
                 decided: chosen,
                 count: 0,
                 rejection: None,
@@ -805,6 +822,7 @@ fn accept(
     match made {
         Ok((None, changed)) => Ok((
             Decided {
+                large_run: None,
                 count: chosen.len(),
                 decided: chosen,
                 rejection: None,
@@ -955,6 +973,7 @@ fn reject(
     let (chosen, _) = chosen(library, stems, asked)?;
     if chosen.is_empty() {
         return Ok(json!(Decided {
+            large_run: None,
             decided: chosen,
             count: 0,
             rejection: None,
@@ -971,6 +990,7 @@ fn reject(
             let facts: Vec<i64> = chosen.iter().map(|h| h.fact).collect();
             crate::review_runs::decided(stems, "rejected", &facts);
             Ok(json!(Decided {
+                large_run: None,
                 count: chosen.len(),
                 decided: chosen,
                 rejection: Some(rejection),

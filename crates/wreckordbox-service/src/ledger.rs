@@ -707,6 +707,18 @@ pub(crate) fn name_tracks(tracks: &[String]) {
     });
 }
 
+/// Puts `value` in the command being answered on this thread
+/// (`args.<key>`), before its write begins, so its intent and entries name
+/// it (wbx-25: the backup a large Run took first). Nothing when no command
+/// is answered.
+pub(crate) fn note(key: &str, value: Value) {
+    CURRENT.with(|current| {
+        if let Some(scope) = current.borrow_mut().as_mut() {
+            scope.command["args"][key] = value;
+        }
+    });
+}
+
 /// Answers `runs.list` and `runs.show`. Reading never makes a Sidecar:
 /// with none there are no Runs.
 pub(crate) fn answer(
