@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { beatMs, nowDetail, standInBands, sweepMs } from "./loudLoad";
+import { beatMs, nextShown, nowDetail, standInBands, sweepMs } from "./loudLoad";
 
 describe("beatMs: the display moves in time with the track", () => {
   it("is one beat of the track's tempo", () => {
@@ -76,5 +76,19 @@ describe("the setting (view.loudStickLoad)", () => {
     expect(sanitisePreferences({}).view.loudStickLoad).toBe(true);
     expect(sanitisePreferences({ view: { loudStickLoad: false } }).view.loudStickLoad).toBe(false);
     expect(sanitisePreferences({ view: { loudStickLoad: "no" } }).view.loudStickLoad).toBe(true);
+  });
+});
+
+describe("nextShown: the display changes track at most every so often", () => {
+  it("shows a new track at once when the last change was long enough ago", () => {
+    expect(nextShown({ shown: "a", since: 0 }, "b", 1000, 400)).toEqual({ show: { shown: "b", since: 1000 }, retryIn: null });
+  });
+
+  it("keeps the track it shows when the last change was too recent, and says when to look again", () => {
+    expect(nextShown({ shown: "a", since: 900 }, "b", 1000, 400)).toEqual({ show: { shown: "a", since: 900 }, retryIn: 300 });
+  });
+
+  it("changes nothing when the latest track is the one shown", () => {
+    expect(nextShown({ shown: "a", since: 900 }, "a", 1000, 400)).toEqual({ show: { shown: "a", since: 900 }, retryIn: null });
   });
 });

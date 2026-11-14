@@ -20,10 +20,10 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import { drawWave, drawBands, waveformKindOf } from "@/canvas/waveform";
+import { drawBands, drawWave, strideOf, waveformKindOf } from "@/canvas/waveform";
 import { getBackend } from "@/ipc/client";
 import { progressLine, progressPercent, type LoadProgress } from "@/lib/holdToLoad";
-import { beatMs, nowDetail, standInBands, sweepMs } from "@/lib/loudLoad";
+import { beatMs, nextShown, nowDetail, standInBands, sweepMs, type Shown } from "@/lib/loudLoad";
 import { usePixelRatio } from "@/lib/pixelRatio";
 import { useShownTheme, useWaveformTheme, waveColoursFrom, wellOf } from "@/lib/waveTheme";
 import { shrinkStickLoad, type StickLoad } from "@/store/stickLoads";
@@ -72,6 +72,9 @@ function useTrack(id: string | null, palette: ReturnType<typeof useWaveformTheme
   };
 }
 
+/** Columns of the stand-in shape. */
+const STAND_IN_COLUMNS = 600;
+
 /** The canvas: the track's waveform, or a muted stand-in; drawn when the track, its bytes, the size or the colours change. */
 function WaveCanvas({ wave, seed, palette }: { wave: Wave; seed: string; palette: ReturnType<typeof useWaveformTheme>["palette"] }) {
   const ref = useRef<HTMLCanvasElement>(null);
@@ -90,8 +93,12 @@ function WaveCanvas({ wave, seed, palette }: { wave: Wave; seed: string; palette
   useLayoutEffect(() => {
     const canvas = ref.current;
     if (!canvas || size.width === 0 || size.height === 0) return;
-    const width = Math.max(1, Math.round(size.width * dpr));
-    const height = Math.max(1, Math.round(size.height * dpr));
+    // The display is rescaled every frame by its beat, so drawing to device
+    // pixels buys nothing: at most a backing pixel a waveform column across
+    // and one a CSS pixel down, which keeps a redraw to a few milliseconds.
+    const columns = wave.state === "analysis" ? Math.max(1, Math.floor(wave.data.length / strideOf(palette, false))) : STAND_IN_COLUMNS;
+    const width = Math.max(1, Math.min(columns, Math.round(size.width * dpr)));
+    const height = Math.max(1, Math.round(size.height * Math.min(dpr, 1)));
     if (canvas.width !== width) canvas.width = width;
     if (canvas.height !== height) canvas.height = height;
     const ctx = canvas.getContext("2d");
@@ -102,7 +109,7 @@ function WaveCanvas({ wave, seed, palette }: { wave: Wave; seed: string; palette
       return;
     }
     // No waveform to show: a made-up shape, one muted colour, so it is never taken for the track's own.
-    drawBands(ctx, standInBands(seed, 600), width, height, "overview", false);
+    drawBands(ctx, standInBands(seed, STAND_IN_COLUMNS), width, height, "overview", false);
     ctx.globalCompositeOperation = "source-in";
     ctx.fillStyle = getComputedStyle(canvas).color;
     ctx.fillRect(0, 0, width, height);
@@ -137,19 +144,50 @@ function useSweep(head: React.RefObject<HTMLDivElement | null>, step: string, ru
   }, [head, step, running]);
 }
 
+/** How often, at most, the display changes the track it draws (`nextShown`). */
+const TRACK_GAP_MS = 400;
+
+type Track = NonNullable<LoadProgress["track"]>;
+
+/** The track the display draws: the one being written, changed at most every `TRACK_GAP_MS`. */
+function usePacedTrack(latest: Track | null): Track | null {
+  const key = latest === null ? "" : JSON.stringify([latest.id, latest.title]);
+  const [track, setTrack] = useState<Track | null>(latest);
+  const shown = useRef<Shown>({ shown: key, since: 0 });
+  const wanted = useRef(latest);
+  wanted.current = latest;
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const look = () => {
+      timer = null;
+      const { show, retryIn } = nextShown(shown.current, key, performance.now(), TRACK_GAP_MS);
+      if (show !== shown.current) {
+        shown.current = show;
+        setTrack(wanted.current);
+      }
+      if (retryIn !== null) timer = setTimeout(look, retryIn);
+    };
+    look();
+    return () => { if (timer !== null) clearTimeout(timer); };
+  }, [key]);
+  return track;
+}
+
 export function LoudLoad({ load, progress }: { load: StickLoad; progress: LoadProgress | null }) {
   const { palette } = useWaveformTheme();
-  const track = progress?.track ?? null;
+  const track = usePacedTrack(progress?.track ?? null);
   const { wave, details } = useTrack(track?.id ?? null, palette);
   const shown: Wave = track === null ? { state: "none" } : track.id === null ? { state: "none" } : wave;
   const percent = progressPercent(progress);
   const head = useRef<HTMLDivElement>(null);
   const copying = progress !== null && track !== null && progress.stage !== "done";
-  useSweep(head, `${track?.id ?? ""}\u0000${track?.title ?? ""}\u0000${progress?.done ?? -1}`, copying);
+  useSweep(head, `${track?.id ?? ""}\u0000${track?.title ?? ""}`, copying);
   const beat = beatMs(details?.bpmX100 ?? null);
+  // A track named by title only (two in the load share it) cannot be looked up.
   const why = shown.state === "failed" ? "Its waveform could not be read."
-    : shown.state === "none" && track !== null ? "No waveform: this track is not analysed."
-      : null;
+    : track !== null && track.id === null ? "No waveform to show for this track."
+      : shown.state === "none" && track !== null ? "No waveform: this track is not analysed."
+        : null;
   return (
     <section className={styles.loud} data-testid="stick-progress" aria-label={`Loading ${load.name}`}>
       <div

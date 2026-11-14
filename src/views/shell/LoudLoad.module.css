@@ -59,6 +59,10 @@
   will-change: transform;
 }
 
+/* Light: the playhead's white line vanishes on a light ground; the head
+   takes the theme's brightest ink instead. */
+:global(:root[data-theme-mode="light"]) .head { border-left-color: var(--role-text-bright); }
+
 .top {
   grid-column: 1 / -1;
   grid-row: 1;

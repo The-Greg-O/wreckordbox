@@ -78,3 +78,20 @@ export function standInBands(seed: string, columns: number): Uint8Array {
   }
   return out;
 }
+
+/** The track the display draws, and since when (ms). */
+export interface Shown { shown: string; since: number }
+
+/**
+ * Which track the display draws now that `latest` is being written: it
+ * changes at most every `gap` ms, so a load racing through small or
+ * already-written tracks costs a waveform read and redraw a few times a
+ * second at most, never one per progress update. `retryIn` says when to
+ * look again (the latest track then shown, if it is still the latest).
+ */
+export function nextShown(current: Shown, latest: string, now: number, gap: number): { show: Shown; retryIn: number | null } {
+  if (latest === current.shown) return { show: current, retryIn: null };
+  const wait = current.since + gap - now;
+  if (wait > 0) return { show: current, retryIn: wait };
+  return { show: { shown: latest, since: now }, retryIn: null };
+}
