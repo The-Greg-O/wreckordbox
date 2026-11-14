@@ -162,6 +162,8 @@ pub(crate) fn answer(
             format!("bad arguments to {}: {e}", request.command),
         )
     })?;
+    // Fact coordination precedes the Library lookup and Stick lock.
+    let _facts = stems.hold_facts();
     let (answer, _) = write_one(
         stems,
         state_dir,
@@ -549,12 +551,18 @@ fn parent_length(audio: &Path) -> Option<u64> {
 }
 
 /// The track's Stems made from the audio it has now, with all four files
-/// in the Sidecar. Stems made from other audio are marked stale on the way,
-/// as every Stems command does, and are not written.
+/// in the Sidecar. The explicit write records an audio observation before
+/// using the shared read-only currency check.
 ///
 /// Before audio goes to a Stick, every Stem file is hashed again and must
 /// be the audio recorded with the set, whatever an earlier look found.
 fn current_stems(stems: &Stems, found: &ParentAudio) -> Result<StemSet, ServiceError> {
+    // This boundary belongs only to the explicit write. Rendering and
+    // previews must never record observations or publish their events.
+    if stems.sidecar_dir().exists() {
+        let fingerprint = stems::fingerprint(found.parent(), found.path())?;
+        stems.before_record(found, Some(&fingerprint), None)?;
+    }
     let (set, _) = current_stems_verified(stems, found)?;
     if !set.audio_verified() {
         return Err(ServiceError::new(
@@ -585,25 +593,22 @@ pub(crate) fn current_stems_verified(
             ),
         )
     };
-    // A Sidecar nobody has made holds no Stems; asking does not make one.
-    let Some(sidecar) = stems.sidecar_if_made()? else {
+    let dir = stems.sidecar_dir();
+    let facts = crate::mutant_reads::inspect(stems, |store| store.stem_facts(&track.id))?;
+    if facts.is_empty() {
         return Err(none("has no Stems in the Sidecar"));
-    };
-    let failed =
-        |e: &dyn std::fmt::Display| ServiceError::new(stems::codes::SIDECAR_FAILED, e.to_string());
+    }
     let fingerprint = stems::fingerprint(track, audio)?;
-    stems.observe_audio(found, Some(&fingerprint))?;
-    let current = sidecar
-        .current_stems(&track.id, &fingerprint)
-        .map_err(|e| failed(&e))?;
+    let current = facts
+        .into_iter()
+        .filter_map(|fact| StemSet::from_fact(dir, fact))
+        .map(|set| crate::stems_show::as_now(set, Some(&fingerprint)))
+        .find(|set| set.is_current() && fingerprint.matches_stored(&set.fingerprint));
     match current {
-        Some(set) if set.stems.iter().all(|stem| stem.path.is_file()) => Ok((set, fingerprint)),
+        Some(set) if set.audio_present() => Ok((set, fingerprint)),
         Some(_) => Err(none(
-            "has Stems recorded in the Sidecar, and their audio files are gone",
+            "has Stems recorded in the Sidecar, and their audio files are gone or changed",
         )),
-        None if sidecar.stems(&track.id).map_err(|e| failed(&e))?.is_empty() => {
-            Err(none("has no Stems in the Sidecar"))
-        }
         None => Err(none(
             "has only stale Stems in the Sidecar: they were made from audio it no longer has",
         )),

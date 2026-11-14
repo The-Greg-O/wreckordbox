@@ -199,7 +199,7 @@ pub struct FactsOfTrack {
     /// Also stale, unverified and superseded Facts.
     #[serde(default)]
     pub all: bool,
-    /// Explicitly verify audio and update attachments/staleness. Default reads are read-only.
+    /// Verify audio and compute staleness for this answer. Never stores observations or re-attaches.
     #[serde(default)]
     pub check_audio: bool,
 }
@@ -265,26 +265,11 @@ pub(crate) fn answer(
     request: &Request,
     lookup: &dyn Fn(&str) -> Result<ParentAudio, ServiceError>,
 ) -> Result<Value, ServiceError> {
-    if request.command == commands::FACTS_OF_TRACK {
-        let wanted: FactsOfTrack = arguments(request)?;
-        if !wanted.check_audio && stems.sidecar_if_made()?.is_none() {
-            let found = lookup(&wanted.id)?;
-            let kinds = Kinds::load(stems.sidecar_dir()).map_err(|e| sidecar_error(&e))?;
-            if let Some(kind) = &wanted.kind {
-                if kinds.get(kind).is_none() && !kinds.schema_is_broken() {
-                    return Err(not_declared(kind, &kinds));
-                }
-            }
-            return serde_json::to_value(TrackFacts {
-                track: found.parent().clone(),
-                facts: Vec::new(),
-                stale: Vec::new(),
-                unverified: Vec::new(),
-                reattached: Vec::new(),
-                review: Vec::new(),
-            })
-            .map_err(|e| ServiceError::new(service_codes::SERVICE_FAILED, e.to_string()));
-        }
+    if matches!(
+        request.command.as_str(),
+        commands::FACTS_OF_TRACK | commands::FACTS_KINDS
+    ) {
+        return crate::query_reads::facts(stems, request, lookup);
     }
     let facts = Facts {
         sidecar: stems.sidecar()?,
@@ -292,16 +277,6 @@ pub(crate) fn answer(
     };
     let answer = match request.command.as_str() {
         commands::FACTS_RECORD => serde_json::to_value(facts.record(arguments(request)?, lookup)?),
-        commands::FACTS_OF_TRACK => {
-            serde_json::to_value(facts.of_track(&arguments(request)?, lookup)?)
-        }
-        commands::FACTS_KINDS => {
-            let kinds = facts.kinds()?;
-            serde_json::to_value(DeclaredKinds {
-                kinds: kinds.all().to_vec(),
-                file: kinds.file().to_path_buf(),
-            })
-        }
         commands::RUNS_START => serde_json::to_value(facts.start_run(&arguments(request)?)?),
         _ => serde_json::to_value(facts.finish_run(&arguments(request)?)?),
     };
@@ -580,79 +555,6 @@ impl Facts<'_> {
         })
     }
 
-    fn of_track(
-        &self,
-        wanted: &FactsOfTrack,
-        lookup: &dyn Fn(&str) -> Result<ParentAudio, ServiceError>,
-    ) -> Result<TrackFacts, ServiceError> {
-        let found = lookup(&wanted.id)?;
-        let kinds = self.kinds();
-        if let Some(kind) = &wanted.kind {
-            let kinds = kinds.as_ref().map_err(Clone::clone)?;
-            // While the Tag schema has a mistake its dimensions are not
-            // declared, and their Facts are still to be read.
-            if kinds.get(kind).is_none() && !kinds.schema_is_broken() {
-                return Err(not_declared(kind, kinds));
-            }
-        }
-        // What is stored is read whatever state the files are in; a value
-        // from when its kind took another shape is given as the kind takes
-        // it now.
-        let as_now = |mut fact: Fact| {
-            if let Some(kind) = kinds.as_ref().ok().and_then(|kinds| kinds.get(&fact.kind)) {
-                fact.value = kind.normalise(std::mem::take(&mut fact.value));
-            }
-            fact
-        };
-        let track = found.parent().clone();
-        let (fingerprint, attachments) = if wanted.check_audio {
-            let fingerprint = stems::fingerprint(&track, found.path()).ok();
-            let (attachments, _) = self.stems.observe_audio(&found, fingerprint.as_ref())?;
-            (fingerprint, attachments)
-        } else {
-            (
-                None,
-                wreckordbox_sidecar::attachments::Attachments {
-                    reattached: Vec::new(),
-                    review: self
-                        .sidecar
-                        .attachment_reviews(&track.id)
-                        .map_err(|e| sidecar_error(&e))?,
-                },
-            )
-        };
-        let facts = match &wanted.kind {
-            Some(kind) => self.sidecar.facts(&track.id, kind),
-            None => self.sidecar.facts_of_track(&track.id),
-        }
-        .map_err(|e| sidecar_error(&e))?;
-        let facts: Vec<Fact> = facts.into_iter().map(Fact::from).map(as_now).collect();
-        let stale = facts.iter().filter(|fact| fact.stale).cloned().collect();
-        let unverified = facts
-            .iter()
-            .filter(|fact| {
-                !fact.stale && fact.nature == Nature::Measurement && fingerprint.is_none()
-            })
-            .cloned()
-            .collect();
-        Ok(TrackFacts {
-            track,
-            stale,
-            unverified,
-            reattached: attachments.reattached,
-            review: attachments.review,
-            facts: facts
-                .into_iter()
-                .filter(|fact| {
-                    wanted.all
-                        || (!fact.superseded
-                            && !fact.stale
-                            && (fact.nature == Nature::Judgement || fingerprint.is_some()))
-                })
-                .collect(),
-        })
-    }
-
     fn changed(&self, track_id: &str, kind: &str, fact_id: Option<i64>, stale: &[i64]) {
         self.stems.publish(
             stems::events::SIDECAR_CHANGED,
@@ -765,7 +667,7 @@ pub(crate) fn source(given: &SourceArg) -> Result<Source, ServiceError> {
     ))
 }
 
-fn not_declared(kind: &str, kinds: &Kinds) -> ServiceError {
+pub(crate) fn not_declared(kind: &str, kinds: &Kinds) -> ServiceError {
     let known: Vec<&str> = kinds.all().iter().map(|kind| kind.name.as_str()).collect();
     ServiceError::new(
         codes::KIND_NOT_DECLARED,

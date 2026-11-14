@@ -180,3 +180,4 @@ pub mod dj_facts;
 pub mod bulk;
 
 mod fingerprint_format;
+mod query_reads;

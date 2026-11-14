@@ -324,32 +324,32 @@ fn stop_service(s: &Sandbox) {
 }
 
 #[test]
-fn an_accept_waits_while_reading_intensity_records_bars_for_a_new_beat_grid() {
+fn an_accept_waits_while_measuring_intensity_records_bars_for_a_new_beat_grid() {
     let s = Sandbox::new();
     let track = import_audio(&s, "Later.wav", &signals::loud_busy(5.0));
     let measured = s.cli(&["--json", "intensity", "measure", &track]);
     assert!(measured.status.success(), "{}", measured.stderr);
     stop_service(&s);
-    // rekordbox analyses it after the measuring: reading it makes the bars.
+    // rekordbox analyses it after the measuring: measuring reuses it to record the bars.
     give_beat_grid(&s, &track, 120.0, 0.5, 5.0);
     let gate = Gate::new();
     let _service = gated(&s, &gate);
     let energy = fact(&s, "10001", "energy", "4", "agent:tagger", "0.7");
     let t = token(&s);
 
-    gate.hold("producer-realign");
-    let showing = spawn(&s, &["intensity", "show", &track]);
-    gate.reached("at-producer-realign");
+    gate.hold("producer-intensity-reuse");
+    let showing = spawn(&s, &["intensity", "measure", &track]);
+    gate.reached("at-producer-intensity-reuse");
     let mut accepting = accept(&s, energy, &t);
 
     kept_waiting(&gate, &mut accepting);
     assert_eq!(db_rating(&s, "10001"), 0);
     assert_eq!(facts_in_sidecar(&s, &track, "intensity"), 1);
 
-    gate.go("producer-realign");
+    gate.go("producer-intensity-reuse");
     let (shown, answer) = finished(showing);
     assert!(shown, "{answer}");
-    assert!(answer["intensity"]["value"]["bars"].is_object(), "{answer}");
+    assert_eq!(answer["tracks"][0]["bars"], 3, "{answer}");
     let (accepted, answer) = finished(accepting);
     assert!(accepted, "{answer}");
     assert_eq!(facts_in_sidecar(&s, &track, "intensity"), 2);
