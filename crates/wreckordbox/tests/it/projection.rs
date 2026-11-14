@@ -663,7 +663,10 @@ fn an_interrupted_assertion_makes_its_tracks_value_the_djs_and_no_other() {
     ok(&s, &["project"]);
     stop_service(&s);
 
-    let mut service = serve_with_faults(&s, "delay_after_begin_ms=4000");
+    // The rating is held once its intent is saved, until released; it
+    // never is: the service is killed while it holds.
+    let hold = tempfile::tempdir().unwrap();
+    let mut service = serve_with_faults(&s, &format!("hold_after_begin={}", hold.path().display()));
     let rating = s
         .command()
         .args(["--json", "tracks", "rate", "10001", "3", "--source", "dj"])
@@ -671,7 +674,14 @@ fn an_interrupted_assertion_makes_its_tracks_value_the_djs_and_no_other() {
         .stderr(std::process::Stdio::null())
         .spawn()
         .unwrap();
-    std::thread::sleep(Duration::from_millis(1500));
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while !hold.path().join("begun").exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the rating never began"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
     service.kill().unwrap();
     service.wait().unwrap();
     let mut rating = rating;
