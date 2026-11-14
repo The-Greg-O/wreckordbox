@@ -26,6 +26,8 @@ use rbl_library::history::LibraryEdit;
 
 #[path = "grid_ledger.rs"]
 mod ledger;
+#[path = "grid_lock_recording.rs"]
+mod lock_recording;
 
 /// Grids kept for undo per track, per session. A grid is at most a few
 /// hundred kilobytes, and a hundred steps is more than a hand edits.
@@ -809,8 +811,8 @@ pub async fn grid_redo<R: tauri::Runtime>(
     run(app, state, player, editor, "grid_redo", track, GridAction::Redo, deck, GridOptions::default()).await
 }
 
-/// Locks or unlocks a track's grid. Nothing in the library changes: see the
-/// module docs for where the lock lives.
+/// Sets the Library's native analysis-lock bit through the recorded hand-edit
+/// path, then clears the legacy local editor lock separately.
 #[tauri::command]
 pub async fn grid_lock<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
@@ -825,9 +827,13 @@ pub async fn grid_lock<R: tauri::Runtime>(
     let editor = Arc::clone(&editor);
     let state = Arc::clone(&state);
     let changed = track.clone();
+    let notify = app.clone();
     let result = blocking("grid_lock", move || {
-        let _gate = state.edit_gate().lock();
-        state.write(|writer| writer.set_analysis_lock(&track, on)).map_err(write_error)?;
+        if let Some(change) = lock_recording::set(&state, &track, on)? {
+            let _ = tauri::Emitter::emit(&notify, "library:changed", change.generation);
+        }
+        // Native acceptance/recording is complete and its gate released before
+        // touching editor files or reading analysis bytes for the response.
         editor.set_locked(&track, false)?;
         let mut result = state_with(&editor, &library, &location.share_root, &track, registered.as_deref())?;
         result.locked = database_locked(&location, &track)?;
