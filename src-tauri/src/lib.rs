@@ -31,6 +31,7 @@ pub mod grid;
 pub mod key_tag;
 mod durable;
 mod backups;
+mod backup_stick;
 mod backup_copy;
 mod backup_zip;
 mod backup_sizes;

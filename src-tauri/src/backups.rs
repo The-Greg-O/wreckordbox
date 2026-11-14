@@ -359,6 +359,18 @@ fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&str, u64, u6
     // whole backup: refused on a protected Stick before anything is written.
     // In the lock order: the Library edit gate (above), then the Stick.
     let access = crate::stick_guard::enter(state.backup_dir(), root)?;
+    // Checked again at every step of the copy, not only before the backup
+    // is named (wbx-45.14): a Stick locked, ejected or replaced mid-copy
+    // stops it at the next file or chunk, and nothing more is written.
+    let copied_to_stick = std::cell::Cell::new(0_u64);
+    let progress = &mut |phase: &str, done: u64, total: u64, item: &str| -> AppResult<()> {
+        access.recheck()?;
+        copied_to_stick.set(copied_to_stick.get().max(done));
+        progress(phase, done, total, item)?;
+        // And again right before the step this reported, whatever the
+        // report waited for.
+        access.recheck()
+    };
     crate::durable::create_dir_all(root).map_err(error)?;
     sweep_discarded(state.backup_dir(), root);
     validate_destination(&root.canonicalize().map_err(error)?, &location)?;
@@ -570,7 +582,7 @@ fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&str, u64, u6
     if result.is_err() {
         discard(&access, state.backup_dir(), root, &[&partial, &archive]);
     }
-    result
+    result.map_err(|stopped| crate::backup_stick::stopped(stopped, &access, root, &[&partial, &archive], copied_to_stick.get()))
 }
 /// Every problem SQLite's `quick_check` reports, not just the first row.
 fn integrity_problems(db: &rbl_db::Library) -> AppResult<Vec<String>> {
@@ -639,6 +651,10 @@ pub fn delete(state: &AppState, path: &Path) -> AppResult<()> {
     remove(&path)?;
     crate::durable::sync_dir(&state.backup_destination()).map_err(error)
 }
+
+#[cfg(test)]
+#[path = "backup_stick_tests.rs"]
+mod stick_tests;
 
 #[cfg(test)]
 mod tests {
