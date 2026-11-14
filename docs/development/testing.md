@@ -51,7 +51,7 @@ Which of these runs when, and where, is in [Test tiers](test-tiers.md).
 | Frontend unit | `pnpm test` | Vitest behavior in the configured source/test paths. |
 | Rust unit and integration | `RB_LITE_TEST=1 cargo test --workspace` | Crate behavior, generated audio, temporary databases, and protocol sessions. |
 | Rust lint | `cargo clippy --workspace --all-targets -- -D warnings` | Workspace lint and warning policy. |
-| Performance budget | `pnpm budget` | Budget schema and production bundle size. |
+| Performance budget | `pnpm budget` | Budget schema and production start-up code size. |
 | Browser interaction | `pnpm e2e` | Chromium/WebKit UI with the mock backend and production-preview checks. |
 
 Install Playwright browsers once with

@@ -1,6 +1,6 @@
 {
   "$schemaVersion": 2,
-  "$comment": "Gates are consumed by the named build and test checks. Manual targets are documented separately because ordinary CI cannot measure them reproducibly.",
+  "$comment": "Gates are consumed by the named build and test checks. Manual targets are documented separately because ordinary CI cannot measure them reproducibly. The bundle gate measures start-up code only: what the main window loads before first paint (DJ decision 2026-11-14); the total-size gate was dropped, so code loaded on demand is not gated. baseline.bundle is the 2026-10-04 history; baseline.startup is the first start-up measurement.",
   "baseline": {
     "date": "2026-10-04",
     "sourceCommit": "29dc378",
@@ -22,12 +22,28 @@
         "deckFrameCostMaxMs": 0,
         "scrollFrameCostMaxMs": 17
       }
+    },
+    "startup": {
+      "date": "2026-11-14",
+      "sourceCommit": "628f78b8",
+      "environment": "Production Vite build (obfuscated) on aarch64 Asahi Linux; start-up chunks confirmed in Chromium by the scripts loaded before first contentful paint.",
+      "startupKbGz": 335.0,
+      "chunks": {
+        "index": 49.7,
+        "vendor": 72.7,
+        "App": 189.3,
+        "waveTheme": 5.6,
+        "StickWriteGate": 7.2,
+        "icons": 5.8,
+        "canvas": 4.1,
+        "windowDrag": 0.6
+      }
     }
   },
   "gates": {
     "bundle": {
       "initialChunkKbGz": 150,
-      "totalKbGz": 340
+      "startupKbGz": 345
     },
     "browser": {
       "firstRowsMs": {

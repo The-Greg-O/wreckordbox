@@ -170,9 +170,9 @@ export function planValidation(paths, { all = false } = {}) {
 
     if (path.startsWith("scripts/")) {
       enable(plan, "scripts");
-      if (/^scripts\/cleanup(?:\.test)?\.mjs$/.test(path)) enable(plan, "frontend_unit");
+      if (/^scripts\/(?:cleanup(?:\.test)?\.mjs|startup-chunks\.test\.ts)$/.test(path)) enable(plan, "frontend_unit");
       if (/\.[cm]?ts$/.test(path)) enable(plan, "frontend_typecheck");
-      if (/^scripts\/check-(?:bundle-size|perf-budgets)\./.test(path)) {
+      if (/^scripts\/(?:check-(?:bundle-size|perf-budgets)|startup-chunks)\./.test(path)) {
         enable(plan, "frontend_build", "frontend_budget");
       }
       continue;
