@@ -7,9 +7,8 @@ use super::{AppResult, AppState, ImportReport, err, write_error};
 /// applying anything (wbx-45.5), or why they could not be read.
 #[allow(clippy::too_many_arguments, reason = "validated source and one operation recorder")]
 pub(super) fn import(state: &AppState, current: Result<&Snapshot, &str>, manifest: Option<&Manifest>, matched: &HashMap<u32, String>, db_id: u64, report: &mut ImportReport, operation: &rbl_library::bulk::Operation) -> AppResult<()> {
-    // Library Protection is checked by Sync Manager. Even an unchanged or
-    // unrecognised stick must also pass the native rekordbox-running guard.
-    state.write(|_| Ok(())).map_err(write_error)?;
+    // apply already checked the native file-edit guards, including Protection
+    // and rekordbox-running, even when this snapshot has no rating changes.
     let Some((manifest, baseline)) = manifest.and_then(|m| m.baseline.as_ref().map(|b| (m, b))) else {
         report.warnings.push("Track ratings were not imported: no export baseline for this library was found. Sync this USB to create one.".into());
         return Ok(());
@@ -58,16 +57,22 @@ pub(super) fn import(state: &AppState, current: Result<&Snapshot, &str>, manifes
     // Exact before values and conflict decisions are read by the writer, under
     // its gate. Recording flushes only after each bounded transaction returns.
     for chunk in changes.chunks(128) {
-        let (records, replaced) = operation.run_many(
+        let (_, replaced, written) = operation.run_many(
             serde_json::json!({"operation":"ratings","tracks":chunk.iter().filter_map(|(id, _)| matched.get(id)).collect::<Vec<_>>()}), chunk.len(),
             || state.write(|writer| {
                 let mut records = Vec::new();
                 let mut replaced = 0;
+                let mut written = 0;
                 for (export_id, rating) in chunk {
                     let Some(id) = matched.get(export_id) else { continue; };
                     let (_, edit) = writer.set_rating_with_undo(id, u8::try_from(*rating).map_err(|e| rbl_db::DbError::WriteRefused(e.to_string()))?)?;
                     let parts = edit.parts();
-                    if parts.before == parts.after { continue; }
+                    if parts.before == parts.after {
+                        operation.assert_player_fields();
+                        records.push(crate::player_ledger::rating(edit));
+                        continue;
+                    }
+                    written += 1;
                     let desktop = match &parts.before {
                         rusqlite::types::Value::Null => 0,
                         rusqlite::types::Value::Integer(value) => *value,
@@ -76,11 +81,11 @@ pub(super) fn import(state: &AppState, current: Result<&Snapshot, &str>, manifes
                     if baseline_ratings.get(export_id).is_some_and(|old| desktop != i64::from(*old)) { replaced += 1; }
                     records.push(crate::player_ledger::rating(edit));
                 }
-                Ok((records, replaced))
+                Ok((records, replaced, written))
             }).map_err(write_error),
-            |(records, _)| records.clone(),
+            |(records, _, _)| records.clone(),
         )?;
-        report.ratings += records.len();
+        report.ratings += written;
         conflicts += replaced;
     }
     if conflicts > 0 {

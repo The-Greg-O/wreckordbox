@@ -23,6 +23,9 @@ pub trait Recorder: Send + Sync {
     fn enter_many(&self, target: Value, _capacity: usize) -> Box<dyn Step> {
         self.enter(target)
     }
+    /// A player explicitly sent scalar fields already at their received values.
+    /// Call inside the guarded writer; completion supplies the field payloads.
+    fn assert_player_fields(&self) {}
     fn idle(&self) -> bool {
         true
     }
@@ -79,6 +82,13 @@ impl Operation {
             });
         }
         result
+    }
+    /// Preserve a player's same-value choice without rewriting its native row.
+    /// Must be called inside this operation's guarded native write.
+    pub fn assert_player_fields(&self) {
+        if let Some(recorder) = &self.0 {
+            recorder.assert_player_fields();
+        }
     }
     pub fn idle(&self) -> bool {
         self.0.as_ref().is_none_or(|recorder| recorder.idle())

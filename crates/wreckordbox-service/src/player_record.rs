@@ -12,6 +12,22 @@ pub(super) struct Description {
 pub(super) fn describe(kind: &str, label: &str, record: &Value) -> Description {
     let player = matches!(kind, "link" | "round_trip");
     if player {
+        if record["status"] == "partial_or_failed" {
+            // A native prefix or the whole write may have committed before
+            // its error. Projection must not fill or replace those fields.
+            // Keep the exact bounded targets, without another Library read.
+            let target = &record["target"];
+            let mut tracks = target["tracks"].as_array().cloned().unwrap_or_default();
+            if let Some(track) = target["track"].as_str() {
+                tracks.push(Value::from(track));
+            }
+            return Description {
+                kind: "unconfirmed".into(),
+                label: format!("{label}: some player edits may have committed before failure"),
+                payload: json!({"tracks":tracks,"records":[record]}),
+                reversible: false,
+            };
+        }
         if let Some(payload) = record.get("track_edit") {
             if super::stored::restore("track", 1, payload).is_some() {
                 let mut payload = payload.clone();

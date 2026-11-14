@@ -35,11 +35,23 @@ impl Manifest {
                 super::player_record::describe(&self.kind, &self.description, &record.value)
             })
             .collect();
-        let command = json!({"name":"bulk.write","args":{"kind":self.kind}});
+        let commands: Vec<_> = descriptions
+            .iter()
+            .map(|description| {
+                let mut command = json!({"name":"bulk.write","args":{"kind":self.kind}});
+                // The apply-time drift check reads command targets as well as the
+                // plan's barrier reader. Both must see the same bounded tracks.
+                if let Some(tracks) = description.payload.get("tracks") {
+                    command["args"]["tracks"] = tracks.clone();
+                }
+                command
+            })
+            .collect();
         let entries: Vec<_> = records
             .iter()
             .zip(&descriptions)
-            .map(|(record, description)| NewEntry {
+            .zip(&commands)
+            .map(|((record, description), command)| NewEntry {
                 id: record.id,
                 run,
                 store: Store::Library,
@@ -52,7 +64,7 @@ impl Manifest {
                 },
                 kind: &description.kind,
                 label: &description.label,
-                command: Some(&command),
+                command: Some(command),
                 reverses: None,
                 part_of: None,
                 reversible: description.reversible,

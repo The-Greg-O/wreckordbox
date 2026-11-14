@@ -209,14 +209,14 @@ impl Source for StateSource {
     fn edit(&self, edit: &rbl_link::Edit) -> bool {
         // Grid-offset files already have a player-attributed file record.
         if matches!(edit, rbl_link::Edit::GridOffset { .. }) {
-            return self.edit_player(edit, &mut serde_json::Value::Null);
+            return self.edit_player(edit, &mut serde_json::Value::Null, None);
         }
         let Some(state) = self.0.upgrade() else { return false; };
         let operation = rbl_library::bulk::Operation::new(state.core(), rbl_library::bulk::Kind::Link);
         let record = crate::player_ledger::link_edit(edit);
         let result = operation.run(record.clone(), || {
             let mut record = record;
-            if self.edit_player(edit, &mut record) { Ok(record) } else { Err("Player edit or refresh failed") }
+            if self.edit_player(edit, &mut record, Some(&operation)) { Ok(record) } else { Err("Player edit or refresh failed") }
         }, |record| vec![record.clone()]);
         self.recording_warning(operation.finish());
         result.is_ok()
@@ -340,7 +340,7 @@ impl StateSource {
             *self.4.lock() = Some(warning);
         }
     }
-    fn edit_player(&self, edit: &rbl_link::Edit, record: &mut serde_json::Value) -> bool {
+    fn edit_player(&self, edit: &rbl_link::Edit, record: &mut serde_json::Value, operation: Option<&rbl_library::bulk::Operation>) -> bool {
         let Some(state) = self.0.upgrade() else { return false; };
         if let rbl_link::Edit::SaveCue { track, cue } | rbl_link::Edit::DeleteCue { track, cue } = edit {
             let save = matches!(edit, rbl_link::Edit::SaveCue { .. });
@@ -371,6 +371,9 @@ impl StateSource {
             rbl_link::Edit::ClearTags => writer.tag_list_clear(),
             rbl_link::Edit::Rating { track, stars } => {
                 let (changed, edit) = writer.set_rating_with_undo(&track.to_string(), *stars)?;
+                if edit.is_empty() {
+                    if let Some(operation) = operation { operation.assert_player_fields(); }
+                }
                 *record = crate::player_ledger::rating(edit);
                 Ok(changed)
             },

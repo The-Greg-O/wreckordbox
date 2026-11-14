@@ -25,6 +25,7 @@ pub(super) struct Active {
     owner: usize,
     session: Arc<Session>,
     uncertain: Cell<bool>,
+    asserted: Cell<bool>,
     bulk_write: Cell<bool>,
     admitted: bool,
     capacity: usize,
@@ -59,7 +60,8 @@ impl Active {
     }
     pub(super) fn written(&self, wrote: bool) {
         self.uncertain.set(false);
-        if wrote {
+        let asserted = self.asserted.replace(false);
+        if wrote || asserted {
             self.stamps
                 .borrow_mut()
                 .push(self.session.accept(self.capacity));
@@ -90,6 +92,7 @@ impl Recorder for Handle {
             owner: self.0.owner,
             session: self.0.clone(),
             uncertain: Cell::new(false),
+            asserted: Cell::new(false),
             bulk_write: Cell::new(false),
             admitted,
             capacity,
@@ -102,6 +105,19 @@ impl Recorder for Handle {
             target,
             completed: false,
         })
+    }
+    fn assert_player_fields(&self) {
+        if matches!(self.0.kind, "link" | "round_trip") {
+            ACTIVE.with(|slot| {
+                if let Some(active) = slot.borrow().as_ref() {
+                    if Arc::ptr_eq(&active.session, &self.0) && active.is_bulk() {
+                        // written() reserves order under the native writer gate,
+                        // including when the fields were already at these values.
+                        active.asserted.set(true);
+                    }
+                }
+            });
+        }
     }
     fn idle(&self) -> bool {
         self.0.state().active == 0
@@ -136,6 +152,18 @@ impl Step for Scope {
             } else {
                 return;
             }
+        }
+        // A bounded file slice accepts several individual publications. Pair
+        // each result with its own acceptance stamp, after releasing its gates.
+        if stamps.len() > 1 && stamps.len() == records.len() {
+            for (stamp, value) in stamps.into_iter().zip(records) {
+                self.active.session.record(Record {
+                    id: stamp.ids.first().copied(),
+                    at: stamp.at,
+                    value,
+                });
+            }
+            return;
         }
         let Some(last) = stamps.pop() else {
             return;

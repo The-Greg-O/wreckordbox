@@ -5,6 +5,7 @@ use tauri::{State, Manager};
 use crate::{commands::{announce_history, blocking, reload, write_error, wrote_outside_history}, dto::{DeviceLibraryTreeDto, DevicePlaylistNodeDto}, error::{AppError, AppResult, ErrorKind}, state::AppState};
 
 mod ratings;
+mod cues;
 
 fn err(e: impl std::fmt::Display) -> AppError {
     let detail = format!("USB import: {e}");
@@ -259,6 +260,15 @@ fn apply(state: &AppState, editor: &crate::grid::GridEditor, source: Source, cue
         let (_edit, _gate, _files);
         if cues || history || ratings {
             _edit = state.file_edit()?;
+            // Preserve Writer's schema refusal without opening a write intent.
+            // Probe the schema once, even if the cached read handle predates a
+            // schema change; this reads declarations, not Library rows.
+            state.read_db(|db| {
+                if let rbl_db::SchemaSupport::Degraded { missing } = rbl_db::SchemaProbe::probe(db.connection())?.support {
+                    return Err(rbl_db::DbError::WriteRefused(format!("the schema is missing {}; writes are disabled rather than guessed", missing.join(", "))));
+                }
+                Ok(())
+            }).map_err(write_error)?;
         } else {
             _gate = state.edit_gate().lock();
             _files = state.analysis_write().lock();
@@ -272,77 +282,7 @@ fn apply(state: &AppState, editor: &crate::grid::GridEditor, source: Source, cue
     let read = analysis;
     if cues {
         report.skipped += gone;
-        // Open the guarded writer even for an empty device; read-only must not look like success.
-        state.write(|_| Ok(())).map_err(write_error)?;
-        for (id, analysis) in tracks.values() {
-            operation.run(serde_json::json!({"operation":"cue_grid","track":id}), || {
-            let mut edit = state.file_edit()?;
-            // Read on the open handle. Opening the library, for the lock
-            // bit here and the analysis path below, derives its key again:
-            // about 155 ms each, two per track, so a stick of 20,000 tracks
-            // held the library, and every analysis and sync, for well over
-            // an hour (#284).
-            if editor.is_locked(id) || state.read_db(|db| crate::grid::locked_in(db, id)).map_err(write_error)? { report.skipped += 1; return Ok(()); }
-            if analysis.is_empty() { report.skipped += 1; return Ok(()); }
-            let (source_dat, source_cues) = match read.get(analysis) {
-                Some(Ok(Analysis::Read { dat, cues })) => (dat, cues),
-                Some(Ok(Analysis::Missing)) => {
-                    report.skipped += 1;
-                    report.warnings.push(format!("Track {id}: USB analysis file is missing ({analysis}); cues and grid were left unchanged."));
-                    return Ok(());
-                }
-                Some(Err(e)) => return Err(e.clone()),
-                None => return Err(err(format!("Track {id}: its analysis file was not read"))),
-            };
-            if source_cues.section(b"PCO2").is_none() { report.skipped += 1; return Ok(()); }
-            let entries = source_cues.cue_entries();
-            let beats = source_dat.beat_grid().unwrap_or_default();
-            let previous_bpm = state.read_db(|db| Ok(db.connection().query_row("SELECT COALESCE(BPM,0) FROM djmdContent WHERE ID=?1 AND rb_local_deleted=0", [id], |r| r.get::<_,u32>(0))?)).map_err(write_error)?;
-            let bpm = beats.first().map_or(previous_bpm, |b| u32::from(b.tempo_x100));
-            let bpm_changed = bpm != previous_bpm;
-            let relative = state.read_db(|db| rbl_db::write::analysis_data_path(db.connection(), id)).map_err(write_error)?;
-            let target = rbl_anlz::resolve(&location.share_root, &relative);
-            let mut files = Vec::new();
-            // A stick that carries the cues and grid the library already has
-            // is not a change: rewriting it would bump the track's analysis,
-            // drop its grid undo history and reload the whole library for
-            // nothing, and the next sync would copy it all back (#134).
-            let mut differs = false;
-            for extension in ["DAT", "EXT"] {
-                let target = target.with_extension(extension);
-                if !target.exists() { continue; }
-                let mut dest = rbl_anlz::Anlz::read(&target).map_err(err)?;
-                let src = if extension == "DAT" { source_dat } else { source_cues };
-                differs |= !dest.sections.iter().filter(|s| s.is_cue_list()).eq(src.sections.iter().filter(|s| s.is_cue_list()));
-                if extension == "DAT" && !beats.is_empty() {
-                    differs |= !dest.sections.iter().filter(|s| s.as_beat_grid().is_some()).eq(source_dat.section(b"PQTZ"));
-                }
-                dest.sections.retain(|s| !s.is_cue_list());
-                dest.sections.extend(src.sections.iter().filter(|s| s.is_cue_list()).cloned());
-                if extension == "DAT" && !beats.is_empty() {
-                    dest.sections.retain(|s| s.as_beat_grid().is_none());
-                    if let Some(grid) = source_dat.section(b"PQTZ") { dest.sections.push(grid.clone()); }
-                }
-                let bytes = if extension == "EXT" { dest.with_extended_grid_cleared().unwrap_or_else(|| dest.to_bytes()) } else { dest.to_bytes() };
-                files.push((target, bytes));
-            }
-            if files.is_empty() { report.skipped += 1; return Ok(()); }
-            if !differs && !bpm_changed && database_cues_match(state, id, &entries)? { report.unchanged += 1; return Ok(()); }
-            let record = edit.recording_values("round_trip_cues", id, &serde_json::Value::Null).map_err(write_error)?;
-            let journal = match crate::file_journal::FileJournal::prepare(state.backup_dir(), &location, id, bpm, None, true, &files) {
-                Ok(journal) => journal,
-                Err(error) => { record.cancelled(); return Err(error); }
-            };
-            if let Err(e) = journal.publish() { journal.rollback()?; record.cancelled(); return Err(e); }
-            if let Err(e) = record.write_row(state, |w| w.import_usb_cues(id, &entries, bpm)) { journal.reconcile(&location)?; return Err(write_error(e)); }
-            journal.commit()?;
-            record.written();
-            editor.forget_history(id);
-            report.changed.push(id.clone());
-            report.tracks += 1;
-            Ok::<_, AppError>(())
-            }, |()| vec![serde_json::json!({"operation":"cue_grid","track":id,"analysis":analysis})])?;
-        }
+        cues::import(state, editor, &location, &tracks, &read, &mut report, operation)?;
     }
     if history {
         let snapshot = snapshot.unwrap_or(Err("not read"))
@@ -929,6 +869,28 @@ mod tests {
     /// (#284). Measured against one open on this machine, the whole import
     /// of the stick must cost a fraction of an open per track.
     #[test]
+    fn read_only_player_probes_open_no_ledger_intents() {
+        use rbl_library::ledger::{Ledger, Link, Step, Unkept};
+        use rbl_library::history::LibraryEdit;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        #[derive(Default)]
+        struct Intents(AtomicUsize);
+        impl Ledger for Intents {
+            fn begin(&self) -> Result<(), String> { self.0.fetch_add(1, Ordering::SeqCst); Ok(()) }
+            fn written(&self, _: bool) {}
+            fn record(&self, _: Step, _: &LibraryEdit, _: &str, _: Link) -> Option<i64> { None }
+            fn note(&self, _: Unkept, _: Option<&str>) {}
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (state, _, usb, _) = library_and_stick(dir.path());
+        let intents = Arc::new(Intents::default());
+        state.edit_history().lock().keep_ledger(Some(intents.clone()));
+        let editor = crate::grid::GridEditor::at(state.backup_dir());
+        import(&state, &editor, &usb, true, false, false, true).unwrap();
+        assert_eq!(intents.0.load(Ordering::SeqCst), 0, "no accepted writes: neither probe may open a window/DJ intent");
+    }
+
+    #[test]
     fn importing_cues_does_not_reopen_the_library_for_every_track() {
         let dir = tempfile::tempdir().unwrap();
         let (state, location, usb, tracks) = library_and_stick(dir.path());
@@ -945,6 +907,7 @@ mod tests {
         let started = std::time::Instant::now();
         let report = import(&state, &editor, &usb, true, false, false, false).unwrap();
         let elapsed = started.elapsed();
+        eprintln!("cue timing: {tracks} tracks = {elapsed:?}; one open = {one_open:?}");
         // No local analysis files: each track is looked up, then skipped.
         assert_eq!((report.tracks, report.skipped), (0, tracks));
         assert!(

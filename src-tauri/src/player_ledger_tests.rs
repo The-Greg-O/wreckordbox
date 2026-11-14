@@ -155,16 +155,42 @@ fn round_trip_cues_and_history_share_one_player_run_and_leave_the_stick_untouche
             ..Default::default()
         })
         .unwrap();
+    let mut destinations = vec![f.dat.clone()];
+    for (export_id, index) in [(2, 0), (3, 2)] {
+        let path = format!("/PIONEER/USBANLZ/fixture-{index}/ANLZ0000.DAT");
+        rbl_db::fixture::set_analysis_path(&f.location, index, &path).unwrap();
+        let destination = rbl_anlz::resolve(&f.location.share_root, &path);
+        std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        std::fs::copy(&f.dat, &destination).unwrap();
+        destinations.push(destination);
+        builder
+            .add_track(&rbl_onelibrary::build::Track {
+                content_id: export_id,
+                master_db_id: i64::try_from(db_id).unwrap(),
+                master_content_id: rbl_db::fixture::track_id(index).parse().unwrap(),
+                title: format!("Fixture {index}"),
+                path: format!("/Contents/fixture-{index}.mp3"),
+                analysis_path: format!("/{relative}"),
+                ..Default::default()
+            })
+            .unwrap();
+    }
     builder.add_history(1, "Player set", 0, 1, false).unwrap();
     builder.add_history_track(1, 1, 1).unwrap();
     builder.finish("Fixture", "2026-11-13", 0).unwrap();
     let before_stick = (std::fs::read(&one).unwrap(), std::fs::read(&dat).unwrap());
     let editor = crate::grid::GridEditor::at(f.state.backup_dir());
     crate::usb_import::import(&f.state, &editor, &usb, true, true, false, false).unwrap();
-    assert_eq!(
-        rbl_anlz::Anlz::read(&f.dat).unwrap().beat_grid().unwrap()[0].time_ms,
-        200
-    );
+    for destination in destinations {
+        assert_eq!(
+            rbl_anlz::Anlz::read(&destination)
+                .unwrap()
+                .beat_grid()
+                .unwrap()[0]
+                .time_ms,
+            200
+        );
+    }
     assert_eq!(
         (std::fs::read(&one).unwrap(), std::fs::read(&dat).unwrap()),
         before_stick
@@ -179,18 +205,150 @@ fn round_trip_cues_and_history_share_one_player_run_and_leave_the_stick_untouche
         json!({"kind":"tool","name":"round-trip"})
     );
     let shown = f.cli(&["runs", "show", &runs["runs"][0]["id"].to_string()]);
-    assert_eq!(shown["total"], 2, "{shown}");
+    assert_eq!(shown["total"], 4, "{shown}");
     let operations: Vec<_> = shown["entries"]
         .as_array()
         .unwrap()
         .iter()
         .map(|entry| entry["payload"]["records"][0]["operation"].clone())
         .collect();
-    assert_eq!(operations, vec![json!("cue_grid"), json!("history_import")]);
+    assert_eq!(
+        operations,
+        vec![
+            json!("cue_grid"),
+            json!("cue_grid"),
+            json!("cue_grid"),
+            json!("history_import")
+        ]
+    );
+    let mut recorded: Vec<_> = shown["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|entry| {
+            entry["payload"]["records"][0]["track"]
+                .as_str()
+                .map(str::to_owned)
+        })
+        .collect();
+    recorded.sort();
+    assert_eq!(
+        recorded,
+        (0..3).map(rbl_db::fixture::track_id).collect::<Vec<_>>()
+    );
     crate::usb_import::import(&f.state, &editor, &usb, true, true, false, false).unwrap();
     assert_eq!(
         f.cli(&["runs", "list"])["total"],
         1,
         "unchanged Round-trip creates no Run"
     );
+}
+
+fn project_rating(f: &Fixture, id: &str, stars: u8) -> Value {
+    f.cli(&[
+        "facts",
+        "record",
+        id,
+        "energy",
+        &stars.to_string(),
+        "--source",
+        "agent:fixture",
+        "--confidence",
+        "1",
+    ]);
+    std::fs::write(
+        wreckordbox_sidecar::default_dir(&f.location.master_db).join("projection-policy.toml"),
+        "[energy]\napply = 0.8\n",
+    )
+    .unwrap();
+    f.cli(&["project"])
+}
+
+#[test]
+fn a_same_value_link_rating_ends_projection_ownership() {
+    let f = Fixture::new(3);
+    let id = rbl_db::fixture::track_id(1);
+    f.state.write(|w| w.set_rating(&id, 0)).unwrap();
+    f.state
+        .read_db(|db| {
+            crate::commands::refresh_after_edit(
+                &f.state,
+                db,
+                crate::commands::Touched::Metadata(vec![id.clone()]),
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        project_rating(&f, &id, 3)["changes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(source(&f).edit(&rbl_link::Edit::Rating {
+        track: id.parse().unwrap(),
+        stars: 3
+    }));
+    let applied = project_rating(&f, &id, 4);
+    assert_eq!(applied["changes"], json!([]), "{applied}");
+    assert_eq!(
+        f.state.library().unwrap().rating[f.state.library().unwrap().row_of(&id).unwrap() as usize],
+        3
+    );
+    assert!(f.cli(&["facts", "show", &id, "--all"])["facts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|fact| fact["source"]["kind"] != "dj"));
+}
+
+#[test]
+fn a_link_clear_committed_before_refresh_failure_bars_projection() {
+    let f = Fixture::new(3);
+    let id = rbl_db::fixture::track_id(1);
+    f.state.write(|w| w.set_rating(&id, 2)).unwrap();
+    // Model an index that has not yet observed this live row. The real
+    // refresh fails after the writer commits because row_of cannot find it.
+    let db = rbl_db::Library::open(f.location.clone(), rbl_db::OpenMode::ReadWrite).unwrap();
+    db.connection()
+        .execute(
+            "UPDATE djmdContent SET rb_local_deleted=1 WHERE ID=?1",
+            [&id],
+        )
+        .unwrap();
+    let (library, _) = rbl_index::load(&db).unwrap();
+    f.state.set_library(
+        library,
+        false,
+        db.schema().db_version,
+        0,
+        f.location.clone(),
+    );
+    db.connection()
+        .execute(
+            "UPDATE djmdContent SET rb_local_deleted=0 WHERE ID=?1",
+            [&id],
+        )
+        .unwrap();
+    assert!(!source(&f).edit(&rbl_link::Edit::Rating {
+        track: id.parse().unwrap(),
+        stars: 0
+    }));
+    assert_eq!(
+        db.connection()
+            .query_row("SELECT Rating FROM djmdContent WHERE ID=?1", [&id], |r| r
+                .get::<_, u8>(0))
+            .unwrap(),
+        0
+    );
+    let (library, _) = rbl_index::load(&db).unwrap();
+    f.state.set_library(
+        library,
+        false,
+        db.schema().db_version,
+        0,
+        f.location.clone(),
+    );
+    let applied = project_rating(&f, &id, 4);
+    assert_eq!(applied["changes"], json!([]), "{applied}");
 }

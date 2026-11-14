@@ -74,8 +74,8 @@ fn player_cleared_rating_is_recorded_without_dj_facts_and_projection_keeps_it() 
     assert_eq!(f.import().unwrap().ratings, 0);
     assert_eq!(
         cli(&f, &["runs", "list"])["total"],
-        1,
-        "repeat is not another Run"
+        2,
+        "a repeated player value is recorded as an assertion without another row write"
     );
     f.state
         .read_db(|db| {
@@ -101,4 +101,109 @@ fn player_cleared_rating_is_recorded_without_dj_facts_and_projection_keeps_it() 
         "projection must not refill a rating deliberately cleared on a player: {applied}"
     );
     assert_eq!(f.desktop(0).0, 0);
+}
+
+#[test]
+fn same_value_round_trip_rating_ends_projection_ownership() {
+    let f = Fixture::new();
+    let location = f.state.location().unwrap();
+    let config = Config {
+        runtime_dir: f._dir.path().join("run"),
+        idle_exit: None,
+        recovery_dir: f.state.backup_dir().to_owned(),
+    };
+    let host: Arc<dyn rbl_library::Host + Send + Sync> = Arc::new(rbl_library::NoHost);
+    let service = Service::host(&location, &config, &f.state.shared_core(), &host).unwrap();
+    let id = rbl_db::fixture::track_id(0);
+    f.rate(0, 0);
+    f.state
+        .read_db(|db| {
+            crate::commands::refresh_after_edit(
+                &f.state,
+                db,
+                crate::commands::Touched::Metadata(vec![id.clone()]),
+            )
+        })
+        .unwrap();
+    std::fs::create_dir_all(wreckordbox_sidecar::default_dir(&location.master_db)).unwrap();
+    std::fs::write(
+        wreckordbox_sidecar::default_dir(&location.master_db).join("projection-policy.toml"),
+        "[energy]\napply = 0.8\n",
+    )
+    .unwrap();
+    service.call("facts.record", json!({"source":{"kind":"agent","name":"fixture"},"facts":[{"track":id,"kind":"energy","value":3,"confidence":1.0}]})).unwrap();
+    assert_eq!(
+        service
+            .call("projection.apply", json!({"tracks":[id]}))
+            .unwrap()["changes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    f.one("UPDATE content SET rating=3 WHERE content_id=1");
+    f.import().unwrap();
+    service.call("facts.record", json!({"source":{"kind":"agent","name":"fixture"},"facts":[{"track":id,"kind":"energy","value":4,"confidence":1.0}]})).unwrap();
+    let applied = service
+        .call("projection.apply", json!({"tracks":[id]}))
+        .unwrap();
+    assert_eq!(applied["changes"], json!([]), "{applied}");
+    assert_eq!(f.desktop(0).0, 3);
+}
+
+#[test]
+fn a_round_trip_chunk_that_fails_after_one_rating_bars_its_tracks() {
+    let f = Fixture::new();
+    let location = f.state.location().unwrap();
+    let config = Config {
+        runtime_dir: f._dir.path().join("run"),
+        idle_exit: None,
+        recovery_dir: f.state.backup_dir().to_owned(),
+    };
+    let host: Arc<dyn rbl_library::Host + Send + Sync> = Arc::new(rbl_library::NoHost);
+    let service = Service::host(&location, &config, &f.state.shared_core(), &host).unwrap();
+    f.one("UPDATE content SET rating=0 WHERE content_id IN (1,2)");
+    let first = rbl_db::fixture::track_id(0);
+    let second = rbl_db::fixture::track_id(1);
+    let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadWrite).unwrap();
+    db.connection().execute_batch(&format!("CREATE TRIGGER fail_second_rating BEFORE UPDATE OF Rating ON djmdContent WHEN NEW.ID='{second}' BEGIN SELECT RAISE(ABORT, 'fixture later row failure'); END;")).unwrap();
+    assert!(f.import().is_err());
+    assert_eq!(f.desktop(0).0, 0, "the earlier row really committed");
+    assert_eq!(f.desktop(1).0, 2, "the failing row did not commit");
+    let barriers = service.call("projection.barriers", json!({})).unwrap();
+    assert_eq!(
+        barriers["barriers"].as_array().unwrap().len(),
+        1,
+        "{barriers}"
+    );
+    assert_eq!(
+        barriers["barriers"][0]["tracks"],
+        json!([first, second]),
+        "{barriers}"
+    );
+    assert_eq!(
+        barriers["barriers"][0]["source"],
+        json!({"kind":"tool","name":"round-trip"})
+    );
+    f.state
+        .read_db(|db| {
+            crate::commands::refresh_after_edit(
+                &f.state,
+                db,
+                crate::commands::Touched::Metadata(vec![first.clone()]),
+            )
+        })
+        .unwrap();
+    service.call("facts.record", json!({"source":{"kind":"agent","name":"fixture"},"facts":[{"track":first,"kind":"energy","value":4,"confidence":1.0}]})).unwrap();
+    std::fs::write(
+        wreckordbox_sidecar::default_dir(&location.master_db).join("projection-policy.toml"),
+        "[energy]\napply = 0.8\n",
+    )
+    .unwrap();
+    assert_eq!(
+        service
+            .call("projection.apply", json!({"tracks":[first]}))
+            .unwrap()["changes"],
+        json!([])
+    );
 }
