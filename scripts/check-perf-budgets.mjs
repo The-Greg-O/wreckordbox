@@ -37,7 +37,7 @@ exactKeys(budgets, ["$schemaVersion", "$comment", "baseline", "gates", "manualTa
 if (budgets.$schemaVersion !== 2) throw new Error("$schemaVersion must be 2");
 if (typeof budgets.$comment !== "string" || budgets.$comment.length === 0) throw new Error("$comment must describe the budget policy");
 
-exactKeys(budgets.baseline, ["date", "sourceCommit", "environment", "bundle", "browser"], "baseline");
+exactKeys(budgets.baseline, ["date", "sourceCommit", "environment", "bundle", "browser", "startup"], "baseline");
 if (!/^\d{4}-\d{2}-\d{2}$/.test(budgets.baseline.date)) throw new Error("baseline.date must be YYYY-MM-DD");
 if (!/^[0-9a-f]{7,40}$/.test(budgets.baseline.sourceCommit)) throw new Error("baseline.sourceCommit must be a Git commit");
 if (typeof budgets.baseline.environment !== "string" || budgets.baseline.environment.length === 0) {
@@ -45,7 +45,7 @@ if (typeof budgets.baseline.environment !== "string" || budgets.baseline.environ
 }
 
 exactKeys(budgets.gates, ["bundle", "browser", "ipc"], "gates");
-exactKeys(budgets.gates.bundle, ["initialChunkKbGz", "totalKbGz"], "gates.bundle");
+exactKeys(budgets.gates.bundle, ["initialChunkKbGz", "startupKbGz"], "gates.bundle");
 exactKeys(budgets.gates.browser, ["firstRowsMs", "deckFrameCostMs", "scrollFrameCostMs"], "gates.browser");
 exactKeys(budgets.gates.ipc, ["responseKb"], "gates.ipc");
 for (const metric of ["firstRowsMs", "deckFrameCostMs", "scrollFrameCostMs"]) {
@@ -55,11 +55,34 @@ for (const metric of ["firstRowsMs", "deckFrameCostMs", "scrollFrameCostMs"]) {
   }
 }
 
+// The 2026-10-04 bundle baseline is kept as history. Its total is no longer
+// gated (DJ decision 2026-11-14: only start-up code is), so it is only checked
+// to be a measurement.
 const measuredBundle = object(budgets.baseline?.bundle, "baseline.bundle");
-for (const key of ["initialChunkKbGz", "totalKbGz"]) {
-  const measured = positive(measuredBundle[key], `baseline.bundle.${key}`);
-  const limit = positive(budgets.gates.bundle[key], `gates.bundle.${key}`);
-  if (measured > limit) throw new Error(`baseline.bundle.${key} exceeds its gate`);
+exactKeys(measuredBundle, ["initialChunkKbGz", "totalKbGz"], "baseline.bundle");
+positive(measuredBundle.totalKbGz, "baseline.bundle.totalKbGz");
+if (positive(measuredBundle.initialChunkKbGz, "baseline.bundle.initialChunkKbGz")
+  > positive(budgets.gates.bundle.initialChunkKbGz, "gates.bundle.initialChunkKbGz")) {
+  throw new Error("baseline.bundle.initialChunkKbGz exceeds its gate");
+}
+
+// Start-up code: what the main window loads before first paint.
+const startup = object(budgets.baseline?.startup, "baseline.startup");
+exactKeys(startup, ["date", "sourceCommit", "environment", "startupKbGz", "chunks"], "baseline.startup");
+if (!/^\d{4}-\d{2}-\d{2}$/.test(startup.date)) throw new Error("baseline.startup.date must be YYYY-MM-DD");
+if (!/^[0-9a-f]{7,40}$/.test(startup.sourceCommit)) throw new Error("baseline.startup.sourceCommit must be a Git commit");
+if (typeof startup.environment !== "string" || startup.environment.length === 0) {
+  throw new Error("baseline.startup.environment must describe the measurement environment");
+}
+const startupChunks = object(startup.chunks, "baseline.startup.chunks");
+let startupSum = 0;
+for (const [name, kb] of Object.entries(startupChunks)) startupSum += positive(kb, `baseline.startup.chunks.${name}`);
+const startupMeasured = positive(startup.startupKbGz, "baseline.startup.startupKbGz");
+if (Math.abs(startupSum - startupMeasured) > 0.5) {
+  throw new Error(`baseline.startup.chunks add up to ${startupSum.toFixed(1)}, not startupKbGz ${startupMeasured}`);
+}
+if (startupMeasured > positive(budgets.gates.bundle.startupKbGz, "gates.bundle.startupKbGz")) {
+  throw new Error("baseline.startup.startupKbGz exceeds its gate");
 }
 
 const measuredBrowsers = object(budgets.baseline?.browser, "baseline.browser");
