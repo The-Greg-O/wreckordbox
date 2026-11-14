@@ -189,11 +189,15 @@ impl AppState {
         // Taken out first and the hosting lock let go, so stopping (which
         // waits for a running Stick load to stop where it safely can and
         // send its report) never holds up anything else that asks for it.
-        let hosted = self.service.lock().take();
-        if let Some(hosted) = hosted {
-            hosted.closing.store(true, Ordering::Release);
-            drop(hosted);
-        }
+        // A drain (wbx-71): completes only once every Stick load command has
+        // kept its report; a second stop while one runs waits for it.
+        self.shutdown.drain(|| {
+            let hosted = self.service.lock().take();
+            if let Some(hosted) = hosted {
+                hosted.closing.store(true, Ordering::Release);
+                drop(hosted);
+            }
+        });
     }
 
     /// A handle to the service this window hosts, to call without holding

@@ -172,6 +172,7 @@ fn load_from(
         playlists.to_vec(),
         plan.to_owned(),
         approval.map(str::to_owned),
+        None,
     ))
 }
 
@@ -569,5 +570,242 @@ fn closing_the_window_stops_a_hosted_load_where_it_safely_can_and_waits_for_its_
     assert!(
         !window.spare.join(".rbxport-publication").exists(),
         "no unfinished write is left"
+    );
+}
+
+// ---- Closing the window during a load (wbx-71 verification review) -----
+
+/// A load started on its own thread and paused at `stage` (the service's
+/// test hook); returns the thread and the pause file that lets it go.
+fn paused_load(
+    window: &Window,
+    stick: &Path,
+    stage: &str,
+) -> (
+    std::thread::JoinHandle<Result<serde_json::Value, rbxport_lib::AppError>>,
+    PathBuf,
+) {
+    use std::time::Duration;
+    let playlists = vec![playlist_id(0)];
+    let plan = window.plan(stick, &playlists);
+    let token = window.held(&plan);
+    let state_dir = window.state_dir();
+    let pause = state_dir.join(wreckordbox_service::stick_load::TEST_PAUSE_AT_FILE);
+    std::fs::write(&pause, stage).unwrap();
+    let handle = window.app.handle().clone();
+    let path = path(stick);
+    let loading = std::thread::spawn(move || {
+        load_from(&handle, &path, &playlists, &plan, Some(token.as_str()))
+    });
+    let paused = state_dir.join(wreckordbox_service::stick_load::TEST_PAUSED_FILE);
+    for _ in 0..3000 {
+        if paused.exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    if !paused.exists() {
+        let _ = std::fs::remove_file(&pause);
+        panic!("the load did not reach {stage}: {:?}", loading.join());
+    }
+    (loading, pause)
+}
+
+/// Whether `thread` is still running after a moment.
+fn still_running<T>(thread: &std::thread::JoinHandle<T>) -> bool {
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    !thread.is_finished()
+}
+
+#[test]
+fn a_second_exit_request_during_publishing_is_held_and_the_final_exit_waits_for_the_load() {
+    use rbxport_lib::shutdown;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let window = hosting_window();
+    window.unlock(&window.spare);
+    let (loading, pause) = paused_load(&window, &window.spare, "publishing");
+    let state = window.state();
+    let exits = Arc::new(AtomicUsize::new(0));
+    // When the app is let exit, the load must be over and its report kept.
+    let reports_at_exit = Arc::new(parking_lot::Mutex::new(None));
+    let exit = {
+        let exits = Arc::clone(&exits);
+        let reports_at_exit = Arc::clone(&reports_at_exit);
+        let state_dir = window.state_dir();
+        move || {
+            *reports_at_exit.lock() =
+                Some(rbxport_lib::stick_load_reports::kept_reports(&state_dir).len());
+            exits.fetch_add(1, Ordering::SeqCst);
+        }
+    };
+
+    let first = shutdown::exit_requested(&state, true, exit.clone());
+    let second = shutdown::exit_requested(&state, true, exit);
+    // The final Exit (a restart's, or one the OS forces) cannot be prevented: it waits.
+    let final_exit = {
+        let state = Arc::clone(&state);
+        std::thread::spawn(move || shutdown::on_exit(&state))
+    };
+    let waited = still_running(&final_exit);
+    let _ = std::fs::remove_file(&pause);
+
+    assert!(first, "the first exit request is held while the load runs");
+    assert!(second, "a second exit request is held too");
+    assert!(
+        waited,
+        "the final Exit returned while the load was still publishing"
+    );
+    let report = loading.join().unwrap().unwrap();
+    final_exit.join().unwrap();
+    for _ in 0..500 {
+        if exits.load(Ordering::SeqCst) > 0 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(
+        exits.load(Ordering::SeqCst),
+        1,
+        "the app exits once, when drained"
+    );
+    assert_eq!(
+        *reports_at_exit.lock(),
+        Some(1),
+        "the report was kept before the exit"
+    );
+    assert!(report["outcome"].is_string(), "{report}");
+    assert!(!window.spare.join(".rbxport-publication").exists());
+}
+
+#[test]
+fn a_restart_waits_for_a_publishing_load_and_keeps_its_report() {
+    use rbxport_lib::shutdown;
+    let window = hosting_window();
+    window.unlock(&window.spare);
+    let (loading, pause) = paused_load(&window, &window.spare, "publishing");
+    let state = window.state();
+    let state_dir = window.state_dir();
+    let restarted = Arc::new(parking_lot::Mutex::new(None));
+
+    let restarting = {
+        let state = Arc::clone(&state);
+        let restarted = Arc::clone(&restarted);
+        std::thread::spawn(move || {
+            shutdown::drain_then(&state, || {
+                *restarted.lock() =
+                    Some(rbxport_lib::stick_load_reports::kept_reports(&state_dir).len());
+            });
+        })
+    };
+    let waited = still_running(&restarting);
+    let _ = std::fs::remove_file(&pause);
+
+    assert!(
+        waited,
+        "the restart went ahead while the load was publishing"
+    );
+    loading.join().unwrap().unwrap();
+    restarting.join().unwrap();
+    assert_eq!(
+        *restarted.lock(),
+        Some(1),
+        "restarted once, with the report kept"
+    );
+}
+
+/// Closes the window (exit asked, drained, exited) during a load paused at
+/// `stage`; answers the reports a reopened window finds.
+fn close_during(window: &Window, stick: &Path, stage: &str) -> Vec<serde_json::Value> {
+    use rbxport_lib::shutdown;
+    let (loading, pause) = paused_load(window, stick, stage);
+    let state = window.state();
+    let (exited, heard) = std::sync::mpsc::channel();
+    assert!(shutdown::exit_requested(&state, true, move || {
+        let _ = exited.send(());
+    }));
+    let _ = std::fs::remove_file(&pause);
+    let _ = loading.join().unwrap();
+    heard
+        .recv_timeout(std::time::Duration::from_secs(60))
+        .expect("the app exits once the load is over");
+    shutdown::on_exit(&state);
+    // Reopened: a new window over the same state folder.
+    let reopened = AppState::with_backups(window.state_dir());
+    rbxport_lib::stick_load_reports::kept_reports(reopened.backup_dir())
+}
+
+#[test]
+fn closing_during_copying_keeps_the_full_report_for_the_next_start() {
+    let window = hosting_window();
+    window.unlock(&window.spare);
+
+    let reports = close_during(&window, &window.spare, "copying");
+
+    assert_eq!(reports.len(), 1, "{reports:?}");
+    let saved = &reports[0];
+    assert!(
+        saved["id"].as_str().is_some_and(|id| !id.is_empty()),
+        "{saved}"
+    );
+    assert_eq!(saved["stick"]["path"], path(&window.spare), "{saved}");
+    assert!(saved["stick"]["volume"].is_string(), "{saved}");
+    let report = &saved["report"];
+    assert_eq!(report["outcome"], "failed", "{saved}");
+    assert!(
+        report["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("stopped"),
+        "{saved}"
+    );
+    assert_eq!(
+        report["not_written"]["tracks"].as_array().unwrap().len(),
+        3,
+        "{saved}"
+    );
+    assert_eq!(report["written"]["tracks"], json!([]), "{saved}");
+    // Kept off the Stick and out of the Library.
+    assert!(!bytes(&window.spare)
+        .keys()
+        .any(|p| p.to_string_lossy().contains("report")));
+
+    // Dismissed, it is gone for good.
+    let id = saved["id"].as_str().unwrap();
+    rbxport_lib::stick_load_reports::dismiss_report(&window.state_dir(), id).unwrap();
+    assert!(rbxport_lib::stick_load_reports::kept_reports(&window.state_dir()).is_empty());
+}
+
+#[test]
+fn closing_after_publication_before_native_stems_finish_keeps_every_stems_outcome() {
+    let window = hosting_window();
+    window.unlock(&window.spare);
+    // Two Native stems sets: the window closes while the first is written,
+    // after the audio was published; the second is never begun.
+    record_stems(&window, &fixture::track_id(0), &window.audio[0]);
+    record_stems(&window, &fixture::track_id(1), &window.audio[1]);
+
+    let reports = close_during(&window, &window.spare, "native_stems_verified");
+
+    assert_eq!(reports.len(), 1, "{reports:?}");
+    let report = &reports[0]["report"];
+    assert_ne!(report["outcome"], "loaded", "{report}");
+    assert_eq!(
+        report["written"]["tracks"].as_array().unwrap().len(),
+        3,
+        "{report}"
+    );
+    let stems = report["native_stems"].as_array().unwrap();
+    assert_eq!(
+        stems.len(),
+        2,
+        "every Native stems outcome is kept: {report}"
+    );
+    let unwritten: Vec<_> = stems.iter().filter(|s| s["outcome"] != "written").collect();
+    assert_eq!(unwritten.len(), 1, "{report}");
+    assert!(
+        unwritten[0]["reason"]
+            .as_str()
+            .is_some_and(|r| r.contains("stopped")),
+        "{report}"
     );
 }

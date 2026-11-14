@@ -363,6 +363,7 @@ fn every_writer_is_refused_on_a_protected_stick_and_writes_nothing() {
             vec![playlist_id(0)],
             "plan".into(),
             t,
+            None,
         )),
     );
     let on_stick = |name: &str| rig.stick.join(name).to_string_lossy().into_owned();
@@ -1027,6 +1028,9 @@ const APP_FILE_WRITERS: &[&str] = &[
     "stick_unlock",
     "undo_edit",
     "use_default_library",
+    // Stick load reports kept in the app's state folder (wbx-71), never on a Stick.
+    "stick_load_report_dismiss",
+    "stick_view_load",
 ];
 
 /// Every registered command that cannot write to a Stick: a new command
@@ -1221,6 +1225,8 @@ const NOT_STICK_WRITERS: &[&str] = &[
     "stick_outline",
     "stick_protection",
     "stick_unlock",
+    "stick_load_report_dismiss",
+    "stick_load_reports",
     "stick_view_dry_run",
     "stick_view_sticks",
     "stick_write_approve",

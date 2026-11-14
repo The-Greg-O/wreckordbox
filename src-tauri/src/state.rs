@@ -30,6 +30,9 @@ pub struct AppState {
     /// The Library service this window hosts, once it does. Never taken
     /// with the edit gate or the core's lock held.
     pub(crate) service: parking_lot::Mutex<Option<crate::service_host::Hosted>>,
+    /// Draining the service as the window closes, with the Stick loads it
+    /// waits for (wbx-71): outlives taking the service out.
+    pub(crate) shutdown: crate::shutdown::Shutdown,
     /// Told when the library history changed without a command of the
     /// window's doing it (a write outside it ended its Redo branch, a
     /// client of the service made an edit), so the window's Edit menu
@@ -130,6 +133,7 @@ impl AppState {
             bulk_operations: parking_lot::Mutex::new(crate::bulk_writes::Operations::default()),
             core: Arc::new(LibraryCore::new(backup_dir.clone())),
             service: parking_lot::Mutex::new(None),
+            shutdown: crate::shutdown::Shutdown::default(),
             history_changed: std::sync::OnceLock::new(),
             backup_progress: parking_lot::Mutex::new(crate::backups::BackupProgress::default()),
             backup_sizes: parking_lot::Mutex::new(crate::backup_sizes::SizeCache::default()),

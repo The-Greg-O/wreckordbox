@@ -18,7 +18,6 @@
 //! load, because the service takes the same lock itself.
 
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use serde_json::{json, Value};
@@ -75,47 +74,6 @@ pub fn dry_run(state: &AppState, stick: &str, playlists: &[String]) -> AppResult
     )
 }
 
-/// Stick loads the window has running, so closing it waits for them.
-static LOADS_RUNNING: AtomicUsize = AtomicUsize::new(0);
-/// Set once the window began closing behind a running load.
-static CLOSING: AtomicBool = AtomicBool::new(false);
-
-/// Counts one running load until dropped.
-struct Running;
-
-impl Running {
-    fn start() -> Self {
-        LOADS_RUNNING.fetch_add(1, Ordering::AcqRel);
-        Self
-    }
-}
-
-impl Drop for Running {
-    fn drop(&mut self) {
-        LOADS_RUNNING.fetch_sub(1, Ordering::AcqRel);
-    }
-}
-
-/// The app is asked to exit (the window closed). With a Stick load running,
-/// the exit waits: on a thread of its own, never the interface's, the
-/// service is stopped, which asks the load to stop where it safely can and
-/// waits for it to end and send its report (logged by the load command);
-/// then the app exits. Nothing abandons the load part-way.
-pub fn exit_requested<R: tauri::Runtime>(
-    handle: &tauri::AppHandle<R>,
-    api: &tauri::ExitRequestApi,
-) {
-    if LOADS_RUNNING.load(Ordering::Acquire) == 0 || CLOSING.swap(true, Ordering::AcqRel) {
-        return;
-    }
-    api.prevent_exit();
-    let handle = handle.clone();
-    std::thread::spawn(move || {
-        tauri::Manager::state::<Arc<AppState>>(&handle).stop_service();
-        handle.exit(0);
-    });
-}
-
 /// The mounted Sticks, for the Stick view.
 #[tauri::command]
 #[allow(
@@ -147,12 +105,16 @@ pub async fn stick_view_dry_run(
 
 /// The load the DJ held for: `plan` is the dry run's plan id the view
 /// showed, `approval` the token the window's hold exchanged that plan for
-/// (`stick_write_approve(plan)`). Stick Protection is checked here first,
-/// under the Stick's lock; the token is used up by the service under its
-/// own hold of that lock, and only for exactly `plan` and the result it
-/// was approved for (a fresh dry run's plan with an earlier hold, or a plan
-/// whose Native stems or audio changed since, is refused). The window's
-/// hosting lock is not held while the load runs.
+/// (`stick_write_approve(plan)`), `operation` the window's id for this load
+/// (one is made when absent). Stick Protection is checked here first, under
+/// the Stick's lock; the token is used up by the service under its own hold
+/// of that lock, and only for exactly `plan` and the result it was approved
+/// for. The window's hosting lock is not held while the load runs.
+///
+/// Whatever the service answers (its report, or why it refused or failed)
+/// is kept in the app's state folder ([`crate::stick_load_reports`]) under
+/// `operation` before this lets the window's shutdown complete, so a load
+/// cut short by closing the window is reported at the next start.
 #[tauri::command]
 #[allow(
     clippy::needless_pass_by_value,
@@ -164,6 +126,7 @@ pub async fn stick_view_load(
     playlists: Vec<String>,
     plan: String,
     approval: Option<String>,
+    operation: Option<String>,
 ) -> AppResult<Value> {
     let state = Arc::clone(&state);
     blocking("stick_view_load", move || {
@@ -176,18 +139,75 @@ pub async fn stick_view_load(
                 "This write to the Stick was not confirmed. Nothing was written: hold to confirm the load shown.",
             ));
         };
-        let _running = Running::start();
+        let operation = operation
+            .filter(|id| crate::stick_load_reports::valid_id(id))
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        // Counted until the report is kept: closing the window waits for it.
+        let _running = state.shutdown.load_running();
+        let volume = crate::stick_approval::volume_identity(root).ok();
         let report = ask(
             &state,
             commands::STICKS_LOAD,
             json!({ "stick": stick, "playlists": playlists, "plan": plan, "approval": approval }),
         );
-        // Said in the log too, so a report is kept when nothing is left to show it.
-        match &report {
-            Ok(load) => tracing::info!(stick = %stick, outcome = %load["outcome"], "Stick load finished"),
-            Err(error) => tracing::warn!(stick = %stick, error = %error.message, "Stick load refused or failed"),
+        let name = report
+            .as_ref()
+            .ok()
+            .and_then(|load| load["stick"]["name"].as_str().map(str::to_owned))
+            .or_else(|| root.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .unwrap_or_else(|| stick.clone());
+        let kept = json!({
+            "id": operation,
+            "stick": { "path": stick, "name": name, "volume": volume },
+            "finished": rbl_core::time::now(),
+            "report": report.as_ref().ok(),
+            "error": report.as_ref().err().map(|e| json!({ "code": e.detail, "message": e.message })),
+        });
+        if let Err(error) = crate::stick_load_reports::keep_report(state.backup_dir(), &kept) {
+            tracing::error!(stick = %stick, %error, report = %kept, "a Stick load report could not be kept");
         }
-        report
+        report.map(|mut load| {
+            load["report_id"] = json!(operation);
+            load
+        })
+    })
+    .await
+}
+
+/// The Stick load reports kept and not yet dismissed (the Stick view shows
+/// them, also for a Stick no longer mounted). Reads the app's state folder.
+#[tauri::command]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "a command is handed its state by value"
+)]
+pub async fn stick_load_reports(state: tauri::State<'_, Arc<AppState>>) -> AppResult<Vec<Value>> {
+    let state = Arc::clone(&state);
+    blocking("stick_load_reports", move || {
+        Ok(crate::stick_load_reports::kept_reports(state.backup_dir()))
+    })
+    .await
+}
+
+/// The DJ dismissed a kept report: removed from the app's state folder.
+#[tauri::command]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "a command is handed its state by value"
+)]
+pub async fn stick_load_report_dismiss(
+    state: tauri::State<'_, Arc<AppState>>,
+    id: String,
+) -> AppResult<()> {
+    let state = Arc::clone(&state);
+    blocking("stick_load_report_dismiss", move || {
+        crate::stick_load_reports::dismiss_report(state.backup_dir(), &id).map_err(|e| {
+            AppError::new(
+                ErrorKind::Internal,
+                "The load report could not be dismissed.",
+            )
+            .with_detail(e.to_string())
+        })
     })
     .await
 }

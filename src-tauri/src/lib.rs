@@ -65,6 +65,8 @@ pub mod service_host;
 pub mod intake_tags;
 pub mod intake_view;
 pub mod stick_view;
+pub mod shutdown;
+pub mod stick_load_reports;
 pub mod playlist_entries;
 pub mod mutant_window;
 pub mod service_status;
@@ -595,6 +597,8 @@ pub fn run() {
             stick_view::stick_view_sticks,
             stick_view::stick_view_dry_run,
             stick_view::stick_view_load,
+            stick_view::stick_load_reports,
+            stick_view::stick_load_report_dismiss,
             mutant_window::collection_removal_mutants,
             intake_view::intake_counts,
             intake_view::intake_colours,
@@ -830,14 +834,20 @@ pub fn run() {
     match result {
         Ok(app) => {
             app.run(|handle, event| {
-                if let tauri::RunEvent::ExitRequested { api, .. } = &event {
+                if let tauri::RunEvent::ExitRequested { api, code, .. } = &event {
                     // A Stick load running: stopped where it safely can first (wbx-71).
-                    stick_view::exit_requested(handle, api);
+                    let state = Arc::clone(handle.state::<Arc<AppState>>().inner());
+                    let again = handle.clone();
+                    let preventable = *code != Some(tauri::RESTART_EXIT_CODE);
+                    if shutdown::exit_requested(&state, preventable, move || again.exit(0)) {
+                        api.prevent_exit();
+                    }
                 }
                 if matches!(event, tauri::RunEvent::Exit) {
                     // Lets go of the Library's lock and socket, so a command
-                    // run next starts a service of its own.
-                    handle.state::<Arc<AppState>>().stop_service();
+                    // run next starts a service of its own; waits for any
+                    // Stick load to be stopped and its report kept first.
+                    shutdown::on_exit(handle.state::<Arc<AppState>>().inner());
                     crate::screen_cache::save(handle);
                 }
             });
