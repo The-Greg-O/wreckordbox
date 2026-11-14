@@ -10,24 +10,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { audit, shortfalls, type Seen } from "./lightAudit";
 import { load } from "./compactPlayer";
-import { BROWSER_THEME_EVENT, type Theme, type ThemeRoles } from "../src/lib/themeRoles";
-
-/** Omarchy's stock light palettes, as the app shell reports them. */
-const LATTE: ThemeRoles = {
-  mode: "light", ground: "#d7d8dc", panel: "#e3e4e8", working: "#eff1f5", hairline: "#dce0e8",
-  selection: "#ccd0da", border: "#acb0be", text: "#4c4f69", textDim: "#9ca0b0", textBright: "#4c4f69",
-  accent: "#1e66f5", onAccent: "#ffffff", tabFrom: "#ea76cb", tabTo: "#df8e1d",
-};
-const WHITE: ThemeRoles = {
-  mode: "light", ground: "#e8e8e8", panel: "#f5f5f5", working: "#ffffff", hairline: "#c0c0c0",
-  selection: "#c0c0c0", border: "#808080", text: "#000000", textDim: "#c0c0c0", textBright: "#000000",
-  accent: "#6e6e6e", onAccent: "#ffffff", tabFrom: "#2e2e2e", tabTo: "#4a4a4a",
-};
-const TOKYO_NIGHT: ThemeRoles = {
-  mode: "dark", ground: "#0e0e14", panel: "#13141c", working: "#1a1b26", hairline: "#24283b",
-  selection: "#292e42", border: "#414868", text: "#a9b1d6", textDim: "#565f89", textBright: "#c0caf5",
-  accent: "#7aa2f7", onAccent: "#0e0e14", tabFrom: "#bb9af7", tabTo: "#ff9e64",
-};
+import { LATTE, WHITE, TOKYO_NIGHT, announce, rgb } from "./lightPalettes";
 
 const VIEWS = ["Library", "Intake", "Review", "Stick"] as const;
 
@@ -37,18 +20,6 @@ const MEANING = [
   "--c-cue-hot", "--c-comment-pink", "--c-comment-yellow", "--c-comment-green", "--c-energy-0", "--c-energy-1",
   "--c-energy-3", "--c-energy-5", "--c-meter-green", "--c-meter-red", "--c-playhead", "--c-loop-band",
 ];
-
-async function announce(page: Page, theme: Theme): Promise<void> {
-  await page.evaluate(
-    ([name, detail]) => void window.dispatchEvent(new CustomEvent(name as string, { detail })),
-    [BROWSER_THEME_EVENT, theme] as const,
-  );
-}
-
-const rgb = (hex: string): string => {
-  const n = Number.parseInt(hex.slice(1), 16);
-  return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
-};
 
 /** Each token as the browser resolves it inside the shell, so `var()` chains and scoped overrides are followed. */
 async function resolved(page: Page, names: string[]): Promise<Record<string, string>> {
@@ -106,15 +77,56 @@ test("under a light theme each view's text and icons can be read on the ground b
   }
 });
 
-test("under a light theme the Stick view with a Stick selected can be read", async ({ page }) => {
+test("under a light theme the Stick view with a Stick selected, a load chosen and its settings open can be read", async ({ page }) => {
   await openShell(page);
   const stick = page.getByRole("tree", { name: "Tree" }).getByRole("group", { name: "Stick TEST" });
   await stick.getByRole("treeitem", { name: "TEST", exact: true }).click();
-  await expect(page.getByTestId("shell-working")).toContainText("77 tracks in 3 playlists");
+  const view = page.getByTestId("stick-view");
+  await expect(view.getByTestId("stick-name")).toHaveText("TEST");
+  // A playlist chosen, so the load's summary (its counts and the space it adds) is drawn.
+  await view.getByRole("button", { name: /^Choose playlists/ }).click();
+  await view.getByTestId("stick-choose").getByRole("checkbox", { name: "Melodic Vox" }).check();
+  await expect(view.getByTestId("stick-summary")).toBeVisible();
+  // Upstream's device panel inside it.
+  await view.getByRole("button", { name: "TEST's settings and tools" }).click();
+  await expect(view.getByTestId("stick-panel")).toBeVisible();
   for (const roles of [LATTE, WHITE]) {
     await announce(page, { roles, font: null });
     const { seen } = await audit(page.getByTestId("shell"));
     expect([...new Set(shortfalls(seen))], roles.working).toEqual([]);
+  }
+});
+
+test("under a light theme the device panel's image buttons are drawn as buttons, not empty squares", async ({ page }) => {
+  await openShell(page);
+  const stick = page.getByRole("tree", { name: "Tree" }).getByRole("group", { name: "Stick TEST" });
+  await stick.getByRole("treeitem", { name: "TEST", exact: true }).click();
+  await page.getByTestId("stick-view").getByRole("button", { name: "TEST's settings and tools" }).click();
+  const buttons = page.getByTestId("stick-panel").getByRole("button", { name: /^(Copy from \[Preferences\]|Import image file|Delete image)$/ });
+  await expect(buttons).toHaveCount(3);
+  for (const roles of [LATTE, WHITE]) {
+    await announce(page, { roles, font: null });
+    for (const button of await buttons.all()) {
+      // The glyph square beside each label: its fill or its edge stands out from the ground behind it.
+      const stands = await button.evaluate((el) => {
+        const glyph = el.querySelector("[aria-hidden]")!;
+        const parse = (c: string) => (c.match(/[\d.]+/g) ?? []).map(Number);
+        const lum = (c: number[]) => {
+          const [r, g, b] = c.slice(0, 3).map((v) => { const x = v / 255; return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; });
+          return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+        };
+        const ratio = (a: number[], b: number[]) => { const [h, l] = [lum(a), lum(b)].sort((x, y) => y - x); return (h! + 0.05) / (l! + 0.05); };
+        let behind = [255, 255, 255];
+        for (let at = glyph.parentElement; at; at = at.parentElement) {
+          const c = parse(getComputedStyle(at).backgroundColor);
+          if (c.length >= 3 && (c[3] ?? 1) > 0.5) { behind = c; break; }
+        }
+        const s = getComputedStyle(glyph);
+        const edge = s.borderTopStyle !== "none" && parseFloat(s.borderTopWidth) > 0 ? ratio(parse(s.borderTopColor), behind) : 0;
+        return Math.max(ratio(parse(s.backgroundColor), behind), edge);
+      });
+      expect(stands, `${await button.textContent()} under ${roles.working}`).toBeGreaterThanOrEqual(3);
+    }
   }
 });
 

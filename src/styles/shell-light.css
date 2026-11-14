@@ -7,13 +7,19 @@
    frame's root element) the chrome tokens point back at the roles, and the
    fixed light-on-dark tokens the shell's parts still use (fields, icons,
    outlines, the player's glyphs) take the role that does their job.
-   Menus and dialogs drawn outside the shell keep upstream's dark look.
+   While the shell is drawn, what it opens outside its frame (context menus
+   and other portals on the body, the command palette, the staged Stick
+   write, the unlock and the other dialogs beside the shell) takes the same
+   tokens: the scope is then the whole document (`:has([data-shell-roles])`
+   on the body; wbx-lfa). Under upstream's layout there is no shell, so its
+   menus and dialogs keep upstream's dark look with the rest of it.
 
    Nothing here describes the music: waveform, phrase, cue, Prep, key, Energy,
    meter and Mutant colours keep their values. Where one would not stand out
    from a light ground it is given a dark well or an outline instead. */
 
-:root[data-theme-mode="light"] [data-shell-roles] {
+:root[data-theme-mode="light"] [data-shell-roles],
+:root[data-theme-mode="light"]:has([data-shell-roles]) body {
   /* Grounds, text and selection: the theme's. */
   --c-black: var(--role-ground);
   --c-top: var(--role-panel);
@@ -49,6 +55,24 @@
   --c-device-disabled: var(--role-text-dim);
   --c-device-disabled-ring: var(--role-border);
   --c-device-row: var(--role-panel);
+  /* The device panel's three image buttons: a glyph square drawn in the
+     label's ink rather than a panel-coloured square that vanishes. */
+  --c-device-image-glyph: var(--role-text-dim);
+
+  /* Menus (context menus, the column and search-scope menus, the layout
+     menu) and the dialogs' buttons, drawn outside the frame. */
+  --c-context-menu: var(--role-working);
+  --c-context-menu-border: var(--role-border);
+  --c-context-menu-inner: var(--role-hairline);
+  --c-context-menu-text: var(--role-text);
+  --c-context-menu-text-dim: var(--role-text-dim);
+  --c-context-menu-separator: var(--role-hairline);
+  --c-search-menu-inner: var(--role-hairline);
+  --c-menu: var(--role-working);
+  --c-menu-border: var(--role-border);
+  --c-pref-button-top: var(--role-control);
+  --c-pref-button-bottom: var(--role-control);
+  --c-pref-button-border: var(--role-border);
 
   /* The outline a meaning colour gets where it alone would not stand out
      from a light ground (pips, Prep stripes, key lights, tag hues). */
