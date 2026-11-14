@@ -132,7 +132,7 @@ fn a_hosted_service_separates_into_its_sidecar_and_tells_the_host_without_a_libr
         .unwrap();
     assert_eq!(shown["stems"], separated["stems"]);
 
-    // Explicit verification detects changed audio and tells the host once.
+    // Explicit verification computes changed audio without telling the host.
     let mut bytes = std::fs::read(&audio).unwrap();
     bytes[44] ^= 0x55;
     std::fs::write(&audio, bytes).unwrap();
@@ -141,12 +141,7 @@ fn a_hosted_service_separates_into_its_sidecar_and_tells_the_host_without_a_libr
         .unwrap();
     assert_eq!(facts["facts"], json!([]));
     assert_eq!(facts["stale"][0]["id"], separated["stems"]["fact_id"]);
-    let changed = heard.recv_timeout(Duration::from_secs(2)).unwrap();
-    assert_eq!(changed.event, events::SIDECAR_CHANGED);
-    assert_eq!(
-        changed.data["stale"],
-        json!([separated["stems"]["fact_id"]])
-    );
+    assert!(heard.recv_timeout(Duration::from_millis(150)).is_err());
     assert_eq!(core.generation(), generation);
     service
         .call("facts.of_track", json!({"id": track, "check_audio": true}))

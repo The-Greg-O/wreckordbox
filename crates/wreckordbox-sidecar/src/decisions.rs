@@ -452,46 +452,7 @@ impl Sidecar {
     /// A page of Decisions, oldest first, and how many there are before
     /// the limit.
     pub fn decisions(&self, query: &DecisionQuery) -> Result<(Vec<Decision>, usize)> {
-        // ?1 track, ?2 and ?3 the Decider, ?4 topic; each may be NULL for
-        // "any".
-        let answered = "EXISTS (SELECT 1 FROM decision_answer AS answer
-                                WHERE answer.decision_id = decision.id
-                                  AND (?2 IS NULL OR (answer.decider_kind = ?2 AND answer.decider_name = ?3)))";
-        let state = match query.state {
-            DecisionState::Pending => format!("NOT {answered}"),
-            DecisionState::Answered => answered.to_owned(),
-            // The Decider still binds, so the statement always has the
-            // same parameters.
-            DecisionState::All => "(?2 IS NULL OR ?3 IS NULL OR 1)".to_owned(),
-        };
-        let filter = format!(
-            "WHERE (?1 IS NULL OR decision.track_id = ?1)
-               AND (?4 IS NULL OR decision.topic = ?4) AND {state}"
-        );
-        let decider_kind = query.decider.as_ref().map(|decider| decider.kind.as_str());
-        let decider_name = query.decider.as_ref().map(|decider| decider.name.as_str());
-        let bound = params![query.track_id, decider_kind, decider_name, query.topic];
-        let db = self.db();
-        let total: i64 = db.query_row(
-            &format!("SELECT COUNT(*) FROM decision {filter}"),
-            bound,
-            |row| row.get(0),
-        )?;
-        let mut statement = db.prepare(&format!(
-            "SELECT id FROM decision {filter} ORDER BY id LIMIT {} OFFSET {}",
-            i64::try_from(query.limit).unwrap_or(i64::MAX),
-            i64::try_from(query.offset).unwrap_or(i64::MAX),
-        ))?;
-        let ids = statement
-            .query_map(bound, |row| row.get(0))?
-            .collect::<rusqlite::Result<Vec<i64>>>()?;
-        let mut decisions = Vec::with_capacity(ids.len());
-        for id in ids {
-            if let Some(decision) = read_decision(&db, id)? {
-                decisions.push(decision);
-            }
-        }
-        Ok((decisions, usize::try_from(total).unwrap_or(0)))
+        list_decisions(&self.db(), query)
     }
 }
 
@@ -722,4 +683,56 @@ fn read_answer(row: &Row) -> rusqlite::Result<Answer> {
         run: row.get::<_, Option<i64>>(9)?.map(RunId),
         answered_at: row.get(10)?,
     })
+}
+
+impl crate::FactsReader {
+    /// Inspect a Decision without opening the writer.
+    pub fn decision(&self, id: i64) -> Result<Option<Decision>> {
+        read_decision(self.connection(), id)
+    }
+    /// Inspect a page of Decisions without opening the writer.
+    pub fn decisions(&self, query: &DecisionQuery) -> Result<(Vec<Decision>, usize)> {
+        list_decisions(self.connection(), query)
+    }
+}
+fn list_decisions(db: &Connection, query: &DecisionQuery) -> Result<(Vec<Decision>, usize)> {
+    // ?1 track, ?2 and ?3 the Decider, ?4 topic; each may be NULL for
+    // "any".
+    let answered = "EXISTS (SELECT 1 FROM decision_answer AS answer
+                                WHERE answer.decision_id = decision.id
+                                  AND (?2 IS NULL OR (answer.decider_kind = ?2 AND answer.decider_name = ?3)))";
+    let state = match query.state {
+        DecisionState::Pending => format!("NOT {answered}"),
+        DecisionState::Answered => answered.to_owned(),
+        // The Decider still binds, so the statement always has the
+        // same parameters.
+        DecisionState::All => "(?2 IS NULL OR ?3 IS NULL OR 1)".to_owned(),
+    };
+    let filter = format!(
+        "WHERE (?1 IS NULL OR decision.track_id = ?1)
+               AND (?4 IS NULL OR decision.topic = ?4) AND {state}"
+    );
+    let decider_kind = query.decider.as_ref().map(|decider| decider.kind.as_str());
+    let decider_name = query.decider.as_ref().map(|decider| decider.name.as_str());
+    let bound = params![query.track_id, decider_kind, decider_name, query.topic];
+    let total: i64 = db.query_row(
+        &format!("SELECT COUNT(*) FROM decision {filter}"),
+        bound,
+        |row| row.get(0),
+    )?;
+    let mut statement = db.prepare(&format!(
+        "SELECT id FROM decision {filter} ORDER BY id LIMIT {} OFFSET {}",
+        i64::try_from(query.limit).unwrap_or(i64::MAX),
+        i64::try_from(query.offset).unwrap_or(i64::MAX),
+    ))?;
+    let ids = statement
+        .query_map(bound, |row| row.get(0))?
+        .collect::<rusqlite::Result<Vec<i64>>>()?;
+    let mut decisions = Vec::with_capacity(ids.len());
+    for id in ids {
+        if let Some(decision) = read_decision(db, id)? {
+            decisions.push(decision);
+        }
+    }
+    Ok((decisions, usize::try_from(total).unwrap_or(0)))
 }

@@ -221,7 +221,7 @@ pub(crate) fn describe(s: &Sandbox, id: &str) {
 }
 
 /// The track removed and its music added again, with the service stopped;
-/// then a service, and the reading that reattaches its Facts. Answers the
+/// then a service, and a producer that reattaches its Facts. Answers the
 /// new track and the service.
 pub(crate) fn readd(s: &Sandbox, id: &str) -> (String, Serving) {
     stop_service(s);
@@ -232,7 +232,7 @@ pub(crate) fn readd(s: &Sandbox, id: &str) -> (String, Serving) {
     });
     describe(s, &next);
     let service = Serving(s.serve());
-    ok(s, &["facts", "show", &next, "--check-audio"]);
+    ok(s, &["intensity", "measure", &next]);
     (next, service)
 }
 

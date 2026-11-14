@@ -72,9 +72,16 @@ impl Store<'_> {
         &self,
         track: &str,
     ) -> Result<Vec<wreckordbox_sidecar::Fact>, SidecarError> {
+        self.facts(track, "stems")
+    }
+    pub(super) fn facts(
+        &self,
+        track: &str,
+        kind: &str,
+    ) -> Result<Vec<wreckordbox_sidecar::Fact>, SidecarError> {
         match self {
-            Self::Open(s) => s.facts(track, "stems"),
-            Self::Snapshot(s) => s.facts(track, "stems"),
+            Self::Open(s) => s.facts(track, kind),
+            Self::Snapshot(s) => s.facts(track, kind),
             Self::Absent => Ok(Vec::new()),
         }
     }

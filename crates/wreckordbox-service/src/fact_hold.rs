@@ -6,7 +6,7 @@
 //! audio ([`Stems::before_record`](crate::stems::Stems)) and then recorded
 //! after letting go could land its Fact in the middle of an accept. Every
 //! producer that records later than its command's dispatch (a separation's
-//! thread, Intensity's workers and its realignment, a Tag schema
+//! thread, Intensity's workers, a Tag schema
 //! conversion) therefore takes [`Stems::hold_facts`] before its last
 //! observation and keeps it until the Fact is committed.
 //!

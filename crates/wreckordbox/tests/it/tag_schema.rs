@@ -1165,6 +1165,9 @@ fn a_conversion_that_cannot_record_its_facts_writes_nothing() {
     };
     let Deck { sandbox, .. } = converted_deck();
 
+    // Explicit fixture setup: reads no longer create the Sidecar directory.
+    drop(Sidecar::open(&sandbox.sidecar_dir()).unwrap());
+
     // A kind that holds one text cannot hold a category's several tags:
     // refused before anything is written, in a dry run too.
     for extra in [&[][..], &["--dry-run"][..]] {

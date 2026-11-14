@@ -961,14 +961,14 @@ fn the_bars_follow_a_beat_grid_added_or_corrected_after_measuring_without_decodi
         numbers(&bars["starts_seconds"]),
         [1.5, 3.5, 5.5, 7.5, 9.5, 11.5]
     );
-    assert_ne!(shown["intensity"]["fact_id"], outcome["fact_id"]);
+    assert_eq!(shown["intensity"]["fact_id"], outcome["fact_id"]);
     assert_eq!(shown["intensity"]["value"]["curve"], curve);
-    // Measuring now has nothing to do.
+    // The explicit measure records the alignment; show kept the original Fact.
     let settled = measure(&sandbox, &[&track]);
     assert_eq!(settled["decoded"], 0);
-    assert_eq!(settled["run"], Value::Null);
+    assert!(settled["run"].is_number());
     assert_eq!(
-        settled["tracks"][0]["fact_id"],
+        settled["tracks"][0]["reused_from"],
         shown["intensity"]["fact_id"]
     );
 
