@@ -909,7 +909,10 @@ fn show(stems: &Stems, target: Target) -> Result<TrackIntensity, ServiceError> {
         let aligned = valid(&fact);
         let mut measurement = Measurement::from(fact);
         if let Some(audio) = &audio {
-            measurement.stale = !measurement.fingerprint.as_ref().is_some_and(|stored| audio.matches_stored(stored));
+            measurement.stale = !measurement
+                .fingerprint
+                .as_ref()
+                .is_some_and(|stored| audio.matches_stored(stored));
         }
         if audio.is_some() && !measurement.superseded && !measurement.stale {
             // Alignment is an answer, not a new Fact. measure still records
@@ -932,7 +935,6 @@ fn show(stems: &Stems, target: Target) -> Result<TrackIntensity, ServiceError> {
         previous,
     })
 }
-
 
 /// Records an Intensity for a track, once it has passed its check.
 fn record(
@@ -1007,7 +1009,12 @@ fn reusable(
     fingerprint: &Fingerprint,
 ) -> Result<Option<(Fact, Intensity)>, ServiceError> {
     let own = ours(sidecar, track_id)?.into_iter().filter(|fact| {
-        fact.is_live() && !fact.is_stale() && fact.fingerprint.as_ref().is_some_and(|stored| fingerprint.matches_stored(stored))
+        fact.is_live()
+            && !fact.is_stale()
+            && fact
+                .fingerprint
+                .as_ref()
+                .is_some_and(|stored| fingerprint.matches_stored(stored))
     });
     let anywhere = sidecar
         .facts_of_audio(fingerprint, INTENSITY.name)

@@ -2,7 +2,7 @@
 //!
 //! A fingerprint names the audio, not the file: it is a hash of the encoded
 //! audio inside the file (every packet of the file's audio stream, in
-//! order, with the stream's sample rate and channel count), found by
+//! order, with the stream's codec, sample format and decoding parameters), found by
 //! demultiplexing the container without decoding anything. So:
 //!
 //! - moving or renaming the file changes nothing (no path, name or
@@ -67,13 +67,15 @@ impl Fingerprint {
     #[must_use]
     pub fn legacy(&self) -> Self {
         if let Some((current, old)) = self.0.strip_prefix("a2:").and_then(|s| s.split_once(':')) {
-            if [current, old].iter().all(|s| s.len() == 64 && s.bytes().all(|c| c.is_ascii_hexdigit())) {
+            if [current, old]
+                .iter()
+                .all(|s| s.len() == 64 && s.bytes().all(|c| c.is_ascii_hexdigit()))
+            {
                 return Self(format!("a1:{old}"));
             }
         }
         self.clone()
     }
-
 }
 
 impl std::fmt::Display for Fingerprint {
@@ -133,7 +135,11 @@ pub fn fingerprint_cached(path: &Path) -> Result<Fingerprint> {
 
 fn read_fingerprint(path: &Path) -> Result<Fingerprint> {
     if let Some((audio, legacy)) = audio_stream_hash(path)? {
-        return Ok(Fingerprint(format!("a2:{}:{}", audio.to_hex(), legacy.to_hex())));
+        return Ok(Fingerprint(format!(
+            "a2:{}:{}",
+            audio.to_hex(),
+            legacy.to_hex()
+        )));
     }
     let mut file = File::open(path).map_err(io("could not open", path))?;
     let mut hasher = blake3::Hasher::new();

@@ -58,7 +58,10 @@ pub(crate) fn facts(
             let mut fact = Fact::from(stored);
             if let Some(audio) = &audio {
                 if fact.nature == Nature::Measurement {
-                    fact.stale = !fact.fingerprint.as_ref().is_some_and(|stored| audio.matches_stored(stored));
+                    fact.stale = !fact
+                        .fingerprint
+                        .as_ref()
+                        .is_some_and(|stored| audio.matches_stored(stored));
                 }
             }
             if let Some(kind) = kinds.as_ref().ok().and_then(|k| k.get(&fact.kind)) {

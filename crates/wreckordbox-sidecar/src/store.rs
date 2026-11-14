@@ -505,7 +505,10 @@ impl Sidecar {
             "WHERE fact.fingerprint IN (?1, ?3) AND fact.kind = ?2 ORDER BY fact.id DESC",
         ))?;
         let facts = statement
-            .query_map(params![fingerprint.as_str(), kind, fingerprint.legacy().as_str()], read_fact)?
+            .query_map(
+                params![fingerprint.as_str(), kind, fingerprint.legacy().as_str()],
+                read_fact,
+            )?
             .collect::<rusqlite::Result<Vec<Fact>>>()?;
         Ok(facts)
     }
@@ -756,7 +759,10 @@ pub(crate) fn mark_stale_in(
                  AND stale_at IS NOT NULL AND fingerprint IN (?2, ?3)
                  AND kind IN (SELECT name FROM kind WHERE nature = 'measurement') RETURNING id",
         )?;
-        let rows = query.query_map(params![track_id, current.as_str(), current.legacy().as_str()], |row| row.get(0))?;
+        let rows = query.query_map(
+            params![track_id, current.as_str(), current.legacy().as_str()],
+            |row| row.get(0),
+        )?;
         rows.collect::<rusqlite::Result<Vec<i64>>>()?
     };
     restored.sort_unstable();
@@ -768,8 +774,10 @@ pub(crate) fn mark_stale_in(
                    AND kind IN (SELECT name FROM kind WHERE nature = 'measurement')
                  RETURNING id",
             )?;
-        let marked =
-            statement.query_map(params![now(), track_id, current.as_str(), current.legacy().as_str()], |row| row.get(0))?;
+        let marked = statement.query_map(
+            params![now(), track_id, current.as_str(), current.legacy().as_str()],
+            |row| row.get(0),
+        )?;
         marked.collect::<rusqlite::Result<Vec<i64>>>()?
     };
     ids.sort_unstable();

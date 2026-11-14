@@ -296,8 +296,11 @@ pub(crate) fn observe_in(
             .iter()
             .copied()
             .filter(|candidate| {
-                fingerprint.is_some_and(|audio| candidate.fingerprint.as_ref()
-                    .is_some_and(|stored| audio.matches_stored(&Fingerprint::from_stored(stored.clone()))))
+                fingerprint.is_some_and(|audio| {
+                    candidate.fingerprint.as_ref().is_some_and(|stored| {
+                        audio.matches_stored(&Fingerprint::from_stored(stored.clone()))
+                    })
+                })
             })
             .collect();
         if exact.len() == 1 && !occupied {
