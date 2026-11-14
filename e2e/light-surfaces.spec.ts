@@ -135,8 +135,8 @@ test("upstream's Preferences window, opened from the shell, stays wholly dark an
   await expect(dialog).toBeVisible();
   await announce(page, { roles: LATTE, font: null });
   const { seen } = await audit(dialog);
-  // Its text reads; its pane rail's icons are upstream's own (the unlit one
-  // is under 4.5:1 on black under every theme), left to the window's redraw.
+  // Its text reads; its pane rail's icons are measured under every theme in
+  // preferences-rail-icons.spec.ts (wbx-4g6).
   expect([...new Set(shortfalls(seen.filter((s) => s.kind === "text")))]).toEqual([]);
   expect(groundsOf(LATTE).has(await surfaceGround(dialog))).toBe(false);
 });
