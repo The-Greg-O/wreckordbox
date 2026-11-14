@@ -67,8 +67,18 @@ fn stop_service(s: &Sandbox) {
     }
 }
 
+/// A service of this test's, stopped and waited for when dropped.
+struct Serving(Child);
+
+impl Drop for Serving {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 /// A service with the given test-mode environment, up and answering.
-fn serve_with(s: &Sandbox, env: &[(&str, &str)]) -> Child {
+fn serve_with(s: &Sandbox, env: &[(&str, &str)]) -> Serving {
     let mut command = s.command();
     for (name, value) in env {
         command.env(name, value);
@@ -85,10 +95,10 @@ fn serve_with(s: &Sandbox, env: &[(&str, &str)]) -> Child {
         assert!(Instant::now() < deadline, "the service did not come up");
         std::thread::sleep(Duration::from_millis(25));
     }
-    child
+    Serving(child)
 }
 
-fn gated(s: &Sandbox, gate: &Gate) -> Child {
+fn gated(s: &Sandbox, gate: &Gate) -> Serving {
     serve_with(
         s,
         &[("WRECKORDBOX_REVIEW_GATE", gate.path().to_str().unwrap())],
@@ -208,7 +218,7 @@ fn an_accept_bound_to_what_the_dj_saw_refuses_a_fact_since_reattached_to_another
         next = w.import_file(&s.path().join("audio/Track.wav")).unwrap();
     });
     describe(&s, &next);
-    let _service = s.serve();
+    let _service = Serving(s.serve());
     ok(&s, &["facts", "show", &next, "--check-audio"]);
     assert_eq!(waiting(&s)[0]["track"], json!(next), "reattached");
 
@@ -322,8 +332,8 @@ fn a_crash_between_setters_is_reconciled_to_the_djs_values_and_hides_no_other_fa
         ],
     );
     gate.reached("at-between");
-    service.kill().unwrap();
-    service.wait().unwrap();
+    service.0.kill().unwrap();
+    service.0.wait().unwrap();
     let (success, _) = finished(accept);
     assert!(!success, "the accept was cut off");
 
