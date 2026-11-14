@@ -309,7 +309,10 @@ impl Stems {
             mutant_edits: Mutex::new(HashMap::default()),
             run_status: Mutex::new(crate::run_status::RunStatus::new(&sidecar_dir)),
             fact_writes: parking_lot::ReentrantMutex::new(()),
-            library_dir: master_db.parent().map(Path::to_path_buf).unwrap_or_default(),
+            library_dir: master_db
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_default(),
             sidecar_dir,
             state_dir: state_dir.to_path_buf(),
             command,

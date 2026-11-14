@@ -55,8 +55,8 @@ pub mod projection_barriers;
 pub mod review;
 pub mod stems;
 mod store;
-mod write_admission;
 pub mod tag_schema;
+mod write_admission;
 
 use std::path::{Path, PathBuf};
 
