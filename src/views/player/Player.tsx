@@ -106,6 +106,7 @@ import { SimplePlayer } from "./SimplePlayer";
 import { CompactPlayer } from "./CompactPlayer";
 import { DetailPhrases, LARGE_PHRASE_H, LargePlayer, largePlayerStyles } from "./LargePlayer";
 import { IntakeCueRow, useTrackWriteFailures } from "./IntakeCueRow";
+import { StemsControl } from "./StemsControl";
 import { compactJumpBeats, compactJumpSizeId, type CompactJumpBeats } from "@/lib/compactPlayer";
 import { JumpMenu } from "./JumpMenu";
 import { VocalStrip } from "./VocalStrip";
@@ -2449,6 +2450,7 @@ export const Player = memo(function Player({
           }}
           failures={writeFailures}
         />
+        <StemsControl track={track ? { id: track.id, title: track.title } : null} />
       </LargePlayer>
     );
   }

@@ -14,6 +14,7 @@ import { mockStickPending, mockStickProtected, mockStickReplaced, mockStickSpare
 import { TRACK_SEARCH_OPTIONS, type TrackSearchField } from "@/lib/search";
 import theme from "@/styles/theme";
 import { mockServiceActivity } from "./mock-service-activity";
+import { createMockStems } from "./mock-stems";
 import { createMockEntries, type MockEntry } from "./mock-playlist-entries";
 import { mockSaveRule } from "./mock-filter-playlist";
 import { rowMemoryCueColours } from "@/lib/memoryCueColours";
@@ -2562,6 +2563,12 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     setTags: (id, tags) => { const row = all.find((r) => r.id === id); if (row) detailsOf(row).myTags = [...tags]; },
     recordEdit: (label, apply, undo) => { apply(); return recordEdit({ label, undo, redo: apply }); },
   });
+  // Stems split from Intake (wbx-67): `mock-stems.ts`, a fake separation.
+  const stems = createMockStems({
+    titleOf: (id) => all.find((row) => row.id === id)?.title ?? id,
+    hasFile: (id) => { const row = all.find((r) => r.id === id); return row ? (fileMissing.get(id) ?? row.missing) !== true : false; },
+    ready: () => ready,
+  });
   // The Stick view's load (wbx-71): `mock-stick-load.ts`.
   const stickLoad = createMockStickLoad({
     devices: () => devices, tree: () => tree, wait,
@@ -2599,7 +2606,14 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     intakeTagPanel: async (track) => fromServicePanel(await tagPanel.intakeTagPanel(track)),
     intakeSetTags: async (track, dimension, terms, version, dropUnmapped) =>
       fromServiceTagsSet(await tagPanel.intakeSetTags(track, dimension, terms, version, dropUnmapped)),
-    onSidecarChanged: tagPanel.onSidecarChanged,
+    onSidecarChanged: (listener) => {
+      const tags = tagPanel.onSidecarChanged(listener);
+      const stemSets = stems.onSidecarChanged(listener);
+      return () => { tags(); stemSets(); };
+    },
+    stemsStatus: stems.stemsStatus,
+    stemsSeparate: stems.stemsSeparate,
+    onStemsProgress: stems.onStemsProgress,
     onStickLoadProgress: stickLoad.onStickLoadProgress,
     rekordboxBrowseSettings: () => Promise.resolve(null),
     librarySummary: () =>
@@ -3532,7 +3546,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       return () => problemListeners.delete(listener);
     },
     libraryProblem: () => wait<LibraryProblem | null>(problem),
-    ...mockServiceActivity(),
+    ...mockServiceActivity(stems.activeRuns),
     // The switch the backend owns, kept for this page's life: nothing is
     // recorded before the window's first start, so its preference is taken up.
     libraryProtection: () => wait(protection ?? { protectLibrary: true, revision: 0 }),

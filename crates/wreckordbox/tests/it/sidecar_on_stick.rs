@@ -128,3 +128,37 @@ fn a_measurement_is_refused_for_a_sidecar_on_a_stick_even_unlocked() {
     let (sandbox, track) = sidecar_on_an_unlocked_stick();
     refused(&sandbox, &["--json", "intensity", "measure", &track]);
 }
+
+#[test]
+fn a_separation_asked_for_again_is_refused_too() {
+    let (sandbox, track) = sidecar_on_an_unlocked_stick();
+    let before = snapshot(&sandbox.sidecar_dir());
+    let error = sandbox
+        .client()
+        .call::<serde_json::Value>(
+            "stems.separate",
+            serde_json::json!({ "id": track, "again": true }),
+        )
+        .expect_err("refused");
+    assert_eq!(error.code, "sidecar_on_stick", "{error:?}");
+    assert_eq!(snapshot(&sandbox.sidecar_dir()), before);
+    assert_eq!(sandbox.engine_runs(), 0);
+}
+
+#[test]
+fn stems_status_reads_a_sidecar_on_a_protected_stick_and_writes_nothing() {
+    let (sandbox, track) = sidecar_on_an_unlocked_stick();
+    let sidecar = sandbox.sidecar_dir();
+    assert!(sandbox
+        .cli(&["stick", "lock", sidecar.to_str().unwrap()])
+        .status
+        .success());
+    let before = snapshot(&sidecar);
+    let status = sandbox
+        .client()
+        .call::<serde_json::Value>("stems.status", serde_json::json!({ "id": track }))
+        .unwrap();
+    assert_eq!(status["unavailable"], serde_json::Value::Null, "{status}");
+    assert_eq!(status["state"], "none", "{status}");
+    assert_eq!(snapshot(&sidecar), before, "nothing written");
+}

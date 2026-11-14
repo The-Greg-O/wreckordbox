@@ -1126,6 +1126,10 @@ const NOT_STICK_WRITERS: &[&str] = &[
     "intake_queue",
     "intake_set_prep_colour",
     "intake_set_tags",
+    // A separation writes the Sidecar through the service (whose
+    // Sidecar guard refuses one on a protected Stick); a status only reads.
+    "intake_stems_separate",
+    "intake_stems_status",
     "intake_tag_panel",
     "itunes_default_library",
     "itunes_library_at",
@@ -1528,7 +1532,7 @@ const SERVICE_NOT_STICK_WRITERS: &[&str] = &[
     "protection.get", "protection.set",
     "runs.active", "runs.finish", "runs.list", "runs.show", "runs.start",
     "schema.check", "schema.convert",
-    "stems.separate", "stems.show",
+    "stems.separate", "stems.show", "stems.status",
     "sticks.dry_run", "sticks.list",
     "tracks.get", "tracks.list", "tracks.query", "tracks.rate", "tracks.remove_from_collection",
     "tracks.set_prep_colour",
