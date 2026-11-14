@@ -24,7 +24,7 @@ import type { StemsStatus, StemsState } from "@/lib/stemsStatus";
 interface Job {
   id: string;
   fraction: number;
-  timer: ReturnType<typeof setInterval>;
+  timer: ReturnType<typeof setTimeout> | undefined;
   waiters: ((outcome: SplitOutcome) => void)[];
   runId: number;
 }
@@ -57,7 +57,7 @@ export function createMockStems(deps: {
   const tell = (event: StemsProgress) => { for (const listener of progressListeners) listener(event); };
 
   const finish = (current: Job) => {
-    clearInterval(current.timer);
+    clearTimeout(current.timer);
     const outcome: SplitOutcome = failWith !== null
       ? { ok: false, error: { code: "separation_failed", message: failWith } }
       : { ok: true, reused: false };
@@ -92,17 +92,17 @@ export function createMockStems(deps: {
     runs.set(id, (runs.get(id) ?? 0) + 1);
     return new Promise((resolve) => {
       const started = Date.now();
-      const current: Job = {
-        id, fraction: 0, waiters: [resolve], runId: nextRun++,
-        timer: setInterval(() => {
-          const elapsed = Date.now() - started;
-          current.fraction = Math.min(0.9, 0.05 + (elapsed / delay) * 0.85);
-          tell({ trackId: id, stage: elapsed < delay * 0.1 ? "loading_model" : current.fraction >= 0.9 ? "writing" : "separating", fraction: current.fraction });
-          if (elapsed >= delay) {
-            if (held) { clearInterval(current.timer); heldFinish = () => finish(current); } else finish(current);
-          }
-        }, 50),
+      const current: Job = { id, fraction: 0, waiters: [resolve], runId: nextRun++, timer: undefined };
+      // The engine's reports, every 50 ms, until the split is done.
+      const report = () => {
+        const elapsed = Date.now() - started;
+        current.fraction = Math.min(0.9, 0.05 + (elapsed / delay) * 0.85);
+        tell({ trackId: id, stage: elapsed < delay * 0.1 ? "loading_model" : current.fraction >= 0.9 ? "writing" : "separating", fraction: current.fraction });
+        if (elapsed < delay) current.timer = setTimeout(report, 50);
+        else if (held) heldFinish = () => finish(current);
+        else finish(current);
       };
+      current.timer = setTimeout(report, 50);
       job = current;
     });
   };
@@ -115,13 +115,19 @@ export function createMockStems(deps: {
     hooks.__releaseStems = () => { held = false; const done = heldFinish; heldFinish = null; done?.(); };
     hooks.__failStems = (message: string | null) => { failWith = message; };
     hooks.__failStemsReads = (on: boolean) => { failReads = on; };
-    hooks.__stemsBurst = (n: number) => {
-      if (!job) return;
-      for (let i = 0; i < n; i += 1) {
-        job.fraction = Math.min(0.89, job.fraction + 0.001);
+    // Each event in a task of its own, as IPC events arrive; resolves when all are sent.
+    hooks.__stemsBurst = (n: number) => new Promise<void>((resolve) => {
+      let sent = 0;
+      const next = () => {
+        if (!job || sent >= n) { resolve(); return; }
+        sent += 1;
+        // From 10% up, a different percent nearly every event.
+        job.fraction = 0.1 + (sent - 1) * 0.007;
         tell({ trackId: job.id, stage: "separating", fraction: job.fraction });
-      }
-    };
+        setTimeout(next, 1);
+      };
+      next();
+    });
     hooks.__setStems = (id: string, state: StemsState | "none") => {
       if (state === "none") states.delete(id); else states.set(id, { state, madeAt: Date.now() });
       announce(id);

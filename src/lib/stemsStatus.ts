@@ -25,7 +25,7 @@ export function fromServiceStatus(raw: unknown): StemsStatus {
     madeAt: typeof value.made_at === "number" ? value.made_at : null,
     separating: typeof value.separating === "string" ? value.separating : null,
     unavailable: unavailable && typeof unavailable.message === "string"
-      ? { code: String(unavailable.code ?? ""), message: unavailable.message }
+      ? { code: typeof unavailable.code === "string" ? unavailable.code : "", message: unavailable.message }
       : null,
   };
 }
