@@ -709,3 +709,37 @@ fn an_interrupted_assertion_makes_its_tracks_value_the_djs_and_no_other() {
     );
     assert_eq!(track(&s, "10001")["rating"], 3);
 }
+
+/// The verification review's second case: the DJ asserts the value a
+/// projection left (nothing changes, so the write tells the Ledger it wrote
+/// nothing) and the service dies before the assertion is recorded. Its
+/// intent must survive, as a barrier for that track only.
+#[test]
+fn an_assertion_cut_off_after_its_write_said_nothing_changed_still_protects_the_value() {
+    let s = Sandbox::new();
+    policy(&s, "[energy]\napply = 0.5\n");
+    ok(&s, &["status"]);
+    fact(&s, "10001", "energy", "3", "agent:tagger", "0.6");
+    fact(&s, "10002", "energy", "3", "agent:tagger", "0.6");
+    ok(&s, &["project"]);
+    stop_service(&s);
+
+    let mut service = serve_with_faults(&s, "abort_before_assert");
+    let rated = s.cli(&["--json", "tracks", "rate", "10001", "3", "--source", "dj"]);
+    assert!(!rated.status.success(), "the service should have died");
+    service.wait().unwrap();
+
+    fact(&s, "10001", "energy", "4", "agent:other", "0.9");
+    fact(&s, "10002", "energy", "4", "agent:other", "0.9");
+    let applied = ok(&s, &["project"]);
+    assert_eq!(
+        changes(&applied, "changes"),
+        vec![("10002".into(), "energy".into(), json!(3), json!(4))],
+        "{applied}"
+    );
+    assert_eq!(
+        reasons(&applied, "kept"),
+        vec![("10001".into(), "energy".into(), "provenance_incomplete".into())]
+    );
+    assert_eq!(track(&s, "10001")["rating"], 3);
+}

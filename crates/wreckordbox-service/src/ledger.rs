@@ -947,6 +947,10 @@ struct Op {
     dj_snapshot: Option<Value>,
     /// What the write planned for Mutants before it was made (wbx-80).
     mutant_plan: Option<Value>,
+    /// A hand set whose assertion follows its changes (wbx-26): its intent
+    /// stays until the assertion is told, which claims the reserved
+    /// identifier and settles it in the same transaction.
+    asserting: bool,
 }
 
 #[derive(Default)]
@@ -1004,6 +1008,9 @@ pub const FAULTS_ENV: &str = "WRECKORDBOX_LEDGER_FAULTS";
 struct Faults {
     abort_after_write: bool,
     abort_before_file_publish: bool,
+    /// The process dies as a hand set's assertion is about to be recorded:
+    /// after its changes (if any) and after its write was told (wbx-26).
+    abort_before_assert: bool,
     fail_append: AtomicUsize,
     abort_in_replay: bool,
     delay_after_begin: Option<Duration>,
@@ -1023,6 +1030,7 @@ impl Faults {
             let number = value.parse::<u64>().unwrap_or(1);
             match name {
                 "abort_before_file_publish" => faults.abort_before_file_publish = true,
+                "abort_before_assert" => faults.abort_before_assert = true,
                 "abort_after_write" => faults.abort_after_write = true,
                 "fail_append" => {
                     faults.fail_append = AtomicUsize::new(usize::try_from(number).unwrap_or(1));
@@ -1427,7 +1435,7 @@ impl Keeper {
                         part_of: None,
                         reversible: false,
                         format: stored::FORMAT,
-                        payload: None,
+                        payload: recovered_tracks(open.dj_snapshot.as_ref()).as_ref(),
                     },
                     &facts,
                     true,
@@ -1585,7 +1593,7 @@ impl Keeper {
                         part_of: None,
                         reversible: false,
                         format: stored::FORMAT,
-                        payload: None,
+                        payload: recovered_tracks(op.dj_snapshot.as_ref()).as_ref(),
                     },
                     &facts,
                     true,
@@ -1722,8 +1730,10 @@ impl Keeper {
             }
             // The identifier its write reserved, for the first entry of
             // that write; another (there should be none) takes the next.
+            // A hand set's changes leave its intent for the assertion that
+            // follows: only that claims the identifier (wbx-26).
             let id = match state.op.as_mut() {
-                Some(op) if !op.recorded => {
+                Some(op) if !op.recorded && (!op.asserting || draft.asserted) => {
                     op.recorded = true;
                     Some(op.id)
                 }
@@ -1898,6 +1908,7 @@ impl Keeper {
             command,
             dj_snapshot,
             mutant_plan: None,
+            asserting: false,
         });
         drop(state);
         if let Some(delay) = self.faults.delay_after_begin {
@@ -1982,6 +1993,11 @@ impl rbl_library::ledger::Ledger for Keeper {
     fn prepare(&self, db: &rbl_db::Library, targets: &rbl_library::ledger::Preparation) {
         self.plan_mutants(db, targets);
         let mut state = self.state();
+        if targets.asserting {
+            if let Some(op) = state.op.as_mut() {
+                op.asserting = true;
+            }
+        }
         let Some(op) = state
             .op
             .as_mut()
@@ -2011,7 +2027,9 @@ impl rbl_library::ledger::Ledger for Keeper {
         }
         if let Some(op) = self.state().op.as_mut() {
             op.wrote = Some(wrote);
-            if !wrote {
+            // A hand set that changed nothing still has its assertion to
+            // tell: its intent stays until then (wbx-26).
+            if !wrote && !op.asserting {
                 if let Ok(sidecar) = self.stems.sidecar() {
                     if let Err(error) = sidecar.settle_intents(&[op.id]) {
                         tracing::error!(%error, "could not clear a failed Library write's intent");
@@ -2025,9 +2043,24 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn assert(&self, edit: &LibraryEdit, label: &str) -> Option<i64> {
+        if self.faults.abort_before_assert {
+            std::process::abort();
+        }
         // An assertion is the DJ's or nothing: a tool's or an agent's set to
-        // the value a field holds changes nothing and is not recorded.
-        if !by_the_dj() {
+        // the value a field holds changes nothing and is not recorded. With
+        // nothing to record, the hand set's intent kept for this is settled.
+        // (An assertion's edits are all unchanged, so `is_empty` is no test.)
+        let nothing = matches!(edit, LibraryEdit::Track(edits) if edits.is_empty());
+        if !by_the_dj() || nothing {
+            let mut state = self.state();
+            if let Some(op) = state.op.as_mut().filter(|op| op.asserting && !op.recorded) {
+                op.recorded = true;
+                if let Ok(sidecar) = self.stems.sidecar() {
+                    if let Err(error) = sidecar.settle_intents(&[op.id]) {
+                        tracing::error!(%error, "could not settle a hand set's intent");
+                    }
+                }
+            }
             return None;
         }
         self.append(Draft {
@@ -2121,6 +2154,21 @@ impl rbl_library::ledger::Ledger for Keeper {
             asserted: false,
         });
     }
+}
+
+/// What an unconfirmed entry keeps of the tracks its write was about, from
+/// its bounded recovery evidence (`{"tracks": [...]}`), so the write stays
+/// a barrier for exactly those tracks once the evidence is gone (wbx-26).
+/// `None` when there is no evidence.
+fn recovered_tracks(snapshot: Option<&Value>) -> Option<Value> {
+    let mut tracks: Vec<&str> = snapshot?["values"]
+        .as_array()?
+        .iter()
+        .filter_map(|value| value["track"].as_str())
+        .collect();
+    tracks.sort_unstable();
+    tracks.dedup();
+    (!tracks.is_empty()).then(|| serde_json::json!({ "tracks": tracks }))
 }
 
 /// Whether the edit being recorded on this thread is the DJ's: the

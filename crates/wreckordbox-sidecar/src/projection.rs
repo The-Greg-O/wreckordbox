@@ -147,6 +147,24 @@ fn tracks_named(command: Option<&str>) -> Option<Vec<String>> {
     (!tracks.is_empty()).then_some(tracks)
 }
 
+/// The texts listed under `key` in the JSON `text` (or, with `field`, that
+/// field of each object listed); `None` when there are none.
+fn listed(text: Option<&str>, key: &str, field: Option<&str>) -> Option<Vec<String>> {
+    let value: Value = serde_json::from_str(text?).ok()?;
+    let mut found: Vec<String> = value[key]
+        .as_array()?
+        .iter()
+        .filter_map(|item| match field {
+            Some(field) => item[field].as_str(),
+            None => item.as_str(),
+        })
+        .map(str::to_owned)
+        .collect();
+    found.sort_unstable();
+    found.dedup();
+    (!found.is_empty()).then_some(found)
+}
+
 /// Whether `payload` is a `track` payload whose edits can be read.
 fn edits_of(payload: Option<&str>) -> Option<Vec<Value>> {
     let payload: Value = serde_json::from_str(payload?).ok()?;
@@ -170,23 +188,39 @@ fn barriers(db: &Connection) -> Result<Vec<Barrier>> {
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     for (seq, kind, payload, command) in rows {
-        if kind == "unconfirmed" || edits_of(payload.as_deref()).is_none() {
+        if kind == "unconfirmed" {
+            // Its command's tracks, else those its recovery evidence named.
+            let recovered = || listed(payload.as_deref(), "tracks", None);
+            found.push(Barrier {
+                seq,
+                tracks: tracks_named(command.as_deref()).or_else(recovered),
+            });
+        } else if edits_of(payload.as_deref()).is_none() {
             found.push(Barrier {
                 seq,
                 tracks: tracks_named(command.as_deref()),
             });
         }
     }
-    let mut open = db.prepare_cached("SELECT id, command FROM ledger_intent ORDER BY id")?;
+    let mut open = db.prepare_cached(
+        "SELECT id, command, (SELECT snapshot FROM dj_intent WHERE dj_intent.id = ledger_intent.id)
+         FROM ledger_intent ORDER BY id",
+    )?;
     let intents = open
         .query_map([], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?))
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    for (seq, command) in intents {
+    for (seq, command, snapshot) in intents {
+        // Its command's tracks, else those its bounded evidence names.
+        let evidence = || listed(snapshot.as_deref(), "values", Some("track"));
         found.push(Barrier {
             seq,
-            tracks: tracks_named(command.as_deref()),
+            tracks: tracks_named(command.as_deref()).or_else(evidence),
         });
     }
     Ok(found)

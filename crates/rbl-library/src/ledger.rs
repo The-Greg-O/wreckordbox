@@ -75,6 +75,11 @@ pub struct Preparation {
     /// for each entry (a Mutant, wbx-80) saves what it needs to carry it to
     /// the new rows should the write never be confirmed.
     pub replaces_entries: bool,
+    /// The write is a deliberate hand set whose unchanged members are told
+    /// afterwards as an assertion ([`Ledger::assert`], wbx-26): the Ledger
+    /// keeps its intent until that assertion is told, so a crash before it
+    /// leaves the intent as evidence.
+    pub asserting: bool,
 }
 impl Preparation {
     pub fn touched(touched: &crate::Touched) -> Self {
