@@ -75,6 +75,7 @@ use serde_json::{json, Value};
 use crate::library::OpenLibrary;
 use crate::protocol::{codes as service_codes, ServiceError};
 use crate::stems::Stems;
+use wreckordbox_stick_write::selection::LibrarySource as _;
 
 /// Codes this module answers.
 pub mod codes {
@@ -108,22 +109,48 @@ pub struct Taken {
     /// Unix milliseconds.
     pub created_at: u64,
     pub bytes: u64,
-    /// How long it took.
+    /// How long it took, all told.
     pub took_ms: u64,
+    /// How long the Library's edit gate (and the analysis-file lock) was
+    /// held: the staging of both stores and the trees.
+    pub gate_ms: u64,
+    /// How long the backup folder's Stick (if any) was held: the archive.
+    pub publish_ms: u64,
 }
 
 /// What a large-Run check decided, as recorded with the Run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Checked {
-    /// Tracks the Run will change.
+    /// Tracks this command will change.
     pub tracks: usize,
+    /// Tracks the Run will have changed with this command: the ones its
+    /// earlier writes changed and this command's.
+    pub run_tracks: usize,
     /// The threshold in force.
     pub above: usize,
+    /// The backup taken before this command.
     pub backup: Option<Taken>,
+    /// The backup taken before an earlier command of the same Run, the one
+    /// that took the Run over the threshold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_backup: Option<PathBuf>,
+}
+
+/// Where the Library and the Sidecar stood when a backup was staged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Mark {
+    update_count: Option<i64>,
+    generation: u32,
+    ledger: i64,
+}
+
+struct Pending {
+    checked: Checked,
+    mark: Option<Mark>,
 }
 
 thread_local! {
-    static DECIDED: RefCell<Option<Checked>> = const { RefCell::new(None) };
+    static DECIDED: RefCell<Option<Pending>> = const { RefCell::new(None) };
 }
 
 /// The threshold in force: `[backup] above_tracks` of the policy file in
@@ -151,32 +178,161 @@ fn threshold(sidecar_dir: &Path) -> Result<usize, ServiceError> {
         .map_or(DEFAULT_ABOVE, |section| section.above_tracks))
 }
 
-/// Before the write of a Run that will change `tracks`: decides whether it
-/// is large, takes the backup when it is, and records what was decided
-/// with the command. An error stops the Run with nothing changed.
+/// The tracks the earlier writes of the Run this command joined changed,
+/// and the backup one of its commands took first, if any. Nothing for a
+/// Run of the command's own: it has no earlier writes.
+fn run_so_far(stems: &Stems) -> Result<(HashSet<String>, Option<PathBuf>), ServiceError> {
+    let mut tracks = HashSet::new();
+    let mut backup = None;
+    let Some(run) = crate::ledger::joined_run() else {
+        return Ok((tracks, backup));
+    };
+    let entries = stems.with_sidecar_wait(|open| {
+        open.map_or(Ok(Vec::new()), |sidecar| {
+            sidecar
+                .run_entries(run, usize::MAX >> 1, 0)
+                .map(|(entries, _)| entries)
+        })
+    })?;
+    let entries =
+        entries.map_err(|e| ServiceError::new(service_codes::SERVICE_FAILED, e.to_string()))?;
+    for entry in entries {
+        if let Some(path) = entry
+            .command
+            .as_ref()
+            .and_then(|command| command["args"]["large_run"]["backup"]["path"].as_str())
+        {
+            backup = Some(PathBuf::from(path));
+        }
+        let Some(payload) = &entry.payload else {
+            continue;
+        };
+        for list in ["edits", "tags"] {
+            for item in payload[list].as_array().into_iter().flatten() {
+                if let Some(track) = item["track"].as_str() {
+                    tracks.insert(track.to_owned());
+                }
+            }
+        }
+    }
+    Ok((tracks, backup))
+}
+
+/// Before the write of a Run that will change `tracks`: counts the Run with
+/// its earlier writes, takes the backup when this command takes it over
+/// the threshold, and records what was decided with the command. Outside
+/// the edit gate; [`bound`] then checks the backup is still of the moment
+/// before the write. An error stops the Run with nothing changed.
 pub(crate) fn before_write(
     library: &OpenLibrary,
     stems: &Stems,
     tracks: impl IntoIterator<Item = String>,
 ) -> Result<(), ServiceError> {
-    let count = tracks.into_iter().collect::<HashSet<_>>().len();
+    let mine: HashSet<String> = tracks.into_iter().collect();
     let above = threshold(stems.sidecar_dir())?;
-    let backup = if count > above {
-        let taken = take(library, stems)?;
+    let (mut run, run_backup) = run_so_far(stems)?;
+    run.extend(mine.iter().cloned());
+    let (backup, mark) = if run.len() > above && run_backup.is_none() {
+        let (taken, mark) = take(library, stems)?;
         hold("backed-up", library.for_backup().0);
-        Some(taken)
+        (Some(taken), Some(mark))
     } else {
-        None
+        (None, None)
     };
     let checked = Checked {
-        tracks: count,
+        tracks: mine.len(),
+        run_tracks: run.len(),
         above,
         backup,
+        run_backup,
     };
     let value = serde_json::to_value(&checked).unwrap_or(Value::Null);
     crate::ledger::note("large_run", value);
-    DECIDED.with(|decided| *decided.borrow_mut() = Some(checked));
+    DECIDED.with(|decided| *decided.borrow_mut() = Some(Pending { checked, mark }));
     Ok(())
+}
+
+/// How many times a backup is taken again before the Run is refused.
+const RETAKES: usize = 3;
+
+/// The edit gate, held, for the write of a Run [`before_write`] decided:
+/// when it took a backup, the Library and the Sidecar are checked to be
+/// where they stood when it was staged. If anything changed in between,
+/// the backup is no longer of the moment before the Run: it is taken again
+/// (and the earlier one removed), up to [`RETAKES`] times, then the Run is
+/// refused with nothing changed.
+pub(crate) fn bound<'a>(
+    library: &'a OpenLibrary,
+    stems: &Stems,
+    tracks: &[String],
+) -> Result<parking_lot::ReentrantMutexGuard<'a, ()>, ServiceError> {
+    for _ in 0..=RETAKES {
+        let guard = library.edit_gate().lock();
+        let mark = DECIDED.with(|decided| decided.borrow().as_ref().and_then(|p| p.mark.clone()));
+        let Some(mark) = mark else {
+            return Ok(guard);
+        };
+        if mark_now(library, stems)? == mark {
+            return Ok(guard);
+        }
+        drop(guard);
+        let stale = DECIDED.with(|decided| {
+            decided
+                .borrow_mut()
+                .take()
+                .and_then(|p| p.checked.backup.map(|taken| taken.path))
+        });
+        if let Some(stale) = stale {
+            discard(library, &stale);
+        }
+        before_write(library, stems, tracks.iter().cloned())?;
+    }
+    Err(ServiceError::new(
+        codes::BACKUP_FAILED,
+        "the Library kept changing while this Run's backup was taken, so the backup could not be of the moment before it; nothing was changed: try again",
+    ))
+}
+
+/// Where the Library and the Sidecar stand now. Under the edit gate.
+fn mark_now(library: &OpenLibrary, stems: &Stems) -> Result<Mark, ServiceError> {
+    let update_count = library.with_db(|db| {
+        Ok(db
+            .connection()
+            .query_row(
+                "SELECT int_1 FROM agentRegistry WHERE registry_id = 'localUpdateCount'",
+                [],
+                |r| r.get::<_, Option<i64>>(0),
+            )
+            .ok()
+            .flatten())
+    })?;
+    let ledger = stems
+        .with_sidecar_wait(|open| {
+            open.map_or(Ok(0), wreckordbox_sidecar::Sidecar::ledger_position)
+        })?
+        .map_err(|e| ServiceError::new(service_codes::SERVICE_FAILED, e.to_string()))?;
+    Ok(Mark {
+        update_count,
+        generation: library.generation(),
+        ledger,
+    })
+}
+
+/// Removes a backup taken for this Run that is no longer of the moment
+/// before it, when its folder may still be written; else it is kept.
+fn discard(library: &OpenLibrary, path: &Path) {
+    let state_dir = library.for_backup().0;
+    let Some(folder) = path.parent() else { return };
+    if let Ok(authorized) = wreckordbox_stick_protection::authorize(state_dir, folder) {
+        let check = || {
+            authorized.recheck().map_err(|refused| {
+                std::io::Error::new(std::io::ErrorKind::PermissionDenied, refused.to_string())
+            })
+        };
+        if let Err(error) = rbl_backup::create::discard(path, &check) {
+            tracing::warn!(%error, path = %path.display(), "a backup taken again was left");
+        }
+    }
 }
 
 /// A command's answer with what [`before_write`] decided in it (`large_run`
@@ -184,17 +340,17 @@ pub(crate) fn before_write(
 /// every answer of a command that may call [`before_write`].
 pub(crate) fn answered(result: Result<Value, ServiceError>) -> Result<Value, ServiceError> {
     let decided = DECIDED.with(|decided| decided.borrow_mut().take());
-    let Some(decided) = decided else {
+    let Some(Pending { checked, .. }) = decided else {
         return result;
     };
     match result {
         Ok(Value::Object(mut answer)) => {
-            answer.insert("large_run".into(), json!(decided));
+            answer.insert("large_run".into(), json!(checked));
             Ok(Value::Object(answer))
         }
         Ok(other) => Ok(other),
         Err(mut error) => {
-            if let Some(taken) = &decided.backup {
+            if let Some(taken) = &checked.backup {
                 error.message = format!(
                     "{} (A backup was taken before this Run and is kept: {}.)",
                     error.message,
@@ -206,7 +362,24 @@ pub(crate) fn answered(result: Result<Value, ServiceError>) -> Result<Value, Ser
     }
 }
 
-fn take(library: &OpenLibrary, stems: &Stems) -> Result<Taken, ServiceError> {
+fn failed(destination: &Path, error: impl std::fmt::Display) -> ServiceError {
+    ServiceError::new(
+        codes::BACKUP_FAILED,
+        format!(
+            "this Run would change more tracks than the backup threshold, and its backup to {} failed: {error}; nothing was changed",
+            destination.display()
+        ),
+    )
+}
+
+/// Takes the backup: both stores and the trees staged under the edit gate
+/// and the analysis-file lock, then (with neither held) the archive
+/// published from the staged copies under the folder's Stick
+/// authorization. Lock order, as every backup writer's: the edit gate,
+/// then a Stick, then the analysis-file lock; here the Stick is never held
+/// with the other two.
+fn take(library: &OpenLibrary, stems: &Stems) -> Result<(Taken, Mark), ServiceError> {
+    let started = Instant::now();
     let (state_dir, location, analysis_files) = library.for_backup();
     let state_dir = state_dir.to_path_buf();
     if crate::protection::is_on(&state_dir) {
@@ -219,36 +392,60 @@ fn take(library: &OpenLibrary, stems: &Stems) -> Result<Taken, ServiceError> {
         )
     })?;
     let destination = rbl_backup::default_destination(&state_dir);
-    let started = Instant::now();
-    // A backup folder on a Stick is a Stick write: refused unless the DJ
-    // unlocked that very mount, and checked again before every write.
-    let authorized =
-        wreckordbox_stick_protection::authorize(&state_dir, &destination).map_err(|why| {
-            let kind = match &why {
-                wreckordbox_stick_protection::Refused::Protected { .. } => {
-                    service_codes::STICK_PROTECTED
-                }
-                _ => codes::BACKUP_FAILED,
-            };
-            ServiceError::new(
-                kind,
-                format!(
-                    "this Run would change more tracks than the backup threshold, and its backup could not be made: {why}; nothing was changed"
-                ),
-            )
-        })?;
+    let sidecar_dir = stems.sidecar_dir();
+    let sidecar_dir = sidecar_dir.is_dir().then_some(sidecar_dir);
+    rbl_backup::create::refuse_overlap(&location, Some(stems.sidecar_dir()), &destination)
+        .map_err(|e| failed(&destination, e))?;
+    // A protected Stick is refused before anything is staged; the
+    // authorization itself is taken for the archive, after the gate.
+    if let Some(stick) = wreckordbox_stick_protection::stick_root(&destination) {
+        if wreckordbox_stick_protection::status(&state_dir, &stick).protected {
+            return Err(stick_refused(&wreckordbox_stick_protection::refusal(
+                &stick,
+            )));
+        }
+    }
+    let gated = Instant::now();
+    let (staged, mark) = {
+        let _gate = library.edit_gate().lock();
+        let _files = analysis_files.lock();
+        // Before the Sidecar is read: a Fact recorded meanwhile moves it.
+        let ledger = stems
+            .with_sidecar_wait(|open| {
+                open.map_or(Ok(0), wreckordbox_sidecar::Sidecar::ledger_position)
+            })?
+            .map_err(|e| failed(&destination, e))?;
+        let staged = rbl_backup::create::stage(&rbl_backup::create::Stage {
+            location: &location,
+            sidecar_dir,
+            sidecar: rbl_backup::sidecar_part::Options::saved(&state_dir),
+            scratch: &state_dir,
+            at: &|point| hold(point, &state_dir),
+        })
+        .map_err(|e| failed(&destination, e))?;
+        let mark = Mark {
+            update_count: staged.update_count,
+            generation: library.generation(),
+            ledger,
+        };
+        (staged, mark)
+    };
+    let gate_ms = millis(gated);
+    let published = Instant::now();
+    let authorized = wreckordbox_stick_protection::authorize(&state_dir, &destination)
+        .map_err(|why| stick_refused(&why.to_string()))?;
     hold("stick-held", &state_dir);
     let fault = rbl_db::test_mode()
         .then(|| std::env::var(FAULT_ENV).ok())
         .flatten();
     let writes = std::cell::Cell::new(0_u64);
-    let failed = std::cell::Cell::new(false);
+    let failed_once = std::cell::Cell::new(false);
     let check = || -> std::io::Result<()> {
         authorized.recheck().map_err(|refused| {
             std::io::Error::new(std::io::ErrorKind::PermissionDenied, refused.to_string())
         })?;
         writes.set(writes.get() + 1);
-        if fault.as_deref() == Some("disk_full") && writes.get() > 3 && !failed.replace(true) {
+        if fault.as_deref() == Some("disk_full") && writes.get() > 3 && !failed_once.replace(true) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::StorageFull,
                 "No space left on device (test fault)",
@@ -256,37 +453,41 @@ fn take(library: &OpenLibrary, stems: &Stems) -> Result<Taken, ServiceError> {
         }
         Ok(())
     };
-    let sidecar_dir = stems.sidecar_dir();
-    let request = rbl_backup::create::Request {
-        location: &location,
-        sidecar_dir: sidecar_dir.is_dir().then_some(sidecar_dir),
-        sidecar: rbl_backup::sidecar_part::Options::saved(&state_dir),
-        destination: &destination,
-        scratch: &state_dir,
-        check: &check,
-        app_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
-        at: &|point| hold(point, &state_dir),
-    };
-    let made = {
-        let _files = analysis_files.lock();
-        rbl_backup::create::write(&request)
-    }
-    .map_err(|error| {
-        ServiceError::new(
-            codes::BACKUP_FAILED,
-            format!(
-                "this Run would change more tracks than the backup threshold, and its backup to {} failed: {error}; nothing was changed",
-                destination.display()
-            ),
-        )
-    })?;
+    let made = rbl_backup::create::publish(
+        &staged,
+        &rbl_backup::create::Publish {
+            destination: &destination,
+            check: &check,
+            app_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
+        },
+    )
+    .map_err(|e| failed(&destination, e))?;
     drop(authorized);
-    Ok(Taken {
-        path: made.path,
-        created_at: made.created_at,
-        bytes: made.bytes,
-        took_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-    })
+    let publish_ms = millis(published);
+    Ok((
+        Taken {
+            path: made.path,
+            created_at: made.created_at,
+            bytes: made.bytes,
+            took_ms: millis(started),
+            gate_ms,
+            publish_ms,
+        },
+        mark,
+    ))
+}
+
+fn stick_refused(why: &str) -> ServiceError {
+    ServiceError::new(
+        service_codes::STICK_PROTECTED,
+        format!(
+            "this Run would change more tracks than the backup threshold, and its backup could not be made: {why}; nothing was changed"
+        ),
+    )
+}
+
+fn millis(since: Instant) -> u64 {
+    u64::try_from(since.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 /// A folder in the state folder in which a test puts an empty file named

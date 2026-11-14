@@ -40,6 +40,12 @@ pub(crate) struct OpenLibrary {
 }
 
 impl OpenLibrary {
+    /// The generation the Library's index is at: every edit through the
+    /// edit path moves it (wbx-25: a backup is of one moment).
+    pub(crate) fn generation(&self) -> u32 {
+        self.core.generation()
+    }
+
     /// What the backup before a large Run reads (wbx-25): the shared state
     /// folder, the Library's location, and the analysis-file lock it holds
     /// while it copies the trees. The core itself is not handed out.

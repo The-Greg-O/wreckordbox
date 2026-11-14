@@ -209,7 +209,7 @@ fn a_run_at_the_threshold_takes_no_backup_and_records_the_threshold_in_force() {
     let applied = ok(&s, &["project"]);
     assert_eq!(
         applied["large_run"],
-        json!({"tracks": 3, "above": 3, "backup": null}),
+        json!({"tracks": 3, "run_tracks": 3, "above": 3, "backup": null}),
         "{applied}"
     );
     assert_eq!(recorded(&s, &applied), applied["large_run"]);
@@ -223,7 +223,7 @@ fn with_no_threshold_in_the_policy_the_default_is_in_force() {
     let applied = ok(&s, &["project"]);
     assert_eq!(
         applied["large_run"],
-        json!({"tracks": 3, "above": wreckordbox_service::large_run::DEFAULT_ABOVE, "backup": null})
+        json!({"tracks": 3, "run_tracks": 3, "above": wreckordbox_service::large_run::DEFAULT_ABOVE, "backup": null})
     );
 }
 

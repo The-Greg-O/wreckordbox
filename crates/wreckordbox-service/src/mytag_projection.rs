@@ -488,9 +488,12 @@ fn plan_or_apply(
     if planned.is_empty() {
         return Ok((report, None));
     }
-    crate::large_run::before_write(library, stems, planned.iter().map(|p| p.track.clone()))
-        .map_err(early)?;
+    let tracks: Vec<String> = planned.iter().map(|p| p.track.clone()).collect();
+    crate::large_run::before_write(library, stems, tracks.iter().cloned()).map_err(early)?;
     crate::projection::pause();
+    // The backup, if one was taken, is still of the moment before the
+    // write; the gate is held from here through the write (reentrant).
+    let _gate = crate::large_run::bound(library, stems, &tracks).map_err(early)?;
     let (changed, warnings) = write(library, stems, &planned, watermark)?;
     let mut report = report;
     report.warnings = warnings;

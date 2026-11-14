@@ -707,6 +707,16 @@ pub(crate) fn name_tracks(tracks: &[String]) {
     });
 }
 
+/// The Run the command answered on this thread joined (named on its
+/// request), or `None` for a command that is a Run of its own, the
+/// window's, or none (wbx-25: a large Run is counted whole).
+pub(crate) fn joined_run() -> Option<RunId> {
+    CURRENT.with(|current| match current.borrow().as_ref().map(|scope| &scope.target) {
+        Some(Target::Joined { run, .. }) => Some(*run),
+        _ => None,
+    })
+}
+
 /// Puts `value` in the command being answered on this thread
 /// (`args.<key>`), before its write begins, so its intent and entries name
 /// it (wbx-25: the backup a large Run took first). Nothing when no command

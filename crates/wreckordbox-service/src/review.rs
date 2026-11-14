@@ -41,7 +41,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use wreckordbox_sidecar::review::{Decision, NotRecorded, Offered, Rejected};
 use wreckordbox_sidecar::{FactsSnapshot, Source, SourceKind};
-use wreckordbox_stick_write::selection::LibrarySource as _;
 
 use crate::facts::SourceArg;
 use crate::library::OpenLibrary;
@@ -698,14 +697,14 @@ fn accept(
     // must still digest to the token the DJ was shown (or each row to its
     // own) under the gate, or nothing is written.
     let (outside, _) = listed(library, stems, asked).map_err(early)?;
+    let outside: Vec<String> = outside.into_iter().map(|h| h.track).collect();
     if !outside.is_empty() {
-        crate::large_run::before_write(library, stems, outside.into_iter().map(|h| h.track))
-            .map_err(early)?;
+        crate::large_run::before_write(library, stems, outside.iter().cloned()).map_err(early)?;
     }
     // The list is read and written under one hold of the edit gate, so no
-    // edit made through the edit path comes between them.
-    let gate_lock = library.edit_gate();
-    let _gate = gate_lock.lock();
+    // edit made through the edit path comes between them; the backup, if
+    // one was taken, is checked still of the moment before (wbx-25).
+    let _gate = crate::large_run::bound(library, stems, &outside).map_err(early)?;
     let (chosen, watermark) = listed(library, stems, asked).map_err(early)?;
     if chosen.is_empty() {
         return Ok((
