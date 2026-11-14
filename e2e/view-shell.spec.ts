@@ -54,7 +54,7 @@ test("with the switch on the window shows the frame: view tabs, tree, player, wo
   expect(await working(page).locator('[role="gridcell"][data-col="title"]').count()).toBeGreaterThan(5);
 });
 
-test("clicking a tab switches the working area: Intake shows its queue, Stick the mounted Stick, Review is a labelled empty state", async ({ page }) => {
+test("clicking a tab switches the working area: Intake shows its queue, Stick the mounted Stick, Review the Facts waiting", async ({ page }) => {
   await enableViewShell(page);
   await open(page);
 
@@ -62,12 +62,12 @@ test("clicking a tab switches the working area: Intake shows its queue, Stick th
     await tab(page, name).click();
     await expect(tab(page, name)).toHaveAttribute("aria-selected", "true");
     await expect(tab(page, "Library")).toHaveAttribute("aria-selected", "false");
-    // Intake is built (wbx-62): its queue; Stick (wbx-71): the mounted Stick; Review is not yet.
+    // Intake (wbx-62): its queue; Stick (wbx-71): the mounted Stick; Review (wbx-74): the Facts waiting.
     if (name === "Intake") await expect(working(page).getByRole("listbox", { name: "Intake queue" })).toBeVisible();
     else if (name === "Stick") await expect(working(page).getByTestId("stick-name")).toBeVisible();
     else {
       await expect(working(page).getByRole("heading", { name })).toBeVisible();
-      await expect(working(page)).toContainText("Nothing is here yet");
+      await expect(working(page).getByTestId("review-view")).toContainText("Waiting for you");
     }
     // Only the working area changed: no track list in it now.
     await expect(working(page).getByRole("grid")).toHaveCount(0);

@@ -1196,6 +1196,14 @@ const NOT_STICK_WRITERS: &[&str] = &[
     "reset_play_count",
     "reset_played_tracks",
     "reveal_track",
+    // The Review view (wbx-74): service reads, and the DJ's decisions,
+    // which edit the Library (accept, through the edit path) or the
+    // Sidecar; never a Stick.
+    "review_accept",
+    "review_reject",
+    "review_rejected",
+    "review_reopen",
+    "review_waiting",
     "run_edit_command",
     "run_menu_item",
     "script_preferences",

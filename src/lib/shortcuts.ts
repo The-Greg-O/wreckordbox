@@ -172,6 +172,9 @@ export type Action =
   | "intakeEnergy4"
   | "intakeEnergy5"
   | "intakeTag"
+  // The Review view's Listen (wbx-74): play deck A unless it already
+  // plays. No key and no palette entry: the view runs it after a load.
+  | "deckPlayIfStopped"
   // The large player's Stems control (wbx-67): a palette entry, no key.
   | "intakeSplitStems"
   // The GRID panel: `Adjust BPM/BeatGrid` (`command + G`) opens it, the

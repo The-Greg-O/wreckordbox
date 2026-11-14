@@ -34,6 +34,7 @@ mod projection_barriers;
 mod projection_failures;
 mod review;
 mod review_races;
+mod review_view_reads;
 mod run_status;
 mod sidecar_on_stick;
 mod standing_facts;
