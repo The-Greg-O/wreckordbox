@@ -11,6 +11,7 @@ mod playlist_entries;
 mod scrub_meters;
 mod service_host;
 mod stick_protection;
+mod stick_view;
 mod track_filter_agrees;
 mod track_filter_stick;
 mod transport_edge;

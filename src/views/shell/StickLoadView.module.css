@@ -1,0 +1,161 @@
+/* The Stick view (wbx-71): docs/design/screens/stick. Chrome colours are the
+   theme's roles; the summary's figures use the fixed meaning colours the
+   Library's Energy uses (added green, Native stems cyan, updated orange,
+   playlists blue, removed red), as the design draws them. */
+
+.view {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 300px);
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: auto;
+  font-family: var(--f-shell);
+  font-size: var(--f-size-shell);
+  font-variant-numeric: tabular-nums;
+  color: var(--role-text);
+  background: var(--role-working);
+}
+
+.main {
+  min-width: 0;
+  padding: var(--s-shell-space-5) var(--s-shell-space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-shell-space-4);
+}
+
+.side {
+  min-width: 0;
+  padding: var(--s-shell-space-5);
+  border-left: var(--s-shell-border) solid var(--role-ground);
+  background: var(--role-panel);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-shell-space-4);
+}
+
+/* Every button of the view: outlined, as the design draws "Show every change". */
+.view button {
+  font: inherit;
+  color: var(--role-text);
+  background: none;
+  padding: var(--s-shell-space-2) var(--s-shell-space-4);
+  border: var(--s-shell-border) solid var(--role-hairline);
+  border-radius: var(--s-shell-radius);
+  cursor: pointer;
+}
+.view button:hover:not(:disabled) { border-color: var(--role-accent); }
+.view button:focus-visible { outline: var(--s-shell-border) solid var(--role-accent); outline-offset: 1px; }
+.view button:disabled, .view .load:disabled { color: var(--role-text-dim); border-color: var(--role-hairline); cursor: default; }
+
+.sticks { display: flex; flex-wrap: wrap; gap: var(--s-shell-space-2); }
+.sticks button[aria-pressed="true"] { border-color: var(--role-accent); color: var(--role-text-bright); }
+
+.heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s-shell-space-4); }
+.title {
+  margin: 0;
+  font-size: var(--f-size-shell-title);
+  font-weight: 700;
+  color: var(--role-text-bright);
+  overflow-wrap: anywhere;
+}
+.badge {
+  padding: 1px var(--s-shell-space-3);
+  border: var(--s-shell-border) solid currentColor;
+  border-radius: var(--s-shell-radius);
+  white-space: nowrap;
+}
+.badge[data-kind="gig"] { color: var(--c-energy-5); }
+.badge[data-kind="spare"] { color: var(--c-energy-3); }
+.badge[data-protection="protected"] { color: var(--role-text-dim); }
+.badge[data-protection="unlocked"] { color: var(--c-energy-4); }
+
+.meta, .note { margin: 0; color: var(--role-text-dim); overflow-wrap: anywhere; }
+.problem { margin: 0; color: var(--c-error); overflow-wrap: anywhere; }
+
+.unlock { max-width: 640px; }
+
+.label {
+  margin: 0 0 var(--s-shell-space-2);
+  font-size: var(--f-size-shell-label);
+  font-weight: 400;
+  letter-spacing: var(--f-tracking-shell-label);
+  text-transform: uppercase;
+  color: var(--role-text-dim);
+}
+
+.space p { margin: 0 0 var(--s-shell-space-2); }
+.bar {
+  position: relative;
+  display: flex;
+  height: 12px;
+  background: var(--role-control);
+  overflow: hidden;
+}
+.used { background: var(--role-text-dim); }
+.adds { background: var(--role-tab-to); }
+.adds[data-short] { background: var(--c-error); }
+
+.lines { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s-shell-space-3); }
+.lines li { display: grid; grid-template-columns: 5ch minmax(0, 1fr); gap: var(--s-shell-space-4); align-items: baseline; }
+.lines li span:last-child { overflow-wrap: anywhere; }
+.count { font-size: var(--f-size-shell-title); text-align: right; }
+.lines li[data-change="added"] .count { color: var(--c-energy-3); }
+.lines li[data-change="stems"] .count { color: var(--c-energy-2); }
+.lines li[data-change="changed"] .count,
+.lines li[data-change="audio"] .count { color: var(--c-energy-4); }
+.lines li[data-change="playlists"] .count,
+.lines li[data-change="playlistsRemoved"] .count { color: var(--c-energy-1); }
+.lines li[data-change="removed"] .count,
+.lines li[data-change="missing"] .count { color: var(--c-energy-5); }
+
+.buttons { display: flex; flex-wrap: wrap; gap: var(--s-shell-space-3); margin-top: var(--s-shell-space-4); }
+
+.choose {
+  margin: var(--s-shell-space-4) 0 0;
+  padding: var(--s-shell-space-3) var(--s-shell-space-4);
+  border: var(--s-shell-border) solid var(--role-hairline);
+  display: grid;
+  gap: var(--s-shell-space-2);
+  max-height: 320px;
+  overflow-y: auto;
+}
+.choose legend { color: var(--role-text-dim); padding: 0 var(--s-shell-space-2); }
+.choose label { display: flex; gap: var(--s-shell-space-3); align-items: baseline; overflow-wrap: anywhere; }
+
+.changes {
+  margin-top: var(--s-shell-space-4);
+  padding: var(--s-shell-space-3) var(--s-shell-space-4);
+  border: var(--s-shell-border) solid var(--role-hairline);
+  display: grid;
+  gap: var(--s-shell-space-4);
+}
+.changes h4, .outcome h4 { margin: 0 0 var(--s-shell-space-2); font-weight: 400; color: var(--role-text-dim); }
+.changes ul, .outcome ul { margin: 0; padding-left: var(--s-shell-space-5); overflow-wrap: anywhere; }
+
+.view .load {
+  min-height: 56px;
+  border-color: var(--role-accent);
+  font-size: var(--f-size-shell-title);
+  font-weight: 700;
+}
+
+.outcome { display: grid; gap: var(--s-shell-space-3); }
+.outcome p { margin: 0; }
+
+.panel { display: grid; gap: var(--s-shell-space-3); justify-items: start; }
+.panel > div { justify-self: stretch; min-width: 0; }
+
+.kept { display: grid; gap: var(--s-shell-space-4); padding: var(--s-shell-space-4); border: var(--s-shell-border) solid var(--c-error); }
+.keptReport { display: grid; gap: var(--s-shell-space-3); justify-items: start; }
+.keptReport h4 { margin: 0; color: var(--role-text-bright); }
+
+.empty { padding: var(--s-shell-space-6); grid-column: 1 / -1; }
+
+/* Half width and narrower: the load panel goes under the summary. */
+@container shell (max-width: 800px) {
+  .view { grid-template-columns: minmax(0, 1fr); }
+  .side { border-left: 0; border-top: var(--s-shell-border) solid var(--role-ground); }
+  .main { padding: var(--s-shell-space-4); }
+}

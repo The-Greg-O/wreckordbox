@@ -124,7 +124,9 @@ test("a mounted Stick appears with its playlists; selecting it opens the Stick v
   await stick.getByRole("treeitem", { name: "TEST", exact: true }).click();
   await expect(tab(page, "Stick")).toHaveAttribute("aria-selected", "true");
   await expect(working(page).getByRole("heading", { name: "Stick" })).toHaveCount(0);
-  // Until the Stick view is built, it holds the Stick's existing panel.
+  // The Stick view (wbx-71) shows the Stick chosen; its own panel is one press away.
+  await expect(working(page).getByTestId("stick-name")).toHaveText("TEST");
+  await working(page).getByRole("button", { name: "TEST's settings and tools" }).click();
   await expect(working(page)).toContainText("77 tracks in 3 playlists");
   await expect(stick.getByRole("treeitem", { name: "TEST", exact: true })).toHaveAttribute("aria-selected", "true");
 

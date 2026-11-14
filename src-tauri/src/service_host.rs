@@ -186,10 +186,25 @@ impl AppState {
     /// Stops the service this window hosts, as the window closes. Never
     /// call it with the edit gate held.
     pub fn stop_service(&self) {
-        if let Some(hosted) = self.service.lock().take() {
-            hosted.closing.store(true, Ordering::Release);
-            drop(hosted);
-        }
+        // Taken out first and the hosting lock let go, so stopping (which
+        // waits for a running Stick load to stop where it safely can and
+        // send its report) never holds up anything else that asks for it.
+        // A drain (wbx-71): completes only once every Stick load command has
+        // kept its report; a second stop while one runs waits for it.
+        self.shutdown.drain(|| {
+            let hosted = self.service.lock().take();
+            if let Some(hosted) = hosted {
+                hosted.closing.store(true, Ordering::Release);
+                drop(hosted);
+            }
+        });
+    }
+
+    /// A handle to the service this window hosts, to call without holding
+    /// the hosting lock (a Stick load runs for minutes; closing the window
+    /// must reach it). `None` when the window hosts no service.
+    pub fn service_caller(&self) -> Option<wreckordbox_service::Caller> {
+        self.service.lock().as_ref().map(|hosted| hosted.service.caller())
     }
 
     /// Runs `use_it` on the service this window hosts, when it hosts one.
