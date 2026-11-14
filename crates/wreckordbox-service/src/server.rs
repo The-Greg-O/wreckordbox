@@ -172,7 +172,13 @@ impl Service {
             return Err(missing());
         }
         let socket = config.socket_path(&library);
-        let library_lock = take_lock(&library.master_db, &socket)?;
+        // One that starts by itself waits for a service still exiting to let
+        // go (wbx-1.2); a hosting front end has its own handover loop.
+        let library_lock = if hosted {
+            take_lock(&library.master_db, &socket)?
+        } else {
+            crate::release_wait::take_lock(&library.master_db, &socket)?
+        };
         // A restore that stopped midway is finished or rolled back now,
         // while this process owns the Library and before the Library or the
         // Sidecar is opened, so neither is ever read half restored.
@@ -772,6 +778,7 @@ impl Shared {
         // end keeps, is no longer this service's to record: its edit gate
         // is taken first, so an edit the window is making is over, and
         // recorded, before the Ledger is taken off it.
+        crate::release_wait::hold_before_release();
         if let Some(owned) = lock(&self.library).take() {
             owned.library.let_go_of_ledger(|| self.ledger.close());
         } else {

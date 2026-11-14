@@ -96,8 +96,13 @@ impl Client {
         }
         match start(config, launcher) {
             Ok(()) => {}
-            // Another client started one in the same moment; use that.
-            Err(error) if error.code == codes::SERVICE_ALREADY_RUNNING => {}
+            // Another service has the Library. The one started waited for
+            // it to answer or let go (`release_wait`), so it answers now:
+            // one another client started in the same moment, or a live one
+            // elsewhere. If not, the started one's reason is the answer.
+            Err(error) if error.code == codes::SERVICE_ALREADY_RUNNING => {
+                return Self::connect(&socket).map_err(|_| error);
+            }
             Err(error) => return Err(error),
         }
         let deadline = Instant::now() + START_TIMEOUT;

@@ -38,6 +38,7 @@ mod review;
 mod review_races;
 mod review_view_reads;
 mod run_status;
+mod service_exit;
 mod sidecar_on_stick;
 mod standing_facts;
 mod status;
