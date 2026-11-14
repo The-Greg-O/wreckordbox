@@ -55,15 +55,34 @@ the Tag schema change only the Sidecar, not your tracks, and take no backup.
   the Run itself, not by an earlier dry run: if anything changed since, the
   Run is refused with nothing written, so the Run that writes is the one
   counted.
+- **A Run of several commands** (an agent's Run named with `--run`) is
+  counted whole: the tracks its earlier commands changed and the tracks this
+  command will change. Its total is not known in advance, so the backup is
+  taken before the command that takes the Run over the threshold, not
+  before the Run's first write; the Run's earlier writes are not in it as
+  "before" values. One backup per Run: later commands of the same Run name
+  it (`run_backup`) and take no other.
+- **One moment:** the Library, the Sidecar and the analysis and artwork
+  files are copied to local storage together while no edit can be made
+  (edits wait a moment, see below), then the backup is written from that
+  copy. If anything changes after the copy and before the Run's first
+  change (an edit in the window, a Fact recorded), the backup is no longer of
+  the moment before the Run: it is taken again and the first one removed.
+  After three tries the Run is refused with nothing changed
+  (`run_backup_failed`).
 - **Where it goes:** the backup folder Preferences › Backups saves to (by
-  default the app's backup folder), named `rbexport-<date>-<time>-run-<id>.zip`.
+  default the app's backup folder; a folder inside the Library's analysis
+  or artwork folders or the Sidecar is refused), named `rbexport-<date>-<time>-run-<id>.zip`.
   It is an ordinary backup: `wreckordbox backup list` and Preferences show
-  it, and `wreckordbox backup restore` restores it. It does not carry the
-  restore scripts the window's own backups add.
+  it, and `wreckordbox backup restore` restores it, the Library and the
+  Sidecar together. Do not use the separate Restore app for it: it leaves
+  the Sidecar out. It does not carry the restore scripts the window's own
+  backups add.
 - **The Run names it:** every Ledger entry of the Run's write carries
-  `large_run` in its command (`wreckordbox runs show`): the number of
-  tracks, the threshold in force, and the backup's path, time and size (or
-  `null` when none was needed). The answer of the apply carries the same.
+  `large_run` in its command (`wreckordbox runs show`): the tracks this
+  command changes (`tracks`) and the Run with it (`run_tracks`), the
+  threshold in force, and the backup's path, time and size (or `null` when
+  none was taken before this command). The answer of the apply carries the same.
 - **A backup that cannot be made stops the Run** before anything changes and
   before a Run is recorded: a full disk or another failure
   (`run_backup_failed`), a backup folder on a Stick you have not unlocked
@@ -72,6 +91,14 @@ the Tag schema change only the Sidecar, not your tracks, and take no backup.
   the first change, or the Run is then refused, the backup stays in the
   folder like any other and nothing in the Library changed. Nothing deletes
   it for you; delete it in Preferences › Backups if you do not want it.
+- **What waits meanwhile:** while the copy is made, edits (in the window
+  and from commands), analysis saves and the window's own backup wait; on a
+  20,000-track test Library with 60,000 analysis files that was under half
+  a second. While the backup is written from the copy, other `wreckordbox`
+  commands wait (the service answers one at a time), as does locking or
+  ejecting the Stick the backup goes to; on that Library it took about a
+  second and a half for a 21 MB archive, and it grows with the size of
+  your analysis files.
 - **Trust:** like the rest of the file, the threshold is not protected from
   an agent; a raised threshold is visible in the policy hash and in each
   Run's `large_run`.

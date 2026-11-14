@@ -800,3 +800,60 @@ fn a_large_review_accept_of_chosen_rows_is_backed_up_first() {
     let path = accepted["large_run"]["backup"]["path"].as_str().unwrap();
     assert_eq!(backups_in(&s.state_dir()), vec![PathBuf::from(path)]);
 }
+
+/// Review finding 7: how long each lock is held for a 20,000-track fixture
+/// Library with three analysis files a track (60,000 files, 1 KiB each:
+/// staging hard-links them, so its time is by count, not size). Run by
+/// hand: `--ignored large_run_backup::twenty_thousand`.
+#[test]
+#[ignore = "a measurement, about a minute; run by hand"]
+fn twenty_thousand_tracks_lock_times() {
+    let s = Sandbox::with_shape(rbl_db::fixture::Shape {
+        tracks: 20_000,
+        ..rbl_db::fixture::Shape::default()
+    });
+    let tree = rbl_backup::analysis_dir(s.location());
+    for i in 0..20_000 {
+        let folder = tree
+            .join(format!("P{:03X}", i / 256))
+            .join(format!("{i:08X}"));
+        std::fs::create_dir_all(&folder).unwrap();
+        for ext in ["DAT", "EXT", "2EX"] {
+            std::fs::write(folder.join(format!("ANLZ0000.{ext}")), vec![7_u8; 1024]).unwrap();
+        }
+    }
+    policy(
+        &s,
+        "[energy]\napply = 0.5\n\n[backup]\nabove_tracks = 200\n",
+    );
+    ok(&s, &["status"]);
+    let lines: String = (0..20_000)
+        .map(|i| {
+            json!({"track": rbl_db::fixture::track_id(i), "kind": "energy", "value": 1 + i % 5, "confidence": 0.9})
+                .to_string()
+                + "\n"
+        })
+        .collect();
+    let file = s.path().join("facts.jsonl");
+    std::fs::write(&file, lines).unwrap();
+    ok(
+        &s,
+        &[
+            "facts",
+            "record-many",
+            "--file",
+            file.to_str().unwrap(),
+            "--source",
+            "agent:bulk",
+        ],
+    );
+    let started = std::time::Instant::now();
+    let applied = ok(&s, &["project"]);
+    let took = started.elapsed();
+    let backup = &applied["large_run"]["backup"];
+    assert!(backup["path"].is_string(), "{applied}");
+    eprintln!(
+        "20,000 tracks, 60,000 analysis files: apply {took:?}; backup {} ms (edit gate and analysis lock held {} ms; archive written with only the Stick, if any, held {} ms), {} bytes",
+        backup["took_ms"], backup["gate_ms"], backup["publish_ms"], backup["bytes"]
+    );
+}

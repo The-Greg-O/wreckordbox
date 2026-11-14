@@ -22,47 +22,64 @@
 //! itself, never a dry run's: the write's own re-check under the edit gate
 //! refuses, with nothing written, unless every planned track is exactly as
 //! planned (Projection: row revisions and no Ledger entry since the plan;
-//! Review: the listing still digests to the token the DJ was shown). So the
-//! Run that writes is the one counted, and the backup, taken after the
-//! plan, holds every planned track's value before the Run.
+//! Review: the listing still digests to the token the DJ was shown, or each
+//! chosen row to its own). So the Run that writes is the one counted.
+//!
+//! A Run joined by several commands (`--run`) is counted whole: the tracks
+//! its earlier `track` and `track_tags` entries changed, with this
+//! command's plan. Its total is not known in advance, so the backup is
+//! taken before the command that takes it over the threshold, not before
+//! its first write; later commands of the Run name that backup
+//! (`run_backup`) and take none.
 //!
 //! # The threshold
 //!
 //! `[backup] above_tracks = N` in the projection policy file
 //! (`projection-policy.toml`, the DJ's, beside the Tag schema): a backup is
 //! taken before a Run that will change more than N tracks. With no file or
-//! no section, [`DEFAULT_ABOVE`]. The value in force, the count and the
-//! backup (or none) are put in the command of every Ledger entry of the
-//! write, under `args.large_run` (`{tracks, above, backup:
-//! {path, created_at, bytes} | null}`), before the write's intent is saved;
-//! so the intent, the entry, and an unconfirmed entry after a crash all
-//! name it. The answer carries the same object as `large_run`.
+//! no section, [`DEFAULT_ABOVE`]. What was decided ([`Checked`]) is put in
+//! the command of every Ledger entry of the write, under `args.large_run`,
+//! before the write's intent is saved; so the intent, the entry, and an
+//! unconfirmed entry after a crash all name it. The answer carries it too.
+//!
+//! # One moment
+//!
+//! [`take`] stages both stores and the trees to local storage under the
+//! edit gate and the analysis-file lock (`rbl_backup::create::stage`), and
+//! remembers where the Library (`localUpdateCount`, the index generation)
+//! and the Ledger (its order position) stood. With neither lock held it
+//! writes the archive from the staged copies. Before the write, under the
+//! edit gate, [`bound`] checks both still stand there; if not, the backup
+//! is taken again (the earlier one removed), up to [`RETAKES`] times, then
+//! the Run is refused. The gate is then held through the write.
 //!
 //! # Failure
 //!
 //! The backup goes to the folder the window saves backups in
-//! (`rbl_backup::default_destination`), which may be on a Stick: Stick
-//! Protection's authorization is taken for it and re-checked before every
-//! write. Library Protection on refuses before the backup. A backup that
-//! fails or is refused (disk full, a protected or replaced Stick) stops the
-//! Run before its intent: nothing is changed, no Run is made, and the
-//! answer is the refusal (`run_backup_failed`, `stick_protected`,
-//! `library_protected`).
+//! (`rbl_backup::default_destination`), which may be on a Stick: a protected
+//! Stick is refused before anything is staged, and the authorization is
+//! taken for the archive and re-checked before every write. A folder inside
+//! the analysis or artwork tree or the Sidecar is refused. Library
+//! Protection on refuses before the backup. A backup that fails or is
+//! refused stops the Run before its intent: nothing is changed, no Run is
+//! made, and the answer is the refusal (`run_backup_failed`,
+//! `stick_protected`, `library_protected`).
 //!
 //! # A backup with no Run
 //!
-//! A crash, a refusal of the write's re-check, or a Ledger refusal after the
-//! backup leaves a complete, ordinary backup and no change. It is kept: it
-//! is listed by `wreckordbox backup list` and in Preferences › Backups like
-//! any other, and deleted there by the DJ. Nothing sweeps it.
+//! A crash, or a refusal of the write's re-check, after the backup leaves a
+//! complete, ordinary backup and no change. It is kept: it is listed by
+//! `wreckordbox backup list` and in Preferences › Backups like any other,
+//! and deleted there by the DJ. Nothing sweeps it.
 //!
 //! # Locks
 //!
-//! Taken under the service's Library lock (one command at a time) and, for
-//! `MyTags` and Review, the Fact coordination, which the apply already holds;
-//! never under the edit gate. During the copy the analysis-file lock is
-//! held (as the window's backup holds it) so the trees are not half
-//! written; lock order: Stick, then the analysis lock, then nothing.
+//! One order for every backup writer, the window's too: the edit gate, then
+//! a Stick, then the analysis-file lock. Here the Stick is never held with
+//! the other two: staging holds the gate and the analysis lock, publishing
+//! holds only the Stick. Taken under the service's Library lock (one
+//! command at a time) and, for `MyTags` and Review, the Fact coordination,
+//! which the apply already holds: both are held for the whole backup.
 
 use std::cell::RefCell;
 use std::collections::HashSet;

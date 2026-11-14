@@ -1110,7 +1110,7 @@
   "Delete the backup from {date}? This cannot be undone.": "刪除 {date} 的備份？此操作無法撤銷。",
   "Backup deleted.": "備份已刪除。",
   "Restore a backup": "恢復備份",
-  "To restore, quit wreckordbox and open wreckordbox Restore. It shows what each backup holds and lets you restore all of it or only some parts.": "若要恢復，請退出 wreckordbox 並開啟 wreckordbox Restore。它顯示每個備份保存的內容，並讓您恢復全部或僅部分部分。",
+  "To restore, quit wreckordbox and run wreckordbox backup restore with the backup's file in a terminal. It puts back the Library and the Sidecar together. Do not use the separate Restore app: it leaves the Sidecar out.": "要還原，請結束 wreckordbox，然後在終端機中用備份檔案執行 wreckordbox backup restore。它會同時還原資料庫和 Sidecar。請勿使用獨立的 Restore 應用程式：它會遺漏 Sidecar。",
   "blue": "藍色",
   "rgb": "RGB",
   "3band": "3波段",
