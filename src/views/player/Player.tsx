@@ -2373,6 +2373,7 @@ export const Player = memo(function Player({
           ref={detailRef}
           className={largePlayerStyles.band}
           data-testid="large-player-detail"
+          data-wave-well=""
           data-pcm={bars <= 0.5 || undefined}
           onWheel={wheelZoom}
           onPointerDown={startDrag}

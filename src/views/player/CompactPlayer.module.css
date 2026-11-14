@@ -92,7 +92,7 @@
 }
 .artist { min-width: 0; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; }
 .line > :not(.artist) { flex: none; }
-.dot { color: var(--c-raised); }
+.dot { color: var(--c-text-dim); }
 .length { color: var(--c-text-dim); }
 .position { color: var(--c-text); }
 

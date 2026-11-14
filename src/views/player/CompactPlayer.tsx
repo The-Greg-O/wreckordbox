@@ -190,6 +190,7 @@ export const CompactPlayer = memo(function CompactPlayer({
           ref={overviewRef}
           className={styles.overview}
           data-testid="compact-player-overview"
+          data-wave-well=""
           role="progressbar"
           aria-label="Position"
           aria-valuemin={0}

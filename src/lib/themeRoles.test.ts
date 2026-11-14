@@ -54,6 +54,9 @@ describe("themeProperties", () => {
       "--role-accent-hover": "#8eb0f8",
       "--role-tab-from": "#bb9af7",
       "--role-tab-to": "#ff9e64",
+      "--role-accent-ink": null,
+      "--role-on-accent-ink": null,
+      "--role-tab-to-ink": null,
       "--role-font": '"JetBrainsMono Nerd Font", ui-monospace, monospace',
       "--role-font-interface": null,
       "--role-font-size": null,
@@ -92,9 +95,22 @@ describe("themeProperties", () => {
     expect(themeProperties({ roles: null, font: null, monoFont: 'Mono"; } body { display: none' })["--role-font-mono"]).toBeNull();
   });
 
+  it("under a light theme gives the view shell readable ink: faint secondary text lifted, and the accent and tab line's end to write with", () => {
+    const properties = themeProperties({ roles: LATTE, font: null });
+    // Latte's dark_foreground (#9ca0b0) is about 2:1 on its grounds.
+    expect(properties["--role-text-dim"]).not.toBe(LATTE.textDim);
+    expect(properties["--role-text"]).toBe(LATTE.text);
+    expect(properties["--role-accent"]).toBe(LATTE.accent);
+    expect(properties["--role-working"]).toBe(LATTE.working);
+    expect(properties["--role-accent-ink"]).toMatch(/^#[0-9a-f]{6}$/);
+    expect(properties["--role-accent-ink"]).not.toBe(LATTE.accent);
+    expect(properties["--role-on-accent-ink"]).toBe(LATTE.onAccent);
+    expect(properties["--role-tab-to-ink"]).not.toBe(LATTE.tabTo);
+  });
+
   it("leaves every role to the stylesheet's fallback when there is no theme and no font", () => {
     const properties = themeProperties({ roles: null, font: null });
-    expect(Object.keys(properties)).toHaveLength(26);
+    expect(Object.keys(properties)).toHaveLength(29);
     expect(Object.values(properties).every((value) => value === null)).toBe(true);
   });
 
