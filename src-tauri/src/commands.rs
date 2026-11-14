@@ -769,6 +769,31 @@ where
     }).await
 }
 
+/// [`recorded_edit`] for one of the DJ's deliberate hand setters (wbx-26):
+/// `action` answers the changed track edits and, apart, those of tracks
+/// that already held the value set. The changed ones are the Undo step;
+/// the unchanged ones are the DJ's assertion, told to the Ledger only.
+pub(crate) async fn asserting_edit<R: tauri::Runtime, F>(
+    app: tauri::AppHandle<R>,
+    state: State<'_, Arc<AppState>>,
+    name: &'static str,
+    touched: Touched,
+    label: &'static str,
+    action: F,
+) -> AppResult<EditHistoryDto>
+where
+    F: FnOnce(&mut rbl_db::write::Writer) -> Result<(LibraryEdit, Vec<rbl_db::write::TrackEdit>), rbl_db::DbError>
+        + Send
+        + 'static,
+{
+    recorded_edit_preparing(app, state, name, touched, true, action, move |history, (reversible, asserted): (LibraryEdit, Vec<rbl_db::write::TrackEdit>)| {
+        if !reversible.is_empty() {
+            history.record(reversible, label);
+        }
+        history.assert(asserted, label);
+    }).await
+}
+
 /// [`recorded_edit`], with the caller deciding how the write's result goes
 /// into the history: an add sent a slice at a time joins the entry its
 /// first slice made (#499).
@@ -785,18 +810,47 @@ where
     T: Send + 'static,
     G: FnOnce(&mut EditHistory, T) + Send + 'static,
 {
+    recorded_edit_preparing(app, state, name, touched, false, action, record).await
+}
+
+/// [`recorded_edit_with`], saying whether the write is a hand set whose
+/// assertion `record` tells after its changes (wbx-26): the Ledger then
+/// keeps the write's intent until that assertion is told.
+async fn recorded_edit_preparing<R: tauri::Runtime, F, T, G>(
+    app: tauri::AppHandle<R>,
+    state: State<'_, Arc<AppState>>,
+    name: &'static str,
+    touched: Touched,
+    asserting: bool,
+    action: F,
+    record: G,
+) -> AppResult<EditHistoryDto>
+where
+    F: FnOnce(&mut rbl_db::write::Writer) -> Result<T, rbl_db::DbError> + Send + 'static,
+    T: Send + 'static,
+    G: FnOnce(&mut EditHistory, T) + Send + 'static,
+{
     let state = Arc::clone(&state);
     let event = touched.event();
     let dto = blocking(name, move || {
         let _gate = state.edit_gate().lock();
         // The refresh's failure is kept aside: the edit is made by then and
         // goes into the history (and the Ledger) whatever it says.
-        let preparation = rbl_library::ledger::Preparation::touched(&touched);
-        let (refreshed, reversible) = state.core().write_then_prepared(
+        let preparation = rbl_library::ledger::Preparation {
+            asserting,
+            ..rbl_library::ledger::Preparation::touched(&touched)
+        };
+        let written = state.core().write_then_prepared(
             state.as_ref(), rbl_library::History::Caller, &preparation,
             action,
             |db, reversible| Ok((refresh_after_edit(&state, db, touched), reversible)),
-        ).map_err(write_error)?;
+        );
+        if written.is_err() && asserting {
+            // Nothing to assert: the Ledger settles the intent it kept for
+            // the assertion, unless the failed write changed rows (wbx-26).
+            state.edit_history().lock().assert(Vec::new(), name);
+        }
+        let (refreshed, reversible) = written.map_err(write_error)?;
         let mut history = state.edit_history().lock();
         record(&mut history, reversible);
         let generation = refreshed.map_err(write_error)?;
@@ -4445,6 +4499,28 @@ pub async fn reorder_playlist<R: tauri::Runtime>(
 /// error is returned: the edit lands on every track or on none. Ids that
 /// are no longer in the library are passed over first; the list keeps a
 /// selection's ids after the tracks behind them are removed.
+/// [`each_track`] for a hand setter: the changed edits as the history's
+/// entry, and apart the unchanged ones (tracks that already held the value),
+/// which are the DJ's assertion (wbx-26).
+pub(crate) fn each_track_asserting<F>(
+    w: &mut rbl_db::write::Writer,
+    tracks: &[String],
+    mut edit: F,
+) -> Result<(LibraryEdit, Vec<rbl_db::write::TrackEdit>), rbl_db::DbError>
+where
+    F: FnMut(&mut rbl_db::write::Writer, &str) -> Result<(rbl_db::write::Changed, rbl_db::write::TrackEdit), rbl_db::DbError>,
+{
+    let mut unchanged = Vec::new();
+    let changed = each_track(w, tracks, |w, track| {
+        let (done, step) = edit(w, track)?;
+        if step.is_empty() {
+            unchanged.push(step.clone());
+        }
+        Ok((done, step))
+    })?;
+    Ok((changed, unchanged))
+}
+
 pub(crate) fn each_track<F>(
     w: &mut rbl_db::write::Writer,
     tracks: &[String],
@@ -4506,8 +4582,8 @@ pub async fn set_track_rating<R: tauri::Runtime>(
     tracks: Vec<String>,
     stars: u8,
 ) -> AppResult<EditHistoryDto> {
-    recorded_edit(app, state, "set_track_rating", Touched::Metadata(tracks.clone()), "Track Edit", move |w| {
-        each_track(w, &tracks, |w, track| w.set_rating_with_undo(track, stars))
+    asserting_edit(app, state, "set_track_rating", Touched::Metadata(tracks.clone()), "Track Edit", move |w| {
+        each_track_asserting(w, &tracks, |w, track| w.set_rating_with_undo(track, stars))
     }).await
 }
 
@@ -4530,8 +4606,8 @@ pub async fn set_track_color<R: tauri::Runtime>(
     tracks: Vec<String>,
     color: Option<String>,
 ) -> AppResult<EditHistoryDto> {
-    recorded_edit(app, state, "set_track_color", Touched::Metadata(tracks.clone()), "Track Edit", move |w| {
-        each_track(w, &tracks, |w, track| w.set_color_with_undo(track, color.as_deref()))
+    asserting_edit(app, state, "set_track_color", Touched::Metadata(tracks.clone()), "Track Edit", move |w| {
+        each_track_asserting(w, &tracks, |w, track| w.set_color_with_undo(track, color.as_deref()))
     }).await
 }
 

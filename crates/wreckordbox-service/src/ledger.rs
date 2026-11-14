@@ -667,6 +667,7 @@ pub(crate) fn takes_run(command: &str) -> bool {
         || command == crate::tag_panel::commands::INTAKE_SET_TAGS
         || crate::mytag_edits::answers(command)
         || crate::playlist_edits::answers(command)
+        || command == crate::projection::commands::PROJECTION_APPLY
 }
 
 pub(crate) fn answers(command: &str) -> bool {
@@ -928,6 +929,10 @@ struct WindowRun {
 
 /// The Library write begun last ([`Keeper::begin`]): its intent is in the
 /// Sidecar until an entry settles it.
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent facts about one write, each set at its own point"
+)]
 struct Op {
     /// The intent's identifier, which its entry takes.
     id: i64,
@@ -946,6 +951,13 @@ struct Op {
     dj_snapshot: Option<Value>,
     /// What the write planned for Mutants before it was made (wbx-80).
     mutant_plan: Option<Value>,
+    /// A hand set whose assertion follows its changes (wbx-26): its intent
+    /// stays until the assertion is told, which claims the reserved
+    /// identifier and settles it in the same transaction.
+    asserting: bool,
+    /// A hand set's changes were given an entry (under an intent of their
+    /// own), so an assertion with nothing to record may settle the write's.
+    changes_recorded: bool,
 }
 
 #[derive(Default)]
@@ -985,6 +997,9 @@ struct Draft<'a> {
     follow: Result<wreckordbox_sidecar::mutant_follow::Follow, String>,
     /// The plan its write left with the intent, for working it out again.
     plan: Option<Value>,
+    /// An explicit assertion of unchanged values (`Ledger::assert`): its
+    /// payload's unchanged fields are the DJ's Facts all the same.
+    asserted: bool,
 }
 
 /// Failures a test can inject into a service with [`FAULTS_ENV`], honoured
@@ -997,9 +1012,16 @@ struct Draft<'a> {
 pub const FAULTS_ENV: &str = "WRECKORDBOX_LEDGER_FAULTS";
 
 #[derive(Default)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent test faults, each switched on by name"
+)]
 struct Faults {
     abort_after_write: bool,
     abort_before_file_publish: bool,
+    /// The process dies as a hand set's assertion is about to be recorded:
+    /// after its changes (if any) and after its write was told (wbx-26).
+    abort_before_assert: bool,
     fail_append: AtomicUsize,
     abort_in_replay: bool,
     delay_after_begin: Option<Duration>,
@@ -1019,6 +1041,7 @@ impl Faults {
             let number = value.parse::<u64>().unwrap_or(1);
             match name {
                 "abort_before_file_publish" => faults.abort_before_file_publish = true,
+                "abort_before_assert" => faults.abort_before_assert = true,
                 "abort_after_write" => faults.abort_after_write = true,
                 "fail_append" => {
                     faults.fail_append = AtomicUsize::new(usize::try_from(number).unwrap_or(1));
@@ -1177,14 +1200,31 @@ impl Keeper {
                 ));
             }
             let run = self.admit(id)?;
+            // A projection never joins the DJ's Run, whatever source it names.
+            if let Err(refused) = crate::projection::attribution(&request.command, &run.source)
+                .and_then(|()| match &source {
+                    Some(source) => crate::projection::attribution(&request.command, source),
+                    None => Ok(()),
+                })
+            {
+                self.leave(run.id);
+                return Err(refused);
+            }
             return Ok(Some(Target::Joined {
                 run: run.id,
                 source: source.unwrap_or(run.source),
             }));
         }
-        if !from_client && request.run.is_none() {
+        // A projection is never the DJ's, even asked for by the window: it
+        // is a tool's (or the named agent's) in a Run of its own.
+        let projection = crate::projection::default_source(&request.command);
+        if !from_client && request.run.is_none() && projection.is_none() {
             return Ok(Some(Target::Window));
         }
+        if let Some(source) = &source {
+            crate::projection::attribution(&request.command, source)?;
+        }
+        let unnamed = crate::projection::description(request).unwrap_or_else(|| described(request));
         let description =
             match named.description.as_deref().map(str::trim) {
                 Some("") => return Err(ServiceError::new(
@@ -1192,10 +1232,12 @@ impl Keeper {
                     "a Run's description cannot be empty: say what the work is, or leave it out",
                 )),
                 Some(description) => description.to_owned(),
-                None => described(request),
+                None => unnamed,
             };
         Ok(Some(Target::Own {
-            source: source.unwrap_or_else(|| Source::new(SourceKind::Tool, UNNAMED_SOURCE)),
+            source: source
+                .or(projection)
+                .unwrap_or_else(|| Source::new(SourceKind::Tool, UNNAMED_SOURCE)),
             description,
             made: None,
         }))
@@ -1404,7 +1446,7 @@ impl Keeper {
                         part_of: None,
                         reversible: false,
                         format: stored::FORMAT,
-                        payload: None,
+                        payload: recovered_tracks(open.dj_snapshot.as_ref()).as_ref(),
                     },
                     &facts,
                     true,
@@ -1562,7 +1604,7 @@ impl Keeper {
                         part_of: None,
                         reversible: false,
                         format: stored::FORMAT,
-                        payload: None,
+                        payload: recovered_tracks(op.dj_snapshot.as_ref()).as_ref(),
                     },
                     &facts,
                     true,
@@ -1699,15 +1741,12 @@ impl Keeper {
             }
             // The identifier its write reserved, for the first entry of
             // that write; another (there should be none) takes the next.
-            let id = match state.op.as_mut() {
-                Some(op) if !op.recorded => {
-                    op.recorded = true;
-                    Some(op.id)
-                }
-                _ => None,
-            };
+            let id = state
+                .op
+                .as_mut()
+                .and_then(|op| claim(op, sidecar.as_deref().ok(), draft.asserted));
             let mut dj_facts = if source.kind == SourceKind::Dj && draft.action != Action::Undo {
-                crate::dj_facts::derive(&self.location, &self.stems, draft.kind, draft.payload.as_ref())
+                crate::dj_facts::derive(&self.location, &self.stems, draft.kind, draft.payload.as_ref(), draft.asserted)
             } else { wreckordbox_sidecar::dj_facts::NativeFacts::default() };
             if source.kind == SourceKind::Dj {
                 if draft.action == Action::Undo { dj_facts.undo_of = draft.reverses; }
@@ -1875,6 +1914,8 @@ impl Keeper {
             command,
             dj_snapshot,
             mutant_plan: None,
+            asserting: false,
+            changes_recorded: false,
         });
         drop(state);
         if let Some(delay) = self.faults.delay_after_begin {
@@ -1952,12 +1993,18 @@ impl rbl_library::ledger::Ledger for Keeper {
             // A file edit moves no playlist entry.
             follow: Ok(wreckordbox_sidecar::mutant_follow::Follow::default()),
             plan: None,
+            asserted: false,
         });
     }
 
     fn prepare(&self, db: &rbl_db::Library, targets: &rbl_library::ledger::Preparation) {
         self.plan_mutants(db, targets);
         let mut state = self.state();
+        if targets.asserting {
+            if let Some(op) = state.op.as_mut() {
+                op.asserting = true;
+            }
+        }
         let Some(op) = state
             .op
             .as_mut()
@@ -1987,7 +2034,9 @@ impl rbl_library::ledger::Ledger for Keeper {
         }
         if let Some(op) = self.state().op.as_mut() {
             op.wrote = Some(wrote);
-            if !wrote {
+            // A hand set that changed nothing still has its assertion to
+            // tell: its intent stays until then (wbx-26).
+            if !wrote && !op.asserting {
                 if let Ok(sidecar) = self.stems.sidecar() {
                     if let Err(error) = sidecar.settle_intents(&[op.id]) {
                         tracing::error!(%error, "could not clear a failed Library write's intent");
@@ -1998,6 +2047,44 @@ impl rbl_library::ledger::Ledger for Keeper {
         if wrote && self.faults.abort_after_write {
             std::process::abort();
         }
+    }
+
+    fn assert(&self, edit: &LibraryEdit, label: &str) -> Option<i64> {
+        if self.faults.abort_before_assert {
+            std::process::abort();
+        }
+        // An assertion is the DJ's or nothing: a tool's or an agent's set to
+        // the value a field holds changes nothing and is not recorded. With
+        // nothing to record, the hand set's intent kept for this is settled.
+        // (An assertion's edits are all unchanged, so `is_empty` is no test.)
+        let nothing = matches!(edit, LibraryEdit::Track(edits) if edits.is_empty());
+        if !by_the_dj() || nothing {
+            let mut state = self.state();
+            // Not a write that changed rows and recorded nothing: that stays
+            // for the next write to record as unconfirmed.
+            if let Some(op) = state.op.as_mut().filter(|op| {
+                op.asserting && !op.recorded && (op.wrote != Some(true) || op.changes_recorded)
+            }) {
+                op.recorded = true;
+                if let Ok(sidecar) = self.stems.sidecar() {
+                    if let Err(error) = sidecar.settle_intents(&[op.id]) {
+                        tracing::error!(%error, "could not settle a hand set's intent");
+                    }
+                }
+            }
+            return None;
+        }
+        self.append(Draft {
+            action: Action::Edit,
+            kind: stored::kind_of(edit),
+            label,
+            reverses: None,
+            part_of: None,
+            payload: stored::store(edit),
+            follow: Ok(wreckordbox_sidecar::mutant_follow::Follow::default()),
+            plan: None,
+            asserted: true,
+        })
     }
 
     fn record(&self, step: Step, edit: &LibraryEdit, label: &str, link: Link) -> Option<i64> {
@@ -2029,6 +2116,7 @@ impl rbl_library::ledger::Ledger for Keeper {
             payload: stored::store(edit),
             follow,
             plan,
+            asserted: false,
         })
     }
 
@@ -2074,8 +2162,65 @@ impl rbl_library::ledger::Ledger for Keeper {
             payload: None,
             follow,
             plan: None,
+            asserted: false,
         });
     }
+}
+
+/// The reserved identifier an entry of `op` takes, if any. The first entry
+/// claims the write's own. A hand set's changes leave that for the assertion
+/// that follows (wbx-26) and take one reserved for them, so a kept entry is
+/// still written once when replayed.
+fn claim(op: &mut Op, sidecar: Option<&Sidecar>, asserted: bool) -> Option<i64> {
+    if op.recorded {
+        return None;
+    }
+    if !op.asserting || asserted {
+        op.recorded = true;
+        return Some(op.id);
+    }
+    op.changes_recorded = true;
+    sidecar?
+        .begin_intent(
+            &Intent {
+                source: &op.source,
+                run: op.run,
+                description: &op.description,
+                command: op.command.as_ref(),
+                at: now(),
+            },
+            &[],
+        )
+        .ok()
+}
+
+/// What an unconfirmed entry keeps of the tracks its write was about, from
+/// its bounded recovery evidence (`{"tracks": [...]}`), so the write stays
+/// a barrier for exactly those tracks once the evidence is gone (wbx-26).
+/// `None` when there is no evidence.
+fn recovered_tracks(snapshot: Option<&Value>) -> Option<Value> {
+    let mut tracks: Vec<&str> = snapshot?["values"]
+        .as_array()?
+        .iter()
+        .filter_map(|value| value["track"].as_str())
+        .collect();
+    tracks.sort_unstable();
+    tracks.dedup();
+    (!tracks.is_empty()).then(|| serde_json::json!({ "tracks": tracks }))
+}
+
+/// Whether the edit being recorded on this thread is the DJ's: the
+/// window's (no command), or a command attributed to the DJ.
+fn by_the_dj() -> bool {
+    CURRENT.with(|current| {
+        let current = current.borrow();
+        match current.as_ref().map(|scope| &scope.target) {
+            None | Some(Target::Window) => true,
+            Some(Target::Own { source, .. } | Target::Joined { source, .. }) => {
+                source.kind == SourceKind::Dj
+            }
+        }
+    })
 }
 
 /// A Run, ended at once, for an entry written after the Run it was made

@@ -437,6 +437,10 @@ impl Shared {
         connection: Option<&Connection>,
         request: &Request,
     ) -> (Result<Value, ServiceError>, Option<Value>) {
+        // A projection names the policy it is made under, so its Run and
+        // Ledger entry record which one was in force.
+        let stamped = crate::projection::stamped(request, &self.stems);
+        let request = stamped.as_ref().unwrap_or(request);
         let (result, run) = self.ledger.attributed(connection.is_some(), request, || {
             self.dispatch(connection, request)
         });
@@ -609,6 +613,7 @@ impl Shared {
                 }
                 Ok(result)
             }
+            projection if crate::projection::answers(projection) => self.project(request),
             intake if crate::intake::answers(intake) => {
                 let (result, changed) = self.with_library(|library| {
                     crate::intake::answer(library, &self.stems, request)
@@ -625,6 +630,17 @@ impl Shared {
                 format!("unknown command: {unknown}"),
             )),
         }
+    }
+
+    /// `projection.plan` and `projection.apply` (wbx-26). The host is told
+    /// of a change even when its answer then failed.
+    fn project(&self, request: &Request) -> Result<Value, ServiceError> {
+        let (changed, result) =
+            self.with_library(|library| crate::projection::answer(library, &self.stems, request))?;
+        if let Some(changed) = changed {
+            self.tell_host(&changed.event());
+        }
+        result
     }
 
     fn publish(&self, event: &Event) {

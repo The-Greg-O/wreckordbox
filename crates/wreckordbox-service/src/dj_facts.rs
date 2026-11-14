@@ -27,6 +27,7 @@ pub(crate) fn derive(
     stems: &Stems,
     kind: &str,
     payload: Option<&Value>,
+    asserted: bool,
 ) -> NativeFacts {
     let mut result = NativeFacts::default();
     let Some(payload) = payload else {
@@ -37,7 +38,9 @@ pub(crate) fn derive(
         for edit in payload["edits"].as_array().into_iter().flatten() {
             let track = edit["track"].as_str().unwrap_or_default();
             let column = edit["column"].as_str().unwrap_or_default();
-            if edit["before"] == edit["after"] {
+            // An unchanged field is a Fact only in an explicit assertion
+            // (`Ledger::assert`, wbx-26), never because a write left it so.
+            if edit["before"] == edit["after"] && !asserted {
                 continue;
             }
             let value = &edit["after"];
@@ -436,8 +439,20 @@ pub(crate) fn recover(
         facts.undo_of = Some(id);
         return facts;
     }
-    let native = derive(location, stems, "track", Some(&json!({"edits":edits})));
-    let tagged = derive(location, stems, "track_tags", Some(&json!({"tags":tags})));
+    let native = derive(
+        location,
+        stems,
+        "track",
+        Some(&json!({"edits":edits})),
+        false,
+    );
+    let tagged = derive(
+        location,
+        stems,
+        "track_tags",
+        Some(&json!({"tags":tags})),
+        false,
+    );
     facts.values.extend(native.values);
     facts.values.extend(tagged.values);
     facts.skipped.extend(native.skipped);
