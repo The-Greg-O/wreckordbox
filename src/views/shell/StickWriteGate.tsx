@@ -379,7 +379,7 @@ function HoldDialog({ path, name, spare, protection, title, lines, answer }: Ask
   const seconds = hold / 1000;
 
   return (
-    <div className={styles.backdrop}>
+    <div className={styles.backdrop} data-shell-surface="">
       <div
         ref={dialog}
         role="alertdialog"
