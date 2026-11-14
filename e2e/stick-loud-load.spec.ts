@@ -128,6 +128,29 @@ test("with the setting off, the plain progress bar is shown; the switch on eithe
   await expect(view(page).getByTestId("stick-finished")).toContainText("Loaded DJ STICK");
 });
 
+test("the setting is in Preferences › View › Layout, and turning it off there gives the next load the plain bar", async ({ page }) => {
+  await ready(page);
+  await page.keyboard.press("Shift+Control+P");
+  const palette = page.getByRole("dialog", { name: /command/i });
+  await palette.getByRole("combobox").fill("Preferences");
+  await page.keyboard.press("Enter");
+  const dialog = page.getByRole("dialog", { name: "Preferences" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("tab", { name: "View", exact: true }).click();
+  await dialog.getByRole("tab", { name: "Layout", exact: true }).click();
+  const box = dialog.getByRole("checkbox", { name: "Loud load display" });
+  await expect(box).toBeChecked();
+  await box.uncheck();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+
+  await startLoad(page);
+  await call(page, "__emitStickLoadTrack", DJ, 1, 4, ONE);
+  await expect(progress(page)).toContainText(/Copying 1 of 4/);
+  await expect(loud(page)).toHaveCount(0);
+  await call(page, "__releaseStickLoads");
+});
+
 test("a track with no waveform, or one that cannot be read, is said, and never shows the track before it", async ({ page }) => {
   await ready(page);
   await startLoad(page);
