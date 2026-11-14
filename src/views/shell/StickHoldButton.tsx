@@ -224,7 +224,7 @@ export function StickHoldButton({ name, kind, enabled, why, binding, onHeld }: {
         onClick={(event) => { event.preventDefault(); }}
         onBlur={() => { if (live.current.state === "holding" && "key" in live.current.holder && live.current.holder.key !== "l") send({ type: "interrupt" }); }}
       >
-        <svg className={styles.ring} viewBox="0 0 100 100" aria-hidden>
+        <svg className={styles.ring} viewBox="0 0 100 100" aria-hidden data-meaning>
           <circle className={styles.track} cx="50" cy="50" r="46" pathLength={100} />
           <circle className={styles.fill} cx="50" cy="50" r="46" pathLength={100} />
         </svg>
