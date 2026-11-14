@@ -608,6 +608,7 @@ fn record(
             run,
         })
         .collect();
+    crate::fact_hold::about_to_commit("schema");
     let written = sidecar.record_many(&new);
     let outcome = match &written {
         Ok(facts) if facts.len() == 1 => "recorded 1 Fact".to_owned(),

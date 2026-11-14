@@ -356,3 +356,38 @@ fn an_accept_waits_while_reading_intensity_records_bars_for_a_new_beat_grid() {
     assert_eq!(facts_in_sidecar(&s, &track, "intensity"), 2);
     assert_eq!(db_rating(&s, "10001"), 4);
 }
+
+#[test]
+fn an_accept_waits_while_a_tag_schema_conversion_records_the_djs_tags() {
+    let s = Sandbox::new();
+    let [_, mood, _, _] = s.four_categories();
+    let dark = s.create_my_tag_in(&mood, "Dark");
+    s.detail_track(
+        1,
+        &common::Details {
+            my_tags: &[dark.as_str()],
+            ..common::Details::default()
+        },
+    );
+    let gate = Gate::new();
+    let _service = gated(&s, &gate);
+    let energy = fact(&s, "10002", "energy", "4", "agent:tagger", "0.7");
+    let t = token(&s);
+
+    gate.hold("producer-schema");
+    let converting = spawn(&s, &["schema", "convert"]);
+    gate.reached("at-producer-schema");
+    let mut accepting = accept(&s, energy, &t);
+
+    kept_waiting(&gate, &mut accepting);
+    assert_eq!(db_rating(&s, "10002"), 0);
+    assert_eq!(facts_in_sidecar(&s, "10001", "mood"), 0);
+
+    gate.go("producer-schema");
+    let (converted, answer) = finished(converting);
+    assert!(converted, "{answer}");
+    let (accepted, answer) = finished(accepting);
+    assert!(accepted, "{answer}");
+    assert_eq!(facts_in_sidecar(&s, "10001", "mood"), 1);
+    assert_eq!(db_rating(&s, "10002"), 4);
+}

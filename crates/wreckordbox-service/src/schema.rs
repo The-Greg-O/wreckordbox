@@ -118,7 +118,13 @@ pub(crate) fn answer(
 ) -> Result<Value, ServiceError> {
     let answer = match request.command.as_str() {
         commands::SCHEMA_CHECK => serde_json::to_value(check(stems, &arguments(request)?)?),
-        _ => serde_json::to_value(convert::convert(stems, &arguments(request)?, read, lookup)?),
+        _ => {
+            // A conversion observes tracks, then records the DJ's Facts:
+            // under one hold of the Fact coordination, taken before its
+            // Library reads, as Fact commands take it (wbx-j8k).
+            let _facts = stems.hold_facts();
+            serde_json::to_value(convert::convert(stems, &arguments(request)?, read, lookup)?)
+        }
     };
     answer.map_err(|e| ServiceError::new(service_codes::SERVICE_FAILED, e.to_string()))
 }
