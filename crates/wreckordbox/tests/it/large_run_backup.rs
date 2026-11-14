@@ -857,3 +857,394 @@ fn twenty_thousand_tracks_lock_times() {
         backup["took_ms"], backup["gate_ms"], backup["publish_ms"], backup["bytes"]
     );
 }
+
+// Review round 2.
+
+/// The backup's test holds in the service's state folder
+/// (`large_run::HOLDS`): armed, reached, released once or for good.
+fn holds(s: &Sandbox) -> PathBuf {
+    s.state_dir().join(wreckordbox_service::large_run::HOLDS)
+}
+
+fn arm(s: &Sandbox, point: &str) {
+    std::fs::create_dir_all(holds(s)).unwrap();
+    std::fs::write(holds(s).join(point), b"").unwrap();
+}
+
+fn reached(s: &Sandbox, point: &str) {
+    let marker = holds(s).join(format!("{point}.reached"));
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while !marker.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the backup never reached {point}"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Lets the backup held at `point` go on, keeping the hold for the next.
+fn release_once(s: &Sandbox, point: &str) {
+    std::fs::remove_file(holds(s).join(format!("{point}.reached"))).unwrap();
+}
+
+fn release(s: &Sandbox, point: &str) {
+    let _ = std::fs::remove_file(holds(s).join(point));
+}
+
+fn spawned(s: &Sandbox, args: &[&str]) -> std::process::Child {
+    let mut words = vec!["--json"];
+    words.extend_from_slice(args);
+    s.command()
+        .args(&words)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap()
+}
+
+/// Its JSON answer (or error) once it ends; a minute at most.
+fn answered(mut child: std::process::Child) -> (bool, Value) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while child.try_wait().unwrap().is_none() {
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            panic!("the command never finished");
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let output = child.wait_with_output().unwrap();
+    let text = String::from_utf8_lossy(if output.status.success() {
+        &output.stdout
+    } else {
+        &output.stderr
+    })
+    .into_owned();
+    let value = serde_json::from_str(text.trim()).unwrap_or(json!({ "text": text }));
+    (output.status.success(), value)
+}
+
+/// A stand-in for a separation's worker (no real separation is run): it
+/// begins its Run in the Sidecar, past the service, as the worker does
+/// (`begin_run`, which takes no Library lock). Its identifier.
+fn a_separation_begins_its_run(s: &Sandbox) -> i64 {
+    let db = rusqlite::Connection::open(s.sidecar_dir().join("sidecar.db")).unwrap();
+    db.busy_timeout(Duration::from_secs(10)).unwrap();
+    db.execute(
+        "INSERT INTO run (source_kind, source_name, description, started_at)
+         VALUES ('tool', 'separation-engine', 'Separate (a stand-in)', 0)",
+        [],
+    )
+    .unwrap();
+    db.last_insert_rowid()
+}
+
+/// The same worker publishing its four files into the Run's folder, as
+/// `record_stems` moves them, before it records their Fact.
+fn and_publishes_its_files(s: &Sandbox, track: &str, run: i64) -> PathBuf {
+    let folder = s
+        .sidecar_dir()
+        .join("stems")
+        .join(track)
+        .join(format!("run-{run}"));
+    std::fs::create_dir_all(&folder).unwrap();
+    for role in ["vocals", "other", "bass", "drums"] {
+        std::fs::write(folder.join(format!("{role}.wav")), b"RIFF stand-in").unwrap();
+    }
+    folder
+}
+
+fn entries_of(archive: &str) -> Vec<String> {
+    rbl_backup::archive::open(Path::new(archive))
+        .unwrap()
+        .file_names()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Each Run in the Sidecar, as its identifier and description (identifiers
+/// alone can repeat after a restore).
+fn runs_in_sidecar(s: &Sandbox) -> Vec<(i64, String)> {
+    let db = rusqlite::Connection::open_with_flags(
+        s.sidecar_dir().join("sidecar.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let mut statement = db
+        .prepare("SELECT id, description FROM run ORDER BY id")
+        .unwrap();
+    let rows = statement
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap();
+    rows.map(Result::unwrap).collect()
+}
+
+/// Every Stem file the Sidecar's Facts name, and every file under its
+/// `stems/` folder.
+fn stems_named_and_on_disk(s: &Sandbox) -> (Vec<String>, Vec<String>) {
+    let db = rusqlite::Connection::open_with_flags(
+        s.sidecar_dir().join("sidecar.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let mut statement = db
+        .prepare(
+            "SELECT json_extract(stem.value, '$.file') FROM fact, json_each(fact.value, '$.stems') AS stem
+             WHERE fact.kind = 'stems' ORDER BY 1",
+        )
+        .unwrap();
+    let named: Vec<String> = statement
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    let mut on_disk = Vec::new();
+    let mut pending = vec![s.sidecar_dir().join("stems")];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            if entry.file_type().unwrap().is_dir() {
+                pending.push(entry.path());
+            } else {
+                on_disk.push(
+                    entry
+                        .path()
+                        .strip_prefix(s.sidecar_dir())
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
+        }
+    }
+    on_disk.sort();
+    (named, on_disk)
+}
+
+/// A track with Stems already (the engine's fake worker), Stem audio asked
+/// for in backups, and three tracks to project above a threshold of two.
+fn separated_and_three_to_project(s: &Sandbox) -> String {
+    let track = s.import_track("Night Bus.wav", 1);
+    ok(s, &["stems", "separate", &track]);
+    std::fs::create_dir_all(s.state_dir()).unwrap();
+    std::fs::write(
+        s.state_dir().join(rbl_backup::sidecar_part::OPTIONS_FILE),
+        br#"{"stems": true}"#,
+    )
+    .unwrap();
+    three_to_project(s, "[energy]\napply = 0.5\n\n[backup]\nabove_tracks = 2\n");
+    track
+}
+
+/// Review round 2, blocker 1: a separation begins its Run and publishes
+/// its files after the backup has snapshotted the Sidecar, and has not yet
+/// recorded its Fact. The backup holds only the Stem files its own
+/// snapshot names, so none of that Run's, and its restore is a state that
+/// existed: every Stem file in it is one a Fact names.
+#[test]
+fn stem_files_published_after_the_sidecar_snapshot_are_not_in_the_backup() {
+    let s = Sandbox::new();
+    let track = separated_and_three_to_project(&s);
+    let (named, on_disk) = stems_named_and_on_disk(&s);
+    assert_eq!(named.len(), 4, "{named:?}");
+    assert_eq!(on_disk, named);
+
+    arm(&s, "sidecar-snapshotted");
+    let apply = spawned(&s, &["project"]);
+    reached(&s, "sidecar-snapshotted");
+    let run = a_separation_begins_its_run(&s);
+    let published = and_publishes_its_files(&s, &track, run);
+    release(&s, "sidecar-snapshotted");
+    let (applied, answer) = answered(apply);
+    assert!(applied, "{answer}");
+    let archive = answer["large_run"]["backup"]["path"]
+        .as_str()
+        .expect("a backup")
+        .to_owned();
+
+    let entries = entries_of(&archive);
+    let late = format!("/run-{run}/");
+    assert!(
+        !entries.iter().any(|name| name.contains(&late)),
+        "files of a Run the snapshot does not name: {entries:#?}"
+    );
+    for file in &named {
+        assert!(
+            entries.contains(&format!("sidecar/{file}")),
+            "{file} is named by the snapshot: {entries:#?}"
+        );
+    }
+
+    stop_service(&s);
+    let restored = s.cli(&["--json", "backup", "restore", &archive, "--yes"]);
+    assert!(
+        restored.status.success(),
+        "{}{}",
+        restored.stdout,
+        restored.stderr
+    );
+    stop_service(&s);
+    let (named_after, on_disk_after) = stems_named_and_on_disk(&s);
+    assert_eq!(named_after, named);
+    assert_eq!(
+        on_disk_after, named,
+        "every Stem file a Fact names, no other"
+    );
+    assert!(!published.exists());
+}
+
+/// Review round 2, blocker 1 (b): a separation begins its Run after the
+/// backup and before the Run's first write. Run creation moves the mark
+/// the write checks, so the backup is taken again and the one the Run
+/// names holds that Run.
+#[test]
+fn a_run_begun_after_the_backup_and_before_the_write_is_in_the_backup_the_run_names() {
+    let s = Sandbox::new();
+    three_to_project(&s, "[energy]\napply = 0.5\n\n[backup]\nabove_tracks = 2\n");
+    arm(&s, "backed-up");
+    let apply = spawned(&s, &["project"]);
+    reached(&s, "backed-up");
+    let run = a_separation_begins_its_run(&s);
+    release(&s, "backed-up");
+    let (applied, answer) = answered(apply);
+    assert!(applied, "{answer}");
+    let archive = answer["large_run"]["backup"]["path"]
+        .as_str()
+        .expect("a backup")
+        .to_owned();
+    assert_eq!(
+        backups_in(&s.state_dir()),
+        vec![PathBuf::from(&archive)],
+        "the first backup, of an earlier moment, is removed"
+    );
+    stop_service(&s);
+    let restored = s.cli(&["--json", "backup", "restore", &archive, "--yes"]);
+    assert!(restored.status.success(), "{}", restored.stderr);
+    stop_service(&s);
+    assert!(
+        runs_in_sidecar(&s).contains(&(run, "Separate (a stand-in)".to_owned())),
+        "the Run begun before the write is in the backup"
+    );
+}
+
+/// Review round 2, item 4: a backup invalidated every time it is taken is
+/// taken exactly three times, each one checked, and then the Run is
+/// refused with nothing changed and none of the three kept.
+#[test]
+fn a_backup_invalidated_each_time_is_taken_three_times_then_the_run_is_refused() {
+    let s = Sandbox::new();
+    three_to_project(&s, "[energy]\napply = 0.5\n\n[backup]\nabove_tracks = 2\n");
+    let unchanged = ratings(&s);
+    arm(&s, "backed-up");
+    let mut apply = spawned(&s, &["project"]);
+    for _ in 0..3 {
+        reached(&s, "backed-up");
+        a_separation_begins_its_run(&s);
+        release_once(&s, "backed-up");
+    }
+    // No fourth: the apply ends, refused, and nothing reaches the hold.
+    let marker = holds(&s).join("backed-up.reached");
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while apply.try_wait().unwrap().is_none() {
+        assert!(
+            !marker.exists(),
+            "a fourth backup was taken after three were checked"
+        );
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the apply never ended"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    release(&s, "backed-up");
+    let (applied, error) = answered(apply);
+    assert!(!applied, "{error}");
+    assert_eq!(error["error"]["code"], "run_backup_failed", "{error}");
+    assert_eq!(ratings(&s), unchanged);
+    assert_eq!(backups_in(&s.state_dir()), Vec::<PathBuf>::new());
+}
+
+/// Review round 2, blocker 2: a joined Run crossed by a command other than
+/// a projection (here `tracks rate`) is backed up before that command's
+/// write, in either order; a Run that stays at the threshold is not.
+#[test]
+fn a_joined_run_crossed_by_a_rating_is_backed_up_first_in_either_order() {
+    for rating_last in [true, false] {
+        let s = Sandbox::new();
+        policy(&s, "[energy]\napply = 0.5\n\n[backup]\nabove_tracks = 2\n");
+        ok(&s, &["status"]);
+        energy(&s, "10001", "4");
+        energy(&s, "10002", "2");
+        let run = run_started(&s);
+        let project = |track: &str| ok(&s, &["project", "--track", track, "--run", &run]);
+        let rate = || ok(&s, &["tracks", "rate", "10003", "3", "--run", &run]);
+        let crossing = if rating_last {
+            assert!(project("10001")["large_run"]["backup"].is_null());
+            assert!(project("10002")["large_run"]["backup"].is_null());
+            assert_eq!(backups_in(&s.state_dir()), Vec::<PathBuf>::new());
+            let rated = rate();
+            assert_eq!(rated["rating"], 3, "{rated}");
+            rated
+        } else {
+            rate();
+            assert!(project("10001")["large_run"]["backup"].is_null());
+            assert_eq!(backups_in(&s.state_dir()), Vec::<PathBuf>::new());
+            project("10002")
+        };
+        assert_eq!(
+            backups_in(&s.state_dir()).len(),
+            1,
+            "rating last: {rating_last}: {crossing}"
+        );
+        let shown = ok(&s, &["runs", "show", &run]);
+        let entries = shown["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 3, "{shown}");
+        let preceded: Vec<bool> = entries
+            .iter()
+            .map(|entry| entry["command"]["args"]["large_run"]["backup"]["path"].is_string())
+            .collect();
+        assert_eq!(preceded, vec![false, false, true], "{shown}");
+        assert_eq!(
+            entries[2]["command"]["args"]["large_run"]["run_tracks"], 3,
+            "{shown}"
+        );
+    }
+}
+
+/// Review round 2, item 3: staging hard-links the analysis and artwork
+/// files and Stem audio, never copies them under the edit gate. When a link
+/// cannot be made (forced here), the backup is refused, saying why, with
+/// nothing changed and nothing left.
+#[test]
+fn a_hard_link_that_cannot_be_made_refuses_the_backup_with_nothing_changed() {
+    let s = Sandbox::new();
+    let tree = rbl_backup::analysis_dir(s.location())
+        .join("P001")
+        .join("0000AAAA");
+    std::fs::create_dir_all(&tree).unwrap();
+    std::fs::write(tree.join("ANLZ0000.DAT"), vec![7_u8; 1024]).unwrap();
+    three_to_project(&s, "[energy]\napply = 0.5\n\n[backup]\nabove_tracks = 2\n");
+    stop_service(&s);
+    let unchanged = ratings(&s);
+    stop_service(&s);
+    let mut service = serve_with(
+        &s,
+        &[(wreckordbox_service::large_run::FAULT_ENV, "link_fails")],
+    );
+    let error = refused(&s, &["project"]);
+    assert_eq!(error["code"], "run_backup_failed", "{error}");
+    let message = error["message"].as_str().unwrap();
+    assert!(message.contains("hard link"), "{message}");
+    assert!(message.contains("nothing was changed"), "{message}");
+    assert_eq!(ratings(&s), unchanged);
+    assert_eq!(backups_in(&s.state_dir()), Vec::<PathBuf>::new());
+    let library_root = s.location().master_db.parent().unwrap().to_path_buf();
+    let staging_left: Vec<_> = [s.state_dir(), library_root]
+        .iter()
+        .flat_map(|dir| std::fs::read_dir(dir).unwrap().flatten())
+        .filter(|entry| entry.file_name().to_string_lossy().contains("run-backup"))
+        .map(|entry| entry.path())
+        .collect();
+    assert!(staging_left.is_empty(), "{staging_left:?}");
+    let _ = service.kill();
+    let _ = service.wait();
+}

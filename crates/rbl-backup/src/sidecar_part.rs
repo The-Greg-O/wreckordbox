@@ -288,12 +288,18 @@ pub struct Collected {
 /// The folder itself must not be a symbolic link; use [`collect_for`] to
 /// have it checked against the Library as well.
 pub fn collect(sidecar_dir: &Path, options: Options, proceed: &mut dyn FnMut() -> bool) -> Result<Option<Collected>> {
+    collect_with(sidecar_dir, options, proceed, &|_| {})
+}
+
+/// [`collect`], calling `at` at named moments (`sidecar-snapshotted`: the
+/// Sidecar's own database is snapshotted), for a test to hold it there.
+pub fn collect_with(sidecar_dir: &Path, options: Options, proceed: &mut dyn FnMut() -> bool, at: &dyn Fn(&str)) -> Result<Option<Collected>> {
     own_folder(sidecar_dir)?;
     if !sidecar_dir.is_dir() {
         return Ok(None);
     }
     let stage = tempfile::tempdir()?;
-    let mut walk = Walk { options, proceed, stage: stage.path(), snapshots: 0, directories: vec![ARCHIVE_FOLDER.to_owned()], files: Vec::new(), databases: Vec::new() };
+    let mut walk = Walk { options, proceed, at, stage: stage.path(), snapshots: 0, directories: vec![ARCHIVE_FOLDER.to_owned()], files: Vec::new(), databases: Vec::new() };
     walk.folder(sidecar_dir, ARCHIVE_FOLDER, true)?;
     let Walk { directories, mut files, databases, .. } = walk;
     let contents = Contents {
@@ -319,6 +325,7 @@ pub fn collect_for(location: &rbl_db::LibraryLocation, options: Options, proceed
 struct Walk<'a> {
     options: Options,
     proceed: &'a mut dyn FnMut() -> bool,
+    at: &'a dyn Fn(&str),
     stage: &'a Path,
     snapshots: usize,
     directories: Vec<String>,
@@ -358,6 +365,9 @@ impl Walk<'_> {
                 // as a plain file.
                 if store || is_database(&path) {
                     let source = self.snapshot(&path, store)?;
+                    if store {
+                        (self.at)("sidecar-snapshotted");
+                    }
                     let bytes = fs::metadata(&source)?.len();
                     self.databases.push(entry.strip_prefix(&format!("{ARCHIVE_FOLDER}/")).unwrap_or(&entry).to_owned());
                     self.files.push(Item { name: entry, source, bytes });

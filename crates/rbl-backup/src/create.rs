@@ -153,7 +153,12 @@ pub fn stage(request: &Stage<'_>) -> Result<Staged> {
     let sidecar = match request.sidecar_dir {
         Some(sidecar_dir) => {
             let checked = crate::sidecar_part::Destination::check(location, sidecar_dir)?;
-            match crate::sidecar_part::collect(&checked.path, request.sidecar, &mut || true)? {
+            match crate::sidecar_part::collect_with(
+                &checked.path,
+                request.sidecar,
+                &mut || true,
+                request.at,
+            )? {
                 Some(part) => {
                     let root = dir.path().join(SIDECAR);
                     let stems = format!(

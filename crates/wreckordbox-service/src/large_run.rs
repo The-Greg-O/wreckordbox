@@ -508,10 +508,11 @@ fn millis(since: Instant) -> u64 {
 }
 
 /// A folder in the state folder in which a test puts an empty file named
-/// for a moment of the backup (`between-stores`, `stick-held`,
-/// `backed-up`): a backup of that state folder reaching the moment makes
-/// `<moment>.reached` there and waits until the test removes `<moment>`
-/// (two minutes at most). Test mode only; scoped by state folder, so tests
+/// for a moment of the backup (`sidecar-snapshotted`, `between-stores`,
+/// `stick-held`, `backed-up`): a backup of that state folder reaching the
+/// moment makes `<moment>.reached` there and waits until the test removes
+/// `<moment>` (released for good) or `<moment>.reached` (released this
+/// once; the next backup to reach it is held again), two minutes at most. Test mode only; scoped by state folder, so tests
 /// in one process do not hold each other.
 pub const HOLDS: &str = "test-run-backup-holds";
 
@@ -524,9 +525,10 @@ pub(crate) fn hold(point: &str, state_dir: &Path) {
     if !armed.exists() {
         return;
     }
-    let _ = std::fs::write(dir.join(format!("{point}.reached")), b"");
+    let reached = dir.join(format!("{point}.reached"));
+    let _ = std::fs::write(&reached, b"");
     let deadline = Instant::now() + std::time::Duration::from_secs(120);
-    while armed.exists() && Instant::now() < deadline {
+    while armed.exists() && reached.exists() && Instant::now() < deadline {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
