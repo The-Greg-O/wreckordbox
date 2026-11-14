@@ -332,6 +332,8 @@ pub(crate) fn snapshot(db: &Library, preparation: &Preparation, command: Option<
                     .map(str::to_owned)
                     .collect();
             }
+            // The tracks of the accept's resolved selection (wbx-27).
+            Some("review.accept") => columns = vec!["Rating", "ColorID"],
             Some(_) => return Value::Null,
             None => {}
         }

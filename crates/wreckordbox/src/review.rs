@@ -6,7 +6,7 @@ use clap::{Args, Subcommand};
 use serde_json::json;
 use wreckordbox_service::facts::SourceArg;
 use wreckordbox_service::projection::{Field, Held};
-use wreckordbox_service::review::{commands, Decided, Selection, Waiting};
+use wreckordbox_service::review::{commands, Decided, RejectedList, Reopened, Selection, Waiting};
 use wreckordbox_service::{Config, ServiceError};
 
 use crate::facts::{parse_source, source_text};
@@ -39,8 +39,10 @@ pub enum ReviewCommands {
     },
     /// Accept waiting Facts, as the DJ's own hand set: their values are
     /// written to the Library through the edit path, as one Undo step, in
-    /// the DJ's Run. Only `--source dj` (or `--run` of the DJ's) is
-    /// accepted; never run this for an agent or a tool.
+    /// the DJ's Run. `--source dj` is required every time, also with
+    /// `--run`; never run this for an agent or a tool. The Facts are read
+    /// first and the accept is bound to them: anything changed since is
+    /// refused by name.
     Accept {
         /// These Facts, by id; each must be waiting.
         #[arg(value_name = "FACT")]
@@ -69,6 +71,32 @@ pub enum ReviewCommands {
         #[arg(long, value_name = "SOURCE", value_parser = parse_source)]
         source: Option<SourceArg>,
     },
+    /// List the suggestions the DJ rejected (track, field, value, source)
+    /// and the rejection each is in. Writes nothing.
+    Rejected {
+        #[command(flatten)]
+        filter: Filter,
+    },
+    /// Reopen rejected suggestions, as the DJ's decision: they wait again.
+    /// Recorded in the Ledger; the rejection stays recorded. Only
+    /// `--source dj` is accepted.
+    Reopen {
+        /// The Facts rejected, by id.
+        #[arg(value_name = "FACT")]
+        facts: Vec<i64>,
+        #[command(flatten)]
+        filter: Filter,
+        /// Every rejected suggestion.
+        #[arg(long)]
+        all: bool,
+        /// Every suggestion one earlier `review reject` rejected: its
+        /// Ledger entry.
+        #[arg(long, value_name = "ENTRY")]
+        rejection: Option<i64>,
+        /// Who reopens: must be `dj`.
+        #[arg(long, value_name = "SOURCE", value_parser = parse_source)]
+        source: Option<SourceArg>,
+    },
 }
 
 fn parse_field(text: &str) -> Result<Field, String> {
@@ -85,6 +113,7 @@ fn selection(facts: &[i64], filter: &Filter, all: bool, source: Option<&SourceAr
         at_least: filter.at_least,
         all,
         source: source.cloned(),
+        ..Selection::default()
     }
 }
 
@@ -111,12 +140,27 @@ pub fn run(
             Ok(waiting_text(&listed))
         }
         ReviewCommands::Accept {
-            facts, filter, all, ..
+            facts,
+            filter,
+            all,
+            run,
         } => {
-            let done: Decided = client.call(
-                commands::REVIEW_ACCEPT,
-                json!(selection(facts, filter, *all, None)),
+            // Bound to the Facts as read here: what changes before the
+            // write is refused by name. The read takes no Run.
+            client.in_run(None);
+            let listed: Waiting = client.call(
+                commands::REVIEW_WAITING,
+                json!(selection(&[], filter, false, None)),
             )?;
+            let shown: Vec<Held> = listed
+                .waiting
+                .into_iter()
+                .filter(|h| facts.is_empty() || facts.contains(&h.fact))
+                .collect();
+            let mut asked = selection(facts, filter, *all, run.source());
+            asked.expect = Some(shown);
+            crate::ledger::attribute(client);
+            let done: Decided = client.call(commands::REVIEW_ACCEPT, json!(asked))?;
             if as_json {
                 return Ok(json!(done).to_string());
             }
@@ -144,6 +188,54 @@ pub fn run(
                 );
             }
             Ok(out)
+        }
+        ReviewCommands::Rejected { filter } => {
+            let listed: RejectedList = client.call(
+                commands::REVIEW_REJECTED,
+                json!(selection(&[], filter, false, None)),
+            )?;
+            if as_json {
+                return Ok(json!(listed).to_string());
+            }
+            if listed.rejected.is_empty() {
+                return Ok("No suggestion stands rejected.".to_owned());
+            }
+            let mut out = format!("{} suggestion(s) rejected by the DJ:\n", listed.count);
+            for r in &listed.rejected {
+                let o = &r.offered;
+                let _ = writeln!(
+                    out,
+                    "  Fact {}: track {}, {} {}, from {}, rejected in Ledger entry {}",
+                    o.fact,
+                    o.track,
+                    o.field,
+                    crate::project::shown(&o.value),
+                    source_text(&o.source),
+                    r.rejection.entry
+                );
+            }
+            Ok(out)
+        }
+        ReviewCommands::Reopen {
+            facts,
+            filter,
+            all,
+            rejection,
+            source,
+        } => {
+            let mut asked = selection(facts, filter, *all, source.as_ref());
+            asked.rejection = *rejection;
+            let done: Reopened = client.call(commands::REVIEW_REOPEN, json!(asked))?;
+            if as_json {
+                return Ok(json!(done).to_string());
+            }
+            Ok(match &done.reopening {
+                None => "Nothing rejected matched: nothing was reopened.".to_owned(),
+                Some(r) => format!(
+                    "Reopened {} suggestion(s); they wait again. Recorded as the DJ's in Ledger entry {} (Run {}).",
+                    done.count, r.entry, r.run
+                ),
+            })
         }
     }
 }

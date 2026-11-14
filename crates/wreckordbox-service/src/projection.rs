@@ -193,7 +193,7 @@ impl Field {
     const ALL: [Self; 2] = [Self::Energy, Self::PrepColour];
 
     /// The field's name, which is also the kind of Fact projected into it.
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Energy => "energy",
             Self::PrepColour => "prep_colour",
@@ -510,12 +510,15 @@ fn pause() {
     }
 }
 
+/// The suggestions the DJ rejected in review (wbx-27).
+type Rejected = HashSet<wreckordbox_sidecar::review::Suggestion>;
+
 /// The Facts of each field's kind.
 type FactsByField = Vec<(Field, Vec<Fact>)>;
 
 /// The Facts of each field's kind, and the provenance of native fields,
 /// read without creating, migrating or tidying a Sidecar.
-fn read_sidecar(stems: &Stems) -> Result<(FactsByField, Provenance, HashSet<i64>), ServiceError> {
+fn read_sidecar(stems: &Stems) -> Result<(FactsByField, Provenance, Rejected), ServiceError> {
     let failed = |why: String| ServiceError::new(crate::stems::codes::SIDECAR_FAILED, why);
     let columns: Vec<&str> = Field::ALL.iter().map(|field| field.column()).collect();
     stems
@@ -530,7 +533,7 @@ fn read_sidecar(stems: &Stems) -> Result<(FactsByField, Provenance, HashSet<i64>
                     Ok((
                         facts,
                         sidecar.provenance(&columns).map_err(text)?,
-                        sidecar.rejected_facts().map_err(text)?,
+                        sidecar.rejected_suggestions().map_err(text)?,
                     ))
                 }
                 None => match FactsSnapshot::open(stems.sidecar_dir()).map_err(text)? {
@@ -551,7 +554,7 @@ fn read_sidecar(stems: &Stems) -> Result<(FactsByField, Provenance, HashSet<i64>
                         Ok((
                             facts,
                             reader.provenance(&columns).map_err(text)?,
-                            reader.rejected_facts().map_err(text)?,
+                            reader.rejected_suggestions().map_err(text)?,
                         ))
                     }
                 },
@@ -817,7 +820,7 @@ fn decide(
     report: &mut Report,
     one: &One<'_>,
     facts: &[Fact],
-    rejected: &HashSet<i64>,
+    rejected: &Rejected,
     rules: &Rules,
     policy: &Policy,
     labels: &[PrepColour],
@@ -837,20 +840,31 @@ fn decide(
             .stale
             .push(unusable(fact, "a stale Fact: never projected".into()));
     }
-    // The DJ's rejection is a decision: the Fact is never projected and
-    // never offered again; another source's answer may still stand.
-    for fact in facts
-        .iter()
-        .filter(|f| f.is_live() && rejected.contains(&f.id))
-    {
-        report.rejected.push(unusable(
-            fact,
-            "rejected by the DJ in review: never projected".into(),
-        ));
-    }
+    // The DJ's rejection is of the suggestion (this track, field, value and
+    // source): a Fact making it, recorded before or after, is never
+    // projected nor offered again; another suggestion may still stand.
+    let suggests_rejected = |fact: &Fact| {
+        target(field, &fact.value, labels).is_ok_and(|value| {
+            rejected.contains(&wreckordbox_sidecar::review::Suggestion::new(
+                one.track,
+                field.name(),
+                native_number(&value),
+                &fact.source,
+            ))
+        })
+    };
     let facts: Vec<Fact> = facts
         .iter()
-        .filter(|f| !rejected.contains(&f.id))
+        .filter(|f| {
+            let refused = suggests_rejected(f);
+            if refused && f.is_live() {
+                report.rejected.push(unusable(
+                    f,
+                    "a suggestion the DJ rejected in review: never projected".into(),
+                ));
+            }
+            !refused
+        })
         .cloned()
         .collect();
     let facts = facts.as_slice();
@@ -980,7 +994,7 @@ fn target(field: Field, value: &Value, labels: &[PrepColour]) -> Result<Value, S
 
 /// The number a report value stands for: stars, or a colour label's id;
 /// none is 0.
-fn native_number(value: &Value) -> i64 {
+pub(crate) fn native_number(value: &Value) -> i64 {
     value.as_i64().or_else(|| value["id"].as_i64()).unwrap_or(0)
 }
 

@@ -247,6 +247,9 @@ pub(crate) struct Stems {
     state_dir: PathBuf,
     pub(crate) mutant_edits: Mutex<std::collections::HashMap<i64, std::sync::Weak<Mutex<()>>>>,
     pub(crate) run_status: Mutex<crate::run_status::RunStatus>,
+    /// Held by Fact commands and by Review's decisions, so no Fact is
+    /// recorded between an accept's check and the end of its write (wbx-27).
+    pub(crate) fact_writes: Mutex<()>,
     command: Vec<OsString>,
     sidecar: Mutex<Option<Arc<Sidecar>>>,
     /// Set, under the `sidecar` lock, when the service stops: the Sidecar
@@ -286,6 +289,7 @@ impl Stems {
         Arc::new(Self {
             mutant_edits: Mutex::new(HashMap::default()),
             run_status: Mutex::new(crate::run_status::RunStatus::new(&sidecar_dir)),
+            fact_writes: Mutex::new(()),
             sidecar_dir,
             state_dir: state_dir.to_path_buf(),
             command,

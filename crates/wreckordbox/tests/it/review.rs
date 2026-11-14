@@ -15,7 +15,7 @@ use std::time::Duration;
 use common::Sandbox;
 use serde_json::{json, Value};
 
-fn ok(s: &Sandbox, args: &[&str]) -> Value {
+pub(crate) fn ok(s: &Sandbox, args: &[&str]) -> Value {
     let mut words = vec!["--json"];
     words.extend_from_slice(args);
     let result = s.cli(&words);
@@ -28,7 +28,7 @@ fn ok(s: &Sandbox, args: &[&str]) -> Value {
     result.json()
 }
 
-fn refused(s: &Sandbox, args: &[&str]) -> Value {
+pub(crate) fn refused(s: &Sandbox, args: &[&str]) -> Value {
     let mut words = vec!["--json"];
     words.extend_from_slice(args);
     let result = s.cli(&words);
@@ -36,12 +36,19 @@ fn refused(s: &Sandbox, args: &[&str]) -> Value {
     result.error_json()["error"].clone()
 }
 
-fn policy(s: &Sandbox, text: &str) {
+pub(crate) fn policy(s: &Sandbox, text: &str) {
     std::fs::create_dir_all(s.sidecar_dir()).unwrap();
     std::fs::write(s.sidecar_dir().join("projection-policy.toml"), text).unwrap();
 }
 
-fn fact(s: &Sandbox, track: &str, kind: &str, value: &str, source: &str, confidence: &str) -> i64 {
+pub(crate) fn fact(
+    s: &Sandbox,
+    track: &str,
+    kind: &str,
+    value: &str,
+    source: &str,
+    confidence: &str,
+) -> i64 {
     ok(
         s,
         &[
@@ -60,21 +67,21 @@ fn fact(s: &Sandbox, track: &str, kind: &str, value: &str, source: &str, confide
         .unwrap()
 }
 
-fn waiting(s: &Sandbox) -> Vec<Value> {
+pub(crate) fn waiting(s: &Sandbox) -> Vec<Value> {
     ok(s, &["review", "waiting"])["waiting"]
         .as_array()
         .unwrap()
         .clone()
 }
 
-fn facts_waiting(s: &Sandbox) -> Vec<i64> {
+pub(crate) fn facts_waiting(s: &Sandbox) -> Vec<i64> {
     waiting(s)
         .iter()
         .map(|w| w["fact"].as_i64().unwrap())
         .collect()
 }
 
-fn rating(s: &Sandbox, id: &str) -> Value {
+pub(crate) fn rating(s: &Sandbox, id: &str) -> Value {
     ok(s, &["tracks", "show", id])["rating"].clone()
 }
 
@@ -95,12 +102,18 @@ fn sidecar_bytes(s: &Sandbox) -> Vec<(String, Vec<u8>)> {
     out
 }
 
-fn drain(watcher: &mut wreckordbox_service::Client) {
-    while watcher
-        .next_event(Duration::from_millis(300))
-        .unwrap()
-        .is_some()
-    {}
+/// How many `library_changed` events arrive before the line is quiet:
+/// the first within two seconds, then until 300 ms pass with none.
+pub(crate) fn library_changes(watcher: &mut wreckordbox_service::Client) -> usize {
+    let mut count = 0;
+    let mut wait = Duration::from_secs(2);
+    while let Some(event) = watcher.next_event(wait).unwrap() {
+        if event.event == "library_changed" {
+            count += 1;
+        }
+        wait = Duration::from_millis(300);
+    }
+    count
 }
 
 #[test]
@@ -116,6 +129,12 @@ fn facts_held_back_by_policy_are_listed_with_track_value_source_and_confidence_a
     fact(&s, "10003", "energy", "2", "agent:tagger", "0.95");
     let mut watcher = s.client();
     watcher.subscribe().unwrap();
+    // Whatever the recordings above still send arrives before the read.
+    while watcher
+        .next_event(Duration::from_millis(300))
+        .unwrap()
+        .is_some()
+    {}
     let runs_before = ok(&s, &["runs", "list"]);
     let bytes_before = sidecar_bytes(&s);
     let library_before = std::fs::read(s.master_db()).unwrap();
@@ -149,10 +168,8 @@ fn facts_held_back_by_policy_are_listed_with_track_value_source_and_confidence_a
     assert_eq!(ok(&s, &["runs", "list"]), runs_before);
     assert_eq!(sidecar_bytes(&s), bytes_before);
     assert_eq!(std::fs::read(s.master_db()).unwrap(), library_before);
-    assert!(watcher
-        .next_event(Duration::from_millis(300))
-        .unwrap()
-        .is_none());
+    let stray = watcher.next_event(Duration::from_millis(300)).unwrap();
+    assert!(stray.is_none(), "{stray:?}");
 }
 
 #[test]
@@ -176,10 +193,8 @@ fn accepting_a_fact_is_the_djs_hand_set_in_the_djs_run_and_it_leaves_the_queue()
     // Only the one named: the other still waits, its track untouched.
     assert_eq!(rating(&s, "10002"), 0);
     assert_eq!(facts_waiting(&s), vec![other]);
-    // The window hears of the edit, once.
-    let event = watcher.next_event(Duration::from_secs(2)).unwrap().unwrap();
-    assert_eq!(event.event, "library_changed");
-    drain(&mut watcher);
+    // The window hears of the edit exactly once.
+    assert_eq!(library_changes(&mut watcher), 1);
 
     // In the DJ's Run, one Library entry, Undo-able, by the DJ.
     let run = &accepted["run"];

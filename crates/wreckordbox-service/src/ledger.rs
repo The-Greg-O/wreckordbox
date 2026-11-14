@@ -1226,7 +1226,9 @@ impl Keeper {
         }
         // A projection is never the DJ's, even asked for by the window: it
         // is a tool's (or the named agent's) in a Run of its own.
-        let projection = crate::projection::default_source(&request.command);
+        // Review's accept is by the DJ its request declares (wbx-27).
+        let projection = crate::projection::default_source(&request.command)
+            .or_else(|| crate::review::declared(request));
         if !from_client && request.run.is_none() && projection.is_none() {
             return Ok(Some(Target::Window));
         }

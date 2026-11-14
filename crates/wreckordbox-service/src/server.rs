@@ -598,6 +598,7 @@ impl Shared {
                 })
             }
             facts if crate::facts::answers(facts) => {
+                let _facts = crate::review::exclude(&self.stems);
                 // The Sidecar's, not the Library's: the Library is only
                 // read, to find the track.
                 crate::facts::answer(&self.stems, request, &|id| {
@@ -672,6 +673,8 @@ impl Shared {
     /// `review.waiting`, `review.accept` and `review.reject` (wbx-27). The
     /// host is told of an accept's Library change.
     fn review(&self, request: &Request) -> Result<Value, ServiceError> {
+        // Before the Library: Fact commands take it first too.
+        let _facts = crate::review::exclude(&self.stems);
         let (changed, result) =
             self.with_library(|library| crate::review::answer(library, &self.stems, request))?;
         if let Some(changed) = changed {

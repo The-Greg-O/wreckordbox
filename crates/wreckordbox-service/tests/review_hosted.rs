@@ -88,8 +88,19 @@ fn the_windows_accept_is_the_djs_and_one_undo_step_puts_the_facts_back_in_the_qu
     while events.recv_timeout(Duration::from_millis(100)).is_ok() {}
     assert_eq!(waiting(), 2);
 
-    // The window accepts everything, naming no Run: the DJ's own act.
-    let accepted = service.call("review.accept", json!({"all": true})).unwrap();
+    // The window must declare the DJ: no default, even in-process.
+    let undeclared = service
+        .call("review.accept", json!({"all": true}))
+        .unwrap_err();
+    assert_eq!(undeclared.code, "review_not_the_djs");
+    assert_eq!((stars(&core, &a), stars(&core, &b)), (0, 0));
+    // The window accepts everything, naming no Run, declaring the DJ.
+    let accepted = service
+        .call(
+            "review.accept",
+            json!({"all": true, "source": {"kind": "dj"}}),
+        )
+        .unwrap();
     assert_eq!(accepted["count"], 2, "{accepted}");
     assert_eq!((stars(&core, &a), stars(&core, &b)), (4, 2));
     let told = events.recv_timeout(Duration::from_secs(2)).unwrap();
