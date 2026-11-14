@@ -11,7 +11,7 @@
 
 use crate::common;
 #[path = "../../../wreckordbox-intensity/tests/common/mod.rs"]
-mod signals;
+pub(crate) mod signals;
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
