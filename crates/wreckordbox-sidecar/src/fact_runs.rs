@@ -20,17 +20,14 @@ fn runs_of(db: &Connection, facts: &[i64]) -> Result<Vec<(i64, Run)>> {
         else {
             continue;
         };
-        if !runs.contains_key(&run) {
-            match run_in(db, RunId(run))? {
-                Some(found) => {
-                    runs.insert(run, found);
-                }
+        let found = match runs.entry(run) {
+            std::collections::hash_map::Entry::Occupied(known) => known.into_mut(),
+            std::collections::hash_map::Entry::Vacant(slot) => match run_in(db, RunId(run))? {
+                Some(found) => slot.insert(found),
                 None => continue,
-            }
-        }
-        if let Some(found) = runs.get(&run) {
-            out.push((*fact, found.clone()));
-        }
+            },
+        };
+        out.push((*fact, found.clone()));
     }
     Ok(out)
 }

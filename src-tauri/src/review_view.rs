@@ -145,7 +145,7 @@ pub fn waiting(state: &Arc<AppState>) -> AppResult<ReviewListing> {
 
 /// The DJ's acceptance of `facts`, chosen in the listing whose token is
 /// `token`.
-pub fn accept(state: &Arc<AppState>, facts: Vec<i64>, token: String) -> AppResult<Value> {
+pub fn accept(state: &Arc<AppState>, facts: &[i64], token: &str) -> AppResult<Value> {
     Ok(decision(ask(
         state,
         commands::REVIEW_ACCEPT,
@@ -154,7 +154,7 @@ pub fn accept(state: &Arc<AppState>, facts: Vec<i64>, token: String) -> AppResul
 }
 
 /// The DJ's rejection of `facts`.
-pub fn reject(state: &Arc<AppState>, facts: Vec<i64>) -> AppResult<Value> {
+pub fn reject(state: &Arc<AppState>, facts: &[i64]) -> AppResult<Value> {
     Ok(decision(ask(
         state,
         commands::REVIEW_REJECT,
@@ -178,7 +178,7 @@ pub fn rejected(state: &Arc<AppState>) -> AppResult<Value> {
 
 /// The DJ's reopening of the rejected `facts`, or of one rejection as a
 /// whole.
-pub fn reopen(state: &Arc<AppState>, facts: Vec<i64>, rejection: Option<i64>) -> AppResult<Value> {
+pub fn reopen(state: &Arc<AppState>, facts: &[i64], rejection: Option<i64>) -> AppResult<Value> {
     let args = match rejection {
         Some(entry) => json!({ "rejection": entry, "source": dj() }),
         None => json!({ "facts": facts, "source": dj() }),
@@ -209,7 +209,7 @@ pub fn watch<R: Runtime>(app: &AppHandle<R>, state: &AppState) {
     {
         return;
     }
-    let Some(heard) = state.with_service(|service| service.events()) else {
+    let Some(heard) = state.with_service(wreckordbox_service::Service::events) else {
         return;
     };
     let alive = Arc::new(AtomicBool::new(true));
@@ -269,7 +269,7 @@ pub async fn review_accept(
     token: String,
 ) -> AppResult<Value> {
     let state = Arc::clone(&state);
-    blocking("review_accept", move || accept(&state, facts, token)).await
+    blocking("review_accept", move || accept(&state, &facts, &token)).await
 }
 
 /// Rejects the chosen Facts.
@@ -283,7 +283,7 @@ pub async fn review_reject(
     facts: Vec<i64>,
 ) -> AppResult<Value> {
     let state = Arc::clone(&state);
-    blocking("review_reject", move || reject(&state, facts)).await
+    blocking("review_reject", move || reject(&state, &facts)).await
 }
 
 /// The suggestions standing rejected.
@@ -309,7 +309,7 @@ pub async fn review_reopen(
     rejection: Option<i64>,
 ) -> AppResult<Value> {
     let state = Arc::clone(&state);
-    blocking("review_reopen", move || reopen(&state, facts, rejection)).await
+    blocking("review_reopen", move || reopen(&state, &facts, rejection)).await
 }
 
 #[cfg(test)]

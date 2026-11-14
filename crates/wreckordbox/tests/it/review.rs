@@ -338,13 +338,15 @@ fn rejecting_records_the_djs_decision_writes_nothing_to_the_library_and_is_never
     let entries = shown["entries"].as_array().unwrap();
     assert_eq!(entries.len(), 1, "{shown}");
     assert_eq!(entries[0]["store"], "sidecar");
-    // The Library is not written, and no client hears of a Library change.
+    // The Library is not written, and no client hears of a Library change:
+    // only the decision itself (`review_decided`, wbx-74) is told.
     assert_eq!(std::fs::read(s.master_db()).unwrap(), library_before);
     assert_eq!(rating(&s, "10001"), 0);
-    assert!(watcher
-        .next_event(Duration::from_millis(300))
-        .unwrap()
-        .is_none());
+    let mut heard = Vec::new();
+    while let Some(event) = watcher.next_event(Duration::from_millis(300)).unwrap() {
+        heard.push(event.event);
+    }
+    assert_eq!(heard, vec!["review_decided".to_owned()]);
 
     // Never offered again, never projected, even under a policy that would
     // apply it; a second rejection of it is refused.

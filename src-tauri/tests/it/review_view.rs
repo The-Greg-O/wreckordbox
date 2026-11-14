@@ -139,7 +139,7 @@ fn an_accept_with_the_shown_token_sets_the_value_and_one_with_an_older_listing_i
     // Something arrives after the DJ's listing: the accept is refused,
     // nothing written, and the answer says so (the view shows the change).
     let late = window.propose(2, 3, 0.8);
-    let refused = review_view::accept(&state, vec![a], token).unwrap();
+    let refused = review_view::accept(&state, &[a], &token).unwrap();
     assert_eq!(refused["ok"], false, "{refused}");
     assert_eq!(refused["error"]["code"], "review_changed");
     assert_eq!(window.rating(1), 0);
@@ -152,7 +152,7 @@ fn an_accept_with_the_shown_token_sets_the_value_and_one_with_an_older_listing_i
     let shown = review_view::waiting(&state).unwrap();
     let token = shown.listing["token"].as_str().unwrap().to_owned();
     window.protect(true);
-    let protected = review_view::accept(&state, vec![a], token.clone()).unwrap();
+    let protected = review_view::accept(&state, &[a], &token).unwrap();
     assert_eq!(protected["ok"], false, "{protected}");
     assert_eq!(protected["error"]["code"], "library_protected");
     assert_eq!(window.rating(1), 0);
@@ -160,7 +160,7 @@ fn an_accept_with_the_shown_token_sets_the_value_and_one_with_an_older_listing_i
 
     // The listing the DJ sees: accepted, the value is the Library's now and
     // the Fact no longer waits.
-    let accepted = review_view::accept(&state, vec![a], token).unwrap();
+    let accepted = review_view::accept(&state, &[a], &token).unwrap();
     assert_eq!(accepted["ok"], true, "{accepted}");
     assert_eq!(accepted["count"], 1);
     assert_eq!(window.rating(1), 4);
@@ -177,7 +177,7 @@ fn a_rejection_is_the_djs_and_is_reopened_from_the_window() {
     let a = window.propose(1, 4, 0.9);
     let b = window.propose(2, 2, 0.5);
 
-    let rejected = review_view::reject(&state, vec![a, b]).unwrap();
+    let rejected = review_view::reject(&state, &[a, b]).unwrap();
     assert_eq!(rejected["ok"], true, "{rejected}");
     assert_eq!(rejected["count"], 2);
     assert!(facts_of(&review_view::waiting(&state).unwrap().listing).is_empty());
@@ -192,7 +192,7 @@ fn a_rejection_is_the_djs_and_is_reopened_from_the_window() {
     assert_eq!(window.rating(1), 0);
 
     // One mistaken rejection reopened as a whole: both wait again.
-    let reopened = review_view::reopen(&state, Vec::new(), Some(entry)).unwrap();
+    let reopened = review_view::reopen(&state, &[], Some(entry)).unwrap();
     assert_eq!(reopened["ok"], true, "{reopened}");
     assert_eq!(reopened["count"], 2);
     assert_eq!(
@@ -201,7 +201,7 @@ fn a_rejection_is_the_djs_and_is_reopened_from_the_window() {
     );
 
     // Reopening a Fact that is not rejected is refused, and said.
-    let refused = review_view::reopen(&state, vec![a], None).unwrap();
+    let refused = review_view::reopen(&state, &[a], None).unwrap();
     assert_eq!(refused["ok"], false, "{refused}");
     assert_eq!(refused["error"]["code"], "review_not_waiting");
 }

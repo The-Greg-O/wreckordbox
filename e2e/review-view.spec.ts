@@ -21,7 +21,7 @@ const run = (page: Page, id: number) => view(page).locator(`[role="group"][data-
 const rows = (scope: Locator) => scope.locator('[role="row"][data-fact]');
 const row = (page: Page, fact: number) => view(page).locator(`[role="row"][data-fact="${fact}"]`);
 const hook = <T,>(page: Page, name: string, ...args: unknown[]) =>
-  page.evaluate(([n, a]) => (window as unknown as Record<string, (...x: unknown[]) => T>)[n as string]!(...(a as unknown[])), [name, args] as const);
+  page.evaluate(([n, a]) => (window as unknown as Record<string, (...x: unknown[]) => T>)[n]!(...(a)), [name, args] as const);
 const calls = (page: Page) => hook<Call[]>(page, "__reviewCalls");
 const factsOf = async (scope: Locator) => (await rows(scope).evaluateAll((els) => els.map((e) => Number(e.getAttribute("data-fact")))));
 
