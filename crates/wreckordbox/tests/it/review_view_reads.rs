@@ -282,19 +282,6 @@ fn a_stale_row_is_refused_by_name_and_no_selected_row_is_applied() {
     assert_eq!(super::review::rating(&s, "10001"), 0);
     let waiting = super::review::facts_waiting(&s);
     assert!(waiting.contains(&a), "{waiting:?}");
-
-    // A row whose value changed (not just gone) is named as it is now.
-    let shown = ok(&s, &["review", "waiting"]);
-    let c = waiting.iter().copied().find(|f| *f != a).unwrap();
-    let stale = json!([{ "fact": c, "token": "0000" }]);
-    let refused = accept_rows(&s, stale).unwrap_err();
-    assert_eq!(refused.code, "review_changed");
-    assert!(
-        refused.message.contains(&format!("Fact {c} is now")),
-        "{}",
-        refused.message
-    );
-    let _ = shown;
 }
 
 #[test]
@@ -334,4 +321,225 @@ fn rows_are_for_an_accept_only_and_never_with_another_selection() {
         .unwrap_err();
     assert_eq!(refused.code, "review_not_the_djs");
     assert_eq!(super::review::facts_waiting(&s), vec![a]);
+}
+
+fn accept_refused(s: &Sandbox, rows: Value) -> wreckordbox_service::ServiceError {
+    let refused = accept_rows(s, rows).unwrap_err();
+    assert_eq!(refused.code, "review_changed", "{refused:?}");
+    refused
+}
+
+#[test]
+fn a_real_row_token_is_refused_once_its_fact_is_reattached_to_another_track_and_nothing_is_written()
+{
+    let s = Sandbox::new();
+    let id = s.import_track("Track.wav", 1);
+    super::review_races::describe(&s, &id);
+    ok(&s, &["status"]);
+    let f = fact(&s, &id, "energy", "4", "agent:tagger", "0.7");
+    let shown = ok(&s, &["review", "waiting"]);
+    let row = json!([{ "fact": f, "token": row_token(&shown, f) }]);
+    let (next, _service) = super::review_races::readd(&s, &id);
+
+    let refused = accept_refused(&s, row);
+
+    assert!(
+        refused
+            .message
+            .contains(&format!("Fact {f} is now: track {next}")),
+        "{}",
+        refused.message
+    );
+    assert_eq!(super::review_races::db_rating(&s, &next), 0);
+    assert_eq!(super::review::facts_waiting(&s), vec![f]);
+}
+
+#[test]
+fn a_real_row_token_is_refused_when_why_the_fact_waits_changes() {
+    // Energy and Prep colour are Judgements: they never go stale, and a
+    // Fact's proposed value never changes under its id (a newer Fact
+    // supersedes it, below). What can change under the same id is the
+    // track (above) and its eligibility: the policy now holds it for
+    // another reason.
+    let s = Sandbox::new();
+    s.dj_prep_colours();
+    ok(&s, &["status"]);
+    let f = fact(&s, "10001", "energy", "4", "agent:tagger", "0.6");
+    let shown = ok(&s, &["review", "waiting"]);
+    assert_eq!(shown["waiting"][0]["reason"], "waits_for_dj");
+    let row = json!([{ "fact": f, "token": row_token(&shown, f) }]);
+    super::review::policy(&s, "[energy]\napply = 0.8\n");
+    assert_eq!(super::review::waiting(&s)[0]["reason"], "below_confidence");
+
+    let refused = accept_refused(&s, row);
+
+    assert!(
+        refused.message.contains(&format!("Fact {f} is now")),
+        "{}",
+        refused.message
+    );
+    assert_eq!(super::review::rating(&s, "10001"), 0);
+}
+
+#[test]
+fn every_changed_row_is_named_and_no_row_is_applied() {
+    let s = Sandbox::new();
+    s.dj_prep_colours();
+    ok(&s, &["status"]);
+    let a = fact(&s, "10001", "energy", "4", "agent:tagger", "0.9");
+    let b = fact(&s, "10002", "energy", "2", "agent:tagger", "0.9");
+    let c = fact(&s, "10003", "energy", "3", "agent:tagger", "0.9");
+    let shown = ok(&s, &["review", "waiting"]);
+    let rows = json!([a, b, c]
+        .iter()
+        .map(|f| json!({ "fact": f, "token": row_token(&shown, *f) }))
+        .collect::<Vec<_>>());
+    // Newer proposals from the same source supersede a and c.
+    fact(&s, "10001", "energy", "5", "agent:tagger", "0.9");
+    fact(&s, "10003", "energy", "1", "agent:tagger", "0.9");
+
+    let refused = accept_refused(&s, rows);
+
+    for f in [a, c] {
+        assert!(
+            refused
+                .message
+                .contains(&format!("Fact {f} is no longer waiting")),
+            "{}",
+            refused.message
+        );
+    }
+    assert!(
+        !refused.message.contains(&format!("Fact {b} ")),
+        "{}",
+        refused.message
+    );
+    for track in ["10001", "10002", "10003"] {
+        assert_eq!(super::review::rating(&s, track), 0, "{track}");
+    }
+}
+
+#[test]
+fn rows_from_two_listings_are_accepted_together_and_only_those_rows() {
+    let s = Sandbox::new();
+    s.dj_prep_colours();
+    ok(&s, &["status"]);
+    let a = fact(&s, "10001", "energy", "4", "agent:tagger", "0.9");
+    let first = ok(&s, &["review", "waiting"]);
+    let b = fact(&s, "10002", "energy", "2", "agent:other", "0.9");
+    let unchosen = fact(&s, "10003", "energy", "3", "agent:other", "0.9");
+    let second = ok(&s, &["review", "waiting"]);
+
+    let accepted = accept_rows(
+        &s,
+        json!([
+            { "fact": a, "token": row_token(&first, a) },
+            { "fact": b, "token": row_token(&second, b) },
+        ]),
+    )
+    .unwrap();
+
+    assert_eq!(accepted["count"], 2, "{accepted}");
+    assert_eq!(super::review::rating(&s, "10001"), 4);
+    assert_eq!(super::review::rating(&s, "10002"), 2);
+    assert_eq!(super::review::rating(&s, "10003"), 0);
+    assert_eq!(super::review::facts_waiting(&s), vec![unchosen]);
+}
+
+#[test]
+fn a_row_token_replayed_after_its_row_was_accepted_or_rejected_is_refused() {
+    let s = Sandbox::new();
+    s.dj_prep_colours();
+    ok(&s, &["status"]);
+    let a = fact(&s, "10001", "energy", "4", "agent:tagger", "0.9");
+    let b = fact(&s, "10002", "energy", "2", "agent:tagger", "0.9");
+    let shown = ok(&s, &["review", "waiting"]);
+    let row_a = json!([{ "fact": a, "token": row_token(&shown, a) }]);
+    let row_b = json!([{ "fact": b, "token": row_token(&shown, b) }]);
+    accept_rows(&s, row_a.clone()).unwrap();
+    ok(&s, &["review", "reject", &b.to_string(), "--source", "dj"]);
+    // The DJ sets track 10001 again by hand; a replay must not undo it.
+    ok(&s, &["tracks", "rate", "10001", "1", "--source", "dj"]);
+
+    let replayed = accept_refused(&s, row_a);
+    assert!(
+        replayed
+            .message
+            .contains(&format!("Fact {a} is no longer waiting")),
+        "{}",
+        replayed.message
+    );
+    let replayed = accept_refused(&s, row_b);
+    assert!(
+        replayed
+            .message
+            .contains(&format!("Fact {b} is no longer waiting")),
+        "{}",
+        replayed.message
+    );
+    assert_eq!(super::review::rating(&s, "10001"), 1);
+    assert_eq!(super::review::rating(&s, "10002"), 0);
+}
+
+#[test]
+fn a_row_rejected_then_reopened_is_accepted_with_the_token_it_was_shown_with() {
+    // Decided: acceptable. The token binds what the DJ was shown (Fact,
+    // track, field, value now, proposal, source, confidence, why it
+    // waits). Reopening is the DJ's own act putting that same suggestion
+    // back; while every covered value is still as shown, accepting with
+    // the old row is accepting exactly what the DJ saw. Any change to it
+    // refuses as above. The whole-list token behaves the same.
+    let s = Sandbox::new();
+    s.dj_prep_colours();
+    ok(&s, &["status"]);
+    let a = fact(&s, "10001", "energy", "4", "agent:tagger", "0.9");
+    let shown = ok(&s, &["review", "waiting"]);
+    let row = json!([{ "fact": a, "token": row_token(&shown, a) }]);
+    let rejected = ok(&s, &["review", "reject", &a.to_string(), "--source", "dj"]);
+    accept_refused(&s, row.clone());
+    ok(
+        &s,
+        &[
+            "review",
+            "reopen",
+            "--rejection",
+            &rejected["rejection"]["entry"].to_string(),
+            "--source",
+            "dj",
+        ],
+    );
+
+    let accepted = accept_rows(&s, row).unwrap();
+
+    assert_eq!(accepted["count"], 1, "{accepted}");
+    assert_eq!(super::review::rating(&s, "10001"), 4);
+}
+
+#[test]
+fn rows_with_a_filter_or_all_are_refused_and_nothing_is_written() {
+    let s = Sandbox::new();
+    s.dj_prep_colours();
+    ok(&s, &["status"]);
+    let a = fact(&s, "10001", "energy", "4", "agent:tagger", "0.9");
+    let b = fact(&s, "10002", "energy", "2", "agent:tagger", "0.9");
+    let shown = ok(&s, &["review", "waiting"]);
+    let row = json!([{ "fact": a, "token": row_token(&shown, a) }]);
+    let mut client = s.client();
+    for extra in [
+        json!({ "all": true }),
+        json!({ "field": "energy" }),
+        json!({ "tracks": ["10002"] }),
+        json!({ "at_least": 0.5 }),
+        json!({ "from": {"kind": "agent", "name": "tagger"} }),
+        json!({ "rejection": 1 }),
+    ] {
+        let mut args = json!({ "rows": row, "source": {"kind": "dj"} });
+        for (k, v) in extra.as_object().unwrap() {
+            args[k] = v.clone();
+        }
+        let refused = client.call::<Value>("review.accept", args).unwrap_err();
+        assert_eq!(refused.code, "bad_request", "{extra}: {refused:?}");
+    }
+    assert_eq!(super::review::facts_waiting(&s), vec![a, b]);
+    assert_eq!(super::review::rating(&s, "10001"), 0);
 }
