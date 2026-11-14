@@ -1107,6 +1107,7 @@ pub async fn export_playlist<R: tauri::Runtime>(
             )?;
         }
         let reservation = reserve_export(&progress_app, destination)?;
+        crate::test_holds::point(crate::test_holds::EXPORT_CONFIRMED, state.backup_dir());
         let selection = playlist_export_selection(&state, &library, &share, destination, &playlist, delete_unlisted_music.unwrap_or(false))?;
         drop(gate);
         write_export_registered(&progress_app, destination, &selection, defaults.as_ref(), compatibility_format, &reservation, &access)

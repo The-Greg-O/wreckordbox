@@ -36,6 +36,10 @@ struct Point {
     released: bool,
 }
 
+/// A playlist export to a Stick has checked its confirmation against the
+/// Library's generation and not yet read what it exports (wbx-45.14).
+pub const EXPORT_CONFIRMED: &str = "export.confirmed";
+
 static ANY: AtomicBool = AtomicBool::new(false);
 static POINTS: Mutex<Option<Points>> = Mutex::new(None);
 static CHANGED: Condvar = Condvar::new();

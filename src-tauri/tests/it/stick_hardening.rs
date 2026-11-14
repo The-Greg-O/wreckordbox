@@ -234,3 +234,96 @@ fn locking_the_stick_during_an_undo_whose_library_step_fails_still_puts_the_tag_
         "the file is as it was before the Undo"
     );
 }
+
+/// A confirmed token for exporting `playlist` to the rig's Stick: planned,
+/// then approved, as the window's hold does.
+fn export_token(rig: &Rig, playlist: &str) -> Option<String> {
+    let request = serde_json::from_value(serde_json::json!({
+        "destination": rig.stick.to_string_lossy(),
+        "operation": { "kind": "exportPlaylist", "playlist": playlist },
+    }))
+    .unwrap();
+    let plan = rbxport_lib::stick_write_plan::plan(&rig.state(), &request).unwrap();
+    plan.plan
+        .map(|id| rbxport_lib::stick_approval::approve(&rig.state_dir(), &id).unwrap())
+}
+
+fn stick_tag_names(stick: &Path) -> Vec<String> {
+    let tags = wreckordbox_stick_outline::read(stick, |read| {
+        read.my_tags(rbl_export::device_library::Format::OneLibrary)
+    })
+    .unwrap();
+    tags.categories
+        .iter()
+        .flat_map(|c| c.tags.iter().map(|t| t.name.clone()))
+        .collect()
+}
+
+/// wbx-45.4 review, C4: the export checks its confirmation against the
+/// Library's generation and reads what it exports under one hold of the
+/// edit gate, so a My Tag edit arriving in between waits, and the Stick
+/// gets exactly the Library that was confirmed.
+#[test]
+fn a_my_tag_edit_arriving_during_an_export_plan_waits_and_is_not_exported() {
+    let rig = rig();
+    rig.unlock();
+    let token = export_token(&rig, &fixture::playlist_id(0));
+    assert!(token.is_some());
+
+    let held = test_holds::arm(test_holds::EXPORT_CONFIRMED, &rig.state_dir());
+    let exporting = {
+        let (handle, path) = (
+            rig.app.handle().clone(),
+            rig.stick.to_string_lossy().into_owned(),
+        );
+        std::thread::spawn(move || {
+            run(commands::export_playlist(
+                handle.clone(),
+                handle.state(),
+                fixture::playlist_id(0),
+                path,
+                None,
+                None,
+                None,
+                token,
+            ))
+            .map(|_| ())
+            .map_err(|e| e.message)
+        })
+    };
+    held.reached();
+    // The DJ renames a My Tag now, from the window or an agent. When the
+    // Library is free it is renamed at once, before the export reads it.
+    let rename = |state: &AppState| {
+        state
+            .write(|w| w.rename_my_tag(fixture::MY_TAG_PEAK, "Peak Hour"))
+            .map(|_| ())
+    };
+    let state = rig.state();
+    let renaming = match state.core().edit_gate().try_lock() {
+        Some(free) => {
+            drop(free);
+            rename(&state).unwrap();
+            None
+        }
+        None => {
+            let state = Arc::clone(&state);
+            Some(std::thread::spawn(move || rename(&state).unwrap()))
+        }
+    };
+    held.release();
+
+    assert_eq!(exporting.join().unwrap(), Ok(()));
+    if let Some(renaming) = renaming {
+        renaming.join().unwrap();
+    }
+    let on_stick = stick_tag_names(&rig.stick);
+    assert!(
+        on_stick.contains(&"Peak".to_owned()),
+        "the confirmed Library was exported: {on_stick:?}"
+    );
+    assert!(
+        !on_stick.contains(&"Peak Hour".to_owned()),
+        "the later edit was not: {on_stick:?}"
+    );
+}
