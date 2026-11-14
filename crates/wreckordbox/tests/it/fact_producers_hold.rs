@@ -13,9 +13,8 @@
     clippy::panic
 )]
 use crate::common;
+use crate::intensity::signals;
 use crate::review::{fact, token};
-#[path = "../../../wreckordbox-intensity/tests/common/mod.rs"]
-mod signals;
 
 use std::path::Path;
 use std::process::{Child, Stdio};
@@ -420,7 +419,9 @@ impl Rig {
         let mut set = String::new();
         s.edit(|writer| {
             set = writer.create_playlist("Set", "root").unwrap();
-            writer.add_tracks(&set, &[loaded.clone()]).unwrap();
+            writer
+                .add_tracks(&set, std::slice::from_ref(&loaded))
+                .unwrap();
         });
         crate::review::policy(&s, "[energy]\napply = 0.8\n");
         Self {
@@ -474,8 +475,8 @@ impl Rig {
 }
 
 #[test]
-fn while_a_producer_holds_its_commit_projection_applies_and_a_stick_loads_and_only_an_accept_waits(
-) {
+fn while_a_producer_holds_its_commit_projection_applies_and_a_stick_loads_and_only_an_accept_waits()
+{
     let rig = Rig::new();
     let gate = Gate::new();
     let _service = gated(&rig.s, &gate);
@@ -504,8 +505,7 @@ fn while_a_producer_holds_its_commit_projection_applies_and_a_stick_loads_and_on
 }
 
 #[test]
-fn a_producer_commits_while_projection_holds_the_library_and_an_accept_queued_behind_it_finishes(
-) {
+fn a_producer_commits_while_projection_holds_the_library_and_an_accept_queued_behind_it_finishes() {
     let rig = Rig::new();
     let gate = Gate::new();
     let projection = tempfile::tempdir().unwrap();
