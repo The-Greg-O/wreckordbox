@@ -248,3 +248,63 @@ pub fn assert_unchanged(root: &Path, before: &BTreeMap<PathBuf, Option<Vec<u8>>>
     let found = changes(before, &snapshot(root));
     assert!(found.is_empty(), "{what} changed the Stick: {found:?}");
 }
+
+/// The MyTags of [`tagged_stick`]: two categories, "Vibe" (Dark, Uplifting)
+/// and "Situation" (Peak, Warm-up, and a second "Dark" of its own), as
+/// `(id, seq, name, attribute, parent)` (wbx-45.12).
+pub const TAGS: [(u64, u32, &str, u8, u64); 7] = [
+    (2, 2, "Situation", 1, 0),
+    (1, 1, "Vibe", 1, 0),
+    (11, 1, "Dark", 0, 1),
+    (12, 2, "Uplifting", 0, 1),
+    (21, 1, "Peak", 0, 2),
+    (22, 2, "Warm-up", 0, 2),
+    (23, 3, "Dark", 0, 2),
+];
+
+/// The tracks of [`tagged_stick`]: `(title, tag ids)`. The first five are
+/// the playlist "Warm Up"; "Elsewhere" is on the Stick but not in it.
+pub const TAGGED_TRACKS: [(&str, &[u64]); 6] = [
+    ("Low Sun", &[11, 21]),
+    ("Paper", &[11, 12]),
+    ("Kiln", &[12, 22]),
+    ("Odd", &[23]),
+    ("Blank", &[]),
+    ("Elsewhere", &[11, 21]),
+];
+
+/// Exports to `dest` a Stick whose tracks carry MyTags ([`TAGS`],
+/// [`TAGGED_TRACKS`]), both libraries and `exportExt.pdb`, with the
+/// playlist "Warm Up" (so the WAL fixtures apply to it too).
+pub fn tagged_stick(dest: &Path) {
+    use rbl_export::{export_full, SourceMyTag};
+    let src = tempfile::tempdir().unwrap();
+    let tracks: Vec<SourceTrack> = TAGGED_TRACKS
+        .iter()
+        .enumerate()
+        .map(|(at, (title, tags))| {
+            let id = u64::try_from(at).unwrap() + 1;
+            let mut t = track(src.path(), id);
+            t.title = (*title).into();
+            t.my_tags = tags.to_vec();
+            t
+        })
+        .collect();
+    let my_tags: Vec<SourceMyTag> = TAGS
+        .iter()
+        .map(|&(id, seq, name, attribute, parent)| SourceMyTag {
+            id,
+            seq,
+            name: name.into(),
+            attribute,
+            parent,
+        })
+        .collect();
+    let playlists = vec![SourcePlaylist {
+        id: 12,
+        name: "Warm Up".into(),
+        track_indices: vec![0, 1, 2, 3, 4],
+        ..Default::default()
+    }];
+    export_full(dest, &tracks, &playlists, &my_tags, None, None, &mut |_| {}).unwrap();
+}
