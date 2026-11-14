@@ -534,3 +534,269 @@ fn backing_up_before_projecting_two_thousand_tracks_is_measured() {
         backup["took_ms"], backup["bytes"]
     );
 }
+
+/// Everything in the Sidecar a restore must bring back as it was: every
+/// Fact, every Run and Ledger entry, and both kinds of projection marks;
+/// leaving out the restore's own record (its `restore` entry and Run).
+fn sidecar_state(s: &Sandbox) -> Vec<String> {
+    let db = rusqlite::Connection::open_with_flags(
+        s.sidecar_dir().join("sidecar.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let rows = |sql: &str| -> Vec<String> {
+        let mut statement = db.prepare(sql).unwrap();
+        let count = statement.column_count();
+        statement
+            .query_map([], |row| {
+                Ok((0..count)
+                    .map(|i| match row.get_ref(i).unwrap() {
+                        rusqlite::types::ValueRef::Null => "NULL".to_owned(),
+                        rusqlite::types::ValueRef::Integer(n) => n.to_string(),
+                        rusqlite::types::ValueRef::Real(r) => r.to_string(),
+                        rusqlite::types::ValueRef::Text(t) => {
+                            String::from_utf8_lossy(t).into_owned()
+                        }
+                        rusqlite::types::ValueRef::Blob(b) => format!("{b:?}"),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("|"))
+            })
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    };
+    let restore_runs = "SELECT run_id FROM ledger WHERE kind = 'restore'";
+    let mut state = Vec::new();
+    for (name, sql) in [
+        ("fact", "SELECT * FROM fact ORDER BY id".to_owned()),
+        (
+            "ledger",
+            format!("SELECT * FROM ledger WHERE run_id NOT IN ({restore_runs}) ORDER BY id"),
+        ),
+        (
+            "run",
+            format!("SELECT * FROM run WHERE id NOT IN ({restore_runs}) ORDER BY id"),
+        ),
+        (
+            "energy and prep colour marks",
+            "SELECT key, value FROM meta WHERE key LIKE 'projection_row:%' ORDER BY key".to_owned(),
+        ),
+        (
+            "mytag marks",
+            "SELECT key, value FROM meta WHERE key LIKE 'projection_tag:%' ORDER BY key".to_owned(),
+        ),
+    ] {
+        let found = rows(&sql);
+        state.push(format!("{name}: {}", found.len()));
+        state.extend(found.into_iter().map(|row| format!("{name}: {row}")));
+    }
+    state
+}
+
+/// Review finding 4: restored, the backup gives back the whole Sidecar as
+/// it was before the Run (Facts, Ledger, both kinds of marks), with the
+/// Library, not only the Energy the Run wrote.
+#[test]
+fn restoring_a_large_runs_backup_gives_back_the_library_and_the_whole_sidecar_before_it() {
+    let s = Sandbox::new();
+    let [_, mood, _, sub_genre] = s.four_categories();
+    s.create_my_tag_in(&mood, "Dark");
+    s.create_my_tag_in(&sub_genre, "House");
+    std::fs::create_dir_all(s.sidecar_dir()).unwrap();
+    std::fs::write(s.sidecar_dir().join("tag-schema.toml"), SCHEMA).unwrap();
+    policy(
+        &s,
+        "[energy]\napply = 0.5\n\n[mytags]\napply = 0.5\n\n[backup]\nabove_tracks = 2\n",
+    );
+    ok(&s, &["status"]);
+    // Small Runs first, which leave marks of both kinds.
+    energy(&s, "10001", "3");
+    assert!(ok(&s, &["project"])["large_run"]["backup"].is_null());
+    ok(
+        &s,
+        &[
+            "facts",
+            "record",
+            "10001",
+            "mood",
+            "dark",
+            "--source",
+            "agent:tagger",
+            "--confidence",
+            "0.9",
+        ],
+    );
+    assert!(ok(&s, &["project", "--mytags"])["large_run"]["backup"].is_null());
+    for (track, value) in [("10002", "4"), ("10003", "2"), ("10004", "5")] {
+        energy(&s, track, value);
+    }
+    // Read with no service holding the Sidecar open.
+    stop_service(&s);
+    let before = sidecar_state(&s);
+    assert!(
+        before
+            .iter()
+            .any(|row| row.starts_with("energy and prep colour marks: projection_row:"))
+            && before
+                .iter()
+                .any(|row| row.starts_with("mytag marks: projection_tag:")),
+        "{before:#?}"
+    );
+    let tracks = ["10001", "10002", "10003", "10004"];
+    let ratings_before: Vec<Value> = tracks.iter().map(|t| rating_of(&s, t)).collect();
+
+    let applied = ok(&s, &["project"]);
+    let path = applied["large_run"]["backup"]["path"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    stop_service(&s);
+    assert_ne!(sidecar_state(&s), before, "the Run changed the Sidecar");
+
+    let restored = s.cli(&["--json", "backup", "restore", &path, "--yes"]);
+    assert!(
+        restored.status.success(),
+        "{}{}",
+        restored.stdout,
+        restored.stderr
+    );
+    stop_service(&s);
+    assert_eq!(sidecar_state(&s), before);
+    let ratings_after: Vec<Value> = tracks.iter().map(|t| rating_of(&s, t)).collect();
+    assert_eq!(ratings_after, ratings_before);
+}
+
+fn run_started(s: &Sandbox) -> String {
+    let started = ok(
+        s,
+        &[
+            "runs",
+            "start",
+            "--source",
+            "agent:tagger",
+            "--description",
+            "Energy by halves",
+        ],
+    );
+    started["run"]["id"]
+        .as_i64()
+        .or_else(|| started["id"].as_i64())
+        .unwrap_or_else(|| panic!("{started}"))
+        .to_string()
+}
+
+/// Review finding 3: a Run is counted as a whole. Commands joining one Run
+/// are counted with what the Run already changed; the backup is taken
+/// before the command that takes the Run over the threshold, once.
+#[test]
+fn a_joined_run_is_counted_whole_and_backed_up_before_the_command_that_crosses_the_threshold() {
+    let s = Sandbox::new();
+    policy(&s, "[energy]\napply = 0.5\n\n[backup]\nabove_tracks = 2\n");
+    ok(&s, &["status"]);
+    for (track, value) in [
+        ("10001", "4"),
+        ("10002", "2"),
+        ("10003", "5"),
+        ("10004", "1"),
+    ] {
+        energy(&s, track, value);
+    }
+    let run = run_started(&s);
+    let project = |track: &str| ok(&s, &["project", "--track", track, "--run", &run]);
+    let first = project("10001");
+    assert_eq!(first["large_run"]["run_tracks"], 1, "{first}");
+    assert!(first["large_run"]["backup"].is_null());
+    let second = project("10002");
+    assert_eq!(second["large_run"]["run_tracks"], 2);
+    assert!(second["large_run"]["backup"].is_null());
+    let third = project("10003");
+    assert_eq!(third["large_run"]["tracks"], 1);
+    assert_eq!(third["large_run"]["run_tracks"], 3);
+    let path = third["large_run"]["backup"]["path"]
+        .as_str()
+        .expect("the crossing command backs up")
+        .to_owned();
+    let fourth = project("10004");
+    assert_eq!(fourth["large_run"]["run_tracks"], 4);
+    assert!(
+        fourth["large_run"]["backup"].is_null(),
+        "once per Run: {fourth}"
+    );
+    assert_eq!(fourth["large_run"]["run_backup"], json!(path));
+    assert_eq!(backups_in(&s.state_dir()).len(), 1);
+    // The Ledger says which of the Run's writes the backup precedes.
+    let shown = ok(&s, &["runs", "show", &run]);
+    let preceded: Vec<Value> = shown["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["command"]["args"]["large_run"]["backup"]["path"].clone())
+        .collect();
+    assert_eq!(
+        preceded,
+        vec![json!(null), json!(null), json!(path), json!(null)],
+        "{shown}"
+    );
+}
+
+/// Review finding 5: a backup folder inside what the backup reads (the
+/// analysis or artwork tree, the Sidecar) is refused before anything is
+/// written, as the window's backup refuses it.
+#[test]
+fn a_backup_folder_inside_what_the_backup_reads_is_refused_with_nothing_changed() {
+    for inside in ["analysis", "artwork", "sidecar"] {
+        let s = Sandbox::new();
+        let folder = match inside {
+            "analysis" => rbl_backup::analysis_dir(s.location()).join("backups"),
+            "artwork" => rbl_backup::artwork_dir(s.location()).join("backups"),
+            _ => s.sidecar_dir().join("backups"),
+        };
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::create_dir_all(s.state_dir()).unwrap();
+        std::fs::write(
+            s.state_dir().join(rbl_backup::DESTINATION_FILE),
+            serde_json::to_vec(&folder).unwrap(),
+        )
+        .unwrap();
+        three_to_project(&s, "[energy]\napply = 0.5\n\n[backup]\nabove_tracks = 2\n");
+        let unchanged = ratings(&s);
+        let error = refused(&s, &["project"]);
+        assert_eq!(error["code"], "run_backup_failed", "{inside}: {error}");
+        assert_eq!(ratings(&s), unchanged, "{inside}");
+        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 0, "{inside}");
+    }
+}
+
+/// Review (e): Review's accept of chosen rows, each by its own token (the
+/// window's way), goes through the same backup.
+#[test]
+fn a_large_review_accept_of_chosen_rows_is_backed_up_first() {
+    let s = Sandbox::new();
+    three_to_project(
+        &s,
+        "[energy]\napply = \"wait\"\n\n[backup]\nabove_tracks = 2\n",
+    );
+    let mut client = s.client();
+    let waiting: Value = client.call("review.waiting", json!({})).unwrap();
+    let rows: Vec<Value> = waiting["row_tokens"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(fact, token)| json!({"fact": fact.parse::<i64>().unwrap(), "token": token}))
+        .collect();
+    assert_eq!(rows.len(), 3);
+    client.in_run(Some(
+        serde_json::from_value(json!({"source": {"kind": "dj"}})).unwrap(),
+    ));
+    let accepted: Value = client
+        .call(
+            "review.accept",
+            json!({"rows": rows, "source": {"kind": "dj"}}),
+        )
+        .unwrap();
+    assert_eq!(accepted["count"], 3, "{accepted}");
+    assert_eq!(accepted["large_run"]["tracks"], 3);
+    let path = accepted["large_run"]["backup"]["path"].as_str().unwrap();
+    assert_eq!(backups_in(&s.state_dir()), vec![PathBuf::from(path)]);
+}

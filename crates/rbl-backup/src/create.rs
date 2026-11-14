@@ -47,6 +47,9 @@ pub struct Request<'a> {
     pub check: &'a dyn Fn() -> io::Result<()>,
     /// Recorded in the summary.
     pub app_version: Option<String>,
+    /// Called at named moments (`between-stores`: the Sidecar is read and
+    /// the Library not yet), for a test to hold the writer there.
+    pub at: &'a dyn Fn(&str),
 }
 
 /// A backup written.
@@ -120,6 +123,7 @@ fn written(request: &Request<'_>, partial: &Path, created_at: u64) -> Result<()>
         }
         None => None,
     };
+    (request.at)("between-stores");
     fs::create_dir_all(request.scratch)?;
     let scratch = tempfile::Builder::new()
         .prefix("run-backup-")

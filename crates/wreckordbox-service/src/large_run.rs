@@ -162,7 +162,9 @@ pub(crate) fn before_write(
     let count = tracks.into_iter().collect::<HashSet<_>>().len();
     let above = threshold(stems.sidecar_dir())?;
     let backup = if count > above {
-        Some(take(library, stems)?)
+        let taken = take(library, stems)?;
+        hold("backed-up", library.for_backup().0);
+        Some(taken)
     } else {
         None
     };
@@ -235,6 +237,7 @@ fn take(library: &OpenLibrary, stems: &Stems) -> Result<Taken, ServiceError> {
                 ),
             )
         })?;
+    hold("stick-held", &state_dir);
     let fault = rbl_db::test_mode()
         .then(|| std::env::var(FAULT_ENV).ok())
         .flatten();
@@ -262,6 +265,7 @@ fn take(library: &OpenLibrary, stems: &Stems) -> Result<Taken, ServiceError> {
         scratch: &state_dir,
         check: &check,
         app_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
+        at: &|point| hold(point, &state_dir),
     };
     let made = {
         let _files = analysis_files.lock();
@@ -283,4 +287,28 @@ fn take(library: &OpenLibrary, stems: &Stems) -> Result<Taken, ServiceError> {
         bytes: made.bytes,
         took_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
     })
+}
+
+/// A folder in the state folder in which a test puts an empty file named
+/// for a moment of the backup (`between-stores`, `stick-held`,
+/// `backed-up`): a backup of that state folder reaching the moment makes
+/// `<moment>.reached` there and waits until the test removes `<moment>`
+/// (two minutes at most). Test mode only; scoped by state folder, so tests
+/// in one process do not hold each other.
+pub const HOLDS: &str = "test-run-backup-holds";
+
+pub(crate) fn hold(point: &str, state_dir: &Path) {
+    if !rbl_db::test_mode() {
+        return;
+    }
+    let dir = state_dir.join(HOLDS);
+    let armed = dir.join(point);
+    if !armed.exists() {
+        return;
+    }
+    let _ = std::fs::write(dir.join(format!("{point}.reached")), b"");
+    let deadline = Instant::now() + std::time::Duration::from_secs(120);
+    while armed.exists() && Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
 }
