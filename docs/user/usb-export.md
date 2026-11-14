@@ -276,14 +276,24 @@ Stick: it is never unlocked on its own.
 - **A write keeps its unlock to the end.** A key edit that writes the tag of
   a file on the Stick keeps the Stick unlocked until the Library has the
   key too, or the edit is undone, so the tag never disagrees with the
-  Library. A backup to a Stick checks it at every file it copies: locked,
-  ejected or replaced mid-copy, the backup stops, says how much it copied
-  and names the unfinished copy it left there.
+  Library. If the Stick is ejected or replaced mid-edit, the edit fails and
+  the Library's key is put back. A backup to a Stick checks it before every
+  write it makes: locked, ejected or replaced mid-copy, the backup stops,
+  says how much it copied and names the unfinished copy it left on that
+  Stick. That copy is not removed for you yet: delete it once the Stick is
+  back and unlocked.
 - **Stem separation and Intensity measurement are never done for a Sidecar
   kept on a Stick**, locked or unlocked (`sidecar_on_stick`): they write the
   Sidecar for minutes, and a Stick must stay free to lock and eject. Keep
-  the Library on this computer for them. Shorter Sidecar writes (a Fact, a
-  Decision) work while the Stick is unlocked.
+  the Library on this computer for them.
+- **Other Sidecar writes on a Library kept on a Stick are not yet covered**
+  by Stick Protection's guarantee. A Fact, a Decision, the Ledger's records
+  and Projection marks are refused while the Stick is protected, but one
+  that began while it was unlocked can still finish after you lock it.
+  Until that is decided and built, keep the Library and its Sidecar on this
+  computer.
+- **Closing the window waits for every write under way**, a Stick load, an
+  export, a sync or a backup, and starts no new one.
 
 The plan and the hold-to-confirm button before a Stick write are an
 interface confirmation: they show what will change and ask you to mean it.
