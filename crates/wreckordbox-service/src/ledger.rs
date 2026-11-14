@@ -1176,6 +1176,7 @@ impl Keeper {
     /// changed rows and recorded nothing: that stays for the next write to
     /// record as unconfirmed.
     fn settle_unasserted(&self) {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         let mut state = self.state();
         if let Some(op) = state.op.as_mut().filter(|op| {
             op.asserting && !op.recorded && (op.wrote != Some(true) || op.changes_recorded)
@@ -1220,9 +1221,15 @@ impl Keeper {
         request: &Request,
         answer: impl FnOnce() -> Result<T, ServiceError>,
     ) -> (Result<T, ServiceError>, Option<Run>) {
+        // The Run's bookkeeping is the edits' own record (wbx-8yh); the
+        // command itself is not.
+        let ledger = crate::sidecar_stick::ledger_scope();
         let target = match self.target(from_client, request) {
             Ok(Some(target)) => target,
-            Ok(None) => return (answer(), None),
+            Ok(None) => {
+                drop(ledger);
+                return (answer(), None);
+            }
             Err(refused) => return (Err(refused), None),
         };
         let admitted = match &target {
@@ -1237,7 +1244,9 @@ impl Keeper {
             stems: Arc::clone(&self.stems),
         };
         CURRENT.with(|current| *current.borrow_mut() = Some(scope));
+        drop(ledger);
         let result = answer();
+        let _ledger = crate::sidecar_stick::ledger_scope();
         let scope = CURRENT.with(|current| current.borrow_mut().take());
         if let Some(run) = admitted {
             self.leave(run);
@@ -2046,10 +2055,12 @@ impl Keeper {
 
 impl rbl_library::ledger::Ledger for Keeper {
     fn bulk(&self, kind: rbl_library::bulk::Kind) -> Option<Arc<dyn rbl_library::bulk::Recorder>> {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         Some(bulk::make(self, kind))
     }
 
     fn begin(&self) -> Result<(), String> {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         if let Some(active) = bulk::active(self) {
             active.set_bulk(false);
             if active.imports() {
@@ -2060,6 +2071,7 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn begin_unkept(&self) -> Result<(), String> {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         if let Some(active) = bulk::active(self) {
             active.set_bulk(true);
             return active.begin();
@@ -2068,6 +2080,7 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn begin_file(&self, kind: &str, track: &str, values: &Value) -> Result<(), String> {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         if let Some(active) = bulk::active(self) {
             active.set_bulk(true);
             return active.begin();
@@ -2085,6 +2098,7 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn files_unrestored(&self, values: &Value, why: &str) {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         let mut payload = values.clone();
         payload["not_reversible_reason"] = Value::from("An audio publication could not be rolled back after the native step failed; inspect the named files before editing again");
         self.append(Draft {
@@ -2101,6 +2115,7 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn file_written(&self, kind: &str, track: &str) {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         if bulk::active(self).is_some_and(|active| active.is_bulk()) {
             // FileRecord has already called written(true).
             return;
@@ -2136,6 +2151,7 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn prepare(&self, db: &rbl_db::Library, targets: &rbl_library::ledger::Preparation) {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         self.plan_mutants(db, targets);
         if bulk::active(self).is_some_and(|active| active.imports()) {
             return;
@@ -2166,6 +2182,7 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn written(&self, wrote: bool) {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         if let Some(active) = bulk::active(self).filter(|active| active.is_bulk()) {
             active.written(wrote);
             if wrote && self.faults.abort_after_write {
@@ -2194,6 +2211,7 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn assert(&self, edit: &LibraryEdit, label: &str) -> Option<i64> {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         if self.faults.abort_before_assert {
             std::process::abort();
         }
@@ -2224,6 +2242,7 @@ impl rbl_library::ledger::Ledger for Keeper {
         assertions: &[rbl_library::ledger::TagAssertion],
         label: &str,
     ) -> Option<i64> {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         if self.faults.abort_before_assert {
             std::process::abort();
         }
@@ -2250,6 +2269,7 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn record(&self, step: Step, edit: &LibraryEdit, label: &str, link: Link) -> Option<i64> {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         let sidecar = self.stems.sidecar().ok();
         // The plan the write left with its intent, before it was made.
         let plan = self
@@ -2283,6 +2303,7 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn note(&self, kept: Unkept, name: Option<&str>) {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         if bulk::active(self).is_some_and(|active| active.is_bulk()) {
             return;
         }
