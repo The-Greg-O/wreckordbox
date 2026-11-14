@@ -533,3 +533,404 @@ fn a_dry_run_over_two_thousand_tracks_stays_cheap() {
     assert!(dry_took < Duration::from_secs(20), "{dry_took:?}");
     assert!(apply_took < Duration::from_secs(60), "{apply_took:?}");
 }
+
+/// The hand-written schema with every term a MyTag of the Library and every
+/// category one of its own: nothing blocked, nothing to define.
+fn placed_schema() -> String {
+    SCHEMA
+        .replace("  { id = \"euphoric\", name = \"Euphoric\" },\n", "")
+        .replace("  { dimension = \"era\", label = \"Era\" },\n", "")
+}
+
+/// Stops the service here and waits until its process is gone.
+fn stop_service(s: &Sandbox) {
+    let Ok(mut client) =
+        wreckordbox_service::Client::connect(&s.config().socket_path(s.location()))
+    else {
+        return;
+    };
+    let pid = client.status().ok().map(|status| u64::from(status.pid));
+    let _ = client.stop();
+    if let Some(pid) = pid {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while common::alive(pid) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the service did not stop"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+/// Runs a CLI command whose service, started by it, has `env` set.
+fn with_env(s: &Sandbox, env: &[(&str, &str)], args: &[&str]) -> common::Run {
+    let mut command = s.command();
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    command.arg("--json").args(args);
+    s.run(&mut command)
+}
+
+fn waits_for(file: &std::path::Path) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while !file.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{} never appeared",
+            file.display()
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// The DJ's Facts about `track`, by kind.
+fn dj_facts(s: &Sandbox, track: &str) -> Vec<Value> {
+    ok(s, &["facts", "show", track])["facts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|fact| fact["source"]["kind"] == "dj")
+        .cloned()
+        .collect()
+}
+
+/// Applying does exactly what the dry run listed, as ONE recorded edit in a
+/// Run of its own by a tool: one Ledger entry, one `library_changed`, no
+/// DJ Fact. It is never the DJ's, and a plan other than the one checked is
+/// refused with nothing written.
+#[test]
+fn applying_is_one_run_by_a_tool_that_does_what_the_dry_run_listed_and_makes_no_dj_fact() {
+    let Deck { s, .. } = tagged_by_hand();
+    write_schema(&s, &placed_schema());
+    policy(&s, "[mytags]\napply = 0.5\n");
+    fact(&s, "10004", "mood", &["uplifting"], "agent:tagger");
+    fact(&s, "10004", "genre", &["techno-hypnotic"], "agent:tagger");
+    fact(&s, "10001", "mood", &["uplifting"], "agent:tagger");
+    let dry = ok(&s, &["project", "--mytags", "--dry-run"]);
+    assert_eq!(dry["changes"].as_array().unwrap().len(), 4, "{dry}");
+    let before = tags_of(&s, "10004");
+
+    // Never the DJ's, and never another plan than the one checked.
+    let error = refused(&s, &["project", "--mytags", "--source", "dj"]);
+    assert_eq!(error["code"], "projection_not_the_djs");
+    let error = refused(&s, &["project", "--mytags", "--expect", "0000000000000000"]);
+    assert_eq!(error["code"], "projection_changed");
+    assert_eq!(tags_of(&s, "10004"), before);
+    let runs = ok(&s, &["runs", "list"])["total"].as_i64().unwrap();
+
+    let mut watcher = s.client();
+    watcher.subscribe().unwrap();
+    let plan = dry["plan"].as_str().unwrap();
+    let applied = ok(&s, &["project", "--mytags", "--expect", plan]);
+
+    assert_eq!(applied["changes"], dry["changes"]);
+    assert_eq!(
+        tags_of(&s, "10004"),
+        [
+            "Mood: Uplifting",
+            "Sub-genre: > Hypnotic",
+            "Sub-genre: Techno"
+        ]
+    );
+    assert_eq!(
+        tags_of(&s, "10001"),
+        [
+            "Mood: Dark",
+            "Mood: Uplifting",
+            "Situation: Peak",
+            "Sub-genre: > Deep",
+            "Sub-genre: House",
+        ]
+    );
+    let run = &applied["run"];
+    assert_eq!(run["source"], json!({"kind": "tool", "name": "projection"}));
+    assert!(
+        run["description"]
+            .as_str()
+            .unwrap()
+            .starts_with("MyTag projection under policy "),
+        "{run}"
+    );
+    assert_eq!(ok(&s, &["runs", "list"])["total"], runs + 1);
+    let shown = ok(&s, &["runs", "show", &run["id"].to_string()]);
+    let entries = shown["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 1, "one Ledger entry: {shown}");
+    assert_eq!(entries[0]["kind"], "track_tags");
+    assert_eq!(entries[0]["reversible"], true);
+    let mut heard = Vec::new();
+    while let Some(event) = watcher.next_event(Duration::from_millis(500)).unwrap() {
+        heard.push(event.event);
+    }
+    assert_eq!(heard, ["library_changed"]);
+    // A projection's write is a tool's: it made no DJ Fact.
+    for track in ["10001", "10004"] {
+        assert_eq!(dj_facts(&s, track), Vec::<Value>::new(), "{track}");
+    }
+    // And now there is nothing to do.
+    let again = ok(&s, &["project", "--mytags", "--dry-run"]);
+    assert_eq!(again["changes"], json!([]));
+}
+
+/// What a projection put on follows its Fact; once anyone else writes the
+/// assignment (the DJ by a recorded edit, or rekordbox while wreckordbox
+/// was closed, which leaves other rows) it is the DJ's and is kept.
+#[test]
+fn a_projected_mytag_follows_its_fact_until_anyone_else_writes_it() {
+    let Deck { s, uplifting, .. } = tagged_by_hand();
+    write_schema(&s, &placed_schema());
+    policy(&s, "[mytags]\napply = 0.5\n");
+    fact(&s, "10004", "mood", &["uplifting"], "agent:tagger");
+    fact(&s, "10005", "mood", &["uplifting"], "agent:tagger");
+    fact(&s, "10006", "mood", &["uplifting"], "agent:tagger");
+    ok(&s, &["project", "--mytags"]);
+    for track in ["10004", "10005", "10006"] {
+        assert_eq!(tags_of(&s, track), ["Mood: Uplifting"], "{track}");
+    }
+
+    // The agent changes its mind: the projection's own tag comes off.
+    fact(&s, "10004", "mood", &["dark"], "agent:tagger");
+    let dry = ok(&s, &["project", "--mytags", "--dry-run"]);
+    let mut planned = changes(&dry);
+    planned.sort();
+    assert_eq!(
+        planned,
+        [
+            ("10004".into(), "Dark".into(), "add".into(), false),
+            ("10004".into(), "Uplifting".into(), "remove".into(), false),
+        ]
+    );
+    ok(&s, &["project", "--mytags"]);
+    assert_eq!(tags_of(&s, "10004"), ["Mood: Dark"]);
+
+    // The DJ puts Uplifting back by hand: theirs from now on.
+    ok(
+        &s,
+        &["mytags", "assign", &uplifting, "10004", "--source", "dj"],
+    );
+    // On 10005, rekordbox takes it off and puts it on again while
+    // wreckordbox is closed: nothing recorded, but other rows.
+    stop_service(&s);
+    s.edit(|writer| {
+        writer.set_my_tags("10005", &[]).unwrap();
+        writer
+            .set_my_tags("10005", std::slice::from_ref(&uplifting))
+            .unwrap();
+    });
+    for track in ["10004", "10005", "10006"] {
+        fact(&s, track, "mood", &["dark"], "agent:tagger");
+    }
+    let dry = ok(&s, &["project", "--mytags", "--dry-run"]);
+    let mut kept = listed(&dry, "kept");
+    kept.sort();
+    assert_eq!(
+        kept,
+        [
+            (
+                "10004".into(),
+                "Uplifting".into(),
+                "remove".into(),
+                "set_by_dj".into()
+            ),
+            (
+                "10005".into(),
+                "Uplifting".into(),
+                "remove".into(),
+                "written_since".into()
+            ),
+        ]
+    );
+    // 10006 is still exactly as the projection left it.
+    assert!(changes(&dry).contains(&("10006".into(), "Uplifting".into(), "remove".into(), false)));
+    ok(&s, &["project", "--mytags"]);
+    assert_eq!(tags_of(&s, "10004"), ["Mood: Dark", "Mood: Uplifting"]);
+    assert_eq!(tags_of(&s, "10005"), ["Mood: Dark", "Mood: Uplifting"]);
+    assert_eq!(tags_of(&s, "10006"), ["Mood: Dark"]);
+}
+
+#[test]
+fn library_protection_refuses_the_apply_and_nothing_is_written() {
+    let Deck { s, .. } = tagged_by_hand();
+    write_schema(&s, &placed_schema());
+    policy(&s, "[mytags]\napply = 0.5\n");
+    fact(&s, "10004", "mood", &["uplifting"], "agent:tagger");
+    ok(&s, &["protection", "on"]);
+    let runs = ok(&s, &["runs", "list"])["total"].clone();
+    let dry = ok(&s, &["project", "--mytags", "--dry-run"]);
+    assert_eq!(dry["library_protected"], true);
+    let error = refused(&s, &["project", "--mytags"]);
+    assert_eq!(error["code"], "library_protected", "{error}");
+    assert_eq!(tags_of(&s, "10004"), Vec::<String>::new());
+    assert_eq!(ok(&s, &["runs", "list"])["total"], runs);
+    ok(&s, &["protection", "off"]);
+    // Nothing was kept of the refused apply: the same plan stands.
+    let after = ok(&s, &["project", "--mytags", "--dry-run"]);
+    assert_eq!(after["plan"], dry["plan"]);
+}
+
+/// A tag the schema has and the Library does not is listed; applying
+/// refuses, with nothing written, until it exists.
+#[test]
+fn an_apply_with_mytags_still_to_make_is_refused_and_writes_nothing() {
+    let Deck { s, .. } = tagged_by_hand();
+    write_schema(&s, SCHEMA);
+    policy(&s, "[mytags]\napply = 0.5\n");
+    fact(&s, "10004", "mood", &["uplifting"], "agent:tagger");
+    let error = refused(&s, &["project", "--mytags"]);
+    assert_eq!(error["code"], "projection_definitions_pending");
+    assert_eq!(tags_of(&s, "10004"), Vec::<String>::new());
+}
+
+/// A write by another connection between the plan and the write (here
+/// rekordbox's, through the Library's own writer) refuses the whole apply
+/// with nothing written: the plan is checked again under the edit gate.
+#[test]
+fn a_write_between_the_plan_and_the_write_refuses_the_whole_apply() {
+    let Deck { s, uplifting, .. } = tagged_by_hand();
+    write_schema(&s, &placed_schema());
+    policy(&s, "[mytags]\napply = 0.5\n");
+    fact(&s, "10004", "mood", &["uplifting"], "agent:tagger");
+    fact(&s, "10005", "mood", &["uplifting"], "agent:tagger");
+    stop_service(&s);
+    let gate = tempfile::tempdir().unwrap();
+    let dir = gate.path().to_str().unwrap().to_owned();
+    let applying = {
+        let command = s.command();
+        let dir = dir.clone();
+        std::thread::spawn(move || {
+            let mut command = command;
+            command
+                .env("WRECKORDBOX_PROJECTION_GATE", &dir)
+                .args(["--json", "project", "--mytags"]);
+            command.output().unwrap()
+        })
+    };
+    waits_for(&gate.path().join("paused"));
+    s.edit(|writer| {
+        writer
+            .set_my_tags("10005", std::slice::from_ref(&uplifting))
+            .unwrap();
+    });
+    std::fs::write(gate.path().join("go"), b"").unwrap();
+    let output = applying.join().unwrap();
+    assert!(!output.status.success());
+    let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "projection_changed", "{error}");
+    assert_eq!(stored_tags(&s, "10004"), Vec::<String>::new());
+    assert_eq!(stored_tags(&s, "10005"), ["Uplifting"]);
+}
+
+/// Past the last check under the gate, the checked writer compares the
+/// rows again in its own transaction: a write by another connection at
+/// that moment is never overwritten, and nothing of the batch is written.
+#[test]
+fn a_write_after_the_last_check_is_never_overwritten() {
+    let Deck { s, dark, .. } = tagged_by_hand();
+    write_schema(&s, &placed_schema());
+    policy(&s, "[mytags]\napply = 0.5\n");
+    fact(&s, "10004", "mood", &["uplifting"], "agent:tagger");
+    fact(&s, "10005", "mood", &["dark"], "agent:tagger");
+    stop_service(&s);
+    let gate = tempfile::tempdir().unwrap();
+    let dir = gate.path().to_str().unwrap().to_owned();
+    let applying = {
+        let command = s.command();
+        let dir = dir.clone();
+        std::thread::spawn(move || {
+            let mut command = command;
+            command
+                .env("WRECKORDBOX_MYTAG_PROJECTION_HOLD", &dir)
+                .args(["--json", "project", "--mytags"]);
+            command.output().unwrap()
+        })
+    };
+    waits_for(&gate.path().join("checked"));
+    // rekordbox puts Dark on 10005 itself, where the plan saw no row.
+    s.edit(|writer| {
+        writer
+            .set_my_tags("10005", std::slice::from_ref(&dark))
+            .unwrap();
+    });
+    std::fs::write(gate.path().join("write"), b"").unwrap();
+    let output = applying.join().unwrap();
+    assert!(
+        !output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "projection_changed", "{error}");
+    assert_eq!(stored_tags(&s, "10004"), Vec::<String>::new());
+    assert_eq!(stored_tags(&s, "10005"), ["Dark"]);
+}
+
+/// A service killed after its write and before the Ledger entry leaves the
+/// written MyTags the DJ's (no record) and a barrier bounded to exactly the
+/// tracks the apply was writing: any other track is still projected.
+#[test]
+fn a_crash_after_the_write_leaves_a_barrier_bounded_to_the_written_tracks() {
+    let Deck { s, .. } = tagged_by_hand();
+    write_schema(&s, &placed_schema());
+    policy(&s, "[mytags]\napply = 0.5\n");
+    fact(&s, "10004", "mood", &["uplifting"], "agent:tagger");
+    fact(&s, "10005", "mood", &["uplifting"], "agent:tagger");
+    stop_service(&s);
+    let crashed = with_env(
+        &s,
+        &[("WRECKORDBOX_LEDGER_FAULTS", "abort_after_write")],
+        &["project", "--mytags"],
+    );
+    assert!(!crashed.status.success());
+    // The next service recovers the unconfirmed write.
+    let barriers = ok(&s, &["projection", "barriers"]);
+    let listed = barriers["barriers"].as_array().unwrap();
+    assert_eq!(listed.len(), 1, "{barriers}");
+    assert_eq!(listed[0]["what"], "unconfirmed");
+    assert_eq!(listed[0]["tracks"], json!(["10004", "10005"]), "{barriers}");
+    assert_eq!(tags_of(&s, "10004"), ["Mood: Uplifting"]);
+    // What was written is the DJ's now; another track is projected.
+    fact(&s, "10004", "mood", &["dark"], "agent:tagger");
+    fact(&s, "10006", "mood", &["dark"], "agent:tagger");
+    let dry = ok(&s, &["project", "--mytags", "--dry-run"]);
+    assert!(
+        listed_has(&dry, "kept", "10004", "Uplifting", "no_record"),
+        "{dry}"
+    );
+    assert!(
+        listed_has(&dry, "kept", "10004", "Dark", "provenance_incomplete"),
+        "{dry}"
+    );
+    assert_eq!(
+        changes(&dry),
+        [("10006".into(), "Dark".into(), "add".into(), false)]
+    );
+}
+
+fn listed_has(report: &Value, key: &str, track: &str, label: &str, reason: &str) -> bool {
+    listed(report, key)
+        .iter()
+        .any(|(t, l, _, r)| t == track && l == label && r == reason)
+}
+
+/// A track's live MyTags as the Library's database holds them, read on a
+/// connection of its own (a write by another connection is not in the
+/// service's index until it next reads the Library).
+fn stored_tags(s: &Sandbox, track: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    s.edit(|writer| {
+        let db = writer.library().connection();
+        let mut statement = db
+            .prepare(
+                "SELECT t.Name FROM djmdSongMyTag s JOIN djmdMyTag t ON t.ID = s.MyTagID
+                 WHERE s.ContentID = ?1 AND s.rb_local_deleted = 0 ORDER BY t.Name",
+            )
+            .unwrap();
+        names = statement
+            .query_map([track], |row| row.get::<_, String>(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+    });
+    names
+}

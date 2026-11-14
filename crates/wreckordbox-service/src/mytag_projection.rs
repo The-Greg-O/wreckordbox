@@ -944,6 +944,7 @@ fn write(
                 )));
             }
         }
+        hold_before_write();
         // Every track's changes in one checked transaction: written whole,
         // or refused with nothing written.
         let batch: Vec<TagChanges> = tracks
@@ -1005,6 +1006,27 @@ fn write(
             ),
         )),
         Err(e) => Err((None, e)),
+    }
+}
+
+/// A folder in which `projection.mytags.apply`, under the edit gate after
+/// its last check and before the checked transaction, makes a file
+/// `checked` and waits until a file `write` appears (at most 30 seconds),
+/// so a test can write from another connection at exactly that point. Read
+/// only in test mode.
+pub const HOLD_ENV: &str = "WRECKORDBOX_MYTAG_PROJECTION_HOLD";
+
+fn hold_before_write() {
+    if !rbl_db::test_mode() {
+        return;
+    }
+    let Some(dir) = std::env::var_os(HOLD_ENV).map(PathBuf::from) else {
+        return;
+    };
+    let _ = std::fs::write(dir.join("checked"), b"");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !dir.join("write").exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
 
