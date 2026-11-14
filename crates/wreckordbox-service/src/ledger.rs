@@ -671,6 +671,7 @@ pub(crate) fn takes_run(command: &str) -> bool {
         || crate::mytag_edits::answers(command)
         || crate::playlist_edits::answers(command)
         || command == crate::projection::commands::PROJECTION_APPLY
+        || command == crate::review::commands::REVIEW_ACCEPT
 }
 
 pub(crate) fn answers(command: &str) -> bool {
@@ -1226,7 +1227,9 @@ impl Keeper {
         }
         // A projection is never the DJ's, even asked for by the window: it
         // is a tool's (or the named agent's) in a Run of its own.
-        let projection = crate::projection::default_source(&request.command);
+        // Review's accept is by the DJ its request declares (wbx-27).
+        let projection = crate::projection::default_source(&request.command)
+            .or_else(|| crate::review::declared(request));
         if !from_client && request.run.is_none() && projection.is_none() {
             return Ok(Some(Target::Window));
         }
@@ -2247,7 +2250,7 @@ fn recovered_tracks(snapshot: Option<&Value>) -> Option<Value> {
 
 /// Whether the edit being recorded on this thread is the DJ's: the
 /// window's (no command), or a command attributed to the DJ.
-fn by_the_dj() -> bool {
+pub(crate) fn by_the_dj() -> bool {
     CURRENT.with(|current| {
         let current = current.borrow();
         match current.as_ref().map(|scope| &scope.target) {

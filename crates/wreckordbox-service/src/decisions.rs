@@ -557,6 +557,8 @@ impl<'a> Decisions<'a> {
                 },
                 str::to_owned,
             );
+        // Test (wbx-27): a Decision past its Library lookup, about to record.
+        crate::review::hold("decision-found");
         self.stems
             .before_record(&fact.found, fact.fingerprint.as_ref(), then.run.map(RunId))?;
         // One transaction: the answer, the Fact, what the Fact supersedes

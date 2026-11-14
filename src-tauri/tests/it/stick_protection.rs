@@ -1530,6 +1530,8 @@ const SERVICE_NOT_STICK_WRITERS: &[&str] = &[
     // Barriers: a read and a Sidecar entry; no Library or Stick write.
     "projection.acknowledge", "projection.barriers",
     "protection.get", "protection.set",
+    // Review (wbx-27): a read, a Library edit through the core, a Sidecar entry.
+    "review.accept", "review.reject", "review.rejected", "review.reopen", "review.waiting",
     "runs.active", "runs.finish", "runs.list", "runs.show", "runs.start",
     "schema.check", "schema.convert",
     "stems.separate", "stems.show", "stems.status",

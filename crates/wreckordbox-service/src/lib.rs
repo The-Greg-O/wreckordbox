@@ -34,6 +34,7 @@ pub mod protection;
 pub mod protocol;
 pub mod reading;
 pub mod render_stems;
+pub mod review;
 pub mod run_status;
 pub mod schema;
 mod separation;

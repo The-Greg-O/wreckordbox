@@ -52,7 +52,7 @@
     reason = "MyTag and the like are the glossary's words, not code items"
 )]
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use rbl_db::DbError;
@@ -193,7 +193,7 @@ impl Field {
     const ALL: [Self; 2] = [Self::Energy, Self::PrepColour];
 
     /// The field's name, which is also the kind of Fact projected into it.
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Energy => "energy",
             Self::PrepColour => "prep_colour",
@@ -396,6 +396,10 @@ pub struct Report {
     pub invalid: Vec<Unusable>,
     /// Stale Facts: never projected.
     pub stale: Vec<Unusable>,
+    /// Facts the DJ rejected in review (wbx-27): never projected, never
+    /// offered again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rejected: Vec<Unusable>,
     /// Tracks and fields whose standing Fact the Library already holds.
     pub unchanged: usize,
     /// Library Protection is on: applying would be refused.
@@ -506,12 +510,15 @@ fn pause() {
     }
 }
 
+/// The suggestions the DJ rejected in review (wbx-27).
+type Rejected = HashSet<wreckordbox_sidecar::review::Suggestion>;
+
 /// The Facts of each field's kind.
 type FactsByField = Vec<(Field, Vec<Fact>)>;
 
 /// The Facts of each field's kind, and the provenance of native fields,
 /// read without creating, migrating or tidying a Sidecar.
-fn read_sidecar(stems: &Stems) -> Result<(FactsByField, Provenance), ServiceError> {
+fn read_sidecar(stems: &Stems) -> Result<(FactsByField, Provenance, Rejected), ServiceError> {
     let failed = |why: String| ServiceError::new(crate::stems::codes::SIDECAR_FAILED, why);
     let columns: Vec<&str> = Field::ALL.iter().map(|field| field.column()).collect();
     stems
@@ -523,7 +530,11 @@ fn read_sidecar(stems: &Stems) -> Result<(FactsByField, Provenance), ServiceErro
                     for field in Field::ALL {
                         facts.push((field, sidecar.facts_of_kind(field.name()).map_err(text)?));
                     }
-                    Ok((facts, sidecar.provenance(&columns).map_err(text)?))
+                    Ok((
+                        facts,
+                        sidecar.provenance(&columns).map_err(text)?,
+                        sidecar.rejected_suggestions().map_err(text)?,
+                    ))
                 }
                 None => match FactsSnapshot::open(stems.sidecar_dir()).map_err(text)? {
                     FactsSnapshot::Absent => Ok((
@@ -532,6 +543,7 @@ fn read_sidecar(stems: &Stems) -> Result<(FactsByField, Provenance), ServiceErro
                             .map(|field| (*field, Vec::new()))
                             .collect(),
                         Provenance::default(),
+                        HashSet::new(),
                     )),
                     FactsSnapshot::Unknown(why) => Err(why),
                     FactsSnapshot::Open(reader) => {
@@ -539,7 +551,11 @@ fn read_sidecar(stems: &Stems) -> Result<(FactsByField, Provenance), ServiceErro
                         for field in Field::ALL {
                             facts.push((field, reader.facts_of_kind(field.name()).map_err(text)?));
                         }
-                        Ok((facts, reader.provenance(&columns).map_err(text)?))
+                        Ok((
+                            facts,
+                            reader.provenance(&columns).map_err(text)?,
+                            reader.rejected_suggestions().map_err(text)?,
+                        ))
                     }
                 },
             }
@@ -609,7 +625,7 @@ fn plan(
             ));
         }
     }
-    let (read, provenance) = read_sidecar(stems)?;
+    let (read, provenance, rejected) = read_sidecar(stems)?;
     // Facts by track, then field; tracks in the Library's order.
     let mut by_track: BTreeMap<u32, (String, FactsByField)> = BTreeMap::new();
     for (field, facts) in read {
@@ -648,6 +664,7 @@ fn plan(
         kept: Vec::new(),
         invalid: Vec::new(),
         stale: Vec::new(),
+        rejected: Vec::new(),
         unchanged: 0,
         library_protected: library.protection().protect_library,
         warnings: Vec::new(),
@@ -671,7 +688,15 @@ fn plan(
                 barriers: &provenance.barriers,
             };
             let before = report.changes.len();
-            decide(&mut report, &one, &facts, &rules, &policy, &labels);
+            decide(
+                &mut report,
+                &one,
+                &facts,
+                &rejected,
+                &rules,
+                &policy,
+                &labels,
+            );
             if report.changes.len() > before {
                 let change = report.changes[before].clone();
                 let Some(stamp) = stamp.clone() else {
@@ -692,6 +717,22 @@ fn plan(
     }
     report.plan = digest(&report.policy_hash, &report.changes);
     Ok((report, planned, provenance.watermark))
+}
+
+/// The dry run's report and the Ledger watermark it was read at, for
+/// Review (wbx-27): its `held` are the Facts waiting for the DJ. Writes
+/// nothing.
+pub(crate) fn dry_run(
+    library: &OpenLibrary,
+    stems: &Stems,
+    tracks: Vec<String>,
+) -> Result<(Report, i64), ServiceError> {
+    let wanted = Wanted {
+        tracks,
+        ..Wanted::default()
+    };
+    let (report, _, watermark) = plan(library, stems, &wanted, true)?;
+    Ok((report, watermark))
 }
 
 /// One track and field being decided.
@@ -779,6 +820,7 @@ fn decide(
     report: &mut Report,
     one: &One<'_>,
     facts: &[Fact],
+    rejected: &Rejected,
     rules: &Rules,
     policy: &Policy,
     labels: &[PrepColour],
@@ -798,6 +840,34 @@ fn decide(
             .stale
             .push(unusable(fact, "a stale Fact: never projected".into()));
     }
+    // The DJ's rejection is of the suggestion (this track, field, value and
+    // source): a Fact making it, recorded before or after, is never
+    // projected nor offered again; another suggestion may still stand.
+    let suggests_rejected = |fact: &Fact| {
+        target(field, &fact.value, labels).is_ok_and(|value| {
+            rejected.contains(&wreckordbox_sidecar::review::Suggestion::new(
+                one.track,
+                field.name(),
+                native_number(&value),
+                &fact.source,
+            ))
+        })
+    };
+    let facts: Vec<Fact> = facts
+        .iter()
+        .filter(|f| {
+            let refused = suggests_rejected(f);
+            if refused && f.is_live() {
+                report.rejected.push(unusable(
+                    f,
+                    "a suggestion the DJ rejected in review: never projected".into(),
+                ));
+            }
+            !refused
+        })
+        .cloned()
+        .collect();
+    let facts = facts.as_slice();
     let (winner, _) = rules.standing(facts);
     let Some(winner) = winner else { return };
     let wanted = match target(field, &winner.value, labels) {
@@ -924,12 +994,12 @@ fn target(field: Field, value: &Value, labels: &[PrepColour]) -> Result<Value, S
 
 /// The number a report value stands for: stars, or a colour label's id;
 /// none is 0.
-fn native_number(value: &Value) -> i64 {
+pub(crate) fn native_number(value: &Value) -> i64 {
     value.as_i64().or_else(|| value["id"].as_i64()).unwrap_or(0)
 }
 
 /// A hash the same in every build (FNV-1a), as 16 hex digits.
-fn hash_of(bytes: &[u8]) -> String {
+pub(crate) fn hash_of(bytes: &[u8]) -> String {
     let hash = bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
         (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
     });
