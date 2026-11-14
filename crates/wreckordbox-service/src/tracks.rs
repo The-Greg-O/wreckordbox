@@ -631,7 +631,8 @@ pub(crate) fn record(index: &rbl_index::Library, row: Row) -> TrackRecord {
                 .zip(&category.ids)
                 .filter(|(_, id)| carried.contains(id))
                 .map(|(tag, id)| TrackTag {
-                    id: id.to_string(),
+                    // The index stores the unsigned MyTag ID's bits in an i32.
+                    id: id.cast_unsigned().to_string(),
                     category: category.name.clone(),
                     tag: tag.clone(),
                 })
