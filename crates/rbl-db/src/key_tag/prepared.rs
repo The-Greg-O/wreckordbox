@@ -13,9 +13,11 @@ use std::{
 
 mod cleanup;
 mod staging;
+mod verification;
 /// Explicit cleanup entry point. The caller must authorize this location;
 /// preparation also sweeps stale copies under its authorization callback.
 pub use cleanup::cleanup_stale;
+pub use verification::Verified;
 
 pub enum Outcome {
     Ready(Box<Prepared>),
