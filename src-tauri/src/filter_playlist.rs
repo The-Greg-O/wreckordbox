@@ -38,6 +38,11 @@
 //! top level of the tree: the one recorded edit path (gated, refused under
 //! Library Protection, told to the Ledger as the DJ's), one Undo step
 //! labelled "Save Filter as Intelligent Playlist".
+#![allow(
+    clippy::doc_markdown,
+    reason = "MyTag is the glossary's word for the thing, not a code item"
+)]
+
 use std::sync::{Arc, Mutex};
 
 use rbl_index::smart::{Condition, Group, Item, Logic, Operator, Property};
