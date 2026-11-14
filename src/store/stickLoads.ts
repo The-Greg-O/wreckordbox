@@ -35,6 +35,8 @@ export interface StickLoad {
   reportId: string;
   /** Kept from before the window last closed (not this session's). */
   kept: boolean;
+  /** The volume this load's progress events named first; an event naming another is not this load's. */
+  volume?: string | null;
   /**
    * The load's state machine (wbx-72, `holdToLoad.ts`): loading (full or
    * shrunk to the status line, with its latest progress), finished, failed.
@@ -234,19 +236,27 @@ export function takeWantedStick(): string | null {
 
 /** How long a burst of progress is gathered before the view hears it. */
 const PROGRESS_FLUSH_MS = 100;
-const pending = new Map<string, LoadProgress>();
+/** The latest progress per operation, with the volume it named. */
+const pending = new Map<string, { stick: string; volume: string | null; progress: LoadProgress }>();
 let flushing: ReturnType<typeof setTimeout> | null = null;
 
 /**
  * One `stick_load_progress` event. A burst is coalesced: the latest for
  * each Stick is kept, and the loads change (and the views draw) at most
- * once per `PROGRESS_FLUSH_MS`. Progress for a Stick with no running load,
- * or one that already ended, changes nothing.
+ * once per `PROGRESS_FLUSH_MS`. An event is matched on its load's
+ * operation id (the window's, which the service echoes), never on the
+ * mount path alone: one without an operation, or for another load, a late
+ * one from an earlier load among them, changes nothing; so does one naming
+ * a volume other than the one this load's events named first, and progress
+ * after the load ended.
  */
 export function receiveStickLoadProgress(data: unknown): void {
   const event = fromServiceProgress(data);
-  if (event === null) return;
-  pending.set(event.stick, event.progress);
+  if (event === null || event.operation === null) return;
+  // Kept per operation and volume: a swap mid-burst is not hidden by the newer event.
+  const before = pending.get(event.operation);
+  if (before !== undefined && (before.volume !== event.volume || before.stick !== event.stick)) return;
+  pending.set(event.operation, { stick: event.stick, volume: event.volume, progress: event.progress });
   flushing ??= setTimeout(flushProgress, PROGRESS_FLUSH_MS);
 }
 
@@ -256,12 +266,14 @@ function flushProgress(): void {
   pending.clear();
   let changed = false;
   const next = loads.map((load) => {
-    const progress = latest.get(load.path);
-    if (progress === undefined || load.kept) return load;
-    const machine = loadStep(load.machine, { type: "progress", progress });
+    const heard = latest.get(load.reportId);
+    if (heard === undefined || load.kept || heard.stick !== load.path) return load;
+    const known = load.volume ?? null;
+    if (known !== null && heard.volume !== known) return load;
+    const machine = loadStep(load.machine, { type: "progress", progress: heard.progress });
     if (machine === load.machine) return load;
     changed = true;
-    return { ...load, machine };
+    return { ...load, machine, volume: known ?? heard.volume };
   });
   if (changed) set(() => next);
 }

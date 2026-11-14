@@ -4,8 +4,8 @@
  * than a Spare stick; a short press or an early release writes nothing.
  * While it runs it shows a plain progress bar naming the track being
  * written; `Esc` shrinks it to the status line, where it keeps running
- * while other views are used, and a click there brings it back. It ends in
- * "safe to remove" with a short summary.
+ * while other views are used, and a click there brings it back. It ends
+ * with what it wrote and an Eject; "safe to remove" only after the eject.
  *
  * Mock hooks: `src/ipc/mock-stick-load.ts` and `mock-stick-safety.ts`.
  */
@@ -84,7 +84,9 @@ test("a full hold starts the load: a plain bar names the track being written, an
   await call(page, "__releaseStickLoads");
   await expect(progress(page)).toHaveCount(0);
   const done = view(page).getByTestId("stick-finished");
-  await expect(done).toContainText("DJ STICK is safe to remove");
+  // Finished is not "safe to remove": that needs the eject (review, wbx-72).
+  await expect(done).toContainText("Loaded DJ STICK");
+  await expect(done).not.toContainText("safe to remove");
   await expect(done.getByTestId("stick-outcome")).toContainText(/Written: \d+ tracks, 1 playlist/);
   expect((await writes(page)).map((w) => [w.method, w.path])).toEqual([["stickViewLoad", DJ]]);
   // Done: back to the button, nothing more written.
@@ -106,7 +108,7 @@ test("a Gig stick needs a longer hold than a Spare stick", async ({ page }) => {
   await ready(page, "TEST");
   await expect(holdButton(page)).toContainText("1 s · Spare stick");
   await pressFor(page, 1400);
-  await expect(view(page).getByTestId("stick-finished")).toContainText("TEST is safe to remove");
+  await expect(view(page).getByTestId("stick-finished")).toContainText("Loaded TEST");
   expect((await writes(page)).map((w) => w.path)).toEqual([TEST]);
 });
 
@@ -155,7 +157,7 @@ test("holding L loads; a tap of L, L in a text field, L with a dialog open and a
   await page.keyboard.down("l");
   await page.waitForTimeout(2300);
   await page.keyboard.up("l");
-  await expect(view(page).getByTestId("stick-finished")).toContainText("DJ STICK is safe to remove");
+  await expect(view(page).getByTestId("stick-finished")).toContainText("Loaded DJ STICK");
   expect((await writes(page)).map((w) => w.path)).toEqual([DJ]);
 });
 
@@ -185,7 +187,7 @@ test("the load shrinks to the status line with Esc, keeps running while another 
   await expect(progress(page)).toContainText("Copying 300 of 300 · Burst track 300");
 
   await call(page, "__releaseStickLoads");
-  await expect(view(page).getByTestId("stick-finished")).toContainText("DJ STICK is safe to remove");
+  await expect(view(page).getByTestId("stick-finished")).toContainText("Loaded DJ STICK");
   await expect(statusLoad(page)).toHaveCount(0);
 });
 
@@ -198,7 +200,7 @@ test("the hold button is held with Space from the keyboard, and Space never reac
   await page.keyboard.down(" ");
   await page.waitForTimeout(2300);
   await page.keyboard.up(" ");
-  await expect(view(page).getByTestId("stick-finished")).toContainText("DJ STICK is safe to remove");
+  await expect(view(page).getByTestId("stick-finished")).toContainText("Loaded DJ STICK");
   await expect(pauseButton(page)).toHaveCount(0);
   await expect(player(page).getByRole("button", { name: "Play", exact: true })).toBeVisible();
 });
@@ -214,4 +216,129 @@ test("a protected Stick cannot be held for: the button says to unlock it first",
   await page.waitForTimeout(2300);
   await page.keyboard.up("l");
   expect(await writes(page)).toEqual([]);
+});
+
+// ---- Review of wbx-72 -------------------------------------------------
+
+const approvals = (page: Page) => call<string[]>(page, "__stickApprovals");
+
+test("a plan refreshed during the hold (another client edits the Library) cancels it: nothing is approved", async ({ page }) => {
+  await ready(page);
+  const shown = await call<string[]>(page, "__stickLoadPlans");
+  await call(page, "__holdStickDryRuns");
+  await holdButton(page).hover();
+  await page.mouse.down();
+  await page.waitForTimeout(200);
+  // Another client's edit: the same dry run asked again, its answer (plan B) held back.
+  await call(page, "__emitLibraryChanged", 1);
+  await page.waitForTimeout(1600);
+  // Plan B arrives at 1.8 s of the 2 s hold.
+  await call(page, "__releaseStickDryRuns");
+  await expect.poll(async () => (await call<string[]>(page, "__stickLoadPlans")).length).toBeGreaterThan(shown.length);
+  await page.waitForTimeout(800);
+  await page.mouse.up();
+  expect(await approvals(page)).toEqual([]);
+  expect(await loadCalls(page)).toEqual([]);
+  await expect(holdButton(page)).not.toHaveAttribute("data-holding");
+  // A fresh, full hold approves the plan now shown, and only it.
+  await pressFor(page, 2300);
+  await expect(view(page).getByTestId("stick-finished")).toBeVisible();
+  expect(await approvals(page)).toEqual([(await call<string[]>(page, "__stickLoadPlans")).at(-1)]);
+});
+
+test("an L hold stops when the palette opens or a text field takes focus, and does not come back without a fresh press", async ({ page }) => {
+  await ready(page);
+  await page.locator("body").click({ position: { x: 1, y: 1 } });
+  // The palette opens during the hold.
+  await page.keyboard.down("l");
+  await page.waitForTimeout(800);
+  await page.keyboard.press("Control+Shift+P");
+  await expect(page.locator("[data-command-palette]")).toBeVisible();
+  await page.waitForTimeout(1800);
+  await page.keyboard.press("Escape");
+  await expect(page.locator("[data-command-palette]")).toHaveCount(0);
+  // Back on the view, L still down: only repeats, so no new hold.
+  for (let at = 0; at < 6; at += 1) {
+    await page.keyboard.down("l");
+    await page.waitForTimeout(200);
+  }
+  await page.keyboard.up("l");
+  expect(await approvals(page)).toEqual([]);
+
+  // A text field takes the focus during the hold.
+  await page.evaluate(() => {
+    const field = document.createElement("input");
+    field.setAttribute("aria-label", "A text field");
+    document.querySelector('[data-testid="stick-view"] section')!.append(field);
+  });
+  await page.locator("body").click({ position: { x: 1, y: 1 } });
+  await page.keyboard.down("l");
+  await page.waitForTimeout(800);
+  await view(page).getByRole("textbox", { name: "A text field" }).evaluate((el) => { (el as HTMLInputElement).focus(); });
+  await page.waitForTimeout(1800);
+  await page.keyboard.up("l");
+  expect(await approvals(page)).toEqual([]);
+  expect(await loadCalls(page)).toEqual([]);
+  expect(await writes(page)).toEqual([]);
+});
+
+test("a load that fails while shrunk and another view shows stays in the status line, links to its report, until acknowledged", async ({ page }) => {
+  await ready(page);
+  await call(page, "__holdStickLoads");
+  await call(page, "__failNextStickLoad", DJ, "The Stick was removed during the export.");
+  await pressFor(page, 2300);
+  await expect(progress(page)).toBeVisible();
+  await page.keyboard.press("Escape");
+  await tab(page, "Library").click();
+  await call(page, "__releaseStickLoads");
+  await expect(statusLoad(page)).toHaveAttribute("data-state", "failed");
+  await expect(statusLoad(page)).toContainText("DJ STICK: the load failed");
+  await page.waitForTimeout(500);
+  await expect(statusLoad(page)).toBeVisible();
+  await statusLoad(page).click();
+  await expect(tab(page, "Stick")).toHaveAttribute("aria-selected", "true");
+  await expect(view(page).getByTestId("stick-load-error")).toContainText("The Stick was removed during the export.");
+  // Still there until the DJ acknowledges it.
+  await expect(statusLoad(page)).toBeVisible();
+  await view(page).getByTestId("stick-dismiss").click();
+  await expect(statusLoad(page)).toHaveCount(0);
+});
+
+test("safe to remove appears only after the eject succeeds, for that Stick; a failed load offers the eject, never safe to remove", async ({ page }) => {
+  await ready(page);
+  await call(page, "__failNextStickLoad", DJ, "The Stick was removed during the export.");
+  await pressFor(page, 2300);
+  const failed = view(page).getByTestId("stick-failed");
+  await expect(failed).toContainText("The Stick was removed during the export.");
+  await expect(page.getByText(/safe to remove/i)).toHaveCount(0);
+  await expect(failed.getByRole("button", { name: "Eject DJ STICK" })).toBeVisible();
+  await failed.getByTestId("stick-dismiss").click();
+
+  await pressFor(page, 2300);
+  const done = view(page).getByTestId("stick-finished");
+  await expect(done).toContainText("Loaded DJ STICK");
+  await expect(page.getByText(/safe to remove/i)).toHaveCount(0);
+  await done.getByRole("button", { name: "Eject DJ STICK" }).click();
+  await expect(page.getByTestId("stick-safe-to-remove")).toHaveText(/DJ STICK is safe to remove/);
+  // Through the existing eject path: the Stick is gone from the window's list.
+  await expect(page.getByTestId("shell-tree").getByRole("group", { name: "Stick DJ STICK" })).toHaveCount(0);
+});
+
+test("a late progress event from an earlier load never touches a later one", async ({ page }) => {
+  await ready(page);
+  await pressFor(page, 2300);
+  await expect(view(page).getByTestId("stick-finished")).toBeVisible();
+  const [first] = await call<string[]>(page, "__stickLoadOperations");
+  await view(page).getByTestId("stick-finished").getByRole("button", { name: "Done" }).click();
+  await view(page).getByTestId("stick-choose").locator("label").filter({ hasNotText: "(folder" }).nth(1).getByRole("checkbox").check();
+  await expect(view(page).getByTestId("stick-summary")).toBeVisible();
+  await call(page, "__holdStickLoads");
+  await pressFor(page, 2300);
+  await expect(progress(page)).toBeVisible();
+  await expect(progress(page)).toContainText(/Copying 0 of/);
+  // Load A's late burst.
+  await call(page, "__emitStickLoadProgress", DJ, 50, first);
+  await page.waitForTimeout(400);
+  await expect(progress(page)).not.toContainText("Burst track");
+  await call(page, "__releaseStickLoads");
 });

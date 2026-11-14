@@ -31,8 +31,10 @@
  *   (having said they are checking the Stick and copying the first track).
  * - Progress (wbx-72): a load sends `stick_load_progress` events as the
  *   service does (`checking`, `copying` each new track, `done`);
- *   `__emitStickLoadProgress(path, count)` sends a burst of `count` copying
- *   events, the last naming "Burst track <count>".
+ *   `__emitStickLoadProgress(path, count, operation?)` sends a burst of
+ *   `count` copying events (for the load running there, or `operation`),
+ *   the last naming "Burst track <count>"; `__stickLoadOperations()`: every
+ *   load's operation id. Events carry `operation` and `volume` as the service's do.
  * - `__playlistTracks(id)`: a Library playlist's tracks.
  * - `__swapStickAt(path, freeBytes)`: another Stick at the same path (a new
  *   volume id, empty, with that free space); the window sees it on its next
@@ -105,8 +107,12 @@ export function createMockStickLoad(source: MockStickLoadSource) {
   let holding: (() => void)[] | null = null;
   let loadsHeld: (() => void)[] | null = null;
   const progressListeners = new Set<(progress: unknown) => void>();
-  const progress = (stick: string, stage: string, done: number, total: number, track: { id: string; title: string } | null) => {
-    for (const listener of [...progressListeners]) listener({ stick, stage, done, total, track });
+  // Each load's operation id, in order; the one running on each Stick.
+  const operations: string[] = [];
+  const runningOn = new Map<string, string>();
+  const progress = (stick: string, stage: string, done: number, total: number, track: { id: string; title: string } | null, operation = runningOn.get(stick) ?? null) => {
+    const volume = source.devices().find((d) => d.path === stick)?.volumeId ?? null;
+    for (const listener of [...progressListeners]) listener({ stick, operation, volume, stage, done, total, track });
   };
   const failNext = new Map<string, string>();
   const incompleteNext = new Map<string, string>();
@@ -276,9 +282,10 @@ export function createMockStickLoad(source: MockStickLoadSource) {
       for (const go of waiting) go();
     };
     hooks.__playlistTracks = (id: string) => [...source.tracksOf(id)];
-    hooks.__emitStickLoadProgress = (path: string, count: number) => {
-      for (let at = 1; at <= count; at += 1) progress(path, "copying", at, count, { id: `burst-${at}`, title: `Burst track ${at}` });
+    hooks.__emitStickLoadProgress = (path: string, count: number, operation?: string) => {
+      for (let at = 1; at <= count; at += 1) progress(path, "copying", at, count, { id: `burst-${at}`, title: `Burst track ${at}` }, operation);
     };
+    hooks.__stickLoadOperations = () => [...operations];
     hooks.__swapStickAt = (path: string, free: number) => {
       const device = source.devices().find((d) => d.path === path) as { volumeId: string } | undefined;
       if (device) device.volumeId = `${device.volumeId}-swapped-${Date.now()}`;
@@ -335,6 +342,8 @@ export function createMockStickLoad(source: MockStickLoadSource) {
           finished: new Date().toISOString(), report, error,
         }]);
       };
+      operations.push(id);
+      runningOn.set(stick, id);
       try {
         const report = await loadNow(stick, playlists, plan) as Record<string, unknown>;
         keep(report, null);
@@ -343,6 +352,8 @@ export function createMockStickLoad(source: MockStickLoadSource) {
         const detail = (error as { detail?: string }).detail ?? "stick_load_failed";
         keep(null, { code: detail, message: error instanceof Error ? error.message : String(error) });
         throw error;
+      } finally {
+        if (runningOn.get(stick) === id) runningOn.delete(stick);
       }
     },
   };

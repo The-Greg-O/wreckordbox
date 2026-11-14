@@ -249,8 +249,14 @@ export function StickLoadView({ devices, selected, library, revision, panel }: {
     : ready === null ? (chosen.length === 0 ? "Choose at least one playlist to load." : null)
     : loadBlocked(ready, chosen.length);
 
-  const load = () => {
+  // What a hold confirms: this Stick as mounted, its kind, and the plan shown.
+  const binding = stick === null || identity === null || ready === null || ready.plan === null
+    ? null
+    : JSON.stringify([identity, stick.kind, ready.plan]);
+  const load = (bound: string) => {
     if (stick === null || identity === null || ready === null || ready.plan === null || loading) return;
+    // Held for exactly what is shown now, or nothing happens.
+    if (bound !== binding) return;
     const servicePlan = ready.plan;
     const path = stick.path;
     const name = stick.name;
@@ -459,6 +465,7 @@ export function StickLoadView({ devices, selected, library, revision, panel }: {
               kind={stick.kind === "spare" ? "spare" : "gig"}
               enabled={why === null && ready !== null && ready.plan !== null && !loading}
               why={why}
+              binding={binding}
               onHeld={load}
             />
             {why !== null ? <p id="stick-load-why" className={styles.note} data-testid="stick-load-why">{why}</p> : null}

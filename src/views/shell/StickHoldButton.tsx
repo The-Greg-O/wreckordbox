@@ -7,6 +7,15 @@
  * being hidden, the button losing the keyboard), nothing happens. A full
  * hold calls `onHeld` once.
  *
+ * A hold is bound when it starts to what is on screen (`binding`: the
+ * Stick's identity, its kind and the dry run's plan id). Any change to it
+ * during the hold (a dry run refreshed after another client's edit gives a
+ * new plan id) ends the hold, and the binding is checked again before
+ * `onHeld(binding)`; the DJ presses again for the new plan. Input moving
+ * elsewhere during a hold (a text field takes the focus, a dialog or the
+ * palette opens, the button leaves the page) ends it too, and is checked
+ * again before completion.
+ *
  * `L` is the view's while it is shown (it is the deck's Memory Cue 9 in the
  * Export key map, so the press stops here), except in a text field, or
  * while a dialog or the command palette is open. Only a fresh press counts:
@@ -34,14 +43,23 @@ function isHoldKey(event: KeyboardEvent): boolean {
   return (event.key === "l" || event.key === "L") && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
 }
 
-export function StickHoldButton({ name, kind, enabled, why, onHeld }: {
+/** Whether a text field, a dialog or the palette has the input now. */
+function inputElsewhere(): boolean {
+  const active = typeof document === "undefined" ? null : document.activeElement;
+  return isTyping(active as HTMLElement | null) || dialogHasInput(active);
+}
+
+export function StickHoldButton({ name, kind, enabled, why, binding, onHeld }: {
   name: string;
   kind: "gig" | "spare";
   /** False while the load cannot start (nothing chosen, too little space, protected, a load running). */
   enabled: boolean;
   /** Why it cannot start, said under it. */
   why: string | null;
-  onHeld: () => void;
+  /** What a hold confirms: the Stick, its kind and the plan shown; null when nothing can be held for. */
+  binding: string | null;
+  /** The hold is full, for `bound` (the binding it started on, still the one shown). */
+  onHeld: (bound: string) => void;
 }) {
   const [machine, setMachine] = useState<LoadMachine>(IDLE);
   const live = useRef(machine);
@@ -52,6 +70,11 @@ export function StickHoldButton({ name, kind, enabled, why, onHeld }: {
   allowed.current = enabled;
   const kindRef = useRef(kind);
   kindRef.current = kind;
+  const bindingRef = useRef(binding);
+  bindingRef.current = binding;
+  // The binding the running hold started on.
+  const bound = useRef<string | null>(null);
+  const button = useRef<HTMLButtonElement>(null);
 
   const send = (event: LoadEvent) => {
     const next = loadStep(live.current, event);
@@ -62,11 +85,20 @@ export function StickHoldButton({ name, kind, enabled, why, onHeld }: {
     }
     if (next.state === "loading") {
       // The hold is full: the load is the shell's from here; this button is idle again.
+      const on = bound.current;
+      bound.current = null;
       live.current = IDLE;
       setMachine(IDLE);
-      held.current();
+      // Only for what it was held for, with the input still the view's and the button still there.
+      if (on === null || on !== bindingRef.current || !allowed.current || inputElsewhere() || button.current?.isConnected !== true) return;
+      held.current(on);
       return;
     }
+    if (next.state === "holding" && event.type === "press") {
+      if (bindingRef.current === null) return;
+      bound.current = bindingRef.current;
+    }
+    if (next.state === "idle") bound.current = null;
     live.current = next;
     setMachine(next);
     if (next.state === "holding" && event.type === "press") {
@@ -84,8 +116,34 @@ export function StickHoldButton({ name, kind, enabled, why, onHeld }: {
     sender.current({ type: "press", holder, at: performance.now(), kind: kindRef.current });
   };
 
-  // Disabled while holding (the plan changed, a load started elsewhere): the hold ends.
+  // Disabled while holding (a load started elsewhere): the hold ends.
   useEffect(() => { if (!enabled) sender.current({ type: "interrupt" }); }, [enabled]);
+  // What is on screen changed (another plan, another Stick or kind): the hold ends; a fresh press is needed.
+  useEffect(() => {
+    if (live.current.state === "holding" && bound.current !== binding) sender.current({ type: "interrupt" });
+  }, [binding]);
+
+  // While holding: input moving to a text field, a dialog or the palette ends the hold.
+  const holdingNow = machine.state === "holding";
+  useEffect(() => {
+    if (!holdingNow) return undefined;
+    const check = () => { if (inputElsewhere()) sender.current({ type: "interrupt" }); };
+    const focused = (event: FocusEvent) => {
+      const to = event.target;
+      if (isTyping(to as HTMLElement | null) || dialogHasInput(to)) sender.current({ type: "interrupt" });
+    };
+    document.addEventListener("focusin", focused, true);
+    // A dialog drawn without taking the focus.
+    const watch = typeof MutationObserver === "undefined" ? null : new MutationObserver(() => {
+      if (dialogHasInput(null)) sender.current({ type: "interrupt" });
+    });
+    watch?.observe(document.body, { childList: true, subtree: true });
+    check();
+    return () => {
+      document.removeEventListener("focusin", focused, true);
+      watch?.disconnect();
+    };
+  }, [holdingNow]);
 
   // `L`, heard on the way down ahead of the deck; the window losing focus or hidden interrupts.
   useEffect(() => {
@@ -125,6 +183,7 @@ export function StickHoldButton({ name, kind, enabled, why, onHeld }: {
     <div className={styles.hold}>
       <button
         type="button"
+        ref={button}
         className={styles.button}
         data-testid="stick-load"
         disabled={!enabled}

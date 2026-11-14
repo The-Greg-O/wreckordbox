@@ -54,8 +54,8 @@ function running(stick = A) {
   return { done, finish: (result: LoadOutcome | Error) => finish(result) };
 }
 
-const event = (stick: string, done: number, title = `Track ${done}`) =>
-  ({ stick, stage: "copying", done, total: 500, track: { id: String(done), title } });
+const event = (stick: string, done: number, title = `Track ${done}`, operation = stickLoads().at(-1)?.reportId ?? null, volume: string | null = "vol:1") =>
+  ({ stick, operation, volume, stage: "copying", done, total: 500, track: { id: String(done), title } });
 
 describe("a running load (wbx-72)", () => {
   beforeEach(() => { resetStickLoads(); vi.useFakeTimers(); });
@@ -93,6 +93,37 @@ describe("a running load (wbx-72)", () => {
     expect(told).toBe(1);
     expect(stickLoads()[0]!.machine).toMatchObject({ state: "loading", progress: { done: 500, track: { title: "Track 500" } } });
     stop();
+    load.finish(outcome());
+    await load.done;
+  });
+
+  it("progress is matched on the load's operation: a late event from an earlier load, or one without an operation, never touches a later load", async () => {
+    const first = running();
+    await vi.advanceTimersByTimeAsync(0);
+    const earlier = stickLoads()[0]!.reportId;
+    first.finish(outcome());
+    await first.done;
+    const second = running();
+    await vi.advanceTimersByTimeAsync(0);
+    receiveStickLoadProgress(event("/media/A", 7, "Late", earlier));
+    receiveStickLoadProgress(event("/media/A", 8, "Nobody's", null));
+    await vi.advanceTimersByTimeAsync(200);
+    expect(stickLoads().at(-1)!.machine).toEqual({ state: "loading", shrunk: false, progress: null });
+    receiveStickLoadProgress(event("/media/A", 9, "Mine"));
+    await vi.advanceTimersByTimeAsync(200);
+    expect(stickLoads().at(-1)!.machine).toMatchObject({ progress: { track: { title: "Mine" } } });
+    second.finish(outcome());
+    await second.done;
+  });
+
+  it("once a load's events name a volume, an event naming another volume changes nothing", async () => {
+    const load = running();
+    await vi.advanceTimersByTimeAsync(0);
+    receiveStickLoadProgress(event("/media/A", 1, "On vol 1"));
+    await vi.advanceTimersByTimeAsync(200);
+    receiveStickLoadProgress(event("/media/A", 2, "On vol 2", undefined, "vol:2"));
+    await vi.advanceTimersByTimeAsync(200);
+    expect(stickLoads()[0]!.machine).toMatchObject({ progress: { track: { title: "On vol 1" } } });
     load.finish(outcome());
     await load.done;
   });
