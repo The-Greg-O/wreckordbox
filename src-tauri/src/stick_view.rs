@@ -148,7 +148,7 @@ pub async fn stick_view_load(
         let report = ask(
             &state,
             commands::STICKS_LOAD,
-            json!({ "stick": stick, "playlists": playlists, "plan": plan, "approval": approval }),
+            json!({ "stick": stick, "playlists": playlists, "plan": plan, "approval": approval, "operation": operation }),
         );
         let name = report
             .as_ref()

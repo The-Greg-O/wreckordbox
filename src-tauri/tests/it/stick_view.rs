@@ -832,13 +832,17 @@ fn the_window_hears_a_hosted_load_progress_track_by_track() {
     let plan = window.plan(&window.spare, &playlists);
     let token = window.held(&plan);
 
-    let loaded = load(
-        &window,
-        &path(&window.spare),
-        &playlists,
-        &plan,
-        Some(token.as_str()),
-    )
+    // wbx-72 review: each event names the load (the window's operation id)
+    // and the volume it writes, so a late event from an earlier load can
+    // never be taken for a later one.
+    let loaded = tauri::async_runtime::block_on(stick_view::stick_view_load(
+        window.app.handle().state(),
+        path(&window.spare),
+        playlists.clone(),
+        plan.clone(),
+        Some(token.clone()),
+        Some("op-progress-1".to_owned()),
+    ))
     .unwrap();
     assert_eq!(loaded["outcome"], "loaded", "{loaded}");
 
@@ -855,6 +859,16 @@ fn the_window_hears_a_hosted_load_progress_track_by_track() {
     assert!(!heard.is_empty(), "the window heard no progress");
     for event in &heard {
         assert_eq!(event["stick"], path(&window.spare), "{event}");
+        assert_eq!(event["operation"], "op-progress-1", "{event}");
+        assert_eq!(
+            event["volume"].as_str(),
+            Some(
+                rbxport_lib::stick_approval::volume_identity(&window.spare)
+                    .unwrap()
+                    .as_str()
+            ),
+            "{event}"
+        );
         assert!(
             event["done"].as_u64().unwrap() <= event["total"].as_u64().unwrap(),
             "{event}"
