@@ -282,16 +282,21 @@ Stick: it is never unlocked on its own.
   says how much it copied and names the unfinished copy it left on that
   Stick. That copy is not removed for you yet: delete it once the Stick is
   back and unlocked.
-- **Stem separation and Intensity measurement are never done for a Sidecar
-  kept on a Stick**, locked or unlocked (`sidecar_on_stick`): they write the
-  Sidecar for minutes, and a Stick must stay free to lock and eject. Keep
-  the Library on this computer for them.
-- **Other Sidecar writes on a Library kept on a Stick are not yet covered**
-  by Stick Protection's guarantee. A Fact, a Decision, the Ledger's records
-  and Projection marks are refused while the Stick is protected, but one
-  that began while it was unlocked can still finish after you lock it.
-  Until that is decided and built, keep the Library and its Sidecar on this
-  computer.
+- **A Library kept on a Stick is read-only for everything the Sidecar
+  records**, locked or unlocked. That is a Library whose folder is on a
+  Stick, or whose Sidecar is. Refused there, with `sidecar_on_stick` (it
+  says why and what you can do) and nothing written: applying a Projection
+  (Energy, Prep colour and MyTags), accepting, rejecting or reopening in
+  Review, recording a Fact (by you, an agent or a tool, a Decision's answer
+  included), Mutants, converting the Tag schema, stem separation and
+  Intensity measurement. A Stick must stay free to lock and eject, and
+  nothing recorded there should outlive your unlock. Still allowed:
+  reading everything (every query, Review's waiting list, Projection's and
+  a Stick load's dry runs), and ordinary Library edits while the Stick is
+  unlocked; an edit's own Ledger entry is written with it, and the edit is
+  refused, not left unrecorded, if the Stick is locked. The check is made
+  when each write would be kept, so work that started before is refused
+  too. To record, copy the Library to this computer and open it from there.
 - **Closing the window waits for every write under way**, a Stick load, an
   export, a sync or a backup, and starts no new one.
 
