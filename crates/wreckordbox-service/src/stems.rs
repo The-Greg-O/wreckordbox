@@ -163,7 +163,10 @@ pub struct SidecarChanged {
 
 /// Whether `command` is one of this module's.
 pub(crate) fn answers(command: &str) -> bool {
-    matches!(command, commands::STEMS_SEPARATE | commands::STEMS_SHOW)
+    matches!(
+        command,
+        commands::STEMS_SEPARATE | commands::STEMS_SHOW | crate::stems_status::STEMS_STATUS
+    )
 }
 
 /// The parent track and where its audio is, from the Library.
@@ -224,6 +227,10 @@ pub(crate) fn answer(
     request: &Request,
     lookup: &dyn Fn(&str) -> Result<ParentAudio, ServiceError>,
 ) -> Result<Value, ServiceError> {
+    if request.command == crate::stems_status::STEMS_STATUS {
+        // Reads only (wbx-67).
+        return crate::stems_status::answer(stems, request, lookup);
+    }
     let track: TrackId = serde_json::from_value(request.args.clone()).map_err(|e| {
         ServiceError::new(
             service_codes::BAD_REQUEST,
