@@ -574,7 +574,11 @@ pub async fn set_track_field<R: tauri::Runtime>(
         drop(crate::stick_guard::enter_files(&state_dir, files)?);
     }
     let key = value.trim().to_owned();
-    recorded_edit(app, state, "set_track_field", Touched::Tracks, crate::commands::TRACK_EDIT, move |w| {
+    // An edit stopped part-way by a Stick replaced (wbx-45.14) is recorded
+    // for the tracks it did change, then reported: why, and which tracks.
+    let stopped = Arc::new(parking_lot::Mutex::new(None::<crate::error::AppError>));
+    let told = Arc::clone(&stopped);
+    let done = recorded_edit(app, state, "set_track_field", Touched::Tracks, crate::commands::TRACK_EDIT, move |w| {
         // The files' Sticks entered under the edit gate, before the
         // Library's key is written, and held until every tag is (wbx-45.14):
         // a Stick locked in between waits, so the tags cannot be left
@@ -601,24 +605,58 @@ pub async fn set_track_field<R: tauri::Runtime>(
             let track = step.content();
             let Some(row) = library.row_of(track) else { continue };
             match crate::key_tag::write_recorded(&access, track, library.folder_path.get(row as usize), &key) {
-                Ok(written) => files.extend(written),
-                // The file's Stick was ejected or replaced since (wbx-45.14):
-                // the tags written are put back and the Library's key with
-                // them, so both stores agree, and the edit fails saying why.
-                Err(refused) => {
-                    let stranded = crate::key_tag::put_back(&access, &files);
-                    for step in steps.iter().rev() {
-                        w.undo_track_edit(step)?;
+                Ok(written) => {
+                    if written.is_some() {
+                        crate::test_holds::point(crate::key_tag::TAG_WRITTEN, &state_dir);
                     }
-                    let outcome = if stranded == 0 {
-                        "Nothing was changed.".to_owned()
-                    } else {
-                        format!("{stranded} file(s) already written could not be changed back.")
+                    files.extend(written);
+                }
+                // The file's Stick was ejected or replaced since (wbx-45.14).
+                // Per track, both stores are made to agree: a tag written and
+                // put back, or never written, has its Library key undone; a
+                // tag written that cannot be put back (its Stick is gone)
+                // keeps its Library key, which is what that file now holds,
+                // recorded as an entry Undo can step once that Stick is back.
+                Err(refused) => {
+                    let restored = crate::key_tag::put_back(&access, &files);
+                    let stranded: Vec<_> = files
+                        .into_iter()
+                        .zip(restored)
+                        .filter_map(|(file, back)| (!back).then_some(file))
+                        .collect();
+                    let title = |track: &str| {
+                        library.row_of(track).map_or_else(|| track.to_owned(), |row| library.title.get(row as usize).to_owned())
                     };
-                    return Err(rbl_db::DbError::WriteRefused(format!(
-                        "The key was not changed: {} {outcome}",
-                        refused.message.trim_end()
-                    )));
+                    let (mut kept, mut undone) = (Vec::new(), Vec::new());
+                    for step in steps.iter().rev() {
+                        let track = step.content();
+                        let file = library.row_of(track).map(|row| std::path::PathBuf::from(library.folder_path.get(row as usize)));
+                        if file.is_some_and(|file| stranded.iter().any(|f| f.path == file)) {
+                            kept.push(step.clone());
+                        } else {
+                            w.undo_track_edit(step)?;
+                            undone.push(format!("“{}”", title(track)));
+                        }
+                    }
+                    kept.reverse();
+                    undone.reverse();
+                    let why = refused.message.trim_end();
+                    if kept.is_empty() {
+                        return Err(rbl_db::DbError::WriteRefused(format!("The key was not changed: {why} Nothing was changed.")));
+                    }
+                    let changed: Vec<String> = kept.iter().map(|step| format!("“{}”", title(step.content()))).collect();
+                    let not_changed = if undone.is_empty() { "none".to_owned() } else { undone.join(", ") };
+                    *told.lock() = Some(crate::error::AppError::new(
+                        refused.kind,
+                        format!(
+                            "The key was not written to every file: {why} Changed to {key}: {}, in the Library and the file. Not changed: {not_changed}. Undo puts the changed ones back once their Stick is back and unlocked.",
+                            changed.join(", ")
+                        ),
+                    ));
+                    return Ok(LibraryEdit::KeyEdit {
+                        tracks: kept,
+                        files: Arc::new(crate::key_tag::KeyTagWrites { files: stranded, state_dir: state_dir.clone() }),
+                    });
                 }
             }
         }
@@ -628,5 +666,10 @@ pub async fn set_track_field<R: tauri::Runtime>(
         let LibraryEdit::Track(tracks) = edit else { return Ok(edit) };
         Ok(LibraryEdit::KeyEdit { tracks, files: Arc::new(crate::key_tag::KeyTagWrites { files, state_dir }) })
     })
-    .await
+    .await?;
+    // Recorded, and told to the window; then the edit is reported as stopped.
+    if let Some(stopped) = stopped.lock().take() {
+        return Err(stopped);
+    }
+    Ok(done)
 }

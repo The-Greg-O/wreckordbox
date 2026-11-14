@@ -84,24 +84,26 @@ pub fn write_logged(state_dir: &Path, track_id: &str, path: &str, key: &str) {
 /// and not yet the Library (wbx-45.14).
 pub const TAGS_STEPPED: &str = "key_tag.tags_stepped";
 /// Puts back, last first, the tags a key edit wrote before it was stopped
-/// (wbx-45.14, round 1), each only while its own Stick may still be
-/// written; answers how many could not be.
-pub(crate) fn put_back(access: &crate::stick_guard::StickAccess, written: &[KeyTagWrite]) -> usize {
-    written
+/// (wbx-45.14), each only while its own Stick may still be written;
+/// answers, for each of `written` in order, whether it was put back.
+pub(crate) fn put_back(access: &crate::stick_guard::StickAccess, written: &[KeyTagWrite]) -> Vec<bool> {
+    let mut restored: Vec<bool> = written
         .iter()
         .rev()
-        .filter(|file| {
-            if access.recheck_for(&file.path).is_err() {
-                return true;
-            }
-            !matches!(
-                swap_key(&file.path, Some(Some(file.after.as_str())), file.before.as_deref()),
-                Ok(KeySwap::Written { .. })
-            )
+        .map(|file| {
+            access.recheck_for(&file.path).is_ok()
+                && matches!(
+                    swap_key(&file.path, Some(Some(file.after.as_str())), file.before.as_deref()),
+                    Ok(KeySwap::Written { .. })
+                )
         })
-        .count()
+        .collect();
+    restored.reverse();
+    restored
 }
 
+/// Test hold: a key edit has written one file's tag (wbx-45.14).
+pub const TAG_WRITTEN: &str = "key_tag.tag_written";
 /// Test hold: a key edit has written the Library's key and not yet the
 /// files' tags (wbx-45.14).
 pub const LIBRARY_KEY_WRITTEN: &str = "key_tag.library_key_written";

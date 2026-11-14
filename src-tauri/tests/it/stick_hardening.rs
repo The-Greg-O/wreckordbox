@@ -392,3 +392,123 @@ fn replacing_the_stick_while_a_key_edit_writes_fails_the_edit_and_both_stores_ag
         "nothing was written to the Stick put in its place"
     );
 }
+
+/// Two MP3s on the Stick holding `Am`, imported: (file, track id) each.
+fn two_tracks_on_stick(rig: &Rig) -> Vec<(PathBuf, String)> {
+    let mut out = Vec::new();
+    for name in ["One", "Two"] {
+        let audio = rig.stick.join(format!("Contents/{name}.mp3"));
+        let mut mp3 = Vec::new();
+        for i in 0..40u8 {
+            mp3.extend_from_slice(&[0xFF, 0xFB, 0x90, 0x64]);
+            mp3.extend(std::iter::repeat_n(i, 413));
+        }
+        std::fs::write(&audio, &mp3).unwrap();
+        rbl_db::key_tag::write_key(&audio, "Am").unwrap();
+        let id = run(commands::import_files(
+            rig.app.handle().clone(),
+            rig.app.state(),
+            vec![audio.display().to_string()],
+        ))
+        .unwrap()
+        .tracks[0]
+            .id
+            .clone();
+        out.push((audio, id));
+    }
+    rig.state()
+        .write(|w| {
+            w.ensure_detected_key("Am")?;
+            w.ensure_detected_key("Fm")
+        })
+        .unwrap();
+    out
+}
+
+/// wbx-45.14 verification (1): the Stick is replaced after the first of
+/// two tags was written. That file cannot be put back (its Stick is gone),
+/// so its track keeps Fm in the Library, recorded as an edit that can be
+/// undone; the second track, whose tag was never written, keeps Am. Both
+/// stores agree for both tracks, and the error says which changed.
+#[test]
+fn a_stick_replaced_between_two_tag_writes_leaves_each_track_agreeing_with_its_file() {
+    let rig = rig();
+    let tracks = two_tracks_on_stick(&rig);
+    rig.unlock();
+    let ids: Vec<String> = tracks.iter().map(|(_, id)| id.clone()).collect();
+
+    assert_ne!(
+        rbxport_lib::commands::current_history(&rig.state())
+            .undo_label
+            .as_deref(),
+        Some(rbl_library::history::TRACK_EDIT)
+    );
+    let held = test_holds::arm(key_tag::TAG_WRITTEN, &rig.state_dir());
+    let editing = {
+        let (handle, ids) = (rig.app.handle().clone(), ids.clone());
+        std::thread::spawn(move || {
+            run(details::set_track_field(
+                handle.clone(),
+                handle.state(),
+                ids,
+                "key".into(),
+                "Fm".into(),
+                Some(true),
+            ))
+            .map(|_| ())
+            .map_err(|e| e.message)
+        })
+    };
+    held.reached();
+    let original = rig.stick.with_file_name("GIGSTICK-taken-out");
+    std::fs::rename(&rig.stick, &original).unwrap();
+    std::fs::create_dir_all(rig.stick.join("Contents")).unwrap();
+    std::fs::write(rig.stick.join(STAND_IN_MARKER), b"").unwrap();
+    held.release();
+
+    let error = editing
+        .join()
+        .unwrap()
+        .expect_err("the edit is reported as stopped");
+    let file = |n: usize| original.join(tracks[n].0.strip_prefix(&rig.stick).unwrap());
+    let (written, unwritten) = if tag(&file(0)).as_deref() == Some("Fm") {
+        (0, 1)
+    } else {
+        (1, 0)
+    };
+    assert_eq!(tag(&file(written)).as_deref(), Some("Fm"));
+    assert_eq!(
+        library_key(&rig, &ids[written]),
+        "Fm",
+        "the Library keeps what the file now holds"
+    );
+    assert_eq!(tag(&file(unwritten)).as_deref(), Some("Am"));
+    assert_eq!(
+        library_key(&rig, &ids[unwritten]),
+        "Am",
+        "the other track was put back"
+    );
+    let title = |n: usize| {
+        tracks[n]
+            .0
+            .file_stem()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned()
+    };
+    assert!(
+        error.contains(&format!("Changed to Fm: “{}”", title(written))),
+        "{error}"
+    );
+    assert!(
+        error.contains(&format!("Not changed: “{}”", title(unwritten))),
+        "{error}"
+    );
+    let history = rbxport_lib::commands::current_history(&rig.state());
+    assert_eq!(
+        history.undo_label.as_deref(),
+        Some(rbl_library::history::TRACK_EDIT),
+        "the kept change can be undone"
+    );
+}
