@@ -1,7 +1,7 @@
 //! Prepare audio outside the Library gate; publish and roll back using only
 //! metadata and atomic renames. The original bytes remain available until Drop.
-//! Publication currently needs Linux/macOS atomic exchange; other platforms
-//! return Unsupported before replacing the original.
+//! Unsupported exchange falls back to rename-over-original. A separately synced
+//! rollback copy is prepared outside the Library gate for that case.
 use super::{
     can_write, format_of, keep_created, keep_owner, links, read_key, sync_parent, temp_beside,
     verify, write_flac, write_id3, Format, KeySwap, KeyTagError, Result, WRITING,
@@ -10,6 +10,11 @@ use std::{
     fs, io,
     path::{Path, PathBuf},
 };
+
+mod cleanup;
+/// Explicit cleanup entry point. The caller must authorize this location;
+/// preparation also sweeps stale copies under its authorization callback.
+pub use cleanup::cleanup_stale;
 
 pub enum Outcome {
     Ready(Box<Prepared>),
@@ -20,12 +25,16 @@ pub struct Prepared {
     requested: PathBuf,
     path: PathBuf,
     temp: PathBuf,
+    backup: PathBuf,
+    backup_stamp: Option<fs::Metadata>,
+    exchanged: bool,
     before: Option<String>,
     after: Option<String>,
     original: fs::Metadata,
     published: Option<fs::Metadata>,
     staged: Option<fs::Metadata>,
     cleanup: bool,
+    test_exchange_error: Option<io::ErrorKind>,
 }
 
 fn changed() -> KeyTagError {
@@ -56,6 +65,18 @@ fn same(a: &fs::Metadata, b: &fs::Metadata) -> bool {
 /// No original file is changed here. Call while authorized to create the
 /// temporary beside it; the caller must authorize publication separately.
 pub fn prepare(path: &Path, expected: Option<Option<&str>>, key: Option<&str>) -> Result<Outcome> {
+    prepare_checked(path, expected, key, || Ok(()))
+}
+
+/// As prepare, with a per-write authorization check for stale cleanup and staging.
+/// The caller holds its location authorization while this runs.
+pub fn prepare_checked(
+    path: &Path,
+    expected: Option<Option<&str>>,
+    key: Option<&str>,
+    authorize: impl Fn() -> io::Result<()>,
+) -> Result<Outcome> {
+    authorize()?;
     let requested = path.to_path_buf();
     let path = fs::canonicalize(path)?;
     let original = fs::metadata(&path)?;
@@ -77,35 +98,68 @@ pub fn prepare(path: &Path, expected: Option<Option<&str>>, key: Option<&str>) -
     if expected.is_some_and(|expected| expected != before.as_deref()) {
         return Ok(Outcome::Skipped(KeySwap::Changed { found: before }));
     }
+    cleanup::cleanup_stale_checked(&path, &authorize)?;
     let temp = temp_beside(&path);
+    let backup = temp_beside(&path);
     let mut prepared = Prepared {
         requested,
         path,
         temp,
+        backup,
+        backup_stamp: None,
+        exchanged: false,
         before,
         after: key.map(str::to_owned),
         original,
         published: None,
         staged: None,
         cleanup: true,
+        test_exchange_error: None,
     };
-    // Same rewrite/verification as swap_key, without any Library lock.
-    fs::copy(&prepared.path, &prepared.temp)?;
-    match format {
-        Format::Mp3 | Format::Aiff => write_id3(&prepared.path, &prepared.temp, format, key)?,
-        Format::Flac => write_flac(&prepared.path, &prepared.temp, key)?,
+    let staged = (|| -> Result<()> {
+        // Same rewrite/verification as swap_key, without any Library lock.
+        authorize()?;
+        fs::copy(&prepared.path, &prepared.temp)?;
+        // Needed on FAT/network filesystems without exchange or hard links. All
+        // audio copying is here, never in publish/rollback under the Library gate.
+        authorize()?;
+        fs::copy(&prepared.temp, &prepared.backup)?;
+        let backup = fs::OpenOptions::new().write(true).open(&prepared.backup)?;
+        keep_created(&backup, &prepared.original);
+        keep_owner(&backup, &prepared.original)?;
+        backup.sync_all()?;
+        prepared.backup_stamp = Some(backup.metadata()?);
+        authorize()?;
+        match format {
+            Format::Mp3 | Format::Aiff => write_id3(&prepared.path, &prepared.temp, format, key)?,
+            Format::Flac => write_flac(&prepared.path, &prepared.temp, key)?,
+        }
+        verify(&prepared.path, &prepared.temp, format, key)?;
+        let file = fs::OpenOptions::new().write(true).open(&prepared.temp)?;
+        keep_created(&file, &prepared.original);
+        keep_owner(&file, &prepared.original)?;
+        file.sync_all()?;
+        prepared.staged = Some(file.metadata()?);
+        prepared.check()?;
+        Ok(())
+    })();
+    if let Err(why) = staged {
+        if authorize().is_err() {
+            prepared.retain_temporary();
+        }
+        return Err(why);
     }
-    verify(&prepared.path, &prepared.temp, format, key)?;
-    let file = fs::OpenOptions::new().write(true).open(&prepared.temp)?;
-    keep_created(&file, &prepared.original);
-    keep_owner(&file, &prepared.original)?;
-    file.sync_all()?;
-    prepared.staged = Some(file.metadata()?);
-    prepared.check()?;
     Ok(Outcome::Ready(Box::new(prepared)))
 }
 
 impl Prepared {
+    /// Fault switch for fixture tests; never enabled by production callers.
+    #[doc(hidden)]
+    pub fn force_exchange_error_for_test(&mut self, kind: io::ErrorKind) {
+        assert!(crate::test_mode());
+        self.test_exchange_error = Some(kind);
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -145,7 +199,25 @@ impl Prepared {
         {
             return Err(changed());
         }
-        exchange(&self.temp, &self.path)?;
+        let exchanged = match self.test_exchange_error {
+            Some(kind) => Err(io::Error::new(kind, "forced unsupported exchange")),
+            None => exchange(&self.temp, &self.path),
+        };
+        match exchanged {
+            Ok(()) => self.exchanged = true,
+            Err(why)
+                if matches!(
+                    why.kind(),
+                    io::ErrorKind::InvalidInput | io::ErrorKind::Unsupported
+                ) =>
+            {
+                // The earlier swap_key publication, with the same preflight
+                // checks. Unlike exchange, this does not retain the old inode.
+                self.check()?;
+                fs::rename(&self.temp, &self.path)?;
+            }
+            Err(why) => return Err(why.into()),
+        }
         // Publication succeeded even if a later metadata read fails. Keep the
         // fallback identity for rollback and never report an untouched file.
         self.published = Some(fs::metadata(&self.path).unwrap_or(next));
@@ -170,14 +242,30 @@ impl Prepared {
         {
             return Err(changed());
         }
-        exchange(&self.temp, &self.path)?;
+        if self.exchanged {
+            exchange(&self.temp, &self.path)?;
+        } else {
+            if !self
+                .backup_stamp
+                .as_ref()
+                .is_some_and(|stamp| fs::metadata(&self.backup).is_ok_and(|now| same(stamp, &now)))
+            {
+                return Err(changed());
+            }
+            fs::rename(&self.backup, &self.path)?;
+        }
         self.published = None;
         sync_parent(&self.path);
         Ok(())
     }
 
-    /// An authorization was lost: leave the temporary for an explicit later
-    /// cleanup instead of writing to a protected or replaced Stick from Drop.
+    pub fn is_published(&self) -> bool {
+        self.published.is_some()
+    }
+
+    /// Authorization was lost: retain the copies. Explicit `cleanup_stale` or
+    /// a later authorized prepare can sweep them once old and this process has
+    /// exited. Live processes' plans are never swept.
     pub fn retain_temporary(&mut self) {
         self.cleanup = false;
     }
@@ -186,6 +274,7 @@ impl Drop for Prepared {
     fn drop(&mut self) {
         if self.cleanup {
             let _ = fs::remove_file(&self.temp);
+            let _ = fs::remove_file(&self.backup);
         }
     }
 }

@@ -13,7 +13,8 @@
 //!   Alphanumeric; an emptied key empties the tag's.
 //!
 //! A file rekordbox cannot write is passed over without a message on screen.
-//! Here it is said in the log, with every other reason a file kept its tag.
+//! Unsupported formats stay Library-only. A refused publication is reported;
+//! the forward edit reconciles each row with the file it actually published.
 //!
 //! rekordbox has no library Undo (see `docs/reference/library-undo.md`), so
 //! nothing it does settles what Undo of a key edit does to the file. Here
@@ -26,7 +27,8 @@ use std::path::PathBuf;
 use rbl_db::key_tag::{swap_key, KeySwap};
 
 mod prepared;
-pub(crate) use prepared::{prepare_key_edit, write_analysis_key_tag};
+pub(crate) use prepared::prepare_key_edit;
+pub use prepared::write_analysis_key_tag;
 
 /// The key display format, which decides the name analysis writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
@@ -56,26 +58,14 @@ impl DetectedKey {
     }
 }
 
-/// Guarded auxiliary key-tag write for hosts. The state is required so even
-/// callers outside an analysis batch use Library Protection and the Ledger.
-/// Returns a visible warning while preserving any earlier accepted row edit.
-pub fn write_logged(
-    state: &crate::state::AppState,
-    track: &str,
-    path: &str,
-    key: &str,
-) -> Option<String> {
-    let (_, warning) = write_analysis_key_tag(state, track, path, key);
-    if let Some(warning) = &warning {
-        tracing::warn!(track,%warning);
-    }
-    warning
-}
+pub const LIBRARY_KEY_WRITTEN: &str = "key_tag.library_key_written";
+pub const TAG_WRITTEN: &str = "key_tag.tag_written";
+pub const TAGS_STEPPED: &str = "key_tag.tags_stepped";
 
 /// One audio file a key edit wrote its key into (#507): the key the tag
 /// held before (`None`: no key) and the key written.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct KeyTagWrite {
+pub struct KeyTagWrite {
     pub(crate) path: PathBuf,
     pub(crate) before: Option<String>,
     pub(crate) after: String,
@@ -143,18 +133,22 @@ impl rbl_library::history::OutsideSteps for KeyTagWrites {
         check_restore(&self.files, undo, label)
     }
 
-    fn step(&self, undo: bool, label: &str) -> Result<(), rbl_db::DbError> {
+    fn step(&self, undo: bool, label: &str) -> Result<rbl_library::history::OutsideHold, rbl_db::DbError> {
         let access = crate::stick_guard::enter_files(&self.state_dir, self.files.iter().map(|f| f.path.as_path()))
             .map_err(|refused| protected(undo, label, &refused))?;
-        restore(&access, &self.files, undo, label)
+        restore(&access, &self.files, undo, label)?;
+        crate::test_holds::point(TAGS_STEPPED, &self.state_dir);
+        // The Sticks' leave goes back to the core, held until the Library's
+        // step is made or this is reverted (wbx-45.14): a lock asked for in
+        // between waits for both.
+        Ok(Box::new(access))
     }
 
-    fn revert(&self, undo: bool) -> (usize, usize) {
-        // Putting back what the step wrote is a write too: under the Sticks'
-        // locks and unlocks again (wbx-45.11). Refused (a Stick locked,
-        // ejected or replaced since), nothing is written and every file is
-        // reported as not put back.
-        let Ok(access) = crate::stick_guard::enter_files(&self.state_dir, self.files.iter().map(|f| f.path.as_path())) else {
+    fn revert(&self, held: rbl_library::history::OutsideHold, undo: bool) -> (usize, usize) {
+        // Putting back what the step wrote, under the leave it wrote with
+        // (wbx-45.14). A Stick ejected or replaced since cannot be written:
+        // every file is reported as not put back.
+        let Ok(access) = held.downcast::<crate::stick_guard::StickAccess>() else {
             return (self.files.len(), self.files.len());
         };
         let written: Vec<_> = if undo { self.files.iter().rev().collect() } else { self.files.iter().collect() };

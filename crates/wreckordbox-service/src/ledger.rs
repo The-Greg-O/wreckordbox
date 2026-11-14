@@ -1783,7 +1783,7 @@ impl Keeper {
                 if draft.action == Action::Redo { dj_facts.redo_of = draft.reverses; }
             }
             let at = now();
-            let reversible = draft.payload.is_some() && draft.kind != "key_edit";
+            let reversible = draft.payload.is_some() && !matches!(draft.kind, "key_edit" | "audio_key_tag_partial");
             let (follow, unworked) = match draft.follow {
                 Ok(follow) => (follow, None),
                 Err(why) => (wreckordbox_sidecar::mutant_follow::Follow::default(), Some(why)),
@@ -2006,6 +2006,22 @@ impl rbl_library::ledger::Ledger for Keeper {
             std::process::abort();
         }
         Ok(())
+    }
+
+    fn files_unrestored(&self, values: &Value, why: &str) {
+        let mut payload = values.clone();
+        payload["not_reversible_reason"] = Value::from("An audio publication could not be rolled back after the native step failed; inspect the named files before editing again");
+        self.append(Draft {
+            action: Action::Write,
+            kind: "audio_key_tag_partial",
+            label: why,
+            reverses: None,
+            part_of: None,
+            payload: Some(payload),
+            follow: Ok(wreckordbox_sidecar::mutant_follow::Follow::default()),
+            plan: None,
+            asserted: false,
+        });
     }
 
     fn file_written(&self, kind: &str, track: &str) {

@@ -13,10 +13,14 @@ fn preparing_audio_history_does_not_hold_the_library_edit_gate() {
         fn check(&self, _: bool, _: &str) -> Result<(), rbl_db::DbError> {
             Ok(())
         }
-        fn step(&self, _: bool, _: &str) -> Result<(), rbl_db::DbError> {
-            Ok(())
+        fn step(
+            &self,
+            _: bool,
+            _: &str,
+        ) -> Result<rbl_library::history::OutsideHold, rbl_db::DbError> {
+            Ok(Box::new(()))
         }
-        fn revert(&self, _: bool) -> (usize, usize) {
+        fn revert(&self, _: rbl_library::history::OutsideHold, _: bool) -> (usize, usize) {
             (0, 1)
         }
     }
@@ -42,10 +46,14 @@ fn preparing_audio_history_does_not_hold_the_library_edit_gate() {
             );
             Ok(())
         }
-        fn step(&self, _: bool, _: &str) -> Result<(), rbl_db::DbError> {
-            Ok(())
+        fn step(
+            &self,
+            _: bool,
+            _: &str,
+        ) -> Result<rbl_library::history::OutsideHold, rbl_db::DbError> {
+            Ok(Box::new(()))
         }
-        fn revert(&self, _: bool) -> (usize, usize) {
+        fn revert(&self, _: rbl_library::history::OutsideHold, _: bool) -> (usize, usize) {
             (0, 1)
         }
     }
@@ -103,11 +111,15 @@ fn a_protection_turn_or_new_history_entry_during_audio_preparation_is_preserved(
         fn check(&self, _: bool, _: &str) -> Result<(), rbl_db::DbError> {
             Ok(())
         }
-        fn step(&self, _: bool, _: &str) -> Result<(), rbl_db::DbError> {
+        fn step(
+            &self,
+            _: bool,
+            _: &str,
+        ) -> Result<rbl_library::history::OutsideHold, rbl_db::DbError> {
             self.published.fetch_add(1, Ordering::SeqCst);
-            Ok(())
+            Ok(Box::new(()))
         }
-        fn revert(&self, _: bool) -> (usize, usize) {
+        fn revert(&self, _: rbl_library::history::OutsideHold, _: bool) -> (usize, usize) {
             (0, 1)
         }
     }

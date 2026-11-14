@@ -205,11 +205,15 @@ fn delete_in_background(state_dir: &Path, root: &Path, paths: Vec<PathBuf>) {
 ///
 /// `access`: the capability, Stick Protection's leave to write to `root`
 /// (wbx-45.11), for the renames.
-fn discard(access: &crate::stick_guard::StickAccess, state_dir: &Path, root: &Path, paths: &[&Path]) {
+/// Answers where each of `paths` that was there now is (its set-aside
+/// name, or itself when it could not be moved); nothing on a refusal.
+fn discard(access: &crate::stick_guard::StickAccess, state_dir: &Path, root: &Path, paths: &[&Path]) -> Vec<PathBuf> {
     if access.recheck().is_err() {
-        return;
+        return Vec::new();
     }
-    delete_in_background(state_dir, root, set_aside(root, paths));
+    let aside = set_aside(root, paths);
+    delete_in_background(state_dir, root, aside.clone());
+    aside
 }
 
 /// Deletes unfinished backups set aside by an earlier run, for example one
@@ -342,7 +346,7 @@ pub fn validate_destination(directory: &Path, location: &rbl_db::LibraryLocation
 }
 
 #[allow(clippy::too_many_lines, reason = "one linear backup pipeline; splitting it would hide the order writes happen in")]
-fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&str, u64, u64, &str) -> AppResult<()>) -> AppResult<String> {
+pub(crate) fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&str, u64, u64, &str) -> AppResult<()>) -> AppResult<String> {
     let _gate = state.edit_gate().lock();
     let _files = state.analysis_write().lock();
     let location = state.location()?;
@@ -359,19 +363,61 @@ fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&str, u64, u6
     // whole backup: refused on a protected Stick before anything is written.
     // In the lock order: the Library edit gate (above), then the Stick.
     let access = crate::stick_guard::enter(state.backup_dir(), root)?;
+    // Checked again at every step of the copy, not only before the backup
+    // is named (wbx-45.14): a Stick locked, ejected or replaced mid-copy
+    // stops it at the next file or chunk, and nothing more is written.
+    let copied_to_stick = std::cell::Cell::new(0_u64);
+    // What this backup made in its folder, on the Stick as it was entered:
+    // reported from here after a refusal, never read back from whatever
+    // is mounted there by then (wbx-45.14, round 1).
+    let made = std::cell::RefCell::new(Vec::<(PathBuf, crate::backup_stick::Made)>::new());
+    // Every write to the folder, from every thread, checks first: the
+    // compression workers and the ZIP writers too (`backup_guard`).
+    let stick_refused = std::sync::atomic::AtomicBool::new(false);
+    let write_check = || -> std::io::Result<()> {
+        if stick_refused.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "Backup stopped: its folder may no longer be written"));
+        }
+        access.recheck().map_err(|refused| {
+            stick_refused.store(true, std::sync::atomic::Ordering::Release);
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, refused.message)
+        })
+    };
+    let state_dir = state.backup_dir().to_path_buf();
+    let progress = &mut |phase: &str, done: u64, total: u64, item: &str| -> AppResult<()> {
+        // Counted before the check: what was copied so far is reported.
+        copied_to_stick.set(copied_to_stick.get().max(done));
+        access.recheck()?;
+        progress(phase, done, total, item)?;
+        // And again right before the step this reported, whatever the
+        // report waited for.
+        access.recheck()
+    };
     crate::durable::create_dir_all(root).map_err(error)?;
     sweep_discarded(state.backup_dir(), root);
     validate_destination(&root.canonicalize().map_err(error)?, &location)?;
     let created_at = millis();
     let id = uuid::Uuid::new_v4();
     let partial = root.join(format!(".partial-{id}"));
+    let worker_check = || -> std::io::Result<()> {
+        // Test hold: at a compression worker's write, once one has put
+        // output in the folder (every folder is made before the workers start).
+        if crate::test_holds::is_armed(crate::test_holds::BACKUP_COMPRESSING, &state_dir)
+            && worker_output_begun(&partial)
+        {
+            crate::test_holds::point(crate::test_holds::BACKUP_COMPRESSING, &state_dir);
+        }
+        write_check()
+    };
     let target = root.join(format!("rbexport-{}.zip", rbl_core::time::local_backup_stamp()));
     if target.try_exists().map_err(error)? {
         return Err(error("A backup for this minute already exists. Try again in the next minute."));
     }
     let archive = root.join(format!(".partial-{id}.zip"));
     let result = (|| {
+        write_check().map_err(error)?;
         fs::create_dir(&partial).map_err(error)?;
+        made.borrow_mut().push((partial.clone(), crate::backup_stick::Made::Unfinished));
         let mut refused = None;
         let plan = if tree.exists() {
             let prepared = crate::backup_copy::TreeCopyPlan::prepare(&tree, &partial.join("analysis"), &mut |_| {
@@ -417,6 +463,37 @@ fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&str, u64, u6
             + art_plan.as_ref().map_or(0, |plan| plan.bytes)
             + sidecar.as_ref().map_or(0, |part| part.contents.bytes);
         progress("copying", 0, total, "Database · master.db")?;
+        // The database's snapshot is made in local temporary storage, never
+        // straight into the backup folder (one SQLite operation could not be
+        // stopped part-way on a Stick), checked there, then compressed into
+        // the folder in chunks, each write checked (wbx-45.14, round 1).
+        crate::durable::create_dir_all(state.backup_dir()).map_err(error)?;
+        let local = tempfile::Builder::new().prefix("backup-snapshot-").tempdir_in(state.backup_dir()).map_err(error)?;
+        let local_db = local.path().join("master.db");
+        let snapshot = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).map_err(error)?;
+        snapshot.connection().execute("VACUUM main INTO ?1", [local_db.to_string_lossy().as_ref()]).map_err(error)?;
+        let counts = rbl_backup::summary::count(snapshot.connection()).map_err(error)?;
+        drop(snapshot);
+        let mut bytes = fs::metadata(&local_db).map_err(error)?.len();
+        let database_bytes = bytes + library_bytes;
+        progress("validating", 0, total, "Checking database · master.db")?;
+        validate_database(&local_db, &location)?;
+        let mut refused = None;
+        // Counted as it goes, so a stop part-way says what it had copied.
+        let mut database_copied = 0;
+        let compressed = crate::backup_zip::compress_file(&local_db, &partial.join("master.db"), &mut |delta| {
+            database_copied += delta;
+            if delta > 0 {
+                crate::test_holds::point(crate::test_holds::BACKUP_DATABASE_COPYING, &state_dir);
+            }
+            progress("copying", database_copied, total, "Database · master.db").map_err(|e| {
+                refused = Some(e);
+                std::io::Error::new(std::io::ErrorKind::Interrupted, "Backup stopped")
+            })
+        }, &write_check);
+        if let Some(error) = refused { return Err(error); }
+        compressed.map_err(error)?;
+        drop(local);
         let mut copied = 0;
         let mut copied_file = |bytes, source: Option<&Path>| {
             copied += bytes;
@@ -428,15 +505,6 @@ fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&str, u64, u6
             };
             progress("copying", copied, total, &item)
         };
-        let snapshot = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).map_err(error)?;
-        snapshot.connection().execute("VACUUM main INTO ?1", [partial.join("master.db").to_string_lossy().as_ref()]).map_err(error)?;
-        let counts = rbl_backup::summary::count(snapshot.connection()).map_err(error)?;
-        drop(snapshot);
-        let mut bytes = fs::metadata(partial.join("master.db")).map_err(error)?.len();
-        let database_bytes = bytes + library_bytes;
-        // FlushFileBuffers needs GENERIC_WRITE on Windows; a read-only handle
-        // fails with "Access is denied" (os error 5) on every backup.
-        fs::OpenOptions::new().write(true).open(partial.join("master.db")).map_err(error)?.sync_all().map_err(error)?;
         copied_file(bytes, Some(&location.master_db))?;
         for (plan, directory) in [(plan, "analysis"), (art_plan, "artwork")] {
         if let Some(plan) = plan {
@@ -446,16 +514,14 @@ fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&str, u64, u6
                     refused = Some(e);
                     std::io::Error::new(std::io::ErrorKind::Interrupted, "Backup stopped")
                 })
-            });
+            }, &worker_check);
             if let Some(error) = refused { return Err(error); }
             bytes += copied.map_err(error)?;
         } else {
+            write_check().map_err(error)?;
             fs::create_dir(partial.join(directory)).map_err(error)?;
         }
         }
-        progress("validating", bytes, total, "Checking database · master.db")?;
-        validate_database(&partial.join("master.db"), &location)?;
-        remove(&partial.join("master.db-shm"))?;
         for name in &library_files {
             let source = library_root.join(name);
             let target = partial.join(name);
@@ -466,12 +532,13 @@ fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&str, u64, u6
                     refused = Some(e);
                     std::io::Error::new(std::io::ErrorKind::Interrupted, "Backup stopped")
                 })
-            });
+            }, &write_check);
             if let Some(error) = refused { return Err(error); }
             compressed.map_err(error)?;
         }
         if let Some(part) = &sidecar {
             for directory in &part.directories {
+                write_check().map_err(error)?;
                 fs::create_dir_all(partial.join(directory)).map_err(error)?;
             }
             for item in &part.files {
@@ -483,7 +550,7 @@ fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&str, u64, u6
                         refused = Some(e);
                         std::io::Error::new(std::io::ErrorKind::Interrupted, "Backup stopped")
                     })
-                });
+                }, &write_check);
                 if let Some(error) = refused { return Err(error); }
                 compressed.map_err(error)?;
             }
@@ -497,9 +564,10 @@ fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&str, u64, u6
                     refused = Some(e);
                     std::io::Error::new(std::io::ErrorKind::Interrupted, "Backup stopped")
                 })
-            });
+            }, &write_check);
             if let Some(error) = refused { return Err(error); }
             compressed.map_err(error)?;
+            write_check().map_err(error)?;
             remove(&source)?;
         }
         // What the backup holds, for RBXport Restore to show before anyone
@@ -519,6 +587,7 @@ fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&str, u64, u6
         }
         measured.sizes.database = database_bytes;
         let summary = rbl_backup::summary::Summary::new(created_at, Some(env!("CARGO_PKG_VERSION").to_owned()), measured, counts);
+        write_check().map_err(error)?;
         crate::durable::write(
             &partial.join(rbl_backup::summary::NAME),
             &serde_json::to_vec(&summary).map_err(error)?,
@@ -532,16 +601,19 @@ fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&str, u64, u6
             includes_artwork: true,
             library_files: library_files.into_iter().map(str::to_owned).collect(),
         };
+        write_check().map_err(error)?;
         crate::durable::write(
             &partial.join(rbl_backup::manifest::NAME),
             &serde_json::to_vec(&saved).map_err(error)?,
         )
         .map_err(error)?;
+        write_check().map_err(error)?;
         crate::durable::write(
             &partial.join(crate::backup_restore_scripts::SHELL_NAME),
             crate::backup_restore_scripts::shell(&location.master_db).as_bytes(),
         )
         .map_err(error)?;
+        write_check().map_err(error)?;
         crate::durable::write(
             &partial.join(crate::backup_restore_scripts::POWERSHELL_NAME),
             crate::backup_restore_scripts::powershell(&location.master_db).as_bytes(),
@@ -549,29 +621,60 @@ fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&str, u64, u6
         .map_err(error)?;
         progress("validating", bytes, total, "Finishing backup · manifest.json")?;
         let mut refused = None;
+        made.borrow_mut().push((archive.clone(), crate::backup_stick::Made::Unfinished));
         let packed = crate::backup_zip::assemble(&partial, &archive, &mut || {
             progress("compressing", bytes, total, "Finishing ZIP archive").map_err(|e| {
                 refused = Some(e);
                 std::io::Error::new(std::io::ErrorKind::Interrupted, "Backup stopped")
             })
-        });
+        }, &write_check);
         if let Some(error) = refused { return Err(error); }
         packed.map_err(error)?;
         // The archive holds everything now; the staged copies go in the background.
-        discard(&access, state.backup_dir(), root, &[&partial]);
+        let aside = discard(&access, state.backup_dir(), root, &[&partial]);
+        // What is on the Stick now goes by its new name (wbx-45.14).
+        if let Some(aside) = aside.into_iter().next() {
+            made.borrow_mut().retain(|(path, _)| *path != partial);
+            made.borrow_mut().push((aside, crate::backup_stick::Made::SetAside));
+        }
         // Still the same Stick, still unlocked, before the backup is named.
         access.recheck()?;
         // A backup folder on an external exFAT or FAT32 drive has no
         // exclusive rename on macOS; `persist_new` still never replaces one.
         rbl_core::durable::persist_new(tempfile::TempPath::try_from_path(&archive).map_err(error)?, &target).map_err(error)?;
+        for entry in made.borrow_mut().iter_mut().filter(|(path, _)| *path == archive) {
+            *entry = (target.clone(), crate::backup_stick::Made::Backup);
+        }
+        crate::test_holds::point(crate::test_holds::BACKUP_PUBLISHED, state.backup_dir());
+        write_check().map_err(error)?;
         crate::durable::sync_dir(root).map_err(error)?;
         Ok(target.to_string_lossy().into_owned())
     })();
     if result.is_err() {
         discard(&access, state.backup_dir(), root, &[&partial, &archive]);
     }
-    result
+    let made = made.into_inner();
+    result.map_err(|stopped| crate::backup_stick::stopped(stopped, &access, &made, copied_to_stick.get()))
 }
+/// Whether a compression worker has written a file of the analysis or
+/// artwork copy yet (for the test hold above only).
+fn worker_output_begun(partial: &Path) -> bool {
+    ["analysis", "artwork"].iter().any(|part| {
+        let mut todo = vec![partial.join(part)];
+        while let Some(dir) = todo.pop() {
+            let Ok(entries) = fs::read_dir(&dir) else { continue };
+            for entry in entries.flatten() {
+                match entry.metadata() {
+                    Ok(meta) if meta.is_dir() => todo.push(entry.path()),
+                    Ok(meta) if meta.len() > 0 => return true,
+                    _ => {}
+                }
+            }
+        }
+        false
+    })
+}
+
 /// Every problem SQLite's `quick_check` reports, not just the first row.
 fn integrity_problems(db: &rbl_db::Library) -> AppResult<Vec<String>> {
     let mut statement = db.connection().prepare("PRAGMA quick_check").map_err(error)?;

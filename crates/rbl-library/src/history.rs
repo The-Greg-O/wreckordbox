@@ -35,6 +35,11 @@ pub trait OutsideSteps: Send + Sync {
         None
     }
 
+    /// Cheap evidence of files left changed after a failed step or rollback.
+    fn unrestored_values(&self) -> Option<serde_json::Value> {
+        None
+    }
+
     /// Stage expensive file work without holding the Library edit gate. The
     /// returned steps must only validate metadata and publish or restore the
     /// staged files. The original history entry remains the durable description.
@@ -47,13 +52,22 @@ pub trait OutsideSteps: Send + Sync {
     /// [`DbError::Conflict`], as a changed row is.
     fn check(&self, undo: bool, label: &str) -> Result<(), DbError>;
 
-    /// Undoes (`undo`) or redoes every change, or none.
-    fn step(&self, undo: bool, label: &str) -> Result<(), DbError>;
+    /// Undoes (`undo`) or redoes every change, or none. The answer is the
+    /// leave the step wrote under (Stick Protection's, for a file on a
+    /// Stick: wbx-45.14), held through the Library's own step and, when
+    /// that fails, through [`Self::revert`], so nothing can take it away
+    /// between the two (a Stick locked mid-step waits for both).
+    fn step(&self, undo: bool, label: &str) -> Result<OutsideHold, DbError>;
 
     /// Puts back what [`Self::step`] changed, after the Library's own step
-    /// failed; answers `(could not be put back, of how many)`.
-    fn revert(&self, undo: bool) -> (usize, usize);
+    /// failed, under the leave that step answered; answers `(could not be
+    /// put back, of how many)`.
+    fn revert(&self, held: OutsideHold, undo: bool) -> (usize, usize);
 }
+
+/// What [`OutsideSteps::step`] wrote under, held until the entry's Library
+/// step is made or reverted. Opaque to the core.
+pub type OutsideHold = Box<dyn std::any::Any + Send>;
 
 /// One reversible library operation. The window's grid edits are entries too
 /// (`Grid`), stepped by its grid editor because they also rewrite analysis
@@ -277,12 +291,13 @@ impl LibraryEdit {
             // it wrote and leaves the library as it was; a failure in the library
             // puts the files and the tracks already written back (#507).
             Self::KeyEdit { tracks, files } => {
-                files.step(undo, TRACK_EDIT)?;
+                // Held to the end of the Library's step, or of the revert.
+                let held = files.step(undo, TRACK_EDIT)?;
                 let error = match step_track_edits(writer, tracks, undo) {
                     Ok(()) => return Ok(()),
                     Err(error) => error,
                 };
-                let (stranded, of) = files.revert(undo);
+                let (stranded, of) = files.revert(held, undo);
                 if stranded == 0 {
                     return Err(error);
                 }
@@ -761,7 +776,20 @@ impl crate::LibraryCore {
             &preparation,
             |w| {
                 executable.check(w, undo)?;
-                executable.apply(w, undo)
+                let result = executable.apply(w, undo);
+                if let (Err(error), LibraryEdit::KeyEdit { tracks, files }) = (&result, executable) {
+                    if let Some(files) = files.unrestored_values() {
+                        let tracks: Vec<_> = tracks.iter().map(|t| t.content().to_owned()).collect();
+                        let why = format!("{error}; audio and Library may disagree for tracks {}. Unrestored audio values are recorded in the Ledger.", tracks.join(", "));
+                        // Before write_then settles a no-row-change intent: a
+                        // committed file is a change even if SQLite refused.
+                        if let Some(ledger) = self.history.lock().ledger() {
+                            ledger.files_unrestored(&serde_json::json!({"tracks":tracks,"files":files}), &why);
+                        }
+                        return Err(DbError::Io(std::io::Error::other(why)));
+                    }
+                }
+                result
             },
             // Kept aside: the step is made by then and is recorded whatever
             // the refresh says.

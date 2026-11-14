@@ -31,10 +31,10 @@
  *   (having said they are checking the Stick and copying the first track).
  * - Progress (wbx-72): a load sends `stick_load_progress` events as the
  *   service does (`checking`, `copying` each new track, `done`);
- *   `__emitStickLoadProgress(path, count, operation?)` sends a burst of
+ *   `__emitStickLoadProgress(path, count, operation?, load?)` sends a burst of
  *   `count` copying events (for the load running there, or `operation`),
  *   the last naming "Burst track <count>"; `__stickLoadOperations()`: every
- *   load's operation id. Events carry `operation` and `volume` as the service's do.
+ *   load's operation id. Events carry `load` (the service's own id per load), `operation` and `volume` as the service's do.
  * - `__playlistTracks(id)`: a Library playlist's tracks.
  * - `__swapStickAt(path, freeBytes)`: another Stick at the same path (a new
  *   volume id, empty, with that free space); the window sees it on its next
@@ -112,9 +112,12 @@ export function createMockStickLoad(source: MockStickLoadSource) {
   // Report ids the shell issued and no load has used yet (as `stick_load_reports` reserves them).
   const reserved = new Set<string>();
   const runningOn = new Map<string, string>();
-  const progress = (stick: string, stage: string, done: number, total: number, track: { id: string | null; title: string } | null, operation = runningOn.get(stick) ?? null) => {
+  // The service's own id for the load running on each Stick (wbx-45.14).
+  const serviceLoadOn = new Map<string, string>();
+  let serviceLoads = 0;
+  const progress = (stick: string, stage: string, done: number, total: number, track: { id: string | null; title: string } | null, operation = runningOn.get(stick) ?? null, load = serviceLoadOn.get(stick) ?? null) => {
     const volume = source.devices().find((d) => d.path === stick)?.volumeId ?? null;
-    for (const listener of [...progressListeners]) listener({ stick, operation, volume, stage, done, total, track });
+    for (const listener of [...progressListeners]) listener({ stick, load, operation, volume, stage, done, total, track });
   };
   const failNext = new Map<string, string>();
   const incompleteNext = new Map<string, string>();
@@ -284,8 +287,8 @@ export function createMockStickLoad(source: MockStickLoadSource) {
       for (const go of waiting) go();
     };
     hooks.__playlistTracks = (id: string) => [...source.tracksOf(id)];
-    hooks.__emitStickLoadProgress = (path: string, count: number, operation?: string) => {
-      for (let at = 1; at <= count; at += 1) progress(path, "copying", at, count, { id: `burst-${at}`, title: `Burst track ${at}` }, operation);
+    hooks.__emitStickLoadProgress = (path: string, count: number, operation?: string, load?: string) => {
+      for (let at = 1; at <= count; at += 1) progress(path, "copying", at, count, { id: `burst-${at}`, title: `Burst track ${at}` }, operation, load);
     };
     // wbx-73: one copying event naming a Library track (its waveform and details are the mock's).
     // `id` null with a `title`: a track the service names by title only.
@@ -357,6 +360,8 @@ export function createMockStickLoad(source: MockStickLoadSource) {
       };
       operations.push(id);
       runningOn.set(stick, id);
+      serviceLoads += 1;
+      serviceLoadOn.set(stick, `mock-load-id-${serviceLoads}`);
       try {
         const report = await loadNow(stick, playlists, plan) as Record<string, unknown>;
         keep(report, null);
@@ -366,7 +371,7 @@ export function createMockStickLoad(source: MockStickLoadSource) {
         keep(null, { code: detail, message: error instanceof Error ? error.message : String(error) });
         throw error;
       } finally {
-        if (runningOn.get(stick) === id) runningOn.delete(stick);
+        if (runningOn.get(stick) === id) { runningOn.delete(stick); serviceLoadOn.delete(stick); }
       }
     },
   };

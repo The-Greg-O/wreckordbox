@@ -584,27 +584,15 @@ pub async fn set_track_field<R: tauri::Runtime>(
         Touched::Tracks,
         crate::commands::TRACK_EDIT,
         move |w| {
-            if let Some(files) = &publishing {
-                files.check_key_edit(w)?;
-            }
-            let edit = each_track(w, &tracks, |w, track| {
-                w.set_field_with_undo(track, which, &value)
-            })?;
-            let (Some(prepared), LibraryEdit::Track(steps)) = (publishing, &edit) else {
-                return Ok(edit);
-            };
-            let (files, problem) = prepared.publish_changed(steps);
-            *noticed.lock() = problem;
-            if files.is_empty() {
-                return Ok(edit);
-            }
-            let LibraryEdit::Track(tracks) = edit else {
-                return Ok(edit);
-            };
-            Ok(LibraryEdit::KeyEdit {
-                tracks,
-                files: Arc::new(crate::key_tag::KeyTagWrites { files, state_dir }),
-            })
+            let access = publishing.as_ref().map(|p| p.enter_key_edit()).transpose()?;
+            if let Some(files) = &publishing { files.check_key_edit(w)?; }
+            let edit = each_track(w, &tracks, |w, track| w.set_field_with_undo(track, which, &value))?;
+            let (Some(prepared), Some(access)) = (publishing, access) else { return Ok(edit) };
+            let LibraryEdit::Track(steps) = edit else { return Ok(edit) };
+            crate::test_holds::point(crate::key_tag::LIBRARY_KEY_WRITTEN, &state_dir);
+            let (edit, stopped) = prepared.finish_key_edit(w, steps, value.trim(), &access)?;
+            *noticed.lock() = stopped;
+            Ok(edit)
         },
     )
     .await;
@@ -612,9 +600,7 @@ pub async fn set_track_field<R: tauri::Runtime>(
     drop(prepared);
     let dto = result?;
     if let Some(warning) = warning.lock().take() {
-        return Err(AppError::internal(format!(
-            "The Library key was saved, but an audio key tag was not written: {warning}"
-        )));
+        return Err(warning);
     }
     Ok(dto)
 }

@@ -27,6 +27,7 @@
 //! wbx-83 (Mutants rendered at load time) adds a step between the plan and
 //! the export: see `load::plan_load`'s note.
 
+mod identity;
 mod load;
 pub mod sticks;
 
@@ -109,6 +110,9 @@ pub mod codes {
     /// would copy cannot be read without writing to it): no load is issued
     /// or performed.
     pub const STICK_LOAD_INCOMPLETE: &str = "stick_load_incomplete";
+    /// Another load running now carries the `operation` name given
+    /// (wbx-45.14): a load's name is its own.
+    pub const STICK_LOAD_DUPLICATE: &str = "stick_load_duplicate";
 }
 
 /// The arguments of `sticks.dry_run`.
@@ -138,8 +142,9 @@ pub struct LoadArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval: Option<String>,
     /// The caller's name for this load (the window's operation id, wbx-72):
-    /// every progress event of this load carries it, so a client tells its
-    /// own load's events from another's or an earlier one's.
+    /// a label only. Every progress event carries it beside the service's
+    /// own id for the load (`load`, wbx-45.14); a name another running load
+    /// carries is refused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation: Option<String>,
 }
@@ -311,6 +316,10 @@ pub struct LoadError {
 /// What `sticks.load` answers once it has started writing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Load {
+    /// The service's own id for this load (wbx-45.14), unique: what its
+    /// progress events carry as `load`.
+    #[serde(default)]
+    pub load: String,
     /// The Stick as it is after the load.
     pub stick: Stick,
     /// `loaded`: everything planned was written. `incomplete`: the export
@@ -348,6 +357,8 @@ pub(crate) fn answers(command: &str) -> bool {
 /// Stick, never a disconnect.
 #[derive(Default)]
 pub(crate) struct Loads {
+    /// Each load's own id, and the labels of those running (wbx-45.14).
+    pub(crate) ids: identity::LoadIds,
     active: std::sync::Mutex<usize>,
     idle: std::sync::Condvar,
     stopping: std::sync::atomic::AtomicBool,

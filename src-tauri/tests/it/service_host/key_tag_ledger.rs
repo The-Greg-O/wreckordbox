@@ -123,12 +123,13 @@ fn an_audio_key_edit_and_its_history_record_the_file_values() {
         Some(true)
     ))
     .is_err());
-    assert!(rbxport_lib::key_tag::write_logged(
+    assert!(rbxport_lib::key_tag::write_analysis_key_tag(
         window.state().inner(),
         "protected",
         &audio.display().to_string(),
         "Am"
     )
+    .1
     .is_some());
     assert_eq!(std::fs::read(&audio).unwrap(), before);
     assert_eq!(window.cli(&["--json", "runs", "list"]).json(), runs);
@@ -194,10 +195,14 @@ fn window_undo_does_not_keep_an_outer_gate_during_audio_preparation() {
         fn check(&self, _: bool, _: &str) -> Result<(), rbl_db::DbError> {
             Ok(())
         }
-        fn step(&self, _: bool, _: &str) -> Result<(), rbl_db::DbError> {
-            Ok(())
+        fn step(
+            &self,
+            _: bool,
+            _: &str,
+        ) -> Result<rbl_library::history::OutsideHold, rbl_db::DbError> {
+            Ok(Box::new(()))
         }
-        fn revert(&self, _: bool) -> (usize, usize) {
+        fn revert(&self, _: rbl_library::history::OutsideHold, _: bool) -> (usize, usize) {
             (0, 1)
         }
     }
@@ -223,10 +228,14 @@ fn window_undo_does_not_keep_an_outer_gate_during_audio_preparation() {
         fn check(&self, _: bool, _: &str) -> Result<(), rbl_db::DbError> {
             Ok(())
         }
-        fn step(&self, _: bool, _: &str) -> Result<(), rbl_db::DbError> {
-            Ok(())
+        fn step(
+            &self,
+            _: bool,
+            _: &str,
+        ) -> Result<rbl_library::history::OutsideHold, rbl_db::DbError> {
+            Ok(Box::new(()))
         }
-        fn revert(&self, _: bool) -> (usize, usize) {
+        fn revert(&self, _: rbl_library::history::OutsideHold, _: bool) -> (usize, usize) {
             (0, 1)
         }
     }
@@ -342,4 +351,65 @@ fn an_accepted_audio_tag_survives_recording_failure_and_reads_do_not_replay_it()
         "{entries:?}"
     );
     assert_eq!(std::fs::read(&audio).unwrap(), bytes);
+}
+
+#[test]
+fn a_failed_sqlite_step_with_an_unrestorable_file_is_named_in_the_ledger() {
+    let window = window();
+    window.load();
+    window.host().unwrap();
+    let (audio, id) = imported(&window);
+    window
+        .state()
+        .write(|w| w.ensure_detected_key("Fm"))
+        .unwrap();
+    run(rbxport_lib::details::set_track_field(
+        window.app.handle().clone(),
+        window.state(),
+        vec![id.clone()],
+        "key".into(),
+        "Fm".into(),
+        Some(true),
+    ))
+    .unwrap();
+    let db = rbl_db::Library::open(
+        window.state().location().unwrap(),
+        rbl_db::OpenMode::ReadWrite,
+    )
+    .unwrap();
+    db.connection().execute_batch("CREATE TRIGGER refuse_key BEFORE UPDATE OF KeyID ON djmdContent BEGIN SELECT RAISE(ABORT, 'forced key commit refusal'); END;").unwrap();
+    let held = rbxport_lib::test_holds::arm(
+        rbxport_lib::key_tag::TAGS_STEPPED,
+        window.state().backup_dir(),
+    );
+    let handle = window.app.handle().clone();
+    let step = std::thread::spawn(move || {
+        run(commands::undo_edit(handle.clone(), handle.state()))
+            .map(|_| ())
+            .map_err(|e| e.message)
+    });
+    held.reached();
+    // Simulates another program changing the published inode before rollback.
+    let mut permissions = std::fs::metadata(&audio).unwrap().permissions();
+    permissions.set_readonly(true);
+    std::fs::set_permissions(&audio, permissions).unwrap();
+    held.release();
+    let error = step.join().unwrap().unwrap_err();
+    assert_eq!(
+        rbl_db::key_tag::read_key(&audio).unwrap().as_deref(),
+        Some("Cm")
+    );
+    assert!(error.contains("could not be changed back"), "{error}");
+    let entries = all_entries(&window);
+    let partial = entries
+        .iter()
+        .find(|e| e["kind"] == "audio_key_tag_partial")
+        .expect("a committed file is recorded even when SQLite and rollback fail");
+    assert_eq!(partial["source"], json!({"kind":"dj","name":"dj"}));
+    assert_eq!(partial["payload"]["tracks"], json!([id]));
+    assert_eq!(
+        partial["payload"]["files"],
+        json!([{"path":audio,"before":"Fm","after":"Cm"}])
+    );
+    assert_eq!(partial["reversible"], false);
 }
