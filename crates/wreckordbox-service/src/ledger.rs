@@ -94,6 +94,8 @@ mod bulk;
 mod bulk_spill;
 #[path = "file_ledger.rs"]
 mod files;
+#[path = "player_record.rs"]
+mod player_record;
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};

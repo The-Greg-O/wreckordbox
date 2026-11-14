@@ -219,6 +219,16 @@ pub(super) fn make(keeper: &Keeper, kind: Kind) -> Arc<dyn Recorder> {
             "Analyze tracks",
             Source::new(SourceKind::Tool, "wreckordbox-analysis"),
         ),
+        Kind::Link => (
+            "link",
+            "Player edits over LINK",
+            Source::new(SourceKind::Tool, "link"),
+        ),
+        Kind::RoundTrip => (
+            "round_trip",
+            "Player edits from Round-trip",
+            Source::new(SourceKind::Tool, "round-trip"),
+        ),
         Kind::Import => (
             "import",
             "Import files",
@@ -510,7 +520,7 @@ mod tests {
             crate::stems::Stems::from_env(&location.master_db, &dir.path().join("state"), events);
         let keeper = Keeper::new(stems.clone(), location);
         let request: crate::protocol::Request = serde_json::from_value(json!({"id":1,"command":"tracks.rate","args":{"id":"10000","stars":3},"run":{"source":{"kind":"agent","name":"fixture-importer"}}})).unwrap();
-        for kind in [Kind::Import, Kind::Analysis] {
+        for kind in [Kind::Import, Kind::Analysis, Kind::Link, Kind::RoundTrip] {
             let (result, _) = keeper.attributed(true, &request, || {
                 let recorder = make(&keeper, kind);
                 let mut step = recorder.enter(json!({"track":"fixture"}));
@@ -525,7 +535,7 @@ mod tests {
         }
         let sidecar = stems.sidecar().unwrap();
         let (runs, _) = sidecar.runs(10, 0).unwrap();
-        assert_eq!(runs.len(), 2);
+        assert_eq!(runs.len(), 4);
         for run in runs {
             let (entries, _) = sidecar.run_entries(run.run.id, 10, 0).unwrap();
             assert_eq!(entries.len(), 1);
@@ -534,7 +544,14 @@ mod tests {
                 if entries[0].kind == "import" {
                     Source::new(SourceKind::Agent, "fixture-importer")
                 } else {
-                    Source::new(SourceKind::Tool, "wreckordbox-analysis")
+                    Source::new(
+                        SourceKind::Tool,
+                        match entries[0].kind.as_str() {
+                            "link" => "link",
+                            "round_trip" => "round-trip",
+                            _ => "wreckordbox-analysis",
+                        },
+                    )
                 }
             );
         }

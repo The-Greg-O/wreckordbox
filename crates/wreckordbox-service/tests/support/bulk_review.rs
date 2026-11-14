@@ -267,6 +267,7 @@ fn protected_stick_refuses_both_bulk_paths_without_records_or_reservations() {
                             )
                             .map(|_| ()),
                         Kind::Import => w.import_files(&paths).map(|_| ()),
+                        Kind::Link | Kind::RoundTrip => unreachable!("tested separately"),
                     },
                     |_, v| Ok(v),
                 )

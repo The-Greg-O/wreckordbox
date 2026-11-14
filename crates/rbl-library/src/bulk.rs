@@ -10,6 +10,10 @@ pub enum Kind {
     /// Local file imports, attributed to the caller (or the DJ in the window).
     /// Player metadata and Round-trip need their own player source, not this kind.
     Import,
+    /// A player message received over LINK; never attributed to its caller.
+    Link,
+    /// One Round-trip operation bringing player changes back from a Stick.
+    RoundTrip,
 }
 
 /// Implemented by the service's Ledger. Enter is thread-local and its guard

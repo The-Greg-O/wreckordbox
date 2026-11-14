@@ -154,7 +154,15 @@ pub(crate) fn import_with(state: &AppState, editor: &crate::grid::GridEditor, ro
     let source = read_source(state, &device_read, cues, history, settings, ratings)?;
     between();
     device_read.finish().map_err(|e| crate::stick_recovery::read_error(root, e))?;
-    apply(state, editor, source, cues, history, settings, ratings)
+    let operation = rbl_library::bulk::Operation::new(state.core(), rbl_library::bulk::Kind::RoundTrip);
+    let mut result = apply(state, editor, source, cues, history, settings, ratings, &operation);
+    if let Some(warning) = operation.finish() {
+        match &mut result {
+            Ok(report) => report.warnings.push(warning),
+            Err(error) => { error.message.push(' '); error.message.push_str(&warning); }
+        }
+    }
+    result
 }
 
 #[allow(clippy::fn_params_excessive_bools, reason = "the same independent choices as import_usb")]
@@ -236,26 +244,30 @@ fn read_analysis(root: &Path, analysis: &str) -> AppResult<Analysis> {
 
 /// Applies what was read from the Stick to the Library and the settings
 /// stash, under the Library's gates.
-#[allow(clippy::fn_params_excessive_bools, reason = "the same independent choices as import_usb")]
-fn apply(state: &AppState, editor: &crate::grid::GridEditor, source: Source, cues: bool, history: bool, settings: bool, ratings: bool) -> AppResult<ImportReport> {
+#[allow(clippy::fn_params_excessive_bools, clippy::too_many_arguments, reason = "the same independent choices as import_usb, with one operation recorder")]
+fn apply(state: &AppState, editor: &crate::grid::GridEditor, source: Source, cues: bool, history: bool, settings: bool, ratings: bool, operation: &rbl_library::bulk::Operation) -> AppResult<ImportReport> {
     let Source { db_id, tracks, gone, manifest, rating_tracks, snapshot, analysis, settings: found, volume } = source;
     // Cues (analysis files and rows), play history and ratings change the
     // Library: refused before any file is written while it may not be
     // changed (Library Protection among it). The players' settings alone go
     // to the app's own folder, not the Library.
-    let (_edit, _gate, _files);
-    if cues || history || ratings {
-        _edit = state.file_edit()?;
-    } else {
-        _gate = state.edit_gate().lock();
-        _files = state.analysis_write().lock();
-    }
     let mut report = ImportReport::default();
     let location = state.location()?;
-    crate::file_journal::recover(state.backup_dir(), &location)?;
+    // Recovery is write-side only. Release the gates before recording batches;
+    // each file publication below takes its own guarded edit lifetime.
+    {
+        let (_edit, _gate, _files);
+        if cues || history || ratings {
+            _edit = state.file_edit()?;
+        } else {
+            _gate = state.edit_gate().lock();
+            _files = state.analysis_write().lock();
+        }
+        crate::file_journal::recover(state.backup_dir(), &location)?;
+    }
     let snapshot = snapshot.as_ref().map(|read| read.as_ref().map_err(String::as_str));
     // Resolve all rating conflicts before any requested imports write to the library.
-    if ratings { ratings::import(state, snapshot.unwrap_or(Err("not read")), manifest.as_ref(), &rating_tracks, db_id, &mut report)?; }
+    if ratings { ratings::import(state, snapshot.unwrap_or(Err("not read")), manifest.as_ref(), &rating_tracks, db_id, &mut report, operation)?; }
     if cues && tracks.is_empty() { return Err(err("No tracks from this library were found on the device.")); }
     let read = analysis;
     if cues {
@@ -263,24 +275,26 @@ fn apply(state: &AppState, editor: &crate::grid::GridEditor, source: Source, cue
         // Open the guarded writer even for an empty device; read-only must not look like success.
         state.write(|_| Ok(())).map_err(write_error)?;
         for (id, analysis) in tracks.values() {
+            operation.run(serde_json::json!({"operation":"cue_grid","track":id}), || {
+            let mut edit = state.file_edit()?;
             // Read on the open handle. Opening the library, for the lock
             // bit here and the analysis path below, derives its key again:
             // about 155 ms each, two per track, so a stick of 20,000 tracks
             // held the library, and every analysis and sync, for well over
             // an hour (#284).
-            if editor.is_locked(id) || state.read_db(|db| crate::grid::locked_in(db, id)).map_err(write_error)? { report.skipped += 1; continue; }
-            if analysis.is_empty() { report.skipped += 1; continue; }
+            if editor.is_locked(id) || state.read_db(|db| crate::grid::locked_in(db, id)).map_err(write_error)? { report.skipped += 1; return Ok(()); }
+            if analysis.is_empty() { report.skipped += 1; return Ok(()); }
             let (source_dat, source_cues) = match read.get(analysis) {
                 Some(Ok(Analysis::Read { dat, cues })) => (dat, cues),
                 Some(Ok(Analysis::Missing)) => {
                     report.skipped += 1;
                     report.warnings.push(format!("Track {id}: USB analysis file is missing ({analysis}); cues and grid were left unchanged."));
-                    continue;
+                    return Ok(());
                 }
                 Some(Err(e)) => return Err(e.clone()),
                 None => return Err(err(format!("Track {id}: its analysis file was not read"))),
             };
-            if source_cues.section(b"PCO2").is_none() { report.skipped += 1; continue; }
+            if source_cues.section(b"PCO2").is_none() { report.skipped += 1; return Ok(()); }
             let entries = source_cues.cue_entries();
             let beats = source_dat.beat_grid().unwrap_or_default();
             let previous_bpm = state.read_db(|db| Ok(db.connection().query_row("SELECT COALESCE(BPM,0) FROM djmdContent WHERE ID=?1 AND rb_local_deleted=0", [id], |r| r.get::<_,u32>(0))?)).map_err(write_error)?;
@@ -312,15 +326,22 @@ fn apply(state: &AppState, editor: &crate::grid::GridEditor, source: Source, cue
                 let bytes = if extension == "EXT" { dest.with_extended_grid_cleared().unwrap_or_else(|| dest.to_bytes()) } else { dest.to_bytes() };
                 files.push((target, bytes));
             }
-            if files.is_empty() { report.skipped += 1; continue; }
-            if !differs && !bpm_changed && database_cues_match(state, id, &entries)? { report.unchanged += 1; continue; }
-            let journal = crate::file_journal::FileJournal::prepare(state.backup_dir(), &location, id, bpm, None, true, &files)?;
-            if let Err(e) = journal.publish() { journal.rollback()?; return Err(e); }
-            if let Err(e) = state.write(|w| w.import_usb_cues(id, &entries, bpm)) { journal.reconcile(&location)?; return Err(write_error(e)); }
+            if files.is_empty() { report.skipped += 1; return Ok(()); }
+            if !differs && !bpm_changed && database_cues_match(state, id, &entries)? { report.unchanged += 1; return Ok(()); }
+            let record = edit.recording_values("round_trip_cues", id, &serde_json::Value::Null).map_err(write_error)?;
+            let journal = match crate::file_journal::FileJournal::prepare(state.backup_dir(), &location, id, bpm, None, true, &files) {
+                Ok(journal) => journal,
+                Err(error) => { record.cancelled(); return Err(error); }
+            };
+            if let Err(e) = journal.publish() { journal.rollback()?; record.cancelled(); return Err(e); }
+            if let Err(e) = record.write_row(state, |w| w.import_usb_cues(id, &entries, bpm)) { journal.reconcile(&location)?; return Err(write_error(e)); }
             journal.commit()?;
+            record.written();
             editor.forget_history(id);
             report.changed.push(id.clone());
             report.tracks += 1;
+            Ok::<_, AppError>(())
+            }, |()| vec![serde_json::json!({"operation":"cue_grid","track":id,"analysis":analysis})])?;
         }
     }
     if history {
@@ -339,10 +360,16 @@ fn apply(state: &AppState, editor: &crate::grid::GridEditor, source: Source, cue
             let key = format!("{}:{}:{}", volume, session.id, session.name);
             let hash = rbl_export::manifest::hash(key.as_bytes());
             let uuid = format!("00000000-0000-4000-8000-{:012x}", hash & 0xffff_ffff_ffff);
-            report.histories += state.write(|w| w.import_usb_history(&format!("{} (USB {:06x})", session.name, hash & 0x00ff_ffff), &uuid, &matched)).map_err(write_error)?;
+            report.histories += operation.run(serde_json::json!({"operation":"history_import","history":uuid}),
+                || state.write(|w| w.import_usb_history(&format!("{} (USB {:06x})", session.name, hash & 0x00ff_ffff), &uuid, &matched)).map_err(write_error),
+                |count| vec![serde_json::json!({"operation":"history_import","history":uuid,"name":session.name,"tracks":matched.len(),"imported":count})])?;
         }
     }
     if settings {
+        // Keep a settings bundle serialized as before, independently of the
+        // player recording scopes (which have already released their gates).
+        let _gate = state.edit_gate().lock();
+        let _files = state.analysis_write().lock();
         let destination = settings_stash(state.backup_dir());
         for (name, bytes) in found {
             validate_settings(name, &bytes)
