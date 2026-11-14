@@ -1232,17 +1232,19 @@ pub async fn open_view(state: &State<'_, Arc<AppState>>, path: String, format: S
         let mount = connected(&path)?;
         let format = format_from(&format)?;
         let playlist = id_from(&playlist)?;
-        // The library, its OneLibrary cues and (when tags are picked) its
-        // MyTags in one read of the Stick that cannot recover or write
-        // anything (wbx-45.5).
+        // The library, its OneLibrary cues and its MyTags in one read of the
+        // Stick that cannot recover or write anything (wbx-45.5). The tags
+        // also name the list's MyTags column (wbx-f7y): with none picked, a
+        // Stick whose tags cannot be read still opens, its column empty;
+        // the bar says they could not be read (`filter_values`).
         let (library, one_cues, my_tags) = wreckordbox_stick_outline::read(&mount, |stick| {
             let library = stick.library(format)?;
             let cues = if format == Format::OneLibrary { one_library_cues(stick.root()) } else { HashMap::new() };
-            let my_tags = if tag_picks.is_empty() { None } else { Some(stick.my_tags(format)?) };
+            let my_tags = if tag_picks.is_empty() { stick.my_tags(format).ok() } else { Some(stick.my_tags(format)?) };
             Ok((library, cues, my_tags))
         })
         .map_err(|error| crate::stick_recovery::read_error(&mount, error))?;
-        if let Some(tags) = &my_tags {
+        if let Some(tags) = my_tags.as_ref().filter(|_| !tag_picks.is_empty()) {
             filter.tags = crate::stick_my_tags::filters(&tag_picks, tags);
         }
         let ids: Vec<u32> = if playlist == 0 {
@@ -1257,6 +1259,7 @@ pub async fn open_view(state: &State<'_, Arc<AppState>>, path: String, format: S
             .collect();
         handle.remember_device_assets(&mount, library.tracks.iter().map(|t| assets_of(&mount, t)));
         let mut view = DeviceView::open_filtered(rows, &parsed, field, &filter);
+        view.tags = my_tags.as_ref().map(crate::stick_my_tags::named).unwrap_or_default();
         let mut remaining = MAX_BROWSER_EXT_VIEW_BYTES;
         for row in &mut view.rows {
             if let Some(track) = library.track(row.id) {
@@ -1522,12 +1525,25 @@ fn assets_of(mount: &Path, track: &device::Track) -> (String, DeviceAssets) {
 
 /// A window of a device view's rows. Each is a track the deck can play from
 /// its file, as an Explorer file is.
-pub fn fetch_rows(view: &DeviceView, offset: u32, len: u32) -> AppResult<Vec<RowDto>> {
+pub fn fetch_rows(view: &DeviceView, offset: u32, len: u32, extra_columns: &[String]) -> AppResult<Vec<RowDto>> {
     if len > MAX_ROWS {
         return Err(AppError::new(ErrorKind::Malformed, "Too many rows requested at once.")
             .with_detail(format!("len {len} exceeds the {MAX_ROWS}-row cap")));
     }
-    Ok(view.window(offset as usize, len as usize).iter().map(row_dto).collect())
+    // The Stick's own MyTags for the list's column, as a Library row sends
+    // them (wbx-f7y); read when the view was opened, never written.
+    let my_tags = extra_columns.iter().any(|column| column == "myTags");
+    Ok(view
+        .window(offset as usize, len as usize)
+        .iter()
+        .map(|row| {
+            let mut dto = row_dto(row);
+            if my_tags {
+                dto.extra.get_or_insert_with(Default::default).insert("myTags".to_owned(), crate::stick_my_tags::row_field(&view.tags, row));
+            }
+            dto
+        })
+        .collect())
 }
 
 /// The row ids between two positions of a device view, for a shift-click.
@@ -2738,10 +2754,10 @@ mod tests {
             filter: rbl_index::TrackFilter::default(),
         };
         let view = DeviceView::open(rows, &spec, rbl_index::SearchField::All);
-        let page = fetch_rows(&view, 0, 10).unwrap();
+        let page = fetch_rows(&view, 0, 10, &[]).unwrap();
         assert_eq!(page.iter().map(|r| (r.title.as_str(), r.track_no)).collect::<Vec<_>>(), [("Track 2", 2), ("Track 1", 1)]);
         assert_eq!(ids_in_range(&view, 1, 0), vec![page[0].id.clone(), page[1].id.clone()]);
-        assert!(fetch_rows(&view, 0, MAX_ROWS + 1).is_err());
+        assert!(fetch_rows(&view, 0, MAX_ROWS + 1, &[]).is_err());
     }
     #[test]
     fn browsing_both_device_formats_reads_cues_without_changing_a_clean_stick() {
@@ -2809,7 +2825,7 @@ mod tests {
                 },
                 rbl_index::SearchField::All,
             );
-            let found = fetch_rows(&view, 0, 10).unwrap();
+            let found = fetch_rows(&view, 0, 10, &[]).unwrap();
             let cued = found.iter().find(|row| row.title == "Track 0").unwrap();
             assert_eq!(
                 cued.hot_cues

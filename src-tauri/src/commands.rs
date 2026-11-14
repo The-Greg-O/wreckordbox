@@ -249,7 +249,7 @@ pub async fn fetch_rows(
         );
     }
     if let Some(device) = state.device_view(view_id) {
-        return crate::device_library::fetch_rows(&device, offset, len);
+        return crate::device_library::fetch_rows(&device, offset, len, extra_columns.as_deref().unwrap_or_default());
     }
     let library = state.library()?;
     let extra_columns = extra_columns.unwrap_or_default();
