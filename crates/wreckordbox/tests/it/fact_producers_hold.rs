@@ -13,7 +13,9 @@
     clippy::panic
 )]
 use crate::common;
-use crate::review::{fact, ok, token};
+use crate::review::{fact, token};
+#[path = "../../../wreckordbox-intensity/tests/common/mod.rs"]
+mod signals;
 
 use std::path::Path;
 use std::process::{Child, Stdio};
@@ -213,5 +215,144 @@ fn an_accept_waits_while_a_separation_records_its_stems_and_then_is_written() {
     let (accepted, answer) = finished(accepting);
     assert!(accepted, "{answer}");
     assert_eq!(facts_in_sidecar(&s, &track, "stems"), 1);
+    assert_eq!(db_rating(&s, "10001"), 4);
+}
+
+/// Adds a track with this audio (16-bit mono WAV at the generators' rate)
+/// to the Library, as rekordbox imports one. Before any service starts.
+fn import_audio(s: &Sandbox, name: &str, samples: &[f32]) -> String {
+    let path = s.path().join("audio").join(name);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let data_len = u32::try_from(samples.len() * 2).unwrap();
+    let mut out = Vec::with_capacity(44 + samples.len() * 2);
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data_len).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16_u32.to_le_bytes());
+    out.extend_from_slice(&1_u16.to_le_bytes());
+    out.extend_from_slice(&1_u16.to_le_bytes());
+    out.extend_from_slice(&signals::RATE.to_le_bytes());
+    out.extend_from_slice(&(signals::RATE * 2).to_le_bytes());
+    out.extend_from_slice(&2_u16.to_le_bytes());
+    out.extend_from_slice(&16_u16.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data_len.to_le_bytes());
+    for sample in samples {
+        let value = (sample.clamp(-1.0, 1.0) * 32_767.0) as i16;
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+    std::fs::write(&path, out).unwrap();
+    let mut id = String::new();
+    s.edit(|writer| id = writer.import_file(&path).unwrap());
+    id
+}
+
+#[test]
+fn an_accept_waits_while_intensity_records_a_measurement_and_then_is_written() {
+    let s = Sandbox::new();
+    let track = import_audio(&s, "Loud.wav", &signals::loud_busy(3.0));
+    let gate = Gate::new();
+    let _service = gated(&s, &gate);
+    let energy = fact(&s, "10001", "energy", "4", "agent:tagger", "0.7");
+    let t = token(&s);
+
+    gate.hold("producer-intensity");
+    let measuring = spawn(&s, &["intensity", "measure", &track]);
+    gate.reached("at-producer-intensity");
+    let mut accepting = accept(&s, energy, &t);
+
+    kept_waiting(&gate, &mut accepting);
+    assert_eq!(db_rating(&s, "10001"), 0);
+    assert_eq!(facts_in_sidecar(&s, &track, "intensity"), 0);
+
+    gate.go("producer-intensity");
+    let (measured, answer) = finished(measuring);
+    assert!(measured, "{answer}");
+    assert_eq!(answer["measured"], 1, "{answer}");
+    let (accepted, answer) = finished(accepting);
+    assert!(accepted, "{answer}");
+    assert_eq!(facts_in_sidecar(&s, &track, "intensity"), 1);
+    assert_eq!(db_rating(&s, "10001"), 4);
+}
+
+/// Gives a track a beat grid at `bpm` from `first_downbeat` seconds, in an
+/// analysis file where rekordbox keeps one. While no service runs.
+fn give_beat_grid(s: &Sandbox, track: &str, bpm: f64, first_downbeat: f64, seconds: f64) {
+    let mut beats = Vec::new();
+    let mut at = first_downbeat;
+    let mut number = 0_u16;
+    while at < seconds {
+        beats.push(rbl_anlz::Beat {
+            beat_number: number % 4 + 1,
+            tempo_x100: (bpm * 100.0) as u16,
+            time_ms: (at * 1000.0).round() as u32,
+        });
+        number += 1;
+        at = first_downbeat + f64::from(number) * 60.0 / bpm;
+    }
+    let relative = format!("/PIONEER/USBANLZ/{track}/ANLZ0000.DAT");
+    let file = rbl_anlz::resolve(&s.location().share_root, &relative);
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let bytes = rbl_anlz::AnlzBuilder::new()
+        .path("/audio/track.wav")
+        .beat_grid(&beats)
+        .finish();
+    std::fs::write(&file, bytes).unwrap();
+    s.edit(|writer| {
+        let changed = writer
+            .library()
+            .connection()
+            .execute(
+                "UPDATE djmdContent SET AnalysisDataPath = ?1 WHERE ID = ?2",
+                (relative.as_str(), track),
+            )
+            .unwrap();
+        assert_eq!(changed, 1);
+    });
+}
+
+/// Stops whatever service runs on the sandbox and waits until it is gone.
+fn stop_service(s: &Sandbox) {
+    let socket = s.config().socket_path(s.location());
+    if let Ok(mut client) = wreckordbox_service::Client::connect(&socket) {
+        let _ = client.stop();
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while wreckordbox_service::Client::connect(&socket).is_ok() {
+        assert!(Instant::now() < deadline, "the service did not stop");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+#[test]
+fn an_accept_waits_while_reading_intensity_records_bars_for_a_new_beat_grid() {
+    let s = Sandbox::new();
+    let track = import_audio(&s, "Later.wav", &signals::loud_busy(5.0));
+    let measured = s.cli(&["--json", "intensity", "measure", &track]);
+    assert!(measured.status.success(), "{}", measured.stderr);
+    stop_service(&s);
+    // rekordbox analyses it after the measuring: reading it makes the bars.
+    give_beat_grid(&s, &track, 120.0, 0.5, 5.0);
+    let gate = Gate::new();
+    let _service = gated(&s, &gate);
+    let energy = fact(&s, "10001", "energy", "4", "agent:tagger", "0.7");
+    let t = token(&s);
+
+    gate.hold("producer-realign");
+    let showing = spawn(&s, &["intensity", "show", &track]);
+    gate.reached("at-producer-realign");
+    let mut accepting = accept(&s, energy, &t);
+
+    kept_waiting(&gate, &mut accepting);
+    assert_eq!(db_rating(&s, "10001"), 0);
+    assert_eq!(facts_in_sidecar(&s, &track, "intensity"), 1);
+
+    gate.go("producer-realign");
+    let (shown, answer) = finished(showing);
+    assert!(shown, "{answer}");
+    assert!(answer["intensity"]["value"]["bars"].is_object(), "{answer}");
+    let (accepted, answer) = finished(accepting);
+    assert!(accepted, "{answer}");
+    assert_eq!(facts_in_sidecar(&s, &track, "intensity"), 2);
     assert_eq!(db_rating(&s, "10001"), 4);
 }
