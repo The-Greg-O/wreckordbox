@@ -458,7 +458,14 @@ fn every_writer_is_refused_on_a_protected_stick_and_writes_nothing() {
     );
     call("analyse_track");
     // Analysis writes the key tag through this, after the Library has it.
-    rbxport_lib::key_tag::write_logged(&rig.state_dir(), &track, &audio.to_string_lossy(), "Am");
+    assert!(rbxport_lib::key_tag::write_analysis_key_tag(
+        rig.app.state::<Arc<AppState>>().inner(),
+        &track,
+        &audio.to_string_lossy(),
+        "Am"
+    )
+    .1
+    .is_some());
     assert_eq!(bytes(&rig.stick), before, "not a byte on the Stick changed");
 
     call("redo_edit");

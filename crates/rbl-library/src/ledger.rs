@@ -163,6 +163,12 @@ pub trait Ledger: Send + Sync {
         self.note(Unkept::Unrecorded, Some(&format!("{kind}: track {track}")));
     }
 
+    /// A file was published, but the native step and/or its file rollback
+    /// failed. Record the already-held file values without claiming a row edit.
+    fn files_unrestored(&self, _values: &serde_json::Value, why: &str) {
+        self.note(Unkept::Unrecorded, Some(why));
+    }
+
     /// The write [`Self::begin`] announced is over: `wrote` is whether it
     /// changed any row. Called before the core re-reads what it touched.
     fn written(&self, wrote: bool);

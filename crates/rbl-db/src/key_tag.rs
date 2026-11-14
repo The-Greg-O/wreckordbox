@@ -33,10 +33,12 @@
 //! replacement would split them off, where the in-place write keeps them),
 //! and a file another user owns that cannot be handed back to them.
 
+pub mod prepared;
+mod file_lock;
+
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
 use lofty::config::{ParseOptions, ParsingMode, WriteOptions};
 use lofty::file::{AudioFile, FileType};
@@ -81,10 +83,6 @@ enum Format {
     Aiff,
     Flac,
 }
-
-/// One file at a time: an analysis and a key edit of the same track must
-/// not both build a replacement from the same original.
-static WRITING: Mutex<()> = Mutex::new(());
 
 const TKEY: &str = "TKEY";
 const INITIALKEY: &str = "INITIALKEY";
@@ -138,9 +136,10 @@ pub enum KeySwap {
 ///
 /// As [`write_key`]. The original is untouched in every case.
 pub fn swap_key(path: &Path, expected: Option<Option<&str>>, key: Option<&str>) -> Result<KeySwap> {
-    let _one = WRITING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     // The file itself: a symlink is followed, so the link stays a link.
     let path = fs::canonicalize(path)?;
+    let writing = file_lock::for_path(&path);
+    let _one = writing.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let meta = fs::metadata(&path)?;
     if !meta.is_file() {
         return Err(KeyTagError::Io(io::Error::new(io::ErrorKind::InvalidInput, "not a file")));
@@ -162,7 +161,6 @@ pub fn swap_key(path: &Path, expected: Option<Option<&str>>, key: Option<&str>) 
             return Ok(KeySwap::Changed { found: before });
         }
     }
-    remove_stale_temps(&path);
     let temp = temp_beside(&path);
     let result = replace_via(&path, &temp, format, key, &meta);
     if result.is_err() {
@@ -235,42 +233,19 @@ const TEMP_TAG: &str = ".rbx-key-";
 
 /// A name in the same directory, so the rename is a rename and not a copy.
 fn temp_beside(path: &Path) -> PathBuf {
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos());
-    path.with_file_name(format!(".{name}{TEMP_TAG}{}-{stamp}.tmp", std::process::id()))
+    temp_at(path, stamp)
 }
 
-/// Removes this file's replacements left behind by a crash between the copy
-/// and the rename: names of exactly `temp_beside`'s shape for this file, last
-/// changed over an hour ago, so a write still in progress elsewhere is safe.
-fn remove_stale_temps(path: &Path) {
-    let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else { return };
-    let prefix = format!(".{}{TEMP_TAG}", name.to_string_lossy());
-    let Ok(entries) = fs::read_dir(dir) else { return };
-    for entry in entries.flatten() {
-        let entry_name = entry.file_name();
-        let entry_name = entry_name.to_string_lossy();
-        let Some(rest) = entry_name.strip_prefix(&prefix).and_then(|r| r.strip_suffix(".tmp")) else { continue };
-        let ours = rest.split_once('-').is_some_and(|(pid, stamp)| {
-            !pid.is_empty()
-                && !stamp.is_empty()
-                && pid.bytes().all(|b| b.is_ascii_digit())
-                && stamp.bytes().all(|b| b.is_ascii_digit())
-        });
-        let stale = entry
-            .metadata()
-            .ok()
-            .filter(fs::Metadata::is_file)
-            .and_then(|m| m.modified().ok())
-            .and_then(|m| m.elapsed().ok())
-            .is_some_and(|age| age > std::time::Duration::from_secs(3600));
-        if ours && stale {
-            let _ = fs::remove_file(entry.path());
-        }
-    }
+fn temp_at(path: &Path, stamp: u128) -> PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let counter = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    path.with_file_name(format!(".{name}{TEMP_TAG}{}-{stamp}-{counter}.tmp", std::process::id()))
 }
+
 
 fn replace_via(path: &Path, temp: &Path, format: Format, key: Option<&str>, meta: &fs::Metadata) -> Result<()> {
     // A copy first, whatever the format: it carries the file's permissions
@@ -924,4 +899,15 @@ fn same_aiff_chunks(original: &Path, temp: &Path) -> Result<()> {
         return Err(KeyTagError::Verify("an AIFF chunk other than ID3 changed".into()));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod gate_tests {
+    #[test]
+    fn gate_temp_names_differ_even_at_the_same_clock_tick() {
+        let names: std::collections::HashSet<_> = (0..64)
+            .map(|_| super::temp_at(std::path::Path::new("fixture.mp3"), 42))
+            .collect();
+        assert_eq!(names.len(), 64);
+    }
 }
