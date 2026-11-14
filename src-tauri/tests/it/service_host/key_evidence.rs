@@ -479,5 +479,17 @@ fn a_completed_undo_with_failed_carry_announces_its_history_and_native_change() 
         history + 1,
         "the menu must offer Redo of the accepted Undo"
     );
+    assert_eq!(
+        window.history.lock().unwrap().last().unwrap()["canRedo"],
+        true
+    );
+    assert_eq!(
+        window.history.lock().unwrap().last().unwrap()["redoLabel"],
+        "Track Edit"
+    );
+    assert_eq!(
+        window.changes.lock().unwrap().last().copied(),
+        Some(window.generation())
+    );
     assert!(shown(&window, &id)["stems"].is_null());
 }
