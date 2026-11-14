@@ -1224,11 +1224,12 @@ export interface Backend {
    */
   reviewWaiting(): Promise<import("@/lib/reviewQueue").ReviewListing>;
   /**
-   * The DJ's acceptance of `facts` in the listing named by `token` (the
-   * listing the view shows), the DJ declared (`review.accept`). Refusals
-   * and a part-way accept are outcomes, never thrown and never retried.
+   * The DJ's acceptance of the shown `rows`, each with its own row token
+   * from the listing the view shows, the DJ declared (`review.accept`).
+   * Refusals and a part-way accept are outcomes, never thrown and never
+   * retried.
    */
-  reviewAccept(facts: number[], token: string): Promise<import("@/lib/reviewQueue").DecisionOutcome>;
+  reviewAccept(rows: { fact: number; token: string }[]): Promise<import("@/lib/reviewQueue").DecisionOutcome>;
   /** The DJ's rejection of `facts` (`review.reject`). */
   reviewReject(facts: number[]): Promise<import("@/lib/reviewQueue").DecisionOutcome>;
   /** The suggestions standing rejected (`review.rejected`). A read. */

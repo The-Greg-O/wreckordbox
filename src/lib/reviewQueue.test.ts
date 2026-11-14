@@ -13,6 +13,10 @@ import {
   toggleSelected,
   afterDecision,
   shownGroups,
+  decidedNow,
+  refusedBoard,
+  showLatest,
+  rowsToAccept,
   valueText,
   reasonText,
   type ReviewListing,
@@ -27,6 +31,7 @@ function service(rows: ReturnType<typeof held>[], runs: { id: number; facts: num
   return {
     listing: {
       waiting: rows, count: rows.length, library_protected: false, token,
+      row_tokens: Object.fromEntries(rows.map((r) => [String(r.fact), `${token}:${r.fact}`])),
       runs: runs.map((r) => ({
         id: r.id, source: { kind: "agent", name: "tagger" }, description: `Run ${r.id}`,
         started_at: 1_700_000_000_000, finished_at: r.finished ? 1_700_000_100_000 : null, outcome: null, facts: r.facts,
@@ -180,5 +185,33 @@ describe("the outcome of a decision", () => {
   it("a refusal keeps its code and words", () => {
     expect(outcomeOf({ ok: false, error: { code: "review_changed", message: "Fact 3 is no longer waiting" } }))
       .toEqual({ kind: "refused", code: "review_changed", message: "Fact 3 is no longer waiting" });
+  });
+});
+
+describe("after a refusal (wbx-74 review)", () => {
+  const first = listing([held(1, "a", 0.9), held(2, "b", 0.85)], [{ id: 1, facts: [1, 2] }], "t1");
+  const more = listing([held(1, "a", 0.9), held(2, "b", 0.85), held(3, "c", 0.95)], [{ id: 1, facts: [1, 2, 3] }], "t2");
+
+  it("keeps what was shown through reads, pins and unpins until the DJ asks for the list as it is now", () => {
+    let board = refusedBoard(pinBoard(received(emptyBoard(), first), true));
+    board = received(board, more);
+    board = pinBoard(board, false);
+    board = afterDecision(board, more, [], "accepted");
+    expect(board.shown?.token).toBe("t1");
+    board = showLatest(board);
+    expect(board.held).toBe(false);
+    expect(board.shown?.token).toBe("t2");
+    expect(board.marked).toEqual({ added: [3], gone: [], changed: [] });
+  });
+
+  it("an accept sends each chosen row with its own token", () => {
+    expect(rowsToAccept(first, [2])).toEqual([{ fact: 2, token: "t1:2" }]);
+  });
+
+  it("a decision applied is drawn inert at once, and leaves the selection", () => {
+    let board = toggleSelected(received(emptyBoard(), first), 2);
+    board = decidedNow(board, [2], "accepted");
+    expect(shownGroups(board)[0]!.rows.map((r) => r.ghost)).toEqual([null, "accepted"]);
+    expect(board.selected.size).toBe(0);
   });
 });

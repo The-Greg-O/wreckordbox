@@ -2561,6 +2561,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
   const review = createMockReview({
     all, wait, ready: () => ready,
     rate: (id, stars) => edits.setTrackRating([id], stars),
+    protectedNow: () => protection?.protectLibrary ?? false,
     colour: (id, colour) => edits.setTrackColor([id], String(colour)),
   });
   // The Intake tag panel (wbx-65): `mock-tag-panel.ts`.

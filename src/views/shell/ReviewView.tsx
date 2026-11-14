@@ -18,13 +18,13 @@
  * - Every control owns its activation (`data-own-activation` on the view),
  *   so Space and Enter press it and never reach the deck.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type MouseEvent } from "react";
 
 import { getBackend } from "@/ipc/client";
 import type { RowDto } from "@/ipc/types";
 import {
-  afterDecision, atOrAbove, clearSelected, emptyBoard, fieldText, isLow, pendingChanges,
-  pinBoard, reasonText, received, showLatest, shownGroups, sourceText, toggleSelected, valueText,
+  afterDecision, atOrAbove, clearSelected, decidedNow, emptyBoard, fieldText, isLow, pendingChanges,
+  pinBoard, reasonText, received, refusedBoard, rowsToAccept, showLatest, shownGroups, sourceText, toggleSelected, valueText,
   type Board, type DecisionOutcome, type ListingChanges, type RejectedFact, type ReviewRun, type ShownGroup,
 } from "@/lib/reviewQueue";
 
@@ -47,9 +47,45 @@ type Verb = "accept" | "reject" | "reopen";
 interface Said {
   verb: Verb;
   outcome: DecisionOutcome;
-  /** After a refusal: what changed, with the titles of rows now gone. */
-  changes?: ListingChanges | undefined;
-  goneTitles?: string[] | undefined;
+}
+
+/** The longest a decision is waited on before the view says it had no answer. */
+export const DECISION_DEADLINE_MS = 20_000;
+/** The longest the read after a decision is waited on before the view says so. */
+export const REFRESH_DEADLINE_MS = 4_000;
+
+/** `promise`, or `null` when it has not settled within `ms`. */
+function within<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+  return new Promise((resolve, reject) => {
+    const at = setTimeout(() => resolve(null), ms);
+    promise.then((v) => { clearTimeout(at); resolve(v); }, (e: unknown) => { clearTimeout(at); reject(e instanceof Error ? e : new Error(String(e))); });
+  });
+}
+
+/**
+ * A decision control's click: only the first activation of a gesture. The
+ * second click of a double-click (`detail > 1`) is ignored; a key's
+ * auto-repeat is stopped on the view itself (`stopRepeats`).
+ */
+function firstOfGesture(run: () => void): (event: MouseEvent) => void {
+  return (event) => {
+    if (event.detail > 1) return;
+    run();
+  };
+}
+
+/** A held Enter or Space never activates a control again. */
+function stopRepeats(event: KeyboardEvent) {
+  if (event.repeat && (event.key === "Enter" || event.key === " ")) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+}
+
+/** A rejected row as drawn: `ghost` says what was done to a row kept in place. */
+interface RejectedShown {
+  row: RejectedFact;
+  ghost: string | null;
 }
 
 const PAST: Record<Verb, string> = { accept: "accepted", reject: "rejected", reopen: "reopened" };
@@ -86,7 +122,11 @@ export function ReviewView({ onListen, loadedTrackId = null }: ReviewViewProps) 
   const [said, setSaid] = useState<Said | null>(null);
   const [lastRejection, setLastRejection] = useState<{ entry: number; count: number } | null>(null);
   const [rejectedOpen, setRejectedOpen] = useState(false);
-  const [rejected, setRejected] = useState<{ rows: RejectedFact[]; error: string | null } | null>(null);
+  const [rejected, setRejected] = useState<{ rows: RejectedShown[]; error: string | null } | null>(null);
+  const [rejectedLatest, setRejectedLatest] = useState<RejectedFact[] | null>(null);
+  const [rejectedDone, setRejectedDone] = useState<ReadonlyMap<number, string>>(new Map());
+  const [refreshProblem, setRefreshProblem] = useState<string | null>(null);
+  const [protectedNow, setProtectedNow] = useState<boolean | null>(null);
   const [pointerIn, setPointerIn] = useState(false);
   const [focusIn, setFocusIn] = useState(false);
 
@@ -107,56 +147,112 @@ export function ReviewView({ onListen, loadedTrackId = null }: ReviewViewProps) 
   const shown = board.shown;
   const working = shown?.runs.some((r) => r.finishedAt === null) ?? false;
 
+  // Library Protection as it is now, followed whoever turns it, apart from
+  // the rows shown (wbx-74 review).
+  useEffect(() => {
+    let live = true;
+    let stop: (() => void) | undefined;
+    void (async () => {
+      const backend = await getBackend();
+      const unlisten = await backend.onLibraryProtectionChanged((now) => { if (live) setProtectedNow(now.protectLibrary); });
+      if (!live) { unlisten(); return; }
+      stop = unlisten;
+      const now = await backend.libraryProtection().catch(() => null);
+      if (live && now) setProtectedNow((was) => was ?? now.protectLibrary);
+    })();
+    return () => { live = false; stop?.(); };
+  }, []);
+
   const loadRejected = useCallback(async () => {
     try {
       const backend = await getBackend();
-      setRejected({ rows: await backend.reviewRejected(), error: null });
+      setRejectedLatest(await backend.reviewRejected());
     } catch (error) {
       setRejected((r) => ({ rows: r?.rows ?? [], error: error instanceof Error ? error.message : String(error) }));
     }
   }, []);
 
+  // The rejected list moves no row under the pointer either: while the DJ
+  // is on it, a row reopened (or otherwise gone) stays in place, inert,
+  // and new ones go below; let go, it is shown as read.
+  useEffect(() => {
+    if (rejectedLatest === null) return;
+    setRejected((was) => {
+      if (!pinned || !was) return { rows: rejectedLatest.map((row) => ({ row, ghost: null })), error: null };
+      const now = new Map(rejectedLatest.map((row) => [row.fact, row]));
+      const kept = was.rows.map(({ row, ghost }) => (now.has(row.fact) && ghost === null
+        ? { row: now.get(row.fact)!, ghost: null }
+        : { row, ghost: ghost ?? rejectedDone.get(row.fact) ?? "gone" }));
+      const fresh = rejectedLatest.filter((row) => !was.rows.some((r) => r.row.fact === row.fact)).map((row) => ({ row, ghost: null }));
+      return { rows: [...kept, ...fresh], error: null };
+    });
+  }, [rejectedLatest, pinned, rejectedDone]);
+
+  /** Reads the list again after a decision, with a deadline and a failure of its own. */
+  const refreshAfter = useCallback(async (verb: Verb, applied: number[]) => {
+    let fresh;
+    try {
+      fresh = await within(readReviewNow(), REFRESH_DEADLINE_MS);
+    } catch {
+      fresh = null;
+    }
+    if (fresh === null) {
+      setRefreshProblem(`no answer within ${REFRESH_DEADLINE_MS / 1000} s`);
+      return;
+    }
+    if (fresh.error !== null || !fresh.listing) {
+      setRefreshProblem(fresh.error ?? "nothing was read");
+      return;
+    }
+    setRefreshProblem(null);
+    const listing = fresh.listing;
+    seen.current = listing;
+    setBoard((b) => afterDecision(b, listing, applied, PAST[verb]));
+  }, []);
+
   const decide = useCallback(async (verb: Verb, facts: number[], rejection: number | null = null) => {
-    const before = board.shown;
-    if ((verb !== "reopen" && (!before || facts.length === 0)) || busy) return;
+    const shownNow = board.shown;
+    if ((verb !== "reopen" && (!shownNow || facts.length === 0)) || busy || board.held) return;
     setBusy(true);
+    let outcome: DecisionOutcome | null;
     try {
       const backend = await getBackend();
-      let outcome: DecisionOutcome;
-      try {
-        outcome = verb === "accept"
-          ? await backend.reviewAccept(facts, before!.token)
-          : verb === "reject"
-            ? await backend.reviewReject(facts)
-            : await backend.reviewReopen(facts, rejection);
-      } catch (error) {
-        outcome = { kind: "refused", code: "failed", message: error instanceof Error ? error.message : String(error) };
-      }
-      const fresh = await readReviewNow();
-      const listing = fresh.listing;
-      if (listing) seen.current = listing;
-      if (outcome.kind === "refused" && (outcome.code === "review_changed" || outcome.code === "review_not_waiting") && listing && before) {
-        // Shown as it is now, the changes marked; the DJ decides again.
-        const next = received(board, listing, { force: true });
-        const goneTitles = (next.marked?.gone ?? []).map((id) => before.facts.find((f) => f.fact === id)?.title ?? `Fact ${id}`);
-        setBoard((b) => received(b, listing, { force: true }));
-        setSaid({ verb, outcome, changes: next.marked ?? undefined, goneTitles });
-      } else {
-        if (listing) {
-          const applied = outcome.kind === "done" ? outcome.facts : outcome.kind === "partial" ? outcome.applied ?? [] : [];
-          setBoard((b) => clearSelected(afterDecision(b, listing, applied, PAST[verb])));
-        }
-        setSaid({ verb, outcome });
-      }
-      if (verb === "reject" && outcome.kind === "done" && outcome.rejection !== null) {
-        setLastRejection({ entry: outcome.rejection, count: outcome.count });
-      }
-      if (verb === "reopen" && outcome.kind === "done") setLastRejection(null);
-      if (verb !== "accept" && (rejectedOpen || verb === "reopen")) void loadRejected();
-    } finally {
-      setBusy(false);
+      const asked = verb === "accept"
+        ? backend.reviewAccept(rowsToAccept(shownNow!, facts))
+        : verb === "reject"
+          ? backend.reviewReject(facts)
+          : backend.reviewReopen(facts, rejection);
+      outcome = await within(asked, DECISION_DEADLINE_MS);
+    } catch (error) {
+      outcome = { kind: "refused", code: "failed", message: error instanceof Error ? error.message : String(error) };
     }
-  }, [board, busy, rejectedOpen, loadRejected]);
+    if (outcome === null) {
+      outcome = {
+        kind: "refused", code: "no_answer",
+        message: `The service gave no answer within ${DECISION_DEADLINE_MS / 1000} s: the decision may or may not have been made. Show the list as it is now to see.`,
+      };
+    }
+    // Shown as soon as it returns: never waiting on the read that follows.
+    const result = outcome;
+    setSaid({ verb, outcome: result });
+    setBusy(false);
+    const applied = result.kind === "done" ? result.facts : result.kind === "partial" ? result.applied ?? [] : [];
+    if (result.kind === "refused" && (result.code === "review_changed" || result.code === "review_not_waiting" || result.code === "no_answer")) {
+      // What is shown stays: nothing replaces it until the DJ asks.
+      setBoard(refusedBoard);
+    } else if (verb !== "reopen") {
+      setBoard((b) => decidedNow(b, applied, PAST[verb]));
+    }
+    if (verb === "reject" && result.kind === "done" && result.rejection !== null) {
+      setLastRejection({ entry: result.rejection, count: result.count });
+    }
+    if (verb === "reopen" && result.kind === "done") {
+      setLastRejection(null);
+      setRejectedDone((m) => new Map([...m, ...result.facts.map((f) => [f, "reopened"] as const)]));
+    }
+    if (verb !== "accept" && (rejectedOpen || verb === "reopen")) void loadRejected();
+    void refreshAfter(verb, applied);
+  }, [board, busy, rejectedOpen, loadRejected, refreshAfter]);
 
   /** The DJ asked for a fresh read: shown at once, wherever the pointer is. */
   const retry = async () => {
@@ -164,6 +260,7 @@ export function ReviewView({ onListen, loadedTrackId = null }: ReviewViewProps) 
     const listing = fresh.listing;
     if (fresh.error === null && listing) {
       seen.current = listing;
+      setRefreshProblem(null);
       setBoard((b) => showLatest(received(b, listing)));
     }
   };
@@ -178,7 +275,8 @@ export function ReviewView({ onListen, loadedTrackId = null }: ReviewViewProps) 
   };
 
   const thresholdOf = (run: ReviewRun | null) => thresholds.get(run?.id ?? null) ?? DEFAULT_THRESHOLD;
-  const protectedLibrary = shown?.libraryProtected ?? false;
+  const protectedLibrary = protectedNow ?? shown?.libraryProtected ?? false;
+  const stale = board.held;
   const total = shown?.facts.length ?? 0;
   const selected = [...board.selected];
 
@@ -188,7 +286,7 @@ export function ReviewView({ onListen, loadedTrackId = null }: ReviewViewProps) 
   };
 
   return (
-    <section className={styles.view} data-testid="review-view" data-own-activation="" aria-label="Review">
+    <section className={styles.view} data-testid="review-view" data-own-activation="" aria-label="Review" onKeyDownCapture={stopRepeats}>
       {working ? <RunsFinishing /> : null}
       <header className={styles.head}>
         <h2 className={styles.title}><span className={styles.hidden}>Review: </span>Waiting for you</h2>
@@ -229,7 +327,7 @@ export function ReviewView({ onListen, loadedTrackId = null }: ReviewViewProps) 
             threshold={thresholdOf(group.run)}
             onThreshold={(value) => setThresholds((m) => new Map(m).set(group.run?.id ?? null, value))}
             board={board}
-            busy={busy}
+            busy={busy || stale}
             protectedLibrary={protectedLibrary}
             loadedTrackId={loadedTrackId}
             canListen={(track) => onListen !== undefined && shown?.decks[track] !== undefined}
@@ -240,19 +338,29 @@ export function ReviewView({ onListen, loadedTrackId = null }: ReviewViewProps) 
         ))}
       </div>
       <footer className={styles.foot} data-testid="review-foot">
-        {pending ? (
+        {pending || stale ? (
           <div className={styles.pending} role="status" data-testid="review-pending">
-            <span>Changed while you were here: {changeLine(pending)}. Shown when you leave the list.</span>
-            <button type="button" className={styles.button} onClick={() => setBoard(showLatest)}>Show now</button>
+            <span>
+              {stale
+                ? `The list is as you saw it${pending ? `; since then: ${changeLine(pending)}` : ""}. Nothing can be decided until you show it as it is now.`
+                : `Changed while you were here: ${pending ? changeLine(pending) : ""}. Shown when you leave the list.`}
+            </span>
+            <button type="button" className={styles.button} onClick={firstOfGesture(() => setBoard(showLatest))}>Show the list as it is now</button>
+          </div>
+        ) : null}
+        {refreshProblem !== null ? (
+          <div className={styles.failed} role="alert" data-testid="review-refresh-failed">
+            <span>Your decision's result is above, but the list could not be read again: {refreshProblem}. What is listed may be out of date.</span>
+            <button type="button" className={styles.button} onClick={() => void retry()}>Retry</button>
           </div>
         ) : null}
         {selected.length > 0 ? (
           <div className={styles.chosen} data-testid="review-chosen">
             <span>{factWord(selected.length)} chosen</span>
-            <button type="button" className={styles.accept} disabled={busy || protectedLibrary} onClick={() => void decide("accept", selected)}>
+            <button type="button" className={styles.accept} disabled={busy || stale || protectedLibrary} onClick={firstOfGesture(() => void decide("accept", selected))}>
               Accept chosen · {selected.length}
             </button>
-            <button type="button" className={styles.button} disabled={busy} onClick={() => void decide("reject", selected)}>
+            <button type="button" className={styles.button} disabled={busy || stale} onClick={firstOfGesture(() => void decide("reject", selected))}>
               Reject chosen · {selected.length}
             </button>
             <button type="button" className={styles.button} onClick={() => setBoard(clearSelected)}>Clear</button>
@@ -276,7 +384,7 @@ export function ReviewView({ onListen, loadedTrackId = null }: ReviewViewProps) 
         {lastRejection ? (
           <div className={styles.note} data-testid="review-last-rejection">
             <span>Rejected {factWord(lastRejection.count)}.</span>
-            <button type="button" className={styles.button} disabled={busy} onClick={() => void decide("reopen", [], lastRejection.entry)}>
+            <button type="button" className={styles.button} disabled={busy} onClick={firstOfGesture(() => void decide("reopen", [], lastRejection.entry))}>
               Reopen these {lastRejection.count}
             </button>
           </div>
@@ -295,15 +403,17 @@ export function ReviewView({ onListen, loadedTrackId = null }: ReviewViewProps) 
           {rejected?.error ? <p role="alert" className={styles.failed}>Could not read the rejected suggestions: {rejected.error}</p> : null}
           {rejected && rejected.rows.length === 0 && !rejected.error ? <p className={styles.emptyNote}>Nothing is rejected.</p> : null}
           <ul className={styles.rejectedList}>
-            {rejected?.rows.map((r) => (
-              <li key={r.fact} className={styles.rejectedRow} data-fact={r.fact}>
+            {rejected?.rows.map(({ row: r, ghost }) => (
+              <li key={r.fact} className={styles.rejectedRow} data-fact={r.fact} data-ghost={ghost ?? undefined}>
                 <span>{shown?.decks[r.track]?.title ?? `Track ${r.track}`}</span>
                 <span>{fieldText(r.field)} {valueText(r.field, r.value)}</span>
                 <span className={styles.dim}>{sourceText(r.source)} · {r.confidence.toFixed(2)}</span>
-                <button type="button" className={styles.button} disabled={busy} onClick={() => void decide("reopen", [r.fact])}
-                  aria-label={`Reopen ${fieldText(r.field)} ${valueText(r.field, r.value)} for track ${r.track}`}>
-                  Reopen
-                </button>
+                {ghost ? <span className={styles.ghostTag}>{ghost}</span> : (
+                  <button type="button" className={styles.button} disabled={busy} onClick={firstOfGesture(() => void decide("reopen", [r.fact]))}
+                    aria-label={`Reopen ${fieldText(r.field)} ${valueText(r.field, r.value)} for track ${r.track}`}>
+                    Reopen
+                  </button>
+                )}
               </li>
             ))}
           </ul>
@@ -355,12 +465,13 @@ function Outcome({ said, onDismiss }: { said: Said; onDismiss: () => void }) {
     <div className={styles.failed} role="alert" data-testid="review-outcome" data-outcome="refused" data-code={outcome.code}>
       <strong>
         {changed
-          ? `Nothing was ${PAST[verb]}: what you were shown has changed. Decide again on the list as it is now.`
+          ? `Nothing was ${PAST[verb]}: rows you were shown have changed. The list stays as you saw it; show it as it is now to decide again.`
+          : outcome.code === "no_answer"
+            ? `No answer: the decision may or may not have been made.`
           : outcome.code === "library_protected"
             ? `Nothing was ${PAST[verb]}: Library Protection is on.`
             : `Nothing was ${PAST[verb]}.`}
       </strong>
-      {said.changes ? <span data-testid="review-changes">{changeLine(said.changes) || "no row differs now"}{said.goneTitles?.length ? `: gone ${said.goneTitles.join(", ")}` : ""}</span> : null}
       <span className={styles.dim}>{outcome.message}</span>
       <button type="button" className={styles.button} onClick={onDismiss}>Dismiss</button>
     </div>
@@ -415,12 +526,12 @@ function RunGroupView({ group, threshold, onThreshold, board, busy, protectedLib
           </label>
           <button type="button" className={styles.accept} data-testid="review-bulk-accept"
             disabled={busy || protectedLibrary || above.length === 0}
-            onClick={() => onDecide("accept", above)}>
+            onClick={firstOfGesture(() => onDecide("accept", above))}>
             Accept ≥ {threshold.toFixed(2)} · {above.length}
           </button>
           <button type="button" className={styles.button} data-testid="review-bulk-reject"
             disabled={busy || above.length === 0}
-            onClick={() => onDecide("reject", above)}>
+            onClick={firstOfGesture(() => onDecide("reject", above))}>
             Reject ≥ {threshold.toFixed(2)} · {above.length}
           </button>
         </span>
@@ -470,13 +581,15 @@ function RunGroupView({ group, threshold, onThreshold, board, busy, protectedLib
                       onClick={() => onListen(f.track)}>▶</button>
                     <button type="button" className={styles.yes} disabled={busy || protectedLibrary}
                       aria-label={`Accept ${what}`} title={protectedLibrary ? "Library Protection is on" : "Accept"}
-                      onClick={() => onDecide("accept", [f.fact])}>✓</button>
+                      onClick={firstOfGesture(() => onDecide("accept", [f.fact]))}>✓</button>
                     <button type="button" className={styles.no} disabled={busy}
                       aria-label={`Reject ${what}`} title="Reject"
-                      onClick={() => onDecide("reject", [f.fact])}>✕</button>
+                      onClick={firstOfGesture(() => onDecide("reject", [f.fact]))}>✕</button>
                   </>
                 )}
               </span>
+              {/* Narrow widths (where Field and Now give way): what will be replaced, on its own line. */}
+              <span className={styles.fieldNow} data-part="field-now">{fieldText(f.field)}: {valueText(f.field, f.before)}</span>
             </div>
           );
         })}

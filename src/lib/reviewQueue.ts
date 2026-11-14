@@ -51,8 +51,10 @@ export interface ReviewRun {
 /** The whole queue as one read gave it. */
 export interface ReviewListing {
   facts: WaitingFact[];
-  /** Names exactly this listing: what an accept of it must send. */
+  /** Names exactly this listing (the CLI's binding). */
   token: string;
+  /** Each listed Fact's own token: what an accept of chosen rows sends (wbx-74 review). */
+  rowTokens: Record<number, string>;
   runs: ReviewRun[];
   libraryProtected: boolean;
   /** The deck's row of each listed track, by track id. */
@@ -92,6 +94,9 @@ export function fromServiceListing(answer: unknown): ReviewListing {
       };
     }),
     token: str(listing.token),
+    rowTokens: Object.fromEntries(Object.entries(obj(listing.row_tokens))
+      .filter(([, t]) => typeof t === "string")
+      .map(([fact, t]) => [Number(fact), t as string])),
     runs: arr(listing.runs).map((r) => {
       const run = obj(r);
       return {
@@ -220,6 +225,19 @@ export interface Board {
    * slides under the pointer. Let go when the DJ leaves the list.
    */
   ghosts: ReadonlyMap<number, Ghost>;
+  /**
+   * After a refusal: what is shown stays until the DJ asks for the list as
+   * it is now (`showLatest`); no decision is offered meanwhile, and no
+   * read, pin or unpin replaces it.
+   */
+  held: boolean;
+  /** Rows the DJ's decision applied, drawn inert until a read shows the result. */
+  deciding: ReadonlyMap<number, string>;
+}
+
+/** The rows of `listing` named by `facts`, each with its own token: what an accept sends. */
+export function rowsToAccept(listing: ReviewListing, facts: readonly number[]): { fact: number; token: string }[] {
+  return facts.map((fact) => ({ fact, token: listing.rowTokens[fact] ?? "" }));
 }
 
 /** A decided row held in place. */
@@ -230,7 +248,7 @@ export interface Ghost {
 }
 
 export function emptyBoard(): Board {
-  return { shown: null, latest: null, pinned: false, selected: new Set(), marked: null, ghosts: new Map() };
+  return { shown: null, latest: null, pinned: false, selected: new Set(), marked: null, ghosts: new Map(), held: false, deciding: new Map() };
 }
 
 function show(board: Board, listing: ReviewListing, marked: ListingChanges | null): Board {
@@ -241,7 +259,7 @@ function show(board: Board, listing: ReviewListing, marked: ListingChanges | nul
       if (board.selected.has(f.fact) && was.get(f.fact) === rowKey(f)) keep.add(f.fact);
     }
   }
-  return { ...board, shown: listing, latest: listing, selected: keep, marked, ghosts: board.pinned ? board.ghosts : new Map() };
+  return { ...board, shown: listing, latest: listing, selected: keep, marked, ghosts: board.pinned ? board.ghosts : new Map(), deciding: new Map() };
 }
 
 /**
@@ -253,6 +271,7 @@ export function received(board: Board, listing: ReviewListing, options: { force?
   if (options.force) {
     return show({ ...board, ghosts: new Map() }, listing, board.shown ? listingChanges(board.shown, listing) : null);
   }
+  if (board.held && board.shown !== null) return { ...board, latest: listing };
   if (board.shown === null || !board.pinned) return show(board, listing, board.pinned ? board.marked : null);
   return { ...board, latest: listing };
 }
@@ -261,7 +280,7 @@ export function received(board: Board, listing: ReviewListing, options: { force?
 export function pinBoard(board: Board, pinned: boolean): Board {
   if (board.pinned === pinned) return board;
   const next: Board = pinned ? { ...board, pinned } : { ...board, pinned, ghosts: new Map() };
-  if (!pinned && next.latest && next.latest !== next.shown) return show(next, next.latest, null);
+  if (!pinned && !next.held && next.latest && next.latest !== next.shown) return show(next, next.latest, null);
   return next;
 }
 
@@ -272,6 +291,7 @@ export function pinBoard(board: Board, pinned: boolean): Board {
  * otherwise held, like any other change, until the DJ leaves the list.
  */
 export function afterDecision(board: Board, listing: ReviewListing, facts: readonly number[], verb: string): Board {
+  if (board.held) return { ...board, latest: listing };
   if (!board.shown || !board.pinned) return show(board, listing, null);
   const c = listingChanges(board.shown, listing);
   const ours = new Set(facts);
@@ -284,6 +304,23 @@ export function afterDecision(board: Board, listing: ReviewListing, facts: reado
     if (fact) ghosts.set(id, { fact, run: board.shown.runs.find((r) => r.facts.includes(id)) ?? null, verb });
   }
   return show({ ...board, ghosts }, listing, null);
+}
+
+/** The DJ's decision on `facts` came back applied: drawn inert at once, before any read. */
+export function decidedNow(board: Board, facts: readonly number[], verb: string): Board {
+  if (facts.length === 0) return board;
+  const deciding = new Map(board.deciding);
+  const selected = new Set(board.selected);
+  for (const fact of facts) {
+    deciding.set(fact, verb);
+    selected.delete(fact);
+  }
+  return { ...board, deciding, selected };
+}
+
+/** The DJ's decision was refused (or not answered): what is shown stays until the DJ asks for the list as it is now. */
+export function refusedBoard(board: Board): Board {
+  return { ...board, held: true };
 }
 
 /** A row as the view draws it: a waiting Fact, or a decided one held in place (`ghost` says what was done). */
@@ -301,7 +338,9 @@ export interface ShownGroup {
 export function shownGroups(board: Board): ShownGroup[] {
   if (!board.shown) return [];
   if (board.ghosts.size === 0) {
-    return groupByRun(board.shown).map((g) => ({ run: g.run, rows: g.facts.map((fact) => ({ fact, ghost: null })) }));
+    return groupByRun(board.shown).map((g) => ({
+      run: g.run, rows: g.facts.map((fact) => ({ fact, ghost: board.deciding.get(fact.fact) ?? null })),
+    }));
   }
   const runs = new Map(board.shown.runs.map((r) => [r.id, { ...r, facts: [...r.facts] }]));
   const facts = [...board.shown.facts];
@@ -314,6 +353,7 @@ export function shownGroups(board: Board): ShownGroup[] {
     }
   }
   const verbs = new Map([...board.ghosts].map(([id, g]) => [id, g.verb]));
+  for (const [id, verb] of board.deciding) verbs.set(id, verb);
   return groupByRun({ ...board.shown, facts, runs: [...runs.values()] }).map((g) => ({
     run: g.run,
     rows: g.facts.map((fact) => ({ fact, ghost: verbs.get(fact.fact) ?? null })),
@@ -329,8 +369,9 @@ export function pendingChanges(board: Board): ListingChanges | null {
 
 /** The DJ asked to see what was held: shown now, decided rows let go. */
 export function showLatest(board: Board): Board {
-  if (!board.latest || board.latest === board.shown) return board;
-  const shown = show({ ...board, ghosts: new Map(), pinned: false }, board.latest, null);
+  if (!board.latest) return board;
+  const marked = board.shown ? listingChanges(board.shown, board.latest) : null;
+  const shown = show({ ...board, ghosts: new Map(), pinned: false, held: false }, board.latest, marked && !nothing(marked) ? marked : null);
   return { ...shown, pinned: board.pinned };
 }
 

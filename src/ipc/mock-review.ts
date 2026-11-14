@@ -11,8 +11,14 @@
  * finished and its Facts were held back below its confidence; Run 40 (tool
  * meter) proposes Prep colours. Some confidences are below 0.6.
  *
- * URL flags: `?review=empty` (nothing waiting), `?reviewProtected` (Library
- * Protection: every accept refused `library_protected`).
+ * URL flag: `?review=empty` (nothing waiting). Library Protection is the
+ * mock's own (`__turnLibraryProtection(on)` turns it as another client
+ * would): the listing says so and every accept is refused
+ * `library_protected`.
+ *
+ * Every listed row has its own token (`row_tokens`), changed when that row
+ * changes; an accept names rows with their tokens and is refused
+ * `review_changed`, naming the rows, when any of them changed or is gone.
  *
  * Hooks on `window`: `__reviewArrive(n)` records n more Facts in the
  * working Run (a "row arriving live"); `__reviewChange(fact, after)`
@@ -38,6 +44,8 @@ export interface MockReviewSource {
   rate: (id: string, stars: number) => Promise<unknown>;
   /** The mock's own Prep colour write. */
   colour: (id: string, colour: number) => Promise<unknown>;
+  /** Whether Library Protection is on now. */
+  protectedNow: () => boolean;
 }
 
 interface Held {
@@ -64,7 +72,7 @@ interface Run {
 interface Call {
   command: string;
   facts: number[];
-  token?: string;
+  rows?: { fact: number; token: string }[];
   rejection?: number | null;
   source: { kind: string };
 }
@@ -120,6 +128,8 @@ export function createMockReview(source: MockReviewSource) {
     });
   }
 
+  const rowVersion = new Map<number, number>();
+  const rowToken = (fact: number) => `r${fact}.${rowVersion.get(fact) ?? 0}`;
   const changed = () => {
     version += 1;
     for (const listener of listeners) listener();
@@ -136,7 +146,8 @@ export function createMockReview(source: MockReviewSource) {
     const tracks = [...new Set(waiting.map((h) => h.track))];
     return {
       listing: {
-        waiting: titled, count: titled.length, library_protected: url.has("reviewProtected"), token: token(),
+        waiting: titled, count: titled.length, library_protected: source.protectedNow(), token: token(),
+        row_tokens: Object.fromEntries(waiting.map((h) => [String(h.fact), rowToken(h.fact)])),
         runs: used.map((r) => ({ ...r, outcome: null, facts: waiting.filter((h) => h.run === r.id).map((h) => h.fact) })),
       },
       rows: tracks.map((id) => source.all.find((r) => r.id === id)).filter((r): r is RowDto => r !== undefined),
@@ -145,15 +156,16 @@ export function createMockReview(source: MockReviewSource) {
 
   const refuse = (code: string, message: string) => ({ ok: false, error: { code, message } });
 
-  const accept = async (facts: number[], given: string): Promise<DecisionOutcome> => {
-    calls.push({ command: "review.accept", facts: [...facts], token: given, source: { kind: "dj" } });
+  const accept = async (rows: { fact: number; token: string }[]): Promise<DecisionOutcome> => {
+    const facts = rows.map((r) => r.fact);
+    calls.push({ command: "review.accept", facts: [...facts], rows: rows.map((r) => ({ ...r })), source: { kind: "dj" } });
     await source.wait(null);
-    if (given !== token()) {
-      return outcomeOf(refuse("review_changed", "what you were shown has changed: list the waiting Facts again and decide on what is listed now"));
+    const stale = rows.filter((r) => !waiting.some((h) => h.fact === r.fact) || rowToken(r.fact) !== r.token);
+    if (stale.length > 0) {
+      return outcomeOf(refuse("review_changed", `rows the DJ was shown have changed since: ${stale.map((r) => `Fact ${r.fact}`).join("; ")}; nothing was written`));
     }
     const chosen = facts.map((f) => waiting.find((h) => h.fact === f));
-    if (chosen.some((h) => h === undefined)) return outcomeOf(refuse("review_not_waiting", "a Fact named is not waiting: nothing was done"));
-    if (url.has("reviewProtected")) return outcomeOf(refuse("library_protected", "Library Protection is on: nothing was written."));
+    if (source.protectedNow()) return outcomeOf(refuse("library_protected", "Library Protection is on: nothing was written."));
     const refusal = refuseNext;
     refuseNext = null;
     if (refusal && refusal !== "review_partial") return outcomeOf(refuse(refusal, `refused: ${refusal}`));
@@ -221,6 +233,7 @@ export function createMockReview(source: MockReviewSource) {
     hooks.__reviewChange = (fact: number, after: unknown) => {
       const h = waiting.find((w) => w.fact === fact);
       if (h) h.after = after;
+      rowVersion.set(fact, (rowVersion.get(fact) ?? 0) + 1);
       changed();
     };
     hooks.__reviewFinishRun = () => {

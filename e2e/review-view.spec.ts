@@ -11,7 +11,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { pauseButton, player, playButton, seedShell } from "./compactPlayer";
 
-interface Call { command: string; facts: number[]; token?: string; rejection?: number | null; source: { kind: string } }
+interface Call { command: string; facts: number[]; rows?: { fact: number; token: string }[]; rejection?: number | null; source: { kind: string } }
 
 const tabs = (page: Page) => page.getByRole("tablist", { name: "Views" });
 const tab = (page: Page, name: string) => tabs(page).getByRole("tab", { name });
@@ -85,7 +85,7 @@ test("accepting one row writes its value as the DJ's, with the token of the list
   await expect(view(page).getByTestId("review-outcome")).toHaveAttribute("data-outcome", "done");
   await expect(view(page).getByTestId("review-outcome")).toContainText("Accepted 1 Fact");
   const asked = await calls(page);
-  expect(asked).toEqual([{ command: "review.accept", facts: [fact], token: "mock.1", source: { kind: "dj" } }]);
+  expect(asked).toEqual([{ command: "review.accept", facts: [fact], rows: [{ fact, token: `r${fact}.0` }], source: { kind: "dj" } }]);
   expect(await hook<number>(page, "__ratingOf", track)).toBe(1);
   await expect(tabCount(page)).toHaveText("13");
   // While the pointer is still on the list the decided row holds its place,
@@ -159,11 +159,14 @@ test("a mistaken bulk rejection is reopened from the view, as a whole or row by 
   const listed = view(page).getByTestId("review-rejected").locator(`li[data-fact="${fact}"]`);
   await listed.getByRole("button", { name: /^Reopen / }).click();
   await expect(tabCount(page)).toHaveText("14");
+  // Kept in place, inert, while the pointer is there; gone once it leaves.
+  await expect(listed).toHaveAttribute("data-ghost", "reopened");
+  await page.mouse.move(2, 2);
   await expect(listed).toHaveCount(0);
 });
 
 test("rows arriving live never move the row under the pointer nor change what the bulk control covers", async ({ page }) => {
-  await openReview(page);
+  await openReview(page, "?writable");
   const tagging = run(page, 41);
   const bulk = tagging.getByTestId("review-bulk-accept");
   await expect(bulk).toHaveText("Accept ≥ 0.80 · 5");
@@ -182,24 +185,20 @@ test("rows arriving live never move the row under the pointer nor change what th
   // The tab follows at once.
   await expect(tabCount(page)).toHaveText("19");
 
-  // Used now, it sends exactly the 5 shown, with the shown listing's token;
-  // the service refuses (the listing changed) and the view shows the new
-  // rows, marked, for the DJ to decide again. Nothing is retried.
+  // Used now, it sends exactly the 5 shown, each with its own row token;
+  // the arrivals are other rows, so they do not refuse it.
   const shown = await rows(tagging).evaluateAll((els) => els
     .filter((e) => Number((e.children[5] as HTMLElement).innerText.match(/\d\.\d\d/)![0]) >= 0.8)
     .map((e) => Number(e.getAttribute("data-fact"))));
   await bulk.click();
-  await expect(view(page).getByTestId("review-outcome")).toHaveAttribute("data-code", "review_changed");
+  await expect(view(page).getByTestId("review-outcome")).toContainText("Accepted 5 Facts");
   const asked = await calls(page);
   expect(asked).toHaveLength(1);
   expect([...asked[0]!.facts].sort()).toEqual([...shown].sort());
-  expect(asked[0]!.token).toBe("mock.1");
-  await expect(view(page).getByTestId("review-changes")).toContainText("5 new");
-  await expect(view(page).locator('[role="row"][data-marked="added"]')).toHaveCount(5);
-  await expect(rows(view(page))).toHaveCount(19);
-  // Deciding again uses the new listing.
-  await page.waitForTimeout(300);
-  expect(await calls(page)).toHaveLength(1);
+  expect(asked[0]!.rows!.map((r) => r.token).sort()).toEqual(shown.map((f) => `r${f}.0`).sort());
+  // The new rows show once the pointer leaves.
+  await page.mouse.move(2, 2);
+  await expect(rows(view(page))).toHaveCount(14);
 });
 
 test("rows arrive live while the pointer is away from the list", async ({ page }) => {
@@ -328,5 +327,124 @@ for (const width of [1280, 900, 640, 436]) {
     const bulk = run(page, 41).getByTestId("review-bulk-accept");
     const bb = await bulk.boundingBox();
     expect(bb!.x + bb!.width).toBeLessThanOrEqual(box!.x + box!.width + 0.5);
+  });
+}
+
+test("after a refusal, a second click of the same gesture or any later click sends nothing until the DJ shows the list as it is now", async ({ page }) => {
+  await openReview(page);
+  const tagging = run(page, 41);
+  const bulk = tagging.getByTestId("review-bulk-accept");
+  await expect(bulk).toHaveText("Accept ≥ 0.80 · 5");
+  const chosen = await rows(tagging).evaluateAll((els) => els
+    .filter((e) => Number((e.children[5] as HTMLElement).innerText.match(/\d\.\d\d/)![0]) >= 0.8)
+    .map((e) => Number(e.getAttribute("data-fact"))));
+  await bulk.hover();
+  // One of the five changes, and more qualifying rows arrive, while the
+  // pointer rests on the control.
+  await hook(page, "__reviewChange", chosen[0], 5);
+  await hook(page, "__reviewArrive", 4);
+  await expect(view(page).getByTestId("review-pending")).toBeVisible();
+
+  // The first click of a double-click: sent with the shown rows, refused.
+  const box = (await bulk.boundingBox())!;
+  const x = box.x + box.width / 2, y = box.y + box.height / 2;
+  await page.mouse.click(x, y);
+  await expect(view(page).getByTestId("review-outcome")).toHaveAttribute("data-code", "review_changed");
+  // The follow-up read has completed.
+  await expect.poll(async () => (await hook<{ waiting: number }>(page, "__reviewReads")).waiting).toBeGreaterThan(1);
+  await page.waitForTimeout(300);
+
+  // The second click of the same gesture, then a fresh click: neither sends.
+  await page.mouse.click(x, y, { clickCount: 2 });
+  await page.mouse.click(x, y);
+  await page.waitForTimeout(300);
+  const asked = await calls(page);
+  expect(asked).toHaveLength(1);
+  expect([...asked[0]!.facts].sort()).toEqual([...chosen].sort());
+
+  // What is under the pointer did not change.
+  await expect(bulk).toHaveText("Accept ≥ 0.80 · 5");
+  // Shown on the DJ's word, with the changed rows marked; then a decision is possible again.
+  await view(page).getByRole("button", { name: "Show the list as it is now" }).click();
+  await expect(view(page).locator('[role="row"][data-marked="changed"]')).toHaveCount(1);
+  await expect(view(page).locator('[role="row"][data-marked="added"]')).toHaveCount(4);
+  await expect(bulk).toBeEnabled();
+});
+
+test("a decision's result is shown as soon as it returns, and a follow-up read that never comes is said, not waited on", async ({ page }) => {
+  await openReview(page);
+  await expect(rows(view(page))).toHaveCount(14);
+  await hook(page, "__holdReviewReads");
+  const first = rows(run(page, 41)).first();
+  await first.getByRole("button", { name: /^Reject / }).click();
+  await expect(view(page).getByTestId("review-outcome")).toContainText("Rejected 1 Fact");
+  // Not busy: another row's controls work while the read is held.
+  await expect(rows(run(page, 41)).nth(2).getByRole("button", { name: /^Reject / })).toBeEnabled();
+  await expect(first).toHaveAttribute("data-ghost", "rejected");
+  // The read never answers: said, with Retry.
+  await expect(view(page).getByTestId("review-refresh-failed")).toBeVisible({ timeout: 10_000 });
+  await hook(page, "__releaseReviewReads");
+  await view(page).getByTestId("review-refresh-failed").getByRole("button", { name: "Retry" }).click();
+  await expect(view(page).getByTestId("review-refresh-failed")).toHaveCount(0);
+  await page.mouse.move(2, 2);
+  await expect(rows(view(page))).toHaveCount(13);
+});
+
+test("Accept follows Library Protection turned on and off from outside, even while the pointer is on the list", async ({ page }) => {
+  await openReview(page);
+  const first = rows(run(page, 41)).first();
+  const accept = first.getByRole("button", { name: /^Accept / });
+  await expect(accept).toBeEnabled();
+  await accept.hover();
+  await hook(page, "__turnLibraryProtection", true);
+  await expect(accept).toBeDisabled();
+  await expect(view(page).getByTestId("review-protected")).toBeVisible();
+  await expect(run(page, 41).getByTestId("review-bulk-accept")).toBeDisabled();
+  await hook(page, "__turnLibraryProtection", false);
+  await expect(accept).toBeEnabled();
+  await expect(view(page).getByTestId("review-protected")).toHaveCount(0);
+});
+
+test("a reopened rejection stays in place, inert, while the pointer is on the rejected list", async ({ page }) => {
+  await openReview(page);
+  const [a, b] = [rows(run(page, 38)).nth(0), rows(run(page, 38)).nth(1)];
+  await a.getByRole("checkbox").check();
+  await b.getByRole("checkbox").check();
+  await view(page).getByRole("button", { name: "Reject chosen · 2" }).click();
+  await expect(view(page).getByTestId("review-outcome")).toContainText("Rejected 2 Facts");
+  await view(page).getByTestId("review-rejected").locator("summary").click();
+  const listed = view(page).getByTestId("review-rejected").locator("li[data-fact]");
+  await expect(listed).toHaveCount(2);
+  const [firstFact, secondBox] = [await listed.nth(0).getAttribute("data-fact"), await listed.nth(1).boundingBox()];
+
+  await listed.nth(0).getByRole("button", { name: /^Reopen / }).click();
+
+  await expect(view(page).getByTestId("review-outcome")).toContainText("Reopened 1 Fact");
+  const kept = view(page).getByTestId("review-rejected").locator(`li[data-fact="${firstFact}"]`);
+  await expect(kept).toHaveAttribute("data-ghost", "reopened");
+  await expect(kept.getByRole("button")).toHaveCount(0);
+  expect(await listed.nth(1).boundingBox()).toEqual(secondBox);
+  await page.mouse.move(2, 2);
+  await expect(kept).toHaveCount(0);
+});
+
+for (const width of [640, 436]) {
+  test(`at ${width}px every row offering Accept shows its field and its value now`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await openReview(page);
+    await expect(rows(view(page))).toHaveCount(14);
+    const box = (await view(page).boundingBox())!;
+    for (const r of await rows(view(page)).all()) {
+      await expect(r.getByRole("button", { name: /^Accept / })).toBeVisible();
+      const what = r.locator('[data-part="field-now"]');
+      await expect(what).toBeVisible();
+      await expect(what).toHaveText(/^(Energy|Prep colour): (—|\d|\w+)$/);
+      const b = (await what.boundingBox())!;
+      expect(b.width).toBeGreaterThan(0);
+      expect(b.x).toBeGreaterThanOrEqual(box.x - 0.5);
+      expect(b.x + b.width).toBeLessThanOrEqual(box.x + box.width + 0.5);
+      // Not cut off: the whole text fits its box.
+      expect(await what.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+    }
   });
 }

@@ -676,7 +676,7 @@ async function realBackend(): Promise<Backend> {
         track, dimension, terms: [...terms], version, dropUnmapped: [...dropUnmapped], comments,
       })),
     reviewWaiting: async () => fromServiceListing(await invoke<unknown>("review_waiting")),
-    reviewAccept: async (facts, token) => outcomeOf(await invoke<unknown>("review_accept", { facts, token })),
+    reviewAccept: async (rows) => outcomeOf(await invoke<unknown>("review_accept", { rows })),
     reviewReject: async (facts) => outcomeOf(await invoke<unknown>("review_reject", { facts })),
     reviewRejected: async () => fromServiceRejected(await invoke<unknown>("review_rejected")),
     reviewReopen: async (facts, rejection) => outcomeOf(await invoke<unknown>("review_reopen", { facts, rejection })),
