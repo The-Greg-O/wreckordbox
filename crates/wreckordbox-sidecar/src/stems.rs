@@ -322,6 +322,7 @@ impl Sidecar {
     /// written, which supersedes the track's earlier Stems from the same
     /// source.
     pub fn record_stems(&self, new: &NewStems) -> Result<StemSet> {
+        self.admit_write()?;
         let mut stored = Vec::with_capacity(Role::ALL.len());
         let mut moves = Vec::with_capacity(Role::ALL.len());
         let folder = Path::new(STEMS_FOLDER)

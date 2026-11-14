@@ -306,6 +306,7 @@ pub struct Sidecar {
     dir: PathBuf,
     pub(crate) db: Mutex<Connection>,
     pub(crate) order_seen: std::sync::Arc<std::sync::atomic::AtomicI64>,
+    admission: crate::write_admission::Slot,
 }
 
 impl std::fmt::Debug for Sidecar {
@@ -392,11 +393,25 @@ impl Sidecar {
                 }
             },
         ))?;
+        let admission = crate::write_admission::Slot::default();
+        admission.guard(&db)?;
         Ok(Self {
             dir,
             order_seen,
             db: Mutex::new(db),
+            admission,
         })
+    }
+
+    /// Installs the check every later write of this handle must pass, asked
+    /// at the moment of writing (see [`WriteAdmission`](crate::WriteAdmission)).
+    pub fn set_write_admission(&self, admission: crate::WriteAdmission) {
+        self.admission.set(admission);
+    }
+
+    /// Asks the write admission before the handle writes a file itself.
+    pub(crate) fn admit_write(&self) -> Result<()> {
+        self.admission.admit().map_err(SidecarError::Refused)
     }
 
     /// The Sidecar's folder.
@@ -432,6 +447,7 @@ impl Sidecar {
     /// An empty folder for `run` to write into before its result is
     /// accepted. Inside the Sidecar, so accepting a file is a rename.
     pub fn workspace(&self, run: RunId) -> Result<PathBuf> {
+        self.admit_write()?;
         let dir = self.dir.join(WORK_FOLDER).join(format!("run-{}", run.0));
         std::fs::create_dir_all(&dir).map_err(io("could not make", &dir))?;
         Ok(dir)
@@ -439,6 +455,9 @@ impl Sidecar {
 
     /// Removes a Run's workspace and whatever is left in it.
     pub fn discard_workspace(&self, run: RunId) {
+        if self.admit_write().is_err() {
+            return;
+        }
         let _ = std::fs::remove_dir_all(self.dir.join(WORK_FOLDER).join(format!("run-{}", run.0)));
     }
 
