@@ -882,6 +882,7 @@ fn a_crash_after_the_write_leaves_a_barrier_bounded_to_the_written_tracks() {
         &["project", "--mytags"],
     );
     assert!(!crashed.status.success());
+    wait_for_no_service(&s);
     // The next service recovers the unconfirmed write.
     let barriers = ok(&s, &["projection", "barriers"]);
     let listed = barriers["barriers"].as_array().unwrap();
@@ -1069,15 +1070,12 @@ fn an_assertion_cut_off_after_its_change_leaves_a_barrier_over_its_tracks_only()
         ],
     );
     assert!(!cut.status.success());
+    wait_for_no_service(&s);
     let barriers = ok(&s, &["projection", "barriers"]);
     let listed = barriers["barriers"].as_array().unwrap();
     assert_eq!(listed.len(), 1, "{barriers}");
-    let tracks = listed[0]["tracks"].as_array().unwrap();
-    assert!(
-        tracks.contains(&json!("10004")) && tracks.contains(&json!("10006")),
-        "{barriers}"
-    );
-    assert!(!tracks.contains(&json!("10005")), "{barriers}");
+    // Exactly the selection's tracks: not the MyTag the command names.
+    assert_eq!(listed[0]["tracks"], json!(["10004", "10006"]), "{barriers}");
     for track in ["10004", "10005"] {
         fact(&s, track, "mood", &["dark"], "agent:tagger");
     }
@@ -1108,6 +1106,7 @@ fn a_crash_during_a_second_projection_leaves_its_assignments_the_djs_cleared_or_
         &["project", "--mytags"],
     );
     assert!(!crashed.status.success());
+    wait_for_no_service(&s);
     fact(&s, "10004", "mood", &["uplifting"], "agent:tagger");
     let dry = ok(&s, &["project", "--mytags", "--dry-run"]);
     assert_eq!(changes(&dry), [], "{dry}");
@@ -1240,4 +1239,81 @@ fn converting_then_projecting_adds_a_missing_parent_only_as_a_listed_held_or_all
         tags_of(&s, "10003"),
         ["Sub-genre: > Deep", "Sub-genre: House"]
     );
+}
+
+/// A MyTag assertion is the DJ's only when the command is: through a Run
+/// the DJ started it is recorded; through an agent's Run it is not.
+#[test]
+fn an_assertion_through_a_joined_run_is_recorded_only_when_the_run_is_the_djs() {
+    let Deck { s, uplifting, .. } = tagged_by_hand();
+    write_schema(&s, &placed_schema());
+    policy(&s, "[mytags]\napply = 0.5\n");
+    for track in ["10004", "10005"] {
+        fact(&s, track, "mood", &["uplifting"], "agent:tagger");
+    }
+    ok(&s, &["project", "--mytags"]);
+    let djs = ok(
+        &s,
+        &["runs", "start", "--source", "dj", "--description", "tidy"],
+    );
+    let agents = ok(
+        &s,
+        &[
+            "runs",
+            "start",
+            "--source",
+            "agent:tidier",
+            "--description",
+            "tidy",
+        ],
+    );
+    ok(
+        &s,
+        &[
+            "mytags",
+            "assign",
+            &uplifting,
+            "10004",
+            "--run",
+            &djs["id"].to_string(),
+        ],
+    );
+    ok(
+        &s,
+        &[
+            "mytags",
+            "assign",
+            &uplifting,
+            "10005",
+            "--run",
+            &agents["id"].to_string(),
+        ],
+    );
+    for track in ["10004", "10005"] {
+        fact(&s, track, "mood", &["dark"], "agent:tagger");
+    }
+    let dry = ok(&s, &["project", "--mytags", "--dry-run"]);
+    assert_eq!(
+        kept_of(&dry),
+        [row("10004", "Uplifting", "remove", "set_by_dj")],
+        "{dry}"
+    );
+    assert!(changes(&dry).contains(&("10005".into(), "Uplifting".into(), "remove".into(), false)));
+}
+
+/// Waits until the service a crashed command was answered by is gone, so
+/// the next command starts (and recovers in) a service of its own.
+fn wait_for_no_service(s: &Sandbox) {
+    let socket = s.config().socket_path(s.location());
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while wreckordbox_service::Client::connect(&socket)
+        .and_then(|mut client| client.status())
+        .is_ok()
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the service did not die"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }

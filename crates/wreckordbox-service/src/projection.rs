@@ -374,6 +374,9 @@ pub struct Kept {
     /// it, recorded or not, this field or another), `provenance_incomplete`
     /// (a write the Ledger cannot account for, an unsettled intent, an
     /// unconfirmed write or an unreadable entry, could concern the track),
+    /// `predates_confirmed_marks` (the projection's value, but its mark was
+    /// kept by a version before marks named the write they were made for,
+    /// so it proves nothing),
     /// `unknown` (an Undo the Ledger cannot follow), or `dj_fact` (the DJ's
     /// own standing Fact is what the Library holds).
     pub reason: String,
@@ -816,8 +819,14 @@ fn not_owned(one: &One<'_>) -> Option<&'static str> {
                 // recorded write. A projection cut off after its write and
                 // before its entry left a mark that proves nothing, whatever
                 // barrier is cleared (wbx-29 review).
-                if mark.entry_of(one.field.column()) != Some(state.entry) {
-                    return Some("written_since");
+                match mark.entry_of(one.field.column()) {
+                    // A mark kept before marks named their write (wbx-29
+                    // review): no evidence which write it was, so the value
+                    // is the DJ's. Deliberately not migrated: inferring
+                    // ownership from the old evidence is the risk.
+                    None => return Some("predates_confirmed_marks"),
+                    Some(entry) if entry != state.entry => return Some("written_since"),
+                    Some(_) => {}
                 }
                 let same_revision = one
                     .row

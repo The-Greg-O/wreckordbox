@@ -31,7 +31,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::projection::{Barrier, FieldState, Owner};
+use crate::projection::{tracks_named, Barrier, FieldState, Owner};
 use crate::{FactsReader, Result, Sidecar, Source, SourceKind};
 
 /// The service command whose MyTag edits are a projection's.
@@ -88,23 +88,6 @@ pub struct TagProvenance {
     pub marks: HashMap<(String, String), TagMark>,
     /// The highest Ledger entry read.
     pub watermark: i64,
-}
-
-/// The tracks a command's JSON names (`args.id`, `args.tracks`,
-/// `args.ids`), if it names any.
-fn tracks_named(command: Option<&str>) -> Option<Vec<String>> {
-    let command: Value = serde_json::from_str(command?).ok()?;
-    let args = &command["args"];
-    let mut tracks: Vec<String> = Vec::new();
-    if let Some(id) = args["id"].as_str() {
-        tracks.push(id.to_owned());
-    }
-    for key in ["tracks", "ids"] {
-        if let Some(list) = args[key].as_array() {
-            tracks.extend(list.iter().filter_map(Value::as_str).map(str::to_owned));
-        }
-    }
-    (!tracks.is_empty()).then_some(tracks)
 }
 
 /// One track's MyTags before and after an edit: `(track, before, after)`.
@@ -540,7 +523,7 @@ mod tests {
                 .iter()
                 .map(|b| b.tracks.clone())
                 .collect::<Vec<_>>(),
-            vec![Some(vec!["9".to_owned(), "3".to_owned()])]
+            vec![Some(vec!["3".to_owned()])]
         );
         assert_eq!(found.marks.get(&("3".into(), "9".into())), Some(&mark));
         assert!(sidecar.tags_written_since(0, &["3".into()]).unwrap());

@@ -167,13 +167,24 @@ struct Row {
     payload: Option<String>,
 }
 
-/// The tracks a command's JSON (`{"name","args"}`) names, if it names any.
-fn tracks_named(command: Option<&str>) -> Option<Vec<String>> {
+/// The tracks a command's JSON (`{"name","args"}`) names, if it names any,
+/// by the command's own meaning (wbx-29 review). A My Tag edit's `args.id`
+/// is the My Tag (or category), never a track: `mytags.assign` and
+/// `mytags.unassign` name their tracks in `args.tracks`; any other My Tag
+/// edit (a rename, merge or delete) can reach any track that carries the
+/// tag, so it cannot be bounded. Elsewhere `args.id` names the track.
+pub(crate) fn tracks_named(command: Option<&str>) -> Option<Vec<String>> {
     let command: Value = serde_json::from_str(command?).ok()?;
     let args = &command["args"];
     let mut tracks: Vec<String> = Vec::new();
-    if let Some(id) = args["id"].as_str() {
-        tracks.push(id.to_owned());
+    match command["name"].as_str() {
+        Some("mytags.assign" | "mytags.unassign") => {}
+        Some(name) if name.starts_with("mytags.") => return None,
+        _ => {
+            if let Some(id) = args["id"].as_str() {
+                tracks.push(id.to_owned());
+            }
+        }
     }
     for key in ["tracks", "ids"] {
         if let Some(list) = args[key].as_array() {

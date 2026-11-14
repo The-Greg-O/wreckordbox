@@ -85,6 +85,19 @@ field by hand does not do it: your clear is recorded as yours, so
 Projection keeps the empty field as your choice and does not fill it. If a
 Fact says the value should change, set it yourself.
 
+### Values projected before this version
+
+A projection keeps a record of what it wrote, so it can change its own
+values later. Records kept by an earlier version do not say which write
+they belong to, so they prove nothing. An Energy or Prep colour value an
+earlier version projected therefore counts as yours: the dry run lists it
+as kept with the reason `predates_confirmed_marks`, and no projection
+changes it. Nothing is converted and no Fact is recorded for you.
+
+There is no way to hand such a value back to Projection. Clearing it by
+hand does not do it either: your clear is recorded as yours. If a Fact
+says the value should change, set it yourself.
+
 ## What waits for you
 
 Changes the policy holds back wait in the review queue: see
