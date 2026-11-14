@@ -2588,6 +2588,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       fromServiceLoad(await stickLoad.stickViewLoad(stick, playlists, plan, operation)),
     stickLoadReports: async () => (await stickLoad.stickLoadReports()).map(fromKeptReport),
     stickLoadReportDismiss: (id) => stickLoad.stickLoadReportDismiss(id),
+    stickLoadReportReserve: () => stickLoad.stickLoadReportReserve(),
     intakeQueue: intake.intakeQueue,
     intakeCounts: intake.intakeCounts,
     intakeColours: intake.intakeColours,

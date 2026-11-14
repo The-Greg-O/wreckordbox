@@ -656,6 +656,7 @@ async function realBackend(): Promise<Backend> {
       fromServiceLoad(await invoke<unknown>("stick_view_load", { stick, playlists, plan, approval: approval ?? null, operation: operation ?? null })),
     stickLoadReports: async () => (await invoke<unknown[]>("stick_load_reports")).map(fromKeptReport),
     stickLoadReportDismiss: (id) => invoke<void>("stick_load_report_dismiss", { id }),
+    stickLoadReportReserve: () => invoke<string>("stick_load_report_reserve"),
     intakeCounts: async () => {
       const counts = await invoke<{ intake: number; problems: number | null }>("intake_counts");
       return { intake: counts.intake, problems: counts.problems };

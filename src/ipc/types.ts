@@ -1185,6 +1185,8 @@ export interface Backend {
   stickLoadReports(): Promise<import("@/lib/stickLoad").KeptLoadReport[]>;
   /** The DJ has read a kept report. */
   stickLoadReportDismiss(id: string): Promise<void>;
+  /** A report id for the next load, issued and reserved by the shell (wbx-72): the load's name for its progress and its kept report. */
+  stickLoadReportReserve(): Promise<string>;
   /** How many tracks wait in Intake and in Problems (the Intake tab). */
   intakeCounts(): Promise<import("@/lib/intakeQueue").IntakeCounts>;
   /** The DJ's eight Prep colours, and which mean Clean and Problem (wbx-63; the service's `intake.colours`). */

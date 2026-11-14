@@ -9,7 +9,7 @@
  * report stays until the DJ starts another load on the same Stick or
  * dismisses it; a failure is never dropped by a view change.
  *
- * Each load has an operation id the shell keeps its report under, in the
+ * Each load has a report id the shell issues and reserves (`stickLoadReportReserve`) and keeps its report under, in the
  * app's state folder (`stick_load_reports`), so a load cut short by closing
  * the window, or one that failed, is reported again at the next start
  * (`readKeptStickLoads`, once per page) until dismissed. A load that completed and
@@ -96,7 +96,8 @@ export async function runStickLoad(
   stage: (run: (load: (operation: string) => Promise<LoadOutcome>) => Promise<void>) => Promise<boolean>,
 ): Promise<void> {
   const id = next++;
-  const operation = operationId();
+  // Until the shell issues the load's report id (just before it runs), a local placeholder.
+  let operation = operationId();
   listenForProgress();
   // A new load on this Stick: whatever an earlier eject said no longer holds.
   dropRemoval(stick.identity);
@@ -111,6 +112,9 @@ export async function runStickLoad(
       ran = true;
       update(id, { state: "running" });
       try {
+        // The shell names the report (and the progress) itself: an id it reserved for this load.
+        operation = await (await getBackend()).stickLoadReportReserve();
+        update(id, { reportId: operation });
         const outcome = await load(operation);
         update(id, { state: "done", outcome });
         step(id, { type: "finished", outcome });

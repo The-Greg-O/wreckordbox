@@ -881,3 +881,38 @@ fn the_window_hears_a_hosted_load_progress_track_by_track() {
     assert!(!titles.is_empty(), "no track was named: {heard:?}");
     assert_eq!(heard.last().unwrap()["stage"], "done", "{heard:?}");
 }
+
+/// wbx-72 verification review: the shell owns a kept report's name. A
+/// second load sent with the id of a kept, undismissed report never
+/// replaces it: the shell names that load's report itself, and both are
+/// kept until the DJ dismisses each.
+#[test]
+fn a_second_load_cannot_replace_a_kept_report() {
+    let window = hosting_window();
+    window.unlock(&window.spare);
+    let playlists = vec![playlist_id(0)];
+    let fail = |operation: Option<String>| {
+        tauri::async_runtime::block_on(stick_view::stick_view_load(
+            window.app.handle().state(),
+            path(&window.spare),
+            playlists.clone(),
+            "plan-that-was-never-made".to_owned(),
+            Some("a-token".to_owned()),
+            operation,
+        ))
+    };
+    assert!(fail(None).is_err(), "a load with no plan of its own fails");
+    let kept = rbxport_lib::stick_load_reports::kept_reports(&window.state_dir());
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    let first = kept[0].clone();
+    let id = first["id"].as_str().unwrap().to_owned();
+
+    // A second load naming the kept report's id.
+    let _ = fail(Some(id.clone()));
+
+    let kept = rbxport_lib::stick_load_reports::kept_reports(&window.state_dir());
+    assert_eq!(kept.len(), 2, "both reports are kept: {kept:?}");
+    let again = kept.iter().find(|r| r["id"] == id.as_str()).unwrap();
+    assert_eq!(again, &first, "the first report is as it was");
+    assert_ne!(kept[0]["id"], kept[1]["id"]);
+}

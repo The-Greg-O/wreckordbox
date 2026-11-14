@@ -109,6 +109,8 @@ export function createMockStickLoad(source: MockStickLoadSource) {
   const progressListeners = new Set<(progress: unknown) => void>();
   // Each load's operation id, in order; the one running on each Stick.
   const operations: string[] = [];
+  // Report ids the shell issued and no load has used yet (as `stick_load_reports` reserves them).
+  const reserved = new Set<string>();
   const runningOn = new Map<string, string>();
   const progress = (stick: string, stage: string, done: number, total: number, track: { id: string; title: string } | null, operation = runningOn.get(stick) ?? null) => {
     const volume = source.devices().find((d) => d.path === stick)?.volumeId ?? null;
@@ -324,6 +326,11 @@ export function createMockStickLoad(source: MockStickLoadSource) {
       return source.wait(answer);
     },
     stickLoadReports: (): Promise<unknown[]> => source.wait(keptReports()),
+    stickLoadReportReserve: (): Promise<string> => {
+      const id = `op-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      reserved.add(id);
+      return source.wait(id);
+    },
     stickLoadReportDismiss: (id: string): Promise<void> => {
       keepReports(keptReports().filter((r) => (r as { id?: string }).id !== id));
       return source.wait(undefined);
@@ -334,7 +341,8 @@ export function createMockStickLoad(source: MockStickLoadSource) {
      * the shell keeps it, under `operation`.
      */
     stickViewLoad: async (stick: string, playlists: string[], plan: string, operation?: string): Promise<unknown> => {
-      const id = operation ?? `op-${Date.now()}`;
+      // The shell names the report: an id it reserved and nobody used, else one of its own.
+      const id = operation !== undefined && reserved.delete(operation) ? operation : `op-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const keep = (report: unknown, error: { code: string; message: string } | null) => {
         const device = source.devices().find((d) => d.path === stick);
         keepReports([...keptReports().filter((r) => (r as { id?: string }).id !== id), {
