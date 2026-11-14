@@ -1180,6 +1180,7 @@ const NOT_STICK_WRITERS: &[&str] = &[
     "rename_playlist",
     "reorder_playlist",
     "reorder_playlist_entries",
+    "save_filter_playlist",
     "reset_play_count",
     "reset_played_tracks",
     "reveal_track",
