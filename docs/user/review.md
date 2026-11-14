@@ -7,8 +7,8 @@ the review queue. See [projection.md](projection.md) for the policy.
 ```sh
 wreckordbox review waiting                       # the queue; writes nothing
 wreckordbox review waiting --field energy --from agent:tagger --at-least 0.8
-wreckordbox review accept 12 15 --source dj      # these Facts
-wreckordbox review accept --at-least 0.8 --source dj   # every waiting Fact matching a filter
+wreckordbox review accept 12 15 --token TOKEN --source dj      # these Facts
+wreckordbox review accept --at-least 0.8 --token TOKEN --source dj   # matching a filter
 wreckordbox review reject --all --source dj      # everything waiting
 wreckordbox review rejected                      # what stands rejected; writes nothing
 wreckordbox review reopen --rejection ENTRY --source dj  # undo one whole reject
@@ -27,12 +27,14 @@ Ledger as yours, in your Run, as one step of Undo for the whole selection.
 They are your values from then on, and no projection replaces them. Library
 Protection refuses an accept like any edit.
 
-An accept applies exactly what you were shown. The command reads the queue
-first and sends those rows with the accept; if any of them changed before
-the write (another answer replaced it, it moved to another track, it no
-longer waits), or a chosen track was written by anything (even a player
-or rekordbox), the whole accept is refused, naming the Facts, and nothing
-is written; read the queue again. Should the write stop part-way, what was
+An accept applies exactly what you were shown. `review waiting` ends with
+a token naming that listing; an accept needs it (`--token`) and chooses
+only within it. If anything in that listing changed since you read it
+(another answer replaced a Fact, a Fact moved to another track, it no
+longer waits, a new one arrived), or a chosen track was written by
+anything (even a player or rekordbox, up to the moment of the write), the
+whole accept is refused, showing what the Facts are now, and nothing is
+written: list again and decide again. Should the write stop part-way, what was
 applied is recorded as yours (one Undo step) and the answer names what was
 and was not applied; what was not still waits. If wreckordbox is killed
 part-way, the next start records the values written as yours. Undo in the
@@ -44,7 +46,8 @@ this value for this field of this track, from this source. It is never
 offered again and never projected, even if you later loosen the policy,
 and even if the same source sends the same answer again. A different value,
 or the same value from another source, is a new suggestion and may wait in
-its turn.
+its turn. When the music of a track is added again and its Facts follow
+it to the new track, your rejections follow them too.
 
 **Reopening** takes a rejection back: by the Fact you rejected, by a filter,
 `--all`, or one whole earlier `reject` by its Ledger entry (`review
