@@ -23,6 +23,18 @@ fn a_bulk_scope_preserves_the_replacement_imports_transactional_mutant_follow() 
         )
         .unwrap();
     assert_eq!(operation.finish(), None);
+    let runs = hosted.service.call("runs.list", json!({})).unwrap();
+    let imported = hosted
+        .service
+        .call("runs.show", json!({"id":runs["runs"][0]["id"]}))
+        .unwrap();
+    let entries = imported["entries"].as_array().unwrap();
+    assert_eq!(
+        entries.len(),
+        2,
+        "the replacement history and imported result share one Run: {imported}"
+    );
+    assert!(entries.iter().any(|entry| entry["kind"] == "import"));
     let live = live_ids(&hosted);
     assert_eq!(live.len(), 1);
     assert_ne!(live[0], original);
