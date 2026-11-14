@@ -26,6 +26,12 @@ pub const TRACK_EDIT: &str = "Track Edit";
 /// files a key edit wrote its key into (#507). The core does not know what
 /// they are; whoever recorded the entry supplies them.
 pub trait OutsideSteps: Send + Sync {
+    /// The native and file step succeeded. Publish only evidence prepared by
+    /// the writer. A failure is shown after recording the accepted history step.
+    fn record_publication(&self) -> Result<(), String> {
+        Ok(())
+    }
+
     /// Nothing outside the Library was changed.
     fn is_empty(&self) -> bool;
 
@@ -615,6 +621,9 @@ pub struct Stepped {
     pub touched: Touched,
     /// The generation the index is at now.
     pub generation: u32,
+    /// Accepted step whose auxiliary evidence could not all be recorded.
+    /// The caller must announce the completed step before showing the warning.
+    pub warning: Option<String>,
 }
 
 /// Why an Undo or Redo did not run.
@@ -850,20 +859,24 @@ impl crate::LibraryCore {
                         return Err(DbError::Io(std::io::Error::other(why)));
                     }
                 }
-                result
+                result.map(|()| match executable {
+                    LibraryEdit::KeyEdit { files, .. } => files.record_publication().err(),
+                    _ => None,
+                })
             },
-            // Kept aside: the step is made by then and is recorded whatever
-            // the refresh says.
-            |db, ()| Ok(self.refresh_after_edit(host, db, touched.clone())),
+            // Both failures are returned only after the accepted step is recorded.
+            |db, warning| Ok((self.refresh_after_edit(host, db, touched.clone()), warning)),
         );
         let mut history = self.history.lock();
         match result {
-            Ok(refreshed) => {
+            Ok((refreshed, warning)) => {
                 history.drop_next(undo);
                 let label = entry.label;
                 history.stepped(entry.clone(), undo);
                 let generation = refreshed.map_err(StepError::Write)?;
-                Ok(Stepped { label, touched, generation })
+                let warning = warning.map(|why|
+                    format!("Key history step completed; evidence was not fully carried: {why}"));
+                Ok(Stepped { label, touched, generation, warning })
             }
             Err(DbError::Conflict(reason)) => {
                 history.drop_next(undo);

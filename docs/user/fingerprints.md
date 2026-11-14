@@ -26,11 +26,19 @@ the Stems are actually made again. Reusing an Intensity measurement on another
 track records the new Fact as `a1` too: copying evidence cannot prove how its
 original bytes were decoded. Only a new analysis can establish `a2` evidence.
 
-The old AIFF reader also included bytes after its sound chunk. A key edit made
-by Wreckordbox can therefore make **old `a1` AIFF Stems** appear stale. Certain
-external trailing tags on FLAC and M4A have similar legacy limitations. Those
-old fingerprints cannot be repaired or upgraded by looking at the track.
-New `a2` evidence excludes this metadata and stays current after retagging.
+The old AIFF reader also included bytes after its sound chunk. When
+Wreckordbox writes a key tag, its writer verifies the audio byte for byte.
+If that verified rewrite changes an old fingerprint, it carries the track's
+existing Stems and Measurements to the rewritten file and records that act
+in the Ledger as the key writer's. Undo and Redo verify and carry them too.
+The carried evidence still uses version 1; this does not establish `a2` evidence.
+If recording fails, the accepted key change stays and the error says evidence
+was not fully carried. Evidence without a successful carry remains stale.
+
+External tag edits can still make old AIFF evidence stale. Certain trailing
+tags on FLAC and M4A have similar legacy limitations. Looking at the track
+never repairs or upgrades its evidence. New `a2` evidence excludes this
+metadata and stays current after retagging.
 MP3 duration estimates are excluded too, including for files without a Xing
 or Info header. The app's audio-file key writer currently supports MP3, AIFF
 and FLAC; it skips WAV and M4A.

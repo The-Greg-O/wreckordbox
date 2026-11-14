@@ -95,6 +95,8 @@ mod bulk;
 mod bulk_spill;
 #[path = "file_ledger.rs"]
 mod files;
+#[path = "key_evidence.rs"]
+mod key_evidence;
 #[path = "player_record.rs"]
 mod player_record;
 
@@ -1035,6 +1037,7 @@ struct Op {
 #[derive(Default)]
 struct State {
     player: Option<WindowRun>,
+    key_writer: Option<WindowRun>,
     window: Option<WindowRun>,
     /// Whether what an earlier service left behind has been dealt with:
     /// its kept entries written, its intents settled, its Runs ended.
@@ -1480,9 +1483,13 @@ impl Keeper {
         if let Err(error) = sidecar.settle_intents(&done) {
             tracing::warn!(%error, "could not settle the Ledger's last intents");
         }
-        for run in [state.window.take(), state.player.take()]
-            .into_iter()
-            .flatten()
+        for run in [
+            state.window.take(),
+            state.player.take(),
+            state.key_writer.take(),
+        ]
+        .into_iter()
+        .flatten()
         {
             let _ = sidecar.finish_run(run.run, "wreckordbox stopped");
         }
@@ -2045,6 +2052,14 @@ impl Keeper {
 }
 
 impl rbl_library::ledger::Ledger for Keeper {
+    fn prepare_key_evidence(
+        &self,
+        file: &rbl_db::key_tag::prepared::Prepared,
+        tracks: &[String],
+    ) -> Result<Option<Box<dyn rbl_library::key_evidence::KeyEvidence>>, String> {
+        key_evidence::prepare(self, file, tracks)
+    }
+
     fn bulk(&self, kind: rbl_library::bulk::Kind) -> Option<Arc<dyn rbl_library::bulk::Recorder>> {
         Some(bulk::make(self, kind))
     }

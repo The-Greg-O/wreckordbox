@@ -1,5 +1,6 @@
 //! Audio staging is outside the Library gate. Only checked publication and
 //! rollback run inside the existing edit path; the history retains values.
+mod evidence;
 mod forward;
 use super::{KeyTagWrite, KeyTagWrites};
 use crate::{
@@ -21,6 +22,7 @@ use std::{
 };
 
 struct FilePlan {
+    evidence: Option<Box<dyn rbl_library::key_evidence::KeyEvidence>>,
     tracks: Vec<String>,
     requested: PathBuf,
     file: Box<Prepared>,
@@ -31,6 +33,7 @@ struct Selected {
     title: String,
 }
 pub(crate) struct PreparedFiles {
+    ledger: Option<Arc<dyn rbl_library::ledger::Ledger>>,
     state_dir: PathBuf,
     files: parking_lot::Mutex<Vec<FilePlan>>,
     selected: Vec<Selected>,
@@ -106,6 +109,7 @@ pub(crate) fn prepare_key_edit(
     // Own staged copies immediately, so every early return authorizes cleanup
     // too (including a later file refusing after this Stick was replaced).
     let prepared = Arc::new(PreparedFiles {
+        ledger: state.core().history().lock().ledger(),
         state_dir: state.backup_dir().to_path_buf(),
         files: parking_lot::Mutex::new(Vec::new()),
         selected,
@@ -132,6 +136,7 @@ pub(crate) fn prepare_key_edit(
                 .map_err(|e| std::io::Error::other(e.message))
         }) {
             Ok(Outcome::Ready(file)) => files.push(FilePlan {
+                evidence: None,
                 tracks: vec![track],
                 requested,
                 file,
@@ -150,6 +155,9 @@ pub(crate) fn prepare_key_edit(
         ));
     }
     drop(files);
+    prepared
+        .capture_evidence()
+        .map_err(|why| write_error(error(why)))?;
     Ok(prepared)
 }
 impl PreparedFiles {
@@ -194,6 +202,7 @@ pub(crate) fn prepare_key_history(
     // Preserve the established conflict/refusal wording, outside the gate.
     super::check_restore(&files.files, undo, label)?;
     let prepared = Arc::new(PreparedFiles {
+        ledger: files.ledger.clone(),
         state_dir: files.state_dir.clone(),
         files: parking_lot::Mutex::new(Vec::new()),
         selected: Vec::new(),
@@ -209,7 +218,12 @@ pub(crate) fn prepare_key_history(
         .map_err(error)?
         {
             Outcome::Ready(plan) => plans.push(FilePlan {
-                tracks: Vec::new(),
+                evidence: None,
+                tracks: files
+                    .evidence_tracks
+                    .iter()
+                    .find(|(path, _)| *path == file.path)
+                    .map_or_else(Vec::new, |(_, ids)| ids.clone()),
                 requested: file.path.clone(),
                 file: plan,
             }),
@@ -236,9 +250,14 @@ pub(crate) fn prepare_key_history(
         crate::test_holds::point("key_tag.file_prepared", &files.state_dir);
     }
     drop(plans);
+    prepared.capture_evidence().map_err(error)?;
     Ok(prepared)
 }
 impl OutsideSteps for PreparedFiles {
+    fn record_publication(&self) -> Result<(), String> {
+        self.record_evidence()
+    }
+
     fn unrestored_values(&self) -> Option<serde_json::Value> {
         let files = self.files.lock();
         let values: Vec<_> = files.iter().filter(|p|p.file.is_published()).map(|p| {
@@ -329,9 +348,9 @@ pub fn write_analysis_key_tag(
     path: &str,
     key: &str,
 ) -> (Option<KeyTagWrite>, Option<String>) {
-    let write = || -> AppResult<Option<KeyTagWrite>> {
+    let write = || -> AppResult<(Option<KeyTagWrite>, Option<String>)> {
         if path.is_empty() {
-            return Ok(None);
+            return Ok((None, None));
         }
         drop(state.file_edit()?);
         let plan = {
@@ -352,14 +371,19 @@ pub fn write_analysis_key_tag(
             }
         };
         let plans = PreparedFiles {
+            ledger: state.core().history().lock().ledger(),
             state_dir: state.backup_dir().to_path_buf(),
             files: parking_lot::Mutex::new(vec![FilePlan {
+                evidence: None,
                 tracks: vec![track.into()],
                 requested: path.into(),
                 file: plan,
             }]),
             selected: Vec::new(),
         };
+        plans
+            .capture_evidence()
+            .map_err(|why| write_error(error(why)))?;
         // plans was declared first: its cleanup runs after every guard drops.
         let _gate = state.core().edit_gate().lock();
         let access = crate::stick_guard::enter_files(state.backup_dir(), [Path::new(path)])?;
@@ -378,7 +402,12 @@ pub fn write_analysis_key_tag(
             Ok(()) => {
                 let written = snapshot(plan);
                 record.written();
-                Ok(Some(written))
+                drop(files);
+                let warning = plans
+                    .record_evidence()
+                    .err()
+                    .map(|why| format!("Key tag written; evidence was not fully carried: {why}"));
+                Ok((Some(written), warning))
             }
             Err(why) => {
                 record.cancelled();
@@ -387,7 +416,7 @@ pub fn write_analysis_key_tag(
         }
     };
     match write() {
-        Ok(file) => (file, None),
+        Ok(result) => result,
         Err(why) => (
             None,
             Some(format!(
@@ -432,6 +461,8 @@ mod tests {
         wreckordbox_stick_protection::unlock(&state_dir, &stick, Some("SPARE")).unwrap();
         let held = crate::test_holds::arm("key_tag.file_prepared", &state_dir);
         let history = KeyTagWrites {
+            evidence_tracks: Vec::new(),
+            ledger: None,
             files,
             state_dir: state_dir.clone(),
         };
