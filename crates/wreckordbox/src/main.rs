@@ -18,6 +18,7 @@ mod project;
 use playlist_edits as edits;
 mod protection;
 mod reading;
+mod review;
 mod schema;
 mod standing;
 mod stems;
@@ -186,6 +187,12 @@ enum Commands {
         #[command(subcommand)]
         command: barriers::ProjectionCommands,
     },
+    /// Review the Facts Projection held back for the DJ: list them, and
+    /// accept or reject them as the DJ's decision.
+    Review {
+        #[command(subcommand)]
+        command: review::ReviewCommands,
+    },
     /// Restore and list backups of the Library and its Sidecar.
     Backup {
         #[command(subcommand)]
@@ -281,6 +288,13 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
     | Commands::Mytags { run, .. }
     | Commands::Intake { run, .. }
     | Commands::Playlists { run, .. } = &cli.command
+    {
+        ledger::begin(run, cli.json);
+    }
+    // Only an accept edits the Library; a rejection names its own source.
+    if let Commands::Review {
+        command: review::ReviewCommands::Accept { run, .. },
+    } = &cli.command
     {
         ledger::begin(run, cli.json);
     }
@@ -407,6 +421,9 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
             print(&project::run(&mut connect(&config)?, cli.json, args)?);
         }
         Commands::Projection { command } => print(&barriers::run(&config, cli.json, command)?),
+        Commands::Review { command } => {
+            print(&review::run(&mut connect(&config)?, cli.json, command)?);
+        }
         Commands::Backup { command } => print(&backup::run(&config, cli.json, command)?),
         Commands::Stop => stop(&config, cli.json)?,
         Commands::Serve { spawned: true } => {

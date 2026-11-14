@@ -51,7 +51,7 @@ pub fn run(client: &mut Client, as_json: bool, args: &ProjectArgs) -> Result<Str
     Ok(text(&report))
 }
 
-fn shown(value: &Value) -> String {
+pub(crate) fn shown(value: &Value) -> String {
     match value {
         Value::Null => "none".to_owned(),
         Value::Object(colour) => match (colour.get("label"), colour.get("colour")) {

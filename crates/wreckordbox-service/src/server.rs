@@ -646,6 +646,15 @@ impl Shared {
                 crate::projection_barriers::answer(&self.stems, request)
             }
             projection if crate::projection::answers(projection) => self.project(request),
+            // Reviewing waiting Facts (wbx-27): an accept is the DJ's edit.
+            review if crate::review::answers(review) => {
+                let (changed, result) = self
+                    .with_library(|library| crate::review::answer(library, &self.stems, request))?;
+                if let Some(changed) = changed {
+                    self.tell_host(&changed.event());
+                }
+                result
+            }
             intake if crate::intake::answers(intake) => {
                 let (result, changed) = self.with_library(|library| {
                     crate::intake::answer(library, &self.stems, request)

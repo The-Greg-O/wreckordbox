@@ -670,6 +670,7 @@ pub(crate) fn takes_run(command: &str) -> bool {
         || crate::mytag_edits::answers(command)
         || crate::playlist_edits::answers(command)
         || command == crate::projection::commands::PROJECTION_APPLY
+        || command == crate::review::commands::REVIEW_ACCEPT
 }
 
 pub(crate) fn answers(command: &str) -> bool {
@@ -2226,7 +2227,7 @@ fn recovered_tracks(snapshot: Option<&Value>) -> Option<Value> {
 
 /// Whether the edit being recorded on this thread is the DJ's: the
 /// window's (no command), or a command attributed to the DJ.
-fn by_the_dj() -> bool {
+pub(crate) fn by_the_dj() -> bool {
     CURRENT.with(|current| {
         let current = current.borrow();
         match current.as_ref().map(|scope| &scope.target) {
