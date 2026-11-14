@@ -1111,7 +1111,7 @@
   "Delete the backup from {date}? This cannot be undone.": "¿Eliminar la copia de seguridad de {date}? Esto no se puede deshacer.",
   "Backup deleted.": "Copia de seguridad eliminada.",
   "Restore a backup": "Restaurar una copia de seguridad",
-  "To restore, quit wreckordbox and open wreckordbox Restore. It shows what each backup holds and lets you restore all of it or only some parts.": "Para restaurar, salga de wreckordbox y abra wreckordbox Restore. Muestra lo que contiene cada copia de seguridad y le permite restaurarla toda o solo algunas partes.",
+  "To restore, quit wreckordbox and run wreckordbox backup restore with the backup's file in a terminal. It puts back the Library and the Sidecar together. Do not use the separate Restore app: it leaves the Sidecar out.": "Para restaurar, cierre wreckordbox y ejecute wreckordbox backup restore con el archivo de la copia en un terminal. Restaura la biblioteca y el Sidecar juntos. No use la aplicación Restore aparte: omite el Sidecar.",
   "blue": "azul",
   "rgb": "rgb",
   "3band": "3 bandas",

@@ -288,13 +288,33 @@ pub struct Collected {
 /// The folder itself must not be a symbolic link; use [`collect_for`] to
 /// have it checked against the Library as well.
 pub fn collect(sidecar_dir: &Path, options: Options, proceed: &mut dyn FnMut() -> bool) -> Result<Option<Collected>> {
+    collect_inner(sidecar_dir, options, proceed, &|_| {}, false)
+}
+
+/// [`collect`] for a backup that must be of one moment (wbx-25: the backup
+/// before a large Run), while background work may be publishing Stems:
+/// Stem audio, when asked for, is only the files the Facts in the Sidecar's
+/// own snapshot name, never what the `stems/` folder holds when it is read.
+/// A separation's files published after the snapshot (its Run begun, its
+/// Fact not yet recorded) are therefore never in it; a named file that is
+/// gone is left out, as the Sidecar itself reads it (Stems whose audio is
+/// missing need separating again). `at` is called at named moments
+/// (`sidecar-snapshotted`), for a test to hold it there.
+pub fn collect_of_one_moment(sidecar_dir: &Path, options: Options, at: &dyn Fn(&str)) -> Result<Option<Collected>> {
+    collect_inner(sidecar_dir, options, &mut || true, at, true)
+}
+
+fn collect_inner(sidecar_dir: &Path, options: Options, proceed: &mut dyn FnMut() -> bool, at: &dyn Fn(&str), named_stems: bool) -> Result<Option<Collected>> {
     own_folder(sidecar_dir)?;
     if !sidecar_dir.is_dir() {
         return Ok(None);
     }
     let stage = tempfile::tempdir()?;
-    let mut walk = Walk { options, proceed, stage: stage.path(), snapshots: 0, directories: vec![ARCHIVE_FOLDER.to_owned()], files: Vec::new(), databases: Vec::new() };
+    let mut walk = Walk { options, proceed, at, named_stems, stage: stage.path(), snapshots: 0, directories: vec![ARCHIVE_FOLDER.to_owned()], files: Vec::new(), databases: Vec::new() };
     walk.folder(sidecar_dir, ARCHIVE_FOLDER, true)?;
+    if named_stems && options.stems {
+        walk.named_stems(sidecar_dir)?;
+    }
     let Walk { directories, mut files, databases, .. } = walk;
     let contents = Contents {
         version: VERSION,
@@ -319,6 +339,9 @@ pub fn collect_for(location: &rbl_db::LibraryLocation, options: Options, proceed
 struct Walk<'a> {
     options: Options,
     proceed: &'a mut dyn FnMut() -> bool,
+    at: &'a dyn Fn(&str),
+    /// Stem audio is what the store's snapshot names, not the folder's.
+    named_stems: bool,
     stage: &'a Path,
     snapshots: usize,
     directories: Vec<String>,
@@ -338,7 +361,7 @@ impl Walk<'_> {
             let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
                 return Err(refused(format!("The Sidecar holds a file whose name a backup cannot carry: {}", path.display())));
             };
-            if top && !backed_up(name, self.options.stems) {
+            if top && (!backed_up(name, self.options.stems) || (self.named_stems && name == STEMS_FOLDER)) {
                 continue;
             }
             let meta = fs::symlink_metadata(&path)?;
@@ -358,6 +381,9 @@ impl Walk<'_> {
                 // as a plain file.
                 if store || is_database(&path) {
                     let source = self.snapshot(&path, store)?;
+                    if store {
+                        (self.at)("sidecar-snapshotted");
+                    }
                     let bytes = fs::metadata(&source)?.len();
                     self.databases.push(entry.strip_prefix(&format!("{ARCHIVE_FOLDER}/")).unwrap_or(&entry).to_owned());
                     self.files.push(Item { name: entry, source, bytes });
@@ -365,6 +391,59 @@ impl Walk<'_> {
                     self.files.push(Item { name: entry, source: path, bytes: meta.len() });
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// The Stem files the Facts in the store's snapshot name, each one
+    /// there now: folders parents first, then the files.
+    fn named_stems(&mut self, sidecar_dir: &Path) -> Result<()> {
+        let store = format!("{ARCHIVE_FOLDER}/{DATABASE_FILE}");
+        let Some(snapshot) = self.files.iter().find(|item| item.name == store).map(|item| item.source.clone()) else {
+            return Ok(());
+        };
+        let stems = sidecar_dir.join(STEMS_FOLDER);
+        match fs::symlink_metadata(&stems) {
+            Ok(meta) if meta.file_type().is_symlink() => return Err(refused(format!("Symbolic links are not supported in backups: {}", stems.display()))),
+            Ok(meta) if meta.is_dir() => {}
+            _ => return Ok(()),
+        }
+        let failed = |e: rusqlite::Error| refused(format!("The Stems the Sidecar records could not be read for the backup: {e}"));
+        let db = rusqlite::Connection::open_with_flags(&snapshot, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(failed)?;
+        let mut statement = db
+            .prepare("SELECT DISTINCT json_extract(stem.value, '$.file') FROM fact, json_each(fact.value, '$.stems') AS stem WHERE fact.kind = 'stems' AND json_valid(fact.value)")
+            .map_err(failed)?;
+        let mut named: Vec<String> = statement.query_map([], |r| r.get::<_, Option<String>>(0)).map_err(failed)?.filter_map(std::result::Result::transpose).collect::<rusqlite::Result<_>>().map_err(failed)?;
+        named.sort();
+        let top = format!("{ARCHIVE_FOLDER}/{STEMS_FOLDER}");
+        self.directories.push(top.clone());
+        for file in named {
+            let relative = Path::new(&file);
+            let mut parts = relative.components();
+            // Only a plain path inside `stems/`: a recorded name is data.
+            if parts.next() != Some(std::path::Component::Normal(STEMS_FOLDER.as_ref())) || !parts.all(|part| matches!(part, std::path::Component::Normal(_))) {
+                return Err(refused(format!("The Sidecar records a Stem file outside its stems folder: {file}")));
+            }
+            let path = sidecar_dir.join(relative);
+            let meta = match fs::symlink_metadata(&path) {
+                Ok(meta) => meta,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e.into()),
+            };
+            if meta.file_type().is_symlink() {
+                return Err(refused(format!("Symbolic links are not supported in backups: {}", path.display())));
+            }
+            if !meta.is_file() {
+                continue;
+            }
+            let mut folder = top.clone();
+            for part in relative.parent().into_iter().flat_map(Path::components).skip(1) {
+                folder = format!("{folder}/{}", part.as_os_str().to_string_lossy());
+                if !self.directories.contains(&folder) {
+                    self.directories.push(folder.clone());
+                }
+            }
+            self.files.push(Item { name: format!("{ARCHIVE_FOLDER}/{file}"), source: path, bytes: meta.len() });
         }
         Ok(())
     }

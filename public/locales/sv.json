@@ -1102,7 +1102,7 @@
   "Delete the backup from {date}? This cannot be undone.": "Vill du ta bort säkerhetskopian från {date}? Detta kan inte ångras.",
   "Backup deleted.": "Säkerhetskopiering raderad.",
   "Restore a backup": "Återställ en säkerhetskopia",
-  "To restore, quit wreckordbox and open wreckordbox Restore. It shows what each backup holds and lets you restore all of it or only some parts.": "För att återställa, avsluta wreckordbox och öppna wreckordbox Restore. Den visar vad varje säkerhetskopia innehåller och låter dig återställa allt eller bara vissa delar.",
+  "To restore, quit wreckordbox and run wreckordbox backup restore with the backup's file in a terminal. It puts back the Library and the Sidecar together. Do not use the separate Restore app: it leaves the Sidecar out.": "För att återställa, avsluta wreckordbox och kör wreckordbox backup restore med säkerhetskopians fil i en terminal. Biblioteket och Sidecar återställs tillsammans. Använd inte den separata Restore-appen: den utelämnar Sidecar.",
   "blue": "blått",
   "rgb": "rgb",
   "3band": "3 band",

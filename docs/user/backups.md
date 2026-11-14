@@ -106,7 +106,15 @@ the Library's files as they always did.
 
 The separate RBXport Restore app does not know about the Sidecar. Do not
 use it for a backup that holds one (a backup with a `sidecar.json`): it
-would put back the Library without the Sidecar that matches it.
+would put back the Library without the Sidecar that matches it, so
+wreckordbox's record of what changed, and what Projection wrote, would no
+longer agree with your tracks. Every backup wreckordbox makes holds the
+Sidecar, including the ones taken automatically before a large Run (see
+[Projection](projection.md), "A backup before a large Run"). Restore them
+with `wreckordbox backup restore`, as above; the Backups pane in
+Preferences says the same. Backups taken before a large Run are named
+`rbexport-<date>-<time>-run-<id>.zip` and do not hold the two restore
+scripts.
 
 ## Developer entry points
 

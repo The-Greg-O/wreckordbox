@@ -1468,6 +1468,9 @@ fn undo_restores_the_previous_dj_fact_and_clear_withdraws_an_opinion() {
 #[path = "service_host/file_ledger.rs"]
 mod file_ledger;
 
+#[path = "service_host/large_run_backup.rs"]
+mod large_run_backup;
+
 /// wbx-26: the DJ's hand setters assert, in the window. Rating and colouring
 /// a selection where some tracks already hold the value records those tracks
 /// as the DJ's own (a Fact each, no Undo step), so a later projection keeps

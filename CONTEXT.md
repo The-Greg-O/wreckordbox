@@ -27,6 +27,10 @@ A Stick the user performs from, which must never be used for testing.
 A Stick the user has declared safe to overwrite.
 _Avoid_: Test stick, disposable stick
 
+**Safe to remove**:
+The state of a Stick after wreckordbox has ejected it successfully and seen it unmounted. A finished load alone is not safe to remove.
+_Avoid_: Done, finished
+
 **Rekordbox-readable**:
 The property of a Stick that rekordbox on any machine can open it and show its tracks, playlists and cues, without wreckordbox present.
 
@@ -82,6 +86,10 @@ _Avoid_: Model, classifier, judge
 A deliberate step that writes chosen Facts into fields rekordbox and players understand, such as a MyTag, Energy, comment, Prep colour or cue. Each kind of change can be set to wait for the DJ or to apply above a confidence.
 _Avoid_: Sync, write-back
 
+**Barrier**:
+A write whose outcome is uncertain (interrupted, unconfirmed or unreadable), which makes Projection treat every value it could have touched as the DJ's until the DJ clears it.
+_Avoid_: Lock, block
+
 **Run**:
 One piece of work by an agent, a tool or the DJ that changes the Library or the Sidecar, recorded as a unit so it can be reviewed and unwound together.
 _Avoid_: Batch, job, session
@@ -90,9 +98,17 @@ _Avoid_: Batch, job, session
 The durable record of every change to the Library and the Sidecar: what changed, from what to what, by which source, in which Run.
 _Avoid_: History, audit log, undo stack
 
+**Assertion**:
+The DJ's explicit confirmation of a value, recorded in the Ledger even when the value does not change, so that Projection treats it as the DJ's.
+_Avoid_: Touch, re-save, same-value edit
+
 **Unwind**:
 Reversing a Run, or part of one, from the Ledger at any later time and out of order. A value changed since is flagged, not overwritten. Distinct from undo, which reverses the most recent edits in the window.
 _Avoid_: Rollback, revert, restore
+
+**Large-run backup**:
+A backup of the Library and the Sidecar together, taken before a Run that will change more than a set number of tracks, and named in that Run's Ledger record.
+_Avoid_: Snapshot, checkpoint
 
 **Stem**:
 A separated component of a parent track (vocals, melody, bass or drums), held in the Sidecar, attached to its parent and inheriting the parent's beat grid, key and cues.

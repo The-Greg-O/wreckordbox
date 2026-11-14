@@ -21,6 +21,7 @@
 //! to start, and RBXport will not read a library while one is pending.
 
 pub mod archive;
+pub mod create;
 pub mod journal;
 pub mod manifest;
 pub mod restore;

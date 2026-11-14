@@ -30,13 +30,15 @@ it("cancelling delete leaves the backup untouched", async () => {
   expect(held.backend.deleteBackup).not.toHaveBeenCalled();
   expect(host.querySelectorAll("tbody tr")).toHaveLength(1);
 });
-it("offers no restore here and points to wreckordbox Restore instead", async () => {
+it("offers no restore here and points to the wreckordbox backup restore command, which keeps the Sidecar", async () => {
   await act(async () => { root.render(<BackupsPane />); await Promise.resolve(); });
   expect(button("Restore")).toBeUndefined();
   expect(button("Restore from ZIP…")).toBeUndefined();
   const guidance = host.querySelector('[aria-label="Restore a backup"]');
   expect(guidance?.querySelector("h4")?.textContent).toBe("Restore a backup");
-  expect(guidance?.textContent).toContain("open wreckordbox Restore");
+  expect(guidance?.textContent).toContain("wreckordbox backup restore");
+  expect(guidance?.textContent).toContain("Sidecar");
+  expect(guidance?.textContent).not.toContain("open wreckordbox Restore");
   expect(guidance?.querySelector("button")).toBeNull();
   expect(button("Create backup").disabled).toBe(false);
   expect(button("Change folder…").disabled).toBe(false);

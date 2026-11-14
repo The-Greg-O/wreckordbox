@@ -1116,7 +1116,7 @@
   "Delete the backup from {date}? This cannot be undone.": "删除 {date} 的备份？此操作无法撤消。",
   "Backup deleted.": "备份已删除。",
   "Restore a backup": "恢复备份",
-  "To restore, quit wreckordbox and open wreckordbox Restore. It shows what each backup holds and lets you restore all of it or only some parts.": "要恢复，请退出 wreckordbox 并打开 wreckordbox Restore。它显示每个备份保存的内容，并让您恢复全部或仅部分部分。",
+  "To restore, quit wreckordbox and run wreckordbox backup restore with the backup's file in a terminal. It puts back the Library and the Sidecar together. Do not use the separate Restore app: it leaves the Sidecar out.": "要恢复，请退出 wreckordbox，然后在终端中用备份文件运行 wreckordbox backup restore。它会同时恢复资料库和 Sidecar。请勿使用单独的 Restore 应用：它会遗漏 Sidecar。",
   "blue": "蓝色",
   "rgb": "RGB",
   "3band": "3波段",

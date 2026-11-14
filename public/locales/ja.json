@@ -1121,7 +1121,7 @@
   "Delete the backup from {date}? This cannot be undone.": "{date} からバックアップを削除しますか?これを元に戻すことはできません。",
   "Backup deleted.": "バックアップが削除されました。",
   "Restore a backup": "バックアップを復元する",
-  "To restore, quit wreckordbox and open wreckordbox Restore. It shows what each backup holds and lets you restore all of it or only some parts.": "復元するには、wreckordbox を終了し、wreckordbox Restore を開きます。各バックアップの内容が表示され、そのすべてまたは一部のみを復元できます。",
+  "To restore, quit wreckordbox and run wreckordbox backup restore with the backup's file in a terminal. It puts back the Library and the Sidecar together. Do not use the separate Restore app: it leaves the Sidecar out.": "復元するには、wreckordbox を終了し、ターミナルでバックアップのファイルを指定して wreckordbox backup restore を実行します。ライブラリーと Sidecar が一緒に復元されます。別の Restore アプリは使わないでください。Sidecar が復元されません。",
   "blue": "青",
   "rgb": "RGB",
   "3band": "3バンド",
