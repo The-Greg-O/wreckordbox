@@ -235,15 +235,54 @@ impl TagRule {
     /// Whether a track carrying `tags` passes: every pick for AND, one for
     /// OR. A column with nothing picked constrains nothing.
     fn matches(&self, tags: &[i32]) -> bool {
-        let carries = |ids: &Vec<i32>| ids.iter().any(|id| tags.contains(id));
-        if self.picks.is_empty() {
-            true
-        } else if self.any {
-            self.picks.iter().any(carries)
-        } else {
-            self.picks.iter().all(carries)
-        }
+        picks_carried(&self.picks, self.any, tags)
     }
+}
+
+/// [`TagRule::matches`]'s rule, shared with a Stick's rows (wbx-45.12).
+fn picks_carried(picks: &[Vec<i32>], any: bool, tags: &[i32]) -> bool {
+    let carries = |ids: &Vec<i32>| ids.iter().any(|id| tags.contains(id));
+    if picks.is_empty() {
+        true
+    } else if any {
+        picks.iter().any(carries)
+    } else {
+        picks.iter().all(carries)
+    }
+}
+
+impl TagFilter {
+    /// Whether a track carrying the tag ids `carried` passes this column, by
+    /// the rule the Library's list applies (wbx-45.12: a Stick's rows).
+    #[must_use]
+    pub fn admits(&self, carried: &[i32]) -> bool {
+        picks_carried(&self.picks, self.any, carried)
+    }
+}
+
+/// The picks for a My Tag column over any list of categories (the
+/// Library's, or a Stick's own, wbx-45.12): see
+/// [`Library::tag_picks_named`].
+#[must_use]
+pub fn tag_picks_in(
+    categories: &[TagCategory],
+    category: usize,
+    names: &[String],
+) -> Vec<Vec<i32>> {
+    let found = categories.get(category);
+    names
+        .iter()
+        .map(|wanted| {
+            found.map_or_else(Vec::new, |c| {
+                c.tags
+                    .iter()
+                    .zip(&c.ids)
+                    .filter(|(name, _)| *name == wanted)
+                    .map(|(_, &id)| id)
+                    .collect()
+            })
+        })
+        .collect()
 }
 
 /// A [`TrackFilter`] with its lists turned into masks and sorted ids.
@@ -409,20 +448,7 @@ impl Library {
     /// dropped silently.
     #[must_use]
     pub fn tag_picks_named(&self, category: usize, names: &[String]) -> Vec<Vec<i32>> {
-        let found = self.my_tags().get(category);
-        names
-            .iter()
-            .map(|wanted| {
-                found.map_or_else(Vec::new, |c| {
-                    c.tags
-                        .iter()
-                        .zip(&c.ids)
-                        .filter(|(name, _)| *name == wanted)
-                        .map(|(_, &id)| id)
-                        .collect()
-                })
-            })
-            .collect()
+        tag_picks_in(self.my_tags(), category, names)
     }
 
     /// Dense key ids carrying one of `identities` as the view shell's bar

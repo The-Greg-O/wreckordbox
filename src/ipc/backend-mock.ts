@@ -34,6 +34,7 @@ import { MY_TAG_LIMIT, newMyTagName } from "@/lib/myTags";
 import { fromServicePanel, fromServiceTagsSet } from "@/lib/tagPanel";
 import { referenceDeviceSettings } from "./mock-device-settings";
 import { createMockDeviceLibraries, type MockImportEntry } from "./mock-device-library";
+import { STICK_MY_TAGS, passesStickTags } from "./mock-stick-mytags";
 import { createMockIntake } from "./mock-intake";
 import { createMockStickLoad } from "./mock-stick-load";
 import { fromKeptReport, fromServiceDryRun, fromServiceLoad, fromServiceSticks } from "@/lib/stickLoad";
@@ -2636,8 +2637,9 @@ export function createMockBackend(options: MockOptions = {}): Backend {
         try {
           rows = stickLibraries.rows(spec.source.path, spec.source.format, spec.source.playlist)
             .filter((row) => q === "" || matchesSearch(row, q, spec.searchField ?? "all"))
-            // The Stick's own fields; a Stick's library carries no MyTags.
-            .filter((row) => !spec.filter || passesFields(row, 0, spec.filter));
+            // The Stick's own fields and its own MyTags (wbx-45.12).
+            .filter((row) => !spec.filter || passesFields(row, 0, spec.filter))
+            .filter((row) => passesStickTags(row, spec.filter?.tags));
         } catch (error) {
           return Promise.reject(error instanceof Error ? error : new Error(String(error)));
         }
@@ -4172,7 +4174,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
           if (q !== "" && !matchesSearch(row, q, spec.searchField ?? "all")) continue;
           if (row.key !== "") keys.set(row.key, (keys.get(row.key) ?? 0) + 1);
         }
-        return wait<FilterValues>({ bpms: [], keys: [...keys].map(([value, count]) => ({ value, count })), tags: [] });
+        return wait<FilterValues>({ bpms: [], keys: [...keys].map(([value, count]) => ({ value, count })), tags: [...STICK_MY_TAGS] });
       }
       // Over the source and query alone, never the filter's own result.
       const bpms = new Map<number, number>();

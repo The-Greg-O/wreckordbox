@@ -208,3 +208,6 @@ fn a_sync_without_import_changes_neither_the_library_nor_the_device_edit() {
     sync(&fixture).unwrap();
     assert_eq!(fixture.import().unwrap().ratings, 0);
 }
+
+#[path = "ledger_tests.rs"]
+mod ledger_tests;

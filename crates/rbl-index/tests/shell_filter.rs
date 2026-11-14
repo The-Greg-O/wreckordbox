@@ -110,6 +110,7 @@ fn row(id: u32, key: &str, bpm_x100: u32, rating: u8, color: u8) -> DeviceRow {
         rating,
         color,
         analysed: true,
+        my_tags: Vec::new(),
         has_artwork: false,
         cues: Vec::new(),
     }

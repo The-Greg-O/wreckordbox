@@ -20,11 +20,13 @@
 //! ones the existing Stick view opens.
 
 mod library;
+mod my_tags;
 pub mod one_library;
 #[cfg(feature = "testing")]
 pub mod testing;
 
 pub use library::{library, read, settle, unfinished_write, ReadError, StickRead};
+pub use my_tags::{StickMyTags, StickTag, StickTagCategory};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;

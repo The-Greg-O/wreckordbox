@@ -3,7 +3,7 @@ import type { FilterValues, KeyDisplay, TagCategory } from "@/ipc/types";
 import { formatKey } from "@/lib/preferences";
 import { OWN_ACTIVATION } from "@/lib/shortcuts";
 import {
-  BPM_MATCH_PCT, EMPTY_SHELL_FILTER, ENERGY_LEVELS, PREP_CHOICES, bpmBand, clearCategory, hasPicks,
+  BPM_MATCH_PCT, EMPTY_SHELL_FILTER, ENERGY_LEVELS, PREP_CHOICES, bpmBand, clearCategory, dropStale, hasPicks,
   keyChoicePicked, keyChoices, matchedKeys, pickSummaries, setBpmRange, setEnergyRange, setTagsAny, tagsAny,
   toggleKeyChoice, togglePrepColour, toggleTag, type KeyChoice, type LoadedTrack, type ShellFilter,
 } from "@/lib/shellTrackFilter";
@@ -23,16 +23,16 @@ export interface TrackFilterBarProps {
   /** The open list's choices (its keys). */
   values: FilterValues | null;
   valuesError: string | null;
-  /** The Library's MyTag categories. */
+  /** The MyTag categories to offer: the Library's, or on a Stick list the Stick's own. */
   categories: readonly TagCategory[];
   /** Picks the Library no longer holds, just left out of the filter. */
   dropped: readonly string[];
   /** Selected tracks the filter hid, just deselected; `0` for none. */
   deselected: number;
-  /** A Stick's list: its MyTags are not read, so MyTag picks do not apply. */
+  /** A Stick's list: picks the Stick does not hold are left out there, and said (wbx-45.12). */
   onStick: boolean;
   count: FilterCount;
-  /** Whether anything narrows the open list now (on a Stick, MyTags do not). */
+  /** Whether anything narrows the open list now (on a Stick, only the picks it holds). */
   filtering: boolean;
   /** The track Key match and BPM ±6% follow. */
   loaded: LoadedTrack;
@@ -124,14 +124,15 @@ export function TrackFilterBar(props: TrackFilterBarProps) {
     </button>
   );
 
-  const stickReason = "A Stick's MyTags are not read, so MyTags do not narrow a Stick playlist";
+  // On a Stick list, once its own categories are read: the picks it does not hold.
+  const notOnStick = onStick && values !== null && valuesError === null ? dropStale(model, categories).dropped : [];
 
   return (
     <div ref={root} className={styles.bar} role="search" aria-label="Track Filter" {...{ [OWN_ACTIVATION]: "" }} onKeyDown={onKeyDown}>
       <div className={styles.row}>
         <span className={styles.label} aria-hidden>Track Filter</span>
         <div className={styles.controls}>
-          {categories.map((c) => control({ kind: "tags", category: c.name }, c.name, said.myTags[c.name] ?? null, onStick ? stickReason : undefined))}
+          {categories.map((c) => control({ kind: "tags", category: c.name }, c.name, said.myTags[c.name] ?? null))}
           {control({ kind: "energy" }, "Energy", said.energy)}
           {control({ kind: "prep" }, "Prep colour", said.prepColours)}
           {control({ kind: "bpm" }, "BPM", said.bpm)}
@@ -166,7 +167,7 @@ export function TrackFilterBar(props: TrackFilterBarProps) {
         {save?.control}
       </div>
       {save?.panel}
-      {onStick && model.myTags.length > 0 ? <p className={styles.note}>{stickReason}: {Object.keys(said.myTags).join(", ")} left out here.</p> : null}
+      {notOnStick.length > 0 ? <p className={styles.note} role="note">Not on this Stick, left out here: {notOnStick.join(", ")}</p> : null}
       {dropped.length > 0 ? <p className={styles.note} role="note">Left out of the filter, no longer in the Library: {dropped.join(", ")}</p> : null}
       {deselected > 0 ? (
         <p className={styles.note} role="note">
