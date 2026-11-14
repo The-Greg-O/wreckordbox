@@ -124,6 +124,9 @@
 }
 .search input:focus { outline: none; }
 .search svg { width: 13px; height: 13px; flex: none; }
+/* The magnifier in the unlit icons' grey: the placeholder's #4B4B4B is
+   2.4:1 on the field's black (wbx-4g6). */
+.search svg { color: var(--c-icon-off); }
 
 .panes {
   margin: calc(var(--s-pref-items-top) - var(--s-pref-search-top) - var(--s-pref-search-h)) 0 0;
@@ -160,7 +163,10 @@
   transform: translate(-50%, -50%);
   color: var(--c-icon-off);
 }
-.pane[aria-selected="true"] svg { color: var(--c-icon-on); }
+/* The selected pane's icon is written as its label is, on the selection:
+   the theme's on-accent colour, else white (4.5:1 on upstream's blue, where
+   #F0F0F0 was 4.0:1; #F0F0F0 on Tokyo Night's light accent was 2.2:1). */
+.pane[aria-selected="true"] svg { color: var(--c-on-accent, #FFFFFF); }
 /* The eye is wider than it is tall. */
 .pane svg[viewBox="0 0 18 13"] { width: 18px; height: 13px; }
 .pane svg[viewBox="0 0 18 14"] { width: 18px; height: 14px; }

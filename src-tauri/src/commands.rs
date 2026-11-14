@@ -2829,10 +2829,7 @@ pub async fn app_diagnostics(player: State<'_, std::sync::Arc<crate::player::Pla
     // readings, and a fresh `System` every second would always report zero.
     let health = player.opened().map(|engine| engine.audio_health()).unwrap_or_default();
     blocking("app_diagnostics", move || {
-        let mut sample = crate::diagnostics::sample_shared();
-        sample.audio_load = health.load;
-        sample.audio_xruns = health.xruns;
-        Ok(sample)
+        Ok(crate::diagnostics::sample_shared().with_audio(health))
     }).await
 }
 

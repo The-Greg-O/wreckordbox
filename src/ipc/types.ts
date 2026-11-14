@@ -249,7 +249,13 @@ export interface LogPage {
 /** What the app is costing, for the title bar's readout. */
 export interface Diagnostics {
   audioLoad: number;
+  /** Callbacks that ran past their deadline: the app was late. */
   audioXruns: number;
+  /** Underruns or overruns the output device reported since the stream
+   * opened: audio actually lost, heard as a click or a gap. */
+  audioUnderruns: number;
+  /** The output's buffered latency, or `null` before a stream has run. */
+  audioLatencyMs: number | null;
   /** Percent of one core, as the OS accounts it. Over 100 on several cores. */
   cpu: number;
   memoryMb: number;
