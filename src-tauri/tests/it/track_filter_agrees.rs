@@ -52,14 +52,14 @@ fn key_of(index: usize) -> &'static str {
     }
 }
 
-struct Window {
+pub(crate) struct Window {
     _dir: tempfile::TempDir,
-    app: tauri::App<MockRuntime>,
-    playlist: String,
-    intelligent: String,
+    pub(crate) app: tauri::App<MockRuntime>,
+    pub(crate) playlist: String,
+    pub(crate) intelligent: String,
 }
 
-fn hosting_window() -> Window {
+pub(crate) fn hosting_window() -> Window {
     let dir = tempfile::tempdir().unwrap();
     let library = dir.path().join("library");
     std::fs::create_dir_all(&library).unwrap();
@@ -167,12 +167,12 @@ fn hosting_window() -> Window {
 }
 
 impl Window {
-    fn state(&self) -> Arc<AppState> {
+    pub(crate) fn state(&self) -> Arc<AppState> {
         Arc::clone(self.app.state::<Arc<AppState>>().inner())
     }
 
     /// The track ids the window's list shows for this `ViewSpec`.
-    fn listed(&self, spec: Value) -> Vec<String> {
+    pub(crate) fn listed(&self, spec: Value) -> Vec<String> {
         let dto: ViewSpecDto = serde_json::from_value(spec).unwrap();
         let library = self.state().library().unwrap();
         let view = library.open_view(&spec_from_wire(&library, &dto));
