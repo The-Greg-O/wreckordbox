@@ -60,7 +60,7 @@
 }
 .small { color: var(--role-text-dim); }
 
-.how { margin: 0; color: var(--role-text-dim); text-align: center; }
+.how { margin: 0; color: var(--role-text-dim); text-align: center; line-height: 1.8; }
 .how kbd {
   font: inherit;
   padding: 0 var(--s-shell-space-2);
