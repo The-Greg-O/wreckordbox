@@ -4019,6 +4019,7 @@ function AppBody() {
             />
           )}
           stick={<StickLoadView devices={devices} selected={selectedDevice?.path ?? null} library={tree} revision={deviceLibraries.revision} panel={selectedDevice ? library : undefined} />}
+          stickHoldsLibrary={selectedDevice !== null}
           library={library}
           libraryTarget={targetList.pane}
           libraryCrumb={libraryCrumb}
