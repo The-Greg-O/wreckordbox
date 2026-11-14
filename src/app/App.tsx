@@ -75,6 +75,7 @@ import { libraryLookFor } from "@/views/shell/libraryFitLook";
 import { SHELL_PLAYER_LAYOUT, ViewShell } from "@/views/shell/ViewShell";
 import { useShellTree } from "@/views/shell/useShellTree";
 import { breadcrumbOf } from "@/lib/shellTreeOverlay";
+import { crumbTally } from "@/lib/crumbTally";
 import { useTargetList } from "@/views/shell/useTargetList";
 import { IntakeView } from "@/views/shell/IntakeView";
 import { useIntakeCounts } from "@/views/shell/useIntakeCounts";
@@ -4023,6 +4024,7 @@ function AppBody() {
           library={library}
           libraryTarget={targetList.pane}
           libraryCrumb={libraryCrumb}
+          libraryTally={crumbTally(listTotals)}
           status={<>{linkStrip}{statusBar}</>}
           topBarEnd={<CommandPaletteButton platform={platform} />}
         />

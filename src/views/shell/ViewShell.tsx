@@ -49,6 +49,8 @@ export const SHELL_PLAYER_LAYOUT: PlayerLayout = "simple";
 export interface ViewShellProps {
   /** The open list's breadcrumb (its folders, then its name), drawn in place of its heading at half width (wbx-45.21). */
   libraryCrumb?: readonly string[] | undefined;
+  /** The open playlist's count and length after the breadcrumb's name ("30 · 2h24m", wbx-6wz). */
+  libraryTally?: string | undefined;
   /** The view in the working area. Held by the window, so it can be asked for from outside the shell. */
   view: ShellView;
   onViewChange: (view: ShellView) => void;
@@ -88,7 +90,7 @@ function tabId(view: ShellView): string {
 }
 
 export function ViewShell({
-  view, onViewChange, tree, player, status, library, libraryTarget, libraryCrumb, topBarEnd, platform, keyOverrides, intakeQueue, stick, stickHoldsLibrary, tabCounts, intake,
+  view, onViewChange, tree, player, status, library, libraryTarget, libraryCrumb, libraryTally, topBarEnd, platform, keyOverrides, intakeQueue, stick, stickHoldsLibrary, tabCounts, intake,
 }: ViewShellProps) {
   const t = useTranslation();
 
@@ -236,7 +238,7 @@ export function ViewShell({
               (`TrackTable`'s `inert`). A selected Stick's panel is the Stick view's instead. */}
           {view === "library" || !(stickHoldsLibrary ?? stick !== undefined) ? (
             <div className={styles.libraryKept} data-kept-hidden={view !== "library" || undefined} inert={view !== "library"} aria-hidden={view !== "library" || undefined}>
-              <LibraryView list={library} target={libraryTarget} crumb={libraryCrumb} />
+              <LibraryView list={library} target={libraryTarget} crumb={libraryCrumb} tally={libraryTally} />
             </div>
           ) : null}
           {view === "intake" ? intake?.(intakeQueue ?? "intake") ?? null : null}
