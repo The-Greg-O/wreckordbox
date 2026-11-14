@@ -37,6 +37,7 @@ mod status;
 mod stems_separate;
 mod stems_write;
 mod stick;
+mod sidecar_on_stick;
 mod stick_library;
 mod stick_load;
 mod tag_schema;

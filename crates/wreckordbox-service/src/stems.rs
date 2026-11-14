@@ -432,6 +432,8 @@ impl Stems {
     }
 
     fn separate(self: &Arc<Self>, found: ParentAudio) -> Result<Separated, ServiceError> {
+        // Before anything is written, the fingerprint's Facts included.
+        crate::sidecar_stick::refuse_background_work(&self.sidecar_dir, "Stem separation")?;
         let fingerprint = fingerprint(found.parent(), found.path())?;
         let (_, marked_stale) = self.before_record(&found, Some(&fingerprint), None)?;
         let parent = found.parent().clone();
