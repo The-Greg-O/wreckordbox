@@ -94,7 +94,11 @@ fn read_ext(bytes: &[u8]) -> Result<(Vec<TagRow>, Vec<(u32, u32)>), String> {
         .into_iter()
         .map(|r| {
             let name_at = usize::from(pdb.u1_at(r, 0x1d));
-            let name = if name_at == 0 { String::new() } else { pdb.string_at(r.offset + name_at) };
+            let name = if name_at == 0 {
+                String::new()
+            } else {
+                pdb.string_at(r.offset + name_at)
+            };
             (
                 pdb.u4_at(r, 0x14),
                 pdb.u4_at(r, 0x10).saturating_add(1),
@@ -180,7 +184,10 @@ fn assemble(rows: Vec<TagRow>, pairs: Vec<(u32, u32)>) -> StickMyTags {
                 name,
                 tags: under
                     .into_iter()
-                    .map(|t| StickTag { id: t.0, name: t.2.clone() })
+                    .map(|t| StickTag {
+                        id: t.0,
+                        name: t.2.clone(),
+                    })
                     .collect(),
             }
         })

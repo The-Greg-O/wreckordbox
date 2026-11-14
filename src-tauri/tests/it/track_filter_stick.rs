@@ -183,6 +183,6 @@ fn the_choices_on_a_stick_playlist_come_from_the_stick() {
     // "Low Sun").
     assert_eq!(keys, ["8A", "Am", "Em", "Mystery"]);
     assert_eq!(values["keys"][1]["count"], 1);
-    // A Stick's library as read carries no MyTags.
+    // This Stick carries no MyTags (a tagged one: track_filter_stick_tags).
     assert_eq!(values["tags"], json!([]));
 }

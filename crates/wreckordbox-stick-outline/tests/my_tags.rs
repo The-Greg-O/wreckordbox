@@ -22,7 +22,12 @@ use wreckordbox_stick_outline::{read, StickMyTags};
 fn names(tags: &StickMyTags) -> Vec<(String, Vec<String>)> {
     tags.categories
         .iter()
-        .map(|c| (c.name.clone(), c.tags.iter().map(|t| t.name.clone()).collect()))
+        .map(|c| {
+            (
+                c.name.clone(),
+                c.tags.iter().map(|t| t.name.clone()).collect(),
+            )
+        })
         .collect()
 }
 
@@ -32,14 +37,25 @@ fn carried(root: &Path, format: Format, tags: &StickMyTags) -> Vec<(String, Vec<
     let label = |id: u32| {
         tags.categories
             .iter()
-            .find_map(|c| c.tags.iter().find(|t| t.id == id).map(|t| format!("{}: {}", c.name, t.name)))
+            .find_map(|c| {
+                c.tags
+                    .iter()
+                    .find(|t| t.id == id)
+                    .map(|t| format!("{}: {}", c.name, t.name))
+            })
             .unwrap_or_else(|| format!("unknown {id}"))
     };
     library
         .tracks
         .iter()
         .map(|t| {
-            let mut held: Vec<String> = tags.tracks.get(&t.id).into_iter().flatten().map(|&id| label(id)).collect();
+            let mut held: Vec<String> = tags
+                .tracks
+                .get(&t.id)
+                .into_iter()
+                .flatten()
+                .map(|&id| label(id))
+                .collect();
             held.sort();
             (t.title.clone(), held)
         })
@@ -63,7 +79,10 @@ fn expected_carried() -> Vec<(String, Vec<String>)> {
 fn expected_names() -> Vec<(String, Vec<String>)> {
     vec![
         ("Vibe".into(), vec!["Dark".into(), "Uplifting".into()]),
-        ("Situation".into(), vec!["Peak".into(), "Warm-up".into(), "Dark".into()]),
+        (
+            "Situation".into(),
+            vec!["Peak".into(), "Warm-up".into(), "Dark".into()],
+        ),
     ]
 }
 
@@ -74,8 +93,16 @@ fn both_libraries_carry_the_sticks_own_categories_tags_and_memberships() {
     let before = snapshot(dest.path());
     for format in [Format::DeviceLibrary, Format::OneLibrary] {
         let tags = read(dest.path(), |stick| stick.my_tags(format)).unwrap();
-        assert_eq!(names(&tags), expected_names(), "{format:?}: categories by Seq, tags by Seq");
-        assert_eq!(carried(dest.path(), format, &tags), expected_carried(), "{format:?}");
+        assert_eq!(
+            names(&tags),
+            expected_names(),
+            "{format:?}: categories by Seq, tags by Seq"
+        );
+        assert_eq!(
+            carried(dest.path(), format, &tags),
+            expected_carried(),
+            "{format:?}"
+        );
     }
     assert_unchanged(dest.path(), &before, "reading a Stick's MyTags");
 }
@@ -100,7 +127,10 @@ fn a_stick_without_tags_has_none_and_a_broken_tag_file_is_an_error() {
     let before = snapshot(dest.path());
     for format in [Format::DeviceLibrary, Format::OneLibrary] {
         let tags = read(dest.path(), |stick| stick.my_tags(format)).unwrap();
-        assert!(tags.categories.is_empty() && tags.tracks.is_empty(), "{format:?}");
+        assert!(
+            tags.categories.is_empty() && tags.tracks.is_empty(),
+            "{format:?}"
+        );
     }
     assert_unchanged(dest.path(), &before, "reading a Stick with no MyTags");
 

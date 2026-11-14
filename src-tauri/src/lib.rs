@@ -39,6 +39,7 @@ mod new_library;
 mod diagnostics;
 mod explorer;
 pub mod device_library;
+mod stick_my_tags;
 mod stick_outline;
 pub mod stick_write_plan;
 pub mod stick_approval;

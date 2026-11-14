@@ -14,6 +14,7 @@ mod stick_protection;
 mod stick_view;
 mod track_filter_agrees;
 mod track_filter_stick;
+mod track_filter_stick_tags;
 mod transport_edge;
 mod upstream_pointers;
 mod window_config;

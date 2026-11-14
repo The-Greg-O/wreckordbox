@@ -41,6 +41,9 @@ pub struct DeviceRow {
     pub has_artwork: bool,
     /// Cues read from this device library when the view was opened.
     pub cues: Vec<Cue>,
+    /// The ids of the Stick's own MyTags the track carries, read beside the
+    /// Stick's library when a filter picks tags (wbx-45.12).
+    pub my_tags: Vec<i32>,
 }
 
 /// The rows a view shows, ordered and searched.
@@ -277,7 +280,8 @@ mod tests {
 
 /// The view shell's Track Filter over a Stick's rows (wbx-57): the fields a
 /// Stick's library carries. Every column given must agree; `None` is no
-/// constraint. Its `MyTags` are not here: the Stick's library as read carries none.
+/// constraint. `MyTags` are the Stick's own (wbx-45.12), picked by category the
+/// way the Library's are, against each row's [`DeviceRow::my_tags`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DeviceFilter {
     /// Key identities, as [`crate::Library::key_ids_identified`] reads them.
@@ -287,12 +291,19 @@ pub struct DeviceFilter {
     /// Colour ids, 1 to 8; 0 is a track with no Prep colour.
     pub colors: Option<Vec<u8>>,
     pub bpm: Option<crate::BpmFilter>,
+    /// One entry per My Tag column with tags picked, resolved against the
+    /// Stick's categories with [`crate::tag_picks_in`]; every one must agree.
+    pub tags: Vec<crate::TagFilter>,
 }
 
 impl DeviceFilter {
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.keys.is_none() && self.ratings.is_none() && self.colors.is_none() && self.bpm.is_none()
+        self.keys.is_none()
+            && self.ratings.is_none()
+            && self.colors.is_none()
+            && self.bpm.is_none()
+            && self.tags.is_empty()
     }
 
     /// Whether a row passes every column given.
@@ -321,13 +332,13 @@ impl DeviceFilter {
                 return false;
             }
         }
-        true
+        self.tags.iter().all(|column| column.admits(&row.my_tags))
     }
 }
 
 /// What a Stick list offers the bar: its keys as stored, in wheel order, and
-/// its whole BPMs, from its own rows. No `MyTag` categories: the Stick's
-/// library as read carries none.
+/// its whole BPMs, from its own rows. Its `MyTag` categories are the caller's
+/// to add: they come from the Stick's tag file, not its rows (wbx-45.12).
 #[must_use]
 pub fn device_filter_values(rows: &[DeviceRow]) -> crate::FilterValues {
     use std::collections::HashMap;
