@@ -38,6 +38,8 @@ export interface AppCost extends Diagnostics {
 const NOTHING: AppCost = {
   audioLoad: 0,
   audioXruns: 0,
+  audioUnderruns: 0,
+  audioLatencyMs: null,
   cpu: 0,
   memoryMb: 0,
   threads: null,
@@ -155,4 +157,9 @@ export function formatPercent(value: number | null): string {
   if (value === null || !Number.isFinite(value)) return "—";
   if (value > 0 && value < 10) return `${value.toFixed(1)}%`;
   return `${Math.round(value)}%`;
+}
+
+/** `197 ms`, or `unknown` before a stream has run: a zero would be a claim. */
+export function formatLatency(ms: number | null): string {
+  return ms === null || !Number.isFinite(ms) || ms <= 0 ? "unknown" : `${Math.round(ms)} ms`;
 }

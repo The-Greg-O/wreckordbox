@@ -9,13 +9,19 @@ use serde::Serialize;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
 /// A reading of this process.
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Default, Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Diagnostics {
     /// Percent of one core, as the OS accounts it. Over 100 on several cores.
     pub cpu: f32,
     pub audio_load: f32,
+    /// Callbacks that ran past their deadline (the app was late).
     pub audio_xruns: u64,
+    /// Underruns or overruns the output device reported since the stream
+    /// opened: audio that was actually lost, heard as a click or a gap.
+    pub audio_underruns: u64,
+    /// The output's buffered latency, or `None` before a stream has run.
+    pub audio_latency_ms: Option<f64>,
     /// Resident memory in mebibytes.
     pub memory_mb: f64,
     /// Threads in the process, or `None` where the platform will not say.
@@ -49,9 +55,23 @@ pub fn sample_shared() -> Diagnostics {
     let Ok(mut held) = SAMPLER.lock() else {
         // A poisoned lock means a previous sample panicked. The readout is not
         // worth propagating that into the window.
-        return Diagnostics { audio_load: 0.0, audio_xruns: 0, cpu: 0.0, memory_mb: 0.0, threads: None, open_files: None, gpu: None };
+        return Diagnostics::default();
     };
     sample(held.get_or_insert_with(System::new_all))
+}
+
+impl Diagnostics {
+    /// This reading with the audio engine's health in it. Reading the health
+    /// is atomic loads only: nothing here touches the audio thread.
+    #[must_use]
+    pub fn with_audio(mut self, health: rbl_deck::AudioHealth) -> Self {
+        self.audio_load = health.load;
+        self.audio_xruns = health.xruns;
+        self.audio_underruns = health.underruns;
+        self.audio_latency_ms =
+            (!health.latency.is_zero()).then_some(health.latency.as_secs_f64() * 1000.0);
+        self
+    }
 }
 
 /// Samples this process into a caller's sampler, which the tests use.
@@ -66,6 +86,8 @@ pub fn sample(system: &mut System) -> Diagnostics {
     Diagnostics {
         audio_load: 0.0,
         audio_xruns: 0,
+        audio_underruns: 0,
+        audio_latency_ms: None,
         cpu: process.map_or(0.0, sysinfo::Process::cpu_usage),
         // A process big enough to lose precision here would be sixteen
         // petabytes of resident memory.
@@ -155,6 +177,31 @@ fn thread_count(_process: Option<&sysinfo::Process>) -> Option<u32> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// The device's own underruns are the audio the DJ actually lost, so they
+    /// reach the readout beside the late callbacks, not only the log.
+    #[test]
+    fn the_device_underruns_and_latency_reach_the_readout() {
+        let health = rbl_deck::AudioHealth {
+            load: 0.25,
+            xruns: 3,
+            underruns: 7,
+            latency: std::time::Duration::from_micros(197_500),
+        };
+        let reading = Diagnostics::default().with_audio(health);
+        assert_eq!(reading.audio_underruns, 7);
+        assert_eq!(reading.audio_xruns, 3);
+        assert!((reading.audio_load - 0.25).abs() < f32::EPSILON);
+        assert_eq!(reading.audio_latency_ms, Some(197.5));
+    }
+
+    /// A stream that has never run has no latency to report: a dash, not a zero.
+    #[test]
+    fn no_stream_means_no_latency_rather_than_none_at_all() {
+        let reading = Diagnostics::default().with_audio(rbl_deck::AudioHealth::default());
+        assert_eq!(reading.audio_underruns, 0);
+        assert_eq!(reading.audio_latency_ms, None);
+    }
 
     #[test]
     fn a_sample_describes_this_process() {
