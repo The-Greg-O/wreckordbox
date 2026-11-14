@@ -217,7 +217,7 @@ pub(crate) fn current_stems_read_only(
         .into_iter()
         // Staleness as the audio says now, not as last stored (wbx-t3p).
         .map(|set| crate::stems_show::as_now(set, Some(&fingerprint)))
-        .find(|set| set.is_current() && set.fingerprint == fingerprint && set.audio_present())?;
+        .find(|set| set.is_current() && fingerprint.matches_stored(&set.fingerprint) && set.audio_present())?;
     if !Role::ALL.iter().all(|role| {
         set.stems
             .iter()
@@ -514,7 +514,7 @@ fn export_checked(
                 ),
             )
         })?;
-        if on_stick != set.fingerprint {
+        if !on_stick.matches_stored(&set.fingerprint) {
             return Err(ServiceError::new(
                 codes::EXPORT_STALE,
                 format!(

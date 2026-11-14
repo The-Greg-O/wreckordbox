@@ -751,7 +751,8 @@ impl Measuring<'_> {
         let Ok(value) = value.with_bars(bars) else {
             return Ok(None);
         };
-        Ok(self.record(parent, fingerprint, &value)?.map(|recorded| {
+        let evidence = fact.fingerprint.as_ref().unwrap_or(fingerprint);
+        Ok(self.record(parent, evidence, &value)?.map(|recorded| {
             changed(self.stems, &parent.id, Some(recorded.id), &[]);
             TrackOutcome {
                 reused_from: Some(fact.id),
@@ -939,7 +940,7 @@ fn realign(
     else {
         return Ok(());
     };
-    let Some(value) = valid(&fact).filter(|_| fact.fingerprint.as_ref() == Some(fingerprint))
+    let Some(value) = valid(&fact).filter(|_| fact.fingerprint.as_ref().is_some_and(|stored| fingerprint.matches_stored(stored)))
     else {
         return Ok(());
     };
@@ -961,7 +962,8 @@ fn realign(
         )
         .map_err(|e| sidecar_error(&e))?;
     crate::fact_hold::about_to_commit("realign");
-    let recorded = record(sidecar, &source, run, parent, fingerprint, &value);
+    let evidence = fact.fingerprint.as_ref().unwrap_or(fingerprint);
+    let recorded = record(sidecar, &source, run, parent, evidence, &value);
     let _ = sidecar.finish_run(
         run,
         if recorded.is_ok() {
@@ -1047,7 +1049,7 @@ fn reusable(
     fingerprint: &Fingerprint,
 ) -> Result<Option<(Fact, Intensity)>, ServiceError> {
     let own = ours(sidecar, track_id)?.into_iter().filter(|fact| {
-        fact.is_live() && !fact.is_stale() && fact.fingerprint.as_ref() == Some(fingerprint)
+        fact.is_live() && !fact.is_stale() && fact.fingerprint.as_ref().is_some_and(|stored| fingerprint.matches_stored(stored))
     });
     let anywhere = sidecar
         .facts_of_audio(fingerprint, INTENSITY.name)

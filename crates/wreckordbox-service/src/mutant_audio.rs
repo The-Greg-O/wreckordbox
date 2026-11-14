@@ -62,7 +62,7 @@ impl Mutants<'_> {
         };
         let matching: Vec<_> = sets
             .into_iter()
-            .filter(|s| s.fingerprint == fingerprint)
+            .filter(|s| fingerprint.matches_stored(&s.fingerprint))
             .collect();
         if matching.is_empty() {
             return Err(ServiceError::new(
