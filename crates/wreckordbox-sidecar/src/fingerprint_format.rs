@@ -22,7 +22,7 @@ pub(crate) fn hash(params: &CodecParameters) -> blake3::Hasher {
     );
     number(&mut h, params.time_base.map(|t| u64::from(t.numer)));
     number(&mut h, params.time_base.map(|t| u64::from(t.denom)));
-    number(&mut h, params.n_frames);
+    // Never hash demuxer duration estimates (CBR MP3 depends on tag size).
     number(&mut h, Some(params.start_ts));
     number(&mut h, params.delay.map(u64::from));
     number(&mut h, params.padding.map(u64::from));
@@ -123,11 +123,6 @@ mod tests {
             },
             {
                 let mut p = base.clone();
-                p.n_frames = Some(128);
-                p
-            },
-            {
-                let mut p = base.clone();
                 p.start_ts = 1;
                 p
             },
@@ -160,6 +155,7 @@ mod tests {
         }
         let mut allocation = base;
         allocation.max_frames_per_packet = Some(8192);
+        allocation.n_frames = Some(123_456);
         assert_eq!(hash(&allocation).finalize(), original);
     }
 }

@@ -185,7 +185,7 @@ fn the_sidecar_records_the_stems_their_parent_its_fingerprint_and_what_made_them
     assert_eq!(stems["samples"], 4_410);
     let fingerprint = stems["fingerprint"].as_str().unwrap();
     assert!(fingerprint.starts_with("a2:"), "{fingerprint}");
-    assert_eq!(fingerprint.len(), 3 + 64 + 1 + 64);
+    assert_eq!(fingerprint.len(), 3 + 64);
     assert_eq!(
         stems["source"],
         serde_json::json!({ "kind": "tool", "name": "separation-engine" })
