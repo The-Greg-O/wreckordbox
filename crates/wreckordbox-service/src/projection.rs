@@ -24,7 +24,8 @@
 //! another revision, and the value is then the DJ's. An empty field nothing
 //! recorded wrote may be filled. Incomplete provenance (an unsettled
 //! intent, an unconfirmed write, an unreadable entry) that could concern a
-//! track is a barrier: its fields are the DJ's. Everything that is not the
+//! track is a barrier: its fields are the DJ's (the DJ may clear one,
+//! `projection_barriers`, after which only its empty fields may be filled). Everything that is not the
 //! projection's is kept and, when a Fact disagrees, reported. Ownership is
 //! checked again under the edit gate: if a track's row or its Ledger
 //! provenance changed since the plan, the whole apply is refused and
@@ -705,13 +706,19 @@ struct One<'a> {
 /// account for came after it. Anything else is the DJ's. No clock is read:
 /// a revision is equal or it is not.
 fn not_owned(one: &One<'_>) -> Option<&'static str> {
-    let barred = |after: i64| {
-        one.barriers
-            .iter()
-            .any(|barrier| barrier.seq > after && barrier.concerns(one.track))
+    // Whether a barrier after `after` could concern the track; with
+    // `cleared`, counting those the DJ cleared too.
+    let barred = |after: i64, cleared: bool| {
+        one.barriers.iter().any(|barrier| {
+            barrier.seq > after
+                && barrier.concerns(one.track)
+                && (cleared || barrier.cleared.is_none())
+        })
     };
+    // An empty field may be filled once the DJ has cleared every barrier
+    // that could concern it (wbx-xme); clearing makes nothing else fillable.
     let empty = || {
-        if barred(0) {
+        if barred(0, false) {
             Some("provenance_incomplete")
         } else {
             None
@@ -737,7 +744,9 @@ fn not_owned(one: &One<'_>) -> Option<&'static str> {
                     mark.fields.get(one.field.column()) == Some(&native_number(&one.native));
                 if !same_revision || !same_value {
                     Some("written_since")
-                } else if barred(mark.seq) {
+                } else if barred(mark.seq, true) {
+                    // Cleared or not: the cleared write may have been made
+                    // after this projection, so the value is the DJ's.
                     Some("provenance_incomplete")
                 } else {
                     None

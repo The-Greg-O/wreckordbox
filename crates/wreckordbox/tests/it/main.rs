@@ -29,6 +29,7 @@ mod mutants;
 mod mutants_follow;
 mod mytag_edits;
 mod projection;
+mod projection_barriers;
 mod run_status;
 mod standing_facts;
 mod status;

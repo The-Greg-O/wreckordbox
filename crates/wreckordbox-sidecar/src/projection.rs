@@ -63,6 +63,10 @@ pub struct Barrier {
     pub seq: i64,
     /// The tracks it could concern; `None` when that cannot be bounded.
     pub tracks: Option<Vec<String>>,
+    /// The Ledger entry in which the DJ cleared it, if they did
+    /// ([`crate::projection_barriers`]). A cleared barrier no longer stops
+    /// an empty field being filled; it makes nothing a projection's.
+    pub cleared: Option<i64>,
 }
 
 impl Barrier {
@@ -171,7 +175,7 @@ fn edits_of(payload: Option<&str>) -> Option<Vec<Value>> {
     payload["edits"].as_array().cloned()
 }
 
-fn barriers(db: &Connection) -> Result<Vec<Barrier>> {
+pub(crate) fn barriers(db: &Connection) -> Result<Vec<Barrier>> {
     let mut found = Vec::new();
     let mut statement = db.prepare_cached(
         "SELECT id, kind, payload, command FROM ledger
@@ -194,11 +198,13 @@ fn barriers(db: &Connection) -> Result<Vec<Barrier>> {
             found.push(Barrier {
                 seq,
                 tracks: tracks_named(command.as_deref()).or_else(recovered),
+                cleared: None,
             });
         } else if edits_of(payload.as_deref()).is_none() {
             found.push(Barrier {
                 seq,
                 tracks: tracks_named(command.as_deref()),
+                cleared: None,
             });
         }
     }
@@ -221,7 +227,12 @@ fn barriers(db: &Connection) -> Result<Vec<Barrier>> {
         found.push(Barrier {
             seq,
             tracks: tracks_named(command.as_deref()).or_else(evidence),
+            cleared: None,
         });
+    }
+    let cleared = crate::projection_barriers::cleared(db)?;
+    for barrier in &mut found {
+        barrier.cleared = cleared.get(&barrier.seq).copied();
     }
     Ok(found)
 }

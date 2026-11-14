@@ -49,3 +49,32 @@ the window takes a whole projection back in one step.
 
 Prep colour Facts name a colour (`Green`); what you have renamed a colour
 label to in rekordbox does not change which colour they mean.
+
+## Barriers: writes wreckordbox cannot account for
+
+If a write to the Library is begun and never confirmed (the service was
+killed in the middle of it, for example during a projection), wreckordbox
+cannot know what it changed. Such a write is a **barrier**: until you clear
+it, Projection fills no empty field it could concern, and replaces no value
+it projected before it. A write that names its tracks bars only those
+tracks; one that names none, such as a crashed `wreckordbox project`, bars
+every track, so nothing is filled at all.
+
+```sh
+wreckordbox projection barriers                       # which write, when, which tracks; writes nothing
+wreckordbox projection acknowledge BARRIER --source dj  # clear one, as your decision
+```
+
+Clearing a barrier is yours alone: it is refused unless it names you
+(`--source dj`), it is recorded in the Ledger as yours, in a Run of its
+own, with the barrier as it was listed, and nothing else ever clears one (a
+dry run, a listing, a projection). A write still in progress cannot be
+cleared. Look at the tracks first: the barrier means some of their values
+may have been written without a record.
+
+**What a cleared barrier allows, exactly:** Projection may fill an empty
+field the barrier concerned, one no recorded write touched. Nothing else
+changes. A value the cleared write may have left has no record, so it is
+yours and is kept; a value a projection wrote before the barrier stays
+yours too, because the cleared write may have changed it afterwards. To
+let Projection manage such a value again, clear the field by hand.
