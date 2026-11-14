@@ -912,9 +912,7 @@ fn show(stems: &Stems, target: Target) -> Result<TrackIntensity, ServiceError> {
             // Alignment is an answer, not a new Fact. measure still records
             // aligned reuse under its Fact hold; reads retain provenance.
             if let Some(value) = aligned {
-                let value = value
-                    .with_bars(&bars)
-                    .map_err(|e| ServiceError::new(codes::INTENSITY_FAILED, e.to_string()))?;
+                let value = value.with_bars(&bars).unwrap_or(value);
                 measurement.value = serde_json::to_value(value)
                     .map_err(|e| ServiceError::new(codes::INTENSITY_FAILED, e.to_string()))?;
             }

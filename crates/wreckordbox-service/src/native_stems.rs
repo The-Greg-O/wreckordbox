@@ -162,6 +162,8 @@ pub(crate) fn answer(
             format!("bad arguments to {}: {e}", request.command),
         )
     })?;
+    // Fact coordination precedes the Library lookup and Stick lock.
+    let _facts = stems.hold_facts();
     let (answer, _) = write_one(
         stems,
         state_dir,
@@ -554,6 +556,12 @@ fn parent_length(audio: &Path) -> Option<u64> {
 /// Before audio goes to a Stick, every Stem file is hashed again and must
 /// be the audio recorded with the set, whatever an earlier look found.
 fn current_stems(stems: &Stems, found: &ParentAudio) -> Result<StemSet, ServiceError> {
+    // This boundary belongs only to the explicit write. Rendering and
+    // previews must never record observations or publish their events.
+    if stems.sidecar_dir().exists() {
+        let fingerprint = stems::fingerprint(found.parent(), found.path())?;
+        stems.before_record(found, Some(&fingerprint), None)?;
+    }
     let (set, _) = current_stems_verified(stems, found)?;
     if !set.audio_verified() {
         return Err(ServiceError::new(

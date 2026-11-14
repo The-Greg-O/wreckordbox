@@ -74,7 +74,7 @@ pub enum FactCommands {
         /// Include stale, unverified and replaced Facts in the full history.
         #[arg(long)]
         all: bool,
-        /// Verify audio and update attachments/staleness. Without this,
+        /// Verify audio and compute staleness without recording changes. Without this,
         /// Measurements are reported as unverified and no audio is read.
         #[arg(long)]
         check_audio: bool,
@@ -467,14 +467,6 @@ fn shown_text(shown: &TrackFacts) -> String {
             text,
             "\nAttachment held for review from track {}: {}.",
             candidate.from_track, candidate.reason
-        );
-    }
-    for attached in &shown.reattached {
-        let _ = write!(
-            text,
-            "\nRe-attached {} Facts from track {} by fingerprint.",
-            attached.fact_ids.len(),
-            attached.from_track
         );
     }
     text

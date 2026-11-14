@@ -242,7 +242,7 @@ fn sweep(s: &Sandbox, id: &str, playlist: &str, tag: &str, populated: bool) {
                 failures.push(format!("{name} {args}: unexpected {e:?}"));
             }
         }
-        let event = watcher.next_event(Duration::from_millis(50)).unwrap();
+        let event = watcher.next_event(Duration::from_millis(150)).unwrap();
         if event.is_some() {
             failures.push(format!("{name}: event {event:?}"));
         }
@@ -410,7 +410,7 @@ fn queries_refuse_unopened_journal_without_recovering_or_tidying() {
         assert_eq!(error.code, "sidecar_failed", "{name}: {error:?}");
         unchanged(&before, &snapshot(&s.sidecar_dir()));
         assert!(watcher
-            .next_event(Duration::from_millis(50))
+            .next_event(Duration::from_millis(150))
             .unwrap()
             .is_none());
     }
@@ -422,4 +422,138 @@ fn backup_list_reads_without_creating_storage() {
     let before = snapshot(&s.state_dir());
     query(&s, || ok(&s, &["backup", "list"]));
     unchanged(&before, &snapshot(&s.state_dir()));
+}
+
+#[test]
+fn intensity_missing_audio_is_unverified_not_replaced() {
+    let s = Sandbox::new();
+    let id = s.import_track("signal.wav", 1);
+    ok(&s, &["intensity", "measure", &id]);
+    std::fs::remove_file(s.path().join("audio/signal.wav")).unwrap();
+    query(&s, || {
+        let shown = s.cli(&["intensity", "show", &id]);
+        assert!(shown.status.success(), "{}", shown.stderr);
+        assert!(
+            shown.stdout.contains("audio unavailable"),
+            "{}",
+            shown.stdout
+        );
+        assert!(!shown.stdout.contains("replaced"), "{}", shown.stdout);
+        Value::Null
+    });
+}
+
+#[test]
+fn intensity_failed_alignment_retains_the_stored_value() {
+    let s = Sandbox::new();
+    let id = s.import_track("signal.wav", 5);
+    ok(&s, &["intensity", "measure", &id]);
+    let shown = ok(&s, &["facts", "show", &id, "--all"]);
+    let original = &shown["facts"][0];
+    let mut value = original["value"].clone();
+    // A finite, valid stored measurement whose cell sum overflows when
+    // aggregated into long bars: retain its already computed time curve.
+    for v in value["cells"]["low_end"].as_array_mut().unwrap() {
+        *v = json!(1e308);
+    }
+    stop(&s);
+    give_beat_grid(&s, &id, 12.0, 0.0, 5.0);
+    {
+        use wreckordbox_sidecar::{fingerprint_file, Kind, NewFact, Sidecar, Source, SourceKind};
+        let store = Sidecar::open(&s.sidecar_dir()).unwrap();
+        let source = Source::new(
+            SourceKind::Tool,
+            original["source"]["name"].as_str().unwrap(),
+        );
+        let run = store
+            .begin_run(&source, "Alignment overflow fixture")
+            .unwrap();
+        let fp = fingerprint_file(&s.path().join("audio/signal.wav")).unwrap();
+        store
+            .record(&NewFact {
+                track_id: &id,
+                fingerprint: Some(&fp),
+                kind: Kind::measurement("intensity"),
+                value: value.clone(),
+                source: &source,
+                confidence: 1.0,
+                run,
+            })
+            .unwrap();
+        store.finish_run(run, "done").unwrap();
+    }
+    s.status();
+    let shown = query(&s, || ok(&s, &["intensity", "show", &id]));
+    assert_eq!(shown["intensity"]["value"], value);
+}
+
+#[test]
+fn reimported_facts_wait_for_a_producer_and_stick_load_has_no_stems_until_then() {
+    let mut s = Sandbox::new();
+    let stick = s.path().join("SPARE");
+    std::fs::create_dir(&stick).unwrap();
+    for marker in [
+        wreckordbox_stick_protection::STAND_IN_MARKER,
+        wreckordbox_stick_protection::SPARE_MARKER,
+    ] {
+        std::fs::write(stick.join(marker), b"").unwrap();
+    }
+    s.sticks = vec![stick.clone()];
+    let id = s.import_track("Track.wav", 1);
+    let made = ok(&s, &["stems", "separate", &id]);
+    let fact = made["stems"]["fact_id"].clone();
+    assert_eq!(s.engine_runs(), 1);
+    stop(&s);
+    let mut next = String::new();
+    let mut playlist = String::new();
+    s.edit(|w| {
+        w.delete_track(&id).unwrap();
+        next = w.import_file(&s.path().join("audio/Track.wav")).unwrap();
+        playlist = w.create_playlist("Re-imported", "root").unwrap();
+        w.add_tracks(&playlist, std::slice::from_ref(&next))
+            .unwrap();
+    });
+    assert_ne!(id, next);
+    s.status();
+    let facts = query(&s, || {
+        ok(&s, &["facts", "show", &next, "--check-audio", "--all"])
+    });
+    assert_eq!(facts["facts"], json!([]));
+    let stems = query(&s, || ok(&s, &["stems", "show", &next]));
+    assert!(stems["stems"].is_null());
+    let path = stick.to_str().unwrap();
+    let before = snapshot(&stick);
+    let dry = query(&s, || ok(&s, &["stick", "dry-run", path, &playlist]));
+    assert_eq!(dry["changes"]["native_stems"], json!([]));
+    unchanged(&before, &snapshot(&stick));
+    // A load still exports ordinary audio; it must not attach or load the
+    // removed track's Stems. The DJ authorizes this temporary Spare stick.
+    ok(&s, &["stick", "unlock", path]);
+    let dry = ok(&s, &["stick", "dry-run", path, &playlist]);
+    let before = snapshot(&s.sidecar_dir());
+    let loaded = ok(
+        &s,
+        &[
+            "stick",
+            "load",
+            path,
+            &playlist,
+            "--plan",
+            dry["plan"].as_str().unwrap(),
+        ],
+    );
+    assert_eq!(loaded["native_stems"], json!([]));
+    assert!(!stick.join("STEMS").exists());
+    unchanged(&before, &snapshot(&s.sidecar_dir()));
+    let reused = ok(&s, &["stems", "separate", &next]);
+    assert_eq!(reused["reused"], true);
+    assert_eq!(reused["stems"]["fact_id"], fact);
+    assert_eq!(s.engine_runs(), 1);
+    let facts = query(&s, || {
+        ok(&s, &["facts", "show", &next, "--check-audio", "--all"])
+    });
+    assert_eq!(facts["facts"][0]["id"], fact);
+    assert_eq!(facts["facts"][0]["track_id"], next);
+    let dry = query(&s, || ok(&s, &["stick", "dry-run", path, &playlist]));
+    assert_eq!(dry["changes"]["native_stems"].as_array().unwrap().len(), 1);
 }
