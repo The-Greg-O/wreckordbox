@@ -14,7 +14,7 @@ pub(super) fn set(state: &AppState, track: &str, on: bool) -> AppResult<Option<C
     if super::database_locked(&state.location()?, track)? == on {
         return Ok(None);
     }
-    let (_, change) = state
+    let ((), change) = state
         .core()
         .asserting_edit(
             state,
