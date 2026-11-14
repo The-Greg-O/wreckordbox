@@ -9,7 +9,6 @@
 //! wait is bounded; a holder that never lets go is named in the error.
 
 use std::fs::File;
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -148,7 +147,7 @@ impl Holder {
             .iter()
             .map(PathBuf::as_path)
             .chain(std::iter::once(ours))
-            .any(|socket| UnixStream::connect(socket).is_ok())
+            .any(listening)
     }
 
     fn pid_text(&self) -> String {
@@ -158,3 +157,31 @@ impl Holder {
             .unwrap_or_default()
     }
 }
+
+/// Whether something listens on `socket`, without ever blocking: a
+/// connection queued, or refused only because the listener's backlog is
+/// full (a live holder that is not accepting, wbx-1.2 review), means a
+/// live listener. A blocking connect would wait for that backlog with no
+/// bound at all.
+fn listening(socket: &Path) -> bool {
+    use socket2::{Domain, SockAddr, Socket, Type};
+    let Ok(address) = SockAddr::unix(socket) else {
+        return false;
+    };
+    let Ok(probe) = Socket::new(Domain::UNIX, Type::STREAM, None) else {
+        return false;
+    };
+    if probe.set_nonblocking(true).is_err() {
+        return false;
+    }
+    match probe.connect(&address) {
+        Ok(()) => true,
+        Err(error) => {
+            error.kind() == std::io::ErrorKind::WouldBlock
+                || error.raw_os_error() == Some(EINPROGRESS)
+        }
+    }
+}
+
+/// `connect(2)` on a non-blocking socket that will finish later (Linux).
+const EINPROGRESS: i32 = 115;

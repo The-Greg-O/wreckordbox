@@ -154,6 +154,10 @@ fn a_service_that_never_lets_go_is_named_in_the_failure() {
     assert!(message.contains(&format!("pid {old}")), "{message}");
     assert!(message.contains("did not let go"), "{message}");
     assert!(
+        waited >= Duration::from_secs(1),
+        "the configured wait was waited: {waited:?}"
+    );
+    assert!(
         waited < Duration::from_secs(8),
         "bounded by the wait: {waited:?}"
     );
@@ -163,6 +167,15 @@ fn a_service_that_never_lets_go_is_named_in_the_failure() {
 fn a_live_service_is_still_refused_at_once_and_keeps_the_library() {
     let sandbox = Sandbox::new();
     let running = sandbox.status();
+
+    // A client connects to it at once.
+    let started = Instant::now();
+    assert_eq!(sandbox.status()["pid"], running["pid"]);
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "a client connects at once: {:?}",
+        started.elapsed()
+    );
 
     let started = Instant::now();
     let second = sandbox.run(sandbox.command().env(RELEASE_WAIT_ENV, "30").arg("serve"));
@@ -179,4 +192,90 @@ fn a_live_service_is_still_refused_at_once_and_keeps_the_library() {
         started.elapsed()
     );
     assert_eq!(sandbox.status()["pid"], running["pid"]);
+}
+
+/// A holder that keeps its lock and its listening socket but never accepts
+/// (paused, or stuck), with its accept backlog full: a second `serve` must
+/// not wait on it past its bound. It is a live listener, so the answer is
+/// the refusal it always was, at once.
+#[test]
+fn a_holder_whose_socket_never_accepts_does_not_hold_up_a_second_serve() {
+    use socket2::{Domain, SockAddr, Socket, Type};
+
+    let sandbox = Sandbox::new();
+    let socket = sandbox.config().socket_path(sandbox.location());
+    std::fs::create_dir_all(sandbox.runtime_dir()).unwrap();
+
+    // The holder: the Library's lock, with the note a service writes.
+    let lock = std::fs::File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(
+            sandbox
+                .master_db()
+                .with_file_name(".wreckordbox-service.lock"),
+        )
+        .unwrap();
+    lock.try_lock().unwrap();
+    std::fs::write(
+        sandbox
+            .master_db()
+            .with_file_name(".wreckordbox-service.lock"),
+        format!("{}\n{}\n", std::process::id(), socket.display()),
+    )
+    .unwrap();
+    let listener = Socket::new(Domain::UNIX, Type::STREAM, None).unwrap();
+    listener.bind(&SockAddr::unix(&socket).unwrap()).unwrap();
+    listener.listen(0).unwrap();
+    // Fill the backlog: connect without blocking until it is refused.
+    let mut pending = Vec::new();
+    loop {
+        let client = Socket::new(Domain::UNIX, Type::STREAM, None).unwrap();
+        client.set_nonblocking(true).unwrap();
+        match client.connect(&SockAddr::unix(&socket).unwrap()) {
+            Ok(()) => pending.push(client),
+            Err(_) => break,
+        }
+        assert!(pending.len() < 10_000, "the backlog never filled");
+    }
+
+    let started = Instant::now();
+    let mut serve = sandbox
+        .command()
+        .env(RELEASE_WAIT_ENV, "2")
+        .arg("serve")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    // Its own watchdog: a hang fails here instead of hanging the suite.
+    let watchdog = Duration::from_secs(15);
+    while serve.try_wait().unwrap().is_none() {
+        if started.elapsed() > watchdog {
+            let _ = serve.kill();
+            let _ = serve.wait();
+            panic!("serve was still waiting after {watchdog:?}, past its 2 s bound");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let waited = started.elapsed();
+    let run = finished(serve);
+
+    assert_eq!(run.status.code(), Some(1), "{}", run.stdout);
+    assert!(run.stderr.contains("already running"), "{}", run.stderr);
+    assert!(
+        run.stderr.contains(&format!("pid {}", std::process::id())),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        waited < Duration::from_secs(2),
+        "a live listener is refused at once: {waited:?}"
+    );
+    // Nothing was taken from the holder or removed.
+    assert!(!library_released(sandbox.master_db()));
+    assert!(socket.exists());
+    drop((pending, listener, lock));
 }
