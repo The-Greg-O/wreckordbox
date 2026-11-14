@@ -2208,6 +2208,8 @@ export const Player = memo(function Player({
       return true;
     },
     playPause: live(() => togglePlay()),
+    // Listen in the Review view (wbx-74): a load then play, never a pause.
+    deckPlayIfStopped: live(() => { if (!playback.playing && !playback.wantsPlaying()) togglePlay(); }),
     // Pressed, not tapped. CUE is a held control on the hardware and in
     // rekordbox: on the cue point it plays for as long as it is down and snaps
     // back when it comes up, which is how a preview works. Doing both on the
