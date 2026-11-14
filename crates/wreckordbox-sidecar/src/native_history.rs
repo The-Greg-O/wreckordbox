@@ -67,9 +67,23 @@ fn row(db: &rusqlite::Connection, table: Table, id: i64) -> Result<Value> {
     })?)
 }
 pub(crate) fn record(tx: &Transaction<'_>, table: Table, id: i64) -> Result<()> {
-    capture(tx, table, id, false)
+    capture(tx, table, id, false, None)
 }
-fn capture(tx: &Transaction<'_>, table: Table, id: i64, historical: bool) -> Result<()> {
+pub(crate) fn record_as(
+    tx: &Transaction<'_>,
+    table: Table,
+    id: i64,
+    source: &Source,
+) -> Result<()> {
+    capture(tx, table, id, false, Some(source))
+}
+fn capture(
+    tx: &Transaction<'_>,
+    table: Table,
+    id: i64,
+    historical: bool,
+    declared: Option<&Source>,
+) -> Result<()> {
     let row = row(tx, table, id)?;
     if let Some(run) = row["run_id"].as_i64() {
         let (source, at, label) = match table {
@@ -85,15 +99,13 @@ fn capture(tx: &Transaction<'_>, table: Table, id: i64, historical: bool) -> Res
                     row["mutant_id"]
                 ),
             ),
-            Table::Decision => {
-                let run = crate::store::run_in(tx, RunId(run))?
-                    .ok_or(crate::SidecarError::NoRun(RunId(run)))?;
-                (
-                    run.source,
-                    row["created_at"].as_i64().unwrap_or(0),
-                    format!("Ask Decision: {}", row["question"].as_str().unwrap_or("")),
-                )
-            }
+            Table::Decision => (
+                declared
+                    .cloned()
+                    .unwrap_or_else(|| Source::new(SourceKind::Tool, "legacy-decision-unknown")),
+                row["created_at"].as_i64().unwrap_or(0),
+                format!("Ask Decision: {}", row["question"].as_str().unwrap_or("")),
+            ),
             Table::Answer => (
                 Source::new(
                     SourceKind::from_stored(row["decider_kind"].as_str().unwrap_or("tool")),
@@ -149,7 +161,7 @@ pub(crate) fn catch_up(db: &mut rusqlite::Connection) -> Result<()> {
                 break;
             }
             for id in ids {
-                capture(&tx, table, id, true)?;
+                capture(&tx, table, id, true, None)?;
             }
             tx.commit()?;
         }

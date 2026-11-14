@@ -294,6 +294,7 @@ struct Session {
     begun: AtomicBool,
     spill: std::path::PathBuf,
     lease: Mutex<Option<super::spill_lease::Lease>>,
+    lease_error: Option<String>,
 }
 pub(super) fn make(keeper: &Keeper, kind: Kind) -> Arc<dyn Recorder> {
     let (kind, description, source) = match kind {
@@ -331,6 +332,10 @@ pub(super) fn make(keeper: &Keeper, kind: Kind) -> Arc<dyn Recorder> {
         .bulk_recovery_dir()
         .join("ledger-bulk")
         .join(format!("{}-{}-{serial}", super::now(), std::process::id()));
+    let (lease, lease_error) = match super::spill_lease::Lease::take(&spill) {
+        Ok(lease) => (Some(lease), None),
+        Err(error) => (None, Some(error)),
+    };
     Arc::new(Handle(Arc::new(Session {
         owner: Arc::as_ptr(&keeper.stems) as usize,
         keeper: keeper.weak.clone(),
@@ -343,7 +348,8 @@ pub(super) fn make(keeper: &Keeper, kind: Kind) -> Arc<dyn Recorder> {
         left: Condvar::new(),
         faults: super::Faults::from_env(),
         begun: AtomicBool::new(false),
-        lease: Mutex::new(super::spill_lease::Lease::take(&spill).ok()),
+        lease: Mutex::new(lease),
+        lease_error,
         spill,
     })))
 }
@@ -370,6 +376,9 @@ impl Session {
         state.warning = Some(message);
     }
     fn begin(&self) -> Result<(), String> {
+        if let Some(error) = &self.lease_error {
+            return Err(error.clone());
+        }
         let keeper = self.keeper.upgrade().ok_or("wreckordbox has stopped")?;
         if keeper.stopping.load(Ordering::Acquire) {
             return Err("wreckordbox is stopping".into());
@@ -530,12 +539,13 @@ impl Session {
             );
         }
         if !self.begun.load(Ordering::Acquire) {
+            state.warning.clone_from(&self.lease_error);
             state.ended = true;
             self.lease
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take();
-            return None;
+            return state.warning.clone();
         }
         self.flush(&mut state);
         let unspilled = std::mem::take(&mut state.unspilled);

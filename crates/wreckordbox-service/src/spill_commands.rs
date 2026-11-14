@@ -5,13 +5,10 @@ use crate::{
     protocol::{codes, Request, ServiceError},
     stems::Stems,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::{Component, Path, PathBuf};
-use wreckordbox_sidecar::{
-    ledger::{Action, NewEntry, Store},
-    RunId, Sidecar, Source, SourceKind,
-};
+use wreckordbox_sidecar::SourceKind;
 
 pub(super) fn answers(command: &str) -> bool {
     matches!(
@@ -103,7 +100,7 @@ pub(super) fn inventory(root: &Path, offset: usize, limit: usize) -> Result<Valu
         json!({"spills":spills,"total":total,"offset":offset,"next_offset":super::next_offset(offset,spills.len(),total)}),
     )
 }
-fn inspect(dir: &Path, offset: usize, limit: usize) -> Result<Value, String> {
+pub(super) fn inspect(dir: &Path, offset: usize, limit: usize) -> Result<Value, String> {
     validate_directory(dir)?;
     let (manifest, error) = match spill::header(dir) {
         Ok(spill::Header::Ready(m)) => (Some(m), None),
@@ -213,31 +210,8 @@ pub(super) fn answer(
                     "Analysis and player writes must retain their original tool source",
                 ));
             }
-            if let Some(intent) = manifest.intent {
-                if let Some(original) = sidecar
-                    .open_intents()
-                    .map_err(failed)?
-                    .into_iter()
-                    .find(|i| i.id == intent)
-                {
-                    if original.source != manifest.source
-                        || original.run.is_some_and(|r| Some(r) != manifest.run)
-                    {
-                        return Err(bad(
-                            "The recovery manifest does not match its original intent",
-                        ));
-                    }
-                }
-            }
-            if let Some(run) = manifest.run {
-                let original = sidecar
-                    .run(run)
-                    .map_err(failed)?
-                    .ok_or_else(|| bad("The original Run does not exist"))?;
-                if original.source != manifest.source {
-                    return Err(bad("The original Run's source does not match"));
-                }
-            }
+            super::spill_manifest::validate(&sidecar, &manifest).map_err(bad)?;
+            super::spill_manifest::preserve_corrupt(&dir).map_err(failed)?;
             manifest.complete = true;
             spill::write(&dir.join("manifest.json"), &manifest).map_err(failed)?;
         }
@@ -255,7 +229,7 @@ pub(super) fn answer(
                 .as_ref()
                 .ok_or_else(|| bad("An explicit DJ source is required"))?,
         )?;
-        discard(&dir, &sidecar, id, reason, &source).map_err(failed)?
+        super::spill_discard::discard(&dir, &sidecar, id, reason, &source).map_err(failed)?
     };
     // State ownership is short; no Keeper mutex spans disk or Sidecar I/O.
     let mut state = keeper.state();
@@ -269,89 +243,6 @@ pub(super) fn answer(
     }
     Ok(answer)
 }
-#[derive(Serialize, Deserialize)]
-struct Receipt {
-    source: Source,
-    id: i64,
-    run: RunId,
-    at: i64,
-    payload: Value,
-}
-fn discard(
-    dir: &Path,
-    sidecar: &Sidecar,
-    id: &str,
-    reason: &str,
-    source: &Source,
-) -> Result<Value, String> {
-    let marker = dir.join("discard.json");
-    let receipt: Receipt = if marker.exists() {
-        spill::read(&marker)?
-    } else {
-        let run = sidecar
-            .begin_owned_run(source, "Discard accepted-write Ledger spill")
-            .map_err(|e| e.to_string())?;
-        let ids = sidecar
-            .reserve_bulk_ids(&mut wreckordbox_sidecar::bulk::OrderLease::default(), 1)
-            .map_err(|e| e.to_string())?;
-        let receipt = Receipt {
-            source: source.clone(),
-            id: ids[0],
-            run,
-            at: super::now(),
-            payload: json!({"spill":id,"reason":reason,"discarded":inspect(dir,0,0)?}),
-        };
-        spill::write(&marker, &receipt)?;
-        receipt
-    };
-    if receipt.source.kind != SourceKind::Dj {
-        return Err("A discard receipt must retain the explicit DJ source".into());
-    }
-    let command =
-        json!({"name":SPILLS_DISCARD,"args":{"id":id,"reason":receipt.payload["reason"]}});
-    sidecar
-        .append(&NewEntry {
-            id: Some(receipt.id),
-            run: receipt.run,
-            store: Store::Sidecar,
-            source: &receipt.source,
-            at: Some(receipt.at),
-            action: Action::Write,
-            kind: "ledger_spill_discard",
-            label: "Discard accepted-write Ledger records",
-            command: Some(&command),
-            reverses: None,
-            part_of: None,
-            reversible: false,
-            format: 1,
-            payload: Some(&receipt.payload),
-        })
-        .map_err(|e| e.to_string())?;
-    sidecar
-        .finish_run(receipt.run, "explicitly discarded by the DJ")
-        .map_err(|e| e.to_string())?;
-    // The durable receipt remains until all accepted records have been removed.
-    for path in spill::files(dir)? {
-        if path != marker {
-            std::fs::remove_file(path).map_err(|e| e.to_string())?;
-        }
-    }
-    std::fs::File::open(dir)
-        .and_then(|f| f.sync_all())
-        .map_err(|e| e.to_string())?;
-    std::fs::remove_file(marker).map_err(|e| e.to_string())?;
-    std::fs::File::open(dir)
-        .and_then(|f| f.sync_all())
-        .map_err(|e| e.to_string())?;
-    std::fs::remove_dir(dir).map_err(|e| e.to_string())?;
-    if let Some(parent) = dir.parent() {
-        std::fs::File::open(parent)
-            .and_then(|f| f.sync_all())
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(json!({"id":id,"discarded":true,"entry":receipt.id,"run":receipt.run}))
-}
-
 /// In-memory append failures are accepted writes too. Copy only this page while
 /// owning state; inspection neither settles the intent nor writes the spill.
 pub(super) fn include_ordinary(

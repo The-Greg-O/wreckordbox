@@ -89,6 +89,10 @@
 //! the edit gate or the history, and never calls a host or sends an
 //! event.
 
+#[path = "spill_manifest.rs"]
+mod spill_manifest;
+#[path = "spill_discard.rs"]
+mod spill_discard;
 #[path = "spill_commands.rs"]
 mod spill_commands;
 #[path = "spill_lease.rs"]
@@ -1143,6 +1147,7 @@ struct Faults {
     /// after its changes (if any) and after its write was told (wbx-26).
     abort_before_assert: bool,
     fail_append: AtomicUsize,
+    fail_lease: bool,
     abort_in_replay: bool,
     delay_after_begin: Option<Duration>,
     hold_after_begin: Option<std::path::PathBuf>,
@@ -1173,6 +1178,7 @@ impl Faults {
                 "fail_append" => {
                     faults.fail_append = AtomicUsize::new(usize::try_from(number).unwrap_or(1));
                 }
+                "fail_lease" => faults.fail_lease = true,
                 "abort_in_replay" => faults.abort_in_replay = true,
                 "hold_after_begin" => {
                     faults.hold_after_begin = Some(std::path::PathBuf::from(value));

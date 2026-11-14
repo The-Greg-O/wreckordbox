@@ -8,6 +8,9 @@ static BUSY: LazyLock<Mutex<HashSet<PathBuf>>> = LazyLock::new(|| Mutex::new(Has
 pub(super) struct Lease(PathBuf);
 impl Lease {
     pub(super) fn take(path: &Path) -> Result<Self, String> {
+        if super::Faults::from_env().fail_lease {
+            return Err("Fixture bulk session lease failure".into());
+        }
         if !BUSY
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

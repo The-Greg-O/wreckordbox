@@ -299,6 +299,15 @@ impl Sidecar {
     /// Records a Decision to be answered. It is pending until
     /// [`answer_decision`](Self::answer_decision) is called for it.
     pub fn create_decision(&self, new: &NewDecision) -> Result<Decision> {
+        self.create_question(new, None)
+    }
+
+    /// Attribute a newly asked question independently of its Run's owner.
+    /// Without a Run, create its own completed Run in the same transaction.
+    pub fn create_decision_as(&self, new: &NewDecision, source: &Source) -> Result<Decision> {
+        self.create_question(new, Some(source))
+    }
+    fn create_question(&self, new: &NewDecision, source: Option<&Source>) -> Result<Decision> {
         if new.question.trim().is_empty() {
             return Err(SidecarError::Decision(
                 "a Decision needs a question".to_owned(),
@@ -324,6 +333,21 @@ impl Sidecar {
         let candidates = candidates_of(new.question_type, new.candidates)?;
         let mut owned = self.db();
         let db = owned.transaction()?;
+        let mut run = new.run;
+        if let Some(source) = source {
+            if let Some(id) = run {
+                let existing_run = crate::store::run_in(&db, id)?.ok_or(SidecarError::NoRun(id))?;
+                if existing_run.source.kind == SourceKind::Dj && source.kind != SourceKind::Dj {
+                    return Err(SidecarError::Invalid(
+                        "An agent or tool cannot ask a Decision in the DJ's Run".into(),
+                    ));
+                }
+            } else {
+                let at = now();
+                db.execute("INSERT INTO run(source_kind,source_name,description,started_at,finished_at,outcome) VALUES (?1,?2,'Ask Decision',?3,?3,'question recorded')",params![source.kind.as_str(),source.name,at])?;
+                run = Some(RunId(db.last_insert_rowid()));
+            }
+        }
         db.execute(
             "INSERT INTO decision (question_type, question, context, candidates, track_id, run_id, created_at, topic)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -333,13 +357,22 @@ impl Sidecar {
                 new.context.to_string(),
                 serde_json::to_string(&candidates).unwrap_or_default(),
                 new.track_id,
-                new.run.map(|run| run.0),
+                run.map(|run| run.0),
                 now(),
                 new.topic,
             ],
         )?;
         let id = db.last_insert_rowid();
-        crate::native_history::record(&db, crate::native_history::Table::Decision, id)?;
+        if let Some(source) = source {
+            crate::native_history::record_as(
+                &db,
+                crate::native_history::Table::Decision,
+                id,
+                source,
+            )?;
+        } else {
+            crate::native_history::record(&db, crate::native_history::Table::Decision, id)?;
+        }
         let decision = read_decision(&db, id)?.ok_or(SidecarError::NoDecision(id))?;
         db.commit()?;
         Ok(decision)

@@ -20,7 +20,7 @@ fn a_normal_binary_ignores_test_fault_environment() {
     let output = command
         .env(
             "WRECKORDBOX_LEDGER_FAULTS",
-            "abort_after_write,fail_append=999",
+            "abort_after_write,fail_append=999,fail_lease",
         )
         .args(["--json", "tracks", "rate", "10003", "4"])
         .output()

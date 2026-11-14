@@ -24,6 +24,11 @@ fn legacy_mutant_and_decision_history_is_visible_once_in_its_original_run() {
         "the Decision must be visible beside the Run's two Facts"
     );
     assert_eq!(decisions[2].kind, "decision");
+    assert_eq!(decisions[2].source.name, "legacy-decision-unknown");
+    assert_eq!(
+        decisions[2].source.kind,
+        wreckordbox_sidecar::SourceKind::Tool
+    );
     assert_eq!(
         decisions[2].payload.as_ref().unwrap()["row"]["question"],
         "Genre?"
@@ -71,15 +76,18 @@ fn mixed_new_history_uses_one_order_and_counts_each_native_change_once() {
         })
         .unwrap();
     let d = sidecar
-        .create_decision(&NewDecision {
-            question_type: QuestionType::YesNo,
-            question: "Keep?",
-            topic: None,
-            context: &serde_json::json!({}),
-            candidates: &[],
-            track_id: Some("3"),
-            run: Some(run),
-        })
+        .create_decision_as(
+            &NewDecision {
+                question_type: QuestionType::YesNo,
+                question: "Keep?",
+                topic: None,
+                context: &serde_json::json!({}),
+                candidates: &[],
+                track_id: Some("3"),
+                run: Some(run),
+            },
+            &source,
+        )
         .unwrap();
     sidecar
         .answer_decision(&NewAnswer {
