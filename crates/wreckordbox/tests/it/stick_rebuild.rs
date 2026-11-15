@@ -52,7 +52,7 @@ struct StickTrack {
     tags: &'static [u64],
 }
 
-const TRACKS: [StickTrack; 6] = [
+const TRACKS: [StickTrack; 7] = [
     StickTrack {
         title: "Low Sun",
         tenths: 10,
@@ -100,6 +100,14 @@ const TRACKS: [StickTrack; 6] = [
         colour: 5,
         comment: "",
         tags: &[22],
+    },
+    StickTrack {
+        title: "Lost",
+        tenths: 22,
+        rating: 1,
+        colour: 0,
+        comment: "",
+        tags: &[],
     },
 ];
 
@@ -185,7 +193,13 @@ impl Rig {
 
         let mut tracks = Vec::new();
         for (at, t) in TRACKS.iter().enumerate() {
-            let file = source.join(format!("{}.wav", t.title));
+            // rekordbox shortened one name on the Stick.
+            let stem = if t.title == "Paper" {
+                "Paper (Original Mi"
+            } else {
+                t.title
+            };
+            let file = source.join(format!("{stem}.wav"));
             write_wav(&file, t.tenths);
             tracks.push(rbl_export::SourceTrack {
                 id: 500 + at as u64,
@@ -249,17 +263,25 @@ impl Rig {
         )
         .unwrap();
 
-        // The music folder: the same files, except that "Kiln" is there
-        // twice at one size, "Odd" only at another size and "Gone" not at all.
+        // The music folder: the same files, except that "Paper" has its
+        // whole name, "Kiln" is there twice at one size, "Odd" only at
+        // another size (retagged), "Gone" not at all but another file has
+        // its size, and "Lost" nothing. A macOS AppleDouble file beside
+        // "Low Sun" has its size too, and is not audio.
         for t in &TRACKS {
             match t.title {
-                "Gone" => {}
+                "Lost" => {}
+                "Gone" => write_wav(&music.join("Stranger.wav"), t.tenths),
+                "Paper" => write_wav(&music.join("Paper (Original Mix).wav"), t.tenths),
                 "Odd" => write_wav(&music.join("Odd.wav"), t.tenths + 3),
                 "Kiln" => {
                     write_wav(&music.join("a/Kiln.wav"), t.tenths);
                     write_wav(&music.join("b/kiln.WAV"), t.tenths);
                 }
-                "Low Sun" => write_wav(&music.join("Albums/Low Sun.wav"), t.tenths),
+                "Low Sun" => {
+                    write_wav(&music.join("Albums/Low Sun.wav"), t.tenths);
+                    write_wav(&music.join("Albums/._Low Sun.wav"), t.tenths);
+                }
                 _ => write_wav(&music.join(format!("{}.wav", t.title)), t.tenths),
             }
         }
@@ -450,9 +472,10 @@ fn a_dry_run_lists_what_would_be_carried_and_writes_nothing_anywhere() {
         .collect();
     assert_eq!(
         unmatched.keys().collect::<Vec<_>>(),
-        ["Gone", "Kiln", "Odd"]
+        ["Gone", "Kiln", "Lost", "Odd"]
     );
-    assert_eq!(unmatched["Gone"]["reason"], "no_file");
+    assert_eq!(unmatched["Lost"]["reason"], "no_file");
+    assert_eq!(unmatched["Gone"]["reason"], "name_disagrees");
     assert_eq!(unmatched["Kiln"]["reason"], "ambiguous");
     assert_eq!(unmatched["Kiln"]["candidates"].as_array().unwrap().len(), 2);
     assert_eq!(unmatched["Odd"]["reason"], "different_size");
@@ -600,7 +623,7 @@ fn applying_links_the_tracks_carries_their_values_and_rebuilds_the_playlists_in_
     let collection = rig.collection();
     assert_eq!(
         collection.keys().collect::<Vec<_>>(),
-        ["Echo", "Low Sun", "Paper"],
+        ["Echo", "Low Sun", "Paper (Original Mix)"],
         "only matched tracks, Echo once"
     );
     let low_sun = &collection["Low Sun"];
@@ -618,7 +641,7 @@ fn applying_links_the_tracks_carries_their_values_and_rebuilds_the_playlists_in_
         [("Situation", "Peak"), ("Vibe", "Dark")].map(|(c, t)| (c.to_owned(), t.to_owned()))
     );
     assert_eq!(
-        tags_of(&collection["Paper"]),
+        tags_of(&collection["Paper (Original Mix)"]),
         [("Mood", "Calm"), ("Situation", "Dark")].map(|(c, t)| (c.to_owned(), t.to_owned())),
         "made in their categories"
     );
@@ -655,7 +678,7 @@ fn applying_links_the_tracks_carries_their_values_and_rebuilds_the_playlists_in_
             (1, "Warm Up".to_owned(), "playlist".to_owned()),
         ]
     );
-    assert_eq!(rig.titles_in("Friday"), ["Low Sun", "Paper"]);
+    assert_eq!(rig.titles_in("Friday"), ["Low Sun", "Paper (Original Mix)"]);
     assert_eq!(rig.titles_in("Warm Up"), ["Echo", "Low Sun"]);
 
     // Cues, loops and the grid came with the Stick's analysis files.
@@ -745,7 +768,7 @@ fn applying_links_the_tracks_carries_their_values_and_rebuilds_the_playlists_in_
     assert_eq!(actions, ["reuse", "replace", "replace"]);
     assert_eq!(rig.collection().len(), 3);
     assert_eq!(rig.tree().len(), 3);
-    assert_eq!(rig.titles_in("Friday"), ["Low Sun", "Paper"]);
+    assert_eq!(rig.titles_in("Friday"), ["Low Sun", "Paper (Original Mix)"]);
 }
 
 #[test]
@@ -832,4 +855,27 @@ fn a_folder_that_is_not_a_stick_is_reported_and_nothing_is_written() {
         run.stderr
     );
     assert_eq!(rig.collection().len(), 1);
+}
+
+#[test]
+fn a_retagged_file_is_linked_by_its_name_only_when_accepted() {
+    let rig = Rig::new();
+    let applied = rig.rebuilt(&["--accept-retagged"]);
+    let odd = applied["matched"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["title"] == "Odd")
+        .unwrap_or_else(|| panic!("Odd linked: {applied}"));
+    assert_eq!(odd["retagged"], true);
+    assert_eq!(odd["file"], rig.music.join("Odd.wav").to_str().unwrap());
+    let unmatched: Vec<&str> = applied["unmatched"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["title"].as_str().unwrap())
+        .collect();
+    assert!(!unmatched.contains(&"Odd"), "{unmatched:?}");
+    assert!(rig.collection().contains_key("Odd"));
+    assert_eq!(rig.titles_in("Warm Up"), ["Echo", "Odd", "Low Sun"]);
 }

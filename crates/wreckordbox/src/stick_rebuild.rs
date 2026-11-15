@@ -17,9 +17,11 @@ pub enum LibraryCommands {
     /// each matched track's rating, colour, comment and MyTags, linking
     /// each track to its file in the music folder.
     ///
-    /// A track is matched by its file name and the size of its copy on the
-    /// Stick; one with no file, several, or one of another size is reported
-    /// by name and left out. A track already in the Library at that file is
+    /// A track is matched by the size of its copy on the Stick, the start of
+    /// the file's name agreeing (rekordbox shortens names on a Stick). One
+    /// with no file, several, or a size match whose name does not agree is
+    /// reported by name and left out; one whose file has its name but
+    /// another size is linked only with `--accept-retagged`. A track already in the Library at that file is
     /// not added again; the Stick's values replace its own. Applying is one
     /// import Run, refused while Library Protection is on.
     RebuildFromStick(RebuildArgs),
@@ -35,6 +37,10 @@ pub struct RebuildArgs {
     /// Say what would be done, and write nothing.
     #[arg(long)]
     pub dry_run: bool,
+    /// Link a track whose file has its name but another size (retagged
+    /// since the export) to that file, when no file has its size.
+    #[arg(long)]
+    pub accept_retagged: bool,
 }
 
 impl LibraryCommands {
@@ -53,7 +59,7 @@ pub fn run(
     let LibraryCommands::RebuildFromStick(args) = command;
     let answer: Rebuilt = client.call(
         commands::LIBRARY_REBUILD_FROM_STICK,
-        json!({"stick": args.stick, "music": args.music, "dry_run": args.dry_run}),
+        json!({"stick": args.stick, "music": args.music, "dry_run": args.dry_run, "accept_retagged": args.accept_retagged}),
     )?;
     if as_json {
         return Ok(json!(answer).to_string());
@@ -75,11 +81,15 @@ fn text(answer: &Rebuilt) -> String {
     );
     let _ = writeln!(out, "Matched {} tracks:", answer.matched.len());
     for track in &answer.matched {
-        let state = if track.existing.is_some() {
+        let mut state = if track.existing.is_some() {
             "already in the Library"
         } else {
             "new"
-        };
+        }
+        .to_owned();
+        if track.retagged {
+            state.push_str(", by name: its size differs from the Stick's copy");
+        }
         let _ = writeln!(
             out,
             "  {} - {} -> {} ({state})",
@@ -101,10 +111,14 @@ fn text(answer: &Rebuilt) -> String {
     let _ = writeln!(out, "Not matched {} tracks:", answer.unmatched.len());
     for track in &answer.unmatched {
         let reason = match track.reason.as_str() {
-            "no_file" => "no file of that name in the music folder".to_owned(),
+            "no_file" => "no file of its size or name in the music folder".to_owned(),
             "ambiguous" => format!("several files it could be: {}", track.candidates.join(", ")),
             "different_size" => format!(
-                "a file of that name, of another size: {}",
+                "a file of that name, of another size (retagged? --accept-retagged links it): {}",
+                track.candidates.join(", ")
+            ),
+            "name_disagrees" => format!(
+                "a file of its size whose name does not agree: {}",
                 track.candidates.join(", ")
             ),
             other => other.to_owned(),

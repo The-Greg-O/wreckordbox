@@ -67,6 +67,10 @@ pub struct Rebuild {
     /// Only say what would be done.
     #[serde(default)]
     pub dry_run: bool,
+    /// Link a track to the one file of its name when no file has its size
+    /// (a file retagged since the export).
+    #[serde(default)]
+    pub accept_retagged: bool,
 }
 
 /// One value of a matched track.
@@ -92,6 +96,10 @@ pub struct MatchedTrack {
     pub stick_path: String,
     /// The file in the music folder it is linked to.
     pub file: String,
+    /// Linked by its name alone: the file's size differs from the Stick
+    /// copy's (retagged since the export), accepted by the caller.
+    #[serde(default)]
+    pub retagged: bool,
     /// The collection's track already at that file, if any.
     pub existing: Option<String>,
     /// The collection's track after applying; `null` in a dry run of a new one.
@@ -105,7 +113,10 @@ pub struct UnmatchedTrack {
     pub title: String,
     pub artist: String,
     pub stick_path: String,
-    /// `no_file`, `ambiguous` or `different_size`.
+    /// `no_file`; `ambiguous` (several files it could be);
+    /// `name_disagrees` (one file of exactly its size, whose name does not
+    /// start as the Stick's does); `different_size` (one file of its name,
+    /// of another size: pass `accept_retagged` to link it).
     pub reason: String,
     /// The files of that name it could be.
     pub candidates: Vec<String>,
@@ -182,27 +193,59 @@ pub struct Rebuilt {
 }
 
 /// The rule that links a Stick track to a file of the music folder.
+///
+/// rekordbox copies each file byte for byte to the Stick but shortens or
+/// cleans up its name, so the size is what really ties the two together;
+/// the start of the name confirms it. In order:
+///
+/// 1. The files whose size is exactly the Stick copy's. One, whose name
+///    starts as the Stick's does ([`matching::names_agree`]): that file. One
+///    whose name does not agree, or several: reported, never guessed.
+/// 2. No file of that size: the files of the same name (case folded). One:
+///    "same name, different size" (retagged since the export), linked only
+///    when the caller accepts retagged files. Several: ambiguous.
+/// 3. Nothing: no file.
+///
+/// Without a Stick copy to measure, only a file of the same name, alone,
+/// is taken. macOS `._` AppleDouble files are never audio and are skipped.
 pub mod matching {
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
 
-    /// The music folder's audio files by file name, case folded, each with
-    /// its size. Links are not followed.
+    /// How many characters of the two names' stems must agree: rekordbox
+    /// keeps at least this much of a name it shortens.
+    pub const AGREEING_CHARACTERS: usize = 20;
+
+    /// The music folder's audio files, by size and by file name (case
+    /// folded). Links are not followed; only names and sizes are read.
     #[derive(Debug, Default)]
     pub struct MusicFolder {
-        by_name: HashMap<String, Vec<(PathBuf, u64)>>,
+        by_size: HashMap<u64, Vec<PathBuf>>,
+        by_name: HashMap<String, Vec<PathBuf>>,
+        /// How many audio files it holds.
+        pub files: usize,
     }
 
     /// Where a Stick track's file is.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub enum Found {
         File(PathBuf),
+        /// The one file of that name, of another size: retagged since the
+        /// export, linked because the caller asked.
+        Retagged(PathBuf),
         NoFile,
-        /// Several files it could be, none or several of them the size of
-        /// the Stick's copy.
+        /// Several files it could be.
         Ambiguous(Vec<PathBuf>),
-        /// One file of that name, but not the size of the Stick's copy.
-        DifferentSize(Vec<PathBuf>),
+        /// One file of exactly that size whose name does not agree.
+        NameDisagrees(PathBuf),
+        /// One file of that name, of another size, not accepted.
+        DifferentSize(PathBuf),
+    }
+
+    /// Whether a name is a macOS AppleDouble companion, never audio.
+    #[must_use]
+    pub fn apple_double(name: &str) -> bool {
+        name.starts_with("._")
     }
 
     impl MusicFolder {
@@ -224,6 +267,10 @@ pub mod matching {
                 };
                 first = false;
                 for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    if apple_double(&name) {
+                        continue;
+                    }
                     let Ok(kind) = entry.file_type() else {
                         continue;
                     };
@@ -231,45 +278,92 @@ pub mod matching {
                     if kind.is_dir() {
                         stack.push(path);
                     } else if kind.is_file() && rbl_db::import::is_audio(&path) {
-                        let size = entry.metadata().map_or(0, |m| m.len());
-                        let name = entry.file_name().to_string_lossy().to_lowercase();
-                        folder.by_name.entry(name).or_default().push((path, size));
+                        let Ok(meta) = entry.metadata() else { continue };
+                        folder.files += 1;
+                        folder
+                            .by_size
+                            .entry(meta.len())
+                            .or_default()
+                            .push(path.clone());
+                        folder
+                            .by_name
+                            .entry(name.to_lowercase())
+                            .or_default()
+                            .push(path);
                     }
                 }
             }
-            for files in folder.by_name.values_mut() {
+            for files in folder
+                .by_size
+                .values_mut()
+                .chain(folder.by_name.values_mut())
+            {
                 files.sort();
             }
             Ok(folder)
         }
 
-        /// The file a Stick track recorded as `stick_path`, whose copy on the
-        /// Stick is `stick_size` bytes (`None`: the Stick has no copy), is:
-        /// the one file of the same name (case folded) whose size is the
-        /// Stick copy's; without a copy to compare, the one file of that name.
+        /// The file of a Stick track recorded as `stick_path`, whose copy on
+        /// the Stick is `stick_size` bytes (`None`: the Stick has no copy).
+        /// `accept_retagged` links the one file of the same name when no
+        /// file has the size.
         #[must_use]
-        pub fn find(&self, stick_path: &str, stick_size: Option<u64>) -> Found {
-            let name = file_name(stick_path).to_lowercase();
-            let Some(files) = self.by_name.get(&name).filter(|f| !f.is_empty()) else {
-                return Found::NoFile;
-            };
-            let paths = |files: &[&(PathBuf, u64)]| files.iter().map(|(p, _)| p.clone()).collect();
-            let all: Vec<&(PathBuf, u64)> = files.iter().collect();
+        pub fn find(
+            &self,
+            stick_path: &str,
+            stick_size: Option<u64>,
+            accept_retagged: bool,
+        ) -> Found {
+            let name = file_name(stick_path);
+            let named: &[PathBuf] = self
+                .by_name
+                .get(&name.to_lowercase())
+                .map_or(&[], Vec::as_slice);
             let Some(size) = stick_size else {
-                return if let [(only, _)] = files.as_slice() {
-                    Found::File(only.clone())
-                } else {
-                    Found::Ambiguous(paths(&all))
+                return match named {
+                    [] => Found::NoFile,
+                    [only] => Found::File(only.clone()),
+                    several => Found::Ambiguous(several.to_vec()),
                 };
             };
-            let same: Vec<&(PathBuf, u64)> = files.iter().filter(|(_, s)| *s == size).collect();
-            match same.as_slice() {
-                [(only, _)] => Found::File(only.clone()),
-                [] if all.len() == 1 => Found::DifferentSize(paths(&all)),
-                [] => Found::Ambiguous(paths(&all)),
-                _ => Found::Ambiguous(paths(&same)),
+            match self.by_size.get(&size).map_or(&[][..], Vec::as_slice) {
+                [only] => {
+                    let theirs = only
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    return if names_agree(&name, &theirs) {
+                        Found::File(only.clone())
+                    } else {
+                        Found::NameDisagrees(only.clone())
+                    };
+                }
+                [] => {}
+                several => return Found::Ambiguous(several.to_vec()),
+            }
+            match named {
+                [] => Found::NoFile,
+                [only] if accept_retagged => Found::Retagged(only.clone()),
+                [only] => Found::DifferentSize(only.clone()),
+                several => Found::Ambiguous(several.to_vec()),
             }
         }
+    }
+
+    /// Whether two file names start alike: their stems (the name without
+    /// its extension), case folded, agree on the first
+    /// [`AGREEING_CHARACTERS`] characters, or on all of the shorter one.
+    #[must_use]
+    pub fn names_agree(stick: &str, folder: &str) -> bool {
+        let stem = |name: &str| -> Vec<char> {
+            let stem = Path::new(name)
+                .file_stem()
+                .map_or_else(|| name.to_owned(), |s| s.to_string_lossy().into_owned());
+            stem.to_lowercase().chars().collect()
+        };
+        let (a, b) = (stem(stick), stem(folder));
+        let n = AGREEING_CHARACTERS.min(a.len()).min(b.len());
+        n > 0 && a[..n] == b[..n]
     }
 
     /// The last component of a Stick's recorded path.
@@ -526,19 +620,29 @@ fn plan(
     library: &OpenLibrary,
 ) -> Result<Plan, ServiceError> {
     let mut matched_files: HashMap<u32, PathBuf> = HashMap::new();
+    let mut retagged = std::collections::HashSet::new();
     let mut unmatched = Vec::new();
     for track in &stick.library.tracks {
         let shown = |p: &[PathBuf]| p.iter().map(|p| p.to_string_lossy().into_owned()).collect();
-        let (reason, candidates) =
-            match folder.find(&track.path, stick.sizes.get(&track.id).copied()) {
-                matching::Found::File(file) => {
-                    matched_files.insert(track.id, file);
-                    continue;
-                }
-                matching::Found::NoFile => ("no_file", Vec::new()),
-                matching::Found::Ambiguous(files) => ("ambiguous", shown(&files)),
-                matching::Found::DifferentSize(files) => ("different_size", shown(&files)),
-            };
+        let (reason, candidates) = match folder.find(
+            &track.path,
+            stick.sizes.get(&track.id).copied(),
+            request.accept_retagged,
+        ) {
+            matching::Found::File(file) => {
+                matched_files.insert(track.id, file);
+                continue;
+            }
+            matching::Found::Retagged(file) => {
+                retagged.insert(track.id);
+                matched_files.insert(track.id, file);
+                continue;
+            }
+            matching::Found::NoFile => ("no_file", Vec::new()),
+            matching::Found::Ambiguous(files) => ("ambiguous", shown(&files)),
+            matching::Found::NameDisagrees(file) => ("name_disagrees", shown(&[file])),
+            matching::Found::DifferentSize(file) => ("different_size", shown(&[file])),
+        };
         unmatched.push(UnmatchedTrack {
             title: track.title.clone(),
             artist: track.artist.clone(),
@@ -769,6 +873,7 @@ fn plan(
             artist: track.artist.clone(),
             stick_path: track.path.clone(),
             file: file.to_string_lossy().into_owned(),
+            retagged: retagged.contains(&track.id),
             existing: existing.as_ref().map(|e| e.id.clone()),
             track: existing.as_ref().map(|e| e.id.clone()),
             values: outcomes,
@@ -1291,45 +1396,84 @@ mod tests {
     }
 
     #[test]
-    fn a_file_is_found_by_name_and_size_and_never_guessed() {
+    fn a_file_is_found_by_size_with_its_name_agreeing_and_never_guessed() {
         let (dir, music) = folder(&[
-            ("x/One.mp3", 10),
+            ("x/One (Extended Mix).mp3", 10),
             ("Two.mp3", 5),
             ("a/Two.MP3", 6),
             ("b/Three.mp3", 7),
-            ("c/three.mp3", 7),
+            ("c/three copy.mp3", 7),
+            ("Stranger.mp3", 8),
+            ("._Stranger.mp3", 9),
             ("notes.txt", 1),
         ]);
         let at = |p: &str| dir.path().join(p);
+        assert_eq!(music.files, 6, "AppleDouble and non-audio files skipped");
+        // A name the Stick shortened: the size, the start of the name agreeing.
         assert_eq!(
-            music.find("/Contents/A/B/One.mp3", Some(10)),
-            Found::File(at("x/One.mp3"))
+            music.find("/Contents/A/B/One (Extended Mi.mp3", Some(10), false),
+            Found::File(at("x/One (Extended Mix).mp3"))
         );
         assert_eq!(
-            music.find("/Contents/A/B/one.MP3", None),
-            Found::File(at("x/One.mp3"))
-        );
-        assert_eq!(
-            music.find("/Contents/A/B/One.mp3", Some(11)),
-            Found::DifferentSize(vec![at("x/One.mp3")])
-        );
-        assert_eq!(
-            music.find("/Contents/Two.mp3", Some(6)),
+            music.find("/Contents/Two.mp3", Some(6), false),
             Found::File(at("a/Two.MP3"))
         );
+        // Several of that size, or one whose name does not agree.
         assert_eq!(
-            music.find("/Contents/Two.mp3", None),
+            music.find("/Contents/Three.mp3", Some(7), false),
+            Found::Ambiguous(vec![at("b/Three.mp3"), at("c/three copy.mp3")])
+        );
+        assert_eq!(
+            music.find("/Contents/Gone.mp3", Some(8), false),
+            Found::NameDisagrees(at("Stranger.mp3"))
+        );
+        // No file of that size: the same name, retagged.
+        assert_eq!(
+            music.find("/Contents/One (Extended Mix).mp3", Some(11), false),
+            Found::DifferentSize(at("x/One (Extended Mix).mp3"))
+        );
+        assert_eq!(
+            music.find("/Contents/One (Extended Mix).mp3", Some(11), true),
+            Found::Retagged(at("x/One (Extended Mix).mp3"))
+        );
+        assert_eq!(
+            music.find("/Contents/Two.mp3", Some(9), true),
             Found::Ambiguous(vec![at("Two.mp3"), at("a/Two.MP3")])
         );
         assert_eq!(
-            music.find("/Contents/Two.mp3", Some(9)),
-            Found::Ambiguous(vec![at("Two.mp3"), at("a/Two.MP3")])
+            music.find("/Contents/._Stranger.mp3", Some(9), true),
+            Found::NoFile
         );
         assert_eq!(
-            music.find("/Contents/Three.mp3", Some(7)),
-            Found::Ambiguous(vec![at("b/Three.mp3"), at("c/three.mp3")])
+            music.find("/Contents/Four.mp3", Some(1), true),
+            Found::NoFile
         );
-        assert_eq!(music.find("/Contents/notes.txt", Some(1)), Found::NoFile);
-        assert_eq!(music.find("/Contents/Four.mp3", Some(1)), Found::NoFile);
+        // No Stick copy to measure: a lone file of the name.
+        assert_eq!(
+            music.find("/Contents/stranger.MP3", None, false),
+            Found::File(at("Stranger.mp3"))
+        );
+        assert_eq!(
+            music.find("/Contents/Two.mp3", None, false),
+            Found::Ambiguous(vec![at("Two.mp3"), at("a/Two.MP3")])
+        );
+    }
+
+    #[test]
+    fn names_agree_on_their_first_twenty_characters_or_all_of_the_shorter() {
+        use super::matching::names_agree;
+        assert!(names_agree(
+            "Abcdefghijklmnopqrstu-cut.wav",
+            "abcdefghijklmnopqrstuvwxyz.aiff"
+        ));
+        assert!(names_agree(
+            "Short (Original Mi.wav",
+            "Short (Original Mix).wav"
+        ));
+        assert!(!names_agree(
+            "Abcdefghijklmnopqrsx.wav",
+            "Abcdefghijklmnopqrst.wav"
+        ));
+        assert!(!names_agree("Gone.wav", "Stranger.wav"));
     }
 }
