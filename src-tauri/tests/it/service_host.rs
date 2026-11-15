@@ -1564,21 +1564,51 @@ mod analysis_lock_ledger;
 fn unwind_updates_the_window_and_is_one_undo_step() {
     let window = window();
     window.host().unwrap();
-    let original = window.cli(&["--json", "runs", "start", "--source", "agent:test", "--description", "Two changes"]).json()["id"].to_string();
-    window.cli(&["tracks", "rate", "10001", "4", "--run", &original]).succeeded();
-    window.cli(&["tracks", "rate", "10002", "3", "--run", &original]).succeeded();
+    let original = window
+        .cli(&[
+            "--json",
+            "runs",
+            "start",
+            "--source",
+            "agent:test",
+            "--description",
+            "Two changes",
+        ])
+        .json()["id"]
+        .to_string();
+    window
+        .cli(&["tracks", "rate", "10001", "4", "--run", &original])
+        .succeeded();
+    window
+        .cli(&["tracks", "rate", "10002", "3", "--run", &original])
+        .succeeded();
     window.cli(&["runs", "finish", &original]).succeeded();
     let before = window.generation();
     let answer = window.cli(&["--json", "runs", "unwind", &original]).json();
     assert_eq!(answer["reversed"], 2);
     assert_eq!(window.rating("10001"), 0);
     assert_eq!(window.rating("10002"), 0);
-    eventually("Unwind change", || window.changes.lock().unwrap().iter().any(|g| *g > before));
-    assert_eq!(commands::current_history(window.state().inner()).undo_label.as_deref(), Some("Unwind Run"));
-    run(commands::undo_edit(window.app.handle().clone(), window.state())).unwrap();
+    eventually("Unwind change", || {
+        window.changes.lock().unwrap().iter().any(|g| *g > before)
+    });
+    assert_eq!(
+        commands::current_history(window.state().inner())
+            .undo_label
+            .as_deref(),
+        Some("Unwind Run")
+    );
+    run(commands::undo_edit(
+        window.app.handle().clone(),
+        window.state(),
+    ))
+    .unwrap();
     assert_eq!(window.rating("10001"), 4);
     assert_eq!(window.rating("10002"), 3);
-    run(commands::redo_edit(window.app.handle().clone(), window.state())).unwrap();
+    run(commands::redo_edit(
+        window.app.handle().clone(),
+        window.state(),
+    ))
+    .unwrap();
     assert_eq!(window.rating("10001"), 0);
     assert_eq!(window.rating("10002"), 0);
 }
@@ -1587,7 +1617,10 @@ fn unwind_updates_the_window_and_is_one_undo_step() {
 fn unwind_keeps_an_entry_already_undone_even_when_the_value_matches_again() {
     let window = window();
     window.host().unwrap();
-    let original = window.cli(&["--json", "tracks", "rate", "10001", "4"]).json()["run"]["id"].to_string();
+    let original = window
+        .cli(&["--json", "tracks", "rate", "10001", "4"])
+        .json()["run"]["id"]
+        .to_string();
     window.undo().unwrap();
     window.cli(&["tracks", "rate", "10001", "4"]).succeeded();
     let answer = window.cli(&["--json", "runs", "unwind", &original]).json();
@@ -1600,12 +1633,25 @@ fn unwind_keeps_an_entry_already_undone_even_when_the_value_matches_again() {
 fn unwind_window_undo_keeps_a_later_fact() {
     let window = window();
     window.host().unwrap();
-    let original = window.cli(&["--json", "tracks", "rate", "10001", "4", "--source", "dj"]).json()["run"]["id"].to_string();
+    let original = window
+        .cli(&["--json", "tracks", "rate", "10001", "4", "--source", "dj"])
+        .json()["run"]["id"]
+        .to_string();
     window.cli(&["runs", "unwind", &original]).succeeded();
-    window.cli(&["facts", "record", "10001", "energy", "5", "--source", "dj"]).succeeded();
-    assert!(window.undo().is_err(), "Undo must not restore an old DJ Fact over a new opinion");
+    window
+        .cli(&["facts", "record", "10001", "energy", "5", "--source", "dj"])
+        .succeeded();
+    assert!(
+        window.undo().is_err(),
+        "Undo must not restore an old DJ Fact over a new opinion"
+    );
     assert_eq!(window.rating("10001"), 0);
-    assert_eq!(window.cli(&["--json", "facts", "show", "10001", "--kind", "energy"]).json()["facts"][0]["value"], 5);
+    assert_eq!(
+        window
+            .cli(&["--json", "facts", "show", "10001", "--kind", "energy"])
+            .json()["facts"][0]["value"],
+        5
+    );
 }
 
 // ---------------------------------------------------------------------------

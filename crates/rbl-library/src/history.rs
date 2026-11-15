@@ -159,7 +159,9 @@ pub enum LibraryEdit {
 impl LibraryEdit {
     pub fn is_empty(&self) -> bool {
         match self {
-            Self::Unwind(edit) => edit.metadata["reverses"].as_array().is_none_or(Vec::is_empty),
+            Self::Unwind(edit) => edit.metadata["reverses"]
+                .as_array()
+                .is_none_or(Vec::is_empty),
             Self::DeletePlaylist(edit) => edit.is_empty(),
             Self::RemovePlaylistTracks(edit) => edit.is_empty(),
             Self::ReplacePlaylistContents(edits) => edits.is_empty(),
@@ -874,9 +876,20 @@ impl crate::LibraryCore {
         }
         let ledger = self.history.lock().ledger();
         let _unwind = if let LibraryEdit::Unwind(edit) = executable {
-            let ledger = ledger.as_ref().ok_or_else(|| StepError::Write(DbError::WriteRefused("Unwind needs its Library service to validate the Facts".into())))?;
-            Some(ledger.hold_unwind(&edit.metadata, undo).map_err(|reason| StepError::Conflict { label: entry.label, reason })?)
-        } else { None };
+            let ledger = ledger.as_ref().ok_or_else(|| {
+                StepError::Write(DbError::WriteRefused(
+                    "Unwind needs its Library service to validate the Facts".into(),
+                ))
+            })?;
+            Some(ledger.hold_unwind(&edit.metadata, undo).map_err(|reason| {
+                StepError::Conflict {
+                    label: entry.label,
+                    reason,
+                }
+            })?)
+        } else {
+            None
+        };
         let touched = entry.edit.touched();
         let mut preparation = crate::ledger::Preparation::edit(&entry.edit);
         if undo { preparation.undo_of = entry.ledger; } else { preparation.redo_of = entry.ledger; }

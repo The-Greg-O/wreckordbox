@@ -25,6 +25,7 @@ pub mod file_edit;
 pub mod file_record;
 pub mod read;
 pub mod stick;
+pub mod unwind;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -681,5 +682,3 @@ impl LibraryCore {
         self.inner.read().views.get(&view_id).map(|open| Arc::clone(&open.view))
     }
 }
-
-pub mod unwind;
