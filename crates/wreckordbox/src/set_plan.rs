@@ -36,6 +36,11 @@ pub enum SetPlanCommands {
     },
     /// List the kept Set plans, newest first.
     List,
+    /// Print the set planning guide for agents: the musical basis of
+    /// harmonic mixing, tempo and energy flow, and how to turn it into a
+    /// Recipe. Read it before writing a Recipe. With `--json`, in sections.
+    /// Needs no service and no Library.
+    Guide,
 }
 
 #[derive(Args)]
@@ -84,6 +89,7 @@ pub fn run(
     command: &SetPlanCommands,
 ) -> Result<(String, bool), ServiceError> {
     match command {
+        SetPlanCommands::Guide => Ok((crate::set_plan_guide::render(as_json), true)),
         SetPlanCommands::Check { file } => {
             let (recipe, _) = read(file)?;
             let checked: Checked =
