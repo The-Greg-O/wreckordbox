@@ -29,6 +29,7 @@ const RECORDS: &[&str] = &[
     "decisions.decide",
     "facts.record",
     "intensity.measure",
+    "lookup.check",
     "mutants.clear",
     "mutants.create",
     "mutants.edit",
@@ -96,6 +97,7 @@ fn reads(track: &str) -> Vec<(&'static str, Value)> {
         ("intake.problems", json!({ "label": "Red" })),
         ("intake.tag_panel", json!({ "id": track })),
         ("intensity.show", json!({ "id": track })),
+        ("lookup.describe", json!({ "id": track })),
         ("mutants.get", json!({ "id": 1 })),
         ("mutants.list", json!({})),
         ("mytags.list", json!({})),
@@ -298,6 +300,12 @@ fn record_args(command: &str, track: &str) -> Value {
         "projection.apply" | "projection.mytags.apply" => json!({ "source": { "kind": "dj" } }),
         "projection.acknowledge" => json!({ "barrier": 1, "source": { "kind": "dj" } }),
         "runs.start" => json!({ "source": { "kind": "dj" }, "description": "tidy" }),
+        "lookup.check" => json!({
+            "id": track,
+            "candidate": { "artist": "A", "title": "T", "duration": 30 },
+            "address": "https://shop.example.test/1",
+            "date": "2026-11-10",
+        }),
         _ => json!({ "id": 1, "entry": "1", "source": { "kind": "dj" } }),
     }
 }
