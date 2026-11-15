@@ -772,7 +772,17 @@ pub(crate) fn answer(
     stems: &Stems,
     request: &Request,
 ) -> Result<Value, ServiceError> {
-    let recovery_error = keeper.state().recovery_error.clone();
+    let (recovery_error, settled) = {
+        let state = keeper.state();
+        (state.recovery_error.clone(), state.settled)
+    };
+    // What an earlier service left and this one could not settle is not
+    // answered around, open writer or not (wbx-8yh).
+    if !settled {
+        if let Some(error) = &recovery_error {
+            return Err(error.clone());
+        }
+    }
     if request.command == commands::RUNS_LIST {
         let index = |name: &str, default| {
             request.args[name]
@@ -1051,6 +1061,9 @@ struct Op {
     /// A hand set's changes were given an entry (under an intent of their
     /// own), so an assertion with nothing to record may settle the write's.
     changes_recorded: bool,
+    /// A change of this hand set whose own intent could not be reserved:
+    /// the write's intent must stay for recovery (wbx-8yh).
+    changes_unreserved: bool,
 }
 
 #[derive(Default)]
@@ -1198,9 +1211,12 @@ impl Keeper {
     /// changed rows and recorded nothing: that stays for the next write to
     /// record as unconfirmed.
     fn settle_unasserted(&self) {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         let mut state = self.state();
         if let Some(op) = state.op.as_mut().filter(|op| {
-            op.asserting && !op.recorded && (op.wrote != Some(true) || op.changes_recorded)
+            op.asserting
+                && !op.recorded
+                && (op.wrote != Some(true) || (op.changes_recorded && !op.changes_unreserved))
         }) {
             op.recorded = true;
             if let Ok(sidecar) = self.stems.sidecar() {
@@ -1242,9 +1258,15 @@ impl Keeper {
         request: &Request,
         answer: impl FnOnce() -> Result<T, ServiceError>,
     ) -> (Result<T, ServiceError>, Option<Run>) {
+        // The Run's bookkeeping is the edits' own record (wbx-8yh); the
+        // command itself is not.
+        let ledger = crate::sidecar_stick::ledger_scope();
         let target = match self.target(from_client, request) {
             Ok(Some(target)) => target,
-            Ok(None) => return (answer(), None),
+            Ok(None) => {
+                drop(ledger);
+                return (answer(), None);
+            }
             Err(refused) => return (Err(refused), None),
         };
         let admitted = match &target {
@@ -1259,7 +1281,9 @@ impl Keeper {
             stems: Arc::clone(&self.stems),
         };
         CURRENT.with(|current| *current.borrow_mut() = Some(scope));
+        drop(ledger);
         let result = answer();
+        let _ledger = crate::sidecar_stick::ledger_scope();
         let scope = CURRENT.with(|current| current.borrow_mut().take());
         if let Some(run) = admitted {
             self.leave(run);
@@ -1436,7 +1460,19 @@ impl Keeper {
     /// Settles what an earlier service left, when there is a Sidecar:
     /// asked as the service starts. Queries never call this or open a writer.
     pub(crate) fn recover(&self) -> Result<(), ServiceError> {
+        // Settling intents into entries is the Ledger's own housekeeping:
+        // kept on a Stick while it is unlocked (wbx-8yh). On a locked one
+        // the writer is not opened, so nothing is begun; the first edit
+        // after an unlock settles first.
+        let _ledger = crate::sidecar_stick::ledger_scope();
         let result = (|| {
+            // Neither the Sidecar nor the Library on a locked Stick: the
+            // writer is not even opened, so nothing is begun (wbx-8yh).
+            if self.stems.sidecar_dir().join("sidecar.db").is_file()
+                || bulk_spill::exists(&self.stems.bulk_recovery_dir())
+            {
+                crate::sidecar_stick::refuse_while_locked(&self.stems)?;
+            }
             let sidecar = if bulk_spill::exists(&self.stems.bulk_recovery_dir()) {
                 Some(self.stems.sidecar()?)
             } else {
@@ -1491,6 +1527,7 @@ impl Keeper {
     /// service has stopped and every write it saw is over. Entries still
     /// waiting stay in the spill file for the next service.
     pub(crate) fn close(&self) {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         self.stopping.store(true, Ordering::Release);
         let mut state = self.state();
         state.closed = true;
@@ -1584,6 +1621,14 @@ impl Keeper {
             .finish_owned_runs("wreckordbox stopped without ending it")
             .map_err(|e| e.to_string())?;
         state.settled = true;
+        // A start that found its Stick locked is over once this is done.
+        if state
+            .recovery_error
+            .as_ref()
+            .is_some_and(|error| error.code == service_codes::STICK_PROTECTED)
+        {
+            state.recovery_error = None;
+        }
         Ok(())
     }
 
@@ -1954,7 +1999,12 @@ impl Keeper {
                     let on_disk = sidecar
                         .as_ref()
                         .map_err(|e| e.message.clone())
-                        .and_then(|sidecar| spill(&spill_file(sidecar), &spilled));
+                        .and_then(|sidecar| {
+                            // Beside the Sidecar, so it passes its admission
+                            // (wbx-8yh): a locked Stick keeps it in memory.
+                            sidecar.admit_write().map_err(|e| e.to_string())?;
+                            spill(&spill_file(sidecar), &spilled)
+                        });
                     tracing::error!(
                         %error,
                         kept_on_disk = on_disk.is_ok(),
@@ -2054,6 +2104,7 @@ impl Keeper {
             mutant_plan: None,
             asserting: false,
             changes_recorded: false,
+            changes_unreserved: false,
         });
         drop(state);
         if let Some(delay) = self.faults.delay_after_begin {
@@ -2080,10 +2131,12 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn bulk(&self, kind: rbl_library::bulk::Kind) -> Option<Arc<dyn rbl_library::bulk::Recorder>> {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         Some(bulk::make(self, kind))
     }
 
     fn begin(&self) -> Result<(), String> {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         if let Some(active) = bulk::active(self) {
             active.set_bulk(false);
             if active.imports() {
@@ -2094,6 +2147,7 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn begin_unkept(&self) -> Result<(), String> {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         if let Some(active) = bulk::active(self) {
             active.set_bulk(true);
             return active.begin();
@@ -2102,6 +2156,7 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn begin_file(&self, kind: &str, track: &str, values: &Value) -> Result<(), String> {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         if let Some(active) = bulk::active(self) {
             active.set_bulk(true);
             return active.begin();
@@ -2119,6 +2174,7 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn files_unrestored(&self, values: &Value, why: &str) {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         let mut payload = values.clone();
         payload["not_reversible_reason"] = Value::from("An audio publication could not be rolled back after the native step failed; inspect the named files before editing again");
         self.append(Draft {
@@ -2135,6 +2191,7 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn file_written(&self, kind: &str, track: &str) {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         if bulk::active(self).is_some_and(|active| active.is_bulk()) {
             // FileRecord has already called written(true).
             return;
@@ -2170,6 +2227,7 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn prepare(&self, db: &rbl_db::Library, targets: &rbl_library::ledger::Preparation) {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         self.plan_mutants(db, targets);
         if bulk::active(self).is_some_and(|active| active.imports()) {
             return;
@@ -2200,6 +2258,7 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn written(&self, wrote: bool) {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         if let Some(active) = bulk::active(self).filter(|active| active.is_bulk()) {
             active.written(wrote);
             if wrote && self.faults.abort_after_write {
@@ -2228,6 +2287,9 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn assert(&self, edit: &LibraryEdit, label: &str) -> Option<i64> {
+        let _ledger = crate::sidecar_stick::ledger_scope();
+        // Test mode only: before the assertion is told or settled.
+        crate::review::hold("ledger-assert");
         if self.faults.abort_before_assert {
             std::process::abort();
         }
@@ -2258,6 +2320,7 @@ impl rbl_library::ledger::Ledger for Keeper {
         assertions: &[rbl_library::ledger::TagAssertion],
         label: &str,
     ) -> Option<i64> {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         if self.faults.abort_before_assert {
             std::process::abort();
         }
@@ -2284,6 +2347,9 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn record(&self, step: Step, edit: &LibraryEdit, label: &str, link: Link) -> Option<i64> {
+        let _ledger = crate::sidecar_stick::ledger_scope();
+        // Test mode only: after the Library write, before its record.
+        crate::review::hold("ledger-record");
         let sidecar = self.stems.sidecar().ok();
         // The plan the write left with its intent, before it was made.
         let plan = self
@@ -2317,6 +2383,7 @@ impl rbl_library::ledger::Ledger for Keeper {
     }
 
     fn note(&self, kept: Unkept, name: Option<&str>) {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         if bulk::active(self).is_some_and(|active| active.is_bulk()) {
             return;
         }
@@ -2375,19 +2442,28 @@ fn claim(op: &mut Op, sidecar: Option<&Sidecar>, asserted: bool) -> Option<i64> 
         op.recorded = true;
         return Some(op.id);
     }
-    op.changes_recorded = true;
-    sidecar?
-        .begin_intent(
-            &Intent {
-                source: &op.source,
-                run: op.run,
-                description: &op.description,
-                command: op.command.as_ref(),
-                at: now(),
-            },
-            &[],
-        )
-        .ok()
+    // Covered only once its own intent is durably reserved: until then the
+    // write's intent is what recovery has, and it is kept (wbx-8yh).
+    let reserved = sidecar.and_then(|sidecar| {
+        sidecar
+            .begin_intent(
+                &Intent {
+                    source: &op.source,
+                    run: op.run,
+                    description: &op.description,
+                    command: op.command.as_ref(),
+                    at: now(),
+                },
+                &[],
+            )
+            .ok()
+    });
+    if reserved.is_some() {
+        op.changes_recorded = true;
+    } else {
+        op.changes_unreserved = true;
+    }
+    reserved
 }
 
 /// What an unconfirmed entry keeps of the tracks its write was about, from

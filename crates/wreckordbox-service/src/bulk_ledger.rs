@@ -154,9 +154,11 @@ impl Recorder for Handle {
         self.0.state().active == 0
     }
     fn finish(&self) -> Option<String> {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         self.0.finish()
     }
     fn finish_wait(&self) -> Option<String> {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         {
             let mut state = self.0.state();
             state.finish_requested = true;
@@ -238,6 +240,7 @@ impl Step for Scope {
 }
 impl Drop for Scope {
     fn drop(&mut self) {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         if !self.completed
             && (self.active.uncertain.get() || !self.active.stamps.borrow().is_empty())
         {
@@ -368,6 +371,7 @@ impl Session {
         state.warning = Some(message);
     }
     fn begin(&self) -> Result<(), String> {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         let keeper = self.keeper.upgrade().ok_or("wreckordbox has stopped")?;
         if keeper.stopping.load(Ordering::Acquire) {
             return Err("wreckordbox is stopping".into());
@@ -474,6 +478,7 @@ impl Session {
         }
     }
     fn flush(&self, state: &mut State) {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         if state.pending.is_empty() {
             return;
         }
@@ -516,6 +521,7 @@ impl Session {
         state.bytes = 0;
     }
     fn finish(&self) -> Option<String> {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         let mut state = self.state();
         if state.ended {
             return state.warning.clone();
@@ -600,6 +606,7 @@ impl Session {
 }
 impl Drop for Session {
     fn drop(&mut self) {
+        let _ledger = crate::sidecar_stick::ledger_scope();
         self.finish();
     }
 }

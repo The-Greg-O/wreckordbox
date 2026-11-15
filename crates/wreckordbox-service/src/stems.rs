@@ -268,6 +268,9 @@ pub(crate) struct Stems {
     pub(crate) fact_writes: parking_lot::ReentrantMutex<()>,
     command: Vec<OsString>,
     sidecar: Mutex<Option<Arc<Sidecar>>>,
+    /// The folder holding the Library's `master.db`: a Library hosted on a
+    /// Stick records nothing in its Sidecar (wbx-8yh, `sidecar_stick`).
+    library_dir: PathBuf,
     /// Set, under the `sidecar` lock, when the service stops: the Sidecar
     /// is not opened again (wbx-45.7).
     closed: AtomicBool,
@@ -306,6 +309,10 @@ impl Stems {
             mutant_edits: Mutex::new(HashMap::default()),
             run_status: Mutex::new(crate::run_status::RunStatus::new(&sidecar_dir)),
             fact_writes: parking_lot::ReentrantMutex::new(()),
+            library_dir: master_db
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_default(),
             sidecar_dir,
             state_dir: state_dir.to_path_buf(),
             command,
@@ -362,6 +369,14 @@ impl Stems {
         let mutex = Arc::new(Mutex::new(()));
         locks.insert(id, Arc::downgrade(&mutex));
         mutex
+    }
+
+    pub(crate) fn state_dir(&self) -> &Path {
+        &self.state_dir
+    }
+
+    pub(crate) fn library_dir(&self) -> &Path {
+        &self.library_dir
     }
 
     pub(crate) fn sidecar_dir(&self) -> &Path {
@@ -435,6 +450,12 @@ impl Stems {
             ));
         }
         let open = Arc::new(Sidecar::open(&self.sidecar_dir).map_err(|e| sidecar_error(&e))?);
+        // Every later write of this handle passes it (wbx-8yh).
+        open.set_write_admission(crate::sidecar_stick::admission(
+            &self.library_dir,
+            &self.sidecar_dir,
+            self.state_dir.clone(),
+        ));
         *sidecar = Some(Arc::clone(&open));
         Ok(open)
     }
@@ -463,7 +484,11 @@ impl Stems {
     ) -> Result<Separated, ServiceError> {
         // Before anything is written, the fingerprint's Facts included, and
         // whether or not `again` (wbx-45.14).
-        crate::sidecar_stick::refuse_background_work(&self.sidecar_dir, "Stem separation")?;
+        crate::sidecar_stick::refuse_background_work(
+            &self.library_dir,
+            &self.sidecar_dir,
+            "Stem separation",
+        )?;
         let fingerprint = fingerprint(found.parent(), found.path())?;
         let (_, marked_stale) = self.before_record(&found, Some(&fingerprint), None)?;
         let parent = found.parent().clone();
@@ -654,6 +679,10 @@ pub(crate) fn sidecar_error(error: &SidecarError) -> ServiceError {
     let code = match error {
         SidecarError::StemLength { .. } => codes::STEM_LENGTH_MISMATCH,
         SidecarError::StemSet(_) | SidecarError::Audio { .. } => codes::SEPARATION_FAILED,
+        // The handle's write admission (wbx-8yh): its words stand alone.
+        SidecarError::Refused(why) => {
+            return ServiceError::new(crate::protocol::codes::SIDECAR_ON_STICK, why.clone());
+        }
         _ => codes::SIDECAR_FAILED,
     };
     let what = if code == codes::SIDECAR_FAILED {
