@@ -21,6 +21,7 @@ use wreckordbox_sidecar::{Fact, FactsSnapshot};
 pub use wreckordbox_sidecar::{Source, SourceKind};
 
 use crate::library::OpenLibrary;
+use crate::projection::Field;
 use crate::protocol::{codes as service_codes, LibraryChanged, Request, ServiceError};
 use crate::stems::Stems;
 use crate::tracks::{TrackRecord, DEFAULT_PAGE_LIMIT};
@@ -234,13 +235,11 @@ pub struct QueuedTrack {
     pub suggestions: Vec<Suggestion>,
 }
 
-/// A title or an artist proposed for a track by a waiting Fact.
-///
-/// A Fact is waiting when it is live (its source has not replaced it), its
-/// source is not the DJ, the DJ has recorded no Fact of the same kind for
-/// the track since, and its value is not what the Library already holds.
-/// Accepting and rejecting Facts do not exist yet; when they do, they
-/// decide this instead.
+/// A title or an artist proposed for a track by a waiting Fact: exactly a
+/// row `review.waiting` lists for it ([`crate::review_text`], wbx-66), so
+/// one the DJ rejected is not here, and one accepted or rejected in Review
+/// is gone. The DJ accepts it here with Review's own `review.accept`,
+/// naming the row by `fact_id` and `token`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Suggestion {
     /// The field it proposes a value for: `title` or `artist`. Also the
@@ -252,6 +251,13 @@ pub struct Suggestion {
     pub value: String,
     pub source: Source,
     pub confidence: f64,
+    /// What the Library holds now, as the row was listed.
+    #[serde(default)]
+    pub before: String,
+    /// The row's own token, the same `review.waiting` gives it in
+    /// `row_tokens`: what an accept of this row carries.
+    #[serde(default)]
+    pub token: String,
 }
 
 /// The stable names of what a queued track can still need.
@@ -688,6 +694,8 @@ struct Known {
     /// The page's `title` and `artist` Facts, by track and kind, newest
     /// first: where waiting proposals are.
     facts: PageFacts,
+    /// The suggestions the DJ rejected in Review.
+    rejected: crate::review_text::Rejected,
     /// Why those could not be read, when they could not.
     facts_unavailable: Option<String>,
 }
@@ -714,14 +722,15 @@ impl Known {
             let locked = locked(db.connection(), &ids).map_err(|e| failed(&e))?;
             Ok((my_tags, locked))
         })?;
-        let (facts, facts_unavailable) = match page_facts(stems, &ids) {
-            Ok(facts) => (facts, None),
-            Err(why) => (HashMap::new(), Some(why)),
+        let (facts, rejected, facts_unavailable) = match page_facts(stems, &ids) {
+            Ok((facts, rejected)) => (facts, rejected, None),
+            Err(why) => (HashMap::new(), HashSet::new(), Some(why)),
         };
         Ok(Self {
             dimensions: dimensions_reaching_the_deck(&my_tags, stems.sidecar_dir()),
             locked,
             facts,
+            rejected,
             facts_unavailable,
         })
     }
@@ -729,9 +738,25 @@ impl Known {
     fn describe(&self, index: &rbl_index::Library, row: Row) -> QueuedTrack {
         let track = crate::tracks::record(index, row);
         let mut suggestions = Vec::new();
-        for (field, held) in [(needs::TITLE, &track.title), (needs::ARTIST, &track.artist)] {
-            if let Some(facts) = self.facts.get(&(track.id.clone(), field)) {
-                suggestions.extend(waiting(facts, field, held));
+        for (field, held) in [(Field::Title, &track.title), (Field::Artist, &track.artist)] {
+            if let Some(facts) = self.facts.get(&(track.id.clone(), field.name())) {
+                let rows = crate::review_text::of_track(
+                    facts,
+                    &track.id,
+                    &track.title,
+                    field,
+                    held,
+                    &self.rejected,
+                );
+                suggestions.extend(rows.iter().map(|row| Suggestion {
+                    field: field.name().to_owned(),
+                    fact_id: row.fact,
+                    value: row.after.as_str().unwrap_or_default().to_owned(),
+                    source: row.source.clone(),
+                    confidence: row.confidence,
+                    before: held.clone(),
+                    token: crate::review::row_token(row),
+                }));
             }
         }
         let carried = index.my_tag_keys(row as usize);
@@ -790,8 +815,11 @@ type FactsOf<'a> = &'a dyn Fn(&str, &str) -> Result<Vec<Fact>, String>;
 /// snapshot of the file, with the Sidecar slot held throughout so the writer
 /// cannot open under the read. `Err` says why they could not be read; the
 /// queue is still listed without them.
-fn page_facts(stems: &Stems, ids: &[String]) -> Result<PageFacts, String> {
-    let read = |facts: FactsOf<'_>| {
+fn page_facts(
+    stems: &Stems,
+    ids: &[String],
+) -> Result<(PageFacts, crate::review_text::Rejected), String> {
+    let read = |facts: FactsOf<'_>| -> Result<PageFacts, String> {
         let mut out = HashMap::new();
         for id in ids {
             for field in [needs::TITLE, needs::ARTIST] {
@@ -803,46 +831,24 @@ fn page_facts(stems: &Stems, ids: &[String]) -> Result<PageFacts, String> {
         }
         Ok(out)
     };
+    let text = |e: wreckordbox_sidecar::SidecarError| e.to_string();
     stems
         .with_current_sidecar(|open| match open {
-            Some(sidecar) => read(&|id, kind| sidecar.facts(id, kind).map_err(|e| e.to_string())),
+            Some(sidecar) => Ok((
+                read(&|id, kind| sidecar.facts(id, kind).map_err(|e| e.to_string()))?,
+                sidecar.rejected_suggestions().map_err(text)?,
+            )),
             None => match FactsSnapshot::open(stems.sidecar_dir()) {
-                Ok(FactsSnapshot::Absent) => Ok(HashMap::new()),
+                Ok(FactsSnapshot::Absent) => Ok((HashMap::new(), HashSet::new())),
                 Ok(FactsSnapshot::Unknown(why)) => Err(why),
-                Ok(FactsSnapshot::Open(reader)) => {
-                    read(&|id, kind| reader.facts(id, kind).map_err(|e| e.to_string()))
-                }
+                Ok(FactsSnapshot::Open(reader)) => Ok((
+                    read(&|id, kind| reader.facts(id, kind).map_err(|e| e.to_string()))?,
+                    reader.rejected_suggestions().map_err(text)?,
+                )),
                 Err(error) => Err(format!("the Sidecar could not be read: {error}")),
             },
         })
         .unwrap_or_else(|| Err("the Sidecar is being opened; try again".to_owned()))
-}
-
-/// The Facts among `facts` (one track's, of the kind `field`, newest
-/// first) that are waiting for the DJ and propose something other than
-/// `held`, the text the Library has. See [`Suggestion`] for the rule.
-fn waiting(facts: &[Fact], field: &str, held: &str) -> Vec<Suggestion> {
-    // Facts are numbered in the order they were recorded.
-    let decided = facts
-        .iter()
-        .filter(|fact| fact.is_live() && fact.source.kind == SourceKind::Dj)
-        .map(|fact| fact.id)
-        .max();
-    facts
-        .iter()
-        .filter(|fact| fact.is_live() && fact.source.kind != SourceKind::Dj)
-        .filter(|fact| decided.is_none_or(|decision| fact.id > decision))
-        .filter_map(|fact| {
-            let value = fact.value.as_str()?.trim();
-            (!value.is_empty() && value != held.trim()).then(|| Suggestion {
-                field: field.to_owned(),
-                fact_id: fact.id,
-                value: value.to_owned(),
-                source: fact.source.clone(),
-                confidence: fact.confidence,
-            })
-        })
-        .collect()
 }
 
 /// The dimensions of the DJ's tags that reach the deck, in the order the

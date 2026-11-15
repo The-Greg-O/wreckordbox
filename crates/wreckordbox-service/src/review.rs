@@ -34,7 +34,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
-use rbl_db::write::checked::{CheckedField, Revision};
+use rbl_db::write::checked::{CheckedField, CheckedText, Revision};
 use rbl_db::DbError;
 use rbl_library::Touched;
 use serde::{Deserialize, Serialize};
@@ -369,12 +369,26 @@ fn listing(
     stems: &Stems,
     filter: &Selection,
 ) -> Result<(Vec<Held>, bool, i64), ServiceError> {
-    let (report, watermark) = crate::projection::dry_run(library, stems, filter.tracks.clone())?;
-    let rows = report
-        .held
+    let (held, library_protected, watermark) = held(library, stems, &filter.tracks)?;
+    let rows = held
         .into_iter()
         .filter(|h| filter.matches(&h.track, h.field, &h.source, h.confidence))
         .collect();
+    Ok((rows, library_protected, watermark))
+}
+
+/// Everything waiting for the DJ on `tracks` (every track when empty): what
+/// Projection's dry run holds back, then the proposed titles and artists
+/// ([`crate::review_text`], wbx-66); whether Library Protection is on; and
+/// the Ledger watermark they were read at.
+fn held(
+    library: &OpenLibrary,
+    stems: &Stems,
+    tracks: &[String],
+) -> Result<(Vec<Held>, bool, i64), ServiceError> {
+    let (report, watermark) = crate::projection::dry_run(library, stems, tracks.to_vec())?;
+    let mut rows = report.held;
+    rows.extend(crate::review_text::waiting(library, stems, tracks)?);
     Ok((rows, report.library_protected, watermark))
 }
 
@@ -411,8 +425,9 @@ fn digest(rows: &[Held]) -> String {
     crate::projection::hash_of(&serde_json::to_vec(&named).unwrap_or_default())
 }
 
-/// One row's own token: the digest of that row alone.
-fn row_token(h: &Held) -> String {
+/// One row's own token: the digest of that row alone. The Intake queue
+/// gives each proposed title or artist this same token (wbx-66).
+pub(crate) fn row_token(h: &Held) -> String {
     digest(std::slice::from_ref(h))
 }
 
@@ -590,18 +605,16 @@ fn chosen(
             "name exactly one of: the Facts (facts), a filter (tracks, field, from, at_least), or all",
         ));
     }
-    let (report, watermark) = crate::projection::dry_run(library, stems, asked.tracks.clone())?;
+    let (waiting, _, watermark) = held(library, stems, &asked.tracks)?;
     if asked.facts.is_empty() {
-        let chosen = report
-            .held
+        let chosen = waiting
             .into_iter()
             .filter(|h| asked.all || asked.matches(&h.track, h.field, &h.source, h.confidence))
             .collect();
         return Ok((chosen, watermark));
     }
     let named: HashSet<i64> = asked.facts.iter().copied().collect();
-    let chosen: Vec<Held> = report
-        .held
+    let chosen: Vec<Held> = waiting
         .into_iter()
         .filter(|h| named.contains(&h.fact))
         .collect();
@@ -626,14 +639,19 @@ struct Row {
     updated_at: String,
     rating: i64,
     colour: i64,
+    title: String,
+    /// The artist's name.
+    artist: String,
 }
 
 fn read_row(db: &rbl_db::Library, track: &str) -> Option<Row> {
     db.connection()
         .query_row(
-            "SELECT COALESCE(rb_local_usn, 0), COALESCE(updated_at, ''),
-                    COALESCE(Rating, 0), COALESCE(CAST(ColorID AS INTEGER), 0)
-             FROM djmdContent WHERE ID = ?1 AND COALESCE(rb_local_deleted, 0) = 0",
+            "SELECT COALESCE(c.rb_local_usn, 0), COALESCE(c.updated_at, ''),
+                    COALESCE(c.Rating, 0), COALESCE(CAST(c.ColorID AS INTEGER), 0),
+                    COALESCE(c.Title, ''),
+                    COALESCE((SELECT a.Name FROM djmdArtist a WHERE a.ID = c.ArtistID), '')
+             FROM djmdContent c WHERE c.ID = ?1 AND COALESCE(c.rb_local_deleted, 0) = 0",
             [track],
             |r| {
                 Ok(Row {
@@ -641,16 +659,21 @@ fn read_row(db: &rbl_db::Library, track: &str) -> Option<Row> {
                     updated_at: r.get(1)?,
                     rating: r.get(2)?,
                     colour: r.get(3)?,
+                    title: r.get(4)?,
+                    artist: r.get(5)?,
                 })
             },
         )
         .ok()
 }
 
-fn value_of(row: &Row, field: Field) -> i64 {
+/// Whether `row` holds `value` (a listing's `before`) in `field`.
+fn shows(row: &Row, field: Field, value: &Value) -> bool {
     match field {
-        Field::Energy => row.rating,
-        Field::PrepColour => row.colour,
+        Field::Energy => row.rating == native_number(value),
+        Field::PrepColour => row.colour == native_number(value),
+        Field::Title => value.as_str() == Some(row.title.as_str()),
+        Field::Artist => value.as_str() == Some(row.artist.as_str()),
     }
 }
 
@@ -732,7 +755,7 @@ fn accept(
     for held in &chosen {
         let fine = rows
             .get(&held.track)
-            .is_some_and(|row| value_of(row, held.field) == native_number(&held.before));
+            .is_some_and(|row| shows(row, held.field, &held.before));
         if !fine {
             return Err(early(changed_error(&format!(
                 "track {} is not as the DJ was shown it",
@@ -744,80 +767,95 @@ fn accept(
     hold("selected");
     let refused = |why: String| DbError::WriteRefused(format!("{CHANGED_MARK}{why}"));
     let mut applied: Vec<i64> = Vec::new();
-    let made = library.asserting_edit(Touched::Metadata(tracks.clone()), UNDO_LABEL, |writer| {
-        // Something recorded wrote one of these tracks since the list was
-        // read (an assertion writes no row, so the row alone cannot say).
-        let newer = stems
-            .with_sidecar_wait(|open| {
-                open.map_or(Ok(false), |sidecar| {
-                    sidecar.written_since(watermark, &tracks)
+    // A title or an artist is a track column: the whole index is re-read,
+    // while the Ledger's evidence stays the chosen tracks (wbx-66).
+    let refresh = if chosen.iter().any(|h| crate::review_text::is_text(h.field)) {
+        Touched::Tracks
+    } else {
+        Touched::Metadata(tracks.clone())
+    };
+    let made = library.asserting_edit_refreshing(
+        Touched::Metadata(tracks.clone()),
+        refresh,
+        UNDO_LABEL,
+        |writer| {
+            // Something recorded wrote one of these tracks since the list was
+            // read (an assertion writes no row, so the row alone cannot say).
+            let newer = stems
+                .with_sidecar_wait(|open| {
+                    open.map_or(Ok(false), |sidecar| {
+                        sidecar.written_since(watermark, &tracks)
+                    })
                 })
-            })
-            .map_err(|e| DbError::WriteRefused(e.message))?
-            .map_err(|e| DbError::WriteRefused(e.to_string()))?;
-        if newer {
-            return Err(refused(
-                "a track was edited while the accept was being made".into(),
-            ));
-        }
-        // The selected tracks' Facts again, under the same hold of Fact
-        // commands: none recorded, replaced, moved or marked since.
-        match facts_state(stems, &chosen) {
-            Ok(now) if now == facts_then => {}
-            Ok(_) => {
+                .map_err(|e| DbError::WriteRefused(e.message))?
+                .map_err(|e| DbError::WriteRefused(e.to_string()))?;
+            if newer {
                 return Err(refused(
-                    "a Fact of a chosen track changed while the accept was being made".into(),
-                ))
+                    "a track was edited while the accept was being made".into(),
+                ));
             }
-            Err(e) => return Err(DbError::WriteRefused(e.message)),
-        }
-        // Each row on the writer's own connection: at the revision and
-        // value read with the selection, or nothing is written.
-        let mut expected = rows.clone();
-        for (track, row) in &expected {
-            if read_row(writer.library(), track).as_ref() != Some(row) {
-                return Err(refused(format!(
-                    "track {track} was written while the accept was being made"
-                )));
+            // The selected tracks' Facts again, under the same hold of Fact
+            // commands: none recorded, replaced, moved or marked since.
+            match facts_state(stems, &chosen) {
+                Ok(now) if now == facts_then => {}
+                Ok(_) => {
+                    return Err(refused(
+                        "a Fact of a chosen track changed while the accept was being made".into(),
+                    ))
+                }
+                Err(e) => return Err(DbError::WriteRefused(e.message)),
             }
-        }
-        let mut done = Vec::with_capacity(chosen.len());
-        let mut failure: Option<DbError> = None;
-        for (at, held) in chosen.iter().enumerate() {
-            let wrote = write_one(writer, held, expected.get(&held.track), at + 1);
-            match wrote {
-                Ok((_, edit, revision)) => {
-                    done.push(edit);
-                    applied.push(held.fact);
-                    // Test: after this value's commit, before the next
-                    // value's expectation is set.
-                    hold("committed");
-                    // Our own write moved the row on: the next value for it
-                    // expects exactly the revision this write committed and
-                    // the value it wrote, never a row read back now, which
-                    // another connection may have written since.
-                    if let Some(row) = expected.get_mut(&held.track) {
-                        row.usn = revision.usn;
-                        row.updated_at = revision.updated_at;
-                        let wrote = native_number(&held.after);
-                        match held.field {
-                            Field::Energy => row.rating = wrote,
-                            Field::PrepColour => row.colour = wrote,
+            // Each row on the writer's own connection: at the revision and
+            // value read with the selection, or nothing is written.
+            let mut expected = rows.clone();
+            for (track, row) in &expected {
+                if read_row(writer.library(), track).as_ref() != Some(row) {
+                    return Err(refused(format!(
+                        "track {track} was written while the accept was being made"
+                    )));
+                }
+            }
+            let mut done = Vec::with_capacity(chosen.len());
+            let mut failure: Option<DbError> = None;
+            for (at, held) in chosen.iter().enumerate() {
+                let wrote = write_one(writer, held, expected.get(&held.track), at + 1);
+                match wrote {
+                    Ok((_, edit, revision)) => {
+                        done.push(edit);
+                        applied.push(held.fact);
+                        // Test: after this value's commit, before the next
+                        // value's expectation is set.
+                        hold("committed");
+                        // Our own write moved the row on: the next value for it
+                        // expects exactly the revision this write committed and
+                        // the value it wrote, never a row read back now, which
+                        // another connection may have written since.
+                        if let Some(row) = expected.get_mut(&held.track) {
+                            row.usn = revision.usn;
+                            row.updated_at = revision.updated_at;
+                            let wrote = native_number(&held.after);
+                            let text = || held.after.as_str().unwrap_or_default().to_owned();
+                            match held.field {
+                                Field::Energy => row.rating = wrote,
+                                Field::PrepColour => row.colour = wrote,
+                                Field::Title => row.title = text(),
+                                Field::Artist => row.artist = text(),
+                            }
+                        }
+                        if done.len() == 1 {
+                            hold("between");
                         }
                     }
-                    if done.len() == 1 {
-                        hold("between");
+                    Err(e) if done.is_empty() => return Err(e),
+                    Err(e) => {
+                        failure = Some(e);
+                        break;
                     }
                 }
-                Err(e) if done.is_empty() => return Err(e),
-                Err(e) => {
-                    failure = Some(e);
-                    break;
-                }
             }
-        }
-        Ok((failure, done))
-    });
+            Ok((failure, done))
+        },
+    );
     match made {
         Ok((None, changed)) => Ok((
             Decided {
@@ -882,23 +920,29 @@ fn write_one(
         ));
     }
     let after = u8::try_from(native_number(&held.after)).unwrap_or(0);
-    let field = match held.field {
-        Field::Energy => CheckedField::Rating(after),
-        Field::PrepColour => CheckedField::Colour(after),
+    let revision = Revision {
+        usn: row.usn,
+        updated_at: row.updated_at.clone(),
     };
-    writer
-        .set_track_if_unchanged(
-            &held.track,
-            field,
-            &Revision {
-                usn: row.usn,
-                updated_at: row.updated_at.clone(),
-            },
-        )
-        .map_err(|e| match e {
-            DbError::Conflict(why) => DbError::WriteRefused(format!("{CHANGED_MARK}{why}")),
-            other => other,
-        })
+    let text = held.after.as_str().unwrap_or_default();
+    let wrote = match held.field {
+        Field::Energy => {
+            writer.set_track_if_unchanged(&held.track, CheckedField::Rating(after), &revision)
+        }
+        Field::PrepColour => {
+            writer.set_track_if_unchanged(&held.track, CheckedField::Colour(after), &revision)
+        }
+        Field::Title => {
+            writer.set_text_if_unchanged(&held.track, CheckedText::Title, text, &revision)
+        }
+        Field::Artist => {
+            writer.set_text_if_unchanged(&held.track, CheckedText::Artist, text, &revision)
+        }
+    };
+    wrote.map_err(|e| match e {
+        DbError::Conflict(why) => DbError::WriteRefused(format!("{CHANGED_MARK}{why}")),
+        other => other,
+    })
 }
 
 /// Every Fact of the chosen fields on the chosen tracks, as it stands:
@@ -949,7 +993,11 @@ fn offered(held: &Held) -> Offered {
         track: held.track.clone(),
         field: held.field.name().to_owned(),
         value: held.after.clone(),
-        canonical: native_number(&held.after),
+        canonical: if crate::review_text::is_text(held.field) {
+            crate::review_text::canonical(held.after.as_str().unwrap_or_default())
+        } else {
+            native_number(&held.after)
+        },
         source: held.source.clone(),
         confidence: held.confidence,
     }

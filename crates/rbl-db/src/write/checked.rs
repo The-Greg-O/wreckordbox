@@ -173,6 +173,141 @@ impl Writer {
     }
 }
 
+/// The text [`Writer::set_text_if_unchanged`] sets (wreckordbox, wbx-66).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckedText {
+    /// The title.
+    Title,
+    /// The artist, by name: its `djmdArtist` row is found or made, as
+    /// [`Writer::set_field`] makes it.
+    Artist,
+}
+
+impl CheckedText {
+    fn column(self) -> &'static str {
+        match self {
+            Self::Title => "Title",
+            Self::Artist => "ArtistID",
+        }
+    }
+
+    /// The text the row shows, as the information panel shows it.
+    fn shown(self) -> &'static str {
+        match self {
+            Self::Title => "COALESCE(Title, '')",
+            Self::Artist => {
+                "COALESCE((SELECT a.Name FROM djmdArtist a WHERE a.ID = djmdContent.ArtistID), '')"
+            }
+        }
+    }
+}
+
+impl Writer {
+    /// Sets the title or the artist of track `content` to `value` (trimmed)
+    /// only while its row is at `expected`, checked and written in one
+    /// immediate transaction, exactly as [`Self::set_track_if_unchanged`]
+    /// does for a rating or a colour: answers the edit to undo and the
+    /// revision the row is at after it. A track already showing the value
+    /// is left as it is. A row at another revision, or gone, is a
+    /// [`DbError::Conflict`], with nothing written; an empty value is
+    /// refused.
+    pub fn set_text_if_unchanged(
+        &mut self,
+        content: &str,
+        field: CheckedText,
+        value: &str,
+        expected: &Revision,
+    ) -> Result<(Changed, TrackEdit, Revision)> {
+        let value = value.trim();
+        if value.is_empty() {
+            return Err(DbError::WriteRefused(
+                "an empty title or artist is not written this way".to_owned(),
+            ));
+        }
+        let column = field.column();
+        self.prepare()?;
+        let stamp = time::now();
+        let tx = self
+            .library
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let row: Option<(i64, String, Value, String)> = tx
+            .query_row(
+                &format!(
+                    "SELECT COALESCE(rb_local_usn, 0), COALESCE(updated_at, ''), `{column}`, {}
+                     FROM djmdContent WHERE ID = ?1 AND rb_local_deleted = 0",
+                    field.shown()
+                ),
+                params![content],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional()?;
+        let Some((usn, updated_at, before, shown)) = row else {
+            return Err(DbError::Conflict(
+                "the track is no longer in the collection".to_owned(),
+            ));
+        };
+        if usn != expected.usn || updated_at != expected.updated_at {
+            return Err(DbError::Conflict(format!(
+                "track {content} was written since it was read"
+            )));
+        }
+        if shown == value {
+            return Ok((
+                Changed::default(),
+                TrackEdit {
+                    content: content.to_owned(),
+                    column,
+                    before: before.clone(),
+                    after: before,
+                },
+                expected.clone(),
+            ));
+        }
+        let stored = match field {
+            CheckedText::Title => Value::Text(value.to_owned()),
+            CheckedText::Artist => Value::Text(
+                super::intern(&tx, "djmdArtist", "Name", value, &mut self.rng, &stamp)?
+                    .unwrap_or_default(),
+            ),
+        };
+        let next = next_usn(&tx)?;
+        let rows = tx.execute(
+            &format!(
+                "UPDATE djmdContent SET `{column}` = ?1, rb_local_usn = ?2, updated_at = ?3
+                 WHERE ID = ?4 AND rb_local_deleted = 0
+                   AND COALESCE(rb_local_usn, 0) = ?5 AND COALESCE(updated_at, '') = ?6"
+            ),
+            params![stored, next, stamp, content, expected.usn, expected.updated_at],
+        )?;
+        if rows != 1 {
+            return Err(DbError::Conflict(format!(
+                "track {content} was written since it was read"
+            )));
+        }
+        set_counter(&tx, next)?;
+        let after: Value = tx.query_row(
+            &format!("SELECT `{column}` FROM djmdContent WHERE ID = ?1"),
+            params![content],
+            |r| r.get(0),
+        )?;
+        tx.commit()?;
+        Ok((
+            Changed { rows, usn: next },
+            TrackEdit {
+                content: content.to_owned(),
+                column,
+                before,
+                after,
+            },
+            Revision {
+                usn: next,
+                updated_at: stamp,
+            },
+        ))
+    }
+}
+
 /// One `djmdSongMyTag` row of a track and a My Tag, live or soft-deleted,
 /// as stored (wbx-29): what a My Tag assignment's revision is made of.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -17,7 +17,7 @@ pub struct Filter {
     /// Only this track; repeat for more.
     #[arg(long = "track", value_name = "TRACK_ID")]
     tracks: Vec<String>,
-    /// Only this field: `energy` or `prep_colour`.
+    /// Only this field: `energy`, `prep_colour`, `title` or `artist`.
     #[arg(long, value_name = "FIELD", value_parser = parse_field)]
     field: Option<Field>,
     /// Only Facts from this source (`agent:NAME`, `tool:NAME`, ...).
@@ -106,7 +106,7 @@ pub enum ReviewCommands {
 
 fn parse_field(text: &str) -> Result<Field, String> {
     serde_json::from_value(json!(text))
-        .map_err(|_| format!("{text:?} is not a field: energy or prep_colour"))
+        .map_err(|_| format!("{text:?} is not a field: energy, prep_colour, title or artist"))
 }
 
 fn selection(facts: &[i64], filter: &Filter, all: bool, source: Option<&SourceArg>) -> Selection {
@@ -238,6 +238,8 @@ fn field_name(field: Field) -> &'static str {
     match field {
         Field::Energy => "energy",
         Field::PrepColour => "prep_colour",
+        Field::Title => "title",
+        Field::Artist => "artist",
     }
 }
 
@@ -255,6 +257,9 @@ fn line(out: &mut String, h: &Held) {
         h.confidence,
         match (h.reason.as_str(), h.threshold) {
             ("below_confidence", Some(at)) => format!("below the policy's {at}"),
+            ("waits_for_dj", _) if matches!(h.field, Field::Title | Field::Artist) => {
+                "proposed; only the DJ decides".to_owned()
+            }
             ("waits_for_dj", _) => "the policy waits for the DJ".to_owned(),
             (other, _) => other.to_owned(),
         }
