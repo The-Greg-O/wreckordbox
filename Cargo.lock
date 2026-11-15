@@ -7211,6 +7211,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "wreckordbox-setplan"
+version = "1.10.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "toml 0.8.2",
+]
+
+[[package]]
 name = "wreckordbox-sidecar"
 version = "1.10.0"
 dependencies = [
