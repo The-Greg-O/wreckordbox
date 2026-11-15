@@ -11,6 +11,7 @@ mod decisions;
 mod facts;
 mod fingerprint;
 mod ledger;
+mod lyrics;
 mod mutants;
 mod stems;
 
