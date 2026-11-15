@@ -75,6 +75,9 @@ pub mod codes {
     /// The accept stopped part-way: what it applied is recorded and named,
     /// with what it did not apply.
     pub const PARTIAL: &str = "review_partial";
+    /// The selection holds two proposals for the same track and field
+    /// (wbx-66): nothing was written; the DJ chooses one.
+    pub const COMPETING: &str = "review_competing";
 }
 
 /// What the window's Undo calls an accept.
@@ -510,7 +513,10 @@ fn listed(
         rows.into_iter()
             .filter(|h| {
                 if asked.facts.is_empty() {
-                    asked.all || asked.matches(&h.track, h.field, &h.source, h.confidence)
+                    // A proposed title or artist is accepted only by name,
+                    // never by a filter, a confidence or `all` (wbx-66).
+                    !crate::review_text::is_text(h.field)
+                        && (asked.all || asked.matches(&h.track, h.field, &h.source, h.confidence))
                 } else {
                     asked.facts.contains(&h.fact)
                 }
@@ -719,7 +725,16 @@ fn accept(
     // the selection read here is the one written below, since the listing
     // must still digest to the token the DJ was shown (or each row to its
     // own) under the gate, or nothing is written.
+    if asked.facts.is_empty()
+        && asked.rows.is_empty()
+        && asked.field.is_some_and(crate::review_text::is_text)
+    {
+        return Err(early(bad_request(
+            "a proposed title or artist is accepted only by naming it: give its Fact (or row), not a filter",
+        )));
+    }
     let (outside, _) = listed(library, stems, asked).map_err(early)?;
+    competing(&outside).map_err(early)?;
     let outside: Vec<String> = outside.into_iter().map(|h| h.track).collect();
     if !outside.is_empty() {
         crate::large_run::before_write(library, stems, outside.iter().cloned()).map_err(early)?;
@@ -729,6 +744,7 @@ fn accept(
     // one was taken, is checked still of the moment before (wbx-25).
     let _gate = crate::large_run::bound(library, stems, &outside).map_err(early)?;
     let (chosen, watermark) = listed(library, stems, asked).map_err(early)?;
+    competing(&chosen).map_err(early)?;
     if chosen.is_empty() {
         return Ok((
             Decided {
@@ -880,6 +896,28 @@ fn accept(
         ))),
         Err(e) => Err(early(e)),
     }
+}
+
+/// Refuses a selection holding two proposals for one track and field: both
+/// cannot be the DJ's value, and writing both would leave the last one
+/// written and an Undo step that cannot be taken back (wbx-66 review).
+fn competing(chosen: &[Held]) -> Result<(), ServiceError> {
+    let mut seen: std::collections::BTreeMap<(&str, Field), i64> =
+        std::collections::BTreeMap::new();
+    for h in chosen {
+        if let Some(other) = seen.insert((h.track.as_str(), h.field), h.fact) {
+            return Err(ServiceError::new(
+                codes::COMPETING,
+                format!(
+                    "Facts {other} and {} both propose a {} for track {}: choose one; nothing was written",
+                    h.fact,
+                    h.field.name(),
+                    h.track
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// How the index is refreshed after an accept: a title or an artist is a

@@ -236,3 +236,67 @@ fn a_title_written_since_it_was_shown_refuses_the_accept_and_is_kept() {
         .unwrap();
     assert_eq!(stored, "Typed Elsewhere");
 }
+
+#[test]
+fn a_bulk_accept_by_filter_or_all_never_takes_a_proposed_title_or_artist() {
+    let s = Sandbox::new();
+    let (title, _) = proposed(&s);
+    // An Energy Fact waits beside them (the policy waits by default).
+    let energy = fact(&s, TRACK, "energy", "4", "agent:tagger", "0.95");
+    let token = ok(&s, &["review", "waiting"])["token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // Everything, and everything at or above a confidence: Energy only.
+    let decided = ok(
+        &s,
+        &[
+            "review",
+            "accept",
+            "--at-least",
+            "0.5",
+            "--token",
+            &token,
+            "--source",
+            "dj",
+        ],
+    );
+    let decided_facts: Vec<i64> = decided["decided"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["fact"].as_i64().unwrap())
+        .collect();
+    assert_eq!(decided_facts, [energy], "{decided}");
+    assert_eq!(show(&s)["title"], "Old Title");
+    assert_eq!(show(&s)["artist"], "Old Artist");
+    assert_eq!(intake_suggestions(&s).len(), 2);
+    let token = ok(&s, &["review", "waiting"])["token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let all = ok(
+        &s,
+        &[
+            "review", "accept", "--all", "--token", &token, "--source", "dj",
+        ],
+    );
+    assert_eq!(all["count"], 0, "{all}");
+    assert_eq!(show(&s)["title"], "Old Title");
+
+    // A filter naming the field is refused: a proposal is accepted by name.
+    let token = waiting_rows(&s, "title")["token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let error = refused(
+        &s,
+        &[
+            "review", "accept", "--field", "title", "--token", &token, "--source", "dj",
+        ],
+    );
+    assert_eq!(error["code"], "bad_request", "{error}");
+    assert_eq!(show(&s)["title"], "Old Title");
+    assert_eq!(waiting_rows(&s, "title")["waiting"][0]["fact"], title);
+}
