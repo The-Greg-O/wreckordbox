@@ -388,8 +388,9 @@ fn numbers_in_the_text() {
     for text in said {
         assert!(guide.contains(&text), "the guide should say {text:?}");
     }
-    // The compensatory example of section 4.
-    assert!((1.0 + 1.0 + 0.0) > 3.0 * 0.65);
+    // The compensatory example of section 4: 1 + 1 + 0 beats 3 x 0.65.
+    let (lopsided, even): (f64, f64) = ([1.0, 1.0, 0.0].iter().sum(), 3.0 * 0.65);
+    assert!(lopsided > even && (even - 1.95).abs() < 1e-12);
     assert!(guide.contains("totals 2.0 and beats one scoring 0.65 on all three (1.95)"));
     // One key move (0.25) is a quarter of S in tempo: 1% at S = 4.
     assert_eq!(1.0 - key_score(1), 1.0 / 4.0);
@@ -553,11 +554,7 @@ fn example_recipes_are_valid_and_their_steps_fit() {
 fn shapes_table_points_match_the_examples() {
     // The shapes table's warm-up, peak and closing rows are the examples'.
     let blocks = toml_blocks();
-    for (name, block) in [
-        ("Warm-up", 0),
-        ("Peak-time hour", 1),
-        ("Closing", 2),
-    ] {
+    for (name, block) in [("Warm-up", 0), ("Peak-time hour", 1), ("Closing", 2)] {
         let line = GUIDE
             .lines()
             .find(|l| l.starts_with(&format!("| {name} |")))
