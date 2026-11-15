@@ -39,6 +39,7 @@ mod backup_zip;
 mod backup_sizes;
 mod backup_restore_scripts;
 mod file_journal;
+mod journal_receipt;
 mod new_library;
 mod diagnostics;
 mod explorer;

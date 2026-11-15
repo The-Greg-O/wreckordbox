@@ -66,7 +66,13 @@ impl FileJournal {
 
     fn install(&self, after: bool, check_external: bool) -> AppResult<()> {
         // Verify the whole set before changing anything during recovery.
-        if check_external {
+        if check_external { self.verify_unchanged_outside()?; }
+        self.install_files(after)
+    }
+
+    /// Every file is at its before or its after image: nothing outside
+    /// this edit changed it.
+    fn verify_unchanged_outside(&self) -> AppResult<()> {
             for (index, file) in self.manifest.files.iter().enumerate() {
                 let current = match std::fs::read(&file.path) {
                     Ok(bytes) => Some(bytes),
@@ -79,7 +85,10 @@ impl FileJournal {
                     return Err(error(format!("{} changed outside this edit; recovery files remain in {}", file.path.display(), self.dir.display())));
                 }
             }
-        }
+        Ok(())
+    }
+
+    fn install_files(&self, after: bool) -> AppResult<()> {
         for (index, file) in self.manifest.files.iter().enumerate() {
             if !after && !file.existed {
                 match std::fs::remove_file(&file.path) {
@@ -95,6 +104,27 @@ impl FileJournal {
             }
         }
         Ok(())
+    }
+
+    /// The files installing `after` (or the before images) would change,
+    /// each with whether it would exist afterwards.
+    fn changes(&self, after: bool) -> AppResult<Vec<(PathBuf, bool)>> {
+        let mut changes = Vec::new();
+        for (index, file) in self.manifest.files.iter().enumerate() {
+            let current = match std::fs::read(&file.path) {
+                Ok(bytes) => Some(bytes),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                Err(e) => return Err(error(e)),
+            };
+            let target = if after || file.existed {
+                let suffix = if after { "after" } else { "before" };
+                Some(std::fs::read(self.dir.join(format!("{index}.{suffix}"))).map_err(error)?)
+            } else {
+                None
+            };
+            if current != target { changes.push((file.path.clone(), target.is_some())); }
+        }
+        Ok(changes)
     }
 
     fn remove(&self) -> AppResult<()> {
@@ -153,6 +183,12 @@ pub fn recover(root: &Path, location: &rbl_db::LibraryLocation) -> AppResult<()>
             return Err(error(format!("the library row changed outside the interrupted edit; journal retained at {}", journal.dir.display())));
         }
         let committed = journal.manifest.committed || (journal.manifest.changes_row && changed && expected);
+        // What recovery itself changes is handed to the Ledger as a receipt
+        // first (wbx-14.15); a journal whose files are already in place
+        // changes nothing and owes nothing.
+        journal.verify_unchanged_outside()?;
+        let changes = journal.changes(committed)?;
+        crate::journal_receipt::hand_off(root, location, &journal.dir, &journal.manifest.track, committed, &changes)?;
         journal.install(committed, true)?;
         journal.remove()?;
     }
