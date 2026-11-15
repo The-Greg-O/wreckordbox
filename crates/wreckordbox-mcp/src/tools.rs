@@ -587,6 +587,27 @@ pub fn catalogue() -> Vec<Tool> {
         vec![],
         vec![],
     );
+    b.read(
+        "read_set_plan_check",
+        "setplans.check",
+        "Checks a Recipe's text: every mistake with its line, or the Recipe as read (`wreckordbox set-plan check`).",
+        vec![("recipe", text("The Recipe's text (TOML, `version = 1`).")),],
+        vec!["recipe"],
+    );
+    b.read(
+        "read_set_plans",
+        "setplans.list",
+        "The Set plans kept in the Sidecar, newest first (`wreckordbox set-plan list`).",
+        vec![],
+        vec![],
+    );
+    b.read(
+        "read_set_plan",
+        "setplans.show",
+        "One kept Set plan: the ordered tracks and each transition's score and reasons (`wreckordbox set-plan show`).",
+        vec![("id", integer("The Set plan's identifier, from `read_set_plans`."))],
+        vec!["id"],
+    );
 
     // Library edits.
     let library = |b: &mut Builder,
@@ -806,6 +827,37 @@ pub fn catalogue() -> Vec<Tool> {
             ("outcome", text("How it went, in a word or a sentence.")),
         ],
         vec!["id"],
+        json!({}),
+    );
+    b.add(
+        "change_set_plan_build",
+        "setplans.build",
+        Effect::Sidecar,
+        Who::Starts,
+        "Builds a Set plan from a Recipe and a pool of tracks and keeps it, in a Run of its own \
+         (`wreckordbox set-plan build`). The same Recipe, pool and Facts give the same plan. When no \
+         plan keeps the Recipe's limits, answers `built: false` with the criterion in the way and \
+         keeps nothing. Name the pool by `ids`, `selection`, or both.",
+        vec![
+            ("recipe", text("The Recipe's text (TOML, `version = 1`).")),
+            ("recipe_file", text("Where the Recipe was read from, kept with the plan.")),
+            ("ids", texts("Tracks of the pool by identifier.")),
+            (
+                "selection",
+                json!({
+                    "type": "object",
+                    "description": "Tracks of the pool as `read_tracks_query` selects them.",
+                    "properties": {
+                        "search": {"type": "string"},
+                        "playlist": {"type": "string"},
+                        "genre": {"type": "string"},
+                        "energy": {"type": "string"}
+                    },
+                    "additionalProperties": false
+                }),
+            ),
+        ],
+        vec!["recipe"],
         json!({}),
     );
     b.add(
