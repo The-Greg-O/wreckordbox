@@ -10,6 +10,7 @@ mod decisions;
 mod facts;
 mod intake;
 mod intensity;
+mod lyrics;
 mod ledger;
 mod mutants;
 mod mytag_edits;
@@ -160,6 +161,13 @@ enum Commands {
     Intensity {
         #[command(subcommand)]
         command: intensity::IntensityCommands,
+    },
+    /// Lyrics: the words of a track, read from its own tags or handed in
+    /// with their source, kept in the Sidecar for agents to read and
+    /// search. Never fetched, never written to the Library or a Stick.
+    Lyrics {
+        #[command(subcommand)]
+        command: lyrics::LyricsCommands,
     },
     /// Check the Tag schema, or write a first one from the Library's
     /// MyTags.
@@ -408,6 +416,9 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
         }
         Commands::Intensity { command } => {
             print(&intensity::run(&mut connect(&config)?, cli.json, command)?);
+        }
+        Commands::Lyrics { command } => {
+            print(&lyrics::run(&mut connect(&config)?, cli.json, command)?);
         }
         Commands::Schema { command } => {
             let (text, ok) = schema::run(&mut connect(&config)?, cli.json, command)?;

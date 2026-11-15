@@ -23,6 +23,8 @@ pub mod intensity;
 pub mod large_run;
 pub mod ledger;
 mod library;
+pub mod lyrics;
+mod lyrics_tags;
 pub mod mutant_edits;
 mod mutant_follow;
 mod mutant_reads;

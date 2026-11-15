@@ -1536,6 +1536,8 @@ const SERVICE_NOT_STICK_WRITERS: &[&str] = &[
     "history.list", "history.tracks",
     "intake.colours", "intake.counts", "intake.list", "intake.problems", "intake.set_tags", "intake.tag_panel",
     "intensity.cancel", "intensity.measure", "intensity.show",
+    // Lyrics (wbx-f6v): Sidecar records and reads; audio tags are only read.
+    "lyrics.import_embedded", "lyrics.list", "lyrics.search", "lyrics.set", "lyrics.show",
     "mutants.clear", "mutants.create", "mutants.edit", "mutants.get", "mutants.list", "mutants.remove",
     "mytags.assign", "mytags.create", "mytags.create_category", "mytags.delete", "mytags.list",
     "mytags.merge", "mytags.move", "mytags.of_track", "mytags.rename", "mytags.reorder",

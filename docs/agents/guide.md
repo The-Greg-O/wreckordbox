@@ -241,6 +241,26 @@ printf '%s\n' '{"track":"10003","kind":"genre","value":["Tech House"],"confidenc
 `project --dry-run` then shows what Projection would write into the Library
 from standing Facts, and what it holds back for the DJ (`review waiting`).
 
+### Match tracks on the themes of their lyrics
+
+wreckordbox never fetches lyrics. It keeps the words already in a file's own
+tags, and the words you hand it with the page you took them from; you judge the
+themes. Lyrics are Facts in the Sidecar (a Judgement that follows the music);
+they never reach the Library's fields or a Stick.
+
+```sh
+wreckordbox --json lyrics import-embedded --dry-run                 # which files carry lyrics; writes nothing
+wreckordbox --json lyrics import-embedded --source agent:claude     # record them
+wreckordbox --json lyrics list --status unknown                     # the tracks still to look up
+# Found on the web: give the page and the day you took them.
+wreckordbox --json lyrics set 10002 words.txt --source agent:claude \
+  --source-url https://lyrics.example/song --date 2026-11-15 --language en
+wreckordbox --json lyrics set 10003 --instrumental --source agent:claude   # none: stop looking
+wreckordbox --json lyrics search harbour night                      # every word must appear
+# Record the themes you read as ordinary Facts:
+wreckordbox --json facts record 10002 themes longing travel --source agent:claude --confidence 0.7
+```
+
 ### Start and finish a Run so changes are grouped and undoable
 
 ```sh
@@ -1047,6 +1067,85 @@ Stops the measuring in progress; finished tracks are kept.
 {"cancelled": false}
 ```
 
+### `wreckordbox lyrics`
+
+The group for Lyrics: the words of a track, in the Sidecar, so tracks can be
+matched on their themes. Never fetched by wreckordbox, never written to the
+Library or a Stick. Each record is a Fact of the reserved Judgement kind
+`lyrics` (it follows the music through a re-add, never goes stale), its value
+`{"instrumental", "text", "synced", "lines": [{"at_ms", "text"}], "language",
+"origin": "embedded" | "supplied", "tag", "address", "retrieved"}`. Which
+record stands follows the DJ's source rules (`facts standing`).
+
+### `wreckordbox lyrics show`
+
+Reads the lyrics of a track. Argument: `<TRACK_ID>`. `status` is `lyrics`,
+`instrumental` or `unknown` (nothing recorded).
+
+```json
+{"track": {"id": "10002", "title": "..."}, "status": "lyrics",
+ "standing": {"id": 4, "kind": "lyrics", "source": {"kind": "web", "name": "https://..."},
+              "value": {"instrumental": false, "text": "...", "origin": "supplied", "address": "https://...", "retrieved": "2026-11-15"}, ...},
+ "records": [ /* every source's live record, newest first */ ]}
+```
+
+### `wreckordbox lyrics set`
+
+Changes the Sidecar: one track's lyrics, from `[FILE]` or standard input, or
+`--instrumental` (an explicit "no lyrics"). `--lrc` reads LRC (`[mm:ss.xx]`
+lines) as synced lyrics. `--source-url URL --date YYYY-MM-DD` for lyrics taken
+from the web (the record's source is then `web:URL`; the Run is `--source`'s),
+`--language`, `--confidence` (default 1), `--source` (required unless `--run`),
+`--run`, `--description`. The same source again replaces its own record.
+Fails: `invalid_lyrics` (no words and not instrumental, both, an address
+without a date, a bad date), `invalid_source`, `track_not_found`,
+`sidecar_on_stick`.
+
+```json
+{"created_run": true, "run": {"id": 3, "source": {"kind": "agent", "name": "claude"}, ...},
+ "fact": {"id": 4, "track_id": "10002", "kind": "lyrics", "value": {...}, ...}}
+```
+
+### `wreckordbox lyrics import-embedded`
+
+Changes the Sidecar: reads the lyrics already in tracks' audio tags (ID3v2
+`SYLT` then `USLT` in MP3, AIFF and WAV; Vorbis `LYRICS` then `UNSYNCEDLYRICS`
+in FLAC and Ogg; MP4 `©lyr`) and records each as source `tool:file-tags`, all
+in one Run of `--source` (required unless `--run`). `--tracks ID...` (left out:
+every track), `--dry-run` (reads and reports, records nothing, needs no source).
+The audio files are only read. A file without lyrics is `none` and records
+nothing (it does not mean the track has none); a missing or unreadable file is
+`failed` with its `problem`. Refused, dry run included, for a Library hosted on
+a Stick (`sidecar_on_stick`).
+
+```json
+{"dry_run": false, "run": {...}, "found": 5, "none": 1, "failed": 1,
+ "tracks": [{"track": {"id": "10010", "title": "..."}, "found": "found", "tag": "ID3v2 USLT", "synced": false,
+             "language": "eng", "fact": 12}, ...]}
+```
+
+### `wreckordbox lyrics list`
+
+Reads the Library's tracks by what is known of their words. `--status
+lyrics|instrumental|unknown`, `--limit` (100), `--offset`.
+
+```json
+{"counts": {"lyrics": 12, "instrumental": 3, "unknown": 85}, "total": 100, "offset": 0, "limit": 100,
+ "next_offset": null, "tracks": [{"id": "10001", "title": "...", "artist": "...", "status": "unknown"}, ...]}
+```
+
+### `wreckordbox lyrics search`
+
+Reads: full-text search of the stored lyrics with SQLite FTS5 (`engine:
+"sqlite-fts5"`). `<WORDS>...`: every word must appear, in any case and order;
+punctuation is ignored. Only live records are searched. `--limit` (100).
+
+```json
+{"engine": "sqlite-fts5", "text": "harbour night",
+ "hits": [{"track": {"id": "10002", "title": "...", "artist": "..."}, "fact": {...}, "standing": true,
+           "snippet": "Neon tide pulls the [harbour] lights...", "rank": -1.2}]}
+```
+
 ### `wreckordbox schema`
 
 The group for the Tag schema (`tag-schema.toml` in the Sidecar's folder).
@@ -1255,7 +1354,9 @@ Reads (each named after the CLI command it mirrors in its description):
 `read_decisions`, `read_decision`, `read_mutants`, `read_mutant`,
 `read_review_waiting`, `read_review_rejected`, `read_projection_barriers`,
 `read_projection_plan`, `read_sticks`, `read_stick_load_preview`,
-`read_stems`, `read_intensity`, `read_schema_check`.
+`read_stems`, `read_intensity`, `read_lyrics`, `read_lyrics_list`,
+`read_lyrics_search`, `read_lyrics_embedded` (`lyrics import-embedded --dry-run`),
+`read_schema_check`.
 
 Changes to the Library: `change_track_rating`, `change_prep_colour`,
 `change_mytag_assign`, `change_mytag_unassign`, `change_mytag_create`,
@@ -1266,7 +1367,8 @@ Changes to the Library: `change_track_rating`, `change_prep_colour`,
 
 Changes to the Sidecar: `change_run_start`, `change_run_finish`,
 `change_record_facts`, `change_decision_create`, `change_decision_answer`,
-`change_mutant_create`, `change_mutant_edit`, `change_mutant_remove`.
+`change_mutant_create`, `change_mutant_edit`, `change_mutant_remove`,
+`change_lyrics_set`, `change_lyrics_import_embedded`.
 
 Changes to Library Protection: `change_protection_on` (only on; off is the
 DJ's).

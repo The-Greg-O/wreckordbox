@@ -27,6 +27,7 @@ mod large_run_backup;
 mod ledger_failures;
 mod library_protection;
 mod library_reading;
+mod lyrics;
 mod mutant_edits;
 mod mutants;
 mod mutants_follow;

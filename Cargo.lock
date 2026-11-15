@@ -7195,6 +7195,7 @@ name = "wreckordbox-service"
 version = "1.10.0"
 dependencies = [
  "dirs 5.0.1",
+ "lofty",
  "parking_lot",
  "rbl-anlz",
  "rbl-backup",

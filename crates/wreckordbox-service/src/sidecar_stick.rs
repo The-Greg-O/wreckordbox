@@ -33,6 +33,8 @@ pub(crate) const RECORDS: &[&str] = &[
     "decisions.decide",
     "facts.record",
     "intensity.measure",
+    "lyrics.import_embedded",
+    "lyrics.set",
     "mutants.clear",
     "mutants.create",
     "mutants.edit",

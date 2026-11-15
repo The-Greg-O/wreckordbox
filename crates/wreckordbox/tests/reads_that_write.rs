@@ -194,6 +194,10 @@ fn sweep(s: &Sandbox, id: &str, playlist: &str, tag: &str, populated: bool) {
         ("stems.show", json!({"id":id})),
         ("stems.status", json!({"id":id})),
         ("intensity.show", json!({"id":id})),
+        ("lyrics.show", json!({"id":id})),
+        ("lyrics.list", json!({})),
+        ("lyrics.search", json!({"text":"harbour"})),
+        ("lyrics.import_embedded", json!({"tracks":[id],"dry_run":true})),
         ("facts.kinds", json!({})),
         ("facts.of_track", json!({"id":id})),
         (
