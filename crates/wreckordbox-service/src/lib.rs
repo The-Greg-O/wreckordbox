@@ -25,6 +25,8 @@ pub mod ledger;
 mod library;
 pub mod lookup_match;
 pub mod lookups;
+pub mod lyrics;
+mod lyrics_tags;
 pub mod mutant_edits;
 mod mutant_follow;
 mod mutant_reads;

@@ -624,6 +624,20 @@ impl Shared {
                     self.with_library(|library| crate::stems::parent(library, id))?
                 })
             }
+            lyrics if crate::lyrics::answers(lyrics) => {
+                let _facts = crate::review::exclude(&self.stems);
+                // The Sidecar's: the Library is only read, to find tracks.
+                crate::lyrics::answer(
+                    &self.stems,
+                    request,
+                    &crate::lyrics::Library {
+                        track: &|id| {
+                            self.with_library(|library| crate::stems::parent(library, id))?
+                        },
+                        index: &|| self.with_library(crate::library::OpenLibrary::index)?,
+                    },
+                )
+            }
             intensity if crate::intensity::answers(intensity) => {
                 // As for Stems: only finding the tracks takes the Library.
                 crate::intensity::answer(&self.stems, request, &|wanted| {

@@ -34,6 +34,8 @@ pub(crate) const RECORDS: &[&str] = &[
     "facts.record",
     "intensity.measure",
     "lookup.check",
+    "lyrics.import_embedded",
+    "lyrics.set",
     "mutants.clear",
     "mutants.create",
     "mutants.edit",

@@ -39,6 +39,9 @@ wreckordbox-stick-protection = { path = "../wreckordbox-stick-protection" }
 # volumes the window offers; the Stick read without recovering it.
 wreckordbox-stick-write = { path = "../wreckordbox-stick-write" }
 wreckordbox-stick-outline = { path = "../wreckordbox-stick-outline" }
+# Lyrics already in an audio file's own tags (wbx-f6v), read only; the
+# same tag reader the Library's import uses.
+lofty = { version = "0.22", default-features = false }
 rbl-export = { path = "../rbl-export" }
 rbl-devices = { path = "../rbl-devices" }
 rbl-core = { path = "../rbl-core" }

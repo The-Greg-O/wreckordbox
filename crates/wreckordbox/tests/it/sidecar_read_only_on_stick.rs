@@ -30,6 +30,8 @@ const RECORDS: &[&str] = &[
     "facts.record",
     "intensity.measure",
     "lookup.check",
+    "lyrics.import_embedded",
+    "lyrics.set",
     "mutants.clear",
     "mutants.create",
     "mutants.edit",
@@ -110,6 +112,9 @@ fn reads(track: &str) -> Vec<(&'static str, Value)> {
         ("intake.tag_panel", json!({ "id": track })),
         ("intensity.show", json!({ "id": track })),
         ("lookup.describe", json!({ "id": track })),
+        ("lyrics.list", json!({})),
+        ("lyrics.search", json!({ "text": "harbour" })),
+        ("lyrics.show", json!({ "id": track })),
         ("mutants.get", json!({ "id": 1 })),
         ("mutants.list", json!({})),
         ("mytags.list", json!({})),
@@ -314,6 +319,8 @@ fn record_args(command: &str, track: &str) -> Value {
             "source": { "kind": "dj" },
         }),
         "stems.separate" | "intensity.measure" => json!({ "id": track, "tracks": [track] }),
+        "lyrics.set" => json!({ "id": track, "text": "words", "source": { "kind": "dj" } }),
+        "lyrics.import_embedded" => json!({ "tracks": [track], "source": { "kind": "dj" } }),
         "review.accept" | "review.reject" | "review.reopen" => {
             json!({ "facts": [2], "source": { "kind": "dj" } })
         }

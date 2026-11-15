@@ -636,6 +636,51 @@ pub fn catalogue() -> Vec<Tool> {
         vec!["id"],
     );
     b.read(
+        "read_lyrics",
+        "lyrics.show",
+        "The lyrics the Sidecar holds for one track: `status` (lyrics, instrumental or unknown), the \
+         `standing` record and every source's (`wreckordbox lyrics show`). Each record's `value` has \
+         `text`, `synced` and timed `lines`, `language`, `origin` (embedded or supplied) and, for lyrics \
+         from the web, `address` and `retrieved`.",
+        vec![("id", text(TRACK_ID))],
+        vec!["id"],
+    );
+    b.read(
+        "read_lyrics_list",
+        "lyrics.list",
+        "The Library's tracks by what is known of their words: lyrics, instrumental or unknown, with \
+         counts of each (`wreckordbox lyrics list`). Unknown tracks are the ones to look up.",
+        vec![
+            ("status", json!({"type": "string", "enum": ["lyrics", "instrumental", "unknown"], "description": "Only tracks in this state."})),
+            ("limit", integer(LIMIT)),
+            ("offset", integer(OFFSET)),
+        ],
+        vec![],
+    );
+    b.read(
+        "read_lyrics_search",
+        "lyrics.search",
+        "Full-text search over the stored lyrics (SQLite FTS5): tracks whose words contain every word \
+         given, best match first, with the match in context (`wreckordbox lyrics search`). Use it to \
+         find tracks on a theme; the themes themselves are yours to judge.",
+        vec![
+            ("text", text("The words to find, in any case and order; punctuation is ignored.")),
+            ("limit", integer(LIMIT)),
+        ],
+        vec!["text"],
+    );
+    b.add(
+        "read_lyrics_embedded",
+        "lyrics.import_embedded",
+        Effect::Read,
+        Who::Nobody,
+        "Which tracks have lyrics in their own audio tags: found, none or failed per track, recording \
+         nothing (`wreckordbox lyrics import-embedded --dry-run`).",
+        vec![("tracks", texts("The tracks' identifiers; left out, every track."))],
+        vec![],
+        json!({"dry_run": true}),
+    );
+    b.read(
         "read_schema_check",
         "schema.check",
         "Checks the Library's Tag schema and shows the MyTag categories its deck view makes (`wreckordbox schema check`).",
@@ -1030,6 +1075,52 @@ pub fn catalogue() -> Vec<Tool> {
             ("confidence", json!({"type": "number", "minimum": 0, "maximum": 1, "description": "How sure, 0 to 1, for every Fact that does not say."})),
         ],
         vec!["facts"],
+        json!({}),
+    );
+    b.add(
+        "change_lyrics_set",
+        "lyrics.set",
+        Effect::Sidecar,
+        Who::InArgs,
+        "Records a track's lyrics, or that it is instrumental, as a Fact that follows the music \
+         (`wreckordbox lyrics set`). Lyrics found on the web need the page's `address` and the `date` \
+         you took them; the record's source is then `web:<address>`. Never written to the Library or a Stick. \
+         Your own record replaces your earlier one for the track.",
+        vec![
+            ("id", text(TRACK_ID)),
+            ("text", text("The words, lines separated by newlines. Not with `lines` or `instrumental`.")),
+            (
+                "lines",
+                json!({
+                    "type": "array",
+                    "description": "Synced lyrics: timed lines.",
+                    "items": {
+                        "type": "object",
+                        "properties": {"at_ms": {"type": "integer", "minimum": 0}, "text": {"type": "string"}},
+                        "required": ["at_ms", "text"],
+                        "additionalProperties": false
+                    }
+                }),
+            ),
+            ("instrumental", boolean("The track has no words: nobody needs to look further.")),
+            ("language", text("A language code such as `eng` or `en`.")),
+            ("address", text("The web address the lyrics were taken from.")),
+            ("date", text("The date they were taken, `YYYY-MM-DD`.")),
+            ("confidence", json!({"type": "number", "minimum": 0, "maximum": 1, "description": "How sure, 0 to 1; left out, 1."})),
+        ],
+        vec!["id"],
+        json!({}),
+    );
+    b.add(
+        "change_lyrics_import_embedded",
+        "lyrics.import_embedded",
+        Effect::Sidecar,
+        Who::InArgs,
+        "Reads lyrics from the tracks' own audio tags and records those found, all in one Run \
+         (`wreckordbox lyrics import-embedded`). The audio files are only read. Reports found, none or \
+         failed per track.",
+        vec![("tracks", texts("The tracks' identifiers; left out, every track."))],
+        vec![],
         json!({}),
     );
     b.add(

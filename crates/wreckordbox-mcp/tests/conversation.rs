@@ -403,6 +403,40 @@ fn a_sidecar_change_takes_the_agent_as_its_source() {
 }
 
 #[test]
+fn an_agent_hands_in_lyrics_from_the_web_and_finds_the_track_by_its_words() {
+    // Synthetic lyrics, written for this test.
+    let sandbox = Sandbox::new();
+    let mut server = sandbox.server();
+    server.start();
+    let set = structured(&server.call(
+        "change_lyrics_set",
+        json!({"id": "10004", "text": "Kites above the quarry\nwind in the wires",
+               "address": "https://lyrics.example.test/7", "date": "2026-11-15"}),
+    ))
+    .clone();
+    assert_eq!(set["run"]["source"]["name"], "test-agent", "{set}");
+    assert_eq!(
+        set["fact"]["source"],
+        json!({"kind": "web", "name": "https://lyrics.example.test/7"})
+    );
+    let found =
+        structured(&server.call("read_lyrics_search", json!({"text": "quarry wires"}))).clone();
+    assert_eq!(found["hits"][0]["track"]["id"], "10004", "{found}");
+    let shown = structured(&server.call("read_lyrics", json!({"id": "10004"}))).clone();
+    assert_eq!(shown["status"], "lyrics");
+    let listed = structured(&server.call("read_lyrics_list", json!({"status": "lyrics"}))).clone();
+    assert_eq!(listed["total"], 1, "{listed}");
+    // Without a date the address is refused, and nothing is recorded.
+    let error = refused(&server.call(
+        "change_lyrics_set",
+        json!({"id": "10005", "text": "words", "address": "https://lyrics.example.test/8"}),
+    ));
+    assert_eq!(error["code"], "invalid_lyrics");
+    let still = structured(&server.call("read_lyrics", json!({"id": "10005"}))).clone();
+    assert_eq!(still["status"], "unknown");
+}
+
+#[test]
 fn an_unknown_tool_or_method_is_a_protocol_error() {
     let sandbox = Sandbox::new();
     let mut server = sandbox.server();

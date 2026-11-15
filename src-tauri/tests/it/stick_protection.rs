@@ -1538,6 +1538,8 @@ const SERVICE_NOT_STICK_WRITERS: &[&str] = &[
     "intensity.cancel", "intensity.measure", "intensity.show",
     // Lookups (wbx-37): a read, and a Sidecar record; no Library or Stick write.
     "lookup.check", "lookup.describe",
+    // Lyrics (wbx-f6v): Sidecar records and reads; audio tags are only read.
+    "lyrics.import_embedded", "lyrics.list", "lyrics.search", "lyrics.set", "lyrics.show",
     "mutants.clear", "mutants.create", "mutants.edit", "mutants.get", "mutants.list", "mutants.remove",
     "mytags.assign", "mytags.create", "mytags.create_category", "mytags.delete", "mytags.list",
     "mytags.merge", "mytags.move", "mytags.of_track", "mytags.rename", "mytags.reorder",

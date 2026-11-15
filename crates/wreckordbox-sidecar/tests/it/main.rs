@@ -12,6 +12,7 @@ mod facts;
 mod fingerprint;
 mod ledger;
 mod lookups;
+mod lyrics;
 mod mutants;
 mod stems;
 

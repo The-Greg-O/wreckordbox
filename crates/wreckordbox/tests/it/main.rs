@@ -28,6 +28,7 @@ mod ledger_failures;
 mod library_protection;
 mod library_reading;
 mod lookups;
+mod lyrics;
 mod mutant_edits;
 mod mutants;
 mod mutants_follow;
