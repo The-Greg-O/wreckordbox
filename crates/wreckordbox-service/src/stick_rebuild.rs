@@ -63,6 +63,10 @@ pub(crate) fn answers(command: &str) -> bool {
 /// The arguments of `library.rebuild_from_stick`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "the command's flat JSON arguments"
+)]
 pub struct Rebuild {
     /// Where the Stick is mounted.
     pub stick: PathBuf,
@@ -1415,14 +1419,15 @@ fn apply_steps(
     for track in &plan.tracks {
         let id = match &track.existing {
             Some(existing) => existing.id.clone(),
-            None => match writer.track_id_at(&track.file).map_err(db)? {
-                Some(id) => id,
-                None => {
+            None => {
+                if let Some(id) = writer.track_id_at(&track.file).map_err(db)? {
+                    id
+                } else {
                     let id = writer.import_file(&track.file).map_err(db)?;
                     added.insert(id.clone());
                     id
                 }
-            },
+            }
         };
         applied.tracks.insert(track.stick_id, id);
     }
@@ -1430,92 +1435,7 @@ fn apply_steps(
 
     let mut files_step = false;
     for track in &plan.tracks {
-        let id = applied.tracks[&track.stick_id].clone();
-        let mut changed = Vec::new();
-        let carried = match &track.analysis {
-            Some(dat) => match carry_analysis(writer, plan, dat, &track.file, &id) {
-                Ok(carried) => Some(carried),
-                Err(reason) => {
-                    changed.push(json!({"field": "analysis", "failed": reason}));
-                    applied.analysis_failed.insert(track.stick_id, reason);
-                    None
-                }
-            },
-            None => None,
-        };
-        if carried.is_some() && !files_step {
-            // The first files written, their row not yet.
-            files_step = true;
-            finished(plan, applied, "analysis_files")?;
-        }
-        // The Stick's tempo and key go with its grid, or to a track with no
-        // analysis of its own (one just added, or one a cut-off apply added).
-        let own = track.existing.as_ref().is_some_and(|e| e.analysed);
-        if !own || carried.is_some() {
-            if !track.key.is_empty() {
-                writer.ensure_detected_key(&track.key).map_err(db)?;
-            }
-            let key = Some(track.key.as_str()).filter(|k| !k.is_empty());
-            let written = writer.import_device_analysis(
-                &id,
-                &rbl_db::write::DeviceAnalysis {
-                    bpm_x100: track.bpm_x100,
-                    key,
-                    analysis_data_path: carried.as_ref().map(|c| c.relative.as_str()),
-                    cues: carried.as_ref().map_or(&[], |c| c.cues.as_slice()),
-                },
-            );
-            if let Err(error) = written {
-                if let Some(carried) = &carried {
-                    carried.remove();
-                }
-                return Err(error.to_string());
-            }
-            if let Some(carried) = &carried {
-                changed.push(json!({"field": "analysis", "path": carried.relative, "cues": carried.cues.len()}));
-            }
-        }
-        let before = track.existing.as_ref();
-        if before.map_or(track.rating > 0, |e| e.rating != track.rating) {
-            writer.set_rating(&id, track.rating).map_err(db)?;
-            changed.push(
-                json!({"field": "rating", "from": before.map(|e| e.rating), "to": track.rating}),
-            );
-        }
-        if before.map_or(track.colour > 0, |e| e.colour != track.colour) {
-            let colour = (track.colour > 0).then(|| track.colour.to_string());
-            writer.set_color(&id, colour.as_deref()).map_err(db)?;
-            changed.push(
-                json!({"field": "colour", "from": before.map(|e| e.colour), "to": track.colour}),
-            );
-        }
-        // A new track's comment is the Stick's, empty included: the file's
-        // own comment, which the import read, is not the DJ's.
-        if before.is_none_or(|e| e.comment != track.comment) {
-            writer.set_comment(&id, &track.comment).map_err(db)?;
-            changed.push(json!({"field": "comment", "from": before.map(|e| e.comment.clone()), "to": track.comment}));
-        }
-        if !track.tags.is_empty() {
-            let mut all: Vec<String> = before.map(|e| e.tags.clone()).unwrap_or_default();
-            let start = all.len();
-            for stick_tag in &track.tags {
-                let tag = &applied.tags[stick_tag];
-                if !all.contains(tag) {
-                    all.push(tag.clone());
-                }
-            }
-            if all.len() > start {
-                writer.set_my_tags(&id, &all).map_err(db)?;
-                changed.push(json!({"field": "my_tags", "added": &all[start..]}));
-            }
-        }
-        applied.records.push(json!({
-            "operation": "rebuild_from_stick",
-            "track": id,
-            "file": track.file,
-            "added": added.contains(&id),
-            "changed": changed,
-        }));
+        apply_track(writer, plan, applied, track, &added, &mut files_step)?;
     }
     if !files_step {
         finished(plan, applied, "analysis_files")?;
@@ -1569,6 +1489,107 @@ fn apply_steps(
         put_in_order(writer, parent, ids).map_err(db)?;
     }
     finished(plan, applied, "order")?;
+    Ok(())
+}
+
+/// One matched track's analysis and values, inside the one edit:
+/// `files_step` says whether the first analysis files were written yet
+/// (the `analysis_files` step ends there).
+fn apply_track(
+    writer: &mut rbl_db::write::Writer,
+    plan: &Plan,
+    applied: &mut Applied,
+    track: &PlannedTrack,
+    added: &std::collections::HashSet<String>,
+    files_step: &mut bool,
+) -> Result<(), String> {
+    let db = |e: DbError| e.to_string();
+    let id = applied.tracks[&track.stick_id].clone();
+    let mut changed = Vec::new();
+    let carried = match &track.analysis {
+        Some(dat) => match carry_analysis(writer, plan, dat, &track.file, &id) {
+            Ok(carried) => Some(carried),
+            Err(reason) => {
+                changed.push(json!({"field": "analysis", "failed": reason}));
+                applied.analysis_failed.insert(track.stick_id, reason);
+                None
+            }
+        },
+        None => None,
+    };
+    if carried.is_some() && !*files_step {
+        // The first files written, their row not yet.
+        *files_step = true;
+        finished(plan, applied, "analysis_files")?;
+    }
+    // The Stick's tempo and key go with its grid, or to a track with no
+    // analysis of its own (one just added, or one a cut-off apply added).
+    let own = track.existing.as_ref().is_some_and(|e| e.analysed);
+    if !own || carried.is_some() {
+        if !track.key.is_empty() {
+            writer.ensure_detected_key(&track.key).map_err(db)?;
+        }
+        let key = Some(track.key.as_str()).filter(|k| !k.is_empty());
+        let written = writer.import_device_analysis(
+            &id,
+            &rbl_db::write::DeviceAnalysis {
+                bpm_x100: track.bpm_x100,
+                key,
+                analysis_data_path: carried.as_ref().map(|c| c.relative.as_str()),
+                cues: carried.as_ref().map_or(&[], |c| c.cues.as_slice()),
+            },
+        );
+        if let Err(error) = written {
+            if let Some(carried) = &carried {
+                carried.remove();
+            }
+            return Err(error.to_string());
+        }
+        if let Some(carried) = &carried {
+            changed.push(
+                json!({"field": "analysis", "path": carried.relative, "cues": carried.cues.len()}),
+            );
+        }
+    }
+    let before = track.existing.as_ref();
+    if before.map_or(track.rating > 0, |e| e.rating != track.rating) {
+        writer.set_rating(&id, track.rating).map_err(db)?;
+        changed
+            .push(json!({"field": "rating", "from": before.map(|e| e.rating), "to": track.rating}));
+    }
+    if before.map_or(track.colour > 0, |e| e.colour != track.colour) {
+        let colour = (track.colour > 0).then(|| track.colour.to_string());
+        writer.set_color(&id, colour.as_deref()).map_err(db)?;
+        changed
+            .push(json!({"field": "colour", "from": before.map(|e| e.colour), "to": track.colour}));
+    }
+    // A new track's comment is the Stick's, empty included: the file's
+    // own comment, which the import read, is not the DJ's.
+    if before.is_none_or(|e| e.comment != track.comment) {
+        writer.set_comment(&id, &track.comment).map_err(db)?;
+        changed.push(json!({"field": "comment", "from": before.map(|e| e.comment.clone()), "to": track.comment}));
+    }
+    if !track.tags.is_empty() {
+        let mut all: Vec<String> = before.map(|e| e.tags.clone()).unwrap_or_default();
+        let start = all.len();
+        for stick_tag in &track.tags {
+            let tag = &applied.tags[stick_tag];
+            if !all.contains(tag) {
+                all.push(tag.clone());
+            }
+        }
+        if all.len() > start {
+            writer.set_my_tags(&id, &all).map_err(db)?;
+            changed.push(json!({"field": "my_tags", "added": &all[start..]}));
+        }
+    }
+    applied.records.push(json!({
+        "operation": "rebuild_from_stick",
+        "track": id,
+        "file": track.file,
+        "added": added.contains(&id),
+        "changed": changed,
+    }));
     Ok(())
 }
 
