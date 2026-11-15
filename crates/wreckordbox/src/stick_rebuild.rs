@@ -31,7 +31,10 @@ pub enum LibraryCommands {
 }
 
 #[derive(Args)]
-#[allow(clippy::struct_excessive_bools, reason = "independent command-line flags")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent command-line flags"
+)]
 pub struct RebuildArgs {
     /// Where the Stick is mounted. It is only read.
     pub stick: PathBuf,
