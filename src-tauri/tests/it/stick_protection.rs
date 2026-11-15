@@ -428,6 +428,15 @@ fn every_writer_is_refused_on_a_protected_stick_and_writes_nothing() {
             on_stick("Contents/keep.txt"),
         )),
     );
+    call("sweep_backup_leftovers");
+    // Refused before the token or the record is looked at (wbx-45.25).
+    protected(
+        "sweep_backup_leftovers",
+        run(rbxport_lib::backup_leftovers::sweep_backup_leftovers(
+            rig.app.state(),
+            None,
+        )),
+    );
     call("set_track_field");
     let key_before = run(details::track_details(rig.app.state(), track.clone()))
         .unwrap()

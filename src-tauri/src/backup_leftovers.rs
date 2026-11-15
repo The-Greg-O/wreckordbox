@@ -366,9 +366,9 @@ mod tests {
             run(backup_leftovers(tauri::Manager::state(&self.app))).unwrap()
         }
         /// The DJ's hold on the offer's plan.
-        fn hold(&self, offer: &LeftoverOffer) -> Option<String> {
+        fn hold(&self, offer: &LeftoverOffer) -> String {
             let plan = offer.plan.as_deref().expect("a plan to confirm");
-            Some(stick_approval::approve(self.state().backup_dir(), plan).unwrap())
+            stick_approval::approve(self.state().backup_dir(), plan).unwrap()
         }
         fn sweep(&self, approval: Option<String>) -> AppResult<Vec<String>> {
             run(sweep_backup_leftovers(
@@ -409,7 +409,7 @@ mod tests {
         let offer = window.offer();
         assert!(offer.on_stick && !offer.protected, "{offer:?}");
         assert_eq!(offer.leftovers, left, "exactly what the backup left");
-        let removed = window.sweep(window.hold(&offer)).unwrap();
+        let removed = window.sweep(Some(window.hold(&offer))).unwrap();
 
         assert_eq!(removed, left);
         assert_eq!(walk(&stick), kept, "everything else is left as it was");
@@ -431,14 +431,14 @@ mod tests {
         assert!(offer.protected, "{offer:?}");
         assert_eq!(offer.leftovers, left);
         let before = walk(&stick);
-        let refused = window.sweep(window.hold(&offer)).unwrap_err();
+        let refused = window.sweep(Some(window.hold(&offer))).unwrap_err();
         assert_eq!(refused.kind, ErrorKind::StickProtected, "{refused:?}");
         assert_eq!(walk(&stick), before, "not a byte changed");
         // Still recorded: offered again once it is unlocked.
         crate::stick_guard::testing::unlock(&window.state(), &stick);
         let offer = window.offer();
         assert_eq!(offer.leftovers, left);
-        assert_eq!(window.sweep(window.hold(&offer)).unwrap(), left);
+        assert_eq!(window.sweep(Some(window.hold(&offer))).unwrap(), left);
     }
 
     #[test]
@@ -448,7 +448,7 @@ mod tests {
         crate::stick_guard::testing::unlock(&state, &stick);
         let window = Window::new(state);
         let offer = window.offer();
-        let approval = window.hold(&offer);
+        let approval = Some(window.hold(&offer));
         // Taken out; another Stick put in at the same place, unlocked too,
         // even holding folders of the very same names.
         let old = dir.path().join("sticks/GIG-taken-out");
@@ -463,7 +463,11 @@ mod tests {
 
         let refused = window.sweep(approval).unwrap_err();
         assert_eq!(refused.kind, ErrorKind::Conflict, "{refused:?}");
-        assert!(refused.message.contains("not the one"), "{}", refused.message);
+        assert!(
+            refused.message.contains("not the one"),
+            "{}",
+            refused.message
+        );
         assert_eq!(
             walk(&stick),
             new_before,
@@ -495,7 +499,7 @@ mod tests {
         let left = refused_backup(&state, &stick);
         crate::stick_guard::testing::unlock(&state, &stick);
         let window = Window::new(state);
-        let approval = window.hold(&window.offer());
+        let approval = Some(window.hold(&window.offer()));
         // One of the offered copies replaced by a link of the same name.
         let target = stick.join("elsewhere");
         fs::create_dir(&target).unwrap();

@@ -33,7 +33,7 @@ pub mod key_tag;
 mod durable;
 mod backups;
 mod backup_stick;
-mod backup_leftovers;
+pub mod backup_leftovers;
 mod backup_guard;
 mod backup_copy;
 mod backup_zip;
