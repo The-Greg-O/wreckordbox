@@ -32,6 +32,12 @@
  * `__stallReviewDecisions(on)` leaves every accept and reject unanswered; `__holdReviewReads()` /
  * `__releaseReviewReads()`; `__failReviewReads(on)`; `__reviewOtherReject(fact)`
  * rejects as another client would (told, no Library change).
+ *
+ * Proposed titles and artists (wbx-66), with `?proposals`: the first
+ * Intake track has a proposed title and artist, the second a proposed
+ * title (Run 41). They are Review rows like any other, and the Intake
+ * queue lists exactly them (`suggestionsOf`), with their row tokens.
+ * `__reviewPropose(track, field, value)` records one more live in Run 41.
  */
 import type { RowDto } from "./types";
 import {
@@ -49,12 +55,16 @@ export interface MockReviewSource {
   colour: (id: string, colour: number) => Promise<unknown>;
   /** Whether Library Protection is on now. */
   protectedNow: () => boolean;
+  /** The mock's own title or artist write (wbx-66). */
+  setText?: (id: string, field: "title" | "artist", value: string) => Promise<unknown>;
+  /** The tracks proposals go on with `?proposals`: Intake's first ones. */
+  proposalTracks?: () => string[];
 }
 
 interface Held {
   fact: number;
   track: string;
-  field: "energy" | "prep_colour";
+  field: "energy" | "prep_colour" | "title" | "artist";
   before: unknown;
   after: unknown;
   source: { kind: string; name: string };
@@ -123,7 +133,10 @@ export function createMockReview(source: MockReviewSource) {
   const energy = (row: RowDto) => (row.rating ? row.rating : null);
   const add = (h: Omit<Held, "fact" | "before">) => {
     const row = source.all.find((r) => r.id === h.track);
-    const before = h.field === "energy" ? (row ? energy(row) : null) : null;
+    const before = h.field === "energy" ? (row ? energy(row) : null)
+      : h.field === "title" ? (row?.title ?? "")
+        : h.field === "artist" ? (row?.artist ?? "")
+          : null;
     waiting.push({ ...h, fact: nextFact++, before });
   };
   if (url.get("review") !== "empty") {
@@ -137,6 +150,15 @@ export function createMockReview(source: MockReviewSource) {
     [5, 2].forEach((colour, i) => {
       add({ track: track(14 + i).id, field: "prep_colour", after: { id: colour, ...COLOURS[colour] }, source: runs[1]!.source, confidence: 0.8 + i * 0.1, reason: "waits_for_dj", run: 40 });
     });
+  }
+
+  if (url.has("proposals")) {
+    const [first, second] = source.proposalTracks?.() ?? [];
+    if (first) {
+      add({ track: first, field: "title", after: "A Better Title", source: runs[2]!.source, confidence: 0.82, reason: "waits_for_dj", run: 41 });
+      add({ track: first, field: "artist", after: "The Proposed Artist", source: runs[2]!.source, confidence: 0.66, reason: "waits_for_dj", run: 41 });
+    }
+    if (second) add({ track: second, field: "title", after: "Second Proposal", source: runs[2]!.source, confidence: 0.71, reason: "waits_for_dj", run: 41 });
   }
 
   const rowVersion = new Map<number, number>();
@@ -183,6 +205,7 @@ export function createMockReview(source: MockReviewSource) {
     const apply = refusal === "review_partial" ? chosen.slice(0, 1) : chosen;
     for (const h of apply as Held[]) {
       if (h.field === "energy") await source.rate(h.track, Number(h.after));
+      else if (h.field === "title" || h.field === "artist") await source.setText?.(h.track, h.field, String(h.after));
       else await source.colour(h.track, Number((h.after as { id: number }).id));
     }
     const applied = new Set((apply as Held[]).map((h) => h.fact));
@@ -241,6 +264,11 @@ export function createMockReview(source: MockReviewSource) {
       }
       changed();
     };
+    hooks.__reviewPropose = (track: string, field: "title" | "artist", value: string) => {
+      add({ track, field, after: value, source: runs[2]!.source, confidence: 0.77, reason: "waits_for_dj", run: 41 });
+      changed();
+      return nextFact - 1;
+    };
     hooks.__reviewChange = (fact: number, after: unknown) => {
       const h = waiting.find((w) => w.fact === fact);
       if (h) h.after = after;
@@ -270,6 +298,14 @@ export function createMockReview(source: MockReviewSource) {
   }
 
   return {
+    /** The proposed titles and artists of `track`, as the service's Intake queue lists them (wbx-66). */
+    suggestionsOf: (track: string) => waiting
+      .filter((h) => h.track === track && (h.field === "title" || h.field === "artist"))
+      .sort((a, b) => b.fact - a.fact)
+      .map((h) => ({
+        field: h.field, value: String(h.after), source: h.source.name, confidence: h.confidence,
+        fact: h.fact, token: rowToken(h.fact), before: String(h.before ?? ""),
+      })),
     reviewWaiting: async (): Promise<ReviewListing> => {
       reads.waiting += 1;
       if (stallNext) {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   atOrAbove,
+  fieldText,
   emptyBoard,
   fromServiceListing,
   groupByRun,
@@ -213,5 +214,13 @@ describe("after a refusal (wbx-74 review)", () => {
     board = decidedNow(board, [2], "accepted");
     expect(shownGroups(board)[0]!.rows.map((r) => r.ghost)).toEqual([null, "accepted"]);
     expect(board.selected.size).toBe(0);
+  });
+});
+
+describe("fieldText and valueText for proposed titles and artists (wbx-66)", () => {
+  it("names the field and shows the text as proposed", () => {
+    expect(fieldText("title")).toBe("Title");
+    expect(fieldText("artist")).toBe("Artist");
+    expect(valueText("title", "A Better Title")).toBe("A Better Title");
   });
 });

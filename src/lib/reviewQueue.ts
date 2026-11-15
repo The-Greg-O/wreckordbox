@@ -12,8 +12,8 @@
  */
 import type { RowDto } from "@/ipc/types";
 
-/** The fields Projection writes (`projection::Field`). */
-export type ReviewField = "energy" | "prep_colour" | (string & {});
+/** The fields Review decides on (`projection::Field`): Projection's two, and proposed titles and artists (wbx-66). */
+export type ReviewField = "energy" | "prep_colour" | "title" | "artist" | (string & {});
 
 export interface ReviewSource {
   kind: string;
@@ -167,6 +167,9 @@ export function valueText(field: ReviewField, value: unknown): string {
 export function fieldText(field: ReviewField): string {
   if (field === "energy") return "Energy";
   if (field === "prep_colour") return "Prep colour";
+  // Proposed titles and artists wait here too (wbx-66).
+  if (field === "title") return "Title";
+  if (field === "artist") return "Artist";
   return field;
 }
 

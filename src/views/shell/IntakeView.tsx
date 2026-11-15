@@ -38,7 +38,7 @@ import { getBackend } from "@/ipc/client";
 import type { RowDto } from "@/ipc/types";
 import { counterStep } from "@/lib/intakeCounter";
 import { energyOf, intakeActionForKey, intakeChord, nextQueuedIndex, type IntakeAction, type PrepColour } from "@/lib/intakeEdits";
-import { needsLine, queuePosition, type IntakeCounts, type IntakeQueueName, type IntakeQueuePage, type QueuedTrack } from "@/lib/intakeQueue";
+import { needsLine, queuePosition, type IntakeCounts, type IntakeQueueName, type IntakeQueuePage, type IntakeSuggestion, type QueuedTrack } from "@/lib/intakeQueue";
 import { refusal } from "@/lib/menu";
 import type { TagsSet } from "@/lib/tagPanel";
 import { TagStore, tagError } from "@/lib/tagStore";
@@ -288,6 +288,30 @@ export function IntakeView(props: IntakeViewProps) {
     setOffset(to.offset);
     await loadQueued(track, row);
   });
+
+  /**
+   * Accepts a proposed title or artist (wbx-66) with Review's own decision
+   * (`review.accept` naming exactly this row and its token), through the
+   * window's edit path (Library Protection, the status line). A refusal
+   * (changed or decided since it was shown, a Stick-hosted Library) is
+   * said in the panel and the queue is read again, so what is shown is
+   * the proposal as it is now, never the stale one.
+   */
+  const [accepting, setAccepting] = useState<number | null>(null);
+  const acceptSuggestion = useEventCallback((suggestion: IntakeSuggestion) => exclusive(async () => {
+    setNote(null);
+    setAccepting(suggestion.fact);
+    try {
+      const written = await edit(t("Proposal accepted."), async (backend) => {
+        const outcome = await backend.reviewAccept([{ fact: suggestion.fact, token: suggestion.token }]);
+        if (outcome.kind !== "done") throw new Error(outcome.message || outcome.kind);
+        return outcome;
+      });
+      if (!written) retry();
+    } finally {
+      setAccepting(null);
+    }
+  }));
 
   // The tag panel's state and writes (wbx-65), kept here so they outlive
   // the panel of any one track: a mark waits for its track's tag writes,
@@ -653,6 +677,9 @@ export function IntakeView(props: IntakeViewProps) {
           platform={platform}
           suggestionsUnavailable={page.suggestionsUnavailable}
           tags={<IntakeTagPanel store={tagStore} trackId={selected.id} />}
+          onAcceptSuggestion={acceptSuggestion}
+          accepting={accepting}
+          protectLibrary={protectLibrary}
         />
       ) : (
         <section className={styles.panel} aria-label={t("Track")} data-testid="intake-panel">

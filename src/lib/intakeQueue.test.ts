@@ -52,7 +52,7 @@ describe("fromServicePage", () => {
           id: "10", title: "Row title", artist: "Who", bpm: 125.5, key: "7A", energy: null,
           needs: ["energy", "tags"], empty_dimensions: [{ id: "3", name: "Situation", kind: "mytag_category" }],
           grid: "not_confirmed",
-          suggestions: [{ field: "title", fact_id: 4, value: "Better", source: { kind: "agent", name: "tagger" }, confidence: 0.9 }],
+          suggestions: [{ field: "title", fact_id: 4, value: "Better", source: { kind: "agent", name: "tagger" }, confidence: 0.9, token: "abc", before: "Row title" }],
         }],
         total: 61, offset: 0, limit: 50, next_offset: 50, prep_colour: null, suggestions_unavailable: "the Sidecar is busy",
       },
@@ -68,7 +68,8 @@ describe("fromServicePage", () => {
     expect(page.tracks[0]).toEqual({
       id: "10", title: "Row title", artist: "Who", bpm: 125.5, key: "7A",
       needs: ["energy", "tags"], emptyDimensions: [{ id: "3", name: "Situation" }], grid: "not_confirmed",
-      suggestions: [{ field: "title", value: "Better", source: "tagger", confidence: 0.9 }],
+      // The row Review lists, with the token an accept of it carries (wbx-66).
+      suggestions: [{ field: "title", value: "Better", source: "tagger", confidence: 0.9, fact: 4, token: "abc", before: "Row title" }],
     });
   });
 
