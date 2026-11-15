@@ -14,6 +14,7 @@ mod ledger;
 mod mutants;
 mod mytag_edits;
 mod playlist_edits;
+mod playlist_making;
 mod project;
 mod project_mytags;
 mod spills;

@@ -158,7 +158,7 @@ pub(crate) fn answers(command: &str) -> bool {
             | commands::PLAYLISTS_REORDER
             | commands::PLAYLISTS_COPY
             | commands::TRACKS_REMOVE_FROM_COLLECTION
-    )
+    ) || crate::playlist_making::answers(command)
 }
 
 /// What an edit did: the change to tell everyone of, when the Library
@@ -198,6 +198,9 @@ fn make(
 ) -> Result<Done, ServiceError> {
     let edits = Edits { library, stems };
     let command = request.command.as_str();
+    if crate::playlist_making::answers(command) {
+        return crate::playlist_making::make(library, request);
+    }
     match command {
         commands::PLAYLISTS_REMOVE => edits.remove(&arguments(command, &request.args)?),
         commands::PLAYLISTS_DELETE => edits.delete(&arguments(command, &request.args)?),
@@ -406,21 +409,9 @@ impl Edits<'_> {
         if entries::playlist_name(&index, playlist).is_none() {
             return Err(not_found(playlist));
         }
-        let plain = self.library.with_db(|db| {
-            Ok(db
-                .connection()
-                .query_row(
-                    "SELECT Attribute = ?2 FROM djmdPlaylist WHERE ID = ?1 AND rb_local_deleted = 0",
-                    rusqlite::params![playlist, rbl_db::write::ATTRIBUTE_PLAYLIST],
-                    |row| row.get::<_, bool>(0),
-                )
-                .unwrap_or(false))
-        })?;
-        if !plain {
-            return Err(ServiceError::new(
-                codes::NOT_A_PLAYLIST,
-                format!("{playlist} is a folder or an intelligent playlist, which has no entries of its own"),
-            ));
+        let attribute = crate::playlist_making::attribute_of(self.library, playlist)?;
+        if attribute != Some(rbl_db::write::ATTRIBUTE_PLAYLIST) {
+            return Err(crate::playlist_making::no_entries(playlist, attribute));
         }
         entries::of_playlist(self.library, &index, playlist)
     }
