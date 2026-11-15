@@ -1,5 +1,10 @@
 //! Unwind through the real CLI on a disposable Library.
-#![allow(clippy::pedantic, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::pedantic,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
 use crate::common::Sandbox;
 use serde_json::Value;
 
@@ -16,7 +21,18 @@ fn an_old_run_keeps_later_values_and_its_unwind_can_be_unwound() {
     let s = Sandbox::new();
     s.describe_track(3, "First", "Artist", "8A", 2);
     s.describe_track(4, "Second", "Artist", "8A", 1);
-    let run = ok(&s, &["runs", "start", "--source", "agent:test", "--description", "Earlier work"])["id"].to_string();
+    let run = ok(
+        &s,
+        &[
+            "runs",
+            "start",
+            "--source",
+            "agent:test",
+            "--description",
+            "Earlier work",
+        ],
+    )["id"]
+        .to_string();
     ok(&s, &["tracks", "rate", "10003", "4", "--run", &run]);
     ok(&s, &["tracks", "rate", "10004", "3", "--run", &run]);
     ok(&s, &["runs", "finish", &run]);
@@ -49,7 +65,10 @@ fn protection_dry_run_and_forced_conflicts_are_explicit() {
     assert!(!refused.status.success());
     assert_eq!(refused.error_json()["error"]["code"], "library_protected");
     assert_eq!(std::fs::read(s.master_db()).unwrap(), before_library);
-    assert_eq!(std::fs::read(s.sidecar_dir().join("sidecar.db")).unwrap(), before_sidecar);
+    assert_eq!(
+        std::fs::read(s.sidecar_dir().join("sidecar.db")).unwrap(),
+        before_sidecar
+    );
     ok(&s, &["protection", "off"]);
     let applied = ok(&s, &["runs", "unwind", &run, "--force"]);
     assert_eq!(applied["reversed"], 1);
@@ -62,10 +81,24 @@ fn protection_dry_run_and_forced_conflicts_are_explicit() {
 #[test]
 fn repeated_edits_in_one_run_and_named_only_entries_are_not_lost() {
     let s = Sandbox::new();
-    let run = ok(&s, &["runs", "start", "--source", "agent:test", "--description", "Repeated work"])["id"].to_string();
+    let run = ok(
+        &s,
+        &[
+            "runs",
+            "start",
+            "--source",
+            "agent:test",
+            "--description",
+            "Repeated work",
+        ],
+    )["id"]
+        .to_string();
     ok(&s, &["tracks", "rate", "10003", "2", "--run", &run]);
     ok(&s, &["tracks", "rate", "10003", "4", "--run", &run]);
-    ok(&s, &["mytags", "create", "700001", "New tag", "--run", &run]);
+    ok(
+        &s,
+        &["mytags", "create", "700001", "New tag", "--run", &run],
+    );
     ok(&s, &["runs", "finish", &run]);
     let plan = ok(&s, &["runs", "unwind", &run, "--dry-run"]);
     assert_eq!(plan["entries"][0]["status"], "cannot_reverse");
@@ -79,9 +112,48 @@ fn repeated_edits_in_one_run_and_named_only_entries_are_not_lost() {
 fn facts_and_mytags_keep_their_original_sources_when_unwound() {
     let s = Sandbox::new();
     let tag = s.create_my_tag("Unwind tag");
-    let first = ok(&s, &["facts", "record", "10003", "genre", "House", "--source", "agent:test", "--confidence", "0.8"]);
-    let run = ok(&s, &["runs", "start", "--source", "agent:test", "--description", "Facts and tags"])["id"].to_string();
-    ok(&s, &["facts", "record", "10003", "genre", "Techno", "--source", "agent:test", "--confidence", "0.9", "--run", &run]);
+    let first = ok(
+        &s,
+        &[
+            "facts",
+            "record",
+            "10003",
+            "genre",
+            "House",
+            "--source",
+            "agent:test",
+            "--confidence",
+            "0.8",
+        ],
+    );
+    let run = ok(
+        &s,
+        &[
+            "runs",
+            "start",
+            "--source",
+            "agent:test",
+            "--description",
+            "Facts and tags",
+        ],
+    )["id"]
+        .to_string();
+    ok(
+        &s,
+        &[
+            "facts",
+            "record",
+            "10003",
+            "genre",
+            "Techno",
+            "--source",
+            "agent:test",
+            "--confidence",
+            "0.9",
+            "--run",
+            &run,
+        ],
+    );
     ok(&s, &["mytags", "assign", &tag, "10003", "--run", &run]);
     ok(&s, &["runs", "finish", &run]);
     let applied = ok(&s, &["runs", "unwind", &run]);
@@ -90,10 +162,17 @@ fn facts_and_mytags_keep_their_original_sources_when_unwound() {
     assert_eq!(facts["facts"][0]["value"], serde_json::json!(["House"]));
     assert_eq!(facts["facts"][0]["source"]["name"], "test");
     assert_eq!(facts["facts"][0]["run"], first["run"]["id"]);
-    assert!(!ok(&s, &["tracks", "show", "10003"])["my_tags"].as_array().unwrap().iter().any(|v| v["id"] == tag));
+    assert!(!ok(&s, &["tracks", "show", "10003"])["my_tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v["id"] == tag));
     let inverse = applied["run"]["id"].to_string();
     ok(&s, &["runs", "unwind", &inverse]);
-    assert_eq!(ok(&s, &["facts", "show", "10003", "--kind", "genre"])["facts"][0]["value"], serde_json::json!(["Techno"]));
+    assert_eq!(
+        ok(&s, &["facts", "show", "10003", "--kind", "genre"])["facts"][0]["value"],
+        serde_json::json!(["Techno"])
+    );
 }
 
 #[test]
@@ -114,7 +193,10 @@ fn a_subscriber_hears_one_change_and_restart_does_not_lose_unwind() {
     assert_eq!(plan["entries"][0]["status"], "will_reverse");
     let answer = ok(&s, &["runs", "unwind", &run]);
     assert_eq!(answer["reversed"], 1);
-    let event = observer.next_event(std::time::Duration::from_secs(5)).unwrap().unwrap();
+    let event = observer
+        .next_event(std::time::Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
     assert_eq!(event.event, "library_changed");
     assert_eq!(ok(&s, &["tracks", "show", "10003"])["rating"], 0);
 }
@@ -122,20 +204,201 @@ fn a_subscriber_hears_one_change_and_restart_does_not_lose_unwind() {
 #[test]
 fn later_dj_facts_are_kept_and_repeated_dj_edits_unwind_together() {
     let s = Sandbox::new();
-    let run = ok(&s, &["runs", "start", "--source", "dj", "--description", "DJ choices"])["id"].to_string();
+    let run = ok(
+        &s,
+        &[
+            "runs",
+            "start",
+            "--source",
+            "dj",
+            "--description",
+            "DJ choices",
+        ],
+    )["id"]
+        .to_string();
     ok(&s, &["tracks", "rate", "10003", "2", "--run", &run]);
     ok(&s, &["tracks", "rate", "10003", "4", "--run", &run]);
     ok(&s, &["runs", "finish", &run]);
     let answer = ok(&s, &["runs", "unwind", &run]);
-    assert_eq!(answer["reversed"],2,"{answer}");
-    assert_eq!(ok(&s, &["tracks", "show", "10003"])["rating"],0);
-    assert!(ok(&s,&["facts","show","10003","--kind","energy"])["facts"].as_array().unwrap().is_empty());
+    assert_eq!(answer["reversed"], 2, "{answer}");
+    assert_eq!(ok(&s, &["tracks", "show", "10003"])["rating"], 0);
+    assert!(
+        ok(&s, &["facts", "show", "10003", "--kind", "energy"])["facts"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 
-    let original = ok(&s, &["tracks","rate","10003","4","--source","dj"])["run"]["id"].to_string();
-    ok(&s, &["facts","record","10003","energy","5","--source","dj"]);
-    let answer = ok(&s,&["runs","unwind",&original]);
-    assert_eq!(answer["reversed"],0);
-    assert_eq!(answer["entries"][0]["status"],"changed_since");
-    assert_eq!(ok(&s,&["facts","show","10003","--kind","energy"])["facts"][0]["value"],5);
-    assert_eq!(ok(&s, &["tracks", "show", "10003"])["rating"],4);
+    let original =
+        ok(&s, &["tracks", "rate", "10003", "4", "--source", "dj"])["run"]["id"].to_string();
+    ok(
+        &s,
+        &["facts", "record", "10003", "energy", "5", "--source", "dj"],
+    );
+    let answer = ok(&s, &["runs", "unwind", &original]);
+    assert_eq!(answer["reversed"], 0);
+    assert_eq!(answer["entries"][0]["status"], "changed_since");
+    assert_eq!(
+        ok(&s, &["facts", "show", "10003", "--kind", "energy"])["facts"][0]["value"],
+        5
+    );
+    assert_eq!(ok(&s, &["tracks", "show", "10003"])["rating"], 4);
+}
+
+#[test]
+fn forced_native_unwind_replaces_later_facts_and_can_restore_them() {
+    let s = Sandbox::new();
+    let original =
+        ok(&s, &["tracks", "rate", "10003", "4", "--source", "dj"])["run"]["id"].to_string();
+    ok(
+        &s,
+        &["facts", "record", "10003", "energy", "5", "--source", "dj"],
+    );
+    let applied = ok(&s, &["runs", "unwind", &original, "--force"]);
+    assert_eq!(applied["reversed"], 1);
+    assert!(
+        ok(&s, &["facts", "show", "10003", "--kind", "energy"])["facts"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    ok(&s, &["runs", "unwind", &applied["run"]["id"].to_string()]);
+    assert_eq!(
+        ok(&s, &["facts", "show", "10003", "--kind", "energy"])["facts"][0]["value"],
+        5
+    );
+}
+
+#[test]
+fn repeated_fact_replacements_restore_the_original_and_dry_run_changes_no_bytes() {
+    let s = Sandbox::new();
+    let initial = ok(
+        &s,
+        &[
+            "facts",
+            "record",
+            "10003",
+            "energy",
+            "1",
+            "--source",
+            "agent:test",
+            "--confidence",
+            "0.8",
+        ],
+    );
+    let original = ok(
+        &s,
+        &[
+            "runs",
+            "start",
+            "--source",
+            "agent:test",
+            "--description",
+            "Facts",
+        ],
+    )["id"]
+        .to_string();
+    for value in ["2", "3"] {
+        ok(
+            &s,
+            &[
+                "facts",
+                "record",
+                "10003",
+                "energy",
+                value,
+                "--source",
+                "agent:test",
+                "--confidence",
+                "0.8",
+                "--run",
+                &original,
+            ],
+        );
+    }
+    ok(&s, &["runs", "finish", &original]);
+    let bytes = || {
+        [
+            s.master_db().to_path_buf(),
+            s.sidecar_dir().join("sidecar.db"),
+            s.sidecar_dir().join("sidecar.db-wal"),
+            s.sidecar_dir().join("sidecar.db-shm"),
+        ]
+        .into_iter()
+        .map(|p| (p.clone(), std::fs::read(p).ok()))
+        .collect::<Vec<_>>()
+    };
+    let before = bytes();
+    let plan = ok(&s, &["runs", "unwind", &original, "--dry-run"]);
+    assert_eq!(bytes(), before);
+    assert_eq!(plan["reversed"], 2);
+    let applied = ok(&s, &["runs", "unwind", &original]);
+    assert_eq!(applied["reversed"], 2);
+    let facts = ok(&s, &["facts", "show", "10003", "--kind", "energy"]);
+    assert_eq!(facts["facts"].as_array().unwrap().len(), 1);
+    assert_eq!(facts["facts"][0]["value"], 1);
+    assert_eq!(facts["facts"][0]["run"], initial["run"]["id"]);
+    let after = bytes();
+    assert_eq!(ok(&s, &["runs", "unwind", &original])["reversed"], 0);
+    assert_eq!(bytes(), after);
+}
+
+#[test]
+fn unwinding_an_unwind_keeps_a_new_opinion_in_a_previously_empty_slot() {
+    let s = Sandbox::new();
+    let original = ok(
+        &s,
+        &["facts", "record", "10003", "energy", "2", "--source", "dj"],
+    )["run"]["id"]
+        .to_string();
+    let unwind = ok(&s, &["runs", "unwind", &original])["run"]["id"].to_string();
+    ok(
+        &s,
+        &["facts", "record", "10003", "energy", "5", "--source", "dj"],
+    );
+    let kept = ok(&s, &["runs", "unwind", &unwind]);
+    assert_eq!(kept["reversed"], 0, "{kept}");
+    assert_eq!(kept["entries"][0]["status"], "changed_since");
+    let forced = ok(&s, &["runs", "unwind", &unwind, "--force"]);
+    assert_eq!(forced["reversed"], 1);
+    let facts = ok(&s, &["facts", "show", "10003", "--kind", "energy"]);
+    assert_eq!(facts["facts"].as_array().unwrap().len(), 1);
+    assert_eq!(facts["facts"][0]["value"], 2);
+    ok(&s, &["runs", "unwind", &forced["run"]["id"].to_string()]);
+    assert_eq!(
+        ok(&s, &["facts", "show", "10003", "--kind", "energy"])["facts"][0]["value"],
+        5
+    );
+}
+
+#[test]
+fn unfinished_and_missing_runs_are_refused_without_creating_an_unwind() {
+    let s = Sandbox::new();
+    let original = ok(
+        &s,
+        &[
+            "runs",
+            "start",
+            "--source",
+            "agent:test",
+            "--description",
+            "Still working",
+        ],
+    )["id"]
+        .to_string();
+    ok(&s, &["tracks", "rate", "10003", "4", "--run", &original]);
+    let before = ok(&s, &["runs", "list"]);
+    for (id, code) in [(original.as_str(), "run_open"), ("99999", "run_not_found")] {
+        for dry in [true, false] {
+            let mut args = vec!["--json", "runs", "unwind", id];
+            if dry {
+                args.push("--dry-run");
+            }
+            let refused = s.cli(&args);
+            assert!(!refused.status.success());
+            assert_eq!(refused.error_json()["error"]["code"], code);
+        }
+    }
+    assert_eq!(ok(&s, &["runs", "list"]), before);
+    assert_eq!(ok(&s, &["tracks", "show", "10003"])["rating"], 4);
 }

@@ -531,10 +531,13 @@ fn unwind_tools_preview_and_apply_the_same_service_operation() {
     let original = structured(&changed)["run"]["id"].clone();
     let plan = server.call("read_run_unwind", json!({"id":original}));
     assert_eq!(structured(&plan)["entries"][0]["status"], "will_reverse");
-    assert_eq!(rating_of(&mut sandbox.client(),"10003"),4);
-    let applied = server.call("change_run_unwind",json!({"id":original}));
-    assert_eq!(structured(&applied)["reversed"],1);
-    assert_eq!(structured(&applied)["run"]["source"]["kind"],"agent");
-    assert_eq!(rating_of(&mut sandbox.client(),"10003"),0);
-    assert_eq!(structured(&server.call("change_run_unwind",json!({"id":original})))["reversed"],0);
+    assert_eq!(rating_of(&mut sandbox.client(), "10003"), 4);
+    let applied = server.call("change_run_unwind", json!({"id":original}));
+    assert_eq!(structured(&applied)["reversed"], 1);
+    assert_eq!(structured(&applied)["run"]["source"]["kind"], "agent");
+    assert_eq!(rating_of(&mut sandbox.client(), "10003"), 0);
+    assert_eq!(
+        structured(&server.call("change_run_unwind", json!({"id":original})))["reversed"],
+        0
+    );
 }

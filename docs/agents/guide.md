@@ -805,10 +805,18 @@ values in the new Run. Use force only when the DJ explicitly asked for those
 conflicts to be replaced. Missing native rows cannot be forced.
 
 Supported native kinds: track fields, track MyTags with their comments, MyTag
-order, and playlist entry order. Facts and native DJ Fact effects retain their
+order, playlist entry order, and Sidecar-only DJ judgements. Facts and native DJ Fact effects retain their
 original rows, sources and Runs when restored. Named-only edits, analysis/audio
 file writes, and other kinds lacking a supported durable inverse are reported
 as `cannot_reverse`; inspect these instead of claiming the whole Run was undone.
+Named-only history kinds include `delete_playlist`, `rename_playlist`,
+`move_playlist`, `replace_playlist`, `replace_playlist_contents`, `sort_playlists`,
+`remove_playlist_tracks`, `add_playlist_tracks`, `reorder_playlist`, `copy_playlist`,
+`cues`, `create_playlist`, `playlist_edit`, `relocate`, `list_removal`, and
+`window_grid`. `unrecorded`, `permanent`, and `unconfirmed` cannot be reversed
+either. Audio key-tag edits (`key_edit`) retain values but have no durable inverse.
+Other Sidecar writes without a supported inverse (including Decisions and Mutants)
+are also reported by kind; this command does not silently undo only their Facts.
 The result's `reversed` counts entries selected for reversal (planned in a dry
 run, applied otherwise). `run` identifies the new Run when anything was reversed.
 

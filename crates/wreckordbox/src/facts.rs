@@ -275,7 +275,9 @@ pub fn runs(
     command: &RunCommands,
 ) -> Result<String, ServiceError> {
     let (run, did): (Run, &str) = match command {
-        RunCommands::Unwind { id, dry_run, force, .. } => return crate::unwind::run(client, as_json, *id, *dry_run, *force),
+        RunCommands::Unwind {
+            id, dry_run, force, ..
+        } => return crate::unwind::run(client, as_json, *id, *dry_run, *force),
         RunCommands::Spills { command } => return crate::spills::run(client, command),
         RunCommands::Start {
             source,

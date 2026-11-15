@@ -372,7 +372,11 @@ pub mod stored {
         match edit {
             LibraryEdit::Unwind(unwind) => {
                 let mut payload = unwind.metadata.clone();
-                payload["edits"] = json!(unwind.edits.iter().map(|edit| json!({"kind":kind_of(edit),"payload":store(edit)})).collect::<Vec<_>>());
+                payload["edits"] = json!(unwind
+                    .edits
+                    .iter()
+                    .map(|edit| json!({"kind":kind_of(edit),"payload":store(edit)}))
+                    .collect::<Vec<_>>());
                 Some(payload)
             }
             LibraryEdit::Track(edits) => Some(json!({ "edits": track_edits(edits) })),
@@ -442,10 +446,16 @@ pub mod stored {
         }
         match kind {
             "unwind" => {
-                let edits = payload.get("edits")?.as_array()?.iter().map(|edit|
-                    restore(edit.get("kind")?.as_str()?, FORMAT, edit.get("payload")?)
-                ).collect::<Option<Vec<_>>>()?;
-                Some(LibraryEdit::Unwind(rbl_library::unwind::Unwind { edits, metadata: payload.clone() }))
+                let edits = payload
+                    .get("edits")?
+                    .as_array()?
+                    .iter()
+                    .map(|edit| restore(edit.get("kind")?.as_str()?, FORMAT, edit.get("payload")?))
+                    .collect::<Option<Vec<_>>>()?;
+                Some(LibraryEdit::Unwind(rbl_library::unwind::Unwind {
+                    edits,
+                    metadata: payload.clone(),
+                }))
             }
             "track" => Some(LibraryEdit::Track(track_edits_from(payload.get("edits")?)?)),
             "track_tags" => {
@@ -564,8 +574,19 @@ pub mod stored {
         match kind {
             "unwind" => {
                 for edit in list("edits") {
-                    values.extend(self::values(edit["kind"].as_str().unwrap_or(""), FORMAT, &edit["payload"], false));
+                    values.extend(self::values(
+                        edit["kind"].as_str().unwrap_or(""),
+                        FORMAT,
+                        &edit["payload"],
+                        false,
+                    ));
                 }
+                values.extend(list("fact_changes").iter().map(|change| ValueChange {
+                    subject: format!("Fact {}", change["before"]["id"]),
+                    field: "visibility".into(),
+                    before: change["before"].clone(),
+                    after: change["after"].clone(),
+                }));
             }
             "track" => values.extend(list("edits").iter().map(column)),
             "key_edit" => {
@@ -1395,7 +1416,10 @@ impl Keeper {
         }
         let named = request.run.clone().unwrap_or_default();
         if request.command == crate::unwind::APPLY && named.id.is_some() {
-            return Err(ServiceError::new(service_codes::BAD_REQUEST, "An Unwind is a Run of its own; do not join an existing Run."));
+            return Err(ServiceError::new(
+                service_codes::BAD_REQUEST,
+                "An Unwind is a Run of its own; do not join an existing Run.",
+            ));
         }
         let source = named
             .source
@@ -1430,7 +1454,11 @@ impl Keeper {
         // Review's accept is by the DJ its request declares (wbx-27).
         let projection = crate::projection::default_source(&request.command)
             .or_else(|| crate::review::declared(request));
-        if !from_client && request.run.is_none() && projection.is_none() && request.command != crate::unwind::APPLY {
+        if !from_client
+            && request.run.is_none()
+            && projection.is_none()
+            && request.command != crate::unwind::APPLY
+        {
             return Ok(Some(Target::Window));
         }
         if let Some(source) = &source {
@@ -2411,6 +2439,27 @@ impl rbl_library::ledger::Ledger for Keeper {
             plan: None,
             asserted: true,
         })
+    }
+
+    fn hold_unwind(
+        &self,
+        payload: &Value,
+        undo: bool,
+    ) -> Result<Box<dyn rbl_library::unwind::Hold + '_>, String> {
+        // History already holds the Library gate. Never wait for a Fact writer
+        // which might itself be waiting for that gate.
+        let held = self.stems.fact_writes.try_lock().ok_or_else(|| {
+            "Facts are being changed; retry Undo after that command finishes".to_owned()
+        })?;
+        self.stems
+            .with_sidecar_wait(|sidecar| {
+                let sidecar = sidecar.ok_or_else(|| "The Sidecar is not open".to_owned())?;
+                sidecar
+                    .check_unwind_history(payload, undo)
+                    .map_err(|e| e.to_string())
+            })
+            .map_err(|e| e.message)??;
+        Ok(Box::new(held))
     }
 
     fn record(&self, step: Step, edit: &LibraryEdit, label: &str, link: Link) -> Option<i64> {

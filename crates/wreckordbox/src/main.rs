@@ -11,13 +11,13 @@ mod facts;
 mod intake;
 mod intensity;
 mod ledger;
-mod unwind;
 mod mutants;
 mod mytag_edits;
 mod playlist_edits;
 mod project;
 mod project_mytags;
 mod spills;
+mod unwind;
 use playlist_edits as edits;
 mod protection;
 mod reading;
@@ -396,7 +396,14 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
             print(&facts::facts(&mut connect(&config)?, cli.json, command)?);
         }
         Commands::Runs { command } => {
-            if let facts::RunCommands::Unwind { how, dry_run:false, .. } = command { ledger::begin(how, cli.json); }
+            if let facts::RunCommands::Unwind {
+                how,
+                dry_run: false,
+                ..
+            } = command
+            {
+                ledger::begin(how, cli.json);
+            }
             print(&facts::runs(&mut connect(&config)?, cli.json, command)?);
         }
         Commands::Decisions { command } => {

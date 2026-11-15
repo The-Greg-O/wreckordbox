@@ -189,7 +189,6 @@ impl LibraryEdit {
     /// What Undo or Redo of this entry leaves to re-read.
     pub fn touched(&self) -> Touched {
         match self {
-            Self::Unwind(_) => Touched::Tracks,
             Self::DeletePlaylist(_) | Self::RenamePlaylist(_) |
             Self::MovePlaylist(_) | Self::SortPlaylists(_) | Self::RemovePlaylistTracks(_) |
             Self::CreatePlaylist(_) | Self::PlaylistEdit(_) |
@@ -200,7 +199,7 @@ impl LibraryEdit {
             // Tokens keep their database row ids private; a full reload after an
             // undo is uncommon and guarantees every view and sort follows it.
             // The index's My Tag list (filters, panel) is read in a full load.
-            Self::Track(_) | Self::KeyEdit { .. } | Self::TrackTags { .. } | Self::Relocate(_)
+            Self::Unwind(_) | Self::Track(_) | Self::KeyEdit { .. } | Self::TrackTags { .. } | Self::Relocate(_)
             | Self::MyTagOrder(_) => Touched::Tracks,
             Self::Cues(revision) => Touched::Cues(revision.content().to_owned()),
             Self::ListRemoval(removal) => match removal.list() {
@@ -849,6 +848,11 @@ impl crate::LibraryCore {
         if matches!(entry.edit, LibraryEdit::Grid(_)) {
             return Err(StepError::Write(DbError::WriteRefused(crate::grid_step::GridStep::NOT_HERE.to_owned())));
         }
+        let ledger = self.history.lock().ledger();
+        let _unwind = if let LibraryEdit::Unwind(edit) = executable {
+            let ledger = ledger.as_ref().ok_or_else(|| StepError::Write(DbError::WriteRefused("Unwind needs its Library service to validate the Facts".into())))?;
+            Some(ledger.hold_unwind(&edit.metadata, undo).map_err(|reason| StepError::Conflict { label: entry.label, reason })?)
+        } else { None };
         let touched = entry.edit.touched();
         let mut preparation = crate::ledger::Preparation::edit(&entry.edit);
         if undo { preparation.undo_of = entry.ledger; } else { preparation.redo_of = entry.ledger; }

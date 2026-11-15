@@ -1582,3 +1582,28 @@ fn unwind_updates_the_window_and_is_one_undo_step() {
     assert_eq!(window.rating("10001"), 0);
     assert_eq!(window.rating("10002"), 0);
 }
+
+#[test]
+fn unwind_keeps_an_entry_already_undone_even_when_the_value_matches_again() {
+    let window = window();
+    window.host().unwrap();
+    let original = window.cli(&["--json", "tracks", "rate", "10001", "4"]).json()["run"]["id"].to_string();
+    window.undo().unwrap();
+    window.cli(&["tracks", "rate", "10001", "4"]).succeeded();
+    let answer = window.cli(&["--json", "runs", "unwind", &original]).json();
+    assert_eq!(answer["reversed"], 0, "{answer}");
+    assert_eq!(answer["entries"][0]["status"], "already_reversed");
+    assert_eq!(window.rating("10001"), 4);
+}
+
+#[test]
+fn unwind_window_undo_keeps_a_later_fact() {
+    let window = window();
+    window.host().unwrap();
+    let original = window.cli(&["--json", "tracks", "rate", "10001", "4", "--source", "dj"]).json()["run"]["id"].to_string();
+    window.cli(&["runs", "unwind", &original]).succeeded();
+    window.cli(&["facts", "record", "10001", "energy", "5", "--source", "dj"]).succeeded();
+    assert!(window.undo().is_err(), "Undo must not restore an old DJ Fact over a new opinion");
+    assert_eq!(window.rating("10001"), 0);
+    assert_eq!(window.cli(&["--json", "facts", "show", "10001", "--kind", "energy"]).json()["facts"][0]["value"], 5);
+}

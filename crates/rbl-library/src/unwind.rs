@@ -3,6 +3,10 @@
 use crate::history::LibraryEdit;
 use rbl_db::{write::Writer, DbError};
 
+/// A Ledger-owned guard held through an Unwind history step and its recording.
+pub trait Hold {}
+impl<T> Hold for T {}
+
 #[derive(Clone)]
 pub struct Unwind {
     pub edits: Vec<LibraryEdit>,
@@ -20,10 +24,16 @@ impl Unwind {
 
     pub fn apply(&self, writer: &mut Writer, undo: bool) -> Result<(), DbError> {
         self.check(writer, undo)?;
-        let ordered: Vec<_> = if undo { self.edits.iter().rev().collect() } else { self.edits.iter().collect() };
+        let ordered: Vec<_> = if undo {
+            self.edits.iter().rev().collect()
+        } else {
+            self.edits.iter().collect()
+        };
         for (at, edit) in ordered.iter().enumerate() {
             let result = match edit {
-                LibraryEdit::Track(values) => writer.step_track_edits_at_once(values, undo).map(|_| ()),
+                LibraryEdit::Track(values) => {
+                    writer.step_track_edits_at_once(values, undo).map(|_| ())
+                }
                 _ => edit.apply(writer, undo),
             };
             if let Err(error) = result {

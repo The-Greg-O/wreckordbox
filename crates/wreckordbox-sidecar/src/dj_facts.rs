@@ -176,7 +176,10 @@ impl Sidecar {
         };
         if entry.kind == "unwind" {
             let id = append_in(&tx, &candidate)?;
-            if let Some(reversed) = entry.reverses.filter(|_| matches!(entry.action, Action::Undo | Action::Redo)) {
+            if let Some(reversed) = entry
+                .reverses
+                .filter(|_| matches!(entry.action, Action::Undo | Action::Redo))
+            {
                 withdraw_edit(&tx, id, reversed)?;
             } else if let Some(payload) = entry.payload {
                 crate::unwind::apply_in(&tx, id, payload)?;

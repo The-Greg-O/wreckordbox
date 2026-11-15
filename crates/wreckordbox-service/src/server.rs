@@ -599,8 +599,12 @@ impl Shared {
             crate::run_status::RUNS_ACTIVE => crate::run_status::active(&self.stems),
             crate::unwind::PLAN | crate::unwind::APPLY => {
                 let _facts = self.stems.hold_facts();
-                let (result, changed) = self.with_library(|library| crate::unwind::answer(library, &self.stems, &self.ledger, request))??;
-                if let Some(changed) = changed { self.tell_host(&changed.event()); }
+                let (result, changed) = self.with_library(|library| {
+                    crate::unwind::answer(library, &self.stems, &self.ledger, request)
+                })??;
+                if let Some(changed) = changed {
+                    self.tell_host(&changed.event());
+                }
                 Ok(result)
             }
             runs if crate::ledger::answers(runs) => {
