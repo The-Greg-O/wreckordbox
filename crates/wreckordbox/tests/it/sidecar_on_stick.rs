@@ -56,21 +56,26 @@ fn snapshot(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
 }
 
 /// A sandbox whose Sidecar folder is a Stick, unlocked by name, with one
-/// imported track; the service is started (and has opened its Sidecar).
+/// imported track; the service is started (and has opened its Sidecar). A
+/// Fact was recorded before the folder became a Stick: on one, nothing is
+/// recorded (wbx-8yh).
 fn sidecar_on_an_unlocked_stick() -> (Sandbox, String) {
     let sandbox = Sandbox::new();
     let sidecar = sandbox.sidecar_dir();
-    std::fs::create_dir_all(&sidecar).unwrap();
-    std::fs::write(
-        sidecar.join(wreckordbox_stick_protection::STAND_IN_MARKER),
-        b"",
-    )
-    .unwrap();
     let audio = sandbox.path().join("audio/Long Track.wav");
     std::fs::create_dir_all(audio.parent().unwrap()).unwrap();
     write_audio(&audio);
     let mut id = String::new();
     sandbox.edit(|writer| id = writer.import_file(&audio).unwrap());
+    let recorded = sandbox.cli(&[
+        "--json", "facts", "record", &id, "mood", "Dark", "--source", "dj",
+    ]);
+    assert!(recorded.status.success(), "{}", recorded.stderr);
+    std::fs::write(
+        sidecar.join(wreckordbox_stick_protection::STAND_IN_MARKER),
+        b"",
+    )
+    .unwrap();
     let name = sidecar.file_name().unwrap().to_str().unwrap().to_owned();
     let unlocked = sandbox.cli(&[
         "stick",
@@ -80,14 +85,6 @@ fn sidecar_on_an_unlocked_stick() -> (Sandbox, String) {
         &name,
     ]);
     assert!(unlocked.status.success(), "{}", unlocked.stderr);
-    let recorded = sandbox.cli(&[
-        "--json", "facts", "record", &id, "mood", "Dark", "--source", "dj",
-    ]);
-    assert!(
-        recorded.status.success(),
-        "a short Sidecar write on the unlocked Stick works: {}",
-        recorded.stderr
-    );
     (sandbox, id)
 }
 

@@ -784,6 +784,16 @@ fn set_tags(
         ));
     }
     if dimension.edit == EDIT_FACT {
+        // Pure Fact recording (the Library does not change): refused for a
+        // Library hosted on a Stick, as every recording command is (wbx-8yh).
+        crate::sidecar_stick::refuse_background_work(
+            stems.library_dir(),
+            stems.sidecar_dir(),
+            &format!(
+                "`intake.set_tags` for {}, which is not on the deck,",
+                dimension.label
+            ),
+        )?;
         if let Some(why) = &now.facts_unavailable {
             return Err(refused(
                 codes::SERVICE_FAILED,

@@ -473,6 +473,15 @@ impl Shared {
     ) -> (Result<Value, ServiceError>, Option<Value>) {
         // A projection names the policy it is made under, so its Run and
         // Ledger entry record which one was in force.
+        // A Library hosted on a Stick records nothing in its Sidecar
+        // (wbx-8yh): refused before anything, the Library included.
+        if let Err(refused) = crate::sidecar_stick::refuse_records(
+            self.stems.library_dir(),
+            self.stems.sidecar_dir(),
+            &request.command,
+        ) {
+            return (Err(refused), None);
+        }
         let stamped = crate::projection::stamped(request, &self.stems);
         let request = stamped.as_ref().unwrap_or(request);
         let (result, run) = self.ledger.attributed(connection.is_some(), request, || {
@@ -589,9 +598,12 @@ impl Shared {
             }
             crate::run_status::RUNS_ACTIVE => crate::run_status::active(&self.stems),
             runs if crate::ledger::answers(runs) => {
+                // Runs are the Ledger's: kept on an unlocked Stick (wbx-8yh).
+                let _ledger = crate::sidecar_stick::ledger_scope();
                 crate::ledger::answer(&self.ledger, &self.stems, request)
             }
             crate::facts::commands::RUNS_FINISH => {
+                let _ledger = crate::sidecar_stick::ledger_scope();
                 // Not while a command admitted to the Run is still in it.
                 self.ledger.finishing(&request.args, || {
                     crate::facts::answer(&self.stems, request, &|id| {

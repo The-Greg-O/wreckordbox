@@ -13,3 +13,4 @@ mod fingerprint;
 mod ledger;
 mod mutants;
 mod stems;
+mod write_admission;
