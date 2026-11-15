@@ -123,42 +123,39 @@ pub(super) fn authorize(
             &format!("intent {id} belongs to an operation that is still running"),
         ));
     }
-    match binding {
-        Some(binding) => {
-            if binding.intent != Some(id) {
-                return Err(refused(
-                    dir,
-                    &format!(
-                        "its manifest names intent {id}, but it was accepted under intent {}",
-                        binding
-                            .intent
-                            .map_or_else(|| "none".to_owned(), |i| i.to_string())
-                    ),
-                ));
-            }
-            let at = spill_manifest::validate(sidecar, manifest).map_err(|e| refused(dir, &e))?;
-            if binding.at != Some(at) {
-                return Err(refused(
+    if let Some(binding) = binding {
+        if binding.intent != Some(id) {
+            return Err(refused(
+                dir,
+                &format!(
+                    "its manifest names intent {id}, but it was accepted under intent {}",
+                    binding
+                        .intent
+                        .map_or_else(|| "none".to_owned(), |i| i.to_string())
+                ),
+            ));
+        }
+        let at = spill_manifest::validate(sidecar, manifest).map_err(|e| refused(dir, &e))?;
+        if binding.at != Some(at) {
+            return Err(refused(
                     dir,
                     &format!("intent {id} in this Ledger is not the intent it was accepted under (another Library's spill?)"),
                 ));
+        }
+    } else {
+        let mut found = Vec::new();
+        for candidate in
+            spill_manifest::candidates(sidecar, manifest, usable).map_err(|e| refused(dir, &e))?
+        {
+            if replayed_from(dir, candidate)?.is_none_or(|from| from == name(dir)) {
+                found.push(candidate);
             }
         }
-        None => {
-            let mut found = Vec::new();
-            for candidate in spill_manifest::candidates(sidecar, manifest, usable)
-                .map_err(|e| refused(dir, &e))?
-            {
-                if replayed_from(dir, candidate)?.is_none_or(|from| from == name(dir)) {
-                    found.push(candidate);
-                }
-            }
-            if found != [id] {
-                return Err(refused(
+        if found != [id] {
+            return Err(refused(
                     dir,
                     &format!("it predates intent binding and the Ledger holds {} matching candidates for intent {id}, not exactly that one", found.len()),
                 ));
-            }
         }
     }
     if let Some(from) = replayed_from(dir, id)? {
