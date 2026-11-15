@@ -521,3 +521,56 @@ fn a_decision_asked_without_a_run_or_source_is_the_agents() {
         "{shown}"
     );
 }
+
+#[test]
+fn a_lookup_is_described_checked_as_a_read_and_recorded_only_by_the_change_tool() {
+    let sandbox = Sandbox::new();
+    let mut server = sandbox.server();
+    server.start();
+    let described =
+        structured(&server.call("read_lookup_description", json!({"id": "10004"}))).clone();
+    assert_eq!(described["track"], "10004", "{described}");
+    let candidate = json!({
+        // The fixture's tracks may credit no artist; a candidate always does.
+        "artist": match described["artist"].as_str() {
+            Some("") | None => "Someone Else",
+            Some(artist) => artist,
+        },
+        "title": described["title"],
+        "duration": described["duration_seconds"],
+    });
+    let asked = json!({
+        "id": "10004", "candidate": candidate,
+        "address": "https://shop.example.test/1", "date": "2026-11-10",
+    });
+
+    let dry = structured(&server.call("read_lookup_check", asked.clone())).clone();
+    assert_eq!(dry["dry_run"], true, "{dry}");
+    assert_eq!(dry["decision"], Value::Null, "{dry}");
+    let none = structured(&server.call(
+        "read_decisions",
+        json!({"topic": "lookup_match", "state": "all"}),
+    ))
+    .clone();
+    assert_eq!(none["total"], 0, "a read records nothing: {none}");
+
+    // The check's attribution is the service's: no source can be given.
+    let mut spoofed = asked.clone();
+    spoofed["source"] = json!("agent:someone-else");
+    let error = refused(&server.call("change_lookup_check", spoofed));
+    assert_eq!(error["code"], "bad_request", "{error}");
+
+    let checked = structured(&server.call("change_lookup_check", asked)).clone();
+    assert_eq!(checked["verdict"], dry["verdict"], "{checked}");
+    assert_eq!(
+        checked["decision"]["answers"][0]["decider"],
+        json!({"kind": "tool", "name": "lookup-check"}),
+        "{checked}"
+    );
+    let recorded = structured(&server.call(
+        "read_decisions",
+        json!({"topic": "lookup_match", "state": "all"}),
+    ))
+    .clone();
+    assert_eq!(recorded["total"], 1, "{recorded}");
+}
