@@ -95,6 +95,19 @@ impl Sidecar {
         reconciled: bool,
         follow: &crate::mutant_follow::Follow,
     ) -> Result<(i64, Vec<crate::mutant_follow::Followed>)> {
+        self.append_recovered_following(entry, facts, reconciled, follow, None)
+    }
+
+    /// Appends an accepted spill and, if necessary, creates its recovery Run
+    /// in that same transaction. Existing stable identities create no Run.
+    pub fn append_recovered_following(
+        &self,
+        entry: &NewEntry,
+        facts: &NativeFacts,
+        reconciled: bool,
+        follow: &crate::mutant_follow::Follow,
+        description: Option<&str>,
+    ) -> Result<(i64, Vec<crate::mutant_follow::Followed>)> {
         let mut db = self.db();
         let tx = db.transaction()?;
         if let Some(id) = entry.id {
@@ -109,6 +122,17 @@ impl Sidecar {
                 return Ok((id, Vec::new()));
             }
         }
+        let recovered;
+        let entry = if let Some(description) = description {
+            let at = crate::store::now();
+            tx.execute("INSERT INTO run(source_kind,source_name,description,started_at,finished_at,outcome) VALUES (?1,?2,?3,?4,?4,'recorded after recovery')",rusqlite::params![entry.source.kind.as_str(),entry.source.name,description,at])?;
+            let run = crate::RunId(tx.last_insert_rowid());
+            tx.execute("INSERT INTO ledger_owned_run(run_id) VALUES (?1)", [run.0])?;
+            recovered = NewEntry { run, ..*entry };
+            &recovered
+        } else {
+            entry
+        };
         // The Mutants' consequences: with the entry or not at all. A
         // failure fails the append, so the Ledger keeps both and writes
         // them later together (wbx-80).

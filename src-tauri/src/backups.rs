@@ -441,12 +441,21 @@ pub(crate) fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&s
             Some(prepared.map_err(error)?)
         } else { None };
         // The Sidecar beside the Library: its database as a snapshot and
-        // the DJ's files, by the rule in `rbl_backup::sidecar_part`.
+        // the DJ's files, by the rule in `rbl_backup::sidecar_part`. Stem
+        // audio is what that snapshot's Facts name, never what `stems/`
+        // holds by then: a separation takes no Library lock (wbx-hy4).
         let mut stopped = None;
-        let sidecar = rbl_backup::sidecar_part::collect_for(
+        let sidecar = rbl_backup::sidecar_part::collect_of_one_moment_for(
             &location,
             rbl_backup::sidecar_part::Options::saved(state.backup_dir()),
             &mut || progress("preparing", 0, 0, "Scanning the Sidecar").map_err(|e| stopped = Some(e)).is_ok(),
+            &|point| {
+                match point {
+                    "sidecar-snapshotted" => crate::test_holds::point(crate::test_holds::BACKUP_SIDECAR_SNAPSHOTTED, &state_dir),
+                    "stems-gathering" => crate::test_holds::point(crate::test_holds::BACKUP_STEMS_GATHERING, &state_dir),
+                    _ => {}
+                }
+            },
         );
         if let Some(error) = stopped { return Err(error); }
         let sidecar = sidecar.map_err(error)?;
@@ -743,6 +752,10 @@ pub fn delete(state: &AppState, path: &Path) -> AppResult<()> {
     remove(&path)?;
     crate::durable::sync_dir(&state.backup_destination()).map_err(error)
 }
+
+#[cfg(test)]
+#[path = "backup_stems_tests.rs"]
+mod stems_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1273,9 +1286,9 @@ mod tests {
         let facts = |value: Option<&str>| {
             let db = rusqlite::Connection::open(sidecar.join("sidecar.db")).unwrap();
             if let Some(value) = value {
-                db.execute_batch(&format!("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT); INSERT OR REPLACE INTO meta VALUES ('schema_version', '5'); CREATE TABLE IF NOT EXISTS fact (value TEXT); DELETE FROM fact; INSERT INTO fact VALUES ('{value}');")).unwrap();
+                db.execute_batch(&format!("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT); INSERT OR REPLACE INTO meta VALUES ('schema_version', '5'); CREATE TABLE IF NOT EXISTS fact (kind TEXT, value TEXT); DELETE FROM fact; INSERT INTO fact VALUES ('genre', '{value}'), ('stems', '{{\"stems\": [{{\"file\": \"stems/10001/run-1/vocals.wav\"}}]}}');")).unwrap();
             }
-            db.query_row("SELECT value FROM fact", [], |row| row.get::<_, String>(0)).unwrap()
+            db.query_row("SELECT value FROM fact WHERE kind = 'genre'", [], |row| row.get::<_, String>(0)).unwrap()
         };
         facts(Some("house"));
         let mut items = Vec::new();

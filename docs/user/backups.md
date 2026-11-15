@@ -33,7 +33,15 @@ leaving it out is time: separating a track again takes over twenty minutes.
 To include it, save a file named `backup-sidecar.json` holding
 `{"stems": true}` in wreckordbox's backup state folder (on Linux
 `~/.local/share/wreckordbox/backups/`). Every later backup then carries the
-Stem audio, and says so in its `sidecar.json`.
+Stem audio, and says so in its `sidecar.json`. A backup chooses its Stem
+files by its own copy of the Sidecar, taken at one moment: a separation that
+finishes while a backup runs is left out whole, its files with its record,
+and is not half in the backup. The files themselves are read a little later,
+as the backup copies them, and are not checked against the record then: a
+Stem file removed or changed after that moment is missing or different in
+the backup, and after a restore that track reads as needing separating
+again. A Stem file inside a symbolic link, at any folder on its way, stops
+the backup.
 
 Restoring a backup without Stem audio leaves any Stem audio already on the
 machine where it is. A track whose Stem audio is not there afterwards has no

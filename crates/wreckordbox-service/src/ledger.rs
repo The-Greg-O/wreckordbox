@@ -89,6 +89,17 @@
 //! the edit gate or the history, and never calls a host or sends an
 //! event.
 
+#[path = "spill_binding.rs"]
+mod spill_binding;
+#[path = "spill_commands.rs"]
+mod spill_commands;
+#[path = "spill_discard.rs"]
+mod spill_discard;
+#[path = "spill_lease.rs"]
+mod spill_lease;
+#[path = "spill_manifest.rs"]
+mod spill_manifest;
+
 #[path = "bulk_ledger.rs"]
 mod bulk;
 #[path = "bulk_spill.rs"]
@@ -125,6 +136,14 @@ pub mod commands {
     pub const RUNS_LIST: &str = "runs.list";
     /// One Run and what it changed.
     pub const RUNS_SHOW: &str = "runs.show";
+    /// Read-only inventory of retained accepted-write spills.
+    pub const SPILLS_LIST: &str = "runs.spills.list";
+    /// Read a spill and one bounded page of its accepted records.
+    pub const SPILLS_SHOW: &str = "runs.spills.show";
+    /// Explicitly replay a completed spill with its original attribution.
+    pub const SPILLS_REPLAY: &str = "runs.spills.replay";
+    /// The DJ's explicit, Ledger-recorded discard of retained records.
+    pub const SPILLS_DISCARD: &str = "runs.spills.discard";
 }
 
 /// The name of the `tool` source a client's edit has when the client names
@@ -215,6 +234,11 @@ pub struct RunList {
     pub limit: usize,
     /// The `offset` of the next page; `null` on the last.
     pub next_offset: Option<usize>,
+    /// Unresolved local spills; listing never replays or repairs them.
+    #[serde(default)]
+    pub recovery: Value,
+    #[serde(default)]
+    pub pending_recording: Value,
 }
 
 /// One value an entry changed, for a person to read.
@@ -271,6 +295,8 @@ pub struct LedgerEntry {
 /// What `runs.show` answers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunShown {
+    #[serde(default)]
+    pub recovery: Value,
     /// Accepted named writes waiting for recording; paging uses the same offset/limit.
     #[serde(default)]
     pub pending_recording: Value,
@@ -695,7 +721,7 @@ pub(crate) fn takes_run(command: &str) -> bool {
 }
 
 pub(crate) fn answers(command: &str) -> bool {
-    matches!(command, commands::RUNS_LIST | commands::RUNS_SHOW)
+    spill_commands::answers(command) || matches!(command, commands::RUNS_LIST | commands::RUNS_SHOW)
 }
 
 /// Names `tracks` in the command being answered on this thread
@@ -754,6 +780,11 @@ pub(crate) fn answer(
     stems: &Stems,
     request: &Request,
 ) -> Result<Value, ServiceError> {
+    // The DJ can always deal with a spill; on a locked Stick these commands
+    // write nothing (spill_commands asks the Stick first).
+    if spill_commands::answers(&request.command) {
+        return spill_commands::answer(keeper, stems, request);
+    }
     let (recovery_error, settled) = {
         let state = keeper.state();
         (state.recovery_error.clone(), state.settled)
@@ -765,43 +796,45 @@ pub(crate) fn answer(
             return Err(error.clone());
         }
     }
-    if request.command == commands::RUNS_LIST {
-        let index = |name: &str, default| {
-            request.args[name]
-                .as_u64()
-                .and_then(|n| usize::try_from(n).ok())
-                .unwrap_or(default)
-        };
-        let mut pending = bulk_spill::pending(
-            &stems.bulk_recovery_dir(),
-            None,
-            index("offset", 0),
-            index("limit", DEFAULT_PAGE_LIMIT).min(1000),
-        )
-        .map_err(|why| ServiceError::new(crate::stems::codes::SIDECAR_FAILED, why))?;
-        if pending["total"].as_u64().unwrap_or(0) != 0 {
-            if let Some(records) = pending["records"].as_array_mut() {
-                for record in records {
-                    record["result"] = json!({"track":record["result"].get("track"),"target":record["result"].get("target")});
-                }
-            }
-            return Err(ServiceError::new(crate::stems::codes::SIDECAR_FAILED,
-                format!("Accepted writes are waiting for a Ledger Run because recording was unavailable. Pending targets (page with offset/limit): {pending}")));
-        }
-    }
+    let offset = request.args["offset"]
+        .as_u64()
+        .and_then(|n| usize::try_from(n).ok())
+        .unwrap_or(0);
+    let limit = request.args["limit"]
+        .as_u64()
+        .and_then(|n| usize::try_from(n).ok())
+        .unwrap_or(DEFAULT_PAGE_LIMIT)
+        .min(1000);
+    let mut recovery = spill_commands::inventory(&stems.bulk_recovery_dir(), offset, limit)
+        .unwrap_or_else(|error| json!({"error":error}));
+    spill_commands::include_refusals(keeper, &stems.bulk_recovery_dir(), &mut recovery);
+    // Complete all disk reads outside the Sidecar's ownership mutex.
+    let mut pending = bulk_spill::pending(
+        &stems.bulk_recovery_dir(),
+        request.args["id"].as_i64(),
+        offset,
+        limit,
+    )
+    .unwrap_or_else(|error| json!({"error":error}));
+    spill_commands::include_ordinary(
+        keeper,
+        request.args["id"].as_i64(),
+        offset,
+        limit,
+        &mut pending,
+    );
     stems.with_sidecar_wait(|sidecar| {
-        if sidecar.is_none() && (stems.sidecar_dir().join("sidecar.db").exists() || bulk_spill::exists(&stems.bulk_recovery_dir())) {
-            if let Some(error) = recovery_error { return Err(error); }
-            return Err(ServiceError::new(crate::stems::codes::SIDECAR_FAILED,
-                "The Sidecar is not open. Check service startup diagnostics and storage access; a Ledger query cannot open or recover it."));
+        if sidecar.is_none() && stems.sidecar_dir().join("sidecar.db").exists() {
+            return Err(recovery_error.unwrap_or_else(|| {
+                ServiceError::new(
+                    crate::stems::codes::SIDECAR_FAILED,
+                    "The Sidecar is not open; a Ledger query cannot open or recover it.",
+                )
+            }));
         }
         let mut answer = read_ledger(sidecar, request)?;
-        if request.command == commands::RUNS_SHOW {
-            if let Some(run) = request.args["id"].as_i64() {
-                answer["pending_recording"] = bulk_spill::pending(&stems.bulk_recovery_dir(), Some(run), answer["offset"].as_u64().and_then(|n| usize::try_from(n).ok()).unwrap_or(0), answer["limit"].as_u64().and_then(|n| usize::try_from(n).ok()).unwrap_or(DEFAULT_PAGE_LIMIT))
-                    .map_err(|why|ServiceError::new(crate::stems::codes::SIDECAR_FAILED,why))?;
-            }
-        }
+        answer["recovery"] = recovery;
+        answer["pending_recording"] = pending;
         Ok(answer)
     })?
 }
@@ -828,6 +861,8 @@ fn read_ledger(sidecar: Option<&Sidecar>, request: &Request) -> Result<Value, Se
         };
         let runs: Vec<RunSummary> = runs.into_iter().map(summary).collect();
         serde_json::to_value(RunList {
+            recovery: Value::Null,
+            pending_recording: Value::Null,
             next_offset: next_offset(offset, runs.len(), total),
             runs,
             total,
@@ -854,6 +889,7 @@ fn read_ledger(sidecar: Option<&Sidecar>, request: &Request) -> Result<Value, Se
             .map_err(|e| failed(&e))?;
         let entries: Vec<LedgerEntry> = entries.into_iter().map(entry).collect();
         serde_json::to_value(RunShown {
+            recovery: Value::Null,
             pending_recording: Value::Null,
             run: summary(run),
             next_offset: next_offset(offset, entries.len(), total),
@@ -889,6 +925,25 @@ fn entry(entry: wreckordbox_sidecar::ledger::Entry) -> LedgerEntry {
                 .as_ref()
                 .map_or(Value::Null, |replaced| replaced.value.clone()),
             after: fact.value.clone(),
+        }],
+        (None, Some(payload))
+            if matches!(
+                entry.kind.as_str(),
+                "mutant_change" | "decision" | "decision_answer"
+            ) =>
+        {
+            vec![ValueChange {
+                subject: format!("{} {}", entry.kind, payload["row"]["id"]),
+                field: "record".into(),
+                before: Value::Null,
+                after: payload["row"].clone(),
+            }]
+        }
+        (None, Some(payload)) if entry.kind == "ledger_spill_discard" => vec![ValueChange {
+            subject: format!("Ledger spill {}", payload["spill"]),
+            field: "discard decision".into(),
+            before: Value::Null,
+            after: payload.clone(),
         }],
         (None, Some(payload)) if entry.store == Store::Library => stored::values(
             &entry.kind,
@@ -1062,6 +1117,8 @@ struct State {
     unwritten: Vec<Spilled>,
     /// Completed bulk spills only: live operation intents must never be settled.
     bulk_waiting: Vec<std::path::PathBuf>,
+    /// Why kept spills were not replayed, for the recovery report.
+    spill_refusals: Vec<String>,
     op: Option<Op>,
     /// Intents that needed no entry, removed with the next one.
     done: Vec<i64>,
@@ -1114,12 +1171,19 @@ struct Faults {
     /// after its changes (if any) and after its write was told (wbx-26).
     abort_before_assert: bool,
     fail_append: AtomicUsize,
+    fail_lease: bool,
     abort_in_replay: bool,
     delay_after_begin: Option<Duration>,
     hold_after_begin: Option<std::path::PathBuf>,
 }
 
 impl Faults {
+    #[cfg(not(feature = "test-faults"))]
+    fn from_env() -> Self {
+        Self::default()
+    }
+
+    #[cfg(feature = "test-faults")]
     fn from_env() -> Self {
         let mut faults = Self::default();
         if std::env::var("RBXPORT_TEST").as_deref() != Ok("1") {
@@ -1138,6 +1202,7 @@ impl Faults {
                 "fail_append" => {
                     faults.fail_append = AtomicUsize::new(usize::try_from(number).unwrap_or(1));
                 }
+                "fail_lease" => faults.fail_lease = true,
                 "abort_in_replay" => faults.abort_in_replay = true,
                 "hold_after_begin" => {
                     faults.hold_after_begin = Some(std::path::PathBuf::from(value));
@@ -1554,7 +1619,8 @@ impl Keeper {
         }
         self.write_waiting(sidecar, state)?;
         for error in bulk_spill::replay_all(&self.stems.bulk_recovery_dir(), sidecar)? {
-            Self::bulk_recovery_error(state, error);
+            Self::bulk_recovery_error(&error);
+            state.spill_refusals.push(error);
         }
         for open in sidecar.open_intents().map_err(|e| e.to_string())? {
             // What the unconfirmed write did to entries: the Library as it
@@ -1614,16 +1680,8 @@ impl Keeper {
         Ok(())
     }
 
-    fn bulk_recovery_error(state: &mut State, error: String) {
-        tracing::error!(%error, "the Ledger could not be brought up to date");
-        let message = match &state.recovery_error {
-            Some(previous) => format!("{}; {error}", previous.message),
-            None => error,
-        };
-        state.recovery_error = Some(ServiceError::new(
-            crate::stems::codes::SIDECAR_FAILED,
-            message,
-        ));
+    fn bulk_recovery_error(error: &str) {
+        tracing::error!(%error, "accepted writes await explicit spill recovery; inspect runs.spills.list");
     }
 
     /// Writes every entry still waiting into the Ledger, oldest first, and
@@ -1632,14 +1690,15 @@ impl Keeper {
     fn write_waiting(&self, sidecar: &Sidecar, state: &mut State) -> Result<(), String> {
         while let Some(dir) = state.bulk_waiting.first() {
             if let Some(error) = bulk_spill::recover(dir, sidecar)? {
-                Self::bulk_recovery_error(state, error);
+                Self::bulk_recovery_error(&error);
+                state.spill_refusals.push(error);
             }
             state.bulk_waiting.remove(0);
         }
         while let Some(waiting) = state.unwritten.first() {
             let run = match waiting.run {
                 Some(run) => RunId(run),
-                None => late_run(sidecar, &waiting.source, &waiting.description)?,
+                None => RunId(0),
             };
             let reconciled = waiting.dj_facts.is_none();
             let facts = match &waiting.dj_facts {
@@ -1662,7 +1721,7 @@ impl Keeper {
                 &waiting.follow
             };
             let (_, followed) = sidecar
-                .append_following(
+                .append_recovered_following(
                     &NewEntry {
                         id: waiting.id,
                         run,
@@ -1682,6 +1741,10 @@ impl Keeper {
                     &facts,
                     reconciled,
                     follow,
+                    waiting
+                        .run
+                        .is_none()
+                        .then_some(waiting.description.as_str()),
                 )
                 .map_err(|e| e.to_string())?;
             crate::mutant_follow::announce(&self.stems, &followed);
@@ -2251,15 +2314,17 @@ impl rbl_library::ledger::Ledger for Keeper {
         if let Some(active) = bulk::active(self).filter(|active| active.imports()) {
             active.written(wrote);
         }
-        if let Some(op) = self.state().op.as_mut() {
-            op.wrote = Some(wrote);
-            // A hand set that changed nothing still has its assertion to
-            // tell: its intent stays until then (wbx-26).
-            if !wrote && !op.asserting {
-                if let Ok(sidecar) = self.stems.sidecar() {
-                    if let Err(error) = sidecar.settle_intents(&[op.id]) {
-                        tracing::error!(%error, "could not clear a failed Library write's intent");
-                    }
+        let settle = {
+            let mut state = self.state();
+            state.op.as_mut().and_then(|op| {
+                op.wrote = Some(wrote);
+                (!wrote && !op.asserting).then_some(op.id)
+            })
+        };
+        if let Some(id) = settle {
+            if let Ok(sidecar) = self.stems.sidecar() {
+                if let Err(error) = sidecar.settle_intents(&[id]) {
+                    tracing::error!(%error, "could not clear a failed Library write's intent");
                 }
             }
         }
