@@ -353,6 +353,9 @@ fn add(library: &OpenLibrary, add: &AddTracks) -> Result<Done, ServiceError> {
     }
 }
 
+/// The new entries, in order, and the tracks skipped.
+type Added = (Vec<String>, Vec<String>);
+
 /// The window's Add Tracks to Playlist: the new entries, in order, and the
 /// tracks skipped because the playlist held them already.
 fn add_entries(
@@ -360,7 +363,7 @@ fn add_entries(
     playlist: &str,
     tracks: &[String],
     allow_duplicates: bool,
-) -> Result<((Vec<String>, Vec<String>), crate::protocol::LibraryChanged), ServiceError> {
+) -> Result<(Added, crate::protocol::LibraryChanged), ServiceError> {
     let (playlist, tracks) = (playlist.to_owned(), tracks.to_vec());
     library.recorded_edit(
         Touched::Playlists,

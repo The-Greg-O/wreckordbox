@@ -131,21 +131,22 @@ pub fn run(
             if as_json {
                 return Ok(json!(added).to_string());
             }
-            let mut said = format!(
-                "Added {} to playlist {}",
+            let place = match at {
+                Some(at) if !added.added.is_empty() => format!(" from position {at}"),
+                _ => String::new(),
+            };
+            let mut lines = vec![format!(
+                "Added {} to playlist {}{place}.",
                 count(added.added.len(), "track"),
                 added.playlist
-            );
-            said.push_str(&match at {
-                Some(at) if !added.added.is_empty() => format!(" from position {at}."),
-                _ => ".".to_owned(),
-            });
+            )];
             if !added.skipped.is_empty() {
-                said.push_str(&format!(
-                    "\nSkipped, already in it: {}. Add them again with --allow-duplicates.",
+                lines.push(format!(
+                    "Skipped, already in it: {}. Add them again with --allow-duplicates.",
                     added.skipped.join(", ")
                 ));
             }
+            let said = lines.join("\n");
             Ok(said)
         }
         PlaylistMakeCommands::Rename { playlist, name } => {
