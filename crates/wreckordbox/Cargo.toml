@@ -16,6 +16,7 @@ clap = { version = "4", features = ["derive"] }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+wreckordbox-service = { path = "../wreckordbox-service", features = ["test-faults"] }
 # `stick load` tests: the Stick read back without recovering it.
 wreckordbox-stick-outline = { path = "../wreckordbox-stick-outline", features = ["testing"] }
 # Compare service readiness with the capabilities of this exact build.

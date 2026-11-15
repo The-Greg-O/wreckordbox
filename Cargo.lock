@@ -7204,6 +7204,7 @@ dependencies = [
  "wreckordbox-intensity",
  "wreckordbox-native-stems",
  "wreckordbox-render",
+ "wreckordbox-service",
  "wreckordbox-setplan",
  "wreckordbox-sidecar",
  "wreckordbox-stick-outline",

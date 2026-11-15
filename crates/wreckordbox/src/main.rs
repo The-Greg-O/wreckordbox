@@ -17,6 +17,7 @@ mod playlist_edits;
 mod project;
 mod project_mytags;
 mod set_plan;
+mod spills;
 use playlist_edits as edits;
 mod protection;
 mod reading;

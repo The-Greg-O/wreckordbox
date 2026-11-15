@@ -9,6 +9,10 @@ description = "The Library service: the one owner of the Library, and the client
 [lints]
 workspace = true
 
+[features]
+# Only fixture/test builds may enable fault injection. Normal binaries ignore its environment.
+test-faults = []
+
 [dependencies]
 rbl-db = { path = "../rbl-db" }
 # The index and search the window uses, so a query here matches the window.
@@ -56,4 +60,5 @@ toml = "0.8"
 rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
 
 [dev-dependencies]
+wreckordbox-service = { path = ".", features = ["test-faults"] }
 tempfile = "3"

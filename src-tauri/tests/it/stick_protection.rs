@@ -1551,6 +1551,7 @@ const SERVICE_NOT_STICK_WRITERS: &[&str] = &[
     // Review (wbx-27): a read, a Library edit through the core, a Sidecar entry.
     "review.accept", "review.reject", "review.rejected", "review.reopen", "review.waiting",
     "runs.active", "runs.finish", "runs.list", "runs.show", "runs.start",
+    "runs.spills.list", "runs.spills.show", "runs.spills.replay", "runs.spills.discard",
     "schema.check", "schema.convert",
     // Set plans (wbx-39): Sidecar only; never the Library or a Stick.
     "setplans.build", "setplans.check", "setplans.list", "setplans.show",

@@ -121,6 +121,9 @@ impl From<CandidateArg> for Candidate {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateDecision {
+    /// The asker, independently of the Run owner. Omitted: the Decisions tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<SourceArg>,
     pub question_type: QuestionType,
     /// What kind of question this is, in the asker's own word (`genre`,
     /// `lookup_match`): lower-case letters, digits and underscores.
@@ -353,6 +356,17 @@ impl<'a> Decisions<'a> {
         })
     }
 
+    fn open_run_as(&self, id: i64, source: &Source) -> Result<Run, ServiceError> {
+        let run = facts::open_run(self.stems, id)?;
+        if run.source.kind == SourceKind::Dj && source.kind != SourceKind::Dj {
+            return Err(ServiceError::new(
+                service_codes::BAD_REQUEST,
+                "An agent or tool cannot join the DJ's Run for a Decision",
+            ));
+        }
+        Ok(run)
+    }
+
     fn existing(&self, id: i64) -> Result<Decision, ServiceError> {
         self.sidecar
             .decision(id)
@@ -366,21 +380,30 @@ impl<'a> Decisions<'a> {
             Some(track) => Some((self.lookup)(track)?.parent().id.clone()),
             None => None,
         };
+        let source = create
+            .source
+            .as_ref()
+            .map(facts::source)
+            .transpose()?
+            .unwrap_or_else(|| Source::new(SourceKind::Tool, "wreckordbox-decisions"));
         if let Some(run) = create.run {
-            facts::open_run(self.stems, run)?;
+            self.open_run_as(run, &source)?;
         }
         let candidates: Vec<Candidate> = create.candidates.into_iter().map(Into::into).collect();
         let decision = self
             .sidecar
-            .create_decision(&NewDecision {
-                question_type: create.question_type,
-                topic: create.topic.as_deref(),
-                question: &create.question,
-                context: &create.context.unwrap_or_else(|| json!({})),
-                candidates: &candidates,
-                track_id: track_id.as_deref(),
-                run: create.run.map(RunId),
-            })
+            .create_decision_as(
+                &NewDecision {
+                    question_type: create.question_type,
+                    topic: create.topic.as_deref(),
+                    question: &create.question,
+                    context: &create.context.unwrap_or_else(|| json!({})),
+                    candidates: &candidates,
+                    track_id: track_id.as_deref(),
+                    run: create.run.map(RunId),
+                },
+                &source,
+            )
             .map_err(|e| sidecar_error(&e))?;
         self.changed(&decision, None);
         Ok(decision)
@@ -465,7 +488,7 @@ impl<'a> Decisions<'a> {
         let Some(wanted) = &then.fact else {
             let run = then
                 .run
-                .map(|run| facts::open_run(self.stems, run))
+                .map(|run| self.open_run_as(run, given.decider))
                 .transpose()?;
             new.run = run.as_ref().map(|run| run.id);
             let (decision, answer) = self
@@ -514,7 +537,7 @@ impl<'a> Decisions<'a> {
             self.lookup,
         )?;
         if let Some(run) = then.run {
-            facts::open_run(self.stems, run)?;
+            self.open_run_as(run, given.decider)?;
         }
         let description = then
             .description
