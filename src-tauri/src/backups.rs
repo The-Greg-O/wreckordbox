@@ -450,8 +450,10 @@ pub(crate) fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&s
             rbl_backup::sidecar_part::Options::saved(state.backup_dir()),
             &mut || progress("preparing", 0, 0, "Scanning the Sidecar").map_err(|e| stopped = Some(e)).is_ok(),
             &|point| {
-                if point == "sidecar-snapshotted" {
-                    crate::test_holds::point(crate::test_holds::BACKUP_SIDECAR_SNAPSHOTTED, &state_dir);
+                match point {
+                    "sidecar-snapshotted" => crate::test_holds::point(crate::test_holds::BACKUP_SIDECAR_SNAPSHOTTED, &state_dir),
+                    "stems-gathering" => crate::test_holds::point(crate::test_holds::BACKUP_STEMS_GATHERING, &state_dir),
+                    _ => {}
                 }
             },
         );
