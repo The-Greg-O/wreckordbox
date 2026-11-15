@@ -326,14 +326,14 @@ impl OpenLibrary {
     /// ([`LibraryCore::asserting_edit_refreshing`], wbx-66).
     pub(crate) fn asserting_edit_refreshing<T>(
         &self,
-        touched: Touched,
+        touched: &Touched,
         refresh: Touched,
         label: &'static str,
         action: impl FnOnce(
             &mut rbl_db::write::Writer,
         ) -> Result<(T, Vec<rbl_db::write::TrackEdit>), DbError>,
     ) -> Result<(T, LibraryChanged), ServiceError> {
-        let planned = crate::large_run::Planned::of(&touched, &[]);
+        let planned = crate::large_run::Planned::of(touched, &[]);
         self.change(planned, |core, host| {
             core.asserting_edit_refreshing(host, touched, refresh, label, action)
         })

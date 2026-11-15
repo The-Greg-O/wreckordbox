@@ -39,6 +39,9 @@ pub(crate) const REASON: &str = "waits_for_dj";
 /// The suggestions standing rejected.
 pub(crate) type Rejected = HashSet<Suggestion>;
 
+/// Each text field's Facts, and the standing rejections.
+type TextFacts = (Vec<(Field, Vec<Fact>)>, Rejected);
+
 /// Whether `field` is one of these text fields.
 pub(crate) fn is_text(field: Field) -> bool {
     FIELDS.contains(&field)
@@ -109,7 +112,7 @@ pub(crate) fn of_track(
             })
         })
         .collect();
-    rows.sort_by(|a, b| b.fact.cmp(&a.fact));
+    rows.sort_by_key(|h| std::cmp::Reverse(h.fact));
     rows
 }
 
@@ -154,10 +157,10 @@ pub(crate) fn waiting(
 }
 
 /// Each text field's Facts and the standing rejections.
-fn read(stems: &Stems) -> Result<(Vec<(Field, Vec<Fact>)>, Rejected), ServiceError> {
+fn read(stems: &Stems) -> Result<TextFacts, ServiceError> {
     let failed = |why: String| ServiceError::new(crate::stems::codes::SIDECAR_FAILED, why);
     stems
-        .with_sidecar_wait(|open| -> Result<_, String> {
+        .with_sidecar_wait(|open| -> Result<TextFacts, String> {
             let text = |e: wreckordbox_sidecar::SidecarError| e.to_string();
             match open {
                 Some(sidecar) => {

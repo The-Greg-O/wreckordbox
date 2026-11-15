@@ -721,8 +721,7 @@ impl crate::LibraryCore {
             &mut rbl_db::write::Writer,
         ) -> Result<(T, Vec<rbl_db::write::TrackEdit>), DbError>,
     ) -> Result<(T, crate::Change), DbError> {
-        let refresh = touched.clone();
-        self.asserting_edit_refreshing(host, touched, refresh, label, action)
+        self.asserting_edit_refreshing(host, &touched.clone(), touched, label, action)
     }
 
     /// [`Self::asserting_edit`] whose index refresh is `refresh` while the
@@ -735,7 +734,7 @@ impl crate::LibraryCore {
     pub fn asserting_edit_refreshing<T>(
         &self,
         host: &(impl crate::Host + ?Sized),
-        touched: Touched,
+        touched: &Touched,
         refresh: Touched,
         label: &'static str,
         action: impl FnOnce(
@@ -747,7 +746,7 @@ impl crate::LibraryCore {
         let _gate = self.edit_gate().lock();
         let preparation = crate::ledger::Preparation {
             asserting: true,
-            ..crate::ledger::Preparation::touched(&touched)
+            ..crate::ledger::Preparation::touched(touched)
         };
         // The Ledger keeps the write's intent until the assertion is told,
         // so a crash between the change and the assertion leaves evidence.

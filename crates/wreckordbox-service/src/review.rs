@@ -767,16 +767,9 @@ fn accept(
     hold("selected");
     let refused = |why: String| DbError::WriteRefused(format!("{CHANGED_MARK}{why}"));
     let mut applied: Vec<i64> = Vec::new();
-    // A title or an artist is a track column: the whole index is re-read,
-    // while the Ledger's evidence stays the chosen tracks (wbx-66).
-    let refresh = if chosen.iter().any(|h| crate::review_text::is_text(h.field)) {
-        Touched::Tracks
-    } else {
-        Touched::Metadata(tracks.clone())
-    };
     let made = library.asserting_edit_refreshing(
-        Touched::Metadata(tracks.clone()),
-        refresh,
+        &Touched::Metadata(tracks.clone()),
+        refresh_of(&chosen, &tracks),
         UNDO_LABEL,
         |writer| {
             // Something recorded wrote one of these tracks since the list was
@@ -886,6 +879,17 @@ fn accept(
             e.message.trim_start_matches(CHANGED_MARK),
         ))),
         Err(e) => Err(early(e)),
+    }
+}
+
+/// How the index is refreshed after an accept: a title or an artist is a
+/// track column, so the whole index is re-read, while the Ledger's evidence
+/// stays the chosen tracks (wbx-66).
+fn refresh_of(chosen: &[Held], tracks: &[String]) -> Touched {
+    if chosen.iter().any(|h| crate::review_text::is_text(h.field)) {
+        Touched::Tracks
+    } else {
+        Touched::Metadata(tracks.to_vec())
     }
 }
 
