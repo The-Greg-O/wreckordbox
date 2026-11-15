@@ -205,8 +205,8 @@ fn write_entry(recovery_dir: &Path, folder: &Path, ledger: &mut Owed) -> Result<
     // Opening writes (it clears the work folder, may migrate): a Sidecar on
     // a Stick is opened and recorded in only under that Stick's
     // authorization, held to the end of the entry (wbx-8yh).
-    let _authorized = wreckordbox_stick_protection::authorize(recovery_dir, folder)
-        .map_err(|e| e.to_string())?;
+    let _authorized =
+        wreckordbox_stick_protection::authorize(recovery_dir, folder).map_err(|e| e.to_string())?;
     let sidecar = wreckordbox_sidecar::Sidecar::open(folder).map_err(|e| e.to_string())?;
     // The restore's entry is the Ledger's own record of a Library change:
     // on a Stick it is kept only while the Stick is unlocked (wbx-8yh); a

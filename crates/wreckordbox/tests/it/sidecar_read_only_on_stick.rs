@@ -764,3 +764,87 @@ fn count(sandbox: &Sandbox, sql: &str) -> i64 {
     .query_row(sql, [], |row| row.get(0))
     .unwrap()
 }
+
+/// An asserting edit whose change could not be recorded (its Stick locked
+/// between the Library write and the Ledger) keeps its own intent, even
+/// when the Stick is unlocked again before the assertion is settled: after
+/// the service ends there is still a record naming the track, never
+/// nothing.
+#[test]
+fn an_asserting_edit_whose_change_went_unrecorded_keeps_its_intent_for_recovery() {
+    use crate::fact_producers_hold::{gated, Gate};
+
+    let (sandbox, track) = with_facts();
+    stop_service(&sandbox);
+    let sidecar = sandbox.sidecar_dir();
+    an_unlocked_stick(&sandbox, &sidecar);
+    let name = sidecar.file_name().unwrap().to_str().unwrap().to_owned();
+    let gate = Gate::new();
+    let service = gated(&sandbox, &gate);
+    gate.hold("ledger-record");
+    gate.hold("ledger-assert");
+
+    // Not as the DJ: its assertion is empty, and only settles the intent.
+    let mut client = sandbox.client();
+    let rated = {
+        let track = track.clone();
+        std::thread::spawn(move || client.assert_rating(&track, 5))
+    };
+    gate.reached("at-ledger-record");
+    assert!(sandbox
+        .cli(&["stick", "lock", sidecar.to_str().unwrap()])
+        .status
+        .success());
+    gate.go("ledger-record");
+    gate.reached("at-ledger-assert");
+    assert!(sandbox
+        .cli(&[
+            "stick",
+            "unlock",
+            sidecar.to_str().unwrap(),
+            "--name",
+            &name
+        ])
+        .status
+        .success());
+    gate.go("ledger-assert");
+    let _ = rated.join().unwrap();
+    // The service ends before any later edit could write what it kept in
+    // memory.
+    drop(service);
+
+    let named = format!("%{track}%");
+    let owed = |sandbox: &Sandbox| -> i64 {
+        rusqlite::Connection::open_with_flags(
+            sandbox.sidecar_dir().join("sidecar.db"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap()
+        .query_row(
+            "SELECT (SELECT COUNT(*) FROM ledger_intent)
+                  + (SELECT COUNT(*) FROM ledger
+                     WHERE label || ' ' || COALESCE(payload, '') || ' ' || COALESCE(command, '') LIKE ?1)",
+            [&named],
+            |row| row.get(0),
+        )
+        .unwrap()
+    };
+    assert!(
+        owed(&sandbox) > 0,
+        "an intent or an entry naming the track survives the end of the service"
+    );
+    // The next service settles it into an entry naming the track; the
+    // rating was made.
+    ok(&sandbox, &["runs", "list"]);
+    assert_eq!(ok(&sandbox, &["tracks", "show", &track])["rating"], 5);
+    assert!(
+        count(
+            &sandbox,
+            &format!(
+                "SELECT COUNT(*) FROM ledger WHERE kind = 'unconfirmed' AND \
+                 label || ' ' || COALESCE(payload, '') || ' ' || COALESCE(command, '') LIKE '%{track}%'"
+            ),
+        ) > 0,
+        "an unconfirmed entry names the track"
+    );
+}

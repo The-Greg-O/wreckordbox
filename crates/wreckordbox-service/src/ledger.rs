@@ -1042,6 +1042,9 @@ struct Op {
     /// A hand set's changes were given an entry (under an intent of their
     /// own), so an assertion with nothing to record may settle the write's.
     changes_recorded: bool,
+    /// A change of this hand set whose own intent could not be reserved:
+    /// the write's intent must stay for recovery (wbx-8yh).
+    changes_unreserved: bool,
 }
 
 #[derive(Default)]
@@ -1192,7 +1195,9 @@ impl Keeper {
         let _ledger = crate::sidecar_stick::ledger_scope();
         let mut state = self.state();
         if let Some(op) = state.op.as_mut().filter(|op| {
-            op.asserting && !op.recorded && (op.wrote != Some(true) || op.changes_recorded)
+            op.asserting
+                && !op.recorded
+                && (op.wrote != Some(true) || (op.changes_recorded && !op.changes_unreserved))
         }) {
             op.recorded = true;
             if let Ok(sidecar) = self.stems.sidecar() {
@@ -2080,6 +2085,7 @@ impl Keeper {
             mutant_plan: None,
             asserting: false,
             changes_recorded: false,
+            changes_unreserved: false,
         });
         drop(state);
         if let Some(delay) = self.faults.delay_after_begin {
@@ -2263,6 +2269,8 @@ impl rbl_library::ledger::Ledger for Keeper {
 
     fn assert(&self, edit: &LibraryEdit, label: &str) -> Option<i64> {
         let _ledger = crate::sidecar_stick::ledger_scope();
+        // Test mode only: before the assertion is told or settled.
+        crate::review::hold("ledger-assert");
         if self.faults.abort_before_assert {
             std::process::abort();
         }
@@ -2321,6 +2329,8 @@ impl rbl_library::ledger::Ledger for Keeper {
 
     fn record(&self, step: Step, edit: &LibraryEdit, label: &str, link: Link) -> Option<i64> {
         let _ledger = crate::sidecar_stick::ledger_scope();
+        // Test mode only: after the Library write, before its record.
+        crate::review::hold("ledger-record");
         let sidecar = self.stems.sidecar().ok();
         // The plan the write left with its intent, before it was made.
         let plan = self
@@ -2413,19 +2423,28 @@ fn claim(op: &mut Op, sidecar: Option<&Sidecar>, asserted: bool) -> Option<i64> 
         op.recorded = true;
         return Some(op.id);
     }
-    op.changes_recorded = true;
-    sidecar?
-        .begin_intent(
-            &Intent {
-                source: &op.source,
-                run: op.run,
-                description: &op.description,
-                command: op.command.as_ref(),
-                at: now(),
-            },
-            &[],
-        )
-        .ok()
+    // Covered only once its own intent is durably reserved: until then the
+    // write's intent is what recovery has, and it is kept (wbx-8yh).
+    let reserved = sidecar.and_then(|sidecar| {
+        sidecar
+            .begin_intent(
+                &Intent {
+                    source: &op.source,
+                    run: op.run,
+                    description: &op.description,
+                    command: op.command.as_ref(),
+                    at: now(),
+                },
+                &[],
+            )
+            .ok()
+    });
+    if reserved.is_some() {
+        op.changes_recorded = true;
+    } else {
+        op.changes_unreserved = true;
+    }
+    reserved
 }
 
 /// What an unconfirmed entry keeps of the tracks its write was about, from
