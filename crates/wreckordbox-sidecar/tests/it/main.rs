@@ -11,6 +11,7 @@ mod decisions;
 mod facts;
 mod fingerprint;
 mod ledger;
+mod lookups;
 mod mutants;
 mod stems;
 mod write_admission;
