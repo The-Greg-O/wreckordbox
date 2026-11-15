@@ -992,13 +992,13 @@ fn ours(sidecar: &Sidecar, track_id: &str) -> Result<Vec<Fact>, ServiceError> {
         .collect())
 }
 
-fn is_ours(fact: &Fact) -> bool {
+pub(crate) fn is_ours(fact: &Fact) -> bool {
     fact.source.kind == SourceKind::Tool && fact.source.name == SOURCE_NAME
 }
 
 /// The value of a Fact when it can stand for a measuring now: a whole,
 /// valid Intensity by this version of the method.
-fn valid(fact: &Fact) -> Option<Intensity> {
+pub(crate) fn valid(fact: &Fact) -> Option<Intensity> {
     serde_json::from_value::<Intensity>(fact.value.clone())
         .ok()
         .filter(|value| value.method.version == METHOD_VERSION && value.check().is_ok())

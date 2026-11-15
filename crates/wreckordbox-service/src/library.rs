@@ -114,6 +114,12 @@ impl OpenLibrary {
         Ok(u32::try_from(self.index()?.len()).unwrap_or(u32::MAX))
     }
 
+    /// An import's recording (wbx-b1d): one Run under the caller's source
+    /// for every edit made inside it.
+    pub(crate) fn import_operation(&self) -> rbl_library::bulk::Operation {
+        rbl_library::bulk::Operation::new(&self.core, rbl_library::bulk::Kind::Import)
+    }
+
     /// Runs `read` on a read-only connection, for what the index does not
     /// hold. A service by itself keeps one open; a service the window hosts
     /// opens one for the read, as the window may replace the file under it
@@ -318,6 +324,24 @@ impl OpenLibrary {
         let planned = crate::large_run::Planned::of(&touched, &[]);
         self.change(planned, |core, host| {
             core.asserting_edit(host, touched, label, action)
+        })
+    }
+
+    /// [`Self::asserting_edit`] refreshing the index by `refresh` while the
+    /// Ledger's evidence and the large-Run count stay `touched`'s
+    /// ([`LibraryCore::asserting_edit_refreshing`], wbx-66).
+    pub(crate) fn asserting_edit_refreshing<T>(
+        &self,
+        touched: &Touched,
+        refresh: Touched,
+        label: &'static str,
+        action: impl FnOnce(
+            &mut rbl_db::write::Writer,
+        ) -> Result<(T, Vec<rbl_db::write::TrackEdit>), DbError>,
+    ) -> Result<(T, LibraryChanged), ServiceError> {
+        let planned = crate::large_run::Planned::of(touched, &[]);
+        self.change(planned, |core, host| {
+            core.asserting_edit_refreshing(host, touched, refresh, label, action)
         })
     }
 

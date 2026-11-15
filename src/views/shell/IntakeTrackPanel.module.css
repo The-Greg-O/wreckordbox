@@ -39,7 +39,39 @@
 }
 .input:focus { outline: none; border-color: var(--role-accent); }
 .input[data-pending] { color: var(--role-text-dim); }
-.suggestions { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--s-shell-space-2); }
+
+/* A proposed title or artist (wbx-66): beside its field, dashed in the
+   accent so it is never mistaken for the value the DJ set. */
+.fieldWithProposals { display: grid; gap: var(--s-shell-space-2); }
+.proposals {
+  margin: 0 0 0 calc(7em + var(--s-shell-space-5));
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--s-shell-space-2);
+}
+.proposal {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-shell-space-4);
+  width: 100%;
+  min-width: 0;
+  padding: var(--s-shell-space-2) var(--s-shell-space-4);
+  border: var(--s-shell-border) dashed var(--role-accent);
+  border-radius: var(--s-shell-radius);
+  background: transparent;
+  color: var(--role-text);
+  font: inherit;
+  font-style: italic;
+  text-align: left;
+  cursor: pointer;
+}
+.proposal:focus-visible { outline: var(--s-shell-border) solid var(--role-accent); outline-offset: 1px; }
+.proposal[aria-disabled="true"] { cursor: default; opacity: 0.6; }
+.proposal[data-pending] { color: var(--role-text-dim); }
+.proposedMark { color: var(--role-accent); font-style: normal; font-size: var(--f-size-shell-label); text-transform: uppercase; }
+.proposedValue { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--role-text-bright); }
+.proposal .key { margin-left: auto; font-style: normal; }
 
 .pickers { display: flex; flex-wrap: wrap; gap: var(--s-shell-space-6) calc(var(--s-shell-space-6) * 2); }
 .picker { display: grid; gap: var(--s-shell-space-3); align-content: start; }
@@ -137,6 +169,7 @@
     background: var(--role-working);
   }
   .field { grid-template-columns: minmax(0, 1fr); gap: var(--s-shell-space-2); }
+  .proposals { margin-left: 0; }
   .secondary { margin-left: 0; }
   /* What the track needs is said once, in the counter above (wbx-69). */
   .actions .open { display: none; }

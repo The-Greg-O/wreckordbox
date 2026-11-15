@@ -247,6 +247,8 @@ fn tools_are_named_and_marked_as_reads_or_changes_and_leave_out_the_djs_decision
     for wanted in [
         "read_tracks_query",
         "read_stick_load_preview",
+        "read_rebuild_from_stick",
+        "change_rebuild_from_stick",
         "change_track_rating",
         "change_run_start",
         "change_record_facts",
@@ -403,6 +405,40 @@ fn a_sidecar_change_takes_the_agent_as_its_source() {
 }
 
 #[test]
+fn an_agent_hands_in_lyrics_from_the_web_and_finds_the_track_by_its_words() {
+    // Synthetic lyrics, written for this test.
+    let sandbox = Sandbox::new();
+    let mut server = sandbox.server();
+    server.start();
+    let set = structured(&server.call(
+        "change_lyrics_set",
+        json!({"id": "10004", "text": "Kites above the quarry\nwind in the wires",
+               "address": "https://lyrics.example.test/7", "date": "2026-11-15"}),
+    ))
+    .clone();
+    assert_eq!(set["run"]["source"]["name"], "test-agent", "{set}");
+    assert_eq!(
+        set["fact"]["source"],
+        json!({"kind": "web", "name": "https://lyrics.example.test/7"})
+    );
+    let found =
+        structured(&server.call("read_lyrics_search", json!({"text": "quarry wires"}))).clone();
+    assert_eq!(found["hits"][0]["track"]["id"], "10004", "{found}");
+    let shown = structured(&server.call("read_lyrics", json!({"id": "10004"}))).clone();
+    assert_eq!(shown["status"], "lyrics");
+    let listed = structured(&server.call("read_lyrics_list", json!({"status": "lyrics"}))).clone();
+    assert_eq!(listed["total"], 1, "{listed}");
+    // Without a date the address is refused, and nothing is recorded.
+    let error = refused(&server.call(
+        "change_lyrics_set",
+        json!({"id": "10005", "text": "words", "address": "https://lyrics.example.test/8"}),
+    ));
+    assert_eq!(error["code"], "invalid_lyrics");
+    let still = structured(&server.call("read_lyrics", json!({"id": "10005"}))).clone();
+    assert_eq!(still["status"], "unknown");
+}
+
+#[test]
 fn an_unknown_tool_or_method_is_a_protocol_error() {
     let sandbox = Sandbox::new();
     let mut server = sandbox.server();
@@ -540,4 +576,178 @@ fn unwind_tools_preview_and_apply_the_same_service_operation() {
         structured(&server.call("change_run_unwind", json!({"id":original})))["reversed"],
         0
     );
+}
+
+#[test]
+fn a_playlist_is_made_with_tracks_filled_and_arranged_through_the_tools_as_the_agents() {
+    let sandbox = Sandbox::new();
+    let mut server = sandbox.server();
+    server.start();
+    let folder = structured(&server.call("change_playlist_create_folder", json!({"name": "Gigs"})))
+        ["playlist"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let made = structured(&server.call(
+        "change_playlist_create",
+        json!({"name": "Warm-up", "parent": folder, "tracks": ["10003", "10001"]}),
+    ))
+    .clone();
+    assert_eq!(
+        made["run"]["source"],
+        json!({"kind": "agent", "name": "test-agent"}),
+        "{made}"
+    );
+    let playlist = made["playlist"].as_str().unwrap().to_owned();
+    structured(&server.call(
+        "change_playlist_add_tracks",
+        json!({"playlist": playlist, "tracks": ["10002"], "at": 1}),
+    ));
+    structured(&server.call(
+        "change_playlist_rename",
+        json!({"playlist": playlist, "name": "Opening"}),
+    ));
+    let moved =
+        structured(&server.call("change_playlist_move", json!({"playlist": playlist}))).clone();
+    assert_eq!(moved["parent"], "root", "{moved}");
+    assert_eq!(moved["name"], "Opening", "{moved}");
+
+    let listed =
+        structured(&server.call("read_playlist_tracks", json!({"id": playlist, "limit": 10})))
+            .clone();
+    let ids: Vec<&str> = listed["tracks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|track| track["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["10002", "10003", "10001"], "{listed}");
+
+    // Under Library Protection, nothing more is made.
+    structured(&server.call("change_protection_on", json!({})));
+    let error = refused(&server.call("change_playlist_create", json!({"name": "Late"})));
+    assert_eq!(error["code"], "library_protected", "{error}");
+}
+
+#[test]
+fn a_set_plan_is_built_through_tools_as_the_agents_own_and_read_back() {
+    let sandbox = Sandbox::new();
+    let mut server = sandbox.server();
+    server.start();
+    let checked = structured(&server.call(
+        "read_set_plan_check",
+        json!({"recipe": "version = 1\ntracks = 3\n[tempo]\nmax_chnge = 2\n"}),
+    ))
+    .clone();
+    assert_eq!(checked["valid"], false, "{checked}");
+    assert_eq!(checked["problems"][0]["line"], 4, "{checked}");
+
+    let recipe = "version = 1\nname = \"Agent's warm-up\"\ntracks = 3\n[tempo]\nmax_change = 2\n";
+    let built = structured(&server.call(
+        "change_set_plan_build",
+        json!({"recipe": recipe, "ids": ["10000", "10001", "10002", "10003"]}),
+    ))
+    .clone();
+    assert_eq!(built["built"], true, "{built}");
+    let plan = &built["set_plan"];
+    assert_eq!(
+        plan["plan"]["tracks"].as_array().unwrap().len(),
+        3,
+        "{built}"
+    );
+    let run = structured(&server.call("read_run", json!({"id": plan["run"]}))).clone();
+    assert_eq!(run["run"]["source"]["kind"], "agent", "{run}");
+    assert_eq!(run["run"]["source"]["name"], "test-agent", "{run}");
+
+    let listed = structured(&server.call("read_set_plans", json!({}))).clone();
+    assert_eq!(listed["set_plans"][0]["id"], plan["id"], "{listed}");
+    let shown = structured(&server.call("read_set_plan", json!({"id": plan["id"]}))).clone();
+    assert_eq!(shown["plan"], plan["plan"]);
+
+    // The DJ is never the source of an agent's plan.
+    let refused = refused(&server.call(
+        "change_set_plan_build",
+        json!({"recipe": recipe, "ids": ["10000", "10001", "10002"], "source": "dj"}),
+    ));
+    assert_eq!(refused["code"], "invalid_source", "{refused}");
+}
+
+#[test]
+fn a_lookup_is_described_checked_as_a_read_and_recorded_only_by_the_change_tool() {
+    let sandbox = Sandbox::new();
+    let mut server = sandbox.server();
+    server.start();
+    let described =
+        structured(&server.call("read_lookup_description", json!({"id": "10004"}))).clone();
+    assert_eq!(described["track"], "10004", "{described}");
+    let candidate = json!({
+        // The fixture's tracks may credit no artist; a candidate always does.
+        "artist": match described["artist"].as_str() {
+            Some("") | None => "Someone Else",
+            Some(artist) => artist,
+        },
+        "title": described["title"],
+        "duration": described["duration_seconds"],
+    });
+    let asked = json!({
+        "id": "10004", "candidate": candidate,
+        "address": "https://shop.example.test/1", "date": "2026-11-10",
+    });
+
+    let dry = structured(&server.call("read_lookup_check", asked.clone())).clone();
+    assert_eq!(dry["dry_run"], true, "{dry}");
+    assert_eq!(dry["decision"], Value::Null, "{dry}");
+    let none = structured(&server.call(
+        "read_decisions",
+        json!({"topic": "lookup_match", "state": "all"}),
+    ))
+    .clone();
+    assert_eq!(none["total"], 0, "a read records nothing: {none}");
+
+    // The check's attribution is the service's: no source can be given.
+    let mut spoofed = asked.clone();
+    spoofed["source"] = json!("agent:someone-else");
+    let error = refused(&server.call("change_lookup_check", spoofed));
+    assert_eq!(error["code"], "bad_request", "{error}");
+
+    let checked = structured(&server.call("change_lookup_check", asked)).clone();
+    assert_eq!(checked["verdict"], dry["verdict"], "{checked}");
+    assert_eq!(
+        checked["decision"]["answers"][0]["decider"],
+        json!({"kind": "tool", "name": "lookup-check"}),
+        "{checked}"
+    );
+    let recorded = structured(&server.call(
+        "read_decisions",
+        json!({"topic": "lookup_match", "state": "all"}),
+    ))
+    .clone();
+    assert_eq!(recorded["total"], 1, "{recorded}");
+}
+
+#[test]
+fn the_set_planning_guide_is_read_without_a_service() {
+    let sandbox = Sandbox::new();
+    let mut server = sandbox.server();
+    server.start();
+    let tool = server.request("tools/list", json!({}))["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "read_set_planning_guide")
+        .cloned()
+        .expect("a read_set_planning_guide tool");
+    assert_eq!(tool["annotations"]["readOnlyHint"], true, "{tool}");
+
+    let guide = structured(&server.call("read_set_planning_guide", json!({}))).clone();
+
+    let document = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/agents/set-planning.md"),
+    )
+    .unwrap();
+    assert_eq!(guide["markdown"], document);
+    assert_eq!(guide["sections"][0]["id"], "keys", "{}", guide["sections"]);
+    // Nothing was started for it: no service, no runtime folder.
+    assert!(Client::connect(&server.socket).is_err());
+    assert!(!sandbox.path("run").exists());
 }

@@ -194,6 +194,13 @@ fn sweep(s: &Sandbox, id: &str, playlist: &str, tag: &str, populated: bool) {
         ("stems.show", json!({"id":id})),
         ("stems.status", json!({"id":id})),
         ("intensity.show", json!({"id":id})),
+        ("lyrics.show", json!({"id":id})),
+        ("lyrics.list", json!({})),
+        ("lyrics.search", json!({"text":"harbour"})),
+        (
+            "lyrics.import_embedded",
+            json!({"tracks":[id],"dry_run":true}),
+        ),
         ("facts.kinds", json!({})),
         ("facts.of_track", json!({"id":id})),
         (
@@ -205,6 +212,12 @@ fn sweep(s: &Sandbox, id: &str, playlist: &str, tag: &str, populated: bool) {
         ("runs.show", json!({"id":1})),
         ("runs.active", json!({})),
         ("decisions.list", json!({})),
+        ("lookup.describe", json!({"id":id})),
+        (
+            "lookup.check",
+            json!({"id":id,"candidate":{"artist":"A","title":"T","duration":1},
+                   "address":"https://shop.example.test/1","date":"2026-11-10","dry_run":true}),
+        ),
         ("decisions.get", json!({"id":1})),
         ("mutants.list", json!({})),
         ("mutants.list", json!({"check_audio":true})),
@@ -216,6 +229,12 @@ fn sweep(s: &Sandbox, id: &str, playlist: &str, tag: &str, populated: bool) {
         ("projection.plan", json!({})),
         ("schema.check", json!({})),
         ("schema.convert", json!({"dry_run":true})),
+        (
+            "setplans.check",
+            json!({"recipe":"version = 1\ntracks = 2\n"}),
+        ),
+        ("setplans.list", json!({})),
+        ("setplans.show", json!({"id":1})),
         ("sticks.list", json!({})),
         (
             "sticks.dry_run",
@@ -236,6 +255,7 @@ fn sweep(s: &Sandbox, id: &str, playlist: &str, tag: &str, populated: bool) {
                 "decisions.get" if !populated => "decision_not_found",
                 "mutants.get" if !populated => "mutant_not_found",
                 "schema.check" => "tag_schema_missing",
+                "setplans.show" => "set_plan_not_found",
                 _ => "no error expected",
             };
             if e.code != allowed {

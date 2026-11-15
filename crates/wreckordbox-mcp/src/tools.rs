@@ -42,6 +42,9 @@ pub enum Who {
     RunAndSource,
     /// `runs.start`: the source is the Run's.
     Starts,
+    /// `lookup.check`: an open Run to record in, and nothing else; the
+    /// check's own Decider and the Facts' web source are the service's.
+    Run,
 }
 
 /// One tool.
@@ -123,6 +126,7 @@ fn run_properties(who: Who) -> Vec<(&'static str, Value)> {
         Who::OwnRun => vec![("source", source_property()), ("description", description)],
         Who::RunAndSource => vec![("run", run), ("source", source_property())],
         Who::Starts => vec![("source", source_property())],
+        Who::Run => vec![("run", run)],
     }
 }
 
@@ -148,6 +152,9 @@ fn texts(description: &str) -> Value {
 
 const TRACK_ID: &str = "The track's identifier: `id` in `read_tracks` or `read_tracks_query`.";
 const LIMIT: &str = "The most rows to answer.";
+/// Not a service command: the set planning guide, answered by this server
+/// from the document built into it, with no service and no Library.
+pub const SET_PLANNING_GUIDE: &str = "(the set planning guide, built in)";
 const OFFSET: &str = "How many rows to skip; each page's `next_offset` fetches the next.";
 const LIBRARY_EDIT: &str =
     "Changes the Library through its single edit path: one step of the window's Undo, \
@@ -215,6 +222,31 @@ impl Builder {
             json!({}),
         );
     }
+}
+
+/// The arguments of `lookup.check`, for both of its tools.
+fn lookup_check_properties() -> Vec<(&'static str, Value)> {
+    vec![
+        ("id", text(TRACK_ID)),
+        (
+            "candidate",
+            json!({
+                "type": "object",
+                "description": "The candidate's fields as found: `artist` and `title` (required), and \
+                                `mix_name` (or `version`, the same field), `duration` (seconds or \"m:ss\"), \
+                                `label`, `release_date`, any declared kind of Fact (`genre`, ...)."
+            }),
+        ),
+        (
+            "address",
+            text("Where the candidate was found: one address, no spaces."),
+        ),
+        ("date", text("When it was found: YYYY-MM-DD.")),
+        (
+            "tolerance_seconds",
+            json!({"type": "number", "minimum": 0, "description": "How far apart the durations may be (3 when left out)."}),
+        ),
+    ]
 }
 
 /// Every tool, in the order `tools/list` gives them.
@@ -490,6 +522,28 @@ pub fn catalogue() -> Vec<Tool> {
         vec!["id"],
     );
     b.read(
+        "read_lookup_description",
+        "lookup.describe",
+        "A track described for a web search: artist, title, mix name, duration, label, release date, \
+         a ready search line, and the audio file's own tags (`wreckordbox lookup describe`). \
+         Wreckordbox never searches: you do, with your own tools.",
+        vec![("id", text(TRACK_ID))],
+        vec!["id"],
+    );
+    b.add(
+        "read_lookup_check",
+        "lookup.check",
+        Effect::Read,
+        Who::Nobody,
+        "Checks a candidate you found against a track and says what recording it would be: accepted, \
+         held for review or rejected, with the reason and the Facts it would record \
+         (`wreckordbox lookup check --dry-run`). Records no Decision and no Fact; \
+         `change_lookup_check` records them.",
+        lookup_check_properties(),
+        vec!["id", "candidate", "address", "date"],
+        json!({"dry_run": true}),
+    );
+    b.read(
         "read_mutants",
         "mutants.list",
         "The Mutants, or those of one playlist or track (`wreckordbox mutants list`).",
@@ -520,11 +574,12 @@ pub fn catalogue() -> Vec<Tool> {
     b.read(
         "read_review_waiting",
         "review.waiting",
-        "The Facts Projection held back for the DJ to decide (`wreckordbox review waiting`). Show them to the \
+        "The Facts Projection held back, and the titles and artists agents proposed, for the DJ to decide \
+         (`wreckordbox review waiting`). Show them to the \
          DJ: accepting or rejecting them is the DJ's decision and is not a tool.",
         vec![
             ("tracks", texts("Only these tracks.")),
-            ("field", json!({"type": "string", "enum": ["energy", "prep_colour"]})),
+            ("field", json!({"type": "string", "enum": ["energy", "prep_colour", "title", "artist"]})),
             ("at_least", number("Only at or above this confidence, 0 to 1.")),
         ],
         vec![],
@@ -537,7 +592,7 @@ pub fn catalogue() -> Vec<Tool> {
             ("tracks", texts("Only these tracks.")),
             (
                 "field",
-                json!({"type": "string", "enum": ["energy", "prep_colour"]}),
+                json!({"type": "string", "enum": ["energy", "prep_colour", "title", "artist"]}),
             ),
         ],
         vec![],
@@ -575,6 +630,25 @@ pub fn catalogue() -> Vec<Tool> {
         ],
         vec!["stick", "playlists"],
     );
+    b.add(
+        "read_rebuild_from_stick",
+        "library.rebuild_from_stick",
+        Effect::Read,
+        Who::Nobody,
+        "What rebuilding the Library from a Stick would do: each Stick track matched to a file of the music \
+         folder by its size and the start of its name (or why not), the playlists and folders, the My Tag \
+         category slots and renames, and each value to be carried (`wreckordbox library rebuild-from-stick \
+         --dry-run`). Writes nothing anywhere.",
+        vec![
+            ("stick", text("Where the Stick is mounted, as an absolute path. It is only read.")),
+            ("music", text("The folder holding the audio files the tracks are linked to (searched with its subfolders).")),
+            ("accept_retagged", boolean("Link a track to the one file of its name when no file has its size (retagged since the export).")),
+            ("accept_uncertain", boolean("Link a track to the one file of its size whose name agrees only in part, or whose length differs.")),
+            ("check_length", boolean("Compare each candidate's length from its header with the Stick's (default true); false for a slow network folder.")),
+        ],
+        vec!["stick", "music"],
+        json!({"dry_run": true}),
+    );
     b.read(
         "read_stems",
         "stems.show",
@@ -590,11 +664,86 @@ pub fn catalogue() -> Vec<Tool> {
         vec!["id"],
     );
     b.read(
+        "read_lyrics",
+        "lyrics.show",
+        "The lyrics the Sidecar holds for one track: `status` (lyrics, instrumental or unknown), the \
+         `standing` record and every source's (`wreckordbox lyrics show`). Each record's `value` has \
+         `text`, `synced` and timed `lines`, `language`, `origin` (embedded or supplied) and, for lyrics \
+         from the web, `address` and `retrieved`.",
+        vec![("id", text(TRACK_ID))],
+        vec!["id"],
+    );
+    b.read(
+        "read_lyrics_list",
+        "lyrics.list",
+        "The Library's tracks by what is known of their words: lyrics, instrumental or unknown, with \
+         counts of each (`wreckordbox lyrics list`). Unknown tracks are the ones to look up.",
+        vec![
+            ("status", json!({"type": "string", "enum": ["lyrics", "instrumental", "unknown"], "description": "Only tracks in this state."})),
+            ("limit", integer(LIMIT)),
+            ("offset", integer(OFFSET)),
+        ],
+        vec![],
+    );
+    b.read(
+        "read_lyrics_search",
+        "lyrics.search",
+        "Full-text search over the stored lyrics (SQLite FTS5): tracks whose words contain every word \
+         given, best match first, with the match in context (`wreckordbox lyrics search`). Use it to \
+         find tracks on a theme; the themes themselves are yours to judge.",
+        vec![
+            ("text", text("The words to find, in any case and order; punctuation is ignored.")),
+            ("limit", integer(LIMIT)),
+        ],
+        vec!["text"],
+    );
+    b.add(
+        "read_lyrics_embedded",
+        "lyrics.import_embedded",
+        Effect::Read,
+        Who::Nobody,
+        "Which tracks have lyrics in their own audio tags: found, none or failed per track, recording \
+         nothing (`wreckordbox lyrics import-embedded --dry-run`).",
+        vec![("tracks", texts("The tracks' identifiers; left out, every track."))],
+        vec![],
+        json!({"dry_run": true}),
+    );
+    b.read(
         "read_schema_check",
         "schema.check",
         "Checks the Library's Tag schema and shows the MyTag categories its deck view makes (`wreckordbox schema check`).",
         vec![],
         vec![],
+    );
+    b.read(
+        "read_set_planning_guide",
+        SET_PLANNING_GUIDE,
+        "The set planning guide: harmonic mixing and the Camelot wheel, tempo and pitch, energy flow, \
+         and how the Recipe and the Set plan's scores work, with example Recipes. Read it before \
+         writing a Recipe. In sections; needs no service (`wreckordbox set-plan guide`).",
+        vec![],
+        vec![],
+    );
+    b.read(
+        "read_set_plan_check",
+        "setplans.check",
+        "Checks a Recipe's text: every mistake with its line, or the Recipe as read (`wreckordbox set-plan check`).",
+        vec![("recipe", text("The Recipe's text (TOML, `version = 1`).")),],
+        vec!["recipe"],
+    );
+    b.read(
+        "read_set_plans",
+        "setplans.list",
+        "The Set plans kept in the Sidecar, newest first (`wreckordbox set-plan list`).",
+        vec![],
+        vec![],
+    );
+    b.read(
+        "read_set_plan",
+        "setplans.show",
+        "One kept Set plan: the ordered tracks and each transition's score and reasons (`wreckordbox set-plan show`).",
+        vec![("id", integer("The Set plan's identifier, from `read_set_plans`."))],
+        vec!["id"],
     );
 
     // Library edits.
@@ -766,6 +915,83 @@ pub fn catalogue() -> Vec<Tool> {
         vec!["playlist", "entries"],
         json!({}),
     );
+    let position = |what: &str| json!({"type": "integer", "minimum": 1, "description": format!("{what}, from 1; left out, the last.")});
+    library(
+        &mut b,
+        "change_playlist_create",
+        "playlists.create",
+        "Makes a playlist, in a folder or at the top level, optionally with its first tracks in order; \
+         answers its identifier as `playlist` (`wreckordbox playlists create`).",
+        vec![
+            ("name", text("The playlist's name.")),
+            ("parent", text("The folder to make it in, from `read_playlists`; left out, the top level.")),
+            ("at", position("Its place among the folder's items")),
+            ("tracks", texts("Its first tracks' identifiers, in order.")),
+        ],
+        vec!["name"],
+        json!({}),
+    );
+    library(
+        &mut b,
+        "change_playlist_create_folder",
+        "playlists.create_folder",
+        "Makes a folder, in a folder or at the top level; answers its identifier as `playlist` \
+         (`wreckordbox playlists create-folder`).",
+        vec![
+            ("name", text("The folder's name.")),
+            (
+                "parent",
+                text("The folder to make it in; left out, the top level."),
+            ),
+            ("at", position("Its place among the folder's items")),
+        ],
+        vec!["name"],
+        json!({}),
+    );
+    library(
+        &mut b,
+        "change_playlist_add_tracks",
+        "playlists.add",
+        "Adds tracks to a playlist, at the end or from a position; a track already in it is skipped \
+         unless `allow_duplicates`. An intelligent playlist is refused (`wreckordbox playlists add`).",
+        vec![
+            ("playlist", text("The playlist's identifier.")),
+            ("tracks", texts("The tracks' identifiers, in the order they go in.")),
+            ("at", position("The position the first of them takes")),
+            ("allow_duplicates", boolean("Add a track the playlist already holds again.")),
+        ],
+        vec!["playlist", "tracks"],
+        json!({}),
+    );
+    library(
+        &mut b,
+        "change_playlist_rename",
+        "playlists.rename",
+        "Renames a playlist or folder (`wreckordbox playlists rename`).",
+        vec![
+            ("playlist", text("The playlist's or folder's identifier.")),
+            ("name", text("The new name.")),
+        ],
+        vec!["playlist", "name"],
+        json!({}),
+    );
+    library(
+        &mut b,
+        "change_playlist_move",
+        "playlists.move",
+        "Moves a playlist or folder, with everything in it, into a folder or to the top level \
+         (`wreckordbox playlists move`).",
+        vec![
+            ("playlist", text("The playlist's or folder's identifier.")),
+            (
+                "parent",
+                text("The folder to move it into; left out, the top level."),
+            ),
+            ("at", position("Its place among the folder's items")),
+        ],
+        vec!["playlist"],
+        json!({}),
+    );
     library(
         &mut b,
         "change_project",
@@ -779,6 +1005,25 @@ pub fn catalogue() -> Vec<Tool> {
         ],
         vec!["expect"],
         json!({}),
+    );
+    library(
+        &mut b,
+        "change_rebuild_from_stick",
+        "library.rebuild_from_stick",
+        "Rebuilds the Library from a Stick, as `read_rebuild_from_stick` reported: links each matched track \
+         to its file in the music folder (never copies from the Stick), carries its rating, colour, comment, \
+         My Tags, cues, loops and beat grid, renames the My Tag categories by slot and rebuilds the playlists; \
+         one import Run; refused under Library Protection; the Stick is only read. Show the DJ the dry run \
+         first (`wreckordbox library rebuild-from-stick`).",
+        vec![
+            ("stick", text("Where the Stick is mounted, as an absolute path. It is only read.")),
+            ("music", text("The folder holding the audio files the tracks are linked to (searched with its subfolders).")),
+            ("accept_retagged", boolean("Link a track to the one file of its name when no file has its size (retagged since the export).")),
+            ("accept_uncertain", boolean("Link a track to the one file of its size whose name agrees only in part, or whose length differs.")),
+            ("check_length", boolean("Compare each candidate's length from its header with the Stick's (default true); false for a slow network folder.")),
+        ],
+        vec!["stick", "music"],
+        json!({"dry_run": false}),
     );
     b.add(
         "change_protection_on",
@@ -818,6 +1063,37 @@ pub fn catalogue() -> Vec<Tool> {
         json!({}),
     );
     b.add(
+        "change_set_plan_build",
+        "setplans.build",
+        Effect::Sidecar,
+        Who::Starts,
+        "Builds a Set plan from a Recipe and a pool of tracks and keeps it, in a Run of its own \
+         (`wreckordbox set-plan build`). The same Recipe, pool and Facts give the same plan. When no \
+         plan keeps the Recipe's limits, answers `built: false` with the criterion in the way and \
+         keeps nothing. Name the pool by `ids`, `selection`, or both.",
+        vec![
+            ("recipe", text("The Recipe's text (TOML, `version = 1`).")),
+            ("recipe_file", text("Where the Recipe was read from, kept with the plan.")),
+            ("ids", texts("Tracks of the pool by identifier.")),
+            (
+                "selection",
+                json!({
+                    "type": "object",
+                    "description": "Tracks of the pool as `read_tracks_query` selects them.",
+                    "properties": {
+                        "search": {"type": "string"},
+                        "playlist": {"type": "string"},
+                        "genre": {"type": "string"},
+                        "energy": {"type": "string"}
+                    },
+                    "additionalProperties": false
+                }),
+            ),
+        ],
+        vec!["recipe"],
+        json!({}),
+    );
+    b.add(
         "change_record_facts",
         "facts.record",
         Effect::Sidecar,
@@ -846,6 +1122,52 @@ pub fn catalogue() -> Vec<Tool> {
             ("confidence", json!({"type": "number", "minimum": 0, "maximum": 1, "description": "How sure, 0 to 1, for every Fact that does not say."})),
         ],
         vec!["facts"],
+        json!({}),
+    );
+    b.add(
+        "change_lyrics_set",
+        "lyrics.set",
+        Effect::Sidecar,
+        Who::InArgs,
+        "Records a track's lyrics, or that it is instrumental, as a Fact that follows the music \
+         (`wreckordbox lyrics set`). Lyrics found on the web need the page's `address` and the `date` \
+         you took them; the record's source is then `web:<address>`. Never written to the Library or a Stick. \
+         Your own record replaces your earlier one for the track.",
+        vec![
+            ("id", text(TRACK_ID)),
+            ("text", text("The words, lines separated by newlines. Not with `lines` or `instrumental`.")),
+            (
+                "lines",
+                json!({
+                    "type": "array",
+                    "description": "Synced lyrics: timed lines.",
+                    "items": {
+                        "type": "object",
+                        "properties": {"at_ms": {"type": "integer", "minimum": 0}, "text": {"type": "string"}},
+                        "required": ["at_ms", "text"],
+                        "additionalProperties": false
+                    }
+                }),
+            ),
+            ("instrumental", boolean("The track has no words: nobody needs to look further.")),
+            ("language", text("A language code such as `eng` or `en`.")),
+            ("address", text("The web address the lyrics were taken from.")),
+            ("date", text("The date they were taken, `YYYY-MM-DD`.")),
+            ("confidence", json!({"type": "number", "minimum": 0, "maximum": 1, "description": "How sure, 0 to 1; left out, 1."})),
+        ],
+        vec!["id"],
+        json!({}),
+    );
+    b.add(
+        "change_lyrics_import_embedded",
+        "lyrics.import_embedded",
+        Effect::Sidecar,
+        Who::InArgs,
+        "Reads lyrics from the tracks' own audio tags and records those found, all in one Run \
+         (`wreckordbox lyrics import-embedded`). The audio files are only read. Reports found, none or \
+         failed per track.",
+        vec![("tracks", texts("The tracks' identifiers; left out, every track."))],
+        vec![],
         json!({}),
     );
     b.add(
@@ -878,6 +1200,19 @@ pub fn catalogue() -> Vec<Tool> {
             ("reason", text("Why, in a sentence.")),
         ],
         vec!["id", "choice"],
+        json!({}),
+    );
+    b.add(
+        "change_lookup_check",
+        "lookup.check",
+        Effect::Sidecar,
+        Who::Run,
+        "Checks a candidate you found against a track (`wreckordbox lookup check`) and records the check \
+         as a Decision (topic `lookup_match`): accepted, held for review or rejected, with the reason. \
+         Only an accepted candidate's fields become Facts, from `web:<address>`, waiting for the DJ's \
+         Review like any Fact that is not the DJ's.",
+        lookup_check_properties(),
+        vec!["id", "candidate", "address", "date"],
         json!({}),
     );
     b.add(

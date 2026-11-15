@@ -308,71 +308,9 @@ impl Sidecar {
         self.create_question(new, Some(source))
     }
     fn create_question(&self, new: &NewDecision, source: Option<&Source>) -> Result<Decision> {
-        if new.question.trim().is_empty() {
-            return Err(SidecarError::Decision(
-                "a Decision needs a question".to_owned(),
-            ));
-        }
-        if !new.context.is_object() {
-            return Err(SidecarError::Decision(
-                "a Decision's context is a JSON object: named things a Decider answers from"
-                    .to_owned(),
-            ));
-        }
-        if let Some(topic) = new.topic {
-            let plain = !topic.is_empty()
-                && topic
-                    .chars()
-                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
-            if !plain {
-                return Err(SidecarError::Decision(format!(
-                    "a Decision's topic is lower-case letters, digits and underscores, not \"{topic}\""
-                )));
-            }
-        }
-        let candidates = candidates_of(new.question_type, new.candidates)?;
         let mut owned = self.db();
         let db = owned.transaction()?;
-        let mut run = new.run;
-        if let Some(source) = source {
-            if let Some(id) = run {
-                let existing_run = crate::store::run_in(&db, id)?.ok_or(SidecarError::NoRun(id))?;
-                if existing_run.source.kind == SourceKind::Dj && source.kind != SourceKind::Dj {
-                    return Err(SidecarError::Invalid(
-                        "An agent or tool cannot ask a Decision in the DJ's Run".into(),
-                    ));
-                }
-            } else {
-                let at = now();
-                db.execute("INSERT INTO run(source_kind,source_name,description,started_at,finished_at,outcome) VALUES (?1,?2,'Ask Decision',?3,?3,'question recorded')",params![source.kind.as_str(),source.name,at])?;
-                run = Some(RunId(db.last_insert_rowid()));
-            }
-        }
-        db.execute(
-            "INSERT INTO decision (question_type, question, context, candidates, track_id, run_id, created_at, topic)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                new.question_type.as_str(),
-                new.question.trim(),
-                new.context.to_string(),
-                serde_json::to_string(&candidates).unwrap_or_default(),
-                new.track_id,
-                run.map(|run| run.0),
-                now(),
-                new.topic,
-            ],
-        )?;
-        let id = db.last_insert_rowid();
-        if let Some(source) = source {
-            crate::native_history::record_as(
-                &db,
-                crate::native_history::Table::Decision,
-                id,
-                source,
-            )?;
-        } else {
-            crate::native_history::record(&db, crate::native_history::Table::Decision, id)?;
-        }
+        let id = insert_question(&db, new, source)?;
         let decision = read_decision(&db, id)?.ok_or(SidecarError::NoDecision(id))?;
         db.commit()?;
         Ok(decision)
@@ -493,9 +431,77 @@ impl Sidecar {
     }
 }
 
+/// Checks a Decision and writes it inside `db`, a transaction a caller
+/// may write more in (a lookup check, wbx-37), answering its identifier.
+/// `source`, when given, is who asked, as for `create_decision_as`.
+pub(crate) fn insert_question(
+    db: &rusqlite::Transaction,
+    new: &NewDecision,
+    source: Option<&Source>,
+) -> Result<i64> {
+    if new.question.trim().is_empty() {
+        return Err(SidecarError::Decision(
+            "a Decision needs a question".to_owned(),
+        ));
+    }
+    if !new.context.is_object() {
+        return Err(SidecarError::Decision(
+            "a Decision's context is a JSON object: named things a Decider answers from".to_owned(),
+        ));
+    }
+    if let Some(topic) = new.topic {
+        let plain = !topic.is_empty()
+            && topic
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+        if !plain {
+            return Err(SidecarError::Decision(format!(
+                "a Decision's topic is lower-case letters, digits and underscores, not \"{topic}\""
+            )));
+        }
+    }
+    let candidates = candidates_of(new.question_type, new.candidates)?;
+    let mut run = new.run;
+    if let Some(source) = source {
+        if let Some(id) = run {
+            let existing_run = crate::store::run_in(db, id)?.ok_or(SidecarError::NoRun(id))?;
+            if existing_run.source.kind == SourceKind::Dj && source.kind != SourceKind::Dj {
+                return Err(SidecarError::Invalid(
+                    "An agent or tool cannot ask a Decision in the DJ's Run".into(),
+                ));
+            }
+        } else {
+            let at = now();
+            db.execute("INSERT INTO run(source_kind,source_name,description,started_at,finished_at,outcome) VALUES (?1,?2,'Ask Decision',?3,?3,'question recorded')",params![source.kind.as_str(),source.name,at])?;
+            run = Some(RunId(db.last_insert_rowid()));
+        }
+    }
+    db.execute(
+        "INSERT INTO decision (question_type, question, context, candidates, track_id, run_id, created_at, topic)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            new.question_type.as_str(),
+            new.question.trim(),
+            new.context.to_string(),
+            serde_json::to_string(&candidates).unwrap_or_default(),
+            new.track_id,
+            run.map(|run| run.0),
+            now(),
+            new.topic,
+        ],
+    )?;
+    let id = db.last_insert_rowid();
+    if let Some(source) = source {
+        crate::native_history::record_as(db, crate::native_history::Table::Decision, id, source)?;
+    } else {
+        crate::native_history::record(db, crate::native_history::Table::Decision, id)?;
+    }
+    Ok(id)
+}
+
 /// Writes an answer that has been checked, inside a transaction, and
 /// answers its identifier.
-fn insert_answer(
+pub(crate) fn insert_answer(
     tx: &rusqlite::Transaction,
     new: &NewAnswer,
     (choice_probability, probabilities): &(f64, Option<BTreeMap<String, f64>>),
@@ -528,7 +534,11 @@ fn insert_answer(
 
 /// A Decision and the answer just written to it, read inside the
 /// transaction that wrote it.
-fn answered(tx: &rusqlite::Transaction, decision: i64, answer: i64) -> Result<(Decision, Answer)> {
+pub(crate) fn answered(
+    tx: &rusqlite::Transaction,
+    decision: i64,
+    answer: i64,
+) -> Result<(Decision, Answer)> {
     let decision = read_decision(tx, decision)?.ok_or(SidecarError::NoDecision(decision))?;
     let answer = decision
         .answers
@@ -576,7 +586,7 @@ fn candidates_of(question_type: QuestionType, given: &[Candidate]) -> Result<Vec
 
 /// Checks an answer against its Decision: the probability of the choice and
 /// the probabilities to store.
-fn checked_answer(
+pub(crate) fn checked_answer(
     decision: &Decision,
     new: &NewAnswer,
 ) -> Result<(f64, Option<BTreeMap<String, f64>>)> {
@@ -666,7 +676,7 @@ fn checked_answer(
     Ok((choice_probability, probabilities))
 }
 
-fn read_decision(db: &Connection, id: i64) -> Result<Option<Decision>> {
+pub(crate) fn read_decision(db: &Connection, id: i64) -> Result<Option<Decision>> {
     let Some(mut decision) = db
         .query_row(
             "SELECT id, question_type, question, context, candidates, track_id, run_id, created_at, topic

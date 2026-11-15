@@ -756,6 +756,7 @@ pub(crate) fn takes_run(command: &str) -> bool {
         || crate::playlist_edits::answers(command)
         || crate::projection::applies(command)
         || command == crate::review::commands::REVIEW_ACCEPT
+        || crate::stick_rebuild::answers(command)
 }
 
 pub(crate) fn answers(command: &str) -> bool {

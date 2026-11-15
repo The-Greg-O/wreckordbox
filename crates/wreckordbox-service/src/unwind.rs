@@ -93,16 +93,7 @@ fn plan(
             "Finish the Run before unwinding it; more changes can still arrive.",
         ));
     }
-    let mut entries = Vec::new();
-    loop {
-        let (page, total) = sidecar
-            .run_entries(run.id, 1000, entries.len())
-            .map_err(|e| sidecar_error(&e))?;
-        entries.extend(page);
-        if entries.len() >= total {
-            break;
-        }
-    }
+    let entries = run_entries(sidecar, run.id)?;
     let mut virtual_native: BTreeMap<String, Part> = BTreeMap::new();
     let mut virtual_facts: BTreeMap<i64, FactChange> = BTreeMap::new();
     let mut reports = Vec::new();
@@ -236,6 +227,20 @@ fn plan(
         report: json!({"original_run":args.id,"dry_run":true,"reversed":count,"entries":reports}),
         edit: LibraryEdit::Unwind(rbl_library::unwind::Unwind { edits, metadata }),
     })
+}
+
+fn run_entries(sidecar: &Sidecar, run: RunId) -> Result<Vec<Entry>, ServiceError> {
+    let mut entries = Vec::new();
+    loop {
+        let (page, total) = sidecar
+            .run_entries(run, 1000, entries.len())
+            .map_err(|e| sidecar_error(&e))?;
+        entries.extend(page);
+        if entries.len() >= total {
+            break;
+        }
+    }
+    Ok(entries)
 }
 
 fn fact_targets(

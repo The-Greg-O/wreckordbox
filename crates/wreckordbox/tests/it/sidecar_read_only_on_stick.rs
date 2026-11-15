@@ -29,6 +29,9 @@ const RECORDS: &[&str] = &[
     "decisions.decide",
     "facts.record",
     "intensity.measure",
+    "lookup.check",
+    "lyrics.import_embedded",
+    "lyrics.set",
     "mutants.clear",
     "mutants.create",
     "mutants.edit",
@@ -42,12 +45,14 @@ const RECORDS: &[&str] = &[
     "runs.start",
     "runs.unwind",
     "schema.convert",
+    "setplans.build",
     "stems.separate",
 ];
 
 /// Ordinary Library edits (and the Runs they are attributed to): allowed.
 const LIBRARY_EDITS: &[&str] = &[
     "intake.set_tags",
+    "library.rebuild_from_stick",
     "mytags.assign",
     "mytags.create",
     "mytags.create_category",
@@ -57,9 +62,14 @@ const LIBRARY_EDITS: &[&str] = &[
     "mytags.rename",
     "mytags.reorder",
     "mytags.unassign",
+    "playlists.add",
     "playlists.copy",
+    "playlists.create",
+    "playlists.create_folder",
     "playlists.delete",
+    "playlists.move",
     "playlists.remove",
+    "playlists.rename",
     "playlists.reorder",
     "protection.set",
     "runs.finish",
@@ -103,6 +113,10 @@ fn reads(track: &str) -> Vec<(&'static str, Value)> {
         ("intake.problems", json!({ "label": "Red" })),
         ("intake.tag_panel", json!({ "id": track })),
         ("intensity.show", json!({ "id": track })),
+        ("lookup.describe", json!({ "id": track })),
+        ("lyrics.list", json!({})),
+        ("lyrics.search", json!({ "text": "harbour" })),
+        ("lyrics.show", json!({ "id": track })),
         ("mutants.get", json!({ "id": 1 })),
         ("mutants.list", json!({})),
         ("mytags.list", json!({})),
@@ -122,6 +136,12 @@ fn reads(track: &str) -> Vec<(&'static str, Value)> {
         ("runs.unwind.plan", json!({ "id": 1 })),
         ("runs.spills.list", json!({})),
         ("schema.check", json!({})),
+        (
+            "setplans.check",
+            json!({ "recipe": "version = 1\ntracks = 2\n" }),
+        ),
+        ("setplans.list", json!({})),
+        ("setplans.show", json!({ "id": 1 })),
         ("stems.show", json!({ "id": track })),
         ("stems.status", json!({ "id": track })),
         ("sticks.list", json!({})),
@@ -140,6 +160,7 @@ const ANSWERED_ERRORS: &[&str] = &[
     "tag_schema_missing",
     "mutant_not_found",
     "run_not_found",
+    "set_plan_not_found",
     "track_not_found",
     "playlist_not_found",
     "my_tag_not_found",
@@ -301,12 +322,20 @@ fn record_args(command: &str, track: &str) -> Value {
             "source": { "kind": "dj" },
         }),
         "stems.separate" | "intensity.measure" => json!({ "id": track, "tracks": [track] }),
+        "lyrics.set" => json!({ "id": track, "text": "words", "source": { "kind": "dj" } }),
+        "lyrics.import_embedded" => json!({ "tracks": [track], "source": { "kind": "dj" } }),
         "review.accept" | "review.reject" | "review.reopen" => {
             json!({ "facts": [2], "source": { "kind": "dj" } })
         }
         "projection.apply" | "projection.mytags.apply" => json!({ "source": { "kind": "dj" } }),
         "projection.acknowledge" => json!({ "barrier": 1, "source": { "kind": "dj" } }),
         "runs.start" => json!({ "source": { "kind": "dj" }, "description": "tidy" }),
+        "lookup.check" => json!({
+            "id": track,
+            "candidate": { "artist": "A", "title": "T", "duration": 30 },
+            "address": "https://shop.example.test/1",
+            "date": "2026-11-10",
+        }),
         _ => json!({ "id": 1, "entry": "1", "source": { "kind": "dj" } }),
     }
 }

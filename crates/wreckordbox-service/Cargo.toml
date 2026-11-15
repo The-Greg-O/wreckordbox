@@ -27,6 +27,8 @@ rbl-backup = { path = "../rbl-backup" }
 wreckordbox-sidecar = { path = "../wreckordbox-sidecar" }
 # Intensity: the measurement itself, and the beat grid it is aligned to.
 wreckordbox-intensity = { path = "../wreckordbox-intensity" }
+# Recipes and the Set plan sequencer (wbx-39), pure.
+wreckordbox-setplan = { path = "../wreckordbox-setplan" }
 rbl-anlz = { path = "../rbl-anlz" }
 # Native stems: the writer of a track's Stems to a Stick, which the service
 # drives because it owns the Sidecar the Stems are in.
@@ -37,6 +39,9 @@ wreckordbox-stick-protection = { path = "../wreckordbox-stick-protection" }
 # volumes the window offers; the Stick read without recovering it.
 wreckordbox-stick-write = { path = "../wreckordbox-stick-write" }
 wreckordbox-stick-outline = { path = "../wreckordbox-stick-outline" }
+# Lyrics already in an audio file's own tags (wbx-f6v), read only; the
+# same tag reader the Library's import uses.
+lofty = { version = "0.22", default-features = false }
 rbl-export = { path = "../rbl-export" }
 rbl-devices = { path = "../rbl-devices" }
 rbl-core = { path = "../rbl-core" }
@@ -52,6 +57,9 @@ serde_json = { workspace = true }
 dirs = "5"
 # A connect that cannot block: probing a socket whose backlog is full (wbx-1.2).
 socket2 = { version = "0.6", features = ["all"] }
+# Comparing a Stick's file names with the music folder's as rekordbox
+# writes them (wbx-b1d): composed Unicode.
+unicode-normalization = "0.1"
 # The DJ's projection policy file (`projection-policy.toml`).
 toml = "0.8"
 # Only to tell a locked Library from a damaged one by SQLite's result code.

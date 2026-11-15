@@ -198,18 +198,24 @@ If the DJ has rekordbox's *Add "My Tag" to the "Comments"* preference on, pass
 
 ### Build a playlist
 
-The CLI cannot create an empty playlist or add tracks to one yet; it can copy,
-trim, reorder and delete. To build a set from an existing playlist:
+Make it with its tracks in one command; the answer's `playlist` is its id for
+the next one:
 
 ```sh
-wreckordbox --json playlists tree
-wreckordbox --json playlists copy 900000 --name "Warm-up set" --run 7   # -> "playlist": "<new id>"
-wreckordbox --json playlists remove <new id> 10004 10005 --run 7
-wreckordbox --json playlists tracks <new id> --limit 500                # entry_id of each entry
+wreckordbox --json runs start --source agent:claude --description "Warm-up set"   # -> "id": 7
+wreckordbox --json playlists create-folder "Gigs" --run 7                   # -> "playlist": "<folder>"
+wreckordbox --json playlists create "Warm-up" 10003 10001 10007 --parent <folder> --run 7
+                                                                             # -> "playlist": "<new id>"
+wreckordbox --json playlists add <new id> 10012 10015 --at 2 --run 7         # from position 2
+wreckordbox --json playlists tracks <new id> --limit 500                     # entry_id of each entry
 wreckordbox --json playlists reorder <new id> <entry_id> <entry_id> ... --run 7
+wreckordbox --json playlists rename <new id> "Warm-up (Friday)" --run 7
 ```
 
-A playlist built from nothing needs the DJ to make it in the window first.
+Each is one of the window's own steps, so the DJ can Undo it there. A playlist
+made with tracks is two steps (Create Playlist, then Add Tracks to Playlist),
+and so is an add at a position (Add Tracks, then Reorder Playlist). To start
+from an existing playlist instead, `playlists copy` it.
 
 ### Work through Intake
 
@@ -241,6 +247,46 @@ printf '%s\n' '{"track":"10003","kind":"genre","value":["Tech House"],"confidenc
 
 `project --dry-run` then shows what Projection would write into the Library
 from standing Facts, and what it holds back for the DJ (`review waiting`).
+
+### Look a track up on the web
+
+Wreckordbox never uses the network: you search, with your own tools, and
+hand it what you found. Describe the track, search for it, then check the
+candidate before anything is recorded.
+
+```sh
+wreckordbox --json lookup describe 10001          # artist, title, mix name, duration, label, release date, the file's own tags, "search"
+wreckordbox --json lookup check 10001 --address https://shop.example.test/release/4471 --date 2026-11-10 \
+  --candidate '{"artist":"Kessler, Vane","title":"Night Signal (Extended Mix)","duration":"6:12","genre":["Tech House"]}' --dry-run
+wreckordbox --json lookup check 10001 --address https://shop.example.test/release/4471 --date 2026-11-10 \
+  --candidate '{"artist":"Kessler, Vane","title":"Night Signal (Extended Mix)","duration":"6:12","genre":["Tech House"]}'
+```
+
+The verdict is `accepted`, `held` (perhaps another mix, edit, master or
+release: the DJ looks) or `rejected` (another recording), with a `reason`.
+Only an accepted candidate's fields become Facts, from `web:<address>`;
+they wait for the DJ like any Fact that is not the DJ's. Never accept a held
+candidate yourself.
+
+### Match tracks on the themes of their lyrics
+
+wreckordbox never fetches lyrics. It keeps the words already in a file's own
+tags, and the words you hand it with the page you took them from; you judge the
+themes. Lyrics are Facts in the Sidecar (a Judgement that follows the music);
+they never reach the Library's fields or a Stick.
+
+```sh
+wreckordbox --json lyrics import-embedded --dry-run                 # which files carry lyrics; writes nothing
+wreckordbox --json lyrics import-embedded --source agent:claude     # record them
+wreckordbox --json lyrics list --status unknown                     # the tracks still to look up
+# Found on the web: give the page and the day you took them.
+wreckordbox --json lyrics set 10002 words.txt --source agent:claude \
+  --source-url https://lyrics.example/song --date 2026-11-15 --language en
+wreckordbox --json lyrics set 10003 --instrumental --source agent:claude   # none: stop looking
+wreckordbox --json lyrics search harbour night                      # every word must appear
+# Record the themes you read as ordinary Facts:
+wreckordbox --json facts record 10002 themes longing travel --source agent:claude --confidence 0.7
+```
 
 ### Start and finish a Run so changes are grouped and undoable
 
@@ -554,6 +600,54 @@ wreckordbox --json playlists copy 900000 --name "Warm-up set" --source agent:cla
 {"from": "900000", "playlist": "2578147643", "name": "Warm-up set", "tracks": 5, "mutants": [], "generation": 7, "run": {...}}
 ```
 
+### `wreckordbox playlists create`
+
+**Changes the Library**: makes a playlist, optionally in a folder and with its
+first tracks in the order given. Arguments: `<NAME> [TRACK_ID]...`,
+`--parent FOLDER_ID` (default: the top level), `--at POSITION` (its place
+among the folder's items, from 1; default: last). A parent that is a playlist
+is refused (`not_a_folder`); an unknown track (`track_not_found`) makes
+nothing.
+
+```json
+{"playlist": "3286034227", "name": "Warm-up", "kind": "playlist", "parent": "root",
+ "added": ["<entry_id>", "<entry_id>"], "generation": 9, "run": {...}}
+```
+
+### `wreckordbox playlists create-folder`
+
+**Changes the Library**: makes a folder. Arguments: `<NAME>`, `--parent
+FOLDER_ID`, `--at POSITION`. Same result as `playlists create`, with
+`"kind": "folder"` and no `added`.
+
+### `wreckordbox playlists add`
+
+**Changes the Library**: adds tracks to a playlist, at the end or from a
+position. Arguments: `<PLAYLIST_ID> <TRACK_ID>...`, `--at POSITION` (from 1),
+`--allow-duplicates` (otherwise a track already in it is skipped and listed in
+`skipped`). An intelligent playlist's tracks are its rule's: refused
+(`not_a_playlist`), as `remove` and `reorder` are.
+
+```json
+{"playlist": "900000", "added": ["<entry_id>"], "skipped": ["10001"], "generation": 10, "run": {...}}
+```
+
+### `wreckordbox playlists rename`
+
+**Changes the Library**: renames a playlist, folder or intelligent playlist.
+Arguments: `<PLAYLIST_ID> <NAME>`.
+
+```json
+{"playlist": "900000", "name": "Closing", "parent": "root", "at": 1, "generation": 11, "run": {...}}
+```
+
+### `wreckordbox playlists move`
+
+**Changes the Library**: moves a playlist or folder, with everything in it,
+into a folder or back to the top level. Arguments: `<PLAYLIST_ID>`, `--parent
+FOLDER_ID` (default: the top level), `--at POSITION`. A folder never goes
+inside itself (`write_refused`). Same result as `playlists rename`.
+
 ### `wreckordbox history`
 
 The group for play history. Reads only.
@@ -663,6 +757,69 @@ unless the DJ unlocked the Stick; refused when the plan is not from a dry run
 of this very load in the last ten minutes, or anything changed since; refused
 before writing when it would not fit. Exits 1 unless everything planned was
 written. Only on the DJ's word.
+
+### `wreckordbox library`
+
+The group for whole-Library work. Takes `--run`, `--source` and
+`--description` like the other editing groups.
+
+### `wreckordbox library rebuild-from-stick`
+
+Reads a Stick (only reads it: no recovery, no lock made) and a music folder,
+and **changes the Library** to match the Stick: each Stick track is linked to
+its file in the music folder (never copied from the Stick), with its rating,
+colour, comment, My Tags, and, for a track with no analysis of its own here,
+the Stick's BPM, key, cues, loops and beat grid; the playlist tree is rebuilt
+in the Stick's order (a repeated entry kept); the My Tag categories are mapped
+by slot and renamed to the Stick's names. Arguments: `<STICK> --music <FOLDER>
+[--dry-run] [--accept-retagged] [--accept-uncertain] [--names-only]`. MCP:
+`read_rebuild_from_stick`, `change_rebuild_from_stick`.
+
+Always run `--dry-run` first and show the DJ the counts. A dry run writes
+nothing to the Stick, the music folder or the Library; it may create
+temporary files (a copy of the Stick's database when it has companion files)
+and the service's own runtime files in the system's temp and state folders.
+
+Matching: a track is linked to the one file of exactly its Stick copy's size
+whose name starts with the whole of the Stick's file name (compared with case
+folded and the characters FAT cannot hold as `_`; rekordbox may cut a name
+short, keeping its first 41 characters and adding `-1`, `-2`, ...) and, where the Stick records a length, whose length agrees within a
+second (`--names-only` skips reading lengths, for a slow network folder).
+Several files of that size are `ambiguous`; one whose name agrees only over its
+first 20 characters, or whose length differs, is `uncertain` and linked only
+with `--accept-uncertain`; a file of the same name and another size
+(`different_size`, retagged) only with `--accept-retagged`. Nothing else is
+guessed.
+
+Applying: a backup of the Library is taken first (no backup, no rebuild) and
+named in the answer (`backup`) and the Run. A track already in the Library at
+that file is not added again; the Stick's rating, colour and comment replace
+its own, My Tags are only added, and its own analysis is kept. Existing
+folders and playlists of the same name in the same place are reused one to one
+and put in the Stick's order. One import Run under your source and one change
+event. If an apply stops part way, its answer has `"complete": false` and
+`incomplete` (what was done and the advice) and the command exits 1: what it
+wrote is kept; run it again to finish (it does only what is still to do), or
+the DJ restores the backup. Play history is not carried.
+
+```sh
+wreckordbox --json library rebuild-from-stick /run/media/dj/GIG --music ~/Music --dry-run
+```
+```json
+{"dry_run": true, "format": "one_library", "complete": true, "backup": null,
+ "matched": [{"title": "...", "file": "/.../x.aiff", "retagged": false, "uncertain": false, "existing": null,
+              "values": [{"value": "rating", "outcome": "set", "to": 4}, ...]}],
+ "unmatched": [{"title": "...", "reason": "uncertain", "candidates": ["/.../other mix.aiff"]}],
+ "playlists": [{"path": "Sets/Friday", "folder": false, "action": "create", "tracks": 12, "left_out": []}],
+ "my_tags": [{"name": "Vibe", "slot": 2, "library_name": "Mood", "rename": true, "tags": [...]}],
+ "values": {"rating": 3, "colour": 2, "my_tags": 3, "analysis": 2}, "not_carried": [...]}
+```
+
+Fails with `stick_unreadable` (no rekordbox library, or an unfinished write:
+the DJ settles it in the window), `music_folder_unreadable`,
+`library_protected`, `run_backup_failed` (no backup could be taken), or
+`my_tag_name_taken` (a slot's new name is taken by a category left as it is);
+in each case nothing is written.
 
 ### `wreckordbox stems`
 
@@ -937,6 +1094,49 @@ Changes the Sidecar: the rule-based Decider answers as `tool:rule-based`.
 cannot answer, nothing is recorded. Also `--fact`, `--fact-track`,
 `--fact-value`, `--run`, `--description`.
 
+### `wreckordbox lookup`
+
+The group for lookups (ADR 0005): describing a track for your search and
+checking a candidate you found. Wreckordbox itself never uses the network.
+
+### `wreckordbox lookup describe`
+
+Reads one track as a search wants it. Argument: `<TRACK_ID>`. Answers
+`{"track", "artist", "artists": [names], "title", "mix_name",
+"duration_seconds", "label", "release_date", "year", "album", "genre",
+"search": "Artist - Title (Mix)", "file": {"path", "tags": {"title", "artist",
+"album", "genre", "label", "comment", "year", "key", "duration_seconds"} | null,
+"problem": text | null}}`. A missing or unreadable file is said in `problem`,
+never guessed. Writes nothing, not even the Sidecar.
+
+### `wreckordbox lookup check`
+
+Changes the Sidecar (none of it with `--dry-run`): checks a candidate
+against a track and records the check as a Decision, topic `lookup_match`,
+answered by `tool:lookup-check`. Argument: `<TRACK_ID>`. Options:
+`--candidate JSON` (`artist` and `title`, and as found `mix_name` or its
+other name `version`, `duration` in seconds or `m:ss`, `label`,
+`release_date`, any declared kind such as `genre`), `--address` (where it was
+found), `--date YYYY-MM-DD` (when), `--tolerance SECONDS` (3), `--run`,
+`--dry-run`. Different title, or no artist in common: `rejected`. Another
+mix, a remaster on one side only, a duration outside the tolerance, another
+release year or label: `held`. Titles are compared ignoring case,
+apostrophes and punctuation; a mix or remaster after a dash counts as one in
+brackets. An accepted candidate's fields (not `duration`) become Facts of
+the kind of the same name (`mix_name` and `version` are the kind `version`)
+from `web:<address>`, in the check's Run, whose description carries the
+address and the date; fields whose kind is not declared are listed in
+`not_recorded`. A `mix_name` and a `version` that disagree are refused
+(`invalid_candidate`); a bad address or date is `invalid_lookup`.
+
+```sh
+wreckordbox --json lookup check 10001 --candidate '{"artist":"Kessler","title":"Day Signal"}' --address https://shop.example.test/1 --date 2026-11-10
+```
+```json
+{"verdict": "rejected", "reason": "the title is \"Day Signal\", not \"Night Signal\"", "findings": [...],
+ "decision": {"id": 4, "topic": "lookup_match", ...}, "run": {...}, "facts": [], "proposed": [], "not_recorded": [], ...}
+```
+
 ### `wreckordbox mutants`
 
 The group for Mutants: a playlist entry's own edited version of its track,
@@ -1091,6 +1291,123 @@ Stops the measuring in progress; finished tracks are kept.
 {"cancelled": false}
 ```
 
+### `wreckordbox set-plan`
+
+The group for Recipes and Set plans. A Recipe is a TOML file of the DJ's
+criteria for a journey; a Set plan is the ordered result, kept in the
+Sidecar. Never changes the Library. Read `set-plan guide` before writing a
+Recipe.
+
+### `wreckordbox set-plan guide`
+
+Prints the set planning guide (`docs/agents/set-planning.md`): harmonic
+mixing and the Camelot wheel, tempo and pitch, Energy and Intensity, what
+each Recipe field and score does, and three example Recipes. `--json` gives
+`{title, source, markdown, introduction, sections: [{id, heading, markdown}]}`.
+Needs no service and no Library; writes nothing.
+
+### `wreckordbox set-plan check`
+
+Reads a Recipe file (`<RECIPE>`) and names each mistake and its line. Exits 1
+when the Recipe cannot be used. Writes nothing.
+
+### `wreckordbox set-plan build`
+
+Changes the Sidecar: builds a Set plan from `<RECIPE>` and a pool
+(`[TRACK_ID]...`, or `--playlist`, `--search`, `--genre`, `--energy`,
+`--all`) and keeps it, in one Run (`--source`, default `dj`; pass
+`--source agent:NAME`). The same Recipe, pool and Facts give the same plan.
+When no plan keeps the Recipe's limits it names the criterion in the way,
+keeps nothing and exits 1.
+
+### `wreckordbox set-plan show`
+
+Reads a kept Set plan (`<SET_PLAN_ID>`): the tracks in order and each
+transition's score and reasons; `--json` in full.
+
+### `wreckordbox set-plan list`
+
+Reads the kept Set plans, newest first.
+
+### `wreckordbox lyrics`
+
+The group for Lyrics: the words of a track, in the Sidecar, so tracks can be
+matched on their themes. Never fetched by wreckordbox, never written to the
+Library or a Stick. Each record is a Fact of the reserved Judgement kind
+`lyrics` (it follows the music through a re-add, never goes stale), its value
+`{"instrumental", "text", "synced", "lines": [{"at_ms", "text"}], "language",
+"origin": "embedded" | "supplied", "tag", "address", "retrieved"}`. Which
+record stands follows the DJ's source rules (`facts standing`).
+
+### `wreckordbox lyrics show`
+
+Reads the lyrics of a track. Argument: `<TRACK_ID>`. `status` is `lyrics`,
+`instrumental` or `unknown` (nothing recorded).
+
+```json
+{"track": {"id": "10002", "title": "..."}, "status": "lyrics",
+ "standing": {"id": 4, "kind": "lyrics", "source": {"kind": "web", "name": "https://..."},
+              "value": {"instrumental": false, "text": "...", "origin": "supplied", "address": "https://...", "retrieved": "2026-11-15"}, ...},
+ "records": [ /* every source's live record, newest first */ ]}
+```
+
+### `wreckordbox lyrics set`
+
+Changes the Sidecar: one track's lyrics, from `[FILE]` or standard input, or
+`--instrumental` (an explicit "no lyrics"). `--lrc` reads LRC (`[mm:ss.xx]`
+lines) as synced lyrics. `--source-url URL --date YYYY-MM-DD` for lyrics taken
+from the web (the record's source is then `web:URL`; the Run is `--source`'s),
+`--language`, `--confidence` (default 1), `--source` (required unless `--run`),
+`--run`, `--description`. The same source again replaces its own record.
+Fails: `invalid_lyrics` (no words and not instrumental, both, an address
+without a date, a bad date), `invalid_source`, `track_not_found`,
+`sidecar_on_stick`.
+
+```json
+{"created_run": true, "run": {"id": 3, "source": {"kind": "agent", "name": "claude"}, ...},
+ "fact": {"id": 4, "track_id": "10002", "kind": "lyrics", "value": {...}, ...}}
+```
+
+### `wreckordbox lyrics import-embedded`
+
+Changes the Sidecar: reads the lyrics already in tracks' audio tags (ID3v2
+`SYLT` then `USLT` in MP3, AIFF and WAV; Vorbis `LYRICS` then `UNSYNCEDLYRICS`
+in FLAC and Ogg; MP4 `©lyr`) and records each as source `tool:file-tags`, all
+in one Run of `--source` (required unless `--run`). `--tracks ID...` (left out:
+every track), `--dry-run` (reads and reports, records nothing, needs no source).
+The audio files are only read. A file without lyrics is `none` and records
+nothing (it does not mean the track has none); a missing or unreadable file is
+`failed` with its `problem`. Refused, dry run included, for a Library hosted on
+a Stick (`sidecar_on_stick`).
+
+```json
+{"dry_run": false, "run": {...}, "found": 5, "none": 1, "failed": 1,
+ "tracks": [{"track": {"id": "10010", "title": "..."}, "found": "found", "tag": "ID3v2 USLT", "synced": false,
+             "language": "eng", "fact": 12}, ...]}
+```
+
+### `wreckordbox lyrics list`
+
+Reads the Library's tracks by what is known of their words. `--status
+lyrics|instrumental|unknown`, `--limit` (100), `--offset`.
+
+```json
+{"counts": {"lyrics": 12, "instrumental": 3, "unknown": 85}, "total": 100, "offset": 0, "limit": 100,
+ "next_offset": null, "tracks": [{"id": "10001", "title": "...", "artist": "...", "status": "unknown"}, ...]}
+```
+
+### `wreckordbox lyrics search`
+
+Reads: full-text search of the stored lyrics with SQLite FTS5 (`engine:
+"sqlite-fts5"`). `<WORDS>...`: every word must appear, in any case and order;
+punctuation is ignored. Only live records are searched. `--limit` (100).
+
+```json
+{"engine": "sqlite-fts5", "text": "harbour night",
+ "hits": [{"track": {"id": "10002", "title": "...", "artist": "..."}, "fact": {...}, "standing": true,
+           "snippet": "Neon tide pulls the [harbour] lights...", "rank": -1.2}]}
+```
+
 ### `wreckordbox schema`
 
 The group for the Tag schema (`tag-schema.toml` in the Sidecar's folder).
@@ -1111,6 +1428,73 @@ Run it only when the DJ asks; the dry run is always safe.
 ```json
 {"file_state": "not_written", "categories": [{"category": "Situation", "dimension": "situation", "terms": 2, ...}],
  "facts_recorded": 3, "conflicts": [], "text": "# The Tag schema: ...", "run": null}
+```
+
+### `wreckordbox set-plan`
+
+The group for Recipes and Set plans. A Recipe is a TOML file the DJ writes:
+how Intensity should move across the set, how far tempo and key may shift
+between neighbours, which Situations belong where, and weights for recency and
+genre mix. A Set plan is the ordered result, kept in the Sidecar; none of these
+commands changes the Library.
+
+```toml
+version = 1
+name = "Warm-up to peak"
+tracks = 8
+[intensity]
+shape = [{ at = 0, intensity = 0.3 }, { at = 0.7, intensity = 0.9 }, { at = 1, intensity = 0.5 }]
+[tempo]
+max_change = 4          # percent; a hard limit
+[key]
+max_moves = 1           # Camelot moves; a hard limit
+[situations]
+place = [{ situation = "opener", from = 0, to = 0, require = true }]
+```
+
+### `wreckordbox set-plan check`
+
+Reads a Recipe file (`<RECIPE>`) and names each mistake and its line. Exits 1
+when the Recipe cannot be used. A Situation must be a term of the Tag schema's
+`situation` dimension when there is one.
+
+```json
+{"valid": false, "problems": [{"line": 8, "message": "unknown field `max_chnge`, expected `max_change` or `weight`"}], "recipe": null}
+```
+
+### `wreckordbox set-plan build`
+
+Changes the Sidecar (never the Library): builds a Set plan from `<RECIPE>` and a
+pool (`[TRACK_ID]...`, `--playlist`, `--search`, `--genre`, `--energy`,
+`--all`) and keeps it with the Recipe's text, in a Run of its own (`--source`,
+default `dj`; an agent passes `agent:NAME`). The same Recipe, pool and Facts
+always give the same plan. Tracks with no Intensity (or no tempo or key under a
+limit) are listed in `left_out` with why. When no plan keeps the limits, it
+exits 1 with `built: false` and the criterion in the way (`tempo_change`,
+`key_moves`, `intensity_step`, `situations`, `tracks`), and keeps nothing.
+Refused (`sidecar_on_stick`) for a Library hosted on a Stick.
+
+```json
+{"built": true, "unsatisfiable": null,
+ "set_plan": {"id": 1, "run": 4, "name": "Warm-up to peak", "pool": ["10001", "..."],
+  "plan": {"tracks": [{"position": 1, "id": "10004", "bpm": 128.03, "key": "8A", "intensity": 0.31, ...}],
+           "transitions": [{"from": 1, "to": 2, "score": 2.41,
+             "criteria": [{"criterion": "key", "score": 0.75, "reason": "8A to 9A, 1 move"}, ...]}],
+           "left_out": [], "score": 11.2}}}
+```
+
+### `wreckordbox set-plan show`
+
+Reads one kept Set plan (`<SET_PLAN_ID>`): its tracks in order, each
+transition's score and reasons, and what was left out. Fails with
+`set_plan_not_found`.
+
+### `wreckordbox set-plan list`
+
+Reads the kept Set plans, newest first.
+
+```json
+{"set_plans": [{"id": 2, "run": 5, "name": "Warm-up to peak", "tracks": 8, "score": 11.2, ...}]}
 ```
 
 ### `wreckordbox project`
@@ -1154,8 +1538,10 @@ asked for that barrier. Not an MCP tool.
 
 ### `wreckordbox review`
 
-The group for Facts Projection held back for the DJ. Filters on every
-subcommand: `--track`, `--field energy|prep_colour`, `--from SOURCE`,
+The group for Facts Projection held back for the DJ, and for the titles and
+artists agents proposed (never projected: they wait for the DJ, and the
+Intake queue shows the same rows). Filters on every subcommand: `--track`,
+`--field energy|prep_colour|title|artist`, `--from SOURCE`,
 `--at-least CONFIDENCE`.
 
 ### `wreckordbox review waiting`
@@ -1172,8 +1558,12 @@ Show these to the DJ; their answer is theirs to give.
 
 **Changes the Library** as the DJ's own hand set. `--source dj` and
 `--token` (from the listing the DJ decided from) are required; `[FACT]...` or
-`--all`. Refused with `review_not_the_djs` for any other source. Only on the
-DJ's word. Not an MCP tool.
+`--all`. Refused with `review_not_the_djs` for any other source. A proposed
+title or artist is accepted only by naming its Fact: `--all` and a filter or
+confidence never take one, and `--field title|artist` is refused. Two
+proposals for the same track and field in one accept are refused
+(`review_competing`): the DJ chooses one. Only on the DJ's word. Not an MCP
+tool.
 
 ### `wreckordbox review reject`
 
@@ -1296,21 +1686,31 @@ Reads (each named after the CLI command it mirrors in its description):
 `read_protection`, `read_intake`, `read_problems`, `read_intake_counts`,
 `read_prep_colours`, `read_track_tag_panel`, `read_fact_kinds`,
 `read_track_facts`, `read_standing_fact`, `read_runs`, `read_run`,
-`read_decisions`, `read_decision`, `read_mutants`, `read_mutant`,
+`read_decisions`, `read_decision`, `read_lookup_description`,
+`read_lookup_check` (a dry run), `read_mutants`, `read_mutant`,
 `read_review_waiting`, `read_review_rejected`, `read_projection_barriers`,
 `read_projection_plan`, `read_sticks`, `read_stick_load_preview`,
-`read_stems`, `read_intensity`, `read_schema_check`.
+`read_stems`, `read_intensity`, `read_lyrics`, `read_lyrics_list`,
+`read_lyrics_search`, `read_lyrics_embedded` (`lyrics import-embedded --dry-run`),
+`read_schema_check`, `read_set_plan_check`, `read_set_plans`, `read_set_plan`,
+`read_set_planning_guide` (answered by the server itself, with no service).
 
 Changes to the Library: `change_track_rating`, `change_prep_colour`,
 `change_mytag_assign`, `change_mytag_unassign`, `change_mytag_create`,
 `change_mytag_rename`, `change_mytag_move`, `change_track_tags`,
-`change_playlist_copy`, `change_playlist_remove_tracks`,
-`change_playlist_reorder`, `change_project` (needs the `plan` of
+`change_playlist_create`, `change_playlist_create_folder`,
+`change_playlist_add_tracks`, `change_playlist_rename`,
+`change_playlist_move`, `change_playlist_copy`,
+`change_playlist_remove_tracks`, `change_playlist_reorder`, `change_project` (needs the `plan` of
 `read_projection_plan`).
 
 Changes to the Sidecar: `change_run_start`, `change_run_finish`,
 `change_record_facts`, `change_decision_create`, `change_decision_answer`,
-`change_mutant_create`, `change_mutant_edit`, `change_mutant_remove`.
+`change_lookup_check` (takes `run` only: the check's Decider and the Facts'
+web source are the service's),
+`change_mutant_create`, `change_mutant_edit`, `change_mutant_remove`,
+`change_lyrics_set`, `change_lyrics_import_embedded`,
+`change_set_plan_build` (makes its own Run: takes `source`, not `run`).
 
 Changes to Library Protection: `change_protection_on` (only on; off is the
 DJ's).

@@ -162,6 +162,9 @@ impl Session {
         // inside one Fact) reaches the service.
         crate::schema::check(&tool.input_schema(), &Value::Object(arguments.clone()), "")
             .map_err(|why| bad_request(format!("{}: {why}", tool.name)))?;
+        if tool.command == crate::tools::SET_PLANNING_GUIDE {
+            return Ok(wreckordbox_setplan::guide::sections());
+        }
         let run = arguments.remove("run");
         // `runs.start` takes its description as its own argument.
         let description = if tool.who == Who::Starts {
@@ -206,6 +209,7 @@ impl Session {
                 insert(&mut args, "source", source);
             }
             Who::Starts => insert(&mut args, "source", source.or_else(|| Some(by_us()))),
+            Who::Run => insert(&mut args, "run", run),
         }
         let mut result: Value = client.call(tool.command, Value::Object(args))?;
         if let (Some(run), Value::Object(object)) = (client.last_run(), &mut result) {

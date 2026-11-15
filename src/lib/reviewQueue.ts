@@ -12,8 +12,8 @@
  */
 import type { RowDto } from "@/ipc/types";
 
-/** The fields Projection writes (`projection::Field`). */
-export type ReviewField = "energy" | "prep_colour" | (string & {});
+/** The fields Review decides on (`projection::Field`): Projection's two, and proposed titles and artists (wbx-66). */
+export type ReviewField = "energy" | "prep_colour" | "title" | "artist" | (string & {});
 
 export interface ReviewSource {
   kind: string;
@@ -146,6 +146,15 @@ export function atOrAbove(facts: readonly WaitingFact[], threshold: number): num
   return facts.filter((f) => f.confidence >= threshold - 1e-9).map((f) => f.fact);
 }
 
+/**
+ * What a confidence-based bulk accept takes: the Facts at or above the
+ * threshold, but never a proposed title or artist (wbx-66 review), which
+ * the DJ accepts only by choosing its row.
+ */
+export function bulkAcceptable(facts: readonly WaitingFact[], threshold: number): number[] {
+  return atOrAbove(facts.filter((f) => f.field !== "title" && f.field !== "artist"), threshold);
+}
+
 /** Below this an agent was unsure: drawn to stand out (docs/design/screens/review). */
 export const LOW_CONFIDENCE = 0.6;
 
@@ -167,6 +176,9 @@ export function valueText(field: ReviewField, value: unknown): string {
 export function fieldText(field: ReviewField): string {
   if (field === "energy") return "Energy";
   if (field === "prep_colour") return "Prep colour";
+  // Proposed titles and artists wait here too (wbx-66).
+  if (field === "title") return "Title";
+  if (field === "artist") return "Artist";
   return field;
 }
 

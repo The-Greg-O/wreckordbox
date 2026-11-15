@@ -11,11 +11,16 @@ mod facts;
 mod intake;
 mod intensity;
 mod ledger;
+mod lookup;
+mod lyrics;
 mod mutants;
 mod mytag_edits;
 mod playlist_edits;
+mod playlist_making;
 mod project;
 mod project_mytags;
+mod set_plan;
+mod set_plan_guide;
 mod spills;
 mod unwind;
 use playlist_edits as edits;
@@ -28,6 +33,7 @@ mod stems;
 mod stems_write;
 mod stick;
 mod stick_load;
+mod stick_rebuild;
 mod tracks;
 
 use std::fmt::Write as _;
@@ -91,6 +97,14 @@ enum Commands {
         #[command(subcommand)]
         command: reading::PlaylistCommands,
     },
+    /// Rebuild the Library from a Stick, linking each track to a file in
+    /// a music folder.
+    Library {
+        #[command(flatten)]
+        run: ledger::RunOptions,
+        #[command(subcommand)]
+        command: stick_rebuild::LibraryCommands,
+    },
     /// Read play history: what was played on which occasion, in order.
     History {
         #[command(subcommand)]
@@ -141,6 +155,12 @@ enum Commands {
         #[command(subcommand)]
         command: decisions::DecisionCommands,
     },
+    /// Describe a track for a lookup, and check a candidate a lookup found
+    /// against it. Wreckordbox itself never uses the network.
+    Lookup {
+        #[command(subcommand)]
+        command: lookup::LookupCommands,
+    },
     /// Mutants: a playlist's own edited version of a track, kept for one
     /// playlist entry and never written into the Library.
     Mutants {
@@ -161,6 +181,20 @@ enum Commands {
     Intensity {
         #[command(subcommand)]
         command: intensity::IntensityCommands,
+    },
+    /// Recipes and Set plans: check a Recipe, build a Set plan from one
+    /// and a pool of tracks, and read the plans kept in the Sidecar. Never
+    /// changes the Library.
+    SetPlan {
+        #[command(subcommand)]
+        command: set_plan::SetPlanCommands,
+    },
+    /// Lyrics: the words of a track, read from its own tags or handed in
+    /// with their source, kept in the Sidecar for agents to read and
+    /// search. Never fetched, never written to the Library or a Stick.
+    Lyrics {
+        #[command(subcommand)]
+        command: lyrics::LyricsCommands,
     },
     /// Check the Tag schema, or write a first one from the Library's
     /// MyTags.
@@ -289,6 +323,14 @@ fn main() -> ExitCode {
     reason = "one arm per subcommand; each arm hands off to its module"
 )]
 fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
+    // The guide is a document: no service, no Library, no configuration.
+    if let Commands::SetPlan {
+        command: set_plan::SetPlanCommands::Guide,
+    } = &cli.command
+    {
+        print(&set_plan_guide::render(cli.json));
+        return Ok(ExitCode::SUCCESS);
+    }
     let config = Config::from_env()?;
     // The Run a command that edits the Library was given, sent with it.
     if let Commands::Tracks { run, .. }
@@ -299,6 +341,11 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
         ledger::begin(run, cli.json);
     }
     // A dry run writes nothing, so it takes no Run.
+    if let Commands::Library { run, command } = &cli.command {
+        if !command.dry_run() {
+            ledger::begin(run, cli.json);
+        }
+    }
     if let Commands::Project { run, args } = &cli.command {
         if !args.dry_run() {
             ledger::begin(run, cli.json);
@@ -352,6 +399,13 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
                 cli.json,
                 command,
             )?);
+        }
+        Commands::Library { command, .. } => {
+            let (text, complete) = stick_rebuild::run(&mut connect(&config)?, cli.json, command)?;
+            print(&text);
+            if !complete {
+                return Ok(ExitCode::FAILURE);
+            }
         }
         Commands::History { command } => {
             print(&reading::history(
@@ -409,6 +463,9 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
         Commands::Decisions { command } => {
             print(&decisions::run(&mut connect(&config)?, cli.json, command)?);
         }
+        Commands::Lookup { command } => {
+            print(&lookup::run(&mut connect(&config)?, cli.json, command)?);
+        }
         Commands::Mutants { command } => {
             print(&mutants::run(&mut connect(&config)?, cli.json, command)?);
         }
@@ -417,6 +474,16 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
         }
         Commands::Intensity { command } => {
             print(&intensity::run(&mut connect(&config)?, cli.json, command)?);
+        }
+        Commands::SetPlan { command } => {
+            let (text, ok) = set_plan::run(&mut connect(&config)?, cli.json, command)?;
+            print(&text);
+            if !ok {
+                return Ok(ExitCode::FAILURE);
+            }
+        }
+        Commands::Lyrics { command } => {
+            print(&lyrics::run(&mut connect(&config)?, cli.json, command)?);
         }
         Commands::Schema { command } => {
             let (text, ok) = schema::run(&mut connect(&config)?, cli.json, command)?;

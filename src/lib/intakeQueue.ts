@@ -18,13 +18,23 @@ export type IntakeNeed = "title" | "artist" | "energy" | "tags" | "hot_cues" | "
 /** Whether the DJ has confirmed the beat grid (the Analysis Lock). */
 export type IntakeGrid = "not_analysed" | "not_confirmed" | "confirmed";
 
-/** An agent's proposed title or artist, waiting for the DJ. */
+/**
+ * An agent's proposed title or artist, waiting for the DJ: exactly a row
+ * of Review's queue (wbx-66), accepted with Review's own decision, named by
+ * its Fact and its row token.
+ */
 export interface IntakeSuggestion {
   field: string;
   value: string;
   /** Who proposed it: the source's name. */
   source: string;
   confidence: number;
+  /** The waiting Fact. */
+  fact: number;
+  /** The row's token from the service: what an accept of exactly this row carries. */
+  token: string;
+  /** What the Library held when the row was listed. */
+  before: string;
 }
 
 /** One track in a queue, and what it still needs. */
@@ -71,7 +81,7 @@ export interface ServiceQueuePage {
       needs: string[];
       empty_dimensions: { id: string; name: string; kind?: string }[];
       grid: IntakeGrid;
-      suggestions: { field: string; fact_id?: number; value: string; source: { kind: string; name: string }; confidence: number }[];
+      suggestions: { field: string; fact_id?: number; value: string; source: { kind: string; name: string }; confidence: number; token?: string; before?: string }[];
     }[];
     total: number;
     offset: number;
@@ -96,7 +106,9 @@ export function fromServicePage(raw: ServiceQueuePage): IntakeQueuePage {
       needs: [...track.needs],
       emptyDimensions: track.empty_dimensions.map(({ id, name }) => ({ id, name })),
       grid: track.grid,
-      suggestions: track.suggestions.map(({ field, value, source, confidence }) => ({ field, value, source: source.name, confidence })),
+      suggestions: track.suggestions.map(({ field, value, source, confidence, fact_id, token, before }) => ({
+        field, value, source: source.name, confidence, fact: fact_id ?? 0, token: token ?? "", before: before ?? "",
+      })),
     })),
     rows: raw.rows,
     total: queue?.total ?? 0,

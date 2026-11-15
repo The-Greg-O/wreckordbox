@@ -569,6 +569,16 @@ impl Shared {
                 }
                 result
             }
+            rebuild if crate::stick_rebuild::answers(rebuild) => {
+                // Reads the Stick, writes only the Library (wbx-b1d).
+                let (result, changed) = self.with_library(|library| {
+                    crate::stick_rebuild::answer(library, &self.stems, &request.args)
+                })??;
+                if let Some(changed) = changed {
+                    self.tell_host(&changed.event());
+                }
+                Ok(result)
+            }
             crate::tracks::TRACKS_GET | crate::tracks::TRACKS_QUERY => {
                 self.with_library(|library| crate::tracks::answer(library, request))?
             }
@@ -634,11 +644,43 @@ impl Shared {
                     self.with_library(|library| crate::stems::parent(library, id))?
                 })
             }
+            lyrics if crate::lyrics::answers(lyrics) => {
+                let _facts = crate::review::exclude(&self.stems);
+                // The Sidecar's: the Library is only read, to find tracks.
+                crate::lyrics::answer(
+                    &self.stems,
+                    request,
+                    &crate::lyrics::Library {
+                        track: &|id| {
+                            self.with_library(|library| crate::stems::parent(library, id))?
+                        },
+                        index: &|| self.with_library(crate::library::OpenLibrary::index)?,
+                    },
+                )
+            }
             intensity if crate::intensity::answers(intensity) => {
                 // As for Stems: only finding the tracks takes the Library.
                 crate::intensity::answer(&self.stems, request, &|wanted| {
                     self.with_library(|library| crate::intensity::targets(library, wanted))?
                 })
+            }
+            plans if crate::set_plans::answers(plans) => {
+                // Only finding the pool takes the Library; a plan is kept
+                // in the Sidecar alone (wbx-39).
+                crate::set_plans::answer(&self.stems, request, &|wanted| {
+                    self.with_library(|library| crate::set_plans::pool(library, wanted))?
+                })
+            }
+            lookups if crate::lookups::answers(lookups) => {
+                let _facts = crate::review::exclude(&self.stems);
+                // Reads the Library, writes only the Sidecar (ADR 0005:
+                // nothing here reaches the network).
+                crate::lookups::answer(
+                    &self.stems,
+                    request,
+                    &|id| self.with_library(|library| crate::lookups::described(library, id))?,
+                    &|id| self.with_library(|library| crate::stems::parent(library, id))?,
+                )
             }
             decisions if crate::decisions::answers(decisions) => {
                 let _facts = crate::review::exclude(&self.stems);

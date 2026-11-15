@@ -19,7 +19,7 @@
  */
 import type { RowDto } from "./types";
 import type { IntakeColours, PrepColour } from "@/lib/intakeEdits";
-import type { IntakeCounts, IntakeQueueName, IntakeQueuePage, QueuedTrack } from "@/lib/intakeQueue";
+import type { IntakeCounts, IntakeQueueName, IntakeQueuePage, IntakeSuggestion, QueuedTrack } from "@/lib/intakeQueue";
 
 /** The mock's Problem colour: Red, `ColorID` 2. */
 export const MOCK_PROBLEM_COLOUR = 2;
@@ -44,6 +44,8 @@ export interface MockIntakeSource {
   ready: () => boolean;
   /** The mock's own undoable colour edit (`setTrackColor`), as the service's `tracks.set_prep_colour` makes it (wbx-63). */
   setColour: (id: string, colour: number | null) => Promise<unknown>;
+  /** The track's proposed titles and artists: the mock Review's rows (wbx-66). */
+  suggestionsOf?: (trackId: string) => IntakeSuggestion[];
 }
 
 /**
@@ -109,7 +111,10 @@ export function createMockIntake(source: MockIntakeSource) {
       .filter((category) => category.tags.length > 0 && !category.tags.some((tag) => held.includes(tag.id)))
       .map(({ id, name }) => ({ id, name }));
     const grid = row.analysed === 0 ? "not_analysed" as const : source.gridLocked(row.id) ? "confirmed" as const : "not_confirmed" as const;
+    const suggestions = source.suggestionsOf?.(row.id) ?? [];
     const needs: string[] = [];
+    // As the service says it: a proposed title or artist is still to decide.
+    for (const field of ["title", "artist"]) if (suggestions.some((s) => s.field === field)) needs.push(field);
     if (row.rating === 0) needs.push("energy");
     if (emptyDimensions.length > 0) needs.push("tags");
     if (row.hotCues.length === 0) needs.push("hot_cues");
@@ -123,7 +128,7 @@ export function createMockIntake(source: MockIntakeSource) {
       needs,
       emptyDimensions,
       grid,
-      suggestions: [],
+      suggestions,
     };
   };
 

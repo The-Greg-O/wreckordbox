@@ -2565,6 +2565,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     all, colors, tagsOf: (row) => detailsOf(row).myTags, categories: myTagCategories,
     gridLocked: (id) => analysisLocks.get(id) ?? gridStore.get(id)?.locked ?? false, wait, ready: () => ready,
     setColour: (id, colour) => edits.setTrackColor([id], colour === null ? null : String(colour)),
+    // Called only after `review` below exists (wbx-66).
+    suggestionsOf: (id) => review.suggestionsOf(id),
   });
   // The Review queue (wbx-74): `mock-review.ts`.
   const review = createMockReview({
@@ -2572,6 +2574,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     rate: (id, stars) => edits.setTrackRating([id], stars),
     protectedNow: () => protection?.protectLibrary ?? false,
     colour: (id, colour) => edits.setTrackColor([id], String(colour)),
+    setText: (id, field, value) => writeTrackField([id], field, value),
+    proposalTracks: () => all.filter((_, at) => (colors[at] ?? 0) === 0).slice(0, 2).map((row) => row.id),
   });
   // The Intake tag panel (wbx-65): `mock-tag-panel.ts`.
   const tagPanel = createMockTagPanel({

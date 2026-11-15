@@ -7135,6 +7135,7 @@ dependencies = [
  "tempfile",
  "wreckordbox-render",
  "wreckordbox-service",
+ "wreckordbox-setplan",
  "wreckordbox-sidecar",
  "wreckordbox-stick-outline",
  "wreckordbox-stick-protection",
@@ -7160,6 +7161,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "wreckordbox-service",
+ "wreckordbox-setplan",
 ]
 
 [[package]]
@@ -7195,6 +7197,7 @@ name = "wreckordbox-service"
 version = "1.10.0"
 dependencies = [
  "dirs 5.0.1",
+ "lofty",
  "parking_lot",
  "rbl-anlz",
  "rbl-backup",
@@ -7211,14 +7214,25 @@ dependencies = [
  "tempfile",
  "toml 0.8.2",
  "tracing",
+ "unicode-normalization",
  "wreckordbox-intensity",
  "wreckordbox-native-stems",
  "wreckordbox-render",
  "wreckordbox-service",
+ "wreckordbox-setplan",
  "wreckordbox-sidecar",
  "wreckordbox-stick-outline",
  "wreckordbox-stick-protection",
  "wreckordbox-stick-write",
+]
+
+[[package]]
+name = "wreckordbox-setplan"
+version = "1.10.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "toml 0.8.2",
 ]
 
 [[package]]

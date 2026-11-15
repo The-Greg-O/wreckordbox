@@ -1536,11 +1536,19 @@ const SERVICE_NOT_STICK_WRITERS: &[&str] = &[
     "history.list", "history.tracks",
     "intake.colours", "intake.counts", "intake.list", "intake.problems", "intake.set_tags", "intake.tag_panel",
     "intensity.cancel", "intensity.measure", "intensity.show",
+    // Rebuild from a Stick (wbx-b1d): the Stick only read, without recovery
+    // or a lock made; the Library written through the core.
+    "library.rebuild_from_stick",
+    // Lookups (wbx-37): a read, and a Sidecar record; no Library or Stick write.
+    "lookup.check", "lookup.describe",
+    // Lyrics (wbx-f6v): Sidecar records and reads; audio tags are only read.
+    "lyrics.import_embedded", "lyrics.list", "lyrics.search", "lyrics.set", "lyrics.show",
     "mutants.clear", "mutants.create", "mutants.edit", "mutants.get", "mutants.list", "mutants.remove",
     "mytags.assign", "mytags.create", "mytags.create_category", "mytags.delete", "mytags.list",
     "mytags.merge", "mytags.move", "mytags.of_track", "mytags.rename", "mytags.reorder",
     "mytags.tracks", "mytags.unassign",
-    "playlists.copy", "playlists.delete", "playlists.remove", "playlists.reorder", "playlists.tracks", "playlists.tree",
+    "playlists.add", "playlists.copy", "playlists.create", "playlists.create_folder", "playlists.delete",
+    "playlists.move", "playlists.remove", "playlists.rename", "playlists.reorder", "playlists.tracks", "playlists.tree",
     // Projection writes the Library through the core, whose write guard
     // refuses a Library on a protected Stick; it writes no Stick itself.
     "projection.apply", "projection.plan",
@@ -1554,6 +1562,8 @@ const SERVICE_NOT_STICK_WRITERS: &[&str] = &[
     "runs.active", "runs.finish", "runs.list", "runs.show", "runs.start",
     "runs.spills.list", "runs.spills.show", "runs.spills.replay", "runs.spills.discard",
     "schema.check", "schema.convert",
+    // Set plans (wbx-39): Sidecar only; never the Library or a Stick.
+    "setplans.build", "setplans.check", "setplans.list", "setplans.show",
     "stems.separate", "stems.show", "stems.status",
     "sticks.dry_run", "sticks.list",
     "tracks.get", "tracks.list", "tracks.query", "tracks.rate", "tracks.remove_from_collection",
