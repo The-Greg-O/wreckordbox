@@ -1107,6 +1107,73 @@ Run it only when the DJ asks; the dry run is always safe.
  "facts_recorded": 3, "conflicts": [], "text": "# The Tag schema: ...", "run": null}
 ```
 
+### `wreckordbox set-plan`
+
+The group for Recipes and Set plans. A Recipe is a TOML file the DJ writes:
+how Intensity should move across the set, how far tempo and key may shift
+between neighbours, which Situations belong where, and weights for recency and
+genre mix. A Set plan is the ordered result, kept in the Sidecar; none of these
+commands changes the Library.
+
+```toml
+version = 1
+name = "Warm-up to peak"
+tracks = 8
+[intensity]
+shape = [{ at = 0, intensity = 0.3 }, { at = 0.7, intensity = 0.9 }, { at = 1, intensity = 0.5 }]
+[tempo]
+max_change = 4          # percent; a hard limit
+[key]
+max_moves = 1           # Camelot moves; a hard limit
+[situations]
+place = [{ situation = "opener", from = 0, to = 0, require = true }]
+```
+
+### `wreckordbox set-plan check`
+
+Reads a Recipe file (`<RECIPE>`) and names each mistake and its line. Exits 1
+when the Recipe cannot be used. A Situation must be a term of the Tag schema's
+`situation` dimension when there is one.
+
+```json
+{"valid": false, "problems": [{"line": 8, "message": "unknown field `max_chnge`, expected `max_change` or `weight`"}], "recipe": null}
+```
+
+### `wreckordbox set-plan build`
+
+Changes the Sidecar (never the Library): builds a Set plan from `<RECIPE>` and a
+pool (`[TRACK_ID]...`, `--playlist`, `--search`, `--genre`, `--energy`,
+`--all`) and keeps it with the Recipe's text, in a Run of its own (`--source`,
+default `dj`; an agent passes `agent:NAME`). The same Recipe, pool and Facts
+always give the same plan. Tracks with no Intensity (or no tempo or key under a
+limit) are listed in `left_out` with why. When no plan keeps the limits, it
+exits 1 with `built: false` and the criterion in the way (`tempo_change`,
+`key_moves`, `intensity_step`, `situations`, `tracks`), and keeps nothing.
+Refused (`sidecar_on_stick`) for a Library hosted on a Stick.
+
+```json
+{"built": true, "unsatisfiable": null,
+ "set_plan": {"id": 1, "run": 4, "name": "Warm-up to peak", "pool": ["10001", "..."],
+  "plan": {"tracks": [{"position": 1, "id": "10004", "bpm": 128.03, "key": "8A", "intensity": 0.31, ...}],
+           "transitions": [{"from": 1, "to": 2, "score": 2.41,
+             "criteria": [{"criterion": "key", "score": 0.75, "reason": "8A to 9A, 1 move"}, ...]}],
+           "left_out": [], "score": 11.2}}}
+```
+
+### `wreckordbox set-plan show`
+
+Reads one kept Set plan (`<SET_PLAN_ID>`): its tracks in order, each
+transition's score and reasons, and what was left out. Fails with
+`set_plan_not_found`.
+
+### `wreckordbox set-plan list`
+
+Reads the kept Set plans, newest first.
+
+```json
+{"set_plans": [{"id": 2, "run": 5, "name": "Warm-up to peak", "tracks": 8, "score": 11.2, ...}]}
+```
+
 ### `wreckordbox project`
 
 **Changes the Library** unless `--dry-run`: writes standing Facts into Energy
@@ -1293,7 +1360,8 @@ Reads (each named after the CLI command it mirrors in its description):
 `read_decisions`, `read_decision`, `read_mutants`, `read_mutant`,
 `read_review_waiting`, `read_review_rejected`, `read_projection_barriers`,
 `read_projection_plan`, `read_sticks`, `read_stick_load_preview`,
-`read_stems`, `read_intensity`, `read_schema_check`, `read_set_planning_guide`
+`read_stems`, `read_intensity`, `read_schema_check`, `read_set_plan_check`,
+`read_set_plans`, `read_set_plan`, `read_set_planning_guide`
 (answered by the server itself, with no service).
 
 Changes to the Library: `change_track_rating`, `change_prep_colour`,
@@ -1305,7 +1373,8 @@ Changes to the Library: `change_track_rating`, `change_prep_colour`,
 
 Changes to the Sidecar: `change_run_start`, `change_run_finish`,
 `change_record_facts`, `change_decision_create`, `change_decision_answer`,
-`change_mutant_create`, `change_mutant_edit`, `change_mutant_remove`.
+`change_mutant_create`, `change_mutant_edit`, `change_mutant_remove`,
+`change_set_plan_build` (makes its own Run: takes `source`, not `run`).
 
 Changes to Library Protection: `change_protection_on` (only on; off is the
 DJ's).

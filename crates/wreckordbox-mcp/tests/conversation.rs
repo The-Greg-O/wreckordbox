@@ -548,3 +548,46 @@ fn the_set_planning_guide_is_read_without_a_service() {
     assert!(Client::connect(&server.socket).is_err());
     assert!(!sandbox.path("run").exists());
 }
+
+#[test]
+fn a_set_plan_is_built_through_tools_as_the_agents_own_and_read_back() {
+    let sandbox = Sandbox::new();
+    let mut server = sandbox.server();
+    server.start();
+    let checked = structured(&server.call(
+        "read_set_plan_check",
+        json!({"recipe": "version = 1\ntracks = 3\n[tempo]\nmax_chnge = 2\n"}),
+    ))
+    .clone();
+    assert_eq!(checked["valid"], false, "{checked}");
+    assert_eq!(checked["problems"][0]["line"], 4, "{checked}");
+
+    let recipe = "version = 1\nname = \"Agent's warm-up\"\ntracks = 3\n[tempo]\nmax_change = 2\n";
+    let built = structured(&server.call(
+        "change_set_plan_build",
+        json!({"recipe": recipe, "ids": ["10000", "10001", "10002", "10003"]}),
+    ))
+    .clone();
+    assert_eq!(built["built"], true, "{built}");
+    let plan = &built["set_plan"];
+    assert_eq!(
+        plan["plan"]["tracks"].as_array().unwrap().len(),
+        3,
+        "{built}"
+    );
+    let run = structured(&server.call("read_run", json!({"id": plan["run"]}))).clone();
+    assert_eq!(run["run"]["source"]["kind"], "agent", "{run}");
+    assert_eq!(run["run"]["source"]["name"], "test-agent", "{run}");
+
+    let listed = structured(&server.call("read_set_plans", json!({}))).clone();
+    assert_eq!(listed["set_plans"][0]["id"], plan["id"], "{listed}");
+    let shown = structured(&server.call("read_set_plan", json!({"id": plan["id"]}))).clone();
+    assert_eq!(shown["plan"], plan["plan"]);
+
+    // The DJ is never the source of an agent's plan.
+    let refused = refused(&server.call(
+        "change_set_plan_build",
+        json!({"recipe": recipe, "ids": ["10000", "10001", "10002"], "source": "dj"}),
+    ));
+    assert_eq!(refused["code"], "invalid_source", "{refused}");
+}
