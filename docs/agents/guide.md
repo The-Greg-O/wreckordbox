@@ -24,6 +24,9 @@ protected. They are not suggestions.
   DJ asked for that barrier to be cleared.**
 - **Never accept, reject or reopen a waiting Fact** (`review accept|reject|reopen`)
   **unless the DJ asked for that decision.** These record the act as the DJ's.
+- **Never discard a Ledger spill** (`runs spills discard`), and never replay
+  one with a manifest you made up: a replay manifest must repeat the source,
+  Run and kind the Ledger already recorded; never substitute the DJ or guess.
 - **Never turn Library Protection off** (`protection off`) unless the DJ asked
   you to. While it is on, every change you try is refused; that is the DJ
   saying "not now". Turning it back on (`protection on`) is always safe.
@@ -58,6 +61,7 @@ decision:
 | `wreckordbox review accept ... --token T --source dj` | that held-back Facts are written to the Library as the DJ's |
 | `wreckordbox review reject ... --source dj` | that suggestions are never offered again |
 | `wreckordbox review reopen ... --source dj` | that rejected suggestions wait again |
+| `wreckordbox runs spills discard <ID> --source dj --reason TEXT` | that set-aside Ledger records are given up |
 | `wreckordbox backup restore <BACKUP> --yes` | that the Library and Sidecar are replaced (also not a tool: no service) |
 | `wreckordbox protection off` | that the Library may be changed at all |
 
@@ -775,6 +779,39 @@ Arguments: `<RUN_ID>`, `--limit`, `--offset`.
              {"id": 5, "action": "record", "store": "sidecar", "fact": {...}}]}
 ```
 
+### `wreckordbox runs spills`
+
+The group for Ledger spills: records of changes the Library accepted but the
+Ledger could not take at the time, set aside on this machine to be recovered
+explicitly. Reads never recover or delete them. See
+`docs/development/ledger-failure-paths.md`.
+
+### `wreckordbox runs spills list`
+
+Reads the retained spills. `--limit`, `--offset`. Recovers and deletes
+nothing.
+
+### `wreckordbox runs spills show`
+
+Reads one spill: its original Run and source, its files and a page of its
+accepted records. Arguments: `<ID>`, `--limit`, `--offset`.
+
+### `wreckordbox runs spills replay`
+
+Changes the Sidecar's Ledger: replays a spill's accepted records with their
+original source and Run. Arguments: `<ID>`, `--manifest JSON_FILE` (the
+original metadata, only when the spill's own manifest was lost; it must repeat
+what the Ledger recorded, never invented or the DJ substituted). Retrying is
+safe. Run it when the DJ asks, or when `runs show` reports pending recording
+and the DJ agrees; not an MCP tool.
+
+### `wreckordbox runs spills discard`
+
+Changes the Sidecar's Ledger: discards a spill's records, **as the DJ's
+decision** (`--source dj --reason TEXT`, nothing else is accepted). The
+Library's values stay; what is lost is their record. Only when the DJ asked
+for that spill to be discarded. Not an MCP tool.
+
 ### `wreckordbox decisions`
 
 The group for Decisions: a question between fixed candidates, answered by
@@ -1219,12 +1256,13 @@ read_run              {"id": 7}
 
 Not tools, by design: the DJ's own decisions (`stick unlock`,
 `projection acknowledge`, `review accept`, `review reject`, `review reopen`,
-`protection off`, and the Ledger spill discard `runs spills discard`, once that
-command lands), and what is destructive or long enough to need a person
-watching: `backup restore`, `tracks remove`, `playlists delete`,
+`protection off`, `runs spills discard`), and what is destructive or long
+enough to need a person watching: `backup restore`, `tracks remove`, `playlists delete`,
 `mytags merge`, `mytags delete`, `stick load`, `stems separate`,
-`stems write`, `intensity measure`, `schema convert`. Also left out for now:
+`stems write`, `intensity measure`, `schema convert`, `runs spills replay`
+(Ledger recovery, which the DJ should see). Also left out for now:
 `mytags reorder`, `mytags create-category` (always refused),
 `decisions decide`, `mutants clear`, `project --mytags`, `intensity cancel`,
 `stick lock` and `stick status` (Stick Protection state is kept beside the
-window, not in the service), `backup list`, `stop`, `serve`.
+window, not in the service), `runs spills list` and `runs spills show`,
+`backup list`, `stop`, `serve`.
