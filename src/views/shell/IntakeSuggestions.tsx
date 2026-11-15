@@ -63,19 +63,30 @@ export function useSuggestionKeys(state: SuggestionKeysState) {
   const down = useRef(new Set<string>());
   const wasDown = useRef(false);
   const atFocus = useRef<{ proposal: ProposalAtFocus; held: Set<string> } | null>(null);
+  // A Y pressed on a proposal is the proposal's until it is released: once
+  // the proposal is accepted it is gone and the focus with it, and the held
+  // key's repeats must not reach the deck from wherever the focus fell.
+  const claimed = useRef(false);
 
   useEffect(() => {
     const onDown = (event: globalThis.KeyboardEvent) => {
       const key = event.key.toLowerCase();
       wasDown.current = down.current.has(key);
       down.current.add(key);
+      const target = event.target as Element | null;
+      if (key === "y" && claimed.current && !target?.closest?.(PROPOSAL)) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
     };
     const onUp = (event: globalThis.KeyboardEvent) => {
       const key = event.key.toLowerCase();
+      if (key === "y") claimed.current = false;
       down.current.delete(key);
       atFocus.current?.held.delete(key);
     };
     const onBlur = () => {
+      claimed.current = false;
       down.current.clear();
       atFocus.current?.held.clear();
     };
@@ -112,6 +123,7 @@ export function useSuggestionKeys(state: SuggestionKeysState) {
     // A Y on a proposal is the proposal's, whatever it does: never the deck's.
     event.preventDefault();
     event.stopPropagation();
+    claimed.current = true;
     const focus = atFocus.current;
     if (!focus || focus.held.has("y")) {
       setRefused("Y did nothing: it was already held down when this proposal took focus. Release it and press it again.");

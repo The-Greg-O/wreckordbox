@@ -677,7 +677,7 @@ export function IntakeView(props: IntakeViewProps) {
           platform={platform}
           suggestionsUnavailable={page.suggestionsUnavailable}
           tags={<IntakeTagPanel store={tagStore} trackId={selected.id} />}
-          onAcceptSuggestion={acceptSuggestion}
+          onAcceptSuggestion={(suggestion) => { void acceptSuggestion(suggestion); }}
           accepting={accepting}
           protectLibrary={protectLibrary}
         />

@@ -304,7 +304,7 @@ export function createMockReview(source: MockReviewSource) {
       .sort((a, b) => b.fact - a.fact)
       .map((h) => ({
         field: h.field, value: String(h.after), source: h.source.name, confidence: h.confidence,
-        fact: h.fact, token: rowToken(h.fact), before: String(h.before ?? ""),
+        fact: h.fact, token: rowToken(h.fact), before: typeof h.before === "string" ? h.before : "",
       })),
     reviewWaiting: async (): Promise<ReviewListing> => {
       reads.waiting += 1;
