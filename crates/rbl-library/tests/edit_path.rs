@@ -639,3 +639,6 @@ fn every_slice_of_one_add_tracks_to_playlist_is_part_of_the_first_and_undone_wit
 
 #[path = "edit_path/audio_preparation.rs"]
 mod audio_preparation;
+
+#[path = "edit_path/ledger_failures.rs"]
+mod ledger_failures;

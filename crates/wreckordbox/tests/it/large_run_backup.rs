@@ -1253,3 +1253,33 @@ fn a_hard_link_that_cannot_be_made_refuses_the_backup_with_nothing_changed() {
     let _ = service.kill();
     let _ = service.wait();
 }
+
+/// wbx-hy4 review round 1, finding 1: a folder on the way to a Stem file
+/// the Sidecar names is a symbolic link to a folder outside it. Only a
+/// check of the last component would follow it and archive the outside
+/// file under the recorded name; the backup is refused instead, before it
+/// reads the file, and the Run with it, nothing left in the backup folder.
+#[test]
+fn a_stem_folder_that_is_a_symbolic_link_refuses_the_backup_and_the_run() {
+    let s = Sandbox::new();
+    let _track = separated_and_three_to_project(&s);
+    let (named, _) = stems_named_and_on_disk(&s);
+    let run_folder = s.sidecar_dir().join(Path::new(&named[0]).parent().unwrap());
+    let outside = tempfile::tempdir().unwrap();
+    let moved = outside.path().join("elsewhere");
+    std::fs::rename(&run_folder, &moved).unwrap();
+    std::os::unix::fs::symlink(&moved, &run_folder).unwrap();
+    let unchanged = ratings(&s);
+
+    let error = refused(&s, &["project"]);
+    assert_eq!(error["code"], "run_backup_failed", "{error}");
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("Symbolic links"),
+        "{error}"
+    );
+    assert_eq!(ratings(&s), unchanged);
+    assert_eq!(backups_in(&s.state_dir()), Vec::<PathBuf>::new());
+}

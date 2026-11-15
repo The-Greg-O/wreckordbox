@@ -25,6 +25,9 @@ pub enum DecisionCommands {
     /// takes none: the question is a statement, and its candidates are
     /// `yes` and `no`.
     Create {
+        /// Who asks; defaults to tool:wreckordbox-decisions, never the Run owner.
+        #[arg(long, value_name = "SOURCE", value_parser = parse_source)]
+        source: Option<wreckordbox_service::facts::SourceArg>,
         /// `choice` between named candidates, or `yes-no`.
         #[arg(long = "type", value_name = "TYPE")]
         question_type: TypeArg,
@@ -210,6 +213,7 @@ pub fn run(
 ) -> Result<String, ServiceError> {
     match command {
         DecisionCommands::Create {
+            source,
             question_type,
             question,
             context,
@@ -225,6 +229,7 @@ pub fn run(
             let created: Decision = client.call(
                 commands::DECISIONS_CREATE,
                 json!(CreateDecision {
+                    source: source.clone(),
                     question_type: match question_type {
                         TypeArg::Choice => QuestionType::Choice,
                         TypeArg::YesNo => QuestionType::YesNo,

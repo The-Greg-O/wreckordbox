@@ -136,7 +136,7 @@ pub fn list(
         return Ok(json!(list).to_string());
     }
     if list.total == 0 {
-        return Ok("No Runs.".to_owned());
+        return Ok(format!("No Runs.{}", recovery_text(&list)));
     }
     let mut rows = vec![[
         "RUN",
@@ -168,7 +168,19 @@ pub fn list(
         list.total,
         list.next_offset,
     );
+    text.push_str(&recovery_text(&list));
     Ok(text)
+}
+
+fn recovery_text(list: &RunList) -> String {
+    if list.recovery["total"].as_u64().unwrap_or(0) > 0 || !list.recovery["error"].is_null() {
+        format!(
+            "\nAccepted-write spills await recording. Inspect with runs spills list.\n{}",
+            list.recovery
+        )
+    } else {
+        String::new()
+    }
 }
 
 /// `runs show`.
@@ -197,6 +209,16 @@ pub fn show(
         },
         counts_text(&shown.run),
     );
+    if !shown.pending_recording["error"].is_null() {
+        let _ = write!(
+            text,
+            "\nPending recording could not be read: {}",
+            shown.pending_recording["error"]
+        );
+    }
+    if shown.recovery["total"].as_u64().unwrap_or(0) > 0 || !shown.recovery["error"].is_null() {
+        let _ = write!(text, "\nLedger recovery: {}", shown.recovery);
+    }
     let pending = shown.pending_recording["total"].as_u64().unwrap_or(0);
     if pending > 0 {
         let _ = write!(
@@ -213,7 +235,7 @@ pub fn show(
         }
     }
     if shown.total == 0 {
-        if pending == 0 {
+        if pending == 0 && shown.pending_recording["error"].is_null() {
             text.push_str("\nThis Run changed nothing.");
         }
         return Ok(text);
