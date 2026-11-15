@@ -757,6 +757,69 @@ of this very load in the last ten minutes, or anything changed since; refused
 before writing when it would not fit. Exits 1 unless everything planned was
 written. Only on the DJ's word.
 
+### `wreckordbox library`
+
+The group for whole-Library work. Takes `--run`, `--source` and
+`--description` like the other editing groups.
+
+### `wreckordbox library rebuild-from-stick`
+
+Reads a Stick (only reads it: no recovery, no lock made) and a music folder,
+and **changes the Library** to match the Stick: each Stick track is linked to
+its file in the music folder (never copied from the Stick), with its rating,
+colour, comment, My Tags, and, for a track with no analysis of its own here,
+the Stick's BPM, key, cues, loops and beat grid; the playlist tree is rebuilt
+in the Stick's order (a repeated entry kept); the My Tag categories are mapped
+by slot and renamed to the Stick's names. Arguments: `<STICK> --music <FOLDER>
+[--dry-run] [--accept-retagged] [--accept-uncertain] [--names-only]`. MCP:
+`read_rebuild_from_stick`, `change_rebuild_from_stick`.
+
+Always run `--dry-run` first and show the DJ the counts. A dry run writes
+nothing to the Stick, the music folder or the Library; it may create
+temporary files (a copy of the Stick's database when it has companion files)
+and the service's own runtime files in the system's temp and state folders.
+
+Matching: a track is linked to the one file of exactly its Stick copy's size
+whose name starts with the whole of the Stick's file name (compared with case
+folded and the characters FAT cannot hold as `_`; rekordbox may cut a name
+short, keeping its first 41 characters and adding `-1`, `-2`, ...) and, where the Stick records a length, whose length agrees within a
+second (`--names-only` skips reading lengths, for a slow network folder).
+Several files of that size are `ambiguous`; one whose name agrees only over its
+first 20 characters, or whose length differs, is `uncertain` and linked only
+with `--accept-uncertain`; a file of the same name and another size
+(`different_size`, retagged) only with `--accept-retagged`. Nothing else is
+guessed.
+
+Applying: a backup of the Library is taken first (no backup, no rebuild) and
+named in the answer (`backup`) and the Run. A track already in the Library at
+that file is not added again; the Stick's rating, colour and comment replace
+its own, My Tags are only added, and its own analysis is kept. Existing
+folders and playlists of the same name in the same place are reused one to one
+and put in the Stick's order. One import Run under your source and one change
+event. If an apply stops part way, its answer has `"complete": false` and
+`incomplete` (what was done and the advice) and the command exits 1: what it
+wrote is kept; run it again to finish (it does only what is still to do), or
+the DJ restores the backup. Play history is not carried.
+
+```sh
+wreckordbox --json library rebuild-from-stick /run/media/dj/GIG --music ~/Music --dry-run
+```
+```json
+{"dry_run": true, "format": "one_library", "complete": true, "backup": null,
+ "matched": [{"title": "...", "file": "/.../x.aiff", "retagged": false, "uncertain": false, "existing": null,
+              "values": [{"value": "rating", "outcome": "set", "to": 4}, ...]}],
+ "unmatched": [{"title": "...", "reason": "uncertain", "candidates": ["/.../other mix.aiff"]}],
+ "playlists": [{"path": "Sets/Friday", "folder": false, "action": "create", "tracks": 12, "left_out": []}],
+ "my_tags": [{"name": "Vibe", "slot": 2, "library_name": "Mood", "rename": true, "tags": [...]}],
+ "values": {"rating": 3, "colour": 2, "my_tags": 3, "analysis": 2}, "not_carried": [...]}
+```
+
+Fails with `stick_unreadable` (no rekordbox library, or an unfinished write:
+the DJ settles it in the window), `music_folder_unreadable`,
+`library_protected`, `run_backup_failed` (no backup could be taken), or
+`my_tag_name_taken` (a slot's new name is taken by a category left as it is);
+in each case nothing is written.
+
 ### `wreckordbox stems`
 
 The group for Stems in the Sidecar and Native stems on a Spare stick.

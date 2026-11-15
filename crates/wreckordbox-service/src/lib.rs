@@ -58,6 +58,7 @@ pub mod stems;
 mod stems_show;
 pub mod stems_status;
 pub mod stick_load;
+pub mod stick_rebuild;
 pub mod tag_panel;
 pub mod track_filter;
 pub mod tracks;

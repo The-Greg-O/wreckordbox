@@ -1536,6 +1536,9 @@ const SERVICE_NOT_STICK_WRITERS: &[&str] = &[
     "history.list", "history.tracks",
     "intake.colours", "intake.counts", "intake.list", "intake.problems", "intake.set_tags", "intake.tag_panel",
     "intensity.cancel", "intensity.measure", "intensity.show",
+    // Rebuild from a Stick (wbx-b1d): the Stick only read, without recovery
+    // or a lock made; the Library written through the core.
+    "library.rebuild_from_stick",
     // Lookups (wbx-37): a read, and a Sidecar record; no Library or Stick write.
     "lookup.check", "lookup.describe",
     // Lyrics (wbx-f6v): Sidecar records and reads; audio tags are only read.

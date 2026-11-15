@@ -569,6 +569,16 @@ impl Shared {
                 }
                 result
             }
+            rebuild if crate::stick_rebuild::answers(rebuild) => {
+                // Reads the Stick, writes only the Library (wbx-b1d).
+                let (result, changed) = self.with_library(|library| {
+                    crate::stick_rebuild::answer(library, &self.stems, &request.args)
+                })??;
+                if let Some(changed) = changed {
+                    self.tell_host(&changed.event());
+                }
+                Ok(result)
+            }
             crate::tracks::TRACKS_GET | crate::tracks::TRACKS_QUERY => {
                 self.with_library(|library| crate::tracks::answer(library, request))?
             }

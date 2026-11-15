@@ -309,6 +309,27 @@ pub(crate) fn before_write(
     )
 }
 
+/// Before a write that is backed up whatever its size (wbx-b1d: a rebuild
+/// from a Stick): decides as [`before_write`] does for a write that cannot
+/// be counted, so the backup is taken (or the Run's earlier one named), and
+/// answers where it is. An error stops the write with nothing changed.
+pub(crate) fn before_write_backed_up(
+    library: &OpenLibrary,
+    stems: &Stems,
+) -> Result<Option<PathBuf>, ServiceError> {
+    decide(library, stems, Planned::Uncounted, true)?;
+    Ok(DECIDED.with(|decided| {
+        decided.borrow().as_ref().and_then(|pending| {
+            pending
+                .checked
+                .backup
+                .as_ref()
+                .map(|taken| taken.path.clone())
+                .or_else(|| pending.checked.run_backup.clone())
+        })
+    }))
+}
+
 /// Before every write through the service's edit path of a command that
 /// joined a named Run (wbx-25, review 2): the same count as
 /// [`before_write`], of the Run so far and this write's tracks, and the

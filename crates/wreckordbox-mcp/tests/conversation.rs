@@ -247,6 +247,8 @@ fn tools_are_named_and_marked_as_reads_or_changes_and_leave_out_the_djs_decision
     for wanted in [
         "read_tracks_query",
         "read_stick_load_preview",
+        "read_rebuild_from_stick",
+        "change_rebuild_from_stick",
         "change_track_rating",
         "change_run_start",
         "change_record_facts",
