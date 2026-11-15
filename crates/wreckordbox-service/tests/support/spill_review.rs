@@ -738,3 +738,151 @@ fn a_spill_from_before_binding_replays_only_against_its_single_candidate() {
     assert!(!o.spill.exists());
     o.f.service.stop();
 }
+/// Every file under `dir` with its bytes.
+fn tree(dir: &std::path::Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut found = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(next) = stack.pop() {
+        for entry in std::fs::read_dir(&next).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                let bytes = std::fs::read(&path).unwrap();
+                found.push((path, bytes));
+            }
+        }
+    }
+    found.sort();
+    found
+}
+#[test]
+fn spill_recovery_writes_nothing_while_the_librarys_stick_is_locked() {
+    if isolated("spill_recovery_writes_nothing_while_the_librarys_stick_is_locked") {
+        return;
+    }
+    let mut o = Orphan::new();
+    o.restart();
+    let intent = o.manifest["intent"].as_i64().unwrap();
+    let run: i64 = o
+        .db()
+        .query_row(
+            "SELECT run_id FROM ledger WHERE id=?1 AND kind='unconfirmed'",
+            [intent],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let mut original = o.manifest.clone();
+    original["run"] = json!(run);
+    // A damaged manifest: replay would archive it under ledger-bulk-evidence.
+    std::fs::write(o.spill.join("manifest.json"), b"{damaged").unwrap();
+    // The Library's folder is a Stick, never unlocked.
+    let marker =
+        o.f.dir
+            .path()
+            .join("library")
+            .join(wreckordbox_stick_protection::STAND_IN_MARKER);
+    std::fs::write(&marker, b"").unwrap();
+    let recovery = o.f.dir.path().join("recovery/ledger");
+    let before = tree(&recovery);
+    let entries = || -> i64 {
+        o.db()
+            .query_row("SELECT COUNT(*) FROM ledger", [], |r| r.get(0))
+            .unwrap()
+    };
+    let recorded = entries();
+    let replay = o.f.service.call(
+        "runs.spills.replay",
+        json!({"id":o.id(),"manifest":original}),
+    );
+    assert!(replay.is_err(), "{replay:?}");
+    let discard = o.discard();
+    assert!(discard.is_err(), "{discard:?}");
+    assert_eq!(
+        tree(&recovery),
+        before,
+        "nothing may be written on a locked Stick"
+    );
+    assert_eq!(entries(), recorded);
+    // Inspection still answers.
+    o.f.service
+        .call("runs.spills.show", json!({"id":o.id()}))
+        .unwrap();
+    // Unlocked by name: the DJ can then deal with the spill on the Stick.
+    wreckordbox_stick_protection::unlock(
+        &o.f.dir.path().join("recovery"),
+        &o.f.dir.path().join("library"),
+        Some("library"),
+    )
+    .unwrap();
+    o.f.service
+        .call(
+            "runs.spills.replay",
+            json!({"id":o.id(),"manifest":original}),
+        )
+        .unwrap();
+    assert!(!o.spill.exists());
+    o.f.service.stop();
+}
+#[test]
+fn a_bulk_spill_is_not_written_once_the_librarys_stick_locks() {
+    if isolated("a_bulk_spill_is_not_written_once_the_librarys_stick_locks") {
+        return;
+    }
+    let f = Fixture::new(2);
+    let marker = f
+        .dir
+        .path()
+        .join("library")
+        .join(wreckordbox_stick_protection::STAND_IN_MARKER);
+    let op = Operation::new(&f.core, Kind::Analysis);
+    op.run(
+        json!({"track":fixture::track_id(0)}),
+        || {
+            let written = f.core.write_then(
+                &NoHost,
+                History::Outside,
+                |w| {
+                    w.set_analysis(
+                        &fixture::track_id(0),
+                        &rbl_db::write::AnalysisWrite {
+                            bpm_x100: 12345,
+                            key: None,
+                            analysis_path: "/fixture/ANLZ0000.DAT",
+                            length_sec: None,
+                        },
+                    )
+                },
+                |_, v| Ok(v),
+            );
+            // The Stick is locked after the native write, before its record.
+            std::fs::write(&marker, b"").unwrap();
+            written
+        },
+        |_| vec![json!({"track":fixture::track_id(0)})],
+    )
+    .unwrap();
+    assert!(
+        op.finish().is_some(),
+        "the unrecorded write must be reported"
+    );
+    let recovery = f.dir.path().join("recovery/ledger");
+    let written: Vec<_> = if recovery.exists() {
+        tree(&recovery)
+            .into_iter()
+            .map(|(path, _)| path)
+            .filter(|p| {
+                p.components()
+                    .any(|c| c.as_os_str().to_string_lossy().starts_with("ledger-bulk"))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    assert!(
+        written.is_empty(),
+        "spill files written on a locked Stick: {written:?}"
+    );
+    std::fs::remove_file(&marker).unwrap();
+    f.service.stop();
+}

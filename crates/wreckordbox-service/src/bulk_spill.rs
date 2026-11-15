@@ -211,6 +211,8 @@ pub(super) fn replay(
         Header::Orphaned(error) => return Err(error),
     };
     super::spill_binding::authorize(dir, sidecar, &manifest, own)?;
+    // No recovery file is rewritten or claimed where the Sidecar may not write.
+    sidecar.admit_write().map_err(|e| e.to_string())?;
     for path in files(dir)? {
         let name = path.file_name().unwrap_or_default().to_string_lossy();
         if name == "manifest.json" || name == "manifest.tmp" || name == super::spill_binding::FILE {
