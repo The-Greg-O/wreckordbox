@@ -566,6 +566,23 @@ pub fn catalogue() -> Vec<Tool> {
         ],
         vec!["stick", "playlists"],
     );
+    b.add(
+        "read_rebuild_from_stick",
+        "library.rebuild_from_stick",
+        Effect::Read,
+        Who::Nobody,
+        "What rebuilding the Library from a Stick would do: each Stick track matched to a file of the music \
+         folder by its size and the start of its name (or why not), the playlists and folders, the My Tag \
+         category slots and renames, and each value to be carried (`wreckordbox library rebuild-from-stick \
+         --dry-run`). Writes nothing anywhere.",
+        vec![
+            ("stick", text("Where the Stick is mounted, as an absolute path. It is only read.")),
+            ("music", text("The folder holding the audio files the tracks are linked to (searched with its subfolders).")),
+            ("accept_retagged", boolean("Link a track to the one file of its name when no file has its size (retagged since the export).")),
+        ],
+        vec!["stick", "music"],
+        json!({"dry_run": true}),
+    );
     b.read(
         "read_stems",
         "stems.show",
@@ -770,6 +787,23 @@ pub fn catalogue() -> Vec<Tool> {
         ],
         vec!["expect"],
         json!({}),
+    );
+    library(
+        &mut b,
+        "change_rebuild_from_stick",
+        "library.rebuild_from_stick",
+        "Rebuilds the Library from a Stick, as `read_rebuild_from_stick` reported: links each matched track \
+         to its file in the music folder (never copies from the Stick), carries its rating, colour, comment, \
+         My Tags, cues, loops and beat grid, renames the My Tag categories by slot and rebuilds the playlists; \
+         one import Run; refused under Library Protection; the Stick is only read. Show the DJ the dry run \
+         first (`wreckordbox library rebuild-from-stick`).",
+        vec![
+            ("stick", text("Where the Stick is mounted, as an absolute path. It is only read.")),
+            ("music", text("The folder holding the audio files the tracks are linked to (searched with its subfolders).")),
+            ("accept_retagged", boolean("Link a track to the one file of its name when no file has its size (retagged since the export).")),
+        ],
+        vec!["stick", "music"],
+        json!({"dry_run": false}),
     );
     b.add(
         "change_protection_on",

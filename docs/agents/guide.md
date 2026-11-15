@@ -663,6 +663,50 @@ of this very load in the last ten minutes, or anything changed since; refused
 before writing when it would not fit. Exits 1 unless everything planned was
 written. Only on the DJ's word.
 
+### `wreckordbox library`
+
+The group for whole-Library work. Takes `--run`, `--source` and
+`--description` like the other editing groups.
+
+### `wreckordbox library rebuild-from-stick`
+
+Reads a Stick (only reads it: no recovery, no lock made) and a music folder,
+and **changes the Library** to match the Stick: each Stick track is linked to
+its file in the music folder (never copied from the Stick), with its rating,
+colour, comment, My Tags, and, for a track with no analysis of its own here,
+the Stick's cues, loops and beat grid; the playlist tree is rebuilt; the My Tag
+categories are mapped by slot and renamed to the Stick's names. Arguments:
+`<STICK> --music <FOLDER> [--dry-run] [--accept-retagged]`. MCP:
+`read_rebuild_from_stick`, `change_rebuild_from_stick`.
+
+Always run `--dry-run` first and show the DJ the counts: it writes nothing
+anywhere. A track is matched by the exact size of its Stick copy, the first 20
+characters of the two names agreeing (rekordbox shortens names on a Stick);
+several files of that size or one whose name does not agree is reported, never
+guessed; a file of the same name and another size (retagged) is linked only
+with `--accept-retagged`. A track already in the Library at that file is not
+added again; the Stick's rating, colour and comment replace its own, My Tags
+are only added, and its own analysis is kept. Applying is one import Run under
+your source and one change event; play history is not carried.
+
+```sh
+wreckordbox --json library rebuild-from-stick /run/media/dj/GIG --music ~/Music --dry-run
+```
+```json
+{"dry_run": true, "format": "one_library",
+ "matched": [{"title": "...", "file": "/.../x.aiff", "retagged": false, "existing": null,
+              "values": [{"value": "rating", "outcome": "set", "to": 4}, ...]}],
+ "unmatched": [{"title": "...", "reason": "no_file", "candidates": []}],
+ "playlists": [{"path": "Sets/Friday", "folder": false, "action": "create", "tracks": 12, "left_out": []}],
+ "my_tags": [{"name": "Vibe", "slot": 2, "library_name": "Mood", "rename": true, "tags": [...]}],
+ "values": {"rating": 3, "colour": 2, "my_tags": 3, "analysis": 2}, "not_carried": [...]}
+```
+
+Fails with `stick_unreadable` (no rekordbox library, or an unfinished write:
+the DJ settles it in the window), `music_folder_unreadable`,
+`library_protected` (nothing written), `my_tag_name_taken` (a slot's new name is
+taken by a category left as it is; nothing written).
+
 ### `wreckordbox stems`
 
 The group for Stems in the Sidecar and Native stems on a Spare stick.
