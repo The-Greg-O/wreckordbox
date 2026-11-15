@@ -89,6 +89,8 @@
 //! the edit gate or the history, and never calls a host or sends an
 //! event.
 
+#[path = "spill_binding.rs"]
+mod spill_binding;
 #[path = "spill_commands.rs"]
 mod spill_commands;
 #[path = "spill_discard.rs"]
@@ -790,8 +792,9 @@ pub(crate) fn answer(
         .and_then(|n| usize::try_from(n).ok())
         .unwrap_or(DEFAULT_PAGE_LIMIT)
         .min(1000);
-    let recovery = spill_commands::inventory(&stems.bulk_recovery_dir(), offset, limit)
+    let mut recovery = spill_commands::inventory(&stems.bulk_recovery_dir(), offset, limit)
         .unwrap_or_else(|error| json!({"error":error}));
+    spill_commands::include_refusals(keeper, &stems.bulk_recovery_dir(), &mut recovery);
     // Complete all disk reads outside the Sidecar's ownership mutex.
     let mut pending = bulk_spill::pending(
         &stems.bulk_recovery_dir(),
@@ -1098,6 +1101,8 @@ struct State {
     unwritten: Vec<Spilled>,
     /// Completed bulk spills only: live operation intents must never be settled.
     bulk_waiting: Vec<std::path::PathBuf>,
+    /// Why kept spills were not replayed, for the recovery report.
+    spill_refusals: Vec<String>,
     op: Option<Op>,
     /// Intents that needed no entry, removed with the next one.
     done: Vec<i64>,
@@ -1575,6 +1580,7 @@ impl Keeper {
         self.write_waiting(sidecar, state)?;
         for error in bulk_spill::replay_all(&self.stems.bulk_recovery_dir(), sidecar)? {
             Self::bulk_recovery_error(&error);
+            state.spill_refusals.push(error);
         }
         for open in sidecar.open_intents().map_err(|e| e.to_string())? {
             // What the unconfirmed write did to entries: the Library as it
@@ -1637,6 +1643,7 @@ impl Keeper {
         while let Some(dir) = state.bulk_waiting.first() {
             if let Some(error) = bulk_spill::recover(dir, sidecar)? {
                 Self::bulk_recovery_error(&error);
+                state.spill_refusals.push(error);
             }
             state.bulk_waiting.remove(0);
         }

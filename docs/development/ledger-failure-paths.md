@@ -38,6 +38,20 @@ attribution. Corrupt manifest bytes are synced under
 `ledger-bulk-evidence/<spill-id>/manifest.json` before replacement and remain
 there after successful replay. Existing different archive bytes are not overwritten.
 
+Each spill is bound to the intent it was accepted under: `intent.json` (the
+intent id and its recorded time) is written before the spill's first batch and
+never replaced. Every replay whose manifest names an intent (a supplied
+manifest, a manifest already on disk, startup and retry) must repeat that
+binding and match the Ledger's source, Run, kind and intent time. The intent
+must belong to no operation still running, and must not have been replayed from
+another spill (`ledger-bulk-replayed/<intent>.json` names the spill that
+claimed it before its first entry). A spill from before binding replays only
+when the Ledger holds exactly one matching candidate. A refused spill is kept
+on disk and its reason is shown as the spill's `error` in the Runs recovery
+report; it never blocks unrelated work. Only the DJ's inspect or discard
+resolves it. A discard receipt in the older format that names an existing Run
+is refused.
+
 Directory ids cannot escape local recovery storage. Symlinks and nonregular
 files are refused. Batches are bounded to 128 records and 16 MiB on read. A
 short-lived in-process claim prevents recovery or discard of an active

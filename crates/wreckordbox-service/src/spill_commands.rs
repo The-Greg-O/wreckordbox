@@ -211,12 +211,13 @@ pub(super) fn answer(
                 ));
             }
             super::spill_manifest::validate(&sidecar, &manifest).map_err(bad)?;
+            super::spill_binding::authorize(&dir, &sidecar, &manifest, None).map_err(bad)?;
             super::spill_manifest::preserve_corrupt(&dir).map_err(failed)?;
             manifest.complete = true;
             spill::write(&dir.join("manifest.json"), &manifest).map_err(failed)?;
         }
         spill::mark_complete(&dir).map_err(failed)?;
-        spill::replay(&dir, &sidecar, || Ok(())).map_err(failed)?;
+        spill::replay(&dir, &sidecar, None, || Ok(())).map_err(failed)?;
         json!({"id":id,"replayed":true})
     } else {
         let reason = args
@@ -234,6 +235,8 @@ pub(super) fn answer(
     // State ownership is short; no Keeper mutex spans disk or Sidecar I/O.
     let mut state = keeper.state();
     state.bulk_waiting.retain(|p| p != &dir);
+    let named = dir.display().to_string();
+    state.spill_refusals.retain(|e| !e.contains(&named));
     if state
         .recovery_error
         .as_ref()
@@ -242,6 +245,27 @@ pub(super) fn answer(
         state.recovery_error = None;
     }
     Ok(answer)
+}
+/// A spill recovery refused stays on disk; the report says why.
+pub(super) fn include_refusals(keeper: &Keeper, root: &Path, recovery: &mut Value) {
+    let Some(spills) = recovery["spills"].as_array_mut() else {
+        return;
+    };
+    let state = keeper.state();
+    for spill in spills.iter_mut().filter(|s| s["error"].is_null()) {
+        let Some(id) = spill["id"].as_str() else {
+            continue;
+        };
+        let named = root.join("ledger-bulk").join(id).display().to_string();
+        if let Some(refusal) = state
+            .spill_refusals
+            .iter()
+            .rev()
+            .find(|e| e.contains(&format!("{named} ")))
+        {
+            spill["error"] = json!(refusal);
+        }
+    }
 }
 /// In-memory append failures are accepted writes too. Copy only this page while
 /// owning state; inspection neither settles the intent nor writes the spill.

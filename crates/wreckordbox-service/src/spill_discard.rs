@@ -39,6 +39,7 @@ pub(super) fn discard(
             let name = path.file_name().unwrap_or_default().to_string_lossy();
             if name != "manifest.json"
                 && name != "manifest.tmp"
+                && name != super::spill_binding::FILE
                 && !(name.starts_with("batch-") && path.extension().is_some_and(|e| e == "json"))
             {
                 return Err(format!(
@@ -88,6 +89,12 @@ pub(super) fn discard(
     };
     if receipt.source.kind != SourceKind::Dj {
         return Err("A discard receipt must retain the explicit DJ source".into());
+    }
+    if receipt.run.is_some() {
+        return Err(format!(
+            "{} is an older receipt naming an existing Run; it was refused and the files were kept",
+            marker.display()
+        ));
     }
     let command =
         json!({"name":SPILLS_DISCARD,"args":{"id":id,"reason":receipt.payload["reason"]}});

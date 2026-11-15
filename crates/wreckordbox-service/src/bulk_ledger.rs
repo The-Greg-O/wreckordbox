@@ -263,6 +263,8 @@ struct Admission {
     lease: OrderLease,
     order_failed: bool,
     intent: Option<i64>,
+    intent_at: Option<i64>,
+    live: Option<super::spill_binding::Live>,
     run: Option<RunId>,
     warning: Option<String>,
 }
@@ -392,19 +394,24 @@ impl Session {
         }
         keeper.admit_bulk()?;
         let command = self.command();
+        let at = super::now();
         match self.stems.sidecar() {
             Ok(sidecar) => {
                 match sidecar.begin_intent(
                     &Intent {
                         run: None,
-                        at: super::now(),
+                        at,
                         source: &self.source,
                         description: self.description,
                         command: Some(&command),
                     },
                     &[],
                 ) {
-                    Ok(id) => admission.intent = Some(id),
+                    Ok(id) => {
+                        admission.intent = Some(id);
+                        admission.intent_at = Some(at);
+                        admission.live = Some(super::spill_binding::Live::register(&sidecar, id));
+                    }
                     Err(error) => admission.warning = Some(error.to_string()),
                 }
                 admission.sidecar = Some(sidecar);
@@ -511,9 +518,20 @@ impl Session {
         if let Err(error) = result {
             self.warning(state, error);
             state.spill_index += 1;
-            if let Err(error) =
-                spill::save(&self.spill, &manifest, state.spill_index, &state.pending)
-            {
+            let binding = {
+                let admission = self.admission();
+                super::spill_binding::Binding {
+                    intent: admission.intent,
+                    at: admission.intent_at,
+                }
+            };
+            if let Err(error) = spill::save(
+                &self.spill,
+                &manifest,
+                state.spill_index,
+                &state.pending,
+                binding,
+            ) {
                 self.warning(
                     state,
                     format!("spill failed ({error}); named results retained in memory"),
@@ -559,7 +577,9 @@ impl Session {
             spill::mark_complete(&self.spill)?;
             let _access = self.stems.bulk_access()?;
             let sidecar = self.stems.sidecar().map_err(|e| e.message)?;
-            spill::replay(&self.spill, &sidecar, || self.before_append())?;
+            spill::replay(&self.spill, &sidecar, manifest.intent, || {
+                self.before_append()
+            })?;
             if !state.unspilled.is_empty() {
                 return Err(format!(
                     "named writes could not be stored: {}",
@@ -611,6 +631,7 @@ impl Session {
             );
         }
         state.ended = true;
+        self.admission().live = None;
         self.lease
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

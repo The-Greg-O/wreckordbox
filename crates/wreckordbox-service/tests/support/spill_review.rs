@@ -436,3 +436,305 @@ fn unreadable_accepted_results_are_kept_when_their_targets_cannot_be_recorded() 
     assert!(!o.spill.join("discard.json").exists());
     o.f.service.stop();
 }
+
+/// A DJ import with one accepted write, its intent still open.
+fn dj_import(f: &Fixture, track: usize) -> (Operation, i64) {
+    let op = Operation::new(&f.core, Kind::Import);
+    op.run(
+        json!({"track":fixture::track_id(track)}),
+        || {
+            f.core.write_then(
+                &NoHost,
+                History::Outside,
+                |w| {
+                    w.set_analysis(
+                        &fixture::track_id(track),
+                        &rbl_db::write::AnalysisWrite {
+                            bpm_x100: 12800,
+                            key: None,
+                            analysis_path: "/fixture/ANLZ0000.DAT",
+                            length_sec: None,
+                        },
+                    )
+                },
+                |_, v| Ok(v),
+            )
+        },
+        |_| vec![json!({"track":fixture::track_id(track)})],
+    )
+    .unwrap();
+    let db =
+        rusqlite::Connection::open(f.dir.path().join("library/wreckordbox-sidecar/sidecar.db"))
+            .unwrap();
+    let intent = db
+        .query_row(
+            "SELECT id FROM ledger_intent WHERE source_kind='dj'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    (op, intent)
+}
+fn batches(dir: &std::path::Path) -> usize {
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .filter(|e| {
+                    e.as_ref()
+                        .unwrap()
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("batch-")
+                })
+                .count()
+        })
+        .unwrap_or(0)
+}
+fn copy_spill(from: &std::path::Path, to: &std::path::Path, manifest: &Value) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        std::fs::copy(entry.path(), to.join(entry.file_name())).unwrap();
+    }
+    std::fs::write(to.join("manifest.json"), manifest.to_string()).unwrap();
+}
+#[test]
+fn an_agents_spill_cannot_be_replayed_as_the_djs_unconfirmed_intent() {
+    if isolated("an_agents_spill_cannot_be_replayed_as_the_djs_unconfirmed_intent") {
+        return;
+    }
+    let mut o = Orphan::new();
+    let (dj, dj_intent) = dj_import(&o.f, 3);
+    // The DJ's import crashes: its intent is never settled.
+    std::mem::forget(dj);
+    o.restart();
+    let dj_run: i64 = o
+        .db()
+        .query_row(
+            "SELECT run_id FROM ledger WHERE id=?1 AND kind='unconfirmed' AND source_kind='dj'",
+            [dj_intent],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let mut supplied = o.manifest.clone();
+    supplied["intent"] = json!(dj_intent);
+    supplied["run"] = json!(dj_run);
+    supplied["source"] = json!({"kind":"dj","name":"dj"});
+    let result = o.f.service.call(
+        "runs.spills.replay",
+        json!({"id":o.id(),"manifest":supplied}),
+    );
+    assert!(result.is_err(), "the DJ's intent was borrowed: {result:?}");
+    assert_eq!(batches(&o.spill), 1, "the agent's spill must be kept");
+    let as_dj: i64 = o
+        .db()
+        .query_row(
+            "SELECT COUNT(*) FROM ledger WHERE source_kind='dj' AND kind<>'unconfirmed'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(as_dj, 0, "nothing may be recorded as the DJ's");
+    o.f.service.stop();
+}
+#[test]
+fn replaying_against_a_live_dj_intent_neither_records_nor_settles_it() {
+    if isolated("replaying_against_a_live_dj_intent_neither_records_nor_settles_it") {
+        return;
+    }
+    let o = Orphan::new();
+    let (dj, dj_intent) = dj_import(&o.f, 3);
+    let mut supplied = o.manifest.clone();
+    supplied["intent"] = json!(dj_intent);
+    supplied["run"] = Value::Null;
+    supplied["source"] = json!({"kind":"dj","name":"dj"});
+    let replay = || {
+        o.f.service.call(
+            "runs.spills.replay",
+            json!({"id":o.id(),"manifest":supplied}),
+        )
+    };
+    let bound = replay();
+    assert!(
+        bound.is_err(),
+        "a spill bound to another intent replayed: {bound:?}"
+    );
+    // A spill from before the binding cannot borrow a live operation's intent either.
+    std::fs::remove_file(o.spill.join("intent.json")).unwrap();
+    let legacy = replay();
+    assert!(legacy.is_err(), "a live intent was borrowed: {legacy:?}");
+    let open: i64 = o
+        .db()
+        .query_row(
+            "SELECT COUNT(*) FROM ledger_intent WHERE id=?1",
+            [dj_intent],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(open, 1, "the live intent and its Barrier must remain");
+    let dj_count = || -> i64 {
+        o.db()
+            .query_row(
+                "SELECT COUNT(*) FROM ledger WHERE source_kind='dj'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(dj_count(), 0);
+    assert_eq!(batches(&o.spill), 1);
+    assert_eq!(dj.finish(), None);
+    assert_eq!(dj_count(), 1, "the DJ's own write is recorded once");
+    o.f.service.stop();
+}
+#[test]
+fn a_spill_moved_in_from_another_library_is_refused_kept_and_reported() {
+    if isolated("a_spill_moved_in_from_another_library_is_refused_kept_and_reported") {
+        return;
+    }
+    let mut a = Orphan::new();
+    let b = Orphan::new();
+    let moved = a.spill.with_file_name(b.id());
+    copy_spill(&b.spill, &moved, &b.manifest);
+    b.f.service.stop();
+    a.restart();
+    assert!(moved.join("manifest.json").is_file());
+    assert_eq!(batches(&moved), 1, "the moved spill must be kept");
+    let imports = || -> i64 {
+        a.db()
+            .query_row("SELECT COUNT(*) FROM ledger WHERE kind='import'", [], |r| {
+                r.get(0)
+            })
+            .unwrap()
+    };
+    assert_eq!(imports(), 0, "another Library's records were replayed");
+    let runs = a.f.service.call("runs.list", json!({})).unwrap();
+    let listed = runs["recovery"]["spills"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == b.id())
+        .cloned()
+        .unwrap();
+    assert!(
+        listed["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("is not the intent it was accepted under")),
+        "the recovery report must name the refusal: {listed}"
+    );
+    let explicit = a.f.service.call("runs.spills.replay", json!({"id":b.id()}));
+    assert!(explicit.is_err(), "{explicit:?}");
+    assert_eq!(batches(&moved), 1);
+    assert_eq!(imports(), 0);
+    a.f.service.stop();
+}
+#[test]
+fn an_intent_already_replayed_refuses_a_second_spill() {
+    if isolated("an_intent_already_replayed_refuses_a_second_spill") {
+        return;
+    }
+    let mut o = Orphan::new();
+    o.restart();
+    let intent = o.manifest["intent"].as_i64().unwrap();
+    let run: i64 = o
+        .db()
+        .query_row(
+            "SELECT run_id FROM ledger WHERE id=?1 AND kind='unconfirmed'",
+            [intent],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let mut original = o.manifest.clone();
+    original["run"] = json!(run);
+    let copy = o.spill.with_file_name(format!("{}-copy", o.id()));
+    copy_spill(&o.spill, &copy, &original);
+    std::fs::remove_file(copy.join("manifest.json")).unwrap();
+    o.f.service
+        .call(
+            "runs.spills.replay",
+            json!({"id":o.id(),"manifest":original}),
+        )
+        .unwrap();
+    let again = o.f.service.call(
+        "runs.spills.replay",
+        json!({"id":format!("{}-copy", o.id()),"manifest":original}),
+    );
+    assert!(again.is_err(), "an intent was replayed twice: {again:?}");
+    assert_eq!(batches(&copy), 1);
+    o.f.service.stop();
+}
+#[test]
+fn an_old_discard_receipt_naming_an_existing_run_is_refused() {
+    if isolated("an_old_discard_receipt_naming_an_existing_run_is_refused") {
+        return;
+    }
+    let o = Orphan::new();
+    let run: i64 = o
+        .db()
+        .query_row(
+            "SELECT id FROM run WHERE source_kind='agent' ORDER BY id LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let state = || -> (i64, Option<i64>) {
+        o.db()
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM ledger WHERE run_id=?1), finished_at FROM run WHERE id=?1",
+                [run],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+    };
+    let before = state();
+    std::fs::write(
+        o.spill.join("discard.json"),
+        json!({"source":{"kind":"dj","name":"dj"},"id":999_999,"run":run,"at":1,
+               "payload":{"spill":o.id(),"reason":"An older receipt"}})
+        .to_string(),
+    )
+    .unwrap();
+    assert!(
+        o.discard().is_err(),
+        "an old receipt finished an existing Run"
+    );
+    assert_eq!(state(), before, "the existing Run must be left as it was");
+    assert!(o.spill.join("discard.json").is_file());
+    assert_eq!(batches(&o.spill), 1);
+    o.f.service.stop();
+}
+#[test]
+fn a_spill_from_before_binding_replays_only_against_its_single_candidate() {
+    if isolated("a_spill_from_before_binding_replays_only_against_its_single_candidate") {
+        return;
+    }
+    let mut o = Orphan::new();
+    o.restart();
+    std::fs::remove_file(o.spill.join("intent.json")).unwrap();
+    let intent = o.manifest["intent"].as_i64().unwrap();
+    let run: i64 = o
+        .db()
+        .query_row(
+            "SELECT run_id FROM ledger WHERE id=?1 AND kind='unconfirmed'",
+            [intent],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let mut original = o.manifest.clone();
+    original["run"] = json!(run);
+    let mut other = original.clone();
+    other["intent"] = json!(intent + 1000);
+    assert!(o
+        .f
+        .service
+        .call("runs.spills.replay", json!({"id":o.id(),"manifest":other}))
+        .is_err());
+    o.f.service
+        .call(
+            "runs.spills.replay",
+            json!({"id":o.id(),"manifest":original}),
+        )
+        .unwrap();
+    assert!(!o.spill.exists());
+    o.f.service.stop();
+}

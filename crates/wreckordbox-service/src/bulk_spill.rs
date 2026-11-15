@@ -106,9 +106,11 @@ pub(super) fn save(
     manifest: &Manifest,
     index: u64,
     records: &[Record],
+    binding: super::spill_binding::Binding,
 ) -> Result<(), String> {
     local(dir)?;
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    super::spill_binding::bind(dir, binding)?;
     let header = dir.join("manifest.json");
     if !header.exists() {
         write(&header, manifest)?;
@@ -142,10 +144,10 @@ pub(super) fn header(dir: &Path) -> Result<Header, String> {
             .map(Header::Ready)
             .map_err(|e| format!("{}: {e}", path.display())),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            if files(dir)?
-                .iter()
-                .any(|p| p.file_name().is_none_or(|n| n != "manifest.tmp"))
-            {
+            if files(dir)?.iter().any(|p| {
+                p.file_name()
+                    .is_none_or(|n| n != "manifest.tmp" && n != super::spill_binding::FILE)
+            }) {
                 Ok(Header::Orphaned(format!(
                     "Bulk spill {} has no manifest.json; files that may contain accepted writes are kept for recovery",
                     dir.display()
@@ -162,6 +164,7 @@ fn remove_empty(dir: &Path) -> Result<(), String> {
     local(dir)?;
     for result in [
         std::fs::remove_file(dir.join("manifest.tmp")),
+        std::fs::remove_file(dir.join(super::spill_binding::FILE)),
         std::fs::remove_dir(dir),
     ] {
         if let Err(error) = result {
@@ -186,9 +189,11 @@ pub(super) fn mark_complete(dir: &Path) -> Result<(), String> {
     manifest.complete = true;
     write(&file, &manifest)
 }
+/// `own` is the intent of the operation replaying its own spill, if any.
 pub(super) fn replay(
     dir: &Path,
     sidecar: &Sidecar,
+    own: Option<i64>,
     mut before: impl FnMut() -> Result<(), String>,
 ) -> Result<(), String> {
     if !dir.exists() {
@@ -205,9 +210,10 @@ pub(super) fn replay(
         Header::Empty => return remove_empty(dir),
         Header::Orphaned(error) => return Err(error),
     };
+    super::spill_binding::authorize(dir, sidecar, &manifest, own)?;
     for path in files(dir)? {
         let name = path.file_name().unwrap_or_default().to_string_lossy();
-        if name == "manifest.json" || name == "manifest.tmp" {
+        if name == "manifest.json" || name == "manifest.tmp" || name == super::spill_binding::FILE {
             continue;
         }
         if !name.starts_with("batch-") || path.extension().is_none_or(|ext| ext != "json") {
@@ -232,6 +238,9 @@ pub(super) fn replay(
                 }
             }
         }
+    }
+    if let Some(intent) = manifest.intent {
+        super::spill_binding::claim(dir, intent)?;
     }
     let header = dir.join("manifest.json");
     if manifest.run.is_none() {
@@ -283,8 +292,10 @@ pub(super) fn replay(
                 .map_err(|e| e.to_string())?;
         }
     }
-    if dir.join("manifest.tmp").exists() {
-        std::fs::remove_file(dir.join("manifest.tmp")).map_err(|e| e.to_string())?;
+    for disposable in ["manifest.tmp", super::spill_binding::FILE] {
+        if dir.join(disposable).exists() {
+            std::fs::remove_file(dir.join(disposable)).map_err(|e| e.to_string())?;
+        }
     }
     std::fs::remove_file(header).map_err(|e| e.to_string())?;
     std::fs::remove_dir(dir).map_err(|e| e.to_string())?;
@@ -303,10 +314,17 @@ pub(super) fn recover(dir: &Path, sidecar: &Sidecar) -> Result<Option<String>, S
             dir.display()
         )));
     }
-    if let Header::Orphaned(error) = header(dir)? {
-        return Ok(Some(error));
+    match header(dir)? {
+        Header::Orphaned(error) => return Ok(Some(error)),
+        // A refused spill is kept and reported; it cannot block unrelated work.
+        Header::Ready(manifest) => {
+            if let Err(error) = super::spill_binding::authorize(dir, sidecar, &manifest, None) {
+                return Ok(Some(error));
+            }
+        }
+        Header::Empty => {}
     }
-    replay(dir, sidecar, || Ok(()))?;
+    replay(dir, sidecar, None, || Ok(()))?;
     Ok(None)
 }
 pub(super) fn replay_all(root: &Path, sidecar: &Sidecar) -> Result<Vec<String>, String> {

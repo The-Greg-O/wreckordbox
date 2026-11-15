@@ -525,6 +525,19 @@ impl Sidecar {
             )
             .optional()?)
     }
+
+    /// The `unconfirmed` entries of one Run: the candidates a recovery
+    /// manifest from before spill binding may name.
+    pub fn unconfirmed_in_run(&self, run: RunId) -> Result<Vec<Entry>> {
+        let db = self.db();
+        let mut statement = db.prepare(&format!(
+            "{ENTRY_COLUMNS} FROM ledger WHERE run_id = ?1 AND kind = 'unconfirmed' ORDER BY id"
+        ))?;
+        let entries = statement
+            .query_map([run.0], read_entry)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(entries)
+    }
 }
 
 /// A page of a Run's entries, in the order made: `(store, id, replaced)`

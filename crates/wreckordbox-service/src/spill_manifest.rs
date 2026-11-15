@@ -4,35 +4,71 @@ use serde_json::Value;
 use std::{io::Write, path::Path};
 use wreckordbox_sidecar::{RunId, Sidecar, Source};
 
-pub(super) fn validate(sidecar: &Sidecar, manifest: &Manifest) -> Result<(), String> {
+/// Answers the recorded intent's time, which the spill's binding repeats.
+pub(super) fn validate(sidecar: &Sidecar, manifest: &Manifest) -> Result<i64, String> {
     let id = manifest
         .intent
         .ok_or("Recovery requires the original intent's Ledger id")?;
-    let (source, run, command): (Source, Option<RunId>, Option<Value>) = if let Some(intent) =
-        sidecar
+    let (source, run, command, at): (Source, Option<RunId>, Option<Value>, i64) =
+        if let Some(intent) = sidecar
             .open_intents()
             .map_err(|e| e.to_string())?
             .into_iter()
             .find(|i| i.id == id)
-    {
-        (intent.source, intent.run, intent.command)
-    } else {
-        let entry = sidecar
-            .ledger_entry(id)
-            .map_err(|e| e.to_string())?
-            .filter(|e| e.kind == super::UNCONFIRMED)
-            .ok_or("The original open intent or unconfirmed entry is not in the Ledger")?;
-        (entry.source, Some(entry.run), entry.command)
-    };
-    let command = command.unwrap_or(Value::Null);
-    if source != manifest.source
-        || run != manifest.run
-        || command["name"] != "bulk.write"
-        || command["args"]["kind"] != manifest.kind
-    {
+        {
+            (intent.source, intent.run, intent.command, intent.at)
+        } else {
+            let entry = sidecar
+                .ledger_entry(id)
+                .map_err(|e| e.to_string())?
+                .filter(|e| e.kind == super::UNCONFIRMED)
+                .ok_or("The original open intent or unconfirmed entry is not in the Ledger")?;
+            (entry.source, Some(entry.run), entry.command, entry.at)
+        };
+    if !matches(manifest, &source, run, command.as_ref()) {
         return Err("The recovery manifest must exactly match the Ledger's original source, Run and operation kind".into());
     }
-    Ok(())
+    Ok(at)
+}
+
+fn matches(
+    manifest: &Manifest,
+    source: &Source,
+    run: Option<RunId>,
+    command: Option<&Value>,
+) -> bool {
+    let command = command.unwrap_or(&Value::Null);
+    *source == manifest.source
+        && run == manifest.run
+        && command["name"] == "bulk.write"
+        && command["args"]["kind"] == manifest.kind
+}
+
+/// For a spill written before binding: every open intent (that `usable`
+/// allows) and every unconfirmed entry this manifest could describe.
+pub(super) fn candidates(
+    sidecar: &Sidecar,
+    manifest: &Manifest,
+    usable: impl Fn(i64) -> bool,
+) -> Result<Vec<i64>, String> {
+    let mut found: Vec<i64> = sidecar
+        .open_intents()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|i| usable(i.id) && matches(manifest, &i.source, i.run, i.command.as_ref()))
+        .map(|i| i.id)
+        .collect();
+    if let Some(run) = manifest.run {
+        found.extend(
+            sidecar
+                .unconfirmed_in_run(run)
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .filter(|e| matches(manifest, &e.source, Some(e.run), e.command.as_ref()))
+                .map(|e| e.id),
+        );
+    }
+    Ok(found)
 }
 
 /// Keep the bytes outside the replay queue, even after successful replay removes
