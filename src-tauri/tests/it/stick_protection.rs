@@ -1540,7 +1540,8 @@ const SERVICE_NOT_STICK_WRITERS: &[&str] = &[
     "mytags.assign", "mytags.create", "mytags.create_category", "mytags.delete", "mytags.list",
     "mytags.merge", "mytags.move", "mytags.of_track", "mytags.rename", "mytags.reorder",
     "mytags.tracks", "mytags.unassign",
-    "playlists.copy", "playlists.delete", "playlists.remove", "playlists.reorder", "playlists.tracks", "playlists.tree",
+    "playlists.add", "playlists.copy", "playlists.create", "playlists.create_folder", "playlists.delete",
+    "playlists.move", "playlists.remove", "playlists.rename", "playlists.reorder", "playlists.tracks", "playlists.tree",
     // Projection writes the Library through the core, whose write guard
     // refuses a Library on a protected Stick; it writes no Stick itself.
     "projection.apply", "projection.plan",

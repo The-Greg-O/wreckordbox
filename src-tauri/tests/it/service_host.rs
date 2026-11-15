@@ -1559,3 +1559,68 @@ mod key_evidence;
 
 #[path = "service_host/analysis_lock_ledger.rs"]
 mod analysis_lock_ledger;
+
+// ---------------------------------------------------------------------------
+// Playlists made and arranged from the command (wbx-uia)
+
+impl Window {
+    /// A node of `playlists tree` as `(name, parent)`, when it is there.
+    fn playlist_node(&self, id: &str) -> Option<(String, Option<String>)> {
+        let tree = self.cli(&["--json", "playlists", "tree"]).json();
+        tree["playlists"].as_array().unwrap().iter().find(|node| node["id"] == id).map(|node| {
+            (node["name"].as_str().unwrap().to_owned(), node["parent_id"].as_str().map(str::to_owned))
+        })
+    }
+
+    fn playlist_tracks(&self, id: &str) -> Vec<String> {
+        let listed = self.cli(&["--json", "playlists", "tracks", id]).json();
+        listed["tracks"].as_array().unwrap().iter().map(|track| track["id"].as_str().unwrap().to_owned()).collect()
+    }
+}
+
+#[test]
+fn a_playlist_made_with_tracks_from_the_command_shows_in_the_window_and_is_undone_step_by_step() {
+    let window = window();
+    window.host().unwrap();
+    let before = window.generation();
+
+    let made = window.cli(&["--json", "playlists", "create", "Warm-up", &track_id(2), &track_id(1)]).json();
+    let id = made["playlist"].as_str().unwrap().to_owned();
+
+    assert_eq!(window.playlist_tracks(&id), [track_id(2), track_id(1)]);
+    assert_eq!(made["generation"], window.generation());
+    // The interface hears of the change, told the answer's generation last.
+    eventually("library:changed", || window.changes.lock().unwrap().last() == Some(&window.generation()));
+    assert!(window.generation() > before);
+
+    // The window's own two steps: Undo takes back the tracks, then the playlist.
+    let undone = window.undo().unwrap();
+    assert_eq!(undone.redo_label.as_deref(), Some("Add Tracks to Playlist"));
+    assert!(window.playlist_tracks(&id).is_empty());
+    let undone = window.undo().unwrap();
+    assert_eq!(undone.redo_label.as_deref(), Some("Create Playlist"));
+    assert_eq!(window.playlist_node(&id), None);
+    window.redo().unwrap();
+    window.redo().unwrap();
+    assert_eq!(window.playlist_tracks(&id), [track_id(2), track_id(1)]);
+}
+
+#[test]
+fn a_playlist_renamed_or_moved_from_the_command_is_one_undo_in_the_window() {
+    let window = window();
+    window.host().unwrap();
+    let folder = window.cli(&["--json", "playlists", "create-folder", "Gigs"]).json()["playlist"].as_str().unwrap().to_owned();
+    let id = window.cli(&["--json", "playlists", "create", "Set"]).json()["playlist"].as_str().unwrap().to_owned();
+
+    window.cli(&["playlists", "rename", &id, "Closing"]).succeeded();
+    assert_eq!(window.playlist_node(&id), Some(("Closing".to_owned(), None)));
+    window.cli(&["playlists", "move", &id, "--parent", &folder]).succeeded();
+    assert_eq!(window.playlist_node(&id), Some(("Closing".to_owned(), Some(folder.clone()))));
+
+    let undone = window.undo().unwrap();
+    assert_eq!(undone.redo_label.as_deref(), Some("Move Playlist"));
+    assert_eq!(window.playlist_node(&id), Some(("Closing".to_owned(), None)));
+    let undone = window.undo().unwrap();
+    assert_eq!(undone.redo_label.as_deref(), Some("Rename Playlist"));
+    assert_eq!(window.playlist_node(&id), Some(("Set".to_owned(), None)));
+}
