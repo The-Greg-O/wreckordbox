@@ -1,0 +1,19 @@
+[package]
+name = "wreckordbox-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "A Model Context Protocol server over stdio: a thin client of the wreckordbox Library service, for an outside agent."
+
+[lints]
+workspace = true
+
+[dependencies]
+wreckordbox-service = { path = "../wreckordbox-service" }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+rbl-db = { path = "../rbl-db" }
+serde_json = { workspace = true }
+tempfile = "3"
