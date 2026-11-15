@@ -67,7 +67,7 @@ const TRACKS: [StickTrack; 6] = [
         rating: 3,
         colour: 0,
         comment: "",
-        tags: &[23],
+        tags: &[23, 31],
     },
     StickTrack {
         title: "Kiln",
@@ -103,14 +103,18 @@ const TRACKS: [StickTrack; 6] = [
     },
 ];
 
-/// The Stick's MyTags: "Situation" (Peak, Warm-up, Dark), which this
-/// Library has, and "Vibe" (Dark), which it does not.
-const TAGS: [(u64, u32, &str, u8, u64); 5] = [
+/// The Stick's MyTags, its categories in rekordbox's slots: 1 "Situation"
+/// (Peak, Warm-up, Dark), as this Library's first; 2 "Vibe" (Dark) where
+/// this Library has "Mood"; 3 "Mood" (Calm) where it has "Sound". So slot
+/// 2 must give up "Mood" before slot 3 can take it.
+const TAGS: [(u64, u32, &str, u8, u64); 7] = [
     (2, 1, "Situation", 1, 0),
     (1, 2, "Vibe", 1, 0),
+    (3, 3, "Mood", 1, 0),
     (11, 1, "Dark", 0, 1),
     (21, 1, "Peak", 0, 2),
     (22, 2, "Warm-up", 0, 2),
+    (31, 1, "Calm", 0, 3),
 ];
 const SITUATION_DARK: (u64, u32, &str, u8, u64) = (23, 3, "Dark", 0, 2);
 
@@ -213,6 +217,8 @@ impl Rig {
                 _ => write_wav(&music.join(format!("{}.wav", t.title)), t.tenths),
             }
         }
+        // rekordbox's four slots: Situation, Mood, Sound, Sub-genre.
+        sandbox.four_categories();
         let mut echo = String::new();
         let echo_file = music.join("Echo.wav");
         sandbox.edit(|writer| {
@@ -335,6 +341,23 @@ fn snapshot(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
             }
         }
     }
+    out
+}
+
+/// A track's MyTags as `(category, tag)`, sorted.
+fn tags_of(track: &Value) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = track["my_tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| {
+            (
+                t["category"].as_str().unwrap().to_owned(),
+                t["tag"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    out.sort();
     out
 }
 
@@ -461,9 +484,34 @@ fn a_dry_run_lists_what_would_be_carried_and_writes_nothing_anywhere() {
             ("Dark".to_owned(), "create".to_owned()),
         ]
     );
-    assert_eq!(categories["Vibe"]["library_category"], Value::Null);
+    // By slot: each Stick category takes the Library's category in its
+    // place, renamed when the names differ.
+    let slots: Vec<(String, u64, String, bool)> = dry["my_tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            (
+                c["name"].as_str().unwrap().to_owned(),
+                c["slot"].as_u64().unwrap(),
+                c["library_name"].as_str().unwrap().to_owned(),
+                c["rename"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        slots,
+        [
+            ("Situation".to_owned(), 1, "Situation".to_owned(), false),
+            ("Vibe".to_owned(), 2, "Mood".to_owned(), true),
+            ("Mood".to_owned(), 3, "Sound".to_owned(), true),
+        ]
+    );
+    assert_eq!(categories["Vibe"]["tags"][0]["action"], "create");
+    assert_eq!(categories["Mood"]["tags"][0]["name"], "Calm");
     let not_carried = dry["not_carried"].to_string();
-    for word in ["Vibe", "cues", "grids", "history"] {
+    assert!(!not_carried.contains("MyTag"), "{not_carried}");
+    for word in ["cues", "grids", "history"] {
         assert!(not_carried.contains(word), "{word} in {not_carried}");
     }
     let carried = &dry["values"];
@@ -517,20 +565,26 @@ fn applying_links_the_tracks_carries_their_values_and_rebuilds_the_playlists_in_
     assert_eq!(low_sun["colour_id"], 3);
     assert_eq!(low_sun["comment"], "opener");
     assert_eq!(low_sun["bpm"], 120.0);
-    let tags: Vec<&str> = low_sun["my_tags"]
+    assert_eq!(
+        tags_of(low_sun),
+        [("Situation", "Peak"), ("Vibe", "Dark")].map(|(c, t)| (c.to_owned(), t.to_owned()))
+    );
+    assert_eq!(
+        tags_of(&collection["Paper"]),
+        [("Mood", "Calm"), ("Situation", "Dark")].map(|(c, t)| (c.to_owned(), t.to_owned())),
+        "made in their categories"
+    );
+    let names: Vec<String> = rig.call("mytags.list", json!({}))["categories"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|t| t["tag"].as_str().unwrap())
+        .map(|c| c["name"].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(tags, ["Peak"], "Vibe's Dark has no category here");
-    let paper_tags: Vec<&str> = collection["Paper"]["my_tags"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|t| t["tag"].as_str().unwrap())
-        .collect();
-    assert_eq!(paper_tags, ["Dark"], "made in Situation");
+    assert_eq!(
+        names,
+        ["Situation", "Vibe", "Mood", "Sub-genre"],
+        "renamed by slot"
+    );
     let echo = &collection["Echo"];
     assert_eq!(echo["id"], rig.echo.as_str());
     assert_eq!(

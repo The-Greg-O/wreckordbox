@@ -143,10 +143,19 @@ pub struct TagOutcome {
 /// One MyTag category of the Stick.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CategoryOutcome {
+    /// The Stick's name for it.
     pub name: String,
-    /// The Library's category of the same name; `null` when it has none
-    /// (rekordbox fixes the categories, so none is made).
+    /// Its slot: its place among the Stick's categories, from 1. rekordbox
+    /// has fixed slots whose names the DJ can change, so a Stick category
+    /// goes to the Library's category in the same slot.
+    pub slot: usize,
+    /// The Library's category in that slot; `null` when the Library has
+    /// fewer slots (rekordbox fixes them, so none is made).
     pub library_category: Option<String>,
+    /// That category's name before the rebuild.
+    pub library_name: Option<String>,
+    /// Whether the Library's category is renamed to the Stick's name.
+    pub rename: bool,
     pub tags: Vec<TagOutcome>,
 }
 
@@ -482,6 +491,8 @@ struct PlannedNode {
 }
 
 struct Plan {
+    /// `(Library category, the Stick's name for its slot)`.
+    renames: Vec<(String, String)>,
     tracks: Vec<PlannedTrack>,
     nodes: Vec<PlannedNode>,
     tags: HashMap<u32, TagTarget>,
@@ -520,8 +531,10 @@ fn plan(
     let files: Vec<PathBuf> = matched_files.values().cloned().collect();
     let state = read_library(library, &files)?;
 
-    // MyTags: a Stick category to the Library's of the same name.
+    // MyTags: a Stick category to the Library's in the same slot, renamed
+    // to the Stick's name when the two differ.
     let mut tags = HashMap::new();
+    let mut renames = Vec::new();
     let mut tag_tracks: HashMap<u32, usize> = HashMap::new();
     for (track, ids) in &stick.my_tags.tracks {
         if matched_files.contains_key(track) {
@@ -531,12 +544,15 @@ fn plan(
         }
     }
     let mut categories = Vec::new();
-    for category in &stick.my_tags.categories {
-        let here = state
-            .categories
-            .iter()
-            .find(|(_, name)| name.eq_ignore_ascii_case(&category.name))
-            .map(|(id, _)| id.clone());
+    for (slot, category) in stick.my_tags.categories.iter().enumerate() {
+        let in_slot = state.categories.get(slot).cloned();
+        let here = in_slot.as_ref().map(|(id, _)| id.clone());
+        let rename = in_slot
+            .as_ref()
+            .is_some_and(|(_, name)| *name != category.name);
+        if let (true, Some((id, _))) = (rename, &in_slot) {
+            renames.push((id.clone(), category.name.clone()));
+        }
         let mut outcomes = Vec::new();
         for tag in &category.tags {
             let (action, id) = match &here {
@@ -574,9 +590,28 @@ fn plan(
         }
         categories.push(CategoryOutcome {
             name: category.name.clone(),
+            slot: slot + 1,
             library_category: here,
+            library_name: in_slot.map(|(_, name)| name),
+            rename,
             tags: outcomes,
         });
+    }
+    // A name the renames would give twice, or that a category left as it is
+    // already has, cannot be given: say so before anything is written.
+    let kept: Vec<&String> = state
+        .categories
+        .iter()
+        .filter(|(id, _)| !renames.iter().any(|(renamed, _)| renamed == id))
+        .map(|(_, name)| name)
+        .collect();
+    for (at, (_, name)) in renames.iter().enumerate() {
+        if kept.contains(&name) || renames[..at].iter().any(|(_, earlier)| earlier == name) {
+            return Err(ServiceError::new(
+                crate::mytag_edits::codes::MY_TAG_NAME_TAKEN,
+                format!("the MyTag category \"{name}\" cannot be given to its slot: another category of this Library has that name"),
+            ));
+        }
     }
     let tag_name = |id: u32| -> Option<String> {
         stick
@@ -769,15 +804,17 @@ fn plan(
         .filter(|c| c.library_category.is_none())
         .map(|c| {
             format!(
-                "MyTag category \"{}\" ({}): this Library has no category of that name, and rekordbox fixes the categories",
+                "MyTag category \"{}\" ({}): its slot ({}) is past this Library's last category, and rekordbox fixes the categories",
                 c.name,
-                c.tags.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", ")
+                c.tags.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", "),
+                c.slot,
             )
         })
         .collect();
     not_carried.extend(NOT_CARRIED.iter().map(|s| (*s).to_owned()));
 
     Ok(Plan {
+        renames,
         tracks: planned,
         nodes,
         tags,
@@ -813,6 +850,17 @@ struct Applied {
 /// Every write of the rebuild, inside the one edit.
 fn apply(writer: &mut rbl_db::write::Writer, plan: &Plan) -> Result<Applied, DbError> {
     let mut records = Vec::new();
+    // Each renamed category under a name no other has first, so that slots
+    // trading names never clash; then under the Stick's name.
+    for (category, _) in &plan.renames {
+        writer.rename_my_tag(category, &format!("rebuild-from-stick {category}"))?;
+    }
+    for (category, name) in &plan.renames {
+        writer.rename_my_tag(category, name)?;
+        records.push(
+            json!({"operation": "rebuild_from_stick", "my_tag_category": category, "name": name}),
+        );
+    }
     let mut tags = HashMap::new();
     for (stick_id, target) in &plan.tags {
         let id = match target {
