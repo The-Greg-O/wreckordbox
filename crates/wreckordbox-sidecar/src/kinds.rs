@@ -352,6 +352,8 @@ impl Kinds {
                 ValueType::Object,
                 "Intensity: how hard the track hits and how that changes over its length.",
             ),
+            judgement("title", ValueType::Text, "The native title chosen by the DJ."),
+            judgement("artist", ValueType::Text, "The native artist chosen by the DJ."),
             Declaration {
                 reserved: true,
                 ..judgement(
@@ -365,8 +367,6 @@ impl Kinds {
                 ValueType::Texts,
                 "The themes of the track's lyrics, as whoever read them judged.",
             ),
-            judgement("title", ValueType::Text, "The native title chosen by the DJ."),
-            judgement("artist", ValueType::Text, "The native artist chosen by the DJ."),
         ]
     }
 

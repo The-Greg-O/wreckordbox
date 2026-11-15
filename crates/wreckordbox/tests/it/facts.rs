@@ -508,6 +508,8 @@ fn every_declared_kind_says_whether_it_is_a_judgement_or_a_measurement_and_its_v
             ("intensity", "measurement", "object"),
             ("title", "judgement", "text"),
             ("artist", "judgement", "text"),
+            ("lyrics", "judgement", "object"),
+            ("themes", "judgement", "texts"),
         ]
     );
     assert!(kinds["kinds"]
