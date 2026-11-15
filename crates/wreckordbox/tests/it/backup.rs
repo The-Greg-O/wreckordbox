@@ -422,6 +422,11 @@ fn a_restore_entry_owed_to_a_sidecar_on_a_locked_stick_waits_for_the_unlock() {
     )
     .unwrap();
 
+    // A tool's leftover in the work folder: opening the Sidecar clears it.
+    std::fs::create_dir_all(folder.join("work/run-9")).unwrap();
+    std::fs::write(folder.join("work/run-9/sentinel"), b"kept").unwrap();
+    let before = folder_bytes(&folder);
+
     let failed = cli(&sandbox, &["--json", "status"]);
     assert!(!failed.status.success(), "{}", failed.stdout);
     let error = failed.error_json()["error"].clone();
@@ -430,6 +435,12 @@ fn a_restore_entry_owed_to_a_sidecar_on_a_locked_stick_waits_for_the_unlock() {
         error["message"].as_str().unwrap().contains("unlock"),
         "{error}"
     );
+    assert_eq!(
+        folder_bytes(&folder),
+        before,
+        "not a byte of the Sidecar on the locked Stick changed"
+    );
+    assert!(folder.join("work/run-9/sentinel").is_file());
     assert!(rbl_backup::journal::pending(&sandbox.state_dir()));
     assert_eq!(restore_entries(&sandbox), 0);
 
@@ -443,4 +454,22 @@ fn a_restore_entry_owed_to_a_sidecar_on_a_locked_stick_waits_for_the_unlock() {
     assert!(status.status.success(), "{}", status.stderr);
     assert!(!rbl_backup::journal::pending(&sandbox.state_dir()));
     assert_eq!(restore_entries(&sandbox), 1);
+}
+
+/// Every file under `root` and its bytes.
+fn folder_bytes(root: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut todo = vec![root.to_path_buf()];
+    while let Some(dir) = todo.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                out.insert(path.clone(), Vec::new());
+                todo.push(path);
+            } else {
+                out.insert(path.clone(), std::fs::read(&path).unwrap());
+            }
+        }
+    }
+    out
 }
