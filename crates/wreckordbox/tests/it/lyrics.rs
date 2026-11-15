@@ -45,7 +45,11 @@ fn refused(sandbox: &Sandbox, args: &[&str]) -> Value {
     let mut all = vec!["--json"];
     all.extend_from_slice(args);
     let run = sandbox.cli(&all);
-    assert!(!run.status.success(), "{args:?} should fail: {}", run.stdout);
+    assert!(
+        !run.status.success(),
+        "{args:?} should fail: {}",
+        run.stdout
+    );
     run.error_json()["error"].clone()
 }
 
@@ -113,18 +117,27 @@ fn tagged(sandbox: &Sandbox, format: &str, name: &str) -> (String, PathBuf) {
     let path = fixture::write(&dir, format);
     let options = WriteOptions::default();
     match name {
-        "mp3-uslt" => id3_with(vec![uslt(b"eng", "Paper lanterns drift over the harbour\nwe sail before the dawn")])
-            .save_to_path(&path, options)
-            .unwrap(),
+        "mp3-uslt" => id3_with(vec![uslt(
+            b"eng",
+            "Paper lanterns drift over the harbour\nwe sail before the dawn",
+        )])
+        .save_to_path(&path, options)
+        .unwrap(),
         "aiff-uslt" => id3_with(vec![uslt(b"XXX", "Copper wires hum beneath the city")])
             .save_to_path(&path, options)
             .unwrap(),
-        "wav-sylt" => id3_with(vec![sylt(&[(1500, "Velvet thunder"), (4250, "rolls across the plain")])])
-            .save_to_path(&path, options)
-            .unwrap(),
+        "wav-sylt" => id3_with(vec![sylt(&[
+            (1500, "Velvet thunder"),
+            (4250, "rolls across the plain"),
+        ])])
+        .save_to_path(&path, options)
+        .unwrap(),
         "flac-unsynced" => {
             let mut comments = VorbisComments::new();
-            comments.insert("UNSYNCEDLYRICS".to_owned(), "Salt and static on the radio".to_owned());
+            comments.insert(
+                "UNSYNCEDLYRICS".to_owned(),
+                "Salt and static on the radio".to_owned(),
+            );
             comments.save_to_path(&path, options).unwrap();
         }
         "m4a-lyr" => {
@@ -179,7 +192,14 @@ fn lyrics_in_each_formats_own_tags_are_imported_into_the_sidecar_and_the_files_a
     args.extend(tracks);
     let dry = ok(&sandbox, &args);
     assert_eq!(dry["dry_run"], true);
-    assert_eq!((dry["found"].as_u64(), dry["none"].as_u64(), dry["failed"].as_u64()), (Some(5), Some(1), Some(1)));
+    assert_eq!(
+        (
+            dry["found"].as_u64(),
+            dry["none"].as_u64(),
+            dry["failed"].as_u64()
+        ),
+        (Some(5), Some(1), Some(1))
+    );
     assert_eq!(dry["run"], Value::Null);
     assert!(
         !sandbox.sidecar_dir().exists(),
@@ -188,7 +208,13 @@ fn lyrics_in_each_formats_own_tags_are_imported_into_the_sidecar_and_the_files_a
 
     let mut watcher = sandbox.client();
     watcher.subscribe().unwrap();
-    let mut args = vec!["lyrics", "import-embedded", "--source", "agent:librarian", "--tracks"];
+    let mut args = vec![
+        "lyrics",
+        "import-embedded",
+        "--source",
+        "agent:librarian",
+        "--tracks",
+    ];
     args.extend(tracks);
     let imported = ok(&sandbox, &args);
     let by_track: BTreeMap<String, Value> = imported["tracks"]
@@ -206,7 +232,10 @@ fn lyrics_in_each_formats_own_tags_are_imported_into_the_sidecar_and_the_files_a
     assert_eq!(by_track[&bare]["found"], "none");
     assert_eq!(by_track[&bare]["fact"], Value::Null);
     assert_eq!(by_track[missing]["found"], "failed");
-    assert!(by_track[missing]["problem"].as_str().unwrap().contains("missing"));
+    assert!(by_track[missing]["problem"]
+        .as_str()
+        .unwrap()
+        .contains("missing"));
     let recorded: Vec<i64> = by_track
         .values()
         .filter_map(|t| t["fact"].as_i64())
@@ -235,11 +264,17 @@ fn lyrics_in_each_formats_own_tags_are_imported_into_the_sidecar_and_the_files_a
     );
     assert_eq!(value["language"], "eng");
     assert_eq!(value["origin"], "embedded");
-    assert_eq!(mp3_shown["standing"]["source"], json!({"kind": "tool", "name": "file-tags"}));
+    assert_eq!(
+        mp3_shown["standing"]["source"],
+        json!({"kind": "tool", "name": "file-tags"})
+    );
     assert_eq!(mp3_shown["standing"]["nature"], "judgement");
     assert!(mp3_shown["standing"]["fingerprint"].is_string());
     // XXX is ID3's "unknown language".
-    assert_eq!(ok(&sandbox, &["lyrics", "show", &aiff])["standing"]["value"].get("language"), None);
+    assert_eq!(
+        ok(&sandbox, &["lyrics", "show", &aiff])["standing"]["value"].get("language"),
+        None
+    );
     let synced = ok(&sandbox, &["lyrics", "show", &wav])["standing"]["value"].clone();
     assert_eq!(synced["synced"], true);
     assert_eq!(
@@ -253,7 +288,10 @@ fn lyrics_in_each_formats_own_tags_are_imported_into_the_sidecar_and_the_files_a
     assert_eq!(std::fs::read(&mp3_file).unwrap(), audio[&mp3_file]);
     assert_eq!(std::fs::read(sandbox.master_db()).unwrap(), master);
     let shown = ok(&sandbox, &["tracks", "show", &mp3]);
-    assert!(!shown.to_string().contains("lanterns"), "the Library holds no lyrics: {shown}");
+    assert!(
+        !shown.to_string().contains("lanterns"),
+        "the Library holds no lyrics: {shown}"
+    );
 }
 
 #[test]
@@ -262,26 +300,50 @@ fn an_agent_hands_lyrics_in_with_their_address_and_date_and_they_are_listed_and_
     let set = with_input(
         &sandbox,
         &[
-            "lyrics", "set", "10002",
-            "--source-url", "https://lyrics.example.test/songs/42",
-            "--date", "2026-11-15",
-            "--language", "en",
-            "--source", "agent:matcher",
+            "lyrics",
+            "set",
+            "10002",
+            "--source-url",
+            "https://lyrics.example.test/songs/42",
+            "--date",
+            "2026-11-15",
+            "--language",
+            "en",
+            "--source",
+            "agent:matcher",
         ],
         "Neon tide pulls the harbour lights\nhold on through the night\n",
     );
     let fact = &set["fact"];
-    assert_eq!(fact["source"], json!({"kind": "web", "name": "https://lyrics.example.test/songs/42"}));
-    assert_eq!(set["run"]["source"], json!({"kind": "agent", "name": "matcher"}));
-    assert_eq!(fact["value"]["address"], "https://lyrics.example.test/songs/42");
+    assert_eq!(
+        fact["source"],
+        json!({"kind": "web", "name": "https://lyrics.example.test/songs/42"})
+    );
+    assert_eq!(
+        set["run"]["source"],
+        json!({"kind": "agent", "name": "matcher"})
+    );
+    assert_eq!(
+        fact["value"]["address"],
+        "https://lyrics.example.test/songs/42"
+    );
     assert_eq!(fact["value"]["retrieved"], "2026-11-15");
     assert_eq!(fact["value"]["origin"], "supplied");
-    assert_eq!(fact["value"]["text"], "Neon tide pulls the harbour lights\nhold on through the night");
+    assert_eq!(
+        fact["value"]["text"],
+        "Neon tide pulls the harbour lights\nhold on through the night"
+    );
 
     // An explicit "no lyrics", so an agent stops looking.
-    let instrumental = ok(&sandbox, &["lyrics", "set", "10003", "--instrumental", "--source", "dj"]);
+    let instrumental = ok(
+        &sandbox,
+        &["lyrics", "set", "10003", "--instrumental", "--source", "dj"],
+    );
     assert_eq!(instrumental["fact"]["value"]["instrumental"], true);
-    assert_eq!(ok(&sandbox, &["lyrics", "show", "10003"])["status"], "instrumental");
+    assert_eq!(
+        ok(&sandbox, &["lyrics", "show", "10003"])["status"],
+        "instrumental"
+    );
 
     let listed = ok(&sandbox, &["lyrics", "list"]);
     let total = listed["total"].as_u64().unwrap();
@@ -305,22 +367,42 @@ fn an_agent_hands_lyrics_in_with_their_address_and_date_and_they_are_listed_and_
     assert_eq!(hits[0]["track"]["id"], "10002");
     assert_eq!(hits[0]["standing"], true);
     assert!(hits[0]["snippet"].as_str().unwrap().contains("[harbour]"));
-    assert_eq!(ok(&sandbox, &["lyrics", "search", "harbour", "desert"])["hits"], json!([]));
+    assert_eq!(
+        ok(&sandbox, &["lyrics", "search", "harbour", "desert"])["hits"],
+        json!([])
+    );
 
     // The same source again replaces its words; the old ones are not found.
     with_input(
         &sandbox,
         &[
-            "lyrics", "set", "10002",
-            "--source-url", "https://lyrics.example.test/songs/42",
-            "--date", "2026-11-16",
-            "--source", "agent:matcher",
+            "lyrics",
+            "set",
+            "10002",
+            "--source-url",
+            "https://lyrics.example.test/songs/42",
+            "--date",
+            "2026-11-16",
+            "--source",
+            "agent:matcher",
         ],
         "Quiet engines in the snow",
     );
-    assert_eq!(ok(&sandbox, &["lyrics", "search", "harbour"])["hits"], json!([]));
-    assert_eq!(ok(&sandbox, &["lyrics", "search", "engines"])["hits"][0]["track"]["id"], "10002");
-    assert_eq!(ok(&sandbox, &["lyrics", "show", "10002"])["records"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        ok(&sandbox, &["lyrics", "search", "harbour"])["hits"],
+        json!([])
+    );
+    assert_eq!(
+        ok(&sandbox, &["lyrics", "search", "engines"])["hits"][0]["track"]["id"],
+        "10002"
+    );
+    assert_eq!(
+        ok(&sandbox, &["lyrics", "show", "10002"])["records"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -331,37 +413,68 @@ fn lyrics_that_do_not_hold_together_or_say_nobody_are_refused_and_nothing_is_wri
         sandbox.client()
     };
     let refuse = |client: &mut wreckordbox_service::Client, args: Value| {
-        client
-            .call::<Value>("lyrics.set", args)
-            .unwrap_err()
-            .code
+        client.call::<Value>("lyrics.set", args).unwrap_err().code
     };
     let agent = json!({"kind": "agent", "name": "a"});
     assert_eq!(
-        refuse(&mut client, json!({"id": "10002", "text": "words", "address": "https://x.test/1", "source": agent})),
+        refuse(
+            &mut client,
+            json!({"id": "10002", "text": "words", "address": "https://x.test/1", "source": agent})
+        ),
         "invalid_lyrics"
     );
     assert_eq!(
-        refuse(&mut client, json!({"id": "10002", "text": "words", "instrumental": true, "source": agent})),
+        refuse(
+            &mut client,
+            json!({"id": "10002", "text": "words", "instrumental": true, "source": agent})
+        ),
         "invalid_lyrics"
     );
     assert_eq!(
-        refuse(&mut client, json!({"id": "10002", "text": "   ", "source": agent})),
+        refuse(
+            &mut client,
+            json!({"id": "10002", "text": "   ", "source": agent})
+        ),
         "invalid_lyrics"
     );
-    assert_eq!(refuse(&mut client, json!({"id": "10002", "text": "words"})), "invalid_source");
     assert_eq!(
-        refuse(&mut client, json!({"id": "99999", "text": "words", "source": agent})),
+        refuse(&mut client, json!({"id": "10002", "text": "words"})),
+        "invalid_source"
+    );
+    assert_eq!(
+        refuse(
+            &mut client,
+            json!({"id": "99999", "text": "words", "source": agent})
+        ),
         "track_not_found"
     );
     assert_eq!(
-        refused(&sandbox, &["lyrics", "import-embedded", "--tracks", "10001"])["code"],
+        refused(
+            &sandbox,
+            &["lyrics", "import-embedded", "--tracks", "10001"]
+        )["code"],
         "invalid_source"
     );
-    assert!(!sandbox.sidecar_dir().exists(), "nothing refused made a Sidecar");
+    assert!(
+        !sandbox.sidecar_dir().exists(),
+        "nothing refused made a Sidecar"
+    );
     // Lyrics are the lyrics commands' own: not a general Fact.
     assert_eq!(
-        refused(&sandbox, &["facts", "record", "10002", "lyrics", "{}", "--source", "agent:a", "--confidence", "1"])["code"],
+        refused(
+            &sandbox,
+            &[
+                "facts",
+                "record",
+                "10002",
+                "lyrics",
+                "{}",
+                "--source",
+                "agent:a",
+                "--confidence",
+                "1"
+            ]
+        )["code"],
         "kind_reserved"
     );
 }
@@ -370,8 +483,14 @@ fn lyrics_that_do_not_hold_together_or_say_nobody_are_refused_and_nothing_is_wri
 fn reading_lyrics_writes_nothing_and_tells_nobody() {
     let sandbox = Sandbox::new();
     // With no Sidecar at all, reads answer and make none.
-    assert_eq!(ok(&sandbox, &["lyrics", "show", "10002"])["status"], "unknown");
-    assert_eq!(ok(&sandbox, &["lyrics", "search", "anything"])["hits"], json!([]));
+    assert_eq!(
+        ok(&sandbox, &["lyrics", "show", "10002"])["status"],
+        "unknown"
+    );
+    assert_eq!(
+        ok(&sandbox, &["lyrics", "search", "anything"])["hits"],
+        json!([])
+    );
     ok(&sandbox, &["lyrics", "list"]);
     assert!(!sandbox.sidecar_dir().exists());
 
@@ -386,7 +505,16 @@ fn reading_lyrics_writes_nothing_and_tells_nobody() {
     ok(&sandbox, &["lyrics", "show", "10002"]);
     ok(&sandbox, &["lyrics", "search", "lanterns"]);
     ok(&sandbox, &["lyrics", "list"]);
-    ok(&sandbox, &["lyrics", "import-embedded", "--dry-run", "--tracks", "10002"]);
+    ok(
+        &sandbox,
+        &[
+            "lyrics",
+            "import-embedded",
+            "--dry-run",
+            "--tracks",
+            "10002",
+        ],
+    );
     told_nothing(&mut watcher);
     assert_eq!(files(&sandbox.sidecar_dir()), before);
 }

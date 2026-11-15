@@ -359,7 +359,10 @@ fn records(stems: &Stems) -> Result<HashMap<String, Vec<wreckordbox_sidecar::Fac
     })?;
     let mut by_track: HashMap<String, Vec<_>> = HashMap::new();
     for fact in all {
-        by_track.entry(fact.track_id.clone()).or_default().push(fact);
+        by_track
+            .entry(fact.track_id.clone())
+            .or_default()
+            .push(fact);
     }
     Ok(by_track)
 }
@@ -456,9 +459,9 @@ fn set(
     );
     let found = (library.track)(&given.id)?;
     let fingerprint = fingerprint(&found)?;
-    let description = given.description.unwrap_or_else(|| {
-        format!("Record lyrics for track {}", found.parent().id)
-    });
+    let description = given
+        .description
+        .unwrap_or_else(|| format!("Record lyrics for track {}", found.parent().id));
     let (run, created_run, mut facts) = write(
         stems,
         &caller,
@@ -586,7 +589,11 @@ fn import(
             format!(
                 "Import lyrics from the audio tags of {} {}",
                 pending.len(),
-                if pending.len() == 1 { "track" } else { "tracks" }
+                if pending.len() == 1 {
+                    "track"
+                } else {
+                    "tracks"
+                }
             )
         });
         let (at, items): (Vec<usize>, Vec<Pending>) = pending.into_iter().unzip();
@@ -772,7 +779,9 @@ fn write(
             let run = sidecar
                 .run(id)
                 .map_err(|e| stems::sidecar_error(&e))?
-                .ok_or_else(|| ServiceError::new(service_codes::SERVICE_FAILED, "the new Run is gone"))?;
+                .ok_or_else(|| {
+                    ServiceError::new(service_codes::SERVICE_FAILED, "the new Run is gone")
+                })?;
             (run, true)
         }
     };
@@ -781,10 +790,7 @@ fn write(
     for item in &items {
         stems.before_record(&item.found, item.fingerprint.as_ref(), Some(run.id))?;
     }
-    let values: Vec<Value> = items
-        .iter()
-        .map(|item| json!(item.lyrics))
-        .collect();
+    let values: Vec<Value> = items.iter().map(|item| json!(item.lyrics)).collect();
     let new: Vec<NewFact> = items
         .iter()
         .zip(&values)

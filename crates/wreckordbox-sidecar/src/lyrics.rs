@@ -133,7 +133,9 @@ impl Lyrics {
         }
         if let Some(language) = &self.language {
             let ok = (2..=8).contains(&language.len())
-                && language.chars().all(|c| c.is_ascii_alphabetic() || c == '-');
+                && language
+                    .chars()
+                    .all(|c| c.is_ascii_alphabetic() || c == '-');
             if !ok {
                 return Err(format!(
                     "a language is a code such as eng or en-GB, not {language:?}"

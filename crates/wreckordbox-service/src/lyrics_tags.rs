@@ -40,7 +40,8 @@ pub(crate) struct Embedded {
 /// words for the DJ.
 pub(crate) fn read(path: &Path) -> Result<Option<Embedded>, String> {
     let open = || File::open(path).map_err(|e| format!("cannot open {}: {e}", path.display()));
-    let failed = |e: lofty::error::LoftyError| format!("cannot read the tags of {}: {e}", path.display());
+    let failed =
+        |e: lofty::error::LoftyError| format!("cannot read the tags of {}: {e}", path.display());
     let options = ParseOptions::new().read_properties(false);
     let kind = lofty::probe::Probe::new(std::io::BufReader::new(open()?))
         .guess_file_type()
@@ -52,11 +53,13 @@ pub(crate) fn read(path: &Path) -> Result<Option<Embedded>, String> {
             file.id3v2().and_then(from_id3)
         }
         Some(FileType::Aiff) => {
-            let file = lofty::iff::aiff::AiffFile::read_from(&mut open()?, options).map_err(failed)?;
+            let file =
+                lofty::iff::aiff::AiffFile::read_from(&mut open()?, options).map_err(failed)?;
             file.id3v2().and_then(from_id3)
         }
         Some(FileType::Wav) => {
-            let file = lofty::iff::wav::WavFile::read_from(&mut open()?, options).map_err(failed)?;
+            let file =
+                lofty::iff::wav::WavFile::read_from(&mut open()?, options).map_err(failed)?;
             file.id3v2().and_then(from_id3)
         }
         Some(FileType::Flac) => {
@@ -150,16 +153,25 @@ fn from_id3(tag: &Id3v2Tag) -> Option<Embedded> {
     }
     tag.unsync_text()
         .find(|frame| !frame.content.trim().is_empty())
-        .and_then(|frame| plain(frame.content.clone(), language(frame.language), "ID3v2 USLT"))
+        .and_then(|frame| {
+            plain(
+                frame.content.clone(),
+                language(frame.language),
+                "ID3v2 USLT",
+            )
+        })
 }
 
 fn from_vorbis(comments: &VorbisComments) -> Option<Embedded> {
-    [("LYRICS", "Vorbis LYRICS"), ("UNSYNCEDLYRICS", "Vorbis UNSYNCEDLYRICS")]
-        .into_iter()
-        .find_map(|(key, tag)| {
-            comments
-                .get_all(key)
-                .find(|text| !text.trim().is_empty())
-                .and_then(|text| plain(text.to_owned(), None, tag))
-        })
+    [
+        ("LYRICS", "Vorbis LYRICS"),
+        ("UNSYNCEDLYRICS", "Vorbis UNSYNCEDLYRICS"),
+    ]
+    .into_iter()
+    .find_map(|(key, tag)| {
+        comments
+            .get_all(key)
+            .find(|text| !text.trim().is_empty())
+            .and_then(|text| plain(text.to_owned(), None, tag))
+    })
 }

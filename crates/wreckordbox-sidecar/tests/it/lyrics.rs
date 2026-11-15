@@ -59,12 +59,20 @@ fn search_finds_every_word_in_live_lyrics_only_and_never_the_replaced_words() {
         &agent("a"),
         "Copper wires hum in the city",
     );
-    assert_eq!(hits(&sidecar, "harbour lanterns"), [("10001".to_owned(), first)]);
+    assert_eq!(
+        hits(&sidecar, "harbour lanterns"),
+        [("10001".to_owned(), first)]
+    );
     assert_eq!(hits(&sidecar, "harbour city"), []);
     assert_eq!(hits(&sidecar, "Harbour!"), [("10001".to_owned(), first)]);
 
     // The same source again replaces its own words: the old ones are not found.
-    let second = record(&sidecar, "10001", &agent("a"), "Salt and static on the radio");
+    let second = record(
+        &sidecar,
+        "10001",
+        &agent("a"),
+        "Salt and static on the radio",
+    );
     assert_eq!(hits(&sidecar, "harbour"), []);
     assert_eq!(hits(&sidecar, "static"), [("10001".to_owned(), second)]);
     let snippet = &sidecar.search_lyrics("static", 1).unwrap()[0].snippet;

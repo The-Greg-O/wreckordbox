@@ -336,7 +336,12 @@ fn shown_text(shown: &TrackLyrics) -> String {
         status_word(shown.status)
     );
     if let Some(standing) = &shown.standing {
-        let _ = writeln!(out, "Standing: Fact {} from {}", standing.id, source_text(&standing.source));
+        let _ = writeln!(
+            out,
+            "Standing: Fact {} from {}",
+            standing.id,
+            source_text(&standing.source)
+        );
         if let Some(text) = standing.value.get("text").and_then(Value::as_str) {
             out.push('\n');
             out.push_str(text);
