@@ -101,6 +101,9 @@ pub enum StickOperation {
     EnsureLibrary { defaults: serde_json::Value },
     /// The Stick erased and formatted.
     Format { layout: String },
+    /// Unfinished copies a refused backup left in its folder on the Stick
+    /// removed, by these names (wbx-45.25).
+    SweepBackupLeftovers { names: Vec<String> },
 }
 
 impl StickOperation {

@@ -1061,6 +1061,7 @@ const NOT_STICK_WRITERS: &[&str] = &[
     "auto_relocate",
     "backup_directory",
     "backup_progress",
+    "backup_leftovers",
     "backup_sizes",
     "cancel_backup",
     "cancel_export",

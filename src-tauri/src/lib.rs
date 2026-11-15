@@ -33,6 +33,7 @@ pub mod key_tag;
 mod durable;
 mod backups;
 mod backup_stick;
+mod backup_leftovers;
 mod backup_guard;
 mod backup_copy;
 mod backup_zip;
@@ -778,6 +779,8 @@ pub fn run() {
             commands::cancel_backup,
             commands::back_up_library,
             commands::delete_backup,
+            backup_leftovers::backup_leftovers,
+            backup_leftovers::sweep_backup_leftovers,
             commands::set_backup_directory,
             commands::reset_play_count,
             commands::record_play,

@@ -274,6 +274,8 @@ pub const STICK_WRITERS: &[&str] = &[
     "back_up_library",
     "start_backup",
     "delete_backup",
+    // Removes what a refused backup left on a Stick (wbx-45.25).
+    "sweep_backup_leftovers",
     // Audio tags of tracks whose file is on a Stick.
     "set_track_field",
     "undo_edit",

@@ -655,6 +655,11 @@ pub(crate) fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&s
         discard(&access, state.backup_dir(), root, &[&partial, &archive]);
     }
     let made = made.into_inner();
+    if result.is_err() && access.recheck().is_err() {
+        // Refused by Stick Protection: what it left is recorded, to be
+        // removed once the Stick is back and unlocked (wbx-45.25).
+        crate::backup_leftovers::record(state.backup_dir(), root, &made);
+    }
     result.map_err(|stopped| crate::backup_stick::stopped(stopped, &access, &made, copied_to_stick.get()))
 }
 /// Whether a compression worker has written a file of the analysis or
