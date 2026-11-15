@@ -106,6 +106,25 @@ pub(crate) fn refuse_background_work(
     }
 }
 
+/// Refuses, with Stick Protection's words, when the Library or its
+/// Sidecar is on a Stick that is locked now: the Ledger's own housekeeping
+/// (bringing it up to date at a start) waits for the unlock.
+pub(crate) fn refuse_while_locked(stems: &crate::stems::Stems) -> Result<(), ServiceError> {
+    let Some(root) = stick_of(stems.library_dir(), stems.sidecar_dir()) else {
+        return Ok(());
+    };
+    if wreckordbox_stick_protection::status(stems.state_dir(), &root).protected {
+        return Err(ServiceError::new(
+            codes::STICK_PROTECTED,
+            format!(
+                "The Ledger is brought up to date once the Stick is unlocked; until then its queries wait. {}",
+                wreckordbox_stick_protection::refusal(&root)
+            ),
+        ));
+    }
+    Ok(())
+}
+
 thread_local! {
     /// How deep this thread is in an ordinary Library edit's own record.
     static LEDGER: Cell<u32> = const { Cell::new(0) };

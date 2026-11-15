@@ -690,3 +690,77 @@ fn a_service_starting_on_a_locked_stick_waits_to_bring_its_ledger_up_to_date() {
         "{runs}"
     );
 }
+
+/// The Library on a locked Stick, its Sidecar kept on this computer: the
+/// Ledger is not brought up to date at the start, and its queries say so
+/// rather than answer without the unsettled work.
+#[test]
+fn a_service_starting_on_a_locked_stick_with_its_sidecar_elsewhere_says_its_ledger_waits() {
+    let sandbox = with_an_unsettled_intent();
+    let library = sandbox.master_db().parent().unwrap().to_path_buf();
+    std::fs::write(
+        library.join(wreckordbox_stick_protection::STAND_IN_MARKER),
+        b"",
+    )
+    .unwrap();
+    let run = sandbox.cli(&["--json", "runs", "list"]);
+    assert!(
+        !run.status.success(),
+        "not an answer without the unsettled work: {}",
+        run.stdout
+    );
+    let error = run.error_json();
+    assert_eq!(error["error"]["code"], "stick_protected", "{error}");
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unlock"),
+        "{error}"
+    );
+
+    let name = library.file_name().unwrap().to_str().unwrap().to_owned();
+    assert!(sandbox
+        .cli(&[
+            "stick",
+            "unlock",
+            library.to_str().unwrap(),
+            "--name",
+            &name
+        ])
+        .status
+        .success());
+    ok(&sandbox, &["tracks", "rate", "10003", "2"]);
+    let runs = ok(&sandbox, &["runs", "list"]);
+    assert!(
+        runs.to_string()
+            .contains("An edit an earlier service began"),
+        "{runs}"
+    );
+}
+
+/// Stops this sandbox's service and waits until it is gone.
+fn stop_service(sandbox: &Sandbox) {
+    let socket = sandbox.config().socket_path(sandbox.location());
+    if let Ok(mut client) = wreckordbox_service::Client::connect(&socket) {
+        let _ = client.stop();
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while wreckordbox_service::Client::connect(&socket).is_ok() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the service did not stop"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+}
+
+fn count(sandbox: &Sandbox, sql: &str) -> i64 {
+    rusqlite::Connection::open_with_flags(
+        sandbox.sidecar_dir().join("sidecar.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap()
+    .query_row(sql, [], |row| row.get(0))
+    .unwrap()
+}

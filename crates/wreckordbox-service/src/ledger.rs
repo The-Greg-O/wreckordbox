@@ -753,7 +753,17 @@ pub(crate) fn answer(
     stems: &Stems,
     request: &Request,
 ) -> Result<Value, ServiceError> {
-    let recovery_error = keeper.state().recovery_error.clone();
+    let (recovery_error, settled) = {
+        let state = keeper.state();
+        (state.recovery_error.clone(), state.settled)
+    };
+    // What an earlier service left and this one could not settle is not
+    // answered around, open writer or not (wbx-8yh).
+    if !settled {
+        if let Some(error) = &recovery_error {
+            return Err(error.clone());
+        }
+    }
     if request.command == commands::RUNS_LIST {
         let index = |name: &str, default| {
             request.args[name]
@@ -1432,6 +1442,13 @@ impl Keeper {
         // after an unlock settles first.
         let _ledger = crate::sidecar_stick::ledger_scope();
         let result = (|| {
+            // Neither the Sidecar nor the Library on a locked Stick: the
+            // writer is not even opened, so nothing is begun (wbx-8yh).
+            if self.stems.sidecar_dir().join("sidecar.db").is_file()
+                || bulk_spill::exists(&self.stems.bulk_recovery_dir())
+            {
+                crate::sidecar_stick::refuse_while_locked(&self.stems)?;
+            }
             let sidecar = if bulk_spill::exists(&self.stems.bulk_recovery_dir()) {
                 Some(self.stems.sidecar()?)
             } else {

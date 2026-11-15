@@ -371,6 +371,10 @@ impl Stems {
         mutex
     }
 
+    pub(crate) fn state_dir(&self) -> &Path {
+        &self.state_dir
+    }
+
     pub(crate) fn library_dir(&self) -> &Path {
         &self.library_dir
     }
