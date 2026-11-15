@@ -75,7 +75,9 @@ fn a_library_on_a_protected_stick_is_not_edited_until_the_stick_is_unlocked() {
 }
 
 #[test]
-fn a_sidecar_on_a_protected_stick_is_not_written_until_the_stick_is_unlocked() {
+fn a_sidecar_on_a_stick_records_no_fact_locked_or_unlocked() {
+    // A Library hosted on a Stick is read-only for what the Sidecar records
+    // (wbx-8yh): before wbx-8yh an unlock let the Fact through.
     let sandbox = Sandbox::new();
     let sidecar = sandbox.sidecar_dir();
     std::fs::create_dir_all(&sidecar).unwrap();
@@ -92,7 +94,7 @@ fn a_sidecar_on_a_protected_stick_is_not_written_until_the_stick_is_unlocked() {
     assert!(!refused.status.success(), "{}", refused.stdout);
     assert_eq!(
         refused.error_json()["error"]["code"],
-        "stick_protected",
+        "sidecar_on_stick",
         "{}",
         refused.stdout
     );
@@ -112,8 +114,47 @@ fn a_sidecar_on_a_protected_stick_is_not_written_until_the_stick_is_unlocked() {
         ])
         .status
         .success());
-    let recorded = sandbox.cli(&record);
-    assert!(recorded.status.success(), "{}", recorded.stderr);
+    let again = sandbox.cli(&record);
+    assert!(!again.status.success(), "{}", again.stdout);
+    assert_eq!(again.error_json()["error"]["code"], "sidecar_on_stick");
+    assert!(!sidecar.join("sidecar.db").exists(), "still not made");
+}
+
+#[test]
+fn an_edit_of_a_library_whose_sidecar_is_on_a_stick_is_kept_only_while_it_is_unlocked() {
+    // Its Ledger entry is the edit's own record: written on the Stick only
+    // while the DJ has it unlocked, so a locked Stick refuses the edit.
+    let sandbox = Sandbox::new();
+    let sidecar = sandbox.sidecar_dir();
+    std::fs::create_dir_all(&sidecar).unwrap();
+    std::fs::write(
+        sidecar.join(wreckordbox_stick_protection::STAND_IN_MARKER),
+        b"",
+    )
+    .unwrap();
+    let refused = sandbox.cli(&["--json", "tracks", "rate", "10003", "4"]);
+    assert_eq!(
+        refused.error_json()["error"]["code"],
+        "stick_protected",
+        "{}",
+        refused.stdout
+    );
+    assert_eq!(rating(&sandbox, "10003"), 0);
+
+    let name = sidecar.file_name().unwrap().to_str().unwrap().to_owned();
+    assert!(sandbox
+        .cli(&[
+            "stick",
+            "unlock",
+            sidecar.to_str().unwrap(),
+            "--name",
+            &name
+        ])
+        .status
+        .success());
+    let rated = sandbox.cli(&["--json", "tracks", "rate", "10003", "4"]);
+    assert!(rated.status.success(), "{}", rated.stderr);
+    assert_eq!(rating(&sandbox, "10003"), 4);
 }
 
 #[test]
