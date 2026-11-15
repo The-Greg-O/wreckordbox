@@ -30,11 +30,7 @@ pub fn start(state: std::sync::Arc<AppState>) -> AppResult<()> {
         if progress.running {
             return Err(error("A backup is already running."));
         }
-        *progress = BackupProgress {
-            running: true,
-            phase: "preparing".into(),
-            ..Default::default()
-        };
+        *progress = BackupProgress { running: true, phase: "preparing".into(), ..Default::default() };
     }
     tauri::async_runtime::spawn_blocking(move || {
         let mut last_detail = std::time::Instant::now();
@@ -42,15 +38,9 @@ pub fn start(state: std::sync::Arc<AppState>) -> AppResult<()> {
             create_with_progress(&state, &mut |phase, copied_bytes, total_bytes, item| {
                 let mut progress = state.backup_progress.lock();
                 if progress.phase == "stopping" {
-                    return Err(AppError::new(
-                        crate::error::ErrorKind::Cancelled,
-                        "Backup stopped.",
-                    ));
+                    return Err(AppError::new(crate::error::ErrorKind::Cancelled, "Backup stopped."));
                 }
-                if progress.phase != phase
-                    || progress.current_item.is_none()
-                    || last_detail.elapsed() >= std::time::Duration::from_secs(1)
-                {
+                if progress.phase != phase || progress.current_item.is_none() || last_detail.elapsed() >= std::time::Duration::from_secs(1) {
                     progress.current_item = Some(item.to_owned());
                     last_detail = std::time::Instant::now();
                 }
@@ -59,23 +49,14 @@ pub fn start(state: std::sync::Arc<AppState>) -> AppResult<()> {
                 progress.total_bytes = total_bytes;
                 Ok(())
             })
-        }))
-        .unwrap_or_else(|_| Err(error("Backup worker stopped unexpectedly.")));
+        })).unwrap_or_else(|_| Err(error("Backup worker stopped unexpectedly.")));
         let mut progress = state.backup_progress.lock();
         progress.running = false;
         progress.current_item = None;
         match result {
-            Ok(path) => {
-                progress.phase = "complete".into();
-                progress.path = Some(path);
-            }
-            Err(e) if e.kind == crate::error::ErrorKind::Cancelled => {
-                progress.phase = "cancelled".into();
-            }
-            Err(e) => {
-                progress.phase = "failed".into();
-                progress.error = Some(failure_message(&e));
-            }
+            Ok(path) => { progress.phase = "complete".into(); progress.path = Some(path); }
+            Err(e) if e.kind == crate::error::ErrorKind::Cancelled => { progress.phase = "cancelled".into(); }
+            Err(e) => { progress.phase = "failed".into(); progress.error = Some(failure_message(&e)); }
         }
     });
     Ok(())
@@ -85,32 +66,22 @@ pub fn start(state: std::sync::Arc<AppState>) -> AppResult<()> {
 /// command, so carry the detail that `errorMessage` would otherwise append.
 fn failure_message(error: &AppError) -> String {
     match error.detail.as_deref().map(str::trim) {
-        Some(detail) if !detail.is_empty() && detail != error.message => {
-            format!("{} {detail}", error.message)
-        }
+        Some(detail) if !detail.is_empty() && detail != error.message => format!("{} {detail}", error.message),
         _ => error.message.clone(),
     }
 }
 
 pub fn cancel(state: &AppState) {
     let mut progress = state.backup_progress.lock();
-    if progress.running {
-        progress.phase = "stopping".into();
-    }
+    if progress.running { progress.phase = "stopping".into(); }
 }
 
 fn tree_size(path: &Path, check: &mut dyn FnMut() -> AppResult<()>) -> AppResult<u64> {
     check()?;
     let meta = fs::symlink_metadata(path).map_err(error)?;
-    if meta.file_type().is_symlink() {
-        return Err(error("Symbolic links are not supported in backups."));
-    }
-    if meta.is_file() {
-        return Ok(meta.len());
-    }
-    if !meta.is_dir() {
-        return Err(error("Unsupported file in backup."));
-    }
+    if meta.file_type().is_symlink() { return Err(error("Symbolic links are not supported in backups.")); }
+    if meta.is_file() { return Ok(meta.len()); }
+    if !meta.is_dir() { return Err(error("Unsupported file in backup.")); }
     let mut bytes = 0;
     for entry in fs::read_dir(path).map_err(error)? {
         bytes += tree_size(&entry.map_err(error)?.path(), check)?;
@@ -136,8 +107,8 @@ fn artwork(location: &rbl_db::LibraryLocation) -> PathBuf {
     rbl_backup::artwork_dir(location)
 }
 // Library selections live beside master.db, outside the SQL database.
-use rbl_backup::manifest::Manifest;
 pub use rbl_backup::LIBRARY_FILES;
+use rbl_backup::manifest::Manifest;
 
 fn remove(path: &Path) -> AppResult<()> {
     match fs::symlink_metadata(path) {
@@ -173,11 +144,7 @@ fn set_aside(root: &Path, paths: &[&Path]) -> Vec<PathBuf> {
             continue;
         }
         let aside = root.join(format!("{DISCARD_PREFIX}{}", uuid::Uuid::new_v4()));
-        doomed.push(if fs::rename(path, &aside).is_ok() {
-            aside
-        } else {
-            path.to_path_buf()
-        });
+        doomed.push(if fs::rename(path, &aside).is_ok() { aside } else { path.to_path_buf() });
     }
     doomed
 }
@@ -190,10 +157,7 @@ fn set_aside(root: &Path, paths: &[&Path]) -> Vec<PathBuf> {
 fn delete_in_background(state_dir: &Path, root: &Path, paths: Vec<PathBuf>) {
     let paths: Vec<_> = {
         let mut busy = DISCARDING.lock();
-        paths
-            .into_iter()
-            .filter(|path| busy.insert(path.clone()))
-            .collect()
+        paths.into_iter().filter(|path| busy.insert(path.clone())).collect()
     };
     if paths.is_empty() {
         return;
@@ -243,12 +207,7 @@ fn delete_in_background(state_dir: &Path, root: &Path, paths: Vec<PathBuf>) {
 /// (wbx-45.11), for the renames.
 /// Answers where each of `paths` that was there now is (its set-aside
 /// name, or itself when it could not be moved); nothing on a refusal.
-fn discard(
-    access: &crate::stick_guard::StickAccess,
-    state_dir: &Path,
-    root: &Path,
-    paths: &[&Path],
-) -> Vec<PathBuf> {
+fn discard(access: &crate::stick_guard::StickAccess, state_dir: &Path, root: &Path, paths: &[&Path]) -> Vec<PathBuf> {
     if access.recheck().is_err() {
         return Vec::new();
     }
@@ -263,17 +222,10 @@ fn discard(
 /// Run at start-up on the saved backup folder: on a protected Stick it is
 /// left as it is (the deleting thread authorizes itself).
 pub fn sweep_discarded(state_dir: &Path, root: &Path) {
-    let Ok(entries) = fs::read_dir(root) else {
-        return;
-    };
+    let Ok(entries) = fs::read_dir(root) else { return; };
     let doomed = entries
         .filter_map(Result::ok)
-        .filter(|entry| {
-            entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with(DISCARD_PREFIX)
-        })
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with(DISCARD_PREFIX))
         .map(|entry| entry.path())
         .collect();
     delete_in_background(state_dir, root, doomed);
@@ -295,8 +247,7 @@ fn checked(root: &Path, path: &Path) -> AppResult<PathBuf> {
         .unwrap_or_default();
     if !(name.starts_with("rbexport-") && meta.is_file() && is_zip(&path)
         || name.starts_with("rbxport-backup-") && meta.is_file() && is_zip(&path)
-        || name.starts_with("library-")
-            && (meta.is_dir() || (meta.is_file() && path.extension().is_some_and(|e| e == "zip")))
+        || name.starts_with("library-") && (meta.is_dir() || (meta.is_file() && path.extension().is_some_and(|e| e == "zip")))
         || name.starts_with("master-")
             && path.extension().is_some_and(|e| e == "db")
             && meta.is_file())
@@ -314,24 +265,15 @@ fn manifest(path: &Path, location: &rbl_db::LibraryLocation) -> AppResult<Manife
 }
 
 fn is_zip(path: &Path) -> bool {
-    path.extension()
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+    path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
 }
 
 /// The Backups preference shows only snapshots created under the current
 /// naming scheme. RBXport Restore restores older ones too.
 fn is_listed_backup(path: &Path) -> bool {
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or_default();
-    let Ok(meta) = fs::symlink_metadata(path) else {
-        return false;
-    };
-    name.starts_with("rbexport-")
-        && meta.is_file()
-        && !meta.file_type().is_symlink()
-        && is_zip(path)
+    let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+    let Ok(meta) = fs::symlink_metadata(path) else { return false; };
+    name.starts_with("rbexport-") && meta.is_file() && !meta.file_type().is_symlink() && is_zip(path)
 }
 
 /// Reads the backup folder without the edit gate. A backup holds that gate
@@ -396,26 +338,15 @@ pub fn create(state: &AppState) -> AppResult<String> {
 
 pub fn validate_destination(directory: &Path, location: &rbl_db::LibraryLocation) -> AppResult<()> {
     for source in [analysis(location), artwork(location)] {
-        if source
-            .canonicalize()
-            .is_ok_and(|source| directory.starts_with(source))
-        {
-            return Err(error(
-                "Choose a backup folder outside the library's analysis and artwork folders.",
-            ));
+        if source.canonicalize().is_ok_and(|source| directory.starts_with(source)) {
+            return Err(error("Choose a backup folder outside the library's analysis and artwork folders."));
         }
     }
     Ok(())
 }
 
-#[allow(
-    clippy::too_many_lines,
-    reason = "one linear backup pipeline; splitting it would hide the order writes happen in"
-)]
-pub(crate) fn create_with_progress(
-    state: &AppState,
-    progress: &mut dyn FnMut(&str, u64, u64, &str) -> AppResult<()>,
-) -> AppResult<String> {
+#[allow(clippy::too_many_lines, reason = "one linear backup pipeline; splitting it would hide the order writes happen in")]
+pub(crate) fn create_with_progress(state: &AppState, progress: &mut dyn FnMut(&str, u64, u64, &str) -> AppResult<()>) -> AppResult<String> {
     let _gate = state.edit_gate().lock();
     let location = state.location()?;
     let destination = state.backup_destination();
@@ -446,10 +377,7 @@ pub(crate) fn create_with_progress(
     let stick_refused = std::sync::atomic::AtomicBool::new(false);
     let write_check = || -> std::io::Result<()> {
         if stick_refused.load(std::sync::atomic::Ordering::Acquire) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "Backup stopped: its folder may no longer be written",
-            ));
+            return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "Backup stopped: its folder may no longer be written"));
         }
         access.recheck().map_err(|refused| {
             stick_refused.store(true, std::sync::atomic::Ordering::Release);
@@ -482,94 +410,56 @@ pub(crate) fn create_with_progress(
         }
         write_check()
     };
-    let target = root.join(format!(
-        "rbexport-{}.zip",
-        rbl_core::time::local_backup_stamp()
-    ));
+    let target = root.join(format!("rbexport-{}.zip", rbl_core::time::local_backup_stamp()));
     if target.try_exists().map_err(error)? {
-        return Err(error(
-            "A backup for this minute already exists. Try again in the next minute.",
-        ));
+        return Err(error("A backup for this minute already exists. Try again in the next minute."));
     }
     let archive = root.join(format!(".partial-{id}.zip"));
     let result = (|| {
         write_check().map_err(error)?;
         fs::create_dir(&partial).map_err(error)?;
-        made.borrow_mut()
-            .push((partial.clone(), crate::backup_stick::Made::Unfinished));
+        made.borrow_mut().push((partial.clone(), crate::backup_stick::Made::Unfinished));
         let mut refused = None;
         let plan = if tree.exists() {
-            let prepared = crate::backup_copy::TreeCopyPlan::prepare(
-                &tree,
-                &partial.join("analysis"),
-                &mut |_| {
-                    progress("preparing", 0, 0, "Scanning analysis files").map_err(|e| {
-                        refused = Some(e);
-                        std::io::Error::new(std::io::ErrorKind::Interrupted, "Backup stopped")
-                    })
-                },
-            );
-            if let Some(error) = refused {
-                return Err(error);
-            }
+            let prepared = crate::backup_copy::TreeCopyPlan::prepare(&tree, &partial.join("analysis"), &mut |_| {
+                progress("preparing", 0, 0, "Scanning analysis files").map_err(|e| {
+                    refused = Some(e);
+                    std::io::Error::new(std::io::ErrorKind::Interrupted, "Backup stopped")
+                })
+            });
+            if let Some(error) = refused { return Err(error); }
             Some(prepared.map_err(error)?)
-        } else {
-            None
-        };
+        } else { None };
         let art_plan = if art.exists() {
-            let prepared = crate::backup_copy::TreeCopyPlan::prepare(
-                &art,
-                &partial.join("artwork"),
-                &mut |_| {
-                    progress("preparing", 0, 0, "Scanning artwork thumbnails").map_err(|e| {
-                        refused = Some(e);
-                        std::io::Error::new(std::io::ErrorKind::Interrupted, "Backup stopped")
-                    })
-                },
-            );
-            if let Some(error) = refused {
-                return Err(error);
-            }
+            let prepared = crate::backup_copy::TreeCopyPlan::prepare(&art, &partial.join("artwork"), &mut |_| {
+                progress("preparing", 0, 0, "Scanning artwork thumbnails").map_err(|e| {
+                    refused = Some(e);
+                    std::io::Error::new(std::io::ErrorKind::Interrupted, "Backup stopped")
+                })
+            });
+            if let Some(error) = refused { return Err(error); }
             Some(prepared.map_err(error)?)
-        } else {
-            None
-        };
+        } else { None };
         // The Sidecar beside the Library: its database as a snapshot and
         // the DJ's files, by the rule in `rbl_backup::sidecar_part`.
         let mut stopped = None;
         let sidecar = rbl_backup::sidecar_part::collect_for(
             &location,
             rbl_backup::sidecar_part::Options::saved(state.backup_dir()),
-            &mut || {
-                progress("preparing", 0, 0, "Scanning the Sidecar")
-                    .map_err(|e| stopped = Some(e))
-                    .is_ok()
-            },
+            &mut || progress("preparing", 0, 0, "Scanning the Sidecar").map_err(|e| stopped = Some(e)).is_ok(),
         );
-        if let Some(error) = stopped {
-            return Err(error);
-        }
+        if let Some(error) = stopped { return Err(error); }
         let sidecar = sidecar.map_err(error)?;
         let mut check = || progress("preparing", 0, 0, "Measuring database files");
-        let library_root = location
-            .master_db
-            .parent()
-            .ok_or_else(|| error("Invalid database path"))?;
-        let library_files: Vec<_> = LIBRARY_FILES
-            .into_iter()
-            .filter(|name| library_root.join(name).exists())
-            .collect();
+        let library_root = location.master_db.parent().ok_or_else(|| error("Invalid database path"))?;
+        let library_files: Vec<_> = LIBRARY_FILES.into_iter().filter(|name| library_root.join(name).exists()).collect();
         let mut library_bytes = 0;
         for name in &library_files {
             library_bytes += tree_size(&library_root.join(name), &mut check)?;
         }
         let total = tree_size(&location.master_db, &mut check)?
             + library_bytes
-            + if wal.exists() {
-                tree_size(&wal, &mut check)?
-            } else {
-                0
-            }
+            + if wal.exists() { tree_size(&wal, &mut check)? } else { 0 }
             + plan.as_ref().map_or(0, |plan| plan.bytes)
             + art_plan.as_ref().map_or(0, |plan| plan.bytes)
             + sidecar.as_ref().map_or(0, |part| part.contents.bytes);
@@ -579,17 +469,10 @@ pub(crate) fn create_with_progress(
         // stopped part-way on a Stick), checked there, then compressed into
         // the folder in chunks, each write checked (wbx-45.14, round 1).
         crate::durable::create_dir_all(state.backup_dir()).map_err(error)?;
-        let local = tempfile::Builder::new()
-            .prefix("backup-snapshot-")
-            .tempdir_in(state.backup_dir())
-            .map_err(error)?;
+        let local = tempfile::Builder::new().prefix("backup-snapshot-").tempdir_in(state.backup_dir()).map_err(error)?;
         let local_db = local.path().join("master.db");
-        let snapshot =
-            rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).map_err(error)?;
-        snapshot
-            .connection()
-            .execute("VACUUM main INTO ?1", [local_db.to_string_lossy().as_ref()])
-            .map_err(error)?;
+        let snapshot = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).map_err(error)?;
+        snapshot.connection().execute("VACUUM main INTO ?1", [local_db.to_string_lossy().as_ref()]).map_err(error)?;
         let counts = rbl_backup::summary::count(snapshot.connection()).map_err(error)?;
         drop(snapshot);
         let mut bytes = fs::metadata(&local_db).map_err(error)?.len();
@@ -599,102 +482,59 @@ pub(crate) fn create_with_progress(
         let mut refused = None;
         // Counted as it goes, so a stop part-way says what it had copied.
         let mut database_copied = 0;
-        let compressed = crate::backup_zip::compress_file(
-            &local_db,
-            &partial.join("master.db"),
-            &mut |delta| {
-                database_copied += delta;
-                if delta > 0 {
-                    crate::test_holds::point(
-                        crate::test_holds::BACKUP_DATABASE_COPYING,
-                        &state_dir,
-                    );
-                }
-                progress("copying", database_copied, total, "Database · master.db").map_err(|e| {
-                    refused = Some(e);
-                    std::io::Error::new(std::io::ErrorKind::Interrupted, "Backup stopped")
-                })
-            },
-            &write_check,
-        );
-        if let Some(error) = refused {
-            return Err(error);
-        }
+        let compressed = crate::backup_zip::compress_file(&local_db, &partial.join("master.db"), &mut |delta| {
+            database_copied += delta;
+            if delta > 0 {
+                crate::test_holds::point(crate::test_holds::BACKUP_DATABASE_COPYING, &state_dir);
+            }
+            progress("copying", database_copied, total, "Database · master.db").map_err(|e| {
+                refused = Some(e);
+                std::io::Error::new(std::io::ErrorKind::Interrupted, "Backup stopped")
+            })
+        }, &write_check);
+        if let Some(error) = refused { return Err(error); }
         compressed.map_err(error)?;
         drop(local);
         let mut copied = 0;
         let mut copied_file = |bytes, source: Option<&Path>| {
             copied += bytes;
             let item = match source {
-                Some(path) if path.starts_with(&art) => format!(
-                    "Artwork thumbnails · Artwork/{}",
-                    path.strip_prefix(&art)
-                        .unwrap_or(path)
-                        .to_string_lossy()
-                        .replace('\\', "/")
-                ),
-                Some(path) if path.starts_with(&tree) => format!(
-                    "Analysis files · USBANLZ/{}",
-                    path.strip_prefix(&tree)
-                        .unwrap_or(path)
-                        .to_string_lossy()
-                        .replace('\\', "/")
-                ),
-                Some(path) => format!(
-                    "Database · {}",
-                    path.file_name().unwrap_or_default().to_string_lossy()
-                ),
+                Some(path) if path.starts_with(&art) => format!("Artwork thumbnails · Artwork/{}", path.strip_prefix(&art).unwrap_or(path).to_string_lossy().replace('\\', "/")),
+                Some(path) if path.starts_with(&tree) => format!("Analysis files · USBANLZ/{}", path.strip_prefix(&tree).unwrap_or(path).to_string_lossy().replace('\\', "/")),
+                Some(path) => format!("Database · {}", path.file_name().unwrap_or_default().to_string_lossy()),
                 None => "Analysis files".to_owned(),
             };
             progress("copying", copied, total, &item)
         };
         copied_file(bytes, Some(&location.master_db))?;
         for (plan, directory) in [(plan, "analysis"), (art_plan, "artwork")] {
-            if let Some(plan) = plan {
-                let mut refused = None;
-                let copied = plan.compress(
-                    &mut |bytes, source| {
-                        copied_file(bytes, source).map_err(|e| {
-                            refused = Some(e);
-                            std::io::Error::new(std::io::ErrorKind::Interrupted, "Backup stopped")
-                        })
-                    },
-                    &worker_check,
-                );
-                if let Some(error) = refused {
-                    return Err(error);
-                }
-                bytes += copied.map_err(error)?;
-            } else {
-                write_check().map_err(error)?;
-                fs::create_dir(partial.join(directory)).map_err(error)?;
-            }
+        if let Some(plan) = plan {
+            let mut refused = None;
+            let copied = plan.compress(&mut |bytes, source| {
+                copied_file(bytes, source).map_err(|e| {
+                    refused = Some(e);
+                    std::io::Error::new(std::io::ErrorKind::Interrupted, "Backup stopped")
+                })
+            }, &worker_check);
+            if let Some(error) = refused { return Err(error); }
+            bytes += copied.map_err(error)?;
+        } else {
+            write_check().map_err(error)?;
+            fs::create_dir(partial.join(directory)).map_err(error)?;
+        }
         }
         for name in &library_files {
             let source = library_root.join(name);
             let target = partial.join(name);
             let mut refused = None;
-            let compressed = crate::backup_zip::compress_file(
-                &source,
-                &target,
-                &mut |delta| {
-                    bytes += delta;
-                    progress(
-                        "copying",
-                        bytes,
-                        total,
-                        &format!("Library settings · {name}"),
-                    )
-                    .map_err(|e| {
-                        refused = Some(e);
-                        std::io::Error::new(std::io::ErrorKind::Interrupted, "Backup stopped")
-                    })
-                },
-                &write_check,
-            );
-            if let Some(error) = refused {
-                return Err(error);
-            }
+            let compressed = crate::backup_zip::compress_file(&source, &target, &mut |delta| {
+                bytes += delta;
+                progress("copying", bytes, total, &format!("Library settings · {name}")).map_err(|e| {
+                    refused = Some(e);
+                    std::io::Error::new(std::io::ErrorKind::Interrupted, "Backup stopped")
+                })
+            }, &write_check);
+            if let Some(error) = refused { return Err(error); }
             compressed.map_err(error)?;
         }
         if let Some(part) = &sidecar {
@@ -705,56 +545,28 @@ pub(crate) fn create_with_progress(
             for item in &part.files {
                 let shown = item.name.strip_prefix("sidecar/").unwrap_or(&item.name);
                 let mut refused = None;
-                let compressed = crate::backup_zip::compress_file(
-                    &item.source,
-                    &partial.join(&item.name),
-                    &mut |delta| {
-                        bytes += delta;
-                        progress(
-                            "copying",
-                            bytes,
-                            total.max(bytes),
-                            &format!("Sidecar · {shown}"),
-                        )
-                        .map_err(|e| {
-                            refused = Some(e);
-                            std::io::Error::new(std::io::ErrorKind::Interrupted, "Backup stopped")
-                        })
-                    },
-                    &write_check,
-                );
-                if let Some(error) = refused {
-                    return Err(error);
-                }
+                let compressed = crate::backup_zip::compress_file(&item.source, &partial.join(&item.name), &mut |delta| {
+                    bytes += delta;
+                    progress("copying", bytes, total.max(bytes), &format!("Sidecar · {shown}")).map_err(|e| {
+                        refused = Some(e);
+                        std::io::Error::new(std::io::ErrorKind::Interrupted, "Backup stopped")
+                    })
+                }, &write_check);
+                if let Some(error) = refused { return Err(error); }
                 compressed.map_err(error)?;
             }
         }
         for name in ["master.db", "master.db-wal"] {
             let source = partial.join(name);
-            if !source.exists() {
-                continue;
-            }
+            if !source.exists() { continue; }
             let mut refused = None;
-            let compressed = crate::backup_zip::compress_file(
-                &source,
-                &source,
-                &mut |_| {
-                    progress(
-                        "compressing",
-                        bytes,
-                        total,
-                        &format!("Compressing database · {name}"),
-                    )
-                    .map_err(|e| {
-                        refused = Some(e);
-                        std::io::Error::new(std::io::ErrorKind::Interrupted, "Backup stopped")
-                    })
-                },
-                &write_check,
-            );
-            if let Some(error) = refused {
-                return Err(error);
-            }
+            let compressed = crate::backup_zip::compress_file(&source, &source, &mut |_| {
+                progress("compressing", bytes, total, &format!("Compressing database · {name}")).map_err(|e| {
+                    refused = Some(e);
+                    std::io::Error::new(std::io::ErrorKind::Interrupted, "Backup stopped")
+                })
+            }, &write_check);
+            if let Some(error) = refused { return Err(error); }
             compressed.map_err(error)?;
             write_check().map_err(error)?;
             remove(&source)?;
@@ -765,27 +577,17 @@ pub(crate) fn create_with_progress(
         let mut measured = rbl_backup::sizes::Measurement::default();
         for (source, is_artwork) in [(&tree, false), (&art, true)] {
             let mut refused = None;
-            let result =
-                rbl_backup::sizes::measure_tree(source, is_artwork, &mut measured, &mut || {
-                    progress("validating", bytes, total, "Summarizing backup contents").map_err(
-                        |e| {
-                            refused = Some(e);
-                            std::io::Error::new(std::io::ErrorKind::Interrupted, "Backup stopped")
-                        },
-                    )
-                });
-            if let Some(error) = refused {
-                return Err(error);
-            }
+            let result = rbl_backup::sizes::measure_tree(source, is_artwork, &mut measured, &mut || {
+                progress("validating", bytes, total, "Summarizing backup contents").map_err(|e| {
+                    refused = Some(e);
+                    std::io::Error::new(std::io::ErrorKind::Interrupted, "Backup stopped")
+                })
+            });
+            if let Some(error) = refused { return Err(error); }
             result.map_err(error)?;
         }
         measured.sizes.database = database_bytes;
-        let summary = rbl_backup::summary::Summary::new(
-            created_at,
-            Some(env!("CARGO_PKG_VERSION").to_owned()),
-            measured,
-            counts,
-        );
+        let summary = rbl_backup::summary::Summary::new(created_at, Some(env!("CARGO_PKG_VERSION").to_owned()), measured, counts);
         write_check().map_err(error)?;
         crate::durable::write(
             &partial.join(rbl_backup::summary::NAME),
@@ -809,63 +611,39 @@ pub(crate) fn create_with_progress(
         write_check().map_err(error)?;
         crate::durable::write(
             &partial.join(crate::backup_restore_scripts::SHELL_NAME),
-            crate::backup_restore_scripts::shell(&location.master_db, state.backup_dir())
-                .as_bytes(),
+            crate::backup_restore_scripts::shell(&location.master_db, state.backup_dir()).as_bytes(),
         )
         .map_err(error)?;
         write_check().map_err(error)?;
         crate::durable::write(
             &partial.join(crate::backup_restore_scripts::POWERSHELL_NAME),
-            crate::backup_restore_scripts::powershell(&location.master_db, state.backup_dir())
-                .as_bytes(),
+            crate::backup_restore_scripts::powershell(&location.master_db, state.backup_dir()).as_bytes(),
         )
         .map_err(error)?;
-        progress(
-            "validating",
-            bytes,
-            total,
-            "Finishing backup · manifest.json",
-        )?;
+        progress("validating", bytes, total, "Finishing backup · manifest.json")?;
         let mut refused = None;
-        made.borrow_mut()
-            .push((archive.clone(), crate::backup_stick::Made::Unfinished));
-        let packed = crate::backup_zip::assemble(
-            &partial,
-            &archive,
-            &mut || {
-                progress("compressing", bytes, total, "Finishing ZIP archive").map_err(|e| {
-                    refused = Some(e);
-                    std::io::Error::new(std::io::ErrorKind::Interrupted, "Backup stopped")
-                })
-            },
-            &write_check,
-        );
-        if let Some(error) = refused {
-            return Err(error);
-        }
+        made.borrow_mut().push((archive.clone(), crate::backup_stick::Made::Unfinished));
+        let packed = crate::backup_zip::assemble(&partial, &archive, &mut || {
+            progress("compressing", bytes, total, "Finishing ZIP archive").map_err(|e| {
+                refused = Some(e);
+                std::io::Error::new(std::io::ErrorKind::Interrupted, "Backup stopped")
+            })
+        }, &write_check);
+        if let Some(error) = refused { return Err(error); }
         packed.map_err(error)?;
         // The archive holds everything now; the staged copies go in the background.
         let aside = discard(&access, state.backup_dir(), root, &[&partial]);
         // What is on the Stick now goes by its new name (wbx-45.14).
         if let Some(aside) = aside.into_iter().next() {
             made.borrow_mut().retain(|(path, _)| *path != partial);
-            made.borrow_mut()
-                .push((aside, crate::backup_stick::Made::SetAside));
+            made.borrow_mut().push((aside, crate::backup_stick::Made::SetAside));
         }
         // Still the same Stick, still unlocked, before the backup is named.
         access.recheck()?;
         // A backup folder on an external exFAT or FAT32 drive has no
         // exclusive rename on macOS; `persist_new` still never replaces one.
-        rbl_core::durable::persist_new(
-            tempfile::TempPath::try_from_path(&archive).map_err(error)?,
-            &target,
-        )
-        .map_err(error)?;
-        for entry in made
-            .borrow_mut()
-            .iter_mut()
-            .filter(|(path, _)| *path == archive)
-        {
+        rbl_core::durable::persist_new(tempfile::TempPath::try_from_path(&archive).map_err(error)?, &target).map_err(error)?;
+        for entry in made.borrow_mut().iter_mut().filter(|(path, _)| *path == archive) {
             *entry = (target.clone(), crate::backup_stick::Made::Backup);
         }
         crate::test_holds::point(crate::test_holds::BACKUP_PUBLISHED, state.backup_dir());
@@ -877,9 +655,7 @@ pub(crate) fn create_with_progress(
         discard(&access, state.backup_dir(), root, &[&partial, &archive]);
     }
     let made = made.into_inner();
-    result.map_err(|stopped| {
-        crate::backup_stick::stopped(stopped, &access, &made, copied_to_stick.get())
-    })
+    result.map_err(|stopped| crate::backup_stick::stopped(stopped, &access, &made, copied_to_stick.get()))
 }
 /// Whether a compression worker has written a file of the analysis or
 /// artwork copy yet (for the test hold above only).
@@ -887,9 +663,7 @@ fn worker_output_begun(partial: &Path) -> bool {
     ["analysis", "artwork"].iter().any(|part| {
         let mut todo = vec![partial.join(part)];
         while let Some(dir) = todo.pop() {
-            let Ok(entries) = fs::read_dir(&dir) else {
-                continue;
-            };
+            let Ok(entries) = fs::read_dir(&dir) else { continue };
             for entry in entries.flatten() {
                 match entry.metadata() {
                     Ok(meta) if meta.is_dir() => todo.push(entry.path()),
@@ -904,19 +678,12 @@ fn worker_output_begun(partial: &Path) -> bool {
 
 /// Every problem SQLite's `quick_check` reports, not just the first row.
 fn integrity_problems(db: &rbl_db::Library) -> AppResult<Vec<String>> {
-    let mut statement = db
-        .connection()
-        .prepare("PRAGMA quick_check")
-        .map_err(error)?;
-    let rows = statement
-        .query_map([], |r| r.get::<_, String>(0))
-        .map_err(error)?;
+    let mut statement = db.connection().prepare("PRAGMA quick_check").map_err(error)?;
+    let rows = statement.query_map([], |r| r.get::<_, String>(0)).map_err(error)?;
     let mut problems = Vec::new();
     for row in rows {
         let row = row.map_err(error)?;
-        if row != "ok" {
-            problems.push(row);
-        }
+        if row != "ok" { problems.push(row); }
     }
     Ok(problems)
 }
@@ -936,8 +703,7 @@ fn validate_database(path: &Path, location: &rbl_db::LibraryLocation) -> AppResu
         return Ok(());
     }
     drop(db);
-    let source =
-        rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).map_err(error)?;
+    let source = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).map_err(error)?;
     let original = integrity_problems(&source)?;
     match staged.iter().find(|problem| !original.contains(problem)) {
         None => Ok(()),
@@ -995,21 +761,10 @@ mod tests {
 
     /// Restores an RBXport archive the way RBXport Restore does, with
     /// RBXport's own recovery directory as the journal's home.
-    fn restore(
-        state: &AppState,
-        location: &rbl_db::LibraryLocation,
-        archive: &Path,
-        parts: rbl_backup::restore::Parts,
-    ) {
+    fn restore(state: &AppState, location: &rbl_db::LibraryLocation, archive: &Path, parts: rbl_backup::restore::Parts) {
         state.drop_reader();
         rbl_backup::restore::restore(
-            &rbl_backup::restore::Request {
-                archive,
-                parts,
-                location,
-                state_dir: state.backup_dir(),
-                sizes: None,
-            },
+            &rbl_backup::restore::Request { archive, parts, location, state_dir: state.backup_dir(), sizes: None },
             &|| Ok(()),
             &mut |_, _, _, _| Ok(()),
         )
@@ -1080,10 +835,7 @@ mod tests {
             ).unwrap();
         }
         let source = rbl_db::Library::open(location, rbl_db::OpenMode::ReadOnly).unwrap();
-        assert!(
-            integrity_problems(&source).unwrap().len() > 1,
-            "fixture must report several rows"
-        );
+        assert!(integrity_problems(&source).unwrap().len() > 1, "fixture must report several rows");
         let backup = PathBuf::from(create(&state).unwrap());
         assert!(backup.is_file());
         assert_eq!(list(&state).unwrap().len(), 1);
@@ -1107,10 +859,7 @@ mod tests {
                  UPDATE sqlite_master SET sql = 'CREATE TABLE rbx_probe (x INTEGER NOT NULL, y)' WHERE name = 'rbx_probe';",
             ).unwrap();
         }
-        let message = validate_database(&copy, &location)
-            .unwrap_err()
-            .detail
-            .unwrap_or_default();
+        let message = validate_database(&copy, &location).unwrap_err().detail.unwrap_or_default();
         assert!(
             message.contains("master.db") && message.contains("NULL value in rbx_probe.x"),
             "{message}"
@@ -1125,17 +874,11 @@ mod tests {
         let first = PathBuf::from(create(&state).unwrap());
         let after = rbl_core::time::local_backup_stamp();
         let name = first.file_name().unwrap().to_string_lossy();
-        assert!(
-            name == format!("rbexport-{before}.zip") || name == format!("rbexport-{after}.zip")
-        );
+        assert!(name == format!("rbexport-{before}.zip") || name == format!("rbexport-{after}.zip"));
         let bytes = fs::read(&first).unwrap();
         // Reserve the current minute, including if the first copy crossed a boundary.
-        let reserved = state
-            .backup_destination()
-            .join(format!("rbexport-{after}.zip"));
-        if reserved != first {
-            fs::copy(&first, &reserved).unwrap();
-        }
+        let reserved = state.backup_destination().join(format!("rbexport-{after}.zip"));
+        if reserved != first { fs::copy(&first, &reserved).unwrap(); }
         assert!(create(&state).is_err());
         assert_eq!(fs::read(first).unwrap(), bytes);
         assert_eq!(fs::read(reserved).unwrap(), bytes);
@@ -1150,9 +893,7 @@ mod tests {
         let mut archive = zip::ZipArchive::new(fs::File::open(path).unwrap()).unwrap();
         let mut shell = String::new();
         let shell_mode = {
-            let mut entry = archive
-                .by_name(crate::backup_restore_scripts::SHELL_NAME)
-                .unwrap();
+            let mut entry = archive.by_name(crate::backup_restore_scripts::SHELL_NAME).unwrap();
             entry.read_to_string(&mut shell).unwrap();
             entry.unix_mode()
         };
@@ -1184,13 +925,9 @@ mod tests {
         let grid = analysis(&location).join("P001/0001/ANLZ0000.DAT");
         fs::create_dir_all(grid.parent().unwrap()).unwrap();
         let mut anlz = b"PMAI".to_vec();
-        for word in [12u32, 40] {
-            anlz.extend(word.to_be_bytes());
-        }
+        for word in [12u32, 40] { anlz.extend(word.to_be_bytes()); }
         anlz.extend(b"PQTZ");
-        for word in [12u32, 28] {
-            anlz.extend(word.to_be_bytes());
-        }
+        for word in [12u32, 28] { anlz.extend(word.to_be_bytes()); }
         anlz.extend([0; 16]);
         fs::write(&grid, &anlz).unwrap();
         let art = artwork(&location).join("abc/artwork_m.jpg");
@@ -1199,29 +936,13 @@ mod tests {
         let path = PathBuf::from(create(&state).unwrap());
         let summary = rbl_backup::summary::Summary::read(&path).unwrap().unwrap();
         let shape = rbl_db::fixture::Shape::default();
-        assert_eq!(
-            summary.app_version.as_deref(),
-            Some(env!("CARGO_PKG_VERSION"))
-        );
+        assert_eq!(summary.app_version.as_deref(), Some(env!("CARGO_PKG_VERSION")));
         assert_eq!(summary.created_at, list(&state).unwrap()[0].created_at);
         assert_eq!(summary.counts.tracks, shape.tracks as u64);
         assert_eq!(summary.counts.playlists, shape.playlists as u64);
-        assert_eq!(
-            (summary.counts.hot_cues, summary.counts.memory_cues),
-            (2, 2)
-        );
-        assert_eq!(
-            (summary.counts.analysis_files, summary.counts.artwork_files),
-            (1, 1)
-        );
-        assert_eq!(
-            (
-                summary.sizes.beat_grids,
-                summary.sizes.artwork,
-                summary.sizes.other
-            ),
-            (28, 33, 12)
-        );
+        assert_eq!((summary.counts.hot_cues, summary.counts.memory_cues), (2, 2));
+        assert_eq!((summary.counts.analysis_files, summary.counts.artwork_files), (1, 1));
+        assert_eq!((summary.sizes.beat_grids, summary.sizes.artwork, summary.sizes.other), (28, 33, 12));
         assert_eq!(summary.sizes.track_count, 40);
         let saved = Manifest::read(&path).unwrap();
         // Everything the manifest counted, less the 40-byte analysis file and the artwork.
@@ -1240,10 +961,7 @@ mod tests {
 
         let listed = list(&state).unwrap();
         assert_eq!(listed.len(), 1);
-        assert_eq!(
-            listed[0].path,
-            current.canonicalize().unwrap().to_string_lossy()
-        );
+        assert_eq!(listed[0].path, current.canonicalize().unwrap().to_string_lossy());
         assert!(listed[0].name.starts_with("rbexport-"));
     }
 
@@ -1272,9 +990,7 @@ mod tests {
         let (_dir, state, _location) = fixture();
         let (_other_dir, other, _) = fixture();
         let foreign = PathBuf::from(create(&other).unwrap());
-        let copied = state
-            .backup_destination()
-            .join(foreign.file_name().unwrap());
+        let copied = state.backup_destination().join(foreign.file_name().unwrap());
         fs::create_dir_all(state.backup_destination()).unwrap();
         fs::copy(&foreign, &copied).unwrap();
         assert!(list(&state).unwrap().is_empty());
@@ -1289,15 +1005,9 @@ mod tests {
         let destination = dir.path().join("new backup folder");
         fs::create_dir(&destination).unwrap();
         let canonical = destination.canonicalize().unwrap();
-        state
-            .set_backup_destination(&crate::stick_guard::testing::ordinary(), &destination)
-            .unwrap();
+        state.set_backup_destination(&crate::stick_guard::testing::ordinary(), &destination).unwrap();
         assert_eq!(state.backup_destination(), canonical);
-        assert_eq!(
-            rbl_backup::default_destination(state.backup_dir()),
-            canonical,
-            "RBXport Restore reads the same setting"
-        );
+        assert_eq!(rbl_backup::default_destination(state.backup_dir()), canonical, "RBXport Restore reads the same setting");
         assert!(original.exists());
         assert!(list(&state).unwrap().is_empty());
         let created = PathBuf::from(create(&state).unwrap());
@@ -1320,30 +1030,16 @@ mod tests {
         let previous = state.backup_destination();
         let file = dir.path().join("not a folder");
         fs::write(&file, b"keep").unwrap();
-        assert!(state
-            .set_backup_destination(&crate::stick_guard::testing::ordinary(), &file)
-            .is_err());
-        assert!(state
-            .set_backup_destination(
-                &crate::stick_guard::testing::ordinary(),
-                &dir.path().join("missing")
-            )
-            .is_err());
+        assert!(state.set_backup_destination(&crate::stick_guard::testing::ordinary(), &file).is_err());
+        assert!(state.set_backup_destination(&crate::stick_guard::testing::ordinary(), &dir.path().join("missing")).is_err());
         let recursive = analysis(&location).join("backups");
         fs::create_dir_all(&recursive).unwrap();
-        assert!(state
-            .set_backup_destination(&crate::stick_guard::testing::ordinary(), &recursive)
-            .is_err());
+        assert!(state.set_backup_destination(&crate::stick_guard::testing::ordinary(), &recursive).is_err());
         assert_eq!(state.backup_destination(), previous);
         state.backup_progress.lock().running = true;
-        assert!(state
-            .set_backup_destination(&crate::stick_guard::testing::ordinary(), dir.path())
-            .is_err());
+        assert!(state.set_backup_destination(&crate::stick_guard::testing::ordinary(), dir.path()).is_err());
         assert_eq!(state.backup_destination(), previous);
-        assert_eq!(
-            AppState::unprotected(state.backup_dir()).backup_destination(),
-            previous
-        );
+        assert_eq!(AppState::unprotected(state.backup_dir()).backup_destination(), previous);
     }
 
     #[test]
@@ -1362,8 +1058,7 @@ mod tests {
                 last = (copied, total);
             }
             Ok(())
-        })
-        .unwrap();
+        }).unwrap();
         assert!(last.0 > 3 * 1024 * 1024);
         assert_eq!(last.0, last.1);
         assert!(items.contains("Database · master.db"));
@@ -1376,56 +1071,31 @@ mod tests {
         let before = rating(&state);
         let result = create_with_progress(&state, &mut |phase, copied, _, _| {
             if phase == "copying" && copied > 0 {
-                Err(AppError::new(
-                    crate::error::ErrorKind::Cancelled,
-                    "Backup stopped.",
-                ))
-            } else {
-                Ok(())
-            }
+                Err(AppError::new(crate::error::ErrorKind::Cancelled, "Backup stopped."))
+            } else { Ok(()) }
         });
         assert_eq!(result.unwrap_err().kind, crate::error::ErrorKind::Cancelled);
         assert_eq!(rating(&state), before);
         assert!(list(&state).unwrap().is_empty());
-        assert!(fs::read_dir(state.backup_dir()).unwrap().all(|e| !e
-            .unwrap()
-            .file_name()
-            .to_string_lossy()
-            .starts_with(".partial-")));
+        assert!(fs::read_dir(state.backup_dir()).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().starts_with(".partial-")));
         assert_eq!(fs::metadata(file).unwrap().len(), 3 * 1024 * 1024);
     }
 
     fn discarded(root: &Path) -> Vec<PathBuf> {
-        fs::read_dir(root)
-            .unwrap()
-            .map(|e| e.unwrap().path())
-            .filter(|path| {
-                path.file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .starts_with(DISCARD_PREFIX)
-            })
+        fs::read_dir(root).unwrap().map(|e| e.unwrap().path())
+            .filter(|path| path.file_name().unwrap().to_string_lossy().starts_with(DISCARD_PREFIX))
             .collect()
     }
 
     fn files_under(path: &Path) -> usize {
-        if path.is_file() {
-            return 1;
-        }
-        fs::read_dir(path)
-            .unwrap()
-            .map(|e| files_under(&e.unwrap().path()))
-            .sum()
+        if path.is_file() { return 1; }
+        fs::read_dir(path).unwrap().map(|e| files_under(&e.unwrap().path())).sum()
     }
 
     fn wait_until_gone(path: &Path) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while path.exists() {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "{} was never deleted",
-                path.display()
-            );
+            assert!(std::time::Instant::now() < deadline, "{} was never deleted", path.display());
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
     }
@@ -1450,40 +1120,22 @@ mod tests {
             if phase == "copying" && item.starts_with("Analysis files ·") {
                 staged.insert(item.to_owned());
                 if staged.len() == 300 {
-                    return Err(AppError::new(
-                        crate::error::ErrorKind::Cancelled,
-                        "Backup stopped.",
-                    ));
+                    return Err(AppError::new(crate::error::ErrorKind::Cancelled, "Backup stopped."));
                 }
             }
             Ok(())
         });
         assert_eq!(result.unwrap_err().kind, crate::error::ErrorKind::Cancelled);
-        assert!(fs::read_dir(&root).unwrap().all(|e| !e
-            .unwrap()
-            .file_name()
-            .to_string_lossy()
-            .starts_with(".partial-")));
+        assert!(fs::read_dir(&root).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().starts_with(".partial-")));
         let aside = discarded(&root);
-        assert_eq!(
-            aside.len(),
-            1,
-            "the staging folder is set aside, not deleted in place"
-        );
+        assert_eq!(aside.len(), 1, "the staging folder is set aside, not deleted in place");
         // A file is reported just before its worker creates it.
         let workers = std::thread::available_parallelism().map_or(2, usize::from);
-        assert!(
-            files_under(&aside[0]) >= 300 - workers,
-            "no staged file was deleted before the job ended"
-        );
+        assert!(files_under(&aside[0]) >= 300 - workers, "no staged file was deleted before the job ended");
         assert!(list(&state).unwrap().is_empty());
         drop(held);
         wait_until_gone(&aside[0]);
-        assert_eq!(
-            files_under(&tree),
-            400,
-            "the library's own analysis files are untouched"
-        );
+        assert_eq!(files_under(&tree), 400, "the library's own analysis files are untouched");
     }
 
     /// wbx-45.11, round 4 A3: a backup folder on a protected Stick is left
@@ -1494,14 +1146,8 @@ mod tests {
         let (dir, state, _location) = fixture();
         let stick = dir.path().join("GIG");
         fs::create_dir_all(&stick).unwrap();
-        fs::write(
-            stick.join(wreckordbox_stick_protection::STAND_IN_MARKER),
-            b"",
-        )
-        .unwrap();
-        state
-            .set_backup_destination(&crate::stick_guard::testing::ordinary(), &stick)
-            .unwrap();
+        fs::write(stick.join(wreckordbox_stick_protection::STAND_IN_MARKER), b"").unwrap();
+        state.set_backup_destination(&crate::stick_guard::testing::ordinary(), &stick).unwrap();
         let root = state.backup_destination();
         let leftover = root.join(format!("{DISCARD_PREFIX}earlier-run"));
         fs::create_dir_all(&leftover).unwrap();
@@ -1511,11 +1157,7 @@ mod tests {
         sweep_discarded(state.backup_dir(), &root);
         std::thread::sleep(std::time::Duration::from_millis(300));
         let refused = create(&state).unwrap_err();
-        assert_eq!(
-            refused.kind,
-            crate::error::ErrorKind::StickProtected,
-            "{refused:?}"
-        );
+        assert_eq!(refused.kind, crate::error::ErrorKind::StickProtected, "{refused:?}");
         assert_eq!(walk(&stick), before, "not a file swept, staged or written");
 
         crate::stick_guard::testing::unlock(&state, &stick);
@@ -1571,9 +1213,7 @@ mod tests {
         let names: Vec<_> = fs::read_dir(&root)
             .unwrap()
             .map(|e| e.unwrap().file_name())
-            .filter(|name| {
-                name != rbl_library::protection::FILE && name != rbl_library::protection::LOCK_FILE
-            })
+            .filter(|name| name != rbl_library::protection::FILE && name != rbl_library::protection::LOCK_FILE)
             .collect();
         assert_eq!(names, [saved.file_name().unwrap()]);
     }
@@ -1581,14 +1221,8 @@ mod tests {
     #[test]
     fn a_failed_background_backup_reports_what_went_wrong() {
         let failed = error("Access is denied. (os error 5)");
-        assert_eq!(
-            failure_message(&failed),
-            "Something went wrong inside wreckordbox. Backup: Access is denied. (os error 5)"
-        );
-        let plain = AppError::new(
-            crate::error::ErrorKind::NotFound,
-            "The library could not be found.",
-        );
+        assert_eq!(failure_message(&failed), "Something went wrong inside wreckordbox. Backup: Access is denied. (os error 5)");
+        let plain = AppError::new(crate::error::ErrorKind::NotFound, "The library could not be found.");
         assert_eq!(failure_message(&plain), "The library could not be found.");
     }
 
@@ -1641,100 +1275,39 @@ mod tests {
             if let Some(value) = value {
                 db.execute_batch(&format!("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT); INSERT OR REPLACE INTO meta VALUES ('schema_version', '5'); CREATE TABLE IF NOT EXISTS fact (value TEXT); DELETE FROM fact; INSERT INTO fact VALUES ('{value}');")).unwrap();
             }
-            db.query_row("SELECT value FROM fact", [], |row| row.get::<_, String>(0))
-                .unwrap()
+            db.query_row("SELECT value FROM fact", [], |row| row.get::<_, String>(0)).unwrap()
         };
         facts(Some("house"));
         let mut items = Vec::new();
-        let snapshot = PathBuf::from(
-            create_with_progress(&state, &mut |_, _, _, item| {
-                items.push(item.to_owned());
-                Ok(())
-            })
-            .unwrap(),
-        );
-        assert!(
-            items.iter().any(|item| item == "Sidecar · kinds.toml"),
-            "{items:?}"
-        );
+        let snapshot = PathBuf::from(create_with_progress(&state, &mut |_, _, _, item| { items.push(item.to_owned()); Ok(()) }).unwrap());
+        assert!(items.iter().any(|item| item == "Sidecar · kinds.toml"), "{items:?}");
         let zip = rbl_backup::archive::open(&snapshot).unwrap();
-        let mut held: Vec<String> = rbl_backup::archive::names(&zip)
-            .into_iter()
-            .filter(|name| name.starts_with("sidecar"))
-            .collect();
+        let mut held: Vec<String> = rbl_backup::archive::names(&zip).into_iter().filter(|name| name.starts_with("sidecar")).collect();
         held.sort();
-        assert_eq!(
-            held,
-            [
-                "sidecar.json",
-                "sidecar/",
-                "sidecar/kinds.toml",
-                "sidecar/recipes/",
-                "sidecar/recipes/friday.toml",
-                "sidecar/sidecar.db"
-            ]
-        );
-        let contents = rbl_backup::sidecar_part::Contents::read(&snapshot)
-            .unwrap()
-            .unwrap();
+        assert_eq!(held, ["sidecar.json", "sidecar/", "sidecar/kinds.toml", "sidecar/recipes/", "sidecar/recipes/friday.toml", "sidecar/sidecar.db"]);
+        let contents = rbl_backup::sidecar_part::Contents::read(&snapshot).unwrap().unwrap();
         assert!(!contents.stems);
         assert_eq!(contents.stems_bytes, 6);
 
         facts(Some("techno"));
         fs::write(sidecar.join("kinds.toml"), b"changed kinds").unwrap();
         fs::remove_file(sidecar.join("recipes/friday.toml")).unwrap();
-        restore(
-            &state,
-            &location,
-            &snapshot,
-            rbl_backup::restore::Parts::ALL,
-        );
+        restore(&state, &location, &snapshot, rbl_backup::restore::Parts::ALL);
         assert_eq!(facts(None), "house");
-        assert_eq!(
-            fs::read(sidecar.join("kinds.toml")).unwrap(),
-            b"original kinds"
-        );
-        assert_eq!(
-            fs::read(sidecar.join("recipes/friday.toml")).unwrap(),
-            b"original recipe"
-        );
-        assert_eq!(
-            fs::read(sidecar.join("renders/abc.wav")).unwrap(),
-            b"a render"
-        );
-        assert_eq!(
-            fs::read(sidecar.join("stems/10001/run-1/vocals.wav")).unwrap(),
-            b"a stem"
-        );
+        assert_eq!(fs::read(sidecar.join("kinds.toml")).unwrap(), b"original kinds");
+        assert_eq!(fs::read(sidecar.join("recipes/friday.toml")).unwrap(), b"original recipe");
+        assert_eq!(fs::read(sidecar.join("renders/abc.wav")).unwrap(), b"a render");
+        assert_eq!(fs::read(sidecar.join("stems/10001/run-1/vocals.wav")).unwrap(), b"a stem");
 
         // Stem audio travels when the saved choice asks for it.
-        fs::write(
-            state
-                .backup_dir()
-                .join(rbl_backup::sidecar_part::OPTIONS_FILE),
-            br#"{"stems": true}"#,
-        )
-        .unwrap();
+        fs::write(state.backup_dir().join(rbl_backup::sidecar_part::OPTIONS_FILE), br#"{"stems": true}"#).unwrap();
         // Two backups in one minute would share a name.
         fs::rename(&snapshot, snapshot.with_file_name("earlier.zip")).unwrap();
         let with_stems = PathBuf::from(create(&state).unwrap());
-        assert!(
-            rbl_backup::sidecar_part::Contents::read(&with_stems)
-                .unwrap()
-                .unwrap()
-                .stems
-        );
+        assert!(rbl_backup::sidecar_part::Contents::read(&with_stems).unwrap().unwrap().stems);
         fs::remove_dir_all(sidecar.join("stems")).unwrap();
-        restore(
-            &state,
-            &location,
-            &with_stems,
-            rbl_backup::restore::Parts::ALL,
-        );
-        assert_eq!(
-            fs::read(sidecar.join("stems/10001/run-1/vocals.wav")).unwrap(),
-            b"a stem"
-        );
+        restore(&state, &location, &with_stems, rbl_backup::restore::Parts::ALL);
+        assert_eq!(fs::read(sidecar.join("stems/10001/run-1/vocals.wav")).unwrap(), b"a stem");
     }
 
     #[test]
@@ -1746,49 +1319,25 @@ mod tests {
         let vocals = analysis(&location).join("abc/ANLZ0000.2EX");
         fs::create_dir_all(vocals.parent().unwrap()).unwrap();
         let mut anlz = b"PMAI".to_vec();
-        for word in [12u32, 40] {
-            anlz.extend(word.to_be_bytes());
-        }
+        for word in [12u32, 40] { anlz.extend(word.to_be_bytes()); }
         anlz.extend(b"PVDI");
-        for word in [24u32, 28, 1024, 0x5622_0001, 4] {
-            anlz.extend(word.to_be_bytes());
-        }
+        for word in [24u32, 28, 1024, 0x5622_0001, 4] { anlz.extend(word.to_be_bytes()); }
         anlz.extend([0, 2, 4, 1]);
         fs::write(&vocals, &anlz).unwrap();
         let root = location.master_db.parent().unwrap();
-        for name in LIBRARY_FILES {
-            fs::write(root.join(name), b"original selections").unwrap();
-        }
+        for name in LIBRARY_FILES { fs::write(root.join(name), b"original selections").unwrap(); }
         let mut items = Vec::new();
-        let snapshot = create_with_progress(&state, &mut |_, _, _, item| {
-            items.push(item.to_owned());
-            Ok(())
-        })
-        .unwrap();
+        let snapshot = create_with_progress(&state, &mut |_, _, _, item| { items.push(item.to_owned()); Ok(()) }).unwrap();
         assert!(list(&state).unwrap()[0].includes_artwork);
-        assert!(items
-            .iter()
-            .any(|s| s.contains("Artwork thumbnails · Artwork/abc/cover/artwork_m.jpg")));
+        assert!(items.iter().any(|s| s.contains("Artwork thumbnails · Artwork/abc/cover/artwork_m.jpg")));
         fs::write(&art, b"changed artwork").unwrap();
         fs::write(&vocals, b"changed vocals").unwrap();
-        for name in LIBRARY_FILES {
-            fs::write(root.join(name), b"changed selections").unwrap();
-        }
-        restore(
-            &state,
-            &location,
-            Path::new(&snapshot),
-            rbl_backup::restore::Parts::ALL,
-        );
+        for name in LIBRARY_FILES { fs::write(root.join(name), b"changed selections").unwrap(); }
+        restore(&state, &location, Path::new(&snapshot), rbl_backup::restore::Parts::ALL);
         assert_eq!(fs::read(&art).unwrap(), b"thumbnail bytes");
         assert_eq!(fs::read(&vocals).unwrap(), anlz);
-        assert_eq!(
-            rbl_anlz::Anlz::read(&vocals).unwrap().vocals().unwrap(),
-            &[0, 2, 4, 1]
-        );
-        for name in LIBRARY_FILES {
-            assert_eq!(fs::read(root.join(name)).unwrap(), b"original selections");
-        }
+        assert_eq!(rbl_anlz::Anlz::read(&vocals).unwrap().vocals().unwrap(), &[0, 2, 4, 1]);
+        for name in LIBRARY_FILES { assert_eq!(fs::read(root.join(name)).unwrap(), b"original selections"); }
     }
 
     #[test]
@@ -1800,9 +1349,7 @@ mod tests {
         db.connection()
             .execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;")
             .unwrap();
-        db.connection()
-            .execute("UPDATE djmdContent SET Rating=3 WHERE ID=?1", [&track])
-            .unwrap();
+        db.connection().execute("UPDATE djmdContent SET Rating=3 WHERE ID=?1", [&track]).unwrap();
         let file = analysis(&location).join("test/ANLZ0000.DAT");
         fs::create_dir_all(file.parent().unwrap()).unwrap();
         fs::write(&file, b"original grid").unwrap();
@@ -1813,11 +1360,7 @@ mod tests {
         let entries = list(&state).unwrap();
         assert_eq!(entries.len(), 1);
         assert!(entries[0].bytes > 0 && entries[0].created_at > 0 && entries[0].includes_analysis);
-        assert_eq!(
-            entries[0].bytes,
-            fs::metadata(&path).unwrap().len(),
-            "saved size is the compressed ZIP size"
-        );
+        assert_eq!(entries[0].bytes, fs::metadata(&path).unwrap().len(), "saved size is the compressed ZIP size");
         state.write(|w| w.set_rating(&track, 5)).unwrap();
         assert_eq!(rating(&state), 5);
         fs::write(&file, b"edited grid").unwrap();
@@ -1842,50 +1385,26 @@ mod tests {
     fn an_unfinished_restore_blocks_the_library_until_it_is_recovered() {
         let (_dir, state, location) = fixture();
         fs::create_dir_all(state.backup_dir()).unwrap();
-        let journal =
-            serde_json::json!({ "library": location.master_db, "committed": true, "swaps": [] });
-        fs::write(
-            state.backup_dir().join(rbl_backup::journal::NAME),
-            journal.to_string(),
-        )
-        .unwrap();
+        let journal = serde_json::json!({ "library": location.master_db, "committed": true, "swaps": [] });
+        fs::write(state.backup_dir().join(rbl_backup::journal::NAME), journal.to_string()).unwrap();
         assert!(pending(state.backup_dir()));
-        assert!(state
-            .write(|w| w.set_rating(&rbl_db::fixture::track_id(1), 5))
-            .is_err());
+        assert!(state.write(|w| w.set_rating(&rbl_db::fixture::track_id(1), 5)).is_err());
         recover(state.backup_dir(), &location).unwrap();
-        state
-            .write(|w| w.set_rating(&rbl_db::fixture::track_id(1), 5))
-            .unwrap();
+        state.write(|w| w.set_rating(&rbl_db::fixture::track_id(1), 5)).unwrap();
         assert_eq!(rating(&state), 5);
     }
 
     #[test]
     fn older_backup_formats_can_still_be_deleted() {
         let (_dir, state, location) = fixture();
-        let database =
-            rbl_db::write::Writer::open(location.clone(), state.backup_dir().to_path_buf())
-                .unwrap()
-                .back_up_now()
-                .unwrap();
+        let database = rbl_db::write::Writer::open(location.clone(), state.backup_dir().to_path_buf()).unwrap().back_up_now().unwrap();
         assert!(list(&state).unwrap().is_empty());
         delete(&state, &database).unwrap();
         assert!(!database.exists());
         let folder = state.backup_destination().join("library-legacy-directory");
         fs::create_dir_all(&folder).unwrap();
-        let manifest = Manifest {
-            version: 1,
-            library: location.master_db.clone(),
-            created_at: 1,
-            bytes: 0,
-            includes_artwork: false,
-            library_files: Vec::new(),
-        };
-        fs::write(
-            folder.join(rbl_backup::manifest::NAME),
-            serde_json::to_vec(&manifest).unwrap(),
-        )
-        .unwrap();
+        let manifest = Manifest { version: 1, library: location.master_db.clone(), created_at: 1, bytes: 0, includes_artwork: false, library_files: Vec::new() };
+        fs::write(folder.join(rbl_backup::manifest::NAME), serde_json::to_vec(&manifest).unwrap()).unwrap();
         delete(&state, &folder).unwrap();
         assert!(!folder.exists());
     }
