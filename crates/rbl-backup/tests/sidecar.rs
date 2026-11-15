@@ -871,9 +871,11 @@ fn a_backup_whose_sidecar_schema_is_newer_than_this_build_reads_is_refused_befor
 #[test]
 fn a_backup_whose_sidecar_schema_is_9_10_or_11_restores() {
     assert_eq!(wreckordbox_sidecar::SCHEMA_VERSION, 11);
-    let fixture = fixture();
-    testing::archive(&fixture.location, &fixture.archive, None);
     for version in [9, 10, 11] {
+        // Each from its own fixture: a copy restamped at an earlier version
+        // holds every later table, so it is restored but never reopened.
+        let fixture = fixture();
+        testing::archive(&fixture.location, &fixture.archive, None);
         fixture.change();
         let backup = with_schema(&fixture, version);
         fixture.restore(&backup, Parts::ALL).unwrap();
