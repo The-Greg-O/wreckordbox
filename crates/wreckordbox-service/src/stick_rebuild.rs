@@ -1,5 +1,5 @@
 //! Rebuilding the Library from a Stick (wbx-b1d): every playlist and folder,
-//! rating, colour, comment and MyTag a Stick's library holds, each track
+//! rating, colour, comment and My Tag a Stick's library holds, each track
 //! linked to its file in a music folder on this computer rather than copied
 //! from the Stick.
 //!
@@ -150,7 +150,7 @@ pub struct TagOutcome {
     pub id: Option<String>,
 }
 
-/// One MyTag category of the Stick.
+/// One My Tag category of the Stick.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CategoryOutcome {
     /// The Stick's name for it.
@@ -207,7 +207,7 @@ pub struct Rebuilt {
 /// 3. Nothing: no file.
 ///
 /// Without a Stick copy to measure, only a file of the same name, alone,
-/// is taken. macOS `._` AppleDouble files are never audio and are skipped.
+/// is taken. macOS `._` `AppleDouble` files are never audio and are skipped.
 pub mod matching {
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -242,7 +242,7 @@ pub mod matching {
         DifferentSize(PathBuf),
     }
 
-    /// Whether a name is a macOS AppleDouble companion, never audio.
+    /// Whether a name is a macOS `AppleDouble` companion, never audio.
     #[must_use]
     pub fn apple_double(name: &str) -> bool {
         name.starts_with("._")
@@ -621,48 +621,22 @@ struct Plan {
     answer: Rebuilt,
 }
 
-fn plan(
-    request: &Rebuild,
-    music: &Path,
-    stick: &StickState,
-    folder: &matching::MusicFolder,
-    library: &OpenLibrary,
-) -> Result<Plan, ServiceError> {
-    let mut matched_files: HashMap<u32, PathBuf> = HashMap::new();
-    let mut retagged = std::collections::HashSet::new();
-    let mut unmatched = Vec::new();
-    for track in &stick.library.tracks {
-        let shown = |p: &[PathBuf]| p.iter().map(|p| p.to_string_lossy().into_owned()).collect();
-        let (reason, candidates) = match folder.find(
-            &track.path,
-            stick.sizes.get(&track.id).copied(),
-            request.accept_retagged,
-        ) {
-            matching::Found::File(file) => {
-                matched_files.insert(track.id, file);
-                continue;
-            }
-            matching::Found::Retagged(file) => {
-                retagged.insert(track.id);
-                matched_files.insert(track.id, file);
-                continue;
-            }
-            matching::Found::NoFile => ("no_file", Vec::new()),
-            matching::Found::Ambiguous(files) => ("ambiguous", shown(&files)),
-            matching::Found::NameDisagrees(file) => ("name_disagrees", shown(&[file])),
-            matching::Found::DifferentSize(file) => ("different_size", shown(&[file])),
-        };
-        unmatched.push(UnmatchedTrack {
-            title: track.title.clone(),
-            artist: track.artist.clone(),
-            stick_path: track.path.clone(),
-            reason: reason.into(),
-            candidates,
-        });
-    }
-    let files: Vec<PathBuf> = matched_files.values().cloned().collect();
-    let state = read_library(library, &files)?;
+/// What the Library's My Tags become: each Stick tag's place, the
+/// categories to rename, and what to report.
+type TagPlan = (
+    HashMap<u32, TagTarget>,
+    Vec<(String, String)>,
+    Vec<CategoryOutcome>,
+);
 
+/// Maps each Stick category to the Library's category in the same slot
+/// (renamed to the Stick's name when the two differ) and each of its tags
+/// to the tag of that name there, or one to make.
+fn plan_tags(
+    stick: &StickState,
+    state: &LibraryState,
+    matched_files: &HashMap<u32, PathBuf>,
+) -> Result<TagPlan, ServiceError> {
     // MyTags: a Stick category to the Library's in the same slot, renamed
     // to the Stick's name when the two differ.
     let mut tags = HashMap::new();
@@ -745,6 +719,109 @@ fn plan(
             ));
         }
     }
+    Ok((tags, renames, categories))
+}
+
+/// The Stick's tree in its order, each node to reuse or make, with the
+/// entries carried and those left out.
+fn plan_tree(
+    stick: &StickState,
+    state: &LibraryState,
+    matched_files: &HashMap<u32, PathBuf>,
+) -> (Vec<PlannedNode>, Vec<PlaylistOutcome>) {
+    // The tree, in the Stick's order; a node is reused only under a reused
+    // parent (a new folder holds nothing yet).
+    let mut library_ids: HashMap<u32, Option<String>> =
+        HashMap::from([(0, Some("root".to_owned()))]);
+    let mut paths: HashMap<u32, String> = HashMap::new();
+    let mut nodes = Vec::new();
+    let mut playlists = Vec::new();
+    for node in &stick.library.nodes {
+        let parent_here = library_ids.get(&node.parent).cloned().flatten();
+        let reuse = parent_here.and_then(|parent| {
+            state
+                .nodes
+                .get(&(parent, node.name.clone(), node.folder))
+                .cloned()
+        });
+        library_ids.insert(node.id, reuse.clone());
+        let path = match paths.get(&node.parent) {
+            Some(parent) => format!("{parent}/{}", node.name),
+            None => node.name.clone(),
+        };
+        paths.insert(node.id, path.clone());
+        let entries: Vec<u32> = node
+            .tracks
+            .iter()
+            .copied()
+            .filter(|t| matched_files.contains_key(t))
+            .collect();
+        let left_out = node
+            .tracks
+            .iter()
+            .filter(|t| !matched_files.contains_key(t))
+            .filter_map(|t| stick.library.track(*t).map(|t| t.title.clone()))
+            .collect();
+        let action = match (&reuse, node.folder) {
+            (None, _) => "create",
+            (Some(_), true) => "reuse",
+            (Some(_), false) => "replace",
+        };
+        playlists.push(PlaylistOutcome {
+            path,
+            folder: node.folder,
+            action: action.into(),
+            tracks: entries.len(),
+            left_out,
+            id: reuse.clone(),
+        });
+        nodes.push(PlannedNode {
+            stick_id: node.id,
+            stick_parent: node.parent,
+            name: node.name.clone(),
+            folder: node.folder,
+            reuse,
+            entries,
+        });
+    }
+
+    (nodes, playlists)
+}
+
+/// The matched tracks planned: each with its values as the Library has
+/// them and as the Stick does, and how many tracks each value is carried for.
+type TrackPlan = (
+    Vec<PlannedTrack>,
+    Vec<MatchedTrack>,
+    BTreeMap<String, usize>,
+);
+
+/// One value of a matched track: `set` for a track the rebuild adds (when
+/// the Stick holds one), `kept` when the Library already has the Stick's,
+/// `replaced` when the Stick's replaces it.
+fn outcome_of(value: &str, to: Value, held: bool, before: Option<Value>) -> Option<ValueOutcome> {
+    let (outcome, from) = match before {
+        None if held => ("set", None),
+        None => return None,
+        Some(before) if before == to => ("kept", None),
+        Some(before) => ("replaced", Some(before)),
+    };
+    Some(ValueOutcome {
+        value: value.into(),
+        outcome: outcome.into(),
+        from,
+        to,
+    })
+}
+
+/// Plans each matched track's values (see the module's rules).
+fn plan_tracks(
+    stick: &StickState,
+    state: &LibraryState,
+    matched_files: &HashMap<u32, PathBuf>,
+    retagged: &std::collections::HashSet<u32>,
+    tags: &HashMap<u32, TagTarget>,
+) -> TrackPlan {
     let tag_name = |id: u32| -> Option<String> {
         stick
             .my_tags
@@ -777,28 +854,8 @@ fn plan(
             .unwrap_or_default();
         let mut outcomes = Vec::new();
         let mut compare = |value: &str, stick_value: Value, held: bool, before: Option<Value>| {
-            match before {
-                None if held => outcomes.push(ValueOutcome {
-                    value: value.into(),
-                    outcome: "set".into(),
-                    from: None,
-                    to: stick_value,
-                }),
-                None => {}
-                Some(before) if before == stick_value => {
-                    outcomes.push(ValueOutcome {
-                        value: value.into(),
-                        outcome: "kept".into(),
-                        from: None,
-                        to: stick_value,
-                    });
-                }
-                Some(before) => outcomes.push(ValueOutcome {
-                    value: value.into(),
-                    outcome: "replaced".into(),
-                    from: Some(before),
-                    to: stick_value,
-                }),
+            if let Some(outcome) = outcome_of(value, stick_value, held, before) {
+                outcomes.push(outcome);
             }
             if held {
                 *values.entry(value.into()).or_default() += 1;
@@ -901,61 +958,54 @@ fn plan(
         });
     }
 
-    // The tree, in the Stick's order; a node is reused only under a reused
-    // parent (a new folder holds nothing yet).
-    let mut library_ids: HashMap<u32, Option<String>> =
-        HashMap::from([(0, Some("root".to_owned()))]);
-    let mut paths: HashMap<u32, String> = HashMap::new();
-    let mut nodes = Vec::new();
-    let mut playlists = Vec::new();
-    for node in &stick.library.nodes {
-        let parent_here = library_ids.get(&node.parent).cloned().flatten();
-        let reuse = parent_here.and_then(|parent| {
-            state
-                .nodes
-                .get(&(parent, node.name.clone(), node.folder))
-                .cloned()
-        });
-        library_ids.insert(node.id, reuse.clone());
-        let path = match paths.get(&node.parent) {
-            Some(parent) => format!("{parent}/{}", node.name),
-            None => node.name.clone(),
+    (planned, matched, values)
+}
+
+fn plan(
+    request: &Rebuild,
+    music: &Path,
+    stick: &StickState,
+    folder: &matching::MusicFolder,
+    library: &OpenLibrary,
+) -> Result<Plan, ServiceError> {
+    let mut matched_files: HashMap<u32, PathBuf> = HashMap::new();
+    let mut retagged = std::collections::HashSet::new();
+    let mut unmatched = Vec::new();
+    for track in &stick.library.tracks {
+        let shown = |p: &[PathBuf]| p.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+        let (reason, candidates) = match folder.find(
+            &track.path,
+            stick.sizes.get(&track.id).copied(),
+            request.accept_retagged,
+        ) {
+            matching::Found::File(file) => {
+                matched_files.insert(track.id, file);
+                continue;
+            }
+            matching::Found::Retagged(file) => {
+                retagged.insert(track.id);
+                matched_files.insert(track.id, file);
+                continue;
+            }
+            matching::Found::NoFile => ("no_file", Vec::new()),
+            matching::Found::Ambiguous(files) => ("ambiguous", shown(&files)),
+            matching::Found::NameDisagrees(file) => ("name_disagrees", shown(&[file])),
+            matching::Found::DifferentSize(file) => ("different_size", shown(&[file])),
         };
-        paths.insert(node.id, path.clone());
-        let entries: Vec<u32> = node
-            .tracks
-            .iter()
-            .copied()
-            .filter(|t| matched_files.contains_key(t))
-            .collect();
-        let left_out = node
-            .tracks
-            .iter()
-            .filter(|t| !matched_files.contains_key(t))
-            .filter_map(|t| stick.library.track(*t).map(|t| t.title.clone()))
-            .collect();
-        let action = match (&reuse, node.folder) {
-            (None, _) => "create",
-            (Some(_), true) => "reuse",
-            (Some(_), false) => "replace",
-        };
-        playlists.push(PlaylistOutcome {
-            path,
-            folder: node.folder,
-            action: action.into(),
-            tracks: entries.len(),
-            left_out,
-            id: reuse.clone(),
-        });
-        nodes.push(PlannedNode {
-            stick_id: node.id,
-            stick_parent: node.parent,
-            name: node.name.clone(),
-            folder: node.folder,
-            reuse,
-            entries,
+        unmatched.push(UnmatchedTrack {
+            title: track.title.clone(),
+            artist: track.artist.clone(),
+            stick_path: track.path.clone(),
+            reason: reason.into(),
+            candidates,
         });
     }
+    let files: Vec<PathBuf> = matched_files.values().cloned().collect();
+    let state = read_library(library, &files)?;
+
+    let (tags, renames, categories) = plan_tags(stick, &state, &matched_files)?;
+    let (planned, matched, values) = plan_tracks(stick, &state, &matched_files, &retagged, &tags);
+    let (nodes, playlists) = plan_tree(stick, &state, &matched_files);
 
     let mut not_carried: Vec<String> = categories
         .iter()
@@ -1119,10 +1169,13 @@ fn write_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     std::fs::rename(&partial, path)
 }
 
-/// Every write of the rebuild, inside the one edit.
-fn apply(writer: &mut rbl_db::write::Writer, plan: &Plan) -> Result<Applied, DbError> {
-    let mut records = Vec::new();
-    let mut analysis_failed = HashMap::new();
+/// The categories renamed and the tags made, inside the one edit: each
+/// Stick tag's Library identifier.
+fn apply_tags(
+    writer: &mut rbl_db::write::Writer,
+    plan: &Plan,
+    records: &mut Vec<Value>,
+) -> Result<HashMap<u32, String>, DbError> {
     // Each renamed category under a name no other has first, so that slots
     // trading names never clash; then under the Stick's name.
     for (category, _) in &plan.renames {
@@ -1148,6 +1201,14 @@ fn apply(writer: &mut rbl_db::write::Writer, plan: &Plan) -> Result<Applied, DbE
         };
         tags.insert(*stick_id, id);
     }
+    Ok(tags)
+}
+
+/// Every write of the rebuild, inside the one edit.
+fn apply(writer: &mut rbl_db::write::Writer, plan: &Plan) -> Result<Applied, DbError> {
+    let mut records = Vec::new();
+    let mut analysis_failed = HashMap::new();
+    let tags = apply_tags(writer, plan, &mut records)?;
     let mut tracks = HashMap::new();
     let mut by_file: HashMap<PathBuf, String> = HashMap::new();
     for track in &plan.tracks {
@@ -1390,6 +1451,7 @@ fn to_value(answer: &Rebuilt) -> Result<Value, ServiceError> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test fixtures")]
 mod tests {
     use super::matching::{Found, MusicFolder};
 

@@ -14,7 +14,7 @@ use wreckordbox_service::{Client, ServiceError};
 #[derive(Subcommand)]
 pub enum LibraryCommands {
     /// Rebuild the Library from a Stick: its playlists and folders, and
-    /// each matched track's rating, colour, comment and MyTags, linking
+    /// each matched track's rating, colour, comment and My Tags, linking
     /// each track to its file in the music folder.
     ///
     /// A track is matched by the size of its copy on the Stick, the start of

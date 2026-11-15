@@ -47,6 +47,7 @@ const RECORDS: &[&str] = &[
 /// Ordinary Library edits (and the Runs they are attributed to): allowed.
 const LIBRARY_EDITS: &[&str] = &[
     "intake.set_tags",
+    "library.rebuild_from_stick",
     "mytags.assign",
     "mytags.create",
     "mytags.create_category",
