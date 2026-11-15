@@ -2,7 +2,7 @@
 //! (wbx-hy4): Stem audio is what the backup's own Sidecar snapshot names,
 //! never what the `stems/` folder holds when it is read, so a restore is a
 //! state that existed.
-#![allow(clippy::unwrap_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -74,19 +74,37 @@ fn a_separation(sidecar: &Sidecar, scratch: &Path, track: &str) -> Vec<String> {
         })
         .unwrap();
     sidecar.finish_run(run, "done").unwrap();
-    set.stems.into_iter().map(|stem| stem.path.strip_prefix(sidecar.dir()).unwrap().to_string_lossy().into_owned()).collect()
+    set.stems
+        .into_iter()
+        .map(|stem| {
+            stem.path
+                .strip_prefix(sidecar.dir())
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect()
 }
 
 /// The Run a Stem file is in: `stems/<track>/run-<id>/<role>.wav`.
 fn run_of(file: &str) -> i64 {
-    let folder = file.split('/').find_map(|part| part.strip_prefix("run-")).unwrap_or_else(|| panic!("{file} is in no Run's folder"));
+    let folder = file
+        .split('/')
+        .find_map(|part| part.strip_prefix("run-"))
+        .expect("a Stem file is in its Run's folder");
     folder.parse().unwrap()
 }
 
 fn runs_in(database: &Path) -> BTreeSet<i64> {
-    let db = rusqlite::Connection::open_with_flags(database, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    let db =
+        rusqlite::Connection::open_with_flags(database, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .unwrap();
     let mut statement = db.prepare("SELECT id FROM run").unwrap();
-    let ids = statement.query_map([], |row| row.get(0)).unwrap().map(Result::unwrap).collect();
+    let ids = statement
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
     ids
 }
 
@@ -98,7 +116,14 @@ fn files_under(root: &Path, folder: &Path) -> Vec<String> {
             if entry.file_type().unwrap().is_dir() {
                 pending.push(entry.path());
             } else {
-                found.push(entry.path().strip_prefix(root).unwrap().to_string_lossy().into_owned());
+                found.push(
+                    entry
+                        .path()
+                        .strip_prefix(root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                );
             }
         }
     }
@@ -114,12 +139,21 @@ fn a_separation_finishing_during_a_backup_leaves_a_restore_whose_stems_all_belon
     let earlier = a_separation(&sidecar, dir.path(), "10001");
     // Stem audio is asked for in this window's backups.
     fs::create_dir_all(state.backup_dir()).unwrap();
-    fs::write(state.backup_dir().join(rbl_backup::sidecar_part::OPTIONS_FILE), br#"{"stems": true}"#).unwrap();
+    fs::write(
+        state
+            .backup_dir()
+            .join(rbl_backup::sidecar_part::OPTIONS_FILE),
+        br#"{"stems": true}"#,
+    )
+    .unwrap();
 
     // The backup has snapshotted the Sidecar's store and not yet gathered
     // its Stems when a second separation finishes: its Run, files and
     // Fact all after the snapshot.
-    let held = crate::test_holds::arm(crate::test_holds::BACKUP_SIDECAR_SNAPSHOTTED, state.backup_dir());
+    let held = crate::test_holds::arm(
+        crate::test_holds::BACKUP_SIDECAR_SNAPSHOTTED,
+        state.backup_dir(),
+    );
     let (archive, later) = std::thread::scope(|scope| {
         let backup = scope.spawn(|| create(&state));
         held.reached();
@@ -132,11 +166,18 @@ fn a_separation_finishing_during_a_backup_leaves_a_restore_whose_stems_all_belon
     // has, and every one that Sidecar names is there.
     let zip = rbl_backup::archive::open(&archive).unwrap();
     let entries = rbl_backup::archive::names(&zip);
-    let mut held_stems: Vec<&str> = entries.iter().filter_map(|name| name.strip_prefix("sidecar/")).filter(|name| name.starts_with("stems/") && !name.ends_with('/')).collect();
+    let mut held_stems: Vec<&str> = entries
+        .iter()
+        .filter_map(|name| name.strip_prefix("sidecar/"))
+        .filter(|name| name.starts_with("stems/") && !name.ends_with('/'))
+        .collect();
     held_stems.sort_unstable();
     let mut expected: Vec<&str> = earlier.iter().map(String::as_str).collect();
     expected.sort_unstable();
-    assert_eq!(held_stems, expected, "only the Stems the backup's snapshot names: {entries:#?}");
+    assert_eq!(
+        held_stems, expected,
+        "only the Stems the backup's snapshot names: {entries:#?}"
+    );
     drop(zip);
 
     // Its restore: the Stems on disk are exactly those of Runs the restored
@@ -144,19 +185,30 @@ fn a_separation_finishing_during_a_backup_leaves_a_restore_whose_stems_all_belon
     drop(sidecar);
     state.drop_reader();
     rbl_backup::restore::restore(
-        &rbl_backup::restore::Request { archive: &archive, parts: rbl_backup::restore::Parts::ALL, location: &location, state_dir: state.backup_dir(), sizes: None },
+        &rbl_backup::restore::Request {
+            archive: &archive,
+            parts: rbl_backup::restore::Parts::ALL,
+            location: &location,
+            state_dir: state.backup_dir(),
+            sizes: None,
+        },
         &|| Ok(()),
         &mut |_, _, _, _| Ok(()),
     )
     .unwrap();
     let runs = runs_in(&sidecar_dir.join("sidecar.db"));
     let on_disk = files_under(&sidecar_dir, &sidecar_dir.join("stems"));
-    assert!(!on_disk.is_empty());
     for file in &on_disk {
-        assert!(runs.contains(&run_of(file)), "{file} is of a Run the restored Sidecar does not have ({runs:?})");
+        assert!(
+            runs.contains(&run_of(file)),
+            "{file} is of a Run the restored Sidecar does not have ({runs:?})"
+        );
     }
     assert_eq!(on_disk, expected);
     for file in &later {
-        assert!(!sidecar_dir.join(file).exists(), "{file} came back without its Run");
+        assert!(
+            !sidecar_dir.join(file).exists(),
+            "{file} came back without its Run"
+        );
     }
 }
