@@ -324,12 +324,23 @@ pub fn record(
     if pending.is_empty() {
         return Ok(done);
     }
-    let store = wreckordbox_sidecar::Sidecar::open(sidecar).map_err(|e| {
+    let unopened = |e: &dyn std::fmt::Display| {
         ServiceError::new(
             codes::RESTORE_UNRECORDED,
             format!("the Sidecar the receipts are recorded in could not be opened: {e}"),
         )
-    })?;
+    };
+    // As a restore's own entry (wbx-8yh): a Sidecar on a Stick is opened
+    // and recorded in only under that Stick's authorization.
+    let _authorized =
+        wreckordbox_stick_protection::authorize(recovery_dir, sidecar).map_err(|e| unopened(&e))?;
+    let store = wreckordbox_sidecar::Sidecar::open(sidecar).map_err(|e| unopened(&e))?;
+    store.set_write_admission(crate::sidecar_stick::admission(
+        master_db.parent().unwrap_or(master_db),
+        sidecar,
+        recovery_dir.to_path_buf(),
+    ));
+    let _ledger = crate::sidecar_stick::ledger_scope();
     for item in pending {
         let (Some(receipt), None) = (&item.receipt, &item.error) else {
             done.unrecorded.push(item);
