@@ -14,6 +14,7 @@ mod committed_write;
 pub mod entry_copy;
 pub mod entry_order;
 pub mod history;
+pub mod key_evidence;
 pub mod judgements;
 pub mod grid_step;
 pub mod ledger;

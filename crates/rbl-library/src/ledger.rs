@@ -136,6 +136,16 @@ impl Preparation {
 /// already made: it is the implementation's to keep (and to refuse the
 /// next write for, in [`Self::ready`]).
 pub trait Ledger: Send + Sync {
+    /// Inspect existing Measurements and a byte-verified staged key write,
+    /// outside the Library gate. Neither captures nor queries publish evidence.
+    fn prepare_key_evidence(
+        &self,
+        _file: &rbl_db::key_tag::prepared::Prepared,
+        _tracks: &[String],
+    ) -> Result<Option<Box<dyn crate::key_evidence::KeyEvidence>>, String> {
+        Ok(None)
+    }
+
     /// A bounded operation recorder. Creating it does not write anything.
     fn bulk(&self, _kind: crate::bulk::Kind) -> Option<std::sync::Arc<dyn crate::bulk::Recorder>> {
         None

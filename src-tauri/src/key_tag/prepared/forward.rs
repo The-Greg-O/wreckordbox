@@ -47,7 +47,14 @@ impl PreparedFiles {
                 .filter(|p| p.file.is_published())
                 .map(|p| snapshot(&p.file))
                 .collect();
-            return Ok((self.entry(tracks, written), None));
+            let entry = self.entry(tracks, written, &files);
+            drop(files);
+            let warning = self.record_evidence().err().map(|why| {
+                AppError::internal(format!(
+                    "Key written; evidence was not fully carried: {why}"
+                ))
+            });
+            return Ok((entry, warning));
         };
         for plan in files.iter_mut().rev().filter(|p| p.file.is_published()) {
             if access.recheck_for(plan.file.path()).is_err() || plan.file.rollback().is_err() {
@@ -104,19 +111,33 @@ impl PreparedFiles {
             .filter(|p| p.file.is_published())
             .map(|p| snapshot(&p.file))
             .collect();
-        Ok((
-            self.entry(kept, written),
-            Some(AppError::new(why.kind, message)),
-        ))
+        let entry = self.entry(kept, written, &files);
+        drop(files);
+        let message = match self.record_evidence() {
+            Ok(()) => message,
+            Err(error) => format!("{message} Evidence was not fully carried: {error}"),
+        };
+        Ok((entry, Some(AppError::new(why.kind, message))))
     }
 
-    fn entry(&self, tracks: Vec<rbl_db::write::TrackEdit>, files: Vec<KeyTagWrite>) -> LibraryEdit {
+    fn entry(
+        &self,
+        tracks: Vec<rbl_db::write::TrackEdit>,
+        files: Vec<KeyTagWrite>,
+        plans: &[super::FilePlan],
+    ) -> LibraryEdit {
         if files.is_empty() {
             LibraryEdit::Track(tracks)
         } else {
             LibraryEdit::KeyEdit {
                 tracks,
                 files: Arc::new(KeyTagWrites {
+                    evidence_tracks: plans
+                        .iter()
+                        .filter(|p| p.file.is_published())
+                        .map(|p| (p.file.path().to_path_buf(), p.tracks.clone()))
+                        .collect(),
+                    ledger: self.ledger.clone(),
                     files,
                     state_dir: self.state_dir.clone(),
                 }),

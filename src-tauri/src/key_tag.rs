@@ -89,6 +89,8 @@ impl KeyTagWrite {
 /// The files one key edit wrote, as its history entry holds them: the
 /// part of the entry the Library core steps without knowing what it is.
 pub(crate) struct KeyTagWrites {
+    pub(crate) evidence_tracks: Vec<(PathBuf, Vec<String>)>,
+    pub(crate) ledger: Option<std::sync::Arc<dyn rbl_library::ledger::Ledger>>,
     pub(crate) files: Vec<KeyTagWrite>,
     /// Where Stick Protection is kept: Undo and Redo of a file on a Stick
     /// write only while that Stick is unlocked (wbx-45.11).
