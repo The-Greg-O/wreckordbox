@@ -26,6 +26,7 @@ mod stems;
 mod stems_write;
 mod stick;
 mod stick_load;
+mod stick_rebuild;
 mod tracks;
 
 use std::fmt::Write as _;
@@ -88,6 +89,14 @@ enum Commands {
         run: ledger::RunOptions,
         #[command(subcommand)]
         command: reading::PlaylistCommands,
+    },
+    /// Rebuild the Library from a Stick, linking each track to a file in
+    /// a music folder.
+    Library {
+        #[command(flatten)]
+        run: ledger::RunOptions,
+        #[command(subcommand)]
+        command: stick_rebuild::LibraryCommands,
     },
     /// Read play history: what was played on which occasion, in order.
     History {
@@ -297,6 +306,11 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
         ledger::begin(run, cli.json);
     }
     // A dry run writes nothing, so it takes no Run.
+    if let Commands::Library { run, command } = &cli.command {
+        if !command.dry_run() {
+            ledger::begin(run, cli.json);
+        }
+    }
     if let Commands::Project { run, args } = &cli.command {
         if !args.dry_run() {
             ledger::begin(run, cli.json);
@@ -346,6 +360,13 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
         }
         Commands::Playlists { command, .. } => {
             print(&reading::playlists(
+                &mut connect(&config)?,
+                cli.json,
+                command,
+            )?);
+        }
+        Commands::Library { command, .. } => {
+            print(&stick_rebuild::run(
                 &mut connect(&config)?,
                 cli.json,
                 command,

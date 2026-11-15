@@ -114,6 +114,12 @@ impl OpenLibrary {
         Ok(u32::try_from(self.index()?.len()).unwrap_or(u32::MAX))
     }
 
+    /// An import's recording (wbx-b1d): one Run under the caller's source
+    /// for every edit made inside it.
+    pub(crate) fn import_operation(&self) -> rbl_library::bulk::Operation {
+        rbl_library::bulk::Operation::new(&self.core, rbl_library::bulk::Kind::Import)
+    }
+
     /// Runs `read` on a read-only connection, for what the index does not
     /// hold. A service by itself keeps one open; a service the window hosts
     /// opens one for the read, as the window may replace the file under it
