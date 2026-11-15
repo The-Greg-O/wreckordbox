@@ -10,7 +10,8 @@
  * value (dashed, marked "proposed"); a click, or Y while it has the focus,
  * accepts it.
  *
- * Y follows Review's rules (wbx-mvr): only the ONE proposal holding the
+ * Y, and the button's own Enter and Space (wbx-66 review), follow Review's
+ * rules (wbx-mvr), through one guarded path: only the ONE proposal holding the
  * focus; a key's repeats do nothing, and a key already down when the
  * proposal took focus does nothing until it is released; a proposal that
  * changed since it took focus is not accepted (the panel says why); never
@@ -41,9 +42,17 @@ export function proposalSince(atFocus: ProposalAtFocus, now: ProposalAtFocus | n
   return null;
 }
 
-/** Whether a key press asks to accept: a plain Y. */
-export function acceptsKey(event: { key: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean }): boolean {
-  return !event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "y";
+/**
+ * The key a press accepts with, as its name for the DJ, or `null`: a plain
+ * Y, or Enter or Space (the button's own activation, which goes through the
+ * same guards; the native click it would make is ignored).
+ */
+export function acceptKey(event: { key: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean }): "Y" | "Enter" | "Space" | null {
+  if (event.ctrlKey || event.metaKey || event.altKey) return null;
+  if (event.key.toLowerCase() === "y") return "Y";
+  if (event.key === "Enter") return "Enter";
+  if (event.key === " ") return "Space";
+  return null;
 }
 
 export interface SuggestionKeysState {
@@ -55,7 +64,7 @@ export interface SuggestionKeysState {
   accept: (suggestion: IntakeSuggestion) => void;
 }
 
-/** Y on the focused proposal; the handlers go on the element around the proposals. */
+/** Y, Enter or Space on the focused proposal; the handlers go on the element around the proposals. */
 export function useSuggestionKeys(state: SuggestionKeysState) {
   const [refused, setRefused] = useState<string | null>(null);
   const live = useRef(state);
@@ -66,7 +75,7 @@ export function useSuggestionKeys(state: SuggestionKeysState) {
   // A Y pressed on a proposal is the proposal's until it is released: once
   // the proposal is accepted it is gone and the focus with it, and the held
   // key's repeats must not reach the deck from wherever the focus fell.
-  const claimed = useRef(false);
+  const claimed = useRef(new Set<string>());
 
   useEffect(() => {
     const onDown = (event: globalThis.KeyboardEvent) => {
@@ -74,19 +83,19 @@ export function useSuggestionKeys(state: SuggestionKeysState) {
       wasDown.current = down.current.has(key);
       down.current.add(key);
       const target = event.target as Element | null;
-      if (key === "y" && claimed.current && !target?.closest?.(PROPOSAL)) {
+      if (claimed.current.has(key) && !target?.closest?.(PROPOSAL)) {
         event.preventDefault();
         event.stopPropagation();
       }
     };
     const onUp = (event: globalThis.KeyboardEvent) => {
       const key = event.key.toLowerCase();
-      if (key === "y") claimed.current = false;
+      claimed.current.delete(key);
       down.current.delete(key);
       atFocus.current?.held.delete(key);
     };
     const onBlur = () => {
-      claimed.current = false;
+      claimed.current.clear();
       down.current.clear();
       atFocus.current?.held.clear();
     };
@@ -115,35 +124,38 @@ export function useSuggestionKeys(state: SuggestionKeysState) {
   }, []);
 
   const onKeyDown = useCallback((event: KeyboardEvent<HTMLElement>) => {
-    if (!acceptsKey(event)) return;
+    const name = acceptKey(event);
+    if (name === null) return;
+    const key = event.key.toLowerCase();
     const target = event.target as HTMLElement;
     if (modalOwnsInput(target) || isTyping(target)) return;
     const button = target.closest?.<HTMLElement>(PROPOSAL) ?? null;
     if (!button) return;
-    // A Y on a proposal is the proposal's, whatever it does: never the deck's.
+    // A Y, Enter or Space on a proposal is the proposal's, whatever it
+    // does: never the deck's.
     event.preventDefault();
     event.stopPropagation();
-    claimed.current = true;
+    claimed.current.add(key);
     const focus = atFocus.current;
-    if (!focus || focus.held.has("y")) {
-      setRefused("Y did nothing: it was already held down when this proposal took focus. Release it and press it again.");
+    if (!focus || focus.held.has(key)) {
+      setRefused(`${name} did nothing: it was already held down when this proposal took focus. Release it and press it again.`);
       return;
     }
     if (event.repeat || wasDown.current) return;
     const since = proposalSince(focus.proposal, find(Number(button.dataset.suggestion)));
     if (since !== null) {
       setRefused(since === "gone"
-        ? "Y did nothing: this proposal is no longer waiting."
-        : "Y did nothing: this proposal changed since it took focus. Move the focus off it and back to accept it as it is now.");
+        ? `${name} did nothing: this proposal is no longer waiting.`
+        : `${name} did nothing: this proposal changed since it took focus. Move the focus off it and back to accept it as it is now.`);
       return;
     }
     const { busy, protectedLibrary, accept, shown } = live.current;
     if (busy) {
-      setRefused("Y did nothing: an edit is still being made.");
+      setRefused(`${name} did nothing: an edit is still being made.`);
       return;
     }
     if (protectedLibrary) {
-      setRefused("Y did nothing: Library Protection is on, so nothing can be accepted.");
+      setRefused(`${name} did nothing: Library Protection is on, so nothing can be accepted.`);
       return;
     }
     const chosen = shown.find((s) => s.fact === focus.proposal.fact);
@@ -184,8 +196,10 @@ export function FieldSuggestions({ field, suggestions, accepting, busy, onAccept
               aria-label={`${t("Accept proposed")} ${field} “${s.value}” ${t("from")} ${s.source} (${confidence})`}
               title={`${t("Accept")} (Y)`}
               onClick={(event) => {
-                // A double click is one decision.
-                if (event.detail > 1 || busy) return;
+                // A double click is one decision; a click the keyboard made
+                // (detail 0: Enter or Space) was decided by the guarded key
+                // path already, and is never a second one.
+                if (event.detail !== 1 || busy) return;
                 onAccept(s);
               }}
             >

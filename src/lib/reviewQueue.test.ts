@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   atOrAbove,
+  bulkAcceptable,
   fieldText,
   emptyBoard,
   fromServiceListing,
@@ -222,5 +223,14 @@ describe("fieldText and valueText for proposed titles and artists (wbx-66)", () 
     expect(fieldText("title")).toBe("Title");
     expect(fieldText("artist")).toBe("Artist");
     expect(valueText("title", "A Better Title")).toBe("A Better Title");
+  });
+});
+
+describe("the confidence bulk accept (wbx-66 review)", () => {
+  it("never takes a proposed title or artist, whatever its confidence", () => {
+    const facts = listing([held(1, "a", 0.9), held(2, "b", 0.95), held(3, "c", 0.85)], [{ id: 1, facts: [1, 2, 3] }]).facts
+      .map((f) => (f.fact === 2 ? { ...f, field: "title" } : f.fact === 3 ? { ...f, field: "artist" } : f));
+    expect(bulkAcceptable(facts, 0.8)).toEqual([1]);
+    expect(atOrAbove(facts, 0.8)).toEqual([1, 2, 3]);
   });
 });

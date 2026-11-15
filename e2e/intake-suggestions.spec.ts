@@ -212,3 +212,66 @@ test("Space and Enter on a proposal accept it and never play or pause the deck",
   await expect(pauseButton(page)).toHaveCount(0);
   await expect(player(page)).toBeVisible();
 });
+
+test("an Enter held from the title field onto a proposal does nothing and says why; a fresh Enter accepts once", async ({ page }) => {
+  await openIntake(page);
+  const { title } = await choose(page);
+  const better = proposal(page, "Title", "A Better Title");
+  await titleField(page).focus();
+  await page.keyboard.down("Enter");
+  await page.keyboard.press("Tab");
+  await expect(better).toBeFocused();
+  // The held Enter's repeats on the proposal.
+  for (let i = 0; i < 3; i += 1) await page.keyboard.down("Enter");
+  await page.keyboard.up("Enter");
+  await expect(panel(page).getByTestId("intake-suggestion-key-refused")).toContainText("Enter did nothing: it was already held down");
+  await page.waitForTimeout(300);
+  expect(await accepts(page)).toHaveLength(0);
+  await expect(titleField(page)).toHaveValue(title);
+  // Released and pressed again: one accept, never two.
+  await page.keyboard.press("Enter");
+  await expect(titleField(page)).toHaveValue("A Better Title");
+  await page.waitForTimeout(300);
+  expect(await accepts(page)).toHaveLength(1);
+});
+
+test("Enter or Space on a proposal that changed since it took focus is not accepted, and says why", async ({ page }) => {
+  await openIntake(page);
+  const { title } = await choose(page);
+  const better = proposal(page, "Title", "A Better Title");
+  const fact = Number(await better.getAttribute("data-suggestion"));
+  await tabOnto(page, titleField(page), better);
+  const reads = await hook<{ queue: number }>(page, "__intakeReads");
+  // Same text, a new row token: changed under the DJ's focus.
+  await hook(page, "__reviewChange", fact, "A Better Title");
+  await expect.poll(async () => (await hook<{ queue: number }>(page, "__intakeReads")).queue).toBeGreaterThan(reads.queue);
+  await page.waitForTimeout(200);
+  await expect(better).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(panel(page).getByTestId("intake-suggestion-key-refused")).toContainText("Enter did nothing: this proposal changed since it took focus");
+  await page.keyboard.press(" ");
+  await expect(panel(page).getByTestId("intake-suggestion-key-refused")).toContainText("Space did nothing: this proposal changed since it took focus");
+  await page.waitForTimeout(300);
+  expect(await accepts(page)).toHaveLength(0);
+  await expect(titleField(page)).toHaveValue(title);
+});
+
+test("Review's confidence bulk accept never takes a proposed title or artist; its count says what it takes", async ({ page }) => {
+  await openIntake(page);
+  await tab(page, "Review").click();
+  const review = page.getByTestId("review-view");
+  const tagging = review.locator('[data-run="41"]');
+  const bulk = tagging.getByTestId("review-bulk-accept");
+  // The Run's Energy rows at or above 0.80 (5); "A Better Title" (0.82) is not counted.
+  await expect(tagging.getByRole("button", { name: /^Accept Title A Better Title/ })).toBeVisible();
+  await expect(bulk).toHaveText("Accept ≥ 0.80 · 5");
+  await bulk.click();
+  await expect.poll(async () => (await accepts(page)).length).toBe(1);
+  const [call] = await accepts(page);
+  expect(call!.facts).toHaveLength(5);
+  // Still waiting, by its own row.
+  await expect(tagging.getByRole("button", { name: /^Accept Title A Better Title/ })).toBeVisible();
+  await tab(page, "Intake").click();
+  await choose(page);
+  await expect(proposal(page, "Title", "A Better Title")).toBeVisible();
+});
