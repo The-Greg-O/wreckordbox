@@ -89,14 +89,14 @@
 //! the edit gate or the history, and never calls a host or sends an
 //! event.
 
-#[path = "spill_manifest.rs"]
-mod spill_manifest;
-#[path = "spill_discard.rs"]
-mod spill_discard;
 #[path = "spill_commands.rs"]
 mod spill_commands;
+#[path = "spill_discard.rs"]
+mod spill_discard;
 #[path = "spill_lease.rs"]
 mod spill_lease;
+#[path = "spill_manifest.rs"]
+mod spill_manifest;
 
 #[path = "bulk_ledger.rs"]
 mod bulk;

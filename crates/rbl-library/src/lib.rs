@@ -446,7 +446,9 @@ impl LibraryCore {
         let observer = match committed_write::Observer::open(location) {
             Ok(observer) => observer,
             Err(error) => {
-                if let Some(ledger) = &ledger { ledger.written(false); }
+                if let Some(ledger) = &ledger {
+                    ledger.written(false);
+                }
                 return Err(error);
             }
         };
@@ -458,11 +460,15 @@ impl LibraryCore {
         let wrote = match observer.changed() {
             Ok(wrote) => wrote,
             Err(error) => {
-                if history == History::Outside { self.history.lock().clear_redo(); }
+                if history == History::Outside {
+                    self.history.lock().clear_redo();
+                }
                 return Err(error);
             }
         };
-        if let Some(ledger) = &ledger { ledger.written(wrote); }
+        if let Some(ledger) = &ledger {
+            ledger.written(wrote);
+        }
         let result = result.and_then(|value| refresh(writer.library(), value));
         tracing::debug!(gate_ms, open_ms = open_ms - gate_ms,
             edit_ms = edit_ms - open_ms, refresh_ms = started.elapsed().as_millis() - edit_ms,

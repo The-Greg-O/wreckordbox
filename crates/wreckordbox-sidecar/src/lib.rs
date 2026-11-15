@@ -184,5 +184,5 @@ mod fingerprint_bounds;
 mod fingerprint_format;
 mod query_reads;
 
-mod native_history;
 pub mod key_evidence;
+mod native_history;

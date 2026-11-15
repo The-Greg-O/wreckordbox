@@ -10,8 +10,8 @@
 //! Undo and Redo, so the durable record does not depend on the history
 //! being kept.
 
-mod prepared;
 mod cue_group;
+mod prepared;
 
 use std::sync::Arc;
 
@@ -800,9 +800,10 @@ impl crate::LibraryCore {
     ) -> Result<(T, crate::Change), DbError> {
         let _gate = self.edit_gate().lock();
         let kind = touched.change_kind();
-        let (value, refreshed) = self.write_then(host, crate::History::Caller, action, |db, value| {
-            Ok((value, self.refresh_after_edit(host, db, touched)))
-        })?;
+        let (value, refreshed) =
+            self.write_then(host, crate::History::Caller, action, |db, value| {
+                Ok((value, self.refresh_after_edit(host, db, touched)))
+            })?;
         let had = {
             let mut history = self.history.lock();
             let had = history.undo_label().is_some() || history.redo_label().is_some();
