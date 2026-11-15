@@ -1118,4 +1118,113 @@ demand. Refuses (`service_already_running`) when a service owns the Library.
 
 ## The MCP server
 
-Added by bead `wbx-048`; see the section in the next revision of this guide.
+`wreckordbox-mcp` (crate `crates/wreckordbox-mcp`) speaks the Model Context
+Protocol over stdio, so an MCP client such as Claude Code can call the Library
+service's commands as tools. It is a thin client of the service, exactly like
+the `wreckordbox` command: it has no Library access of its own and no network.
+Each tool call connects to the service for this machine's Library (starting
+one with the `wreckordbox` command beside it, as the CLI does), sends one
+service command, and answers the service's result. A change therefore goes
+through the same single edit path, Library Protection, Ledger and live update
+of the window as the same change from the CLI.
+
+The JSON-RPC it needs (`initialize`, `ping`, `tools/list`, `tools/call`) is
+implemented by hand, newline-delimited on stdin and stdout; no MCP SDK is
+used.
+
+### Register it with Claude Code
+
+Build both binaries (`cargo build --release -p wreckordbox -p wreckordbox-mcp`)
+and keep them in the same folder. Then, in the project's `.mcp.json` (or with
+`claude mcp add wreckordbox -- /path/to/wreckordbox-mcp`):
+
+```json
+{
+  "mcpServers": {
+    "wreckordbox": {
+      "type": "stdio",
+      "command": "/path/to/target/release/wreckordbox-mcp",
+      "args": [],
+      "env": {}
+    }
+  }
+}
+```
+
+The server uses the environment the CLI does: the Library rekordbox's settings
+name (or `RBXPORT_OPTIONS`), `WRECKORDBOX_RUNTIME_DIR`,
+`WRECKORDBOX_SIDECAR_DIR`, `WRECKORDBOX_LOADING_WAIT_SECS`. Set
+`WRECKORDBOX_CLI` when the `wreckordbox` command is not beside it.
+
+### How tools behave
+
+- A tool whose name starts `read_` changes nothing; its description starts
+  `Read only.` and it is marked `readOnlyHint`. A tool whose name starts
+  `change_` changes something, and its description starts by saying what:
+  the Library (through the edit path, refused while Library Protection is on),
+  the Sidecar, or Library Protection.
+- Each tool's input is a typed JSON schema whose properties are the service
+  command's own arguments (no others are accepted); they are passed to the
+  service as they are, and the service checks them.
+- A result is the service's JSON, in `structuredContent` and as text, with a
+  `run` key when the call's changes are in a Run, as the CLI's `--json`. A
+  refusal is a tool result with `isError: true` and the text
+  `{"error":{"code":"...","message":"..."}}`: tell the DJ the message.
+- **Whose work it is.** Changing tools take `run`, `source` and `description`
+  as the CLI's options. `source` is `agent:NAME`, `tool:NAME` or
+  `web:ADDRESS`, never the DJ (`dj` is refused with `invalid_source`). With
+  neither `run` nor `source`, the change is recorded as
+  `agent:<the MCP client's name>`, the `clientInfo.name` it sent with
+  `initialize` (anything but letters, digits, `-`, `_` and `.` becomes `-`).
+
+### Tools
+
+Reads (each named after the CLI command it mirrors in its description):
+`read_status`, `read_tracks`, `read_track`, `read_tracks_query`, `read_mytags`,
+`read_track_mytags`, `read_mytag_tracks`, `read_playlists`,
+`read_playlist_tracks`, `read_history`, `read_history_tracks`,
+`read_protection`, `read_intake`, `read_problems`, `read_intake_counts`,
+`read_prep_colours`, `read_track_tag_panel`, `read_fact_kinds`,
+`read_track_facts`, `read_standing_fact`, `read_runs`, `read_run`,
+`read_decisions`, `read_decision`, `read_mutants`, `read_mutant`,
+`read_review_waiting`, `read_review_rejected`, `read_projection_barriers`,
+`read_projection_plan`, `read_sticks`, `read_stick_load_preview`,
+`read_stems`, `read_intensity`, `read_schema_check`.
+
+Changes to the Library: `change_track_rating`, `change_prep_colour`,
+`change_mytag_assign`, `change_mytag_unassign`, `change_mytag_create`,
+`change_mytag_rename`, `change_mytag_move`, `change_track_tags`,
+`change_playlist_copy`, `change_playlist_remove_tracks`,
+`change_playlist_reorder`, `change_project` (needs the `plan` of
+`read_projection_plan`).
+
+Changes to the Sidecar: `change_run_start`, `change_run_finish`,
+`change_record_facts`, `change_decision_create`, `change_decision_answer`,
+`change_mutant_create`, `change_mutant_edit`, `change_mutant_remove`.
+
+Changes to Library Protection: `change_protection_on` (only on; off is the
+DJ's).
+
+A recipe in tools, rating a selection in one Run:
+
+```text
+change_run_start      {"description": "Energy for the new arrivals"}          -> {"id": 7, ...}
+change_track_rating   {"id": "10001", "rating": 4, "run": 7}
+change_mytag_assign   {"id": "700003", "tracks": ["10001", "10002"], "run": 7}
+change_run_finish     {"id": 7, "outcome": "2 rated, 2 tagged"}
+read_run              {"id": 7}
+```
+
+### CLI only, in this first version
+
+Not tools, by design: the DJ's own decisions (`stick unlock`,
+`projection acknowledge`, `review accept`, `review reject`, `review reopen`,
+`protection off`, and the Ledger spill discard `runs spills discard`, once that
+command lands), and what is destructive or long enough to need a person
+watching: `backup restore`, `tracks remove`, `playlists delete`,
+`mytags merge`, `mytags delete`, `stick load`, `stems separate`,
+`stems write`, `intensity measure`, `schema convert`. Also left out for now:
+`mytags reorder`, `mytags create-category` (always refused),
+`decisions decide`, `mutants clear`, `project --mytags`, `intensity cancel`,
+`stick lock` and `stick status` (Stick Protection state is kept beside the
+window, not in the service), `backup list`, `stop`, `serve`.

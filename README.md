@@ -14,7 +14,8 @@ Its scope is limited to library management, USB exporting, and PRO DJ LINK.
 ## Driving it from an agent
 
 An outside agent (such as Claude Code) can work on the Library for a DJ through
-the `wreckordbox` command. Start with [the agent guide](docs/agents/guide.md).
+the `wreckordbox` command, or as MCP tools through `wreckordbox-mcp`. Start with
+[the agent guide](docs/agents/guide.md).
 
 ## Project vision
 
