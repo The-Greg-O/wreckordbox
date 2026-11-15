@@ -259,3 +259,6 @@ fn staging_keeps_its_copies_if_authorization_is_lost_before_cleanup() {
         "no unauthorized deletion of the staged copy"
     );
 }
+
+#[path = "verification.rs"]
+mod verification;

@@ -1551,5 +1551,8 @@ mod import_ledger;
 #[path = "service_host/key_tag_ledger.rs"]
 mod key_tag_ledger;
 
+#[path = "service_host/key_evidence.rs"]
+mod key_evidence;
+
 #[path = "service_host/analysis_lock_ledger.rs"]
 mod analysis_lock_ledger;

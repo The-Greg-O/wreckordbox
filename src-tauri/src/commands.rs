@@ -3587,7 +3587,7 @@ async fn run_history<R: tauri::Runtime>(
             let _ = match stepped {
                 Stepped::Cues(track) => tauri::Emitter::emit(&app, "cues:changed", track),
                 Stepped::TagList => tauri::Emitter::emit(&app, Touched::TagList.event(), dto.generation),
-                Stepped::Library => tauri::Emitter::emit(&app, "library:changed", dto.generation),
+                Stepped::Library | Stepped::LibraryWarning(_) => tauri::Emitter::emit(&app, "library:changed", dto.generation),
                 // A grid step (wbx-64): every deck showing the track re-reads
                 // its grid, and a changed tempo is a changed BPM column.
                 Stepped::Grid { track, bpm_changed } => {
@@ -3603,13 +3603,18 @@ async fn run_history<R: tauri::Runtime>(
         Err(error) if error.kind == ErrorKind::Conflict => announce_history(&app, &state),
         Err(_) => {}
     }
-    result.map(|(dto, _)| dto)
+    result.and_then(|(dto, stepped)| match stepped {
+        Stepped::LibraryWarning(why) => Err(AppError::internal(why)),
+        _ => Ok(dto),
+    })
 }
 
 /// What an Undo or Redo changed, for the event the window is sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Stepped {
     Library,
+    /// The step committed; announce it before returning its evidence warning.
+    LibraryWarning(String),
     TagList,
     /// One track's cues (#504).
     Cues(String),
@@ -3663,10 +3668,14 @@ fn step_history_with(state: &AppState, editor: Option<&crate::grid::GridEditor>,
     drop(gate);
     match state.core().step_history(state, undo) {
         Ok(step) => {
-            let stepped = match step.touched {
-                Touched::Cues(track) => Stepped::Cues(track),
-                Touched::TagList => Stepped::TagList,
-                _ => Stepped::Library,
+            let stepped = if let Some(why) = step.warning {
+                Stepped::LibraryWarning(why)
+            } else {
+                match step.touched {
+                    Touched::Cues(track) => Stepped::Cues(track),
+                    Touched::TagList => Stepped::TagList,
+                    _ => Stepped::Library,
+                }
             };
             Ok((history_dto(step.generation, &state.edit_history().lock()), stepped))
         }
