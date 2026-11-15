@@ -725,16 +725,7 @@ fn accept(
     // the selection read here is the one written below, since the listing
     // must still digest to the token the DJ was shown (or each row to its
     // own) under the gate, or nothing is written.
-    if asked.facts.is_empty()
-        && asked.rows.is_empty()
-        && asked.field.is_some_and(crate::review_text::is_text)
-    {
-        return Err(early(bad_request(
-            "a proposed title or artist is accepted only by naming it: give its Fact (or row), not a filter",
-        )));
-    }
-    let (outside, _) = listed(library, stems, asked).map_err(early)?;
-    competing(&outside).map_err(early)?;
+    let (outside, _) = to_accept(library, stems, asked).map_err(early)?;
     let outside: Vec<String> = outside.into_iter().map(|h| h.track).collect();
     if !outside.is_empty() {
         crate::large_run::before_write(library, stems, outside.iter().cloned()).map_err(early)?;
@@ -743,8 +734,7 @@ fn accept(
     // edit made through the edit path comes between them; the backup, if
     // one was taken, is checked still of the moment before (wbx-25).
     let _gate = crate::large_run::bound(library, stems, &outside).map_err(early)?;
-    let (chosen, watermark) = listed(library, stems, asked).map_err(early)?;
-    competing(&chosen).map_err(early)?;
+    let (chosen, watermark) = to_accept(library, stems, asked).map_err(early)?;
     if chosen.is_empty() {
         return Ok((
             Decided {
@@ -896,6 +886,33 @@ fn accept(
         ))),
         Err(e) => Err(early(e)),
     }
+}
+
+/// [`listed`] for an accept: refused when it names a title or an artist by
+/// a filter, or holds competing proposals (wbx-66 review).
+fn to_accept(
+    library: &OpenLibrary,
+    stems: &Stems,
+    asked: &Selection,
+) -> Result<(Vec<Held>, i64), ServiceError> {
+    by_name(asked)?;
+    let (chosen, watermark) = listed(library, stems, asked)?;
+    competing(&chosen)?;
+    Ok((chosen, watermark))
+}
+
+/// Refuses an accept by a filter naming a title or an artist: those are
+/// accepted only by naming their Facts or rows (wbx-66 review).
+fn by_name(asked: &Selection) -> Result<(), ServiceError> {
+    if asked.facts.is_empty()
+        && asked.rows.is_empty()
+        && asked.field.is_some_and(crate::review_text::is_text)
+    {
+        return Err(bad_request(
+            "a proposed title or artist is accepted only by naming it: give its Fact (or row), not a filter",
+        ));
+    }
+    Ok(())
 }
 
 /// Refuses a selection holding two proposals for one track and field: both
