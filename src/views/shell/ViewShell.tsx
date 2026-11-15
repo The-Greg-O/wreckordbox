@@ -35,8 +35,8 @@ import { observeShellWidth, useShellWidth } from "@/store/useShellWidth";
 import { SHELL_NARROW_MAX_PX } from "@/lib/shellViews";
 import { treeKeyAction } from "@/lib/shellTreeOverlay";
 import { isTyping } from "@/lib/shortcuts";
+import { EmptyView } from "./EmptyView";
 import { LibraryView } from "./LibraryView";
-import { ReviewView } from "./ReviewView";
 import { StickView } from "./StickView";
 import styles from "./ViewShell.module.css";
 
@@ -81,7 +81,10 @@ export interface ViewShellProps {
   stickHoldsLibrary?: boolean | undefined;
   /** The number waiting, drawn on a view's tab ("Intake 23"); absent or `null` draws none. */
   tabCounts?: Partial<Record<ShellView, number | null>> | undefined;
-  /** The Review view (wbx-74), loaded on demand by the window; absent, the empty placeholder. */
+  /**
+   * The Review view (wbx-74), loaded on demand by the window; absent, the empty placeholder.
+   * Never imported here: a static import would put its code in the start-up chunk (wbx-45.24).
+   */
   review?: ReactNode | undefined;
   /** The Intake view: given the queue it shows, so the shell stays out of its data. */
   intake?: ((queue: IntakeQueue) => ReactNode) | undefined;
@@ -244,7 +247,7 @@ export function ViewShell({
             </div>
           ) : null}
           {view === "intake" ? intake?.(intakeQueue ?? "intake") ?? null : null}
-          {view === "review" ? review ?? <ReviewView /> : null}
+          {view === "review" ? review ?? <EmptyView title="Review" note="Nothing to show here." /> : null}
           {view === "stick" ? <StickView stick={stick} /> : null}
         </main>
         <footer className={styles.status} data-testid="shell-status">{status}</footer>
