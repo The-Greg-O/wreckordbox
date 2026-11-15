@@ -506,7 +506,11 @@ struct Measuring<'a> {
 }
 
 fn measure(stems: &Arc<Stems>, targets: &[Target], force: bool) -> Result<Measured, ServiceError> {
-    crate::sidecar_stick::refuse_background_work(stems.sidecar_dir(), "Intensity measurement")?;
+    crate::sidecar_stick::refuse_background_work(
+        stems.library_dir(),
+        stems.sidecar_dir(),
+        "Intensity measurement",
+    )?;
     let total = targets.len();
     if total == 0 {
         return Ok(Measured {
