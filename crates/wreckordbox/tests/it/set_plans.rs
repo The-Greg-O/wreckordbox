@@ -179,11 +179,19 @@ fn a_set_plan_is_built_the_same_twice_kept_in_the_sidecar_and_the_library_is_unc
             .map(|c| c["score"].as_f64().unwrap())
             .sum();
         assert!((sum - t["score"].as_f64().unwrap()).abs() < 1e-3);
+        // The key reason names the two keys and the move (wbx-b59).
+        let key_of = |position: &Value| {
+            tracks[usize::try_from(position.as_u64().unwrap() - 1).unwrap()]["key"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        let named = format!("{} to {}, ", key_of(&t["from"]), key_of(&t["to"]));
         assert!(
             t["criteria"][0]["reason"]
                 .as_str()
                 .unwrap()
-                .contains("move"),
+                .starts_with(&named),
             "{t}"
         );
         assert!(
