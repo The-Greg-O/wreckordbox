@@ -197,18 +197,24 @@ If the DJ has rekordbox's *Add "My Tag" to the "Comments"* preference on, pass
 
 ### Build a playlist
 
-The CLI cannot create an empty playlist or add tracks to one yet; it can copy,
-trim, reorder and delete. To build a set from an existing playlist:
+Make it with its tracks in one command; the answer's `playlist` is its id for
+the next one:
 
 ```sh
-wreckordbox --json playlists tree
-wreckordbox --json playlists copy 900000 --name "Warm-up set" --run 7   # -> "playlist": "<new id>"
-wreckordbox --json playlists remove <new id> 10004 10005 --run 7
-wreckordbox --json playlists tracks <new id> --limit 500                # entry_id of each entry
+wreckordbox --json runs start --source agent:claude --description "Warm-up set"   # -> "id": 7
+wreckordbox --json playlists create-folder "Gigs" --run 7                   # -> "playlist": "<folder>"
+wreckordbox --json playlists create "Warm-up" 10003 10001 10007 --parent <folder> --run 7
+                                                                             # -> "playlist": "<new id>"
+wreckordbox --json playlists add <new id> 10012 10015 --at 2 --run 7         # from position 2
+wreckordbox --json playlists tracks <new id> --limit 500                     # entry_id of each entry
 wreckordbox --json playlists reorder <new id> <entry_id> <entry_id> ... --run 7
+wreckordbox --json playlists rename <new id> "Warm-up (Friday)" --run 7
 ```
 
-A playlist built from nothing needs the DJ to make it in the window first.
+Each is one of the window's own steps, so the DJ can Undo it there. A playlist
+made with tracks is two steps (Create Playlist, then Add Tracks to Playlist),
+and so is an add at a position (Add Tracks, then Reorder Playlist). To start
+from an existing playlist instead, `playlists copy` it.
 
 ### Work through Intake
 
@@ -552,6 +558,54 @@ wreckordbox --json playlists copy 900000 --name "Warm-up set" --source agent:cla
 ```json
 {"from": "900000", "playlist": "2578147643", "name": "Warm-up set", "tracks": 5, "mutants": [], "generation": 7, "run": {...}}
 ```
+
+### `wreckordbox playlists create`
+
+**Changes the Library**: makes a playlist, optionally in a folder and with its
+first tracks in the order given. Arguments: `<NAME> [TRACK_ID]...`,
+`--parent FOLDER_ID` (default: the top level), `--at POSITION` (its place
+among the folder's items, from 1; default: last). A parent that is a playlist
+is refused (`not_a_folder`); an unknown track (`track_not_found`) makes
+nothing.
+
+```json
+{"playlist": "3286034227", "name": "Warm-up", "kind": "playlist", "parent": "root",
+ "added": ["<entry_id>", "<entry_id>"], "generation": 9, "run": {...}}
+```
+
+### `wreckordbox playlists create-folder`
+
+**Changes the Library**: makes a folder. Arguments: `<NAME>`, `--parent
+FOLDER_ID`, `--at POSITION`. Same result as `playlists create`, with
+`"kind": "folder"` and no `added`.
+
+### `wreckordbox playlists add`
+
+**Changes the Library**: adds tracks to a playlist, at the end or from a
+position. Arguments: `<PLAYLIST_ID> <TRACK_ID>...`, `--at POSITION` (from 1),
+`--allow-duplicates` (otherwise a track already in it is skipped and listed in
+`skipped`). An intelligent playlist's tracks are its rule's: refused
+(`not_a_playlist`), as `remove` and `reorder` are.
+
+```json
+{"playlist": "900000", "added": ["<entry_id>"], "skipped": ["10001"], "generation": 10, "run": {...}}
+```
+
+### `wreckordbox playlists rename`
+
+**Changes the Library**: renames a playlist, folder or intelligent playlist.
+Arguments: `<PLAYLIST_ID> <NAME>`.
+
+```json
+{"playlist": "900000", "name": "Closing", "parent": "root", "at": 1, "generation": 11, "run": {...}}
+```
+
+### `wreckordbox playlists move`
+
+**Changes the Library**: moves a playlist or folder, with everything in it,
+into a folder or back to the top level. Arguments: `<PLAYLIST_ID>`, `--parent
+FOLDER_ID` (default: the top level), `--at POSITION`. A folder never goes
+inside itself (`write_refused`). Same result as `playlists rename`.
 
 ### `wreckordbox history`
 
@@ -1260,8 +1314,10 @@ Reads (each named after the CLI command it mirrors in its description):
 Changes to the Library: `change_track_rating`, `change_prep_colour`,
 `change_mytag_assign`, `change_mytag_unassign`, `change_mytag_create`,
 `change_mytag_rename`, `change_mytag_move`, `change_track_tags`,
-`change_playlist_copy`, `change_playlist_remove_tracks`,
-`change_playlist_reorder`, `change_project` (needs the `plan` of
+`change_playlist_create`, `change_playlist_create_folder`,
+`change_playlist_add_tracks`, `change_playlist_rename`,
+`change_playlist_move`, `change_playlist_copy`,
+`change_playlist_remove_tracks`, `change_playlist_reorder`, `change_project` (needs the `plan` of
 `read_projection_plan`).
 
 Changes to the Sidecar: `change_run_start`, `change_run_finish`,

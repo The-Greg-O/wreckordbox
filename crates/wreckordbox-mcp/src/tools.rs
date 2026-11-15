@@ -757,6 +757,83 @@ pub fn catalogue() -> Vec<Tool> {
         vec!["playlist", "entries"],
         json!({}),
     );
+    let position = |what: &str| json!({"type": "integer", "minimum": 1, "description": format!("{what}, from 1; left out, the last.")});
+    library(
+        &mut b,
+        "change_playlist_create",
+        "playlists.create",
+        "Makes a playlist, in a folder or at the top level, optionally with its first tracks in order; \
+         answers its identifier as `playlist` (`wreckordbox playlists create`).",
+        vec![
+            ("name", text("The playlist's name.")),
+            ("parent", text("The folder to make it in, from `read_playlists`; left out, the top level.")),
+            ("at", position("Its place among the folder's items")),
+            ("tracks", texts("Its first tracks' identifiers, in order.")),
+        ],
+        vec!["name"],
+        json!({}),
+    );
+    library(
+        &mut b,
+        "change_playlist_create_folder",
+        "playlists.create_folder",
+        "Makes a folder, in a folder or at the top level; answers its identifier as `playlist` \
+         (`wreckordbox playlists create-folder`).",
+        vec![
+            ("name", text("The folder's name.")),
+            (
+                "parent",
+                text("The folder to make it in; left out, the top level."),
+            ),
+            ("at", position("Its place among the folder's items")),
+        ],
+        vec!["name"],
+        json!({}),
+    );
+    library(
+        &mut b,
+        "change_playlist_add_tracks",
+        "playlists.add",
+        "Adds tracks to a playlist, at the end or from a position; a track already in it is skipped \
+         unless `allow_duplicates`. An intelligent playlist is refused (`wreckordbox playlists add`).",
+        vec![
+            ("playlist", text("The playlist's identifier.")),
+            ("tracks", texts("The tracks' identifiers, in the order they go in.")),
+            ("at", position("The position the first of them takes")),
+            ("allow_duplicates", boolean("Add a track the playlist already holds again.")),
+        ],
+        vec!["playlist", "tracks"],
+        json!({}),
+    );
+    library(
+        &mut b,
+        "change_playlist_rename",
+        "playlists.rename",
+        "Renames a playlist or folder (`wreckordbox playlists rename`).",
+        vec![
+            ("playlist", text("The playlist's or folder's identifier.")),
+            ("name", text("The new name.")),
+        ],
+        vec!["playlist", "name"],
+        json!({}),
+    );
+    library(
+        &mut b,
+        "change_playlist_move",
+        "playlists.move",
+        "Moves a playlist or folder, with everything in it, into a folder or to the top level \
+         (`wreckordbox playlists move`).",
+        vec![
+            ("playlist", text("The playlist's or folder's identifier.")),
+            (
+                "parent",
+                text("The folder to move it into; left out, the top level."),
+            ),
+            ("at", position("Its place among the folder's items")),
+        ],
+        vec!["playlist"],
+        json!({}),
+    );
     library(
         &mut b,
         "change_project",

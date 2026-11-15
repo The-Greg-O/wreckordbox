@@ -521,3 +521,54 @@ fn a_decision_asked_without_a_run_or_source_is_the_agents() {
         "{shown}"
     );
 }
+
+#[test]
+fn a_playlist_is_made_with_tracks_filled_and_arranged_through_the_tools_as_the_agents() {
+    let sandbox = Sandbox::new();
+    let mut server = sandbox.server();
+    server.start();
+    let folder = structured(&server.call("change_playlist_create_folder", json!({"name": "Gigs"})))
+        ["playlist"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let made = structured(&server.call(
+        "change_playlist_create",
+        json!({"name": "Warm-up", "parent": folder, "tracks": ["10003", "10001"]}),
+    ))
+    .clone();
+    assert_eq!(
+        made["run"]["source"],
+        json!({"kind": "agent", "name": "test-agent"}),
+        "{made}"
+    );
+    let playlist = made["playlist"].as_str().unwrap().to_owned();
+    structured(&server.call(
+        "change_playlist_add_tracks",
+        json!({"playlist": playlist, "tracks": ["10002"], "at": 1}),
+    ));
+    structured(&server.call(
+        "change_playlist_rename",
+        json!({"playlist": playlist, "name": "Opening"}),
+    ));
+    let moved =
+        structured(&server.call("change_playlist_move", json!({"playlist": playlist}))).clone();
+    assert_eq!(moved["parent"], "root", "{moved}");
+    assert_eq!(moved["name"], "Opening", "{moved}");
+
+    let listed =
+        structured(&server.call("read_playlist_tracks", json!({"id": playlist, "limit": 10})))
+            .clone();
+    let ids: Vec<&str> = listed["tracks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|track| track["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["10002", "10003", "10001"], "{listed}");
+
+    // Under Library Protection, nothing more is made.
+    structured(&server.call("change_protection_on", json!({})));
+    let error = refused(&server.call("change_playlist_create", json!({"name": "Late"})));
+    assert_eq!(error["code"], "library_protected", "{error}");
+}
