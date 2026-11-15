@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   atOrAbove,
+  bulkAcceptable,
+  fieldText,
   emptyBoard,
   fromServiceListing,
   groupByRun,
@@ -213,5 +215,22 @@ describe("after a refusal (wbx-74 review)", () => {
     board = decidedNow(board, [2], "accepted");
     expect(shownGroups(board)[0]!.rows.map((r) => r.ghost)).toEqual([null, "accepted"]);
     expect(board.selected.size).toBe(0);
+  });
+});
+
+describe("fieldText and valueText for proposed titles and artists (wbx-66)", () => {
+  it("names the field and shows the text as proposed", () => {
+    expect(fieldText("title")).toBe("Title");
+    expect(fieldText("artist")).toBe("Artist");
+    expect(valueText("title", "A Better Title")).toBe("A Better Title");
+  });
+});
+
+describe("the confidence bulk accept (wbx-66 review)", () => {
+  it("never takes a proposed title or artist, whatever its confidence", () => {
+    const facts = listing([held(1, "a", 0.9), held(2, "b", 0.95), held(3, "c", 0.85)], [{ id: 1, facts: [1, 2, 3] }]).facts
+      .map((f) => (f.fact === 2 ? { ...f, field: "title" } : f.fact === 3 ? { ...f, field: "artist" } : f));
+    expect(bulkAcceptable(facts, 0.8)).toEqual([1]);
+    expect(atOrAbove(facts, 0.8)).toEqual([1, 2, 3]);
   });
 });

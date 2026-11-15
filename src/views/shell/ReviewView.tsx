@@ -23,7 +23,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent, typ
 import { getBackend } from "@/ipc/client";
 import type { RowDto } from "@/ipc/types";
 import {
-  afterDecision, atOrAbove, clearSelected, decidedNow, emptyBoard, fieldText, isLow, pendingChanges,
+  afterDecision, atOrAbove, bulkAcceptable, clearSelected, decidedNow, emptyBoard, fieldText, isLow, pendingChanges,
   pinBoard, reasonText, received, refusedBoard, rowsToAccept, showLatest, shownGroups, sourceText, toggleSelected, valueText,
   type Board, type DecisionOutcome, type ListingChanges, type RejectedFact, type ReviewRun, type ShownGroup,
 } from "@/lib/reviewQueue";
@@ -516,6 +516,8 @@ function RunGroupView({ group, threshold, onThreshold, board, busy, protectedLib
   const live = group.rows.filter((r) => !r.ghost).map((r) => r.fact);
   // Computed from what is drawn; the same array is what the control sends.
   const above = atOrAbove(live, threshold);
+  // Never a proposed title or artist: those only by their own row (wbx-66).
+  const acceptable = bulkAcceptable(live, threshold);
   const held = live.filter((f) => f.reason !== "waits_for_dj");
   const label = runTitle(run);
   const marked = board.marked;
@@ -544,9 +546,9 @@ function RunGroupView({ group, threshold, onThreshold, board, busy, protectedLib
             />
           </label>
           <button type="button" className={styles.accept} data-testid="review-bulk-accept"
-            disabled={busy || protectedLibrary || above.length === 0}
-            onClick={firstOfGesture(() => onDecide("accept", above))}>
-            Accept ≥ {threshold.toFixed(2)} · {above.length}
+            disabled={busy || protectedLibrary || acceptable.length === 0}
+            onClick={firstOfGesture(() => onDecide("accept", acceptable))}>
+            Accept ≥ {threshold.toFixed(2)} · {acceptable.length}
           </button>
           <button type="button" className={styles.button} data-testid="review-bulk-reject"
             disabled={busy || above.length === 0}

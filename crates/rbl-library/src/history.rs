@@ -721,12 +721,36 @@ impl crate::LibraryCore {
             &mut rbl_db::write::Writer,
         ) -> Result<(T, Vec<rbl_db::write::TrackEdit>), DbError>,
     ) -> Result<(T, crate::Change), DbError> {
+        self.asserting_edit_refreshing(host, &touched.clone(), touched, label, action)
+    }
+
+    /// [`Self::asserting_edit`] whose index refresh is `refresh` while the
+    /// Ledger's recovery evidence stays bounded to `touched`'s tracks
+    /// (wreckordbox, wbx-66): a hand set of a title or an artist names its
+    /// tracks as `Touched::Metadata` but needs the whole index re-read
+    /// (`Touched::Tracks`), as any edit of a track column does.
+    ///
+    /// Blocking.
+    pub fn asserting_edit_refreshing<T>(
+        &self,
+        host: &(impl crate::Host + ?Sized),
+        touched: &Touched,
+        refresh: Touched,
+        label: &'static str,
+        action: impl FnOnce(
+            &mut rbl_db::write::Writer,
+        ) -> Result<(T, Vec<rbl_db::write::TrackEdit>), DbError>,
+    ) -> Result<(T, crate::Change), DbError> {
         // Held across both, so the assertion follows its change with no
         // other edit between (the gate is re-entrant).
         let _gate = self.edit_gate().lock();
+        let preparation = crate::ledger::Preparation {
+            asserting: true,
+            ..crate::ledger::Preparation::touched(touched)
+        };
         // The Ledger keeps the write's intent until the assertion is told,
         // so a crash between the change and the assertion leaves evidence.
-        let made = self.recorded_edit_preparing(host, touched, label, true, |writer| {
+        let made = self.recorded_edit_prepared(host, refresh, label, &preparation, |writer| {
             let (value, edits) = action(writer)?;
             let (unchanged, changed): (Vec<_>, Vec<_>) = edits
                 .into_iter()

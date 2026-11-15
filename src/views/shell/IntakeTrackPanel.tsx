@@ -18,8 +18,9 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 
 
 import { useTranslation } from "@/i18n";
 import type { IntakeColours, PrepColour } from "@/lib/intakeEdits";
-import { needsLine, type QueuedTrack } from "@/lib/intakeQueue";
+import { needsLine, type IntakeSuggestion, type QueuedTrack } from "@/lib/intakeQueue";
 import { describeChord, type KeyChord, type Platform } from "@/lib/shortcuts";
+import { FieldSuggestions, useSuggestionKeys } from "./IntakeSuggestions";
 import styles from "./IntakeTrackPanel.module.css";
 
 export interface IntakeTrackPanelProps {
@@ -54,6 +55,12 @@ export interface IntakeTrackPanelProps {
   suggestionsUnavailable: string | null;
   /** The tag panel (wbx-65), between the pickers and the actions. */
   tags?: ReactNode;
+  /** Accepts a proposed title or artist: Review's own decision (wbx-66). */
+  onAcceptSuggestion?: (suggestion: IntakeSuggestion) => void;
+  /** The proposal being accepted now, if any. */
+  accepting?: number | null;
+  /** Library Protection is on: nothing can be accepted. */
+  protectLibrary?: boolean;
 }
 
 export function IntakeTrackPanel(props: IntakeTrackPanelProps) {
@@ -71,24 +78,31 @@ export function IntakeTrackPanel(props: IntakeTrackPanelProps) {
     void props.onEnergy(to).then((written) => { if (!written) setPendingEnergy(null); });
   };
 
+  const accepting = props.accepting ?? null;
+  const accept = (suggestion: IntakeSuggestion) => props.onAcceptSuggestion?.(suggestion);
+  const proposed = (field: string) => track.suggestions.filter((s) => s.field === field);
+  const proposalKeys = useSuggestionKeys({
+    shown: track.suggestions,
+    busy: busy || accepting !== null,
+    protectedLibrary: props.protectLibrary ?? false,
+    accept,
+  });
+
   const key = (chord: KeyChord) => (chord.key === "" ? null : <kbd className={styles.key}>{describeChord(chord, platform)}</kbd>);
 
   return (
     <section className={styles.panel} aria-label={t("Track")} data-testid="intake-panel">
-      <div className={styles.fields}>
-        <InPlaceField key={`title:${track.id}`} label={t("Title")} value={track.title} onCommit={props.onTitle} onSaveThenMark={props.onSaveThenMark} />
-        <InPlaceField key={`artist:${track.id}`} label={t("Artist")} value={track.artist} onCommit={props.onArtist} onSaveThenMark={props.onSaveThenMark} />
+      <div className={styles.fields} onFocusCapture={proposalKeys.onFocusCapture} onKeyDown={proposalKeys.onKeyDown}>
+        <div className={styles.fieldWithProposals}>
+          <InPlaceField key={`title:${track.id}`} label={t("Title")} value={track.title} onCommit={props.onTitle} onSaveThenMark={props.onSaveThenMark} />
+          <FieldSuggestions field={t("Title")} suggestions={proposed("title")} accepting={accepting} busy={busy || accepting !== null} onAccept={accept} />
+        </div>
+        <div className={styles.fieldWithProposals}>
+          <InPlaceField key={`artist:${track.id}`} label={t("Artist")} value={track.artist} onCommit={props.onArtist} onSaveThenMark={props.onSaveThenMark} />
+          <FieldSuggestions field={t("Artist")} suggestions={proposed("artist")} accepting={accepting} busy={busy || accepting !== null} onAccept={accept} />
+        </div>
       </div>
-      {track.suggestions.length > 0 ? (
-        <ul className={styles.suggestions} aria-label={t("Proposed")}>
-          {track.suggestions.map((suggestion) => (
-            <li key={`${suggestion.field}:${suggestion.value}`}>
-              <span className={styles.label}>{t(suggestion.field)}</span> {suggestion.value}
-              <span className={styles.source}> {suggestion.source} · {suggestion.confidence.toFixed(2)}</span>
-            </li>
-          ))}
-        </ul>
-      ) : null}
+      {proposalKeys.refused !== null ? <p className={styles.note} data-testid="intake-suggestion-key-refused" role="status">{t(proposalKeys.refused)}</p> : null}
 
       <div className={styles.pickers}>
         <div className={styles.picker}>

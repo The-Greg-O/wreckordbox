@@ -2,7 +2,8 @@
  * One page of the Intake or Problems queue, kept current (wbx-62).
  *
  * Read when shown, after every change to the Library, every cue or grid
- * edit, and when the Library finishes loading, coalesced so that a burst of changes costs at most one
+ * edit, every Fact recorded or decided (proposed titles and artists), and
+ * when the Library finishes loading, coalesced so that a burst of changes costs at most one
  * more read (`coalescedRefresh`). Only the page shown is ever read: the
  * cost of a refresh is bounded by the page size, however far the DJ pages.
  *
@@ -61,6 +62,10 @@ export function useIntakeQueue(queue: IntakeQueueName, offset: number, limit: nu
       // and changes what a track still needs (cues, grid) (wbx-64).
       stops.push(backend.onCuesChanged(() => refresh.request()));
       stops.push(backend.onGridChanged(() => refresh.request()));
+      // A title or artist proposed while a Run works, or decided in Review,
+      // is a Sidecar change with no Library change (wbx-66).
+      stops.push(backend.onSidecarChanged(() => refresh.request()));
+      stops.push(backend.onReviewChanged(() => refresh.request()));
       refresh.request();
     })();
     return () => {

@@ -321,6 +321,24 @@ impl OpenLibrary {
         })
     }
 
+    /// [`Self::asserting_edit`] refreshing the index by `refresh` while the
+    /// Ledger's evidence and the large-Run count stay `touched`'s
+    /// ([`LibraryCore::asserting_edit_refreshing`], wbx-66).
+    pub(crate) fn asserting_edit_refreshing<T>(
+        &self,
+        touched: &Touched,
+        refresh: Touched,
+        label: &'static str,
+        action: impl FnOnce(
+            &mut rbl_db::write::Writer,
+        ) -> Result<(T, Vec<rbl_db::write::TrackEdit>), DbError>,
+    ) -> Result<(T, LibraryChanged), ServiceError> {
+        let planned = crate::large_run::Planned::of(touched, &[]);
+        self.change(planned, |core, host| {
+            core.asserting_edit_refreshing(host, touched, refresh, label, action)
+        })
+    }
+
     /// [`Self::recorded_edit`] for the DJ's hand set of My Tags (wbx-29):
     /// the assignments `action` left as they were are the DJ's assertion
     /// ([`LibraryCore::asserting_tag_edit`]), no step of the history.

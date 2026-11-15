@@ -41,6 +41,7 @@ pub mod release_wait;
 pub mod render_stems;
 pub mod review;
 pub mod review_runs;
+pub(crate) mod review_text;
 pub mod run_status;
 pub mod schema;
 mod separation;
