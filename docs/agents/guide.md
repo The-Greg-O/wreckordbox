@@ -138,10 +138,11 @@ take back your most recent changes from the window. **Not all of them:**
 
 Every other Library change (ratings, Prep colours, MyTag assign and unassign,
 `mytags move`, `intake tag`, playlist edits, Projection) is an Undo step.
-**The CLI has no undo command.** Reversing a whole Run later and out of order (Unwind) is planned
-(beads `wbx-23`, `wbx-24`) and not built yet; until then `runs show` lists
-every change with its value before and after, which is what you, or the DJ,
-need to put things back by hand.
+A finished Run can be reversed later and out of order with `runs unwind`.
+Start with `--dry-run`: values changed since are kept and reported with the
+expected and current values. Kinds without a durable inverse are named plainly.
+An Unwind is a new Run and one window Undo step; you can unwind that Run too.
+Partial Unwind is not available yet (wbx-24).
 
 ### Where things are
 
@@ -785,6 +786,37 @@ Reads Runs, newest first, with change counts. `--limit`, `--offset`.
  "runs": [{"id": 7, "description": "...", "source": {...}, "started_at": ..., "finished_at": ..., "outcome": "...", "changes": 0, "counts": []}]}
 ```
 
+### `wreckordbox runs unwind`
+
+`wreckordbox runs unwind RUN_ID [--dry-run] [--force] [--source SOURCE] [--description TEXT]`
+
+Unwinds a finished Run through the single edit path. The dry run writes nothing
+and lists every entry, newest first: `will_reverse`, `changed_since` (kept),
+`cannot_reverse` (kind and reason), or `already_reversed`. Each native value
+includes the original before/after and current value. Apply recomputes the plan
+under the edit gate; a dry run is not permission to overwrite intervening work.
+
+Use your own agent source. An Unwind makes its own Run (`--run` is refused),
+records which original entries it reverses, and honours Library Protection.
+A Library or Sidecar hosted on a Stick refuses apply even when unlocked; the
+dry run remains available. Repeating the same Unwind does not reverse an entry
+twice. `--force` explicitly replaces conflicts and retains the actual overwritten
+values in the new Run. Use force only when the DJ explicitly asked for those
+conflicts to be replaced. Missing native rows cannot be forced.
+
+Supported native kinds: track fields, track MyTags with their comments, MyTag
+order, and playlist entry order. Facts and native DJ Fact effects retain their
+original rows, sources and Runs when restored. Named-only edits, analysis/audio
+file writes, and other kinds lacking a supported durable inverse are reported
+as `cannot_reverse`; inspect these instead of claiming the whole Run was undone.
+The result's `reversed` counts entries selected for reversal (planned in a dry
+run, applied otherwise). `run` identifies the new Run when anything was reversed.
+
+```sh
+wreckordbox --json runs unwind 7 --dry-run
+wreckordbox --json runs unwind 7 --source agent:claude --description "Unwind the earlier tagging pass"
+```
+
 ### `wreckordbox runs show`
 
 Reads one Run and every change it made, in order, with before and after.
@@ -1295,3 +1327,11 @@ enough to need a person watching: `backup restore`, `tracks remove`, `playlists 
 `stick lock` and `stick status` (Stick Protection state is kept beside the
 window, not in the service), `runs spills list` and `runs spills show`,
 `backup list`, `stop`, `serve`.
+
+### MCP Unwind tools
+
+`read_run_unwind` reads the dry run (`runs.unwind.plan`); `change_run_unwind`
+applies it (`runs.unwind`). Both take `id` and optional `force`. The changing
+tool retains the calling agent's source and returns the new Run. A dry run
+has no Run attribution and cannot write. These use the same service behavior
+as `wreckordbox runs unwind`, including protection and conflict reporting.

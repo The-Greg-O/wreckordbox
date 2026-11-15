@@ -174,6 +174,16 @@ impl Sidecar {
             payload: payload.as_ref(),
             ..*entry
         };
+        if entry.kind == "unwind" {
+            let id = append_in(&tx, &candidate)?;
+            if let Some(reversed) = entry.reverses.filter(|_| matches!(entry.action, Action::Undo | Action::Redo)) {
+                withdraw_edit(&tx, id, reversed)?;
+            } else if let Some(payload) = entry.payload {
+                crate::unwind::apply_in(&tx, id, payload)?;
+            }
+            tx.commit()?;
+            return Ok((id, followed));
+        }
         tx.execute_batch("SAVEPOINT native_facts")?;
         let id = append_in(&tx, &candidate)?;
         let work = (|| {
@@ -279,7 +289,7 @@ fn attributable(tx: &Transaction<'_>, fact: &NativeFact, source: &str) -> Result
     let owned = terms(&existing);
     Ok(unchanged.iter().all(|term| owned.contains(term)))
 }
-fn remember(tx: &Transaction<'_>, entry: i64, fact: i64, existed: bool) -> Result<()> {
+pub(crate) fn remember(tx: &Transaction<'_>, entry: i64, fact: i64, existed: bool) -> Result<()> {
     tx.execute("INSERT OR IGNORE INTO dj_fact_effect(entry_id,fact_id,existed,superseded_at,superseded_by) SELECT ?1,id,?3,superseded_at,superseded_by FROM fact WHERE id=?2",params![entry,fact,existed])?;
     Ok(())
 }

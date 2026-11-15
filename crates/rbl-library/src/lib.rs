@@ -681,3 +681,5 @@ impl LibraryCore {
         self.inner.read().views.get(&view_id).map(|open| Arc::clone(&open.view))
     }
 }
+
+pub mod unwind;

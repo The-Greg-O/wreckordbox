@@ -338,6 +338,7 @@ pub mod stored {
     #[must_use]
     pub fn kind_of(edit: &LibraryEdit) -> &'static str {
         match edit {
+            LibraryEdit::Unwind(_) => "unwind",
             LibraryEdit::DeletePlaylist(_) => "delete_playlist",
             LibraryEdit::RenamePlaylist(_) => "rename_playlist",
             LibraryEdit::MovePlaylist(_) => "move_playlist",
@@ -369,6 +370,11 @@ pub mod stored {
     #[must_use]
     pub fn store(edit: &LibraryEdit) -> Option<Value> {
         match edit {
+            LibraryEdit::Unwind(unwind) => {
+                let mut payload = unwind.metadata.clone();
+                payload["edits"] = json!(unwind.edits.iter().map(|edit| json!({"kind":kind_of(edit),"payload":store(edit)})).collect::<Vec<_>>());
+                Some(payload)
+            }
             LibraryEdit::Track(edits) => Some(json!({ "edits": track_edits(edits) })),
             LibraryEdit::KeyEdit { tracks, files } => Some(json!({
                 "edits":track_edits(tracks),"files":files.ledger_values(),
@@ -435,6 +441,12 @@ pub mod stored {
             return None;
         }
         match kind {
+            "unwind" => {
+                let edits = payload.get("edits")?.as_array()?.iter().map(|edit|
+                    restore(edit.get("kind")?.as_str()?, FORMAT, edit.get("payload")?)
+                ).collect::<Option<Vec<_>>>()?;
+                Some(LibraryEdit::Unwind(rbl_library::unwind::Unwind { edits, metadata: payload.clone() }))
+            }
             "track" => Some(LibraryEdit::Track(track_edits_from(payload.get("edits")?)?)),
             "track_tags" => {
                 let tags = payload
@@ -550,6 +562,11 @@ pub mod stored {
             after: shown(&field(edit, "after")),
         };
         match kind {
+            "unwind" => {
+                for edit in list("edits") {
+                    values.extend(self::values(edit["kind"].as_str().unwrap_or(""), FORMAT, &edit["payload"], false));
+                }
+            }
             "track" => values.extend(list("edits").iter().map(column)),
             "key_edit" => {
                 values.extend(list("edits").iter().map(column));
@@ -650,7 +667,7 @@ pub mod stored {
 
     /// A SQLite value, exactly: an integer and a real of the same amount
     /// stay apart.
-    fn sql_json(value: &Sql) -> Value {
+    pub(crate) fn sql_json(value: &Sql) -> Value {
         match value {
             Sql::Null => Value::Null,
             Sql::Integer(whole) => json!(whole),
@@ -710,7 +727,8 @@ pub mod stored {
 pub const TAG_ASSERTION_KIND: &str = wreckordbox_sidecar::mytag_projection::ASSERTION_KIND;
 
 pub(crate) fn takes_run(command: &str) -> bool {
-    command == crate::protocol::commands::TRACKS_RATE
+    command == crate::unwind::APPLY
+        || command == crate::protocol::commands::TRACKS_RATE
         || command == crate::intake::commands::TRACKS_SET_PREP_COLOUR
         || command == crate::tag_panel::commands::INTAKE_SET_TAGS
         || crate::mytag_edits::answers(command)
@@ -1376,6 +1394,9 @@ impl Keeper {
             };
         }
         let named = request.run.clone().unwrap_or_default();
+        if request.command == crate::unwind::APPLY && named.id.is_some() {
+            return Err(ServiceError::new(service_codes::BAD_REQUEST, "An Unwind is a Run of its own; do not join an existing Run."));
+        }
         let source = named
             .source
             .as_ref()
@@ -1409,7 +1430,7 @@ impl Keeper {
         // Review's accept is by the DJ its request declares (wbx-27).
         let projection = crate::projection::default_source(&request.command)
             .or_else(|| crate::review::declared(request));
-        if !from_client && request.run.is_none() && projection.is_none() {
+        if !from_client && request.run.is_none() && projection.is_none() && request.command != crate::unwind::APPLY {
             return Ok(Some(Target::Window));
         }
         if let Some(source) = &source {

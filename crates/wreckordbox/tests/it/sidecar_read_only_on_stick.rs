@@ -40,6 +40,7 @@ const RECORDS: &[&str] = &[
     "review.reject",
     "review.reopen",
     "runs.start",
+    "runs.unwind",
     "schema.convert",
     "stems.separate",
 ];
@@ -118,6 +119,7 @@ fn reads(track: &str) -> Vec<(&'static str, Value)> {
         ("runs.active", json!({})),
         ("runs.list", json!({})),
         ("runs.show", json!({ "id": 1 })),
+        ("runs.unwind.plan", json!({ "id": 1 })),
         ("runs.spills.list", json!({})),
         ("schema.check", json!({})),
         ("stems.show", json!({ "id": track })),

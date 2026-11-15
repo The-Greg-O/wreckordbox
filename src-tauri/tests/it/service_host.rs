@@ -1559,3 +1559,26 @@ mod key_evidence;
 
 #[path = "service_host/analysis_lock_ledger.rs"]
 mod analysis_lock_ledger;
+
+#[test]
+fn unwind_updates_the_window_and_is_one_undo_step() {
+    let window = window();
+    window.host().unwrap();
+    let original = window.cli(&["--json", "runs", "start", "--source", "agent:test", "--description", "Two changes"]).json()["id"].to_string();
+    window.cli(&["tracks", "rate", "10001", "4", "--run", &original]).succeeded();
+    window.cli(&["tracks", "rate", "10002", "3", "--run", &original]).succeeded();
+    window.cli(&["runs", "finish", &original]).succeeded();
+    let before = window.generation();
+    let answer = window.cli(&["--json", "runs", "unwind", &original]).json();
+    assert_eq!(answer["reversed"], 2);
+    assert_eq!(window.rating("10001"), 0);
+    assert_eq!(window.rating("10002"), 0);
+    eventually("Unwind change", || window.changes.lock().unwrap().iter().any(|g| *g > before));
+    assert_eq!(commands::current_history(window.state().inner()).undo_label.as_deref(), Some("Unwind Run"));
+    run(commands::undo_edit(window.app.handle().clone(), window.state())).unwrap();
+    assert_eq!(window.rating("10001"), 4);
+    assert_eq!(window.rating("10002"), 3);
+    run(commands::redo_edit(window.app.handle().clone(), window.state())).unwrap();
+    assert_eq!(window.rating("10001"), 0);
+    assert_eq!(window.rating("10002"), 0);
+}

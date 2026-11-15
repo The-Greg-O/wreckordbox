@@ -81,6 +81,8 @@ pub type OutsideHold = Box<dyn std::any::Any + Send>;
 /// files; text fields keep `WebKit`'s native history.
 #[derive(Clone)]
 pub enum LibraryEdit {
+    /// A Run reversed through the Ledger, as one Undo step.
+    Unwind(crate::unwind::Unwind),
     DeletePlaylist(rbl_db::write::PlaylistDeletion),
     RenamePlaylist(rbl_db::write::PlaylistRename),
     MovePlaylist(rbl_db::write::PlaylistMove),
@@ -157,6 +159,7 @@ pub enum LibraryEdit {
 impl LibraryEdit {
     pub fn is_empty(&self) -> bool {
         match self {
+            Self::Unwind(edit) => edit.metadata["reverses"].as_array().is_none_or(Vec::is_empty),
             Self::DeletePlaylist(edit) => edit.is_empty(),
             Self::RemovePlaylistTracks(edit) => edit.is_empty(),
             Self::ReplacePlaylistContents(edits) => edits.is_empty(),
@@ -186,6 +189,7 @@ impl LibraryEdit {
     /// What Undo or Redo of this entry leaves to re-read.
     pub fn touched(&self) -> Touched {
         match self {
+            Self::Unwind(_) => Touched::Tracks,
             Self::DeletePlaylist(_) | Self::RenamePlaylist(_) |
             Self::MovePlaylist(_) | Self::SortPlaylists(_) | Self::RemovePlaylistTracks(_) |
             Self::CreatePlaylist(_) | Self::PlaylistEdit(_) |
@@ -217,6 +221,7 @@ impl LibraryEdit {
     /// transaction, is checked by the writer as it runs.
     pub fn check(&self, writer: &rbl_db::write::Writer, undo: bool) -> Result<(), DbError> {
         match self {
+            Self::Unwind(edit) => edit.check(writer, undo),
             Self::Track(values) => values.iter().try_for_each(|value| writer.check_track_edit(value, undo)),
             // The library's rows and every file the edit wrote, before either is
             // written (#507).
@@ -267,6 +272,7 @@ impl LibraryEdit {
     /// Undoes (`undo`) or redoes this entry through `writer`.
     pub fn apply(&self, writer: &mut rbl_db::write::Writer, undo: bool) -> Result<(), DbError> {
         match self {
+            Self::Unwind(edit) => edit.apply(writer, undo),
             Self::DeletePlaylist(value) => if undo { writer.restore_playlist(value) } else { writer.redo_playlist_deletion(value) }.map(|_| ()),
             Self::RenamePlaylist(value) => if undo { writer.undo_rename(value) } else { writer.redo_rename(value) }.map(|_| ()),
             Self::MovePlaylist(value) => if undo { writer.undo_move(value) } else { writer.redo_move(value) }.map(|_| ()),
