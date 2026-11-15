@@ -272,7 +272,8 @@ place, and the uncompressed copy is deleted.
 - `manifest.json` records the library's `master.db` path, the creation time,
   the logical bytes copied, and which library files were present.
 - The two restore scripts get the library's `master.db` path as their
-  default target.
+  default target, and the state folder (`state_dir`) for Library Protection
+  and Ledger receipts (`WRECKORDBOX_RECOVERY_DIR` overrides it when run).
 
 Each is written through `durable::write`: written to a temporary sibling,
 flushed, then renamed into place.
@@ -336,7 +337,8 @@ entry is written under an identifier reserved by an intent and saved back
 into the journal (so writing it again changes nothing), then discharged. A
 stop after the files are in place is recorded by the next owner; a failure
 to write it is `restore_unrecorded` and keeps the journal, and while it is
-kept no new restore starts.
+kept no new restore starts. With no Sidecar yet the entry makes one; with
+no usable Sidecar folder a Ledger receipt is handed off instead (wbx-14.15).
 The separate RBXport Restore app does not know about the Sidecar and must
 not be used for a backup holding one. The logic is `rbl_backup::restore`. A
 restore:
@@ -439,12 +441,19 @@ Every backup contains `restore-rekordbox.sh` and `restore-rekordbox.ps1`.
 For a backup holding the Sidecar (`sidecar.json` beside the script) they
 change nothing themselves: they run `wreckordbox backup restore <zip> --yes`
 (`WRECKORDBOX_BIN` or `wreckordbox` on the path; `WRECKORDBOX_BACKUP` or the
-extracted folder's name plus `.zip`) or refuse. For any other backup, after
-unzipping, either one restores the backup without RBXport or RBXport
-Restore. The script:
+extracted folder's name plus `.zip`) or refuse. A Library-only backup goes
+to that command the same way when both are found and no library path was
+given. Otherwise, after unzipping, either one restores the backup without
+RBXport or RBXport Restore. The script:
 
 - checks that it is in an extracted backup and that rekordbox is not running;
+- refuses, changing nothing, while `library-protection.json` in the state
+  folder exists and does not say `"protect_library": false`;
 - asks for confirmation;
+- hands off a Ledger receipt (`ledger-receipts/restore-script-<time>-<pid>.json`
+  in the state folder: source `restore-script`, the library, the backup and
+  the rollback folder, outcome `begun`) before replacing anything, and sets
+  its outcome to `restored` or `failed` at the end;
 - moves the current database, `-wal`/`-shm` files, `USBANLZ`, `Artwork` and
   library files into a `.rbxport-before-restore-<time>-<pid>` folder beside
   the library;
@@ -463,6 +472,7 @@ set. It holds:
 | --- | --- |
 | `backup-restore.json` | The restore journal, while a restore is pending. |
 | `analysis-journal/` | Journals for analysis edits in progress. |
+| `ledger-receipts/` | Ledger receipts waiting for `wreckordbox backup receipts --record` (`wreckordbox_service::ledger_receipts`). |
 | `backup-destination.json` | The Default backup folder setting. RBXport Restore reads it to list the same folder. |
 
 This folder stays on the local machine even when backups are saved to

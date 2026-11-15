@@ -99,8 +99,22 @@ backup that holds the Sidecar they do not restore anything themselves: they
 hand the backup's `.zip` to `wreckordbox backup restore` when that command
 is installed (or named by `WRECKORDBOX_BIN`) and the `.zip` is beside the
 extracted folder (or named by `WRECKORDBOX_BACKUP`), and otherwise stop
-before changing anything. For an older backup with no Sidecar they restore
-the Library's files as they always did.
+before changing anything. An older backup with no Sidecar goes to
+`wreckordbox backup restore` the same way when it can (and when you did not
+give the script a library path). Otherwise the script restores the
+Library's files itself, refusing first while Library Protection is on in
+wreckordbox on this machine. Before it replaces anything it leaves a
+receipt for wreckordbox's Ledger, so the restore is not left unrecorded.
+
+### Receipts for the Ledger
+
+`wreckordbox backup receipts` lists what wreckordbox owes its Ledger but
+could not record when it happened: a restore made by a backup's script, or
+an interrupted analysis edit that the window finished or put back from its
+journal. Listing changes nothing. `wreckordbox backup receipts --record`
+records each one as an entry under the tool that did it (never as yours)
+and removes it; quit the window or run `wreckordbox stop` first. One that
+cannot be recorded is kept and shown, and the command fails.
 
 ### RBXport Restore
 
