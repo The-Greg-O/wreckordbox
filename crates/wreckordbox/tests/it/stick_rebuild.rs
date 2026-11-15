@@ -263,6 +263,11 @@ impl Rig {
         )
         .unwrap();
 
+        // The Stick's file system spells one name otherwise than its
+        // library does (case here; Unicode normalisation on a real one).
+        let spelled = find_file(&stick.join("Contents"), "Paper (Original Mi.wav");
+        std::fs::rename(&spelled, spelled.with_file_name("PAPER (ORIGINAL MI.wav")).unwrap();
+
         // The music folder: the same files, except that "Paper" has its
         // whole name, "Kiln" is there twice at one size, "Odd" only at
         // another size (retagged), "Gone" not at all but another file has
@@ -389,6 +394,14 @@ impl Rig {
             .unwrap()
             .clone()
     }
+}
+
+/// The file called `name` somewhere under `root`.
+fn find_file(root: &Path, name: &str) -> PathBuf {
+    snapshot(root)
+        .into_keys()
+        .find(|p| p.file_name().is_some_and(|n| n == name))
+        .unwrap_or_else(|| panic!("no {name} under {}", root.display()))
 }
 
 /// Every file under `root` with its bytes.

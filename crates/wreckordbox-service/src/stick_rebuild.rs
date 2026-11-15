@@ -408,8 +408,17 @@ fn read_stick(mount: &Path) -> Result<StickState, ServiceError> {
         let my_tags = stick.my_tags(format)?;
         let root = stick.root();
         let mut sizes = HashMap::new();
+        // A name the Stick's file system spells otherwise (case, Unicode
+        // normalisation) is found by listing its folders, as Import
+        // Playlist finds it; only names are listed.
+        let mut files = rbl_export::device_library::StickFiles::new(root);
         for track in &library.tracks {
-            let at = root.join(track.path.replace('\\', "/").trim_start_matches('/'));
+            let spelled = root.join(track.path.replace('\\', "/").trim_start_matches('/'));
+            let at = if spelled.exists() {
+                spelled
+            } else {
+                files.locate(&track.path)
+            };
             // Only a stat, and only of a file that is really on the Stick.
             if let Ok(real) = at.canonicalize() {
                 if real.starts_with(root) {

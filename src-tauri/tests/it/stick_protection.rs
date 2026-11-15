@@ -1536,6 +1536,9 @@ const SERVICE_NOT_STICK_WRITERS: &[&str] = &[
     "history.list", "history.tracks",
     "intake.colours", "intake.counts", "intake.list", "intake.problems", "intake.set_tags", "intake.tag_panel",
     "intensity.cancel", "intensity.measure", "intensity.show",
+    // Rebuild from a Stick (wbx-b1d): the Stick only read, without recovery
+    // or a lock made; the Library written through the core.
+    "library.rebuild_from_stick",
     "mutants.clear", "mutants.create", "mutants.edit", "mutants.get", "mutants.list", "mutants.remove",
     "mytags.assign", "mytags.create", "mytags.create_category", "mytags.delete", "mytags.list",
     "mytags.merge", "mytags.move", "mytags.of_track", "mytags.rename", "mytags.reorder",
