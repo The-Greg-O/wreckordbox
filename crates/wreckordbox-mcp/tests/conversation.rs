@@ -521,3 +521,30 @@ fn a_decision_asked_without_a_run_or_source_is_the_agents() {
         "{shown}"
     );
 }
+
+#[test]
+fn the_set_planning_guide_is_read_without_a_service() {
+    let sandbox = Sandbox::new();
+    let mut server = sandbox.server();
+    server.start();
+    let tool = server.request("tools/list", json!({}))["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "read_set_planning_guide")
+        .cloned()
+        .expect("a read_set_planning_guide tool");
+    assert_eq!(tool["annotations"]["readOnlyHint"], true, "{tool}");
+
+    let guide = structured(&server.call("read_set_planning_guide", json!({}))).clone();
+
+    let document = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/agents/set-planning.md"),
+    )
+    .unwrap();
+    assert_eq!(guide["markdown"], document);
+    assert_eq!(guide["sections"][0]["id"], "keys", "{}", guide["sections"]);
+    // Nothing was started for it: no service, no runtime folder.
+    assert!(Client::connect(&server.socket).is_err());
+    assert!(!sandbox.path("run").exists());
+}

@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 wreckordbox-service = { path = "../wreckordbox-service" }
 wreckordbox-stick-protection = { path = "../wreckordbox-stick-protection" }
+wreckordbox-setplan = { path = "../wreckordbox-setplan" }
 clap = { version = "4", features = ["derive"] }
 serde_json = { workspace = true }
 

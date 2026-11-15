@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 wreckordbox-service = { path = "../wreckordbox-service" }
+wreckordbox-setplan = { path = "../wreckordbox-setplan" }
 serde_json = { workspace = true }
 
 [dev-dependencies]
