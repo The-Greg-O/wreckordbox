@@ -299,45 +299,8 @@ impl Sidecar {
     /// Records a Decision to be answered. It is pending until
     /// [`answer_decision`](Self::answer_decision) is called for it.
     pub fn create_decision(&self, new: &NewDecision) -> Result<Decision> {
-        if new.question.trim().is_empty() {
-            return Err(SidecarError::Decision(
-                "a Decision needs a question".to_owned(),
-            ));
-        }
-        if !new.context.is_object() {
-            return Err(SidecarError::Decision(
-                "a Decision's context is a JSON object: named things a Decider answers from"
-                    .to_owned(),
-            ));
-        }
-        if let Some(topic) = new.topic {
-            let plain = !topic.is_empty()
-                && topic
-                    .chars()
-                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
-            if !plain {
-                return Err(SidecarError::Decision(format!(
-                    "a Decision's topic is lower-case letters, digits and underscores, not \"{topic}\""
-                )));
-            }
-        }
-        let candidates = candidates_of(new.question_type, new.candidates)?;
         let db = self.db();
-        db.execute(
-            "INSERT INTO decision (question_type, question, context, candidates, track_id, run_id, created_at, topic)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                new.question_type.as_str(),
-                new.question.trim(),
-                new.context.to_string(),
-                serde_json::to_string(&candidates).unwrap_or_default(),
-                new.track_id,
-                new.run.map(|run| run.0),
-                now(),
-                new.topic,
-            ],
-        )?;
-        let id = db.last_insert_rowid();
+        let id = insert_decision(&db, new)?;
         read_decision(&db, id)?.ok_or(SidecarError::NoDecision(id))
     }
 
@@ -377,39 +340,7 @@ impl Sidecar {
         let decision =
             read_decision(&tx, new.decision)?.ok_or(SidecarError::NoDecision(new.decision))?;
         let checked = checked_answer(&decision, new)?;
-        let run = match fact.run {
-            RunOfAnswer::Open(run) => {
-                let finished_at: Option<Option<i64>> = tx
-                    .query_row(
-                        "SELECT finished_at FROM run WHERE id = ?1",
-                        [run.0],
-                        |row| row.get(0),
-                    )
-                    .optional()?;
-                match finished_at {
-                    Some(None) => run,
-                    Some(Some(_)) => {
-                        return Err(SidecarError::Invalid(format!("Run {} has ended", run.0)))
-                    }
-                    None => {
-                        return Err(SidecarError::Invalid(format!("there is no Run {}", run.0)))
-                    }
-                }
-            }
-            RunOfAnswer::Made { description } => {
-                tx.execute(
-                    "INSERT INTO run (source_kind, source_name, description, started_at)
-                     VALUES (?1, ?2, ?3, ?4)",
-                    params![
-                        new.decider.kind.as_str(),
-                        new.decider.name,
-                        description,
-                        now()
-                    ],
-                )?;
-                RunId(tx.last_insert_rowid())
-            }
-        };
+        let run = run_of_answer(&tx, fact.run, new.decider)?;
         let recorded = record_in(
             &tx,
             &NewFact {
@@ -456,9 +387,86 @@ impl Sidecar {
     }
 }
 
+/// Checks a Decision and writes it on `db` (a transaction, for a caller
+/// that writes more with it), answering its identifier.
+pub(crate) fn insert_decision(db: &Connection, new: &NewDecision) -> Result<i64> {
+    if new.question.trim().is_empty() {
+        return Err(SidecarError::Decision(
+            "a Decision needs a question".to_owned(),
+        ));
+    }
+    if !new.context.is_object() {
+        return Err(SidecarError::Decision(
+            "a Decision's context is a JSON object: named things a Decider answers from".to_owned(),
+        ));
+    }
+    if let Some(topic) = new.topic {
+        let plain = !topic.is_empty()
+            && topic
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+        if !plain {
+            return Err(SidecarError::Decision(format!(
+                "a Decision's topic is lower-case letters, digits and underscores, not \"{topic}\""
+            )));
+        }
+    }
+    let candidates = candidates_of(new.question_type, new.candidates)?;
+    db.execute(
+        "INSERT INTO decision (question_type, question, context, candidates, track_id, run_id, created_at, topic)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            new.question_type.as_str(),
+            new.question.trim(),
+            new.context.to_string(),
+            serde_json::to_string(&candidates).unwrap_or_default(),
+            new.track_id,
+            new.run.map(|run| run.0),
+            now(),
+            new.topic,
+        ],
+    )?;
+    Ok(db.last_insert_rowid())
+}
+
+/// The Run an answer belongs to, inside its transaction: the open Run
+/// named, checked to be open, or a new one by `decider`.
+pub(crate) fn run_of_answer(
+    tx: &rusqlite::Transaction,
+    run: RunOfAnswer,
+    decider: &Source,
+) -> Result<RunId> {
+    Ok(match run {
+        RunOfAnswer::Open(run) => {
+            let finished_at: Option<Option<i64>> = tx
+                .query_row(
+                    "SELECT finished_at FROM run WHERE id = ?1",
+                    [run.0],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            match finished_at {
+                Some(None) => run,
+                Some(Some(_)) => {
+                    return Err(SidecarError::Invalid(format!("Run {} has ended", run.0)))
+                }
+                None => return Err(SidecarError::Invalid(format!("there is no Run {}", run.0))),
+            }
+        }
+        RunOfAnswer::Made { description } => {
+            tx.execute(
+                "INSERT INTO run (source_kind, source_name, description, started_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![decider.kind.as_str(), decider.name, description, now()],
+            )?;
+            RunId(tx.last_insert_rowid())
+        }
+    })
+}
+
 /// Writes an answer that has been checked, inside a transaction, and
 /// answers its identifier.
-fn insert_answer(
+pub(crate) fn insert_answer(
     tx: &rusqlite::Transaction,
     new: &NewAnswer,
     (choice_probability, probabilities): &(f64, Option<BTreeMap<String, f64>>),
@@ -489,7 +497,11 @@ fn insert_answer(
 
 /// A Decision and the answer just written to it, read inside the
 /// transaction that wrote it.
-fn answered(tx: &rusqlite::Transaction, decision: i64, answer: i64) -> Result<(Decision, Answer)> {
+pub(crate) fn answered(
+    tx: &rusqlite::Transaction,
+    decision: i64,
+    answer: i64,
+) -> Result<(Decision, Answer)> {
     let decision = read_decision(tx, decision)?.ok_or(SidecarError::NoDecision(decision))?;
     let answer = decision
         .answers
@@ -537,7 +549,7 @@ fn candidates_of(question_type: QuestionType, given: &[Candidate]) -> Result<Vec
 
 /// Checks an answer against its Decision: the probability of the choice and
 /// the probabilities to store.
-fn checked_answer(
+pub(crate) fn checked_answer(
     decision: &Decision,
     new: &NewAnswer,
 ) -> Result<(f64, Option<BTreeMap<String, f64>>)> {
@@ -627,7 +639,7 @@ fn checked_answer(
     Ok((choice_probability, probabilities))
 }
 
-fn read_decision(db: &Connection, id: i64) -> Result<Option<Decision>> {
+pub(crate) fn read_decision(db: &Connection, id: i64) -> Result<Option<Decision>> {
     let Some(mut decision) = db
         .query_row(
             "SELECT id, question_type, question, context, candidates, track_id, run_id, created_at, topic

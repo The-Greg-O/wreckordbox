@@ -630,6 +630,17 @@ impl Shared {
                     self.with_library(|library| crate::intensity::targets(library, wanted))?
                 })
             }
+            lookups if crate::lookups::answers(lookups) => {
+                let _facts = crate::review::exclude(&self.stems);
+                // Reads the Library, writes only the Sidecar (ADR 0005:
+                // nothing here reaches the network).
+                crate::lookups::answer(
+                    &self.stems,
+                    request,
+                    &|id| self.with_library(|library| crate::lookups::described(library, id))?,
+                    &|id| self.with_library(|library| crate::stems::parent(library, id))?,
+                )
+            }
             decisions if crate::decisions::answers(decisions) => {
                 let _facts = crate::review::exclude(&self.stems);
                 // The Sidecar's too: the Library is only read, to find a
