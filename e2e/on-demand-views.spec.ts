@@ -1,6 +1,6 @@
 /**
- * The shell's views loaded on demand (wbx-45.13): Intake and Stick are their
- * own chunks, kept off the window's start and fetched once the shell has
+ * The shell's views loaded on demand (wbx-45.13, Review since wbx-45.24):
+ * Intake, Review and Stick are their own chunks, kept off the window's start and fetched once the shell has
  * painted. A first switch shows the view at once; a view whose code is still
  * on the way says so and its key still switches to it; a chunk that failed
  * to load is shown as a failure with Retry, never as an empty view.
@@ -12,6 +12,7 @@ const tab = (page: Page, name: string) => page.getByRole("tablist", { name: "Vie
 const working = (page: Page) => page.getByTestId("shell-working");
 const INTAKE_CHUNK = /\/assets\/IntakeView-[^/]*\.js$/;
 const STICK_CHUNK = /\/assets\/StickLoadView-[^/]*\.js$/;
+const REVIEW_CHUNK = /\/assets\/ReviewView-[^/]*\.js$/;
 
 async function openShell(page: Page): Promise<void> {
   await seedShell(page);
@@ -103,4 +104,44 @@ test("a view whose code failed to load is shown as a failure, not an empty view,
   // Either the view arrives, or (if the browser keeps the failed load) the failure stays shown.
   await expect(working(page).getByTestId("shell-empty").or(working(page).getByTestId("stick-view")).or(failed)).toBeVisible();
   await expect(working(page).getByTestId("shell-empty")).toHaveCount(0);
+});
+
+test("the Review view is not part of the window's start, and is fetched once it has painted", async ({ page }) => {
+  const fetched: string[] = [];
+  page.on("request", (request) => { fetched.push(new URL(request.url()).pathname); });
+  await openShell(page);
+  await expect.poll(() => fetched.some((path) => REVIEW_CHUNK.test(path))).toBe(true);
+  const entry = fetched.findIndex((path) => /\/assets\/App-[^/]*\.js$/.test(path));
+  expect(entry).toBeGreaterThanOrEqual(0);
+  expect(fetched.findIndex((path) => REVIEW_CHUNK.test(path))).toBeGreaterThan(entry);
+});
+
+test("while the Review view's code is on the way its key still switches to it, and the view follows when the code arrives", async ({ page }) => {
+  const held: Route[] = [];
+  await page.route(REVIEW_CHUNK, (route) => { held.push(route); });
+  await openShell(page);
+  await expect.poll(() => held.length).toBe(1);
+
+  await page.keyboard.press("3");
+  await expect(tab(page, "Review")).toHaveAttribute("aria-selected", "true");
+  await expect(working(page).getByTestId("shell-empty")).toContainText("Opening");
+
+  await held[0]!.continue();
+  await expect(page.getByTestId("review-view")).toBeVisible();
+  await expect(working(page).getByTestId("shell-empty")).toHaveCount(0);
+});
+
+test("a Review view whose code failed to load is shown as a failure with Retry, never a blank tab", async ({ page }) => {
+  await page.route(REVIEW_CHUNK, (route) => route.abort("failed"));
+  await openShell(page);
+
+  await page.keyboard.press("3");
+  await expect(tab(page, "Review")).toHaveAttribute("aria-selected", "true");
+  const failed = working(page).getByTestId("on-demand-failed");
+  await expect(failed).toBeVisible();
+  await expect(failed).toHaveAttribute("role", "alert");
+  await expect(failed).toContainText("Review");
+  await expect(failed).toContainText("could not be loaded");
+  await expect(failed.getByRole("button", { name: "Retry" })).toBeVisible();
+  await expect(page.getByTestId("review-view")).toHaveCount(0);
 });
