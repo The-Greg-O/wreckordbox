@@ -318,6 +318,13 @@ fn a_dry_run_lists_each_change_and_keeps_what_the_dj_set_by_hand() {
                 "add".into(),
                 "waits_for_dj".into()
             ),
+            // A MyTag the apply would make (wbx-14.14) waits like any.
+            (
+                "10002".into(),
+                "Euphoric".into(),
+                "add".into(),
+                "waits_for_dj".into()
+            ),
             (
                 "10004".into(),
                 "> Hypnotic".into(),
@@ -347,6 +354,7 @@ fn a_dry_run_lists_each_change_and_keeps_what_the_dj_set_by_hand() {
         planned,
         [
             ("10001".into(), "Uplifting".into(), "add".into(), false),
+            ("10002".into(), "Euphoric".into(), "add".into(), false),
             // The parent comes with its child, from the same Fact.
             ("10004".into(), "> Hypnotic".into(), "add".into(), false),
             ("10004".into(), "Techno".into(), "add".into(), true),
@@ -397,18 +405,13 @@ fn a_dry_run_lists_each_change_and_keeps_what_the_dj_set_by_hand() {
             ),
         ]
     );
-    // A term with no MyTag yet, and a category the Library does not have.
+    // A category the Library does not have. (A term with no MyTag yet is
+    // made by the apply since wbx-14.14.)
     let mut blocked = listed(&dry, "blocked");
     blocked.sort();
     assert_eq!(
         blocked,
         [
-            (
-                "10002".into(),
-                "Euphoric".into(),
-                "add".into(),
-                "no_my_tag".into()
-            ),
             (
                 "10005".into(),
                 "90s".into(),
@@ -769,17 +772,18 @@ fn library_protection_refuses_the_apply_and_nothing_is_written() {
     assert_eq!(after["plan"], dry["plan"]);
 }
 
-/// A tag the schema has and the Library does not is listed; applying
-/// refuses, with nothing written, until it exists.
+/// A tag the schema has and the Library does not is listed, and since
+/// wbx-14.14 the apply makes it with the assignments (the definitions'
+/// own tests are in `mytag_definitions`).
 #[test]
-fn an_apply_with_mytags_still_to_make_is_refused_and_writes_nothing() {
+fn an_apply_with_mytags_still_to_make_makes_them() {
     let Deck { s, .. } = tagged_by_hand();
     write_schema(&s, SCHEMA);
     policy(&s, "[mytags]\napply = 0.5\n");
     fact(&s, "10004", "mood", &["uplifting"], "agent:tagger");
-    let error = refused(&s, &["project", "--mytags"]);
-    assert_eq!(error["code"], "projection_definitions_pending");
-    assert_eq!(tags_of(&s, "10004"), Vec::<String>::new());
+    let applied = ok(&s, &["project", "--mytags"]);
+    assert_eq!(applied["definitions"][0]["label"], "Euphoric", "{applied}");
+    assert_eq!(tags_of(&s, "10004"), ["Mood: Uplifting"]);
 }
 
 /// A write by another connection between the plan and the write (here

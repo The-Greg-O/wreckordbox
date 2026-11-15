@@ -126,6 +126,14 @@ pub enum LibraryEdit {
     },
     /// The categories, or one category's tags, put in a new order (#584).
     MyTagOrder(rbl_db::write::MyTagOrder),
+    /// A MyTag Projection (wbx-14.14): the MyTags it made, renamed and put
+    /// in order, and the tracks' assignments written with them, in one
+    /// transaction; undone and redone as one step
+    /// ([`crate::my_tag_definitions`]).
+    MyTagProjection {
+        definitions: crate::my_tag_definitions::Definitions,
+        tags: Vec<rbl_db::write::TrackTagEdit>,
+    },
     /// One cue or loop command on one track (#504): an add, move, slot,
     /// colour, comment, Active Loop or delete, or a whole Convert Memory
     /// Cues to Hot Cues.
@@ -170,6 +178,9 @@ impl LibraryEdit {
                     && comments.iter().all(rbl_db::write::TrackEdit::is_empty)
             }
             Self::MyTagOrder(edit) => edit.is_empty(),
+            Self::MyTagProjection { definitions, tags } => {
+                definitions.is_empty() && tags.iter().all(rbl_db::write::TrackTagEdit::is_empty)
+            }
             Self::RenamePlaylist(_) | Self::MovePlaylist(_) | Self::ReplacePlaylist(_) | Self::CreatePlaylist(_)
             | Self::CopyPlaylist(_) => false,
             Self::SortPlaylists(edit) => edit.is_empty(),
@@ -196,7 +207,7 @@ impl LibraryEdit {
             // undo is uncommon and guarantees every view and sort follows it.
             // The index's My Tag list (filters, panel) is read in a full load.
             Self::Track(_) | Self::KeyEdit { .. } | Self::TrackTags { .. } | Self::Relocate(_)
-            | Self::MyTagOrder(_) => Touched::Tracks,
+            | Self::MyTagOrder(_) | Self::MyTagProjection { .. } => Touched::Tracks,
             Self::Cues(revision) => Touched::Cues(revision.content().to_owned()),
             Self::ListRemoval(removal) => match removal.list() {
                 rbl_db::write::RemovalList::TagList => Touched::TagList,
@@ -226,6 +237,19 @@ impl LibraryEdit {
             Self::TrackTags { tags, comments } => {
                 tags.iter().try_for_each(|value| writer.check_tag_edit(value, undo))?;
                 comments.iter().try_for_each(|value| writer.check_track_edit(value, undo))
+            }
+            Self::MyTagProjection { definitions, tags } => {
+                tags.iter().try_for_each(|value| writer.check_tag_edit(value, undo))?;
+                // An Undo finds the made tags still carried until the
+                // assignments are stepped, so only a Redo's definitions are
+                // checked here; each is checked again in its transaction.
+                if undo {
+                    return Ok(());
+                }
+                match crate::my_tag_definitions::conflict(writer.library().connection(), definitions, false)? {
+                    Some(reason) => Err(DbError::Conflict(reason)),
+                    None => Ok(()),
+                }
             }
             Self::DeletePlaylist(_) | Self::RenamePlaylist(_) | Self::MovePlaylist(_)
             | Self::ReplacePlaylist(_) | Self::SortPlaylists(_) | Self::RemovePlaylistTracks(_)
@@ -313,6 +337,7 @@ impl LibraryEdit {
             }
             Self::TrackTags { tags, comments } => step_track_tags(writer, tags, comments, undo),
             Self::MyTagOrder(value) => if undo { writer.undo_my_tag_order(value) } else { writer.redo_my_tag_order(value) }.map(|_| ()),
+            Self::MyTagProjection { definitions, tags } => step_my_tag_projection(writer, definitions, tags, undo),
             Self::Cues(value) => if undo { writer.undo_cue_revision(value) } else { writer.redo_cue_revision(value) }.map(|_| ()),
             Self::CreatePlaylist(value) => if undo { writer.undo_creation(value) } else { writer.redo_creation(value) }.map(|_| ()),
             Self::PlaylistEdit(value) => if undo { writer.undo_playlist_edit(value) } else { writer.redo_playlist_edit(value) }.map(|_| ()),
@@ -365,6 +390,35 @@ fn step_track_tags(
             if let Err(back) = writer.step_track_edits_at_once(comments, false) {
                 tracing::error!(%back, "the My Tag comments could not be written again after a failed Undo");
             }
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// Undoes or redoes a MyTag Projection: Undo takes the assignments off
+/// before the tags they use, Redo makes the tags before the assignments; a
+/// second half that fails has the first put back.
+fn step_my_tag_projection(
+    writer: &mut rbl_db::write::Writer,
+    definitions: &crate::my_tag_definitions::Definitions,
+    tags: &[rbl_db::write::TrackTagEdit],
+    undo: bool,
+) -> Result<(), DbError> {
+    if undo {
+        step_track_tags(writer, tags, &[], true)?;
+        if let Err(error) = crate::my_tag_definitions::step(writer, definitions, true) {
+            if let Err(back) = step_track_tags(writer, tags, &[], false) {
+                tracing::error!(%back, "a MyTag projection's assignments could not be put back after a failed Undo");
+            }
+            return Err(error);
+        }
+        return Ok(());
+    }
+    crate::my_tag_definitions::step(writer, definitions, false)?;
+    if let Err(error) = step_track_tags(writer, tags, &[], false) {
+        if let Err(back) = crate::my_tag_definitions::step(writer, definitions, true) {
+            tracing::error!(%back, "a MyTag projection's definitions could not be put back after a failed Redo");
         }
         return Err(error);
     }

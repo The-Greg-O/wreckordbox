@@ -291,7 +291,7 @@ pub struct RunShown {
 /// | kind | payload |
 /// |---|---|
 /// | `track` | `{"edits": [{"track", "column", "before": value, "after": value}]}` |
-/// | `track_tags` | `{"tags": [{"track", "before": [tag ids], "after": [tag ids]}], "comments": [as a `track` edit]}` |
+/// | `track_tags` | `{"tags": [{"track", "before": [tag ids], "after": [tag ids]}], "comments": [as a `track` edit]}`; a MyTag Projection's adds `"definitions"` (`crate::mytag_definitions::stored`) |
 /// | `my_tag_order` | `{"parent", "before": [{"id", "seq"}], "after": [{"id", "seq"}]}` |
 /// | `reorder_playlist_entries` | `{"playlist", "before": [{"entry", "number"}], "after": [{"entry", "number"}]}` |
 ///
@@ -325,7 +325,9 @@ pub mod stored {
             LibraryEdit::CopyPlaylist(_) => "copy_playlist",
             LibraryEdit::Track(_) => "track",
             LibraryEdit::KeyEdit { .. } => "key_edit",
-            LibraryEdit::TrackTags { .. } => "track_tags",
+            // The same kind as any MyTag step, so assignment provenance
+            // reads it; its payload adds the definitions.
+            LibraryEdit::TrackTags { .. } | LibraryEdit::MyTagProjection { .. } => "track_tags",
             LibraryEdit::MyTagOrder(_) => "my_tag_order",
             LibraryEdit::Cues(_) => "cues",
             LibraryEdit::CreatePlaylist(_) => "create_playlist",
@@ -357,6 +359,17 @@ pub mod stored {
                     })
                     .collect::<Vec<Value>>(),
                 "comments": track_edits(comments),
+            })),
+            LibraryEdit::MyTagProjection { definitions, tags } => Some(json!({
+                "tags": tags
+                    .iter()
+                    .map(|edit| {
+                        let parts = edit.parts();
+                        json!({"track": parts.track, "before": parts.before, "after": parts.after})
+                    })
+                    .collect::<Vec<Value>>(),
+                "comments": [],
+                "definitions": crate::mytag_definitions::stored(definitions),
             })),
             LibraryEdit::MyTagOrder(order) => {
                 let parts = order.parts();
@@ -424,6 +437,12 @@ pub mod stored {
                     })
                     .collect::<Option<Vec<TrackTagEdit>>>()?;
                 let comments = track_edits_from(payload.get("comments")?)?;
+                if let Some(definitions) = payload.get("definitions") {
+                    return Some(LibraryEdit::MyTagProjection {
+                        definitions: crate::mytag_definitions::restored(definitions)?,
+                        tags,
+                    });
+                }
                 Some(LibraryEdit::TrackTags { tags, comments })
             }
             "my_tag_order" => {

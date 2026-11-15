@@ -19,6 +19,7 @@ pub mod grid_step;
 pub mod ledger;
 pub mod bulk;
 pub mod my_tags;
+pub mod my_tag_definitions;
 pub mod protection;
 pub mod file_edit;
 pub mod file_record;

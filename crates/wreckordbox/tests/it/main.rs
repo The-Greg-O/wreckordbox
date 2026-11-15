@@ -29,6 +29,7 @@ mod library_reading;
 mod mutant_edits;
 mod mutants;
 mod mutants_follow;
+mod mytag_definitions;
 mod mytag_edits;
 mod mytag_projection;
 mod projection;

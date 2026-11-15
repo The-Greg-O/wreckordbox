@@ -12,9 +12,11 @@
 //!   `tool:projection` or the tool or agent the request names: never the
 //!   DJ's (`projection::attribution`, `ledger::Keeper::target`). Given
 //!   `expect` (a dry run's `plan`), it refuses unless it would do exactly
-//!   that. It refuses while the plan holds a change to the MyTags
-//!   themselves (a tag the schema has and the Library does not): those are
-//!   listed in `definitions` and not yet applied by this service.
+//!   that. Changes to the MyTags themselves (a tag the schema has and the
+//!   Library lacks, a relabelled or moved tag a projection made) are listed
+//!   in `definitions` and written in the same edit, the same transaction and
+//!   the same Undo step as the assignments; what the DJ made is kept and
+//!   listed in `definitions_kept` ([`crate::mytag_definitions`]).
 //!
 //! **What is matched.** A deck category is the Library's MyTag category of
 //! the same name; a deck tag is the MyTag of exactly the same text in it
@@ -78,6 +80,7 @@ use rbl_library::history::LibraryEdit;
 use rbl_library::Touched;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use wreckordbox_sidecar::mytag_definitions::DefinitionMarks;
 use wreckordbox_sidecar::mytag_projection::{TagMark, TagProvenance};
 use wreckordbox_sidecar::precedence::Rules;
 use wreckordbox_sidecar::projection::{Barrier, FieldState, Owner};
@@ -100,8 +103,8 @@ pub mod commands {
 
 /// The error codes of MyTag Projection, beside `projection::codes`.
 pub mod codes {
-    /// The plan holds changes to the MyTags themselves (a tag to make),
-    /// which this service does not apply yet: nothing was written.
+    /// No longer answered (wbx-14.14 applies definitions); kept so a
+    /// client that matches on it still builds.
     pub const DEFINITIONS_PENDING: &str = "projection_definitions_pending";
 }
 
@@ -187,17 +190,7 @@ pub struct Outside {
     pub category: String,
 }
 
-/// A change to the MyTags themselves that the schema calls for.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Definition {
-    /// `create_tag`: the category has no MyTag with this text.
-    pub change: String,
-    pub category: String,
-    pub category_id: String,
-    pub label: String,
-    pub dimension: String,
-    pub term: String,
-}
+pub use crate::mytag_definitions::Definition;
 
 /// One assignment: a change made (or to be made), held, kept or blocked.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -262,8 +255,13 @@ pub struct Report {
     /// The deck view's categories, in its order.
     pub categories: Vec<Category>,
     pub outside_deck: Vec<Outside>,
-    /// Changes to the MyTags themselves the schema calls for.
+    /// Changes to the MyTags themselves the schema calls for, made with
+    /// the assignments.
     pub definitions: Vec<Definition>,
+    /// Changes to the MyTags the schema calls for that a projection does not
+    /// own: the DJ's, left as they are.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub definitions_kept: Vec<Definition>,
     /// Assignments changed, or in a dry run to be changed, in track order.
     pub changes: Vec<Assignment>,
     /// Held for the DJ.
@@ -283,7 +281,10 @@ pub struct Report {
 /// A planned change with what the apply checks again under the edit gate.
 struct Planned {
     track: String,
+    /// The MyTag; empty when `made` names it.
     tag: String,
+    /// The `n`th MyTag the apply makes.
+    made: Option<usize>,
     on: bool,
     /// The assignment's rows when the plan was made.
     rows: Vec<TagRow>,
@@ -293,10 +294,10 @@ struct Planned {
 struct Native {
     /// `(id, name)` in the deck's order.
     categories: Vec<(String, String)>,
-    /// By category id: `(tag id, text)` in order.
-    tags: HashMap<String, Vec<(String, String)>>,
     /// By `(track, tag)`: every row, live or not.
     rows: HashMap<(String, String), Vec<TagRow>>,
+    /// Every live `djmdMyTag` row, for the definitions.
+    definitions: Vec<crate::mytag_definitions::Row>,
 }
 
 fn read_native(library: &OpenLibrary) -> Result<Native, ServiceError> {
@@ -314,26 +315,17 @@ fn read_native(library: &OpenLibrary) -> Result<Native, ServiceError> {
             .iter()
             .map(|c| (c.id.clone(), c.name.clone()))
             .collect();
-        let mut tags = HashMap::new();
-        for category in &catalogue.categories {
-            tags.insert(
-                category.id.clone(),
-                catalogue
-                    .tags_of(category)
-                    .map(|t| (t.id.clone(), t.name.clone()))
-                    .collect(),
-            );
-        }
         let mut rows: HashMap<(String, String), Vec<TagRow>> = HashMap::new();
         for (track, tag, row) in
             rbl_db::write::checked::my_tag_rows(db.connection()).map_err(failed)?
         {
             rows.entry((track, tag)).or_default().push(row);
         }
+        let definitions = crate::mytag_definitions::rows(db.connection()).map_err(failed)?;
         Ok(Native {
             categories,
-            tags,
             rows,
+            definitions,
         })
     })
 }
@@ -343,7 +335,7 @@ fn read_native(library: &OpenLibrary) -> Result<Native, ServiceError> {
 fn read_sidecar(
     stems: &Stems,
     kinds: &[String],
-) -> Result<(HashMap<String, Vec<Fact>>, TagProvenance), ServiceError> {
+) -> Result<(HashMap<String, Vec<Fact>>, TagProvenance, DefinitionMarks), ServiceError> {
     let failed = |why: String| ServiceError::new(crate::stems::codes::SIDECAR_FAILED, why);
     stems
         .with_sidecar_wait(|open| -> Result<_, String> {
@@ -354,16 +346,26 @@ fn read_sidecar(
                     for kind in kinds {
                         facts.insert(kind.clone(), sidecar.facts_of_kind(kind).map_err(text)?);
                     }
-                    Ok((facts, sidecar.tag_provenance().map_err(text)?))
+                    Ok((
+                        facts,
+                        sidecar.tag_provenance().map_err(text)?,
+                        sidecar.definition_marks().map_err(text)?,
+                    ))
                 }
                 None => match FactsSnapshot::open(stems.sidecar_dir()).map_err(text)? {
-                    FactsSnapshot::Absent => Ok((facts, TagProvenance::default())),
+                    FactsSnapshot::Absent => {
+                        Ok((facts, TagProvenance::default(), DefinitionMarks::default()))
+                    }
                     FactsSnapshot::Unknown(why) => Err(why),
                     FactsSnapshot::Open(reader) => {
                         for kind in kinds {
                             facts.insert(kind.clone(), reader.facts_of_kind(kind).map_err(text)?);
                         }
-                        Ok((facts, reader.tag_provenance().map_err(text)?))
+                        Ok((
+                            facts,
+                            reader.tag_provenance().map_err(text)?,
+                            reader.definition_marks().map_err(text)?,
+                        ))
                     }
                 },
             }
@@ -461,7 +463,8 @@ fn plan_or_apply(
             "expect is for projection.mytags.apply: a dry run is what makes a plan",
         )));
     }
-    let (report, planned, watermark) = plan(library, stems, &wanted, dry_run).map_err(early)?;
+    let (report, planned, watermark, defined) =
+        plan(library, stems, &wanted, dry_run).map_err(early)?;
     if dry_run {
         return Ok((report, None));
     }
@@ -476,16 +479,7 @@ fn plan_or_apply(
             )));
         }
     }
-    if !report.definitions.is_empty() {
-        return Err(early(ServiceError::new(
-            codes::DEFINITIONS_PENDING,
-            format!(
-                "the Tag schema has {} MyTag(s) the Library does not (listed in the dry run's definitions); this projection does not make MyTags yet, so nothing was written: make them by hand (`wreckordbox mytags create`) and project again",
-                report.definitions.len()
-            ),
-        )));
-    }
-    if planned.is_empty() {
+    if planned.is_empty() && !defined.writes() {
         return Ok((report, None));
     }
     let tracks: Vec<String> = planned.iter().map(|p| p.track.clone()).collect();
@@ -494,7 +488,7 @@ fn plan_or_apply(
     // The backup, if one was taken, is still of the moment before the
     // write; the gate is held from here through the write (reentrant).
     let _gate = crate::large_run::bound(library, stems, &tracks).map_err(early)?;
-    let (changed, warnings) = write(library, stems, &planned, watermark)?;
+    let (changed, warnings) = write(library, stems, &planned, &defined, watermark)?;
     let mut report = report;
     report.warnings = warnings;
     Ok((report, Some(changed)))
@@ -521,7 +515,7 @@ fn plan(
     stems: &Stems,
     wanted: &Wanted,
     dry_run: bool,
-) -> Result<(Report, Vec<Planned>, i64), ServiceError> {
+) -> Result<(Report, Vec<Planned>, i64, crate::mytag_definitions::Plan), ServiceError> {
     let dir = stems.sidecar_dir();
     let (rule, policy_hash) = policy(dir)?;
     if let Some(expected) = &wanted.policy_hash {
@@ -550,7 +544,7 @@ fn plan(
     let native = read_native(library)?;
     let views = schema.deck_view();
     let kinds: Vec<String> = views.iter().map(|v| v.dimension.clone()).collect();
-    let (facts, provenance) = read_sidecar(stems, &kinds)?;
+    let (facts, provenance, definition_marks) = read_sidecar(stems, &kinds)?;
 
     let mut report = Report {
         large_run: None,
@@ -564,6 +558,7 @@ fn plan(
         categories: Vec::new(),
         outside_deck: Vec::new(),
         definitions: Vec::new(),
+        definitions_kept: Vec::new(),
         changes: Vec::new(),
         held: Vec::new(),
         kept: Vec::new(),
@@ -605,22 +600,15 @@ fn plan(
             });
         }
     }
-    for (view, (category, _)) in views.iter().zip(&placed) {
-        let Some(category) = category else { continue };
-        let there = native.tags.get(category).cloned().unwrap_or_default();
-        for tag in &view.tags {
-            if !there.iter().any(|(_, text)| *text == tag.label) {
-                report.definitions.push(Definition {
-                    change: "create_tag".into(),
-                    category: view.label.clone(),
-                    category_id: category.clone(),
-                    label: tag.label.clone(),
-                    dimension: view.dimension.clone(),
-                    term: tag.id.clone(),
-                });
-            }
-        }
-    }
+    let defined = crate::mytag_definitions::plan(
+        &views,
+        &placed.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>(),
+        native.definitions.clone(),
+        &definition_marks,
+        &provenance.barriers,
+    );
+    report.definitions.clone_from(&defined.listed);
+    report.definitions_kept.clone_from(&defined.kept);
 
     // Facts by track, in the Library's order.
     let mut by_track: BTreeMap<u32, String> = BTreeMap::new();
@@ -669,13 +657,14 @@ fn plan(
                 &rules,
                 &rule,
                 &native,
+                &defined.resolved,
                 &provenance,
                 schema.deck.tag_parents,
             );
         }
     }
     report.plan = digest(&report);
-    Ok((report, planned, provenance.watermark))
+    Ok((report, planned, provenance.watermark, defined))
 }
 
 #[allow(
@@ -690,6 +679,7 @@ fn decide(
     rules: &Rules,
     rule: &Rule,
     native: &Native,
+    resolved: &HashMap<(String, String), crate::mytag_definitions::Resolved>,
     provenance: &TagProvenance,
     tag_parents: bool,
 ) {
@@ -729,11 +719,6 @@ fn decide(
         }
     }
     let wants = |id: &str| terms.iter().any(|t| t == id) || implied.iter().any(|t| t == id);
-    let there = one
-        .category
-        .and_then(|c| native.tags.get(c))
-        .cloned()
-        .unwrap_or_default();
     for deck_tag in &one.view.tags {
         let want = wants(&deck_tag.id);
         let mut listed = Assignment {
@@ -768,26 +753,25 @@ fn decide(
             }
             continue;
         }
-        let matching: Vec<&(String, String)> = there
-            .iter()
-            .filter(|(_, text)| *text == deck_tag.label)
-            .collect();
-        let tag = match matching.as_slice() {
-            [one] => one.0.clone(),
-            [] => {
+        use crate::mytag_definitions::Resolved;
+        let category = one.category.unwrap_or_default().to_owned();
+        let (tag, made) = match resolved.get(&(category, deck_tag.id.clone())) {
+            Some(Resolved::Tag(id)) => (id.clone(), None),
+            Some(Resolved::ToMake(n)) => (String::new(), Some(*n)),
+            Some(Resolved::Blocked(why)) => {
+                if want {
+                    report.blocked.push(blocked(listed, why));
+                }
+                continue;
+            }
+            None => {
                 if want {
                     report.blocked.push(blocked(listed, "no_my_tag"));
                 }
                 continue;
             }
-            _ => {
-                if want {
-                    report.blocked.push(blocked(listed, "ambiguous_my_tag"));
-                }
-                continue;
-            }
         };
-        listed.tag = Some(tag.clone());
+        listed.tag = made.is_none().then(|| tag.clone());
         let key = (one.track.to_owned(), tag.clone());
         let rows = native.rows.get(&key).cloned().unwrap_or_default();
         let on = rows.iter().any(|row| row.live);
@@ -823,6 +807,7 @@ fn decide(
                 planned.push(Planned {
                     track: one.track.to_owned(),
                     tag,
+                    made,
                     on: want,
                     rows,
                 });
@@ -904,12 +889,12 @@ fn digest(report: &Report) -> String {
     let named: Vec<Value> = report
         .changes
         .iter()
-        .map(|c| json!([c.track, c.tag, c.change, c.fact]))
+        .map(|c| json!([c.track, c.tag, c.dimension, c.term, c.change, c.fact]))
         .collect();
     let defined: Vec<Value> = report
         .definitions
         .iter()
-        .map(|d| json!([d.change, d.category_id, d.label]))
+        .map(|d| json!([d.change, d.category_id, d.label, d.tag, d.order]))
         .collect();
     hash_of(
         &serde_json::to_vec(&json!([
@@ -922,13 +907,19 @@ fn digest(report: &Report) -> String {
     )
 }
 
-/// Makes the planned changes as one recorded edit through the single edit
-/// path, each track's by the checked writer, after checking under the edit
-/// gate that nothing the plan read has changed.
+/// Makes the planned changes, the definitions with the assignments, as one
+/// recorded edit through the single edit path, in one checked transaction,
+/// after checking under the edit gate that nothing the plan read has
+/// changed.
+#[allow(
+    clippy::too_many_lines,
+    reason = "the checks and the write under one gate, in order"
+)]
 fn write(
     library: &OpenLibrary,
     stems: &Stems,
     planned: &[Planned],
+    defined: &crate::mytag_definitions::Plan,
     watermark: i64,
 ) -> Result<(LibraryChanged, Vec<String>), Failure> {
     let mut warnings = Vec::new();
@@ -940,8 +931,11 @@ fn write(
         }
     }
     // The write's intent names exactly these tracks: a crash part-way is a
-    // barrier bounded to them.
-    crate::ledger::name_tracks(&tracks);
+    // barrier bounded to them. A write that also changes the MyTags
+    // themselves can reach any carrier of them: unbounded.
+    if !defined.writes() {
+        crate::ledger::name_tracks(&tracks);
+    }
     let refused = |why: String| DbError::WriteRefused(format!("{CHANGED_MARK}{why}"));
     let result = library.recorded_edit(Touched::Tracks, UNDO_LABEL, |writer| {
         let newer = stems
@@ -955,6 +949,11 @@ fn write(
                 "a track's MyTags were edited while the projection was being made".into(),
             ));
         }
+        if !crate::mytag_definitions::unchanged_since(writer.library().connection(), defined)? {
+            return Err(refused(
+                "the Library's MyTags were edited while the projection was being made".into(),
+            ));
+        }
         let now: HashMap<(String, String), Vec<TagRow>> =
             rbl_db::write::checked::my_tag_rows(writer.library().connection())?
                 .into_iter()
@@ -962,7 +961,7 @@ fn write(
                     all.entry((track, tag)).or_default().push(row);
                     all
                 });
-        for p in planned {
+        for p in planned.iter().filter(|p| p.made.is_none()) {
             let key = (p.track.clone(), p.tag.clone());
             if now.get(&key).cloned().unwrap_or_default() != p.rows {
                 return Err(refused(format!(
@@ -971,22 +970,34 @@ fn write(
                 )));
             }
         }
+        let ids = rbl_library::my_tag_definitions::fresh_ids(
+            writer.library().connection(),
+            defined.make.len(),
+        )?;
+        let tag_of = |p: &Planned| match p.made {
+            Some(n) => ids[n].0.clone(),
+            None => p.tag.clone(),
+        };
+        let changes = crate::mytag_definitions::changes(defined, &ids);
         hold_before_write();
-        // Every track's changes in one checked transaction: written whole,
-        // or refused with nothing written.
+        // Every definition and every track's changes in one checked
+        // transaction: written whole, or refused with nothing written.
         let batch: Vec<TagChanges> = tracks
             .iter()
             .map(|track| {
                 let mine: Vec<&Planned> = planned.iter().filter(|p| p.track == *track).collect();
                 TagChanges {
                     content: track.clone(),
-                    changes: mine.iter().map(|p| (p.tag.clone(), p.on)).collect(),
-                    expected: mine.iter().map(|p| (p.tag.clone(), p.rows.clone())).collect(),
+                    changes: mine.iter().map(|p| (tag_of(p), p.on)).collect(),
+                    expected: mine.iter().map(|p| (tag_of(p), p.rows.clone())).collect(),
                 }
             })
             .collect();
-        let (_, written) = writer
-            .set_my_tags_if_unchanged(&batch)
+        let (made, _, written) = writer
+            .set_my_tags_if_unchanged_after(
+                |conn| rbl_library::my_tag_definitions::write(conn, &changes),
+                &batch,
+            )
             .map_err(|e| match e {
                 DbError::Conflict(why) => refused(why),
                 other => other,
@@ -1008,18 +1019,25 @@ fn write(
             }
             done.push(written.edit);
         }
-        if let Err(why) = keep_marks(stems, left) {
+        let after = crate::mytag_definitions::rows(writer.library().connection())?;
+        let definition_marks = crate::mytag_definitions::marks_after(defined, &ids, &after);
+        if let Err(why) = keep_marks(stems, left, definition_marks) {
             warnings.push(format!(
                 "the rows this projection left could not be kept ({why}): the MyTags it wrote count as the DJ's"
             ));
         }
-        Ok((
-            (),
+        let edit = if made.is_empty() {
             LibraryEdit::TrackTags {
                 tags: done,
                 comments: Vec::new(),
-            },
-        ))
+            }
+        } else {
+            LibraryEdit::MyTagProjection {
+                definitions: made,
+                tags: done,
+            }
+        };
+        Ok(((), edit))
     });
     match result {
         Ok(((), made)) => Ok((made, warnings)),
@@ -1059,8 +1077,15 @@ fn hold_before_write() {
 }
 
 /// Keeps the marks of what was written, at the Ledger's position now.
-fn keep_marks(stems: &Stems, mut marks: Vec<((String, String), TagMark)>) -> Result<(), String> {
-    if marks.is_empty() {
+fn keep_marks(
+    stems: &Stems,
+    mut marks: Vec<((String, String), TagMark)>,
+    mut definitions: Vec<(
+        String,
+        wreckordbox_sidecar::mytag_definitions::DefinitionMark,
+    )>,
+) -> Result<(), String> {
+    if marks.is_empty() && definitions.is_empty() {
         return Ok(());
     }
     stems
@@ -1076,7 +1101,14 @@ fn keep_marks(stems: &Stems, mut marks: Vec<((String, String), TagMark)>) -> Res
                 mark.seq = seq;
                 mark.entry = entry;
             }
-            sidecar.set_tag_marks(&marks).map_err(|e| e.to_string())
+            for (_, mark) in &mut definitions {
+                mark.ledger_seq = seq;
+                mark.entry = entry;
+            }
+            sidecar.set_tag_marks(&marks).map_err(|e| e.to_string())?;
+            sidecar
+                .set_definition_marks(&definitions)
+                .map_err(|e| e.to_string())
         })
         .map_err(|e| e.message)?
 }

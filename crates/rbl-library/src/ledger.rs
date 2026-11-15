@@ -112,7 +112,7 @@ impl Preparation {
                     matches!(column.as_str(), "Rating" | "ColorID" | "Title" | "ArtistID")
                 })
                 .collect(),
-            LibraryEdit::TrackTags { tags, .. } => tags
+            LibraryEdit::TrackTags { tags, .. } | LibraryEdit::MyTagProjection { tags, .. } => tags
                 .iter()
                 .map(|tag| (tag.parts().track, "MyTags".to_owned()))
                 .collect(),

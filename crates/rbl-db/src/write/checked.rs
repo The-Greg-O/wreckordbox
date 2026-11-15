@@ -260,6 +260,20 @@ impl Writer {
         &mut self,
         tracks: &[TagChanges],
     ) -> Result<(Changed, Vec<TagsWritten>)> {
+        self.set_my_tags_if_unchanged_after(|_| Ok(()), tracks)
+            .map(|((), changed, written)| (changed, written))
+    }
+
+    /// [`Self::set_my_tags_if_unchanged`], with `first` run in the same
+    /// immediate transaction before the comparisons (wbx-14.14: MyTag
+    /// Projection makes the tags its assignments use). `first` must keep the
+    /// registry's update counter itself; an error from it, or anything
+    /// after it, rolls the whole transaction back.
+    pub fn set_my_tags_if_unchanged_after<T>(
+        &mut self,
+        first: impl FnOnce(&rusqlite::Connection) -> Result<T>,
+        tracks: &[TagChanges],
+    ) -> Result<(T, Changed, Vec<TagsWritten>)> {
         self.prepare()?;
         let stamp = time::now();
         let ids: Vec<Vec<(String, String)>> = tracks
@@ -275,6 +289,7 @@ impl Writer {
             .library
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let before_all = first(&tx)?;
         for track in tracks {
             let content = track.content.as_str();
             if !super::content_exists(&tx, content)? {
@@ -362,6 +377,6 @@ impl Writer {
             set_counter(&tx, usn)?;
         }
         tx.commit()?;
-        Ok((Changed { rows, usn }, written))
+        Ok((before_all, Changed { rows, usn }, written))
     }
 }

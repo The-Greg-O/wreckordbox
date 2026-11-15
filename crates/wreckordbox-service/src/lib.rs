@@ -27,6 +27,7 @@ pub mod mutant_edits;
 mod mutant_follow;
 mod mutant_reads;
 pub mod mutants;
+pub mod mytag_definitions;
 pub mod mytag_edits;
 pub mod mytag_projection;
 pub mod native_stems;
