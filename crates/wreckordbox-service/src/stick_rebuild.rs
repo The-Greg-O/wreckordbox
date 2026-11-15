@@ -46,9 +46,8 @@ pub mod codes {
 }
 
 /// What cannot be carried, in every answer.
-const NOT_CARRIED: [&str; 4] = [
-    "cues and loops: they are in the Stick's analysis files, which this command does not copy yet",
-    "beat grids: they are in the Stick's analysis files, which this command does not copy yet",
+const NOT_CARRIED: [&str; 3] = [
+    "cues, loops and beat grids of a track already analysed in this Library: it keeps its own analysis files (replacing them needs the window's analysis journal)",
     "play history: not carried yet",
     "artwork and date added: not carried",
 ];
@@ -346,6 +345,8 @@ struct Existing {
     colour: u8,
     comment: String,
     tags: Vec<String>,
+    /// It has analysis files or cues of its own, which the rebuild keeps.
+    analysed: bool,
 }
 
 /// What the Library holds that the rebuild compares with.
@@ -369,7 +370,10 @@ fn read_library(library: &OpenLibrary, files: &[PathBuf]) -> Result<LibraryState
         let mut at = conn
             .prepare(
                 "SELECT ID, COALESCE(Rating, 0), COALESCE(CAST(NULLIF(ColorID, '') AS INTEGER), 0),
-                        COALESCE(Commnt, '')
+                        COALESCE(Commnt, ''),
+                        COALESCE(AnalysisDataPath, '') <> ''
+                          OR EXISTS (SELECT 1 FROM djmdCue
+                                     WHERE ContentID = djmdContent.ID AND rb_local_deleted = 0)
                  FROM djmdContent WHERE FolderPath = ?1 AND rb_local_deleted = 0 ORDER BY ID LIMIT 1",
             )
             .map_err(failed)?;
@@ -381,9 +385,15 @@ fn read_library(library: &OpenLibrary, files: &[PathBuf]) -> Result<LibraryState
             .map_err(failed)?;
         for file in files {
             let row = at.query_row([file.to_string_lossy().as_ref()], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?))
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, bool>(4)?,
+                ))
             });
-            let (id, rating, colour, comment) = match row {
+            let (id, rating, colour, comment, analysed) = match row {
                 Ok(row) => row,
                 Err(rusqlite::Error::QueryReturnedNoRows) => continue,
                 Err(e) => return Err(failed(e)),
@@ -401,6 +411,7 @@ fn read_library(library: &OpenLibrary, files: &[PathBuf]) -> Result<LibraryState
                     colour: u8::try_from(colour).unwrap_or(0),
                     comment,
                     tags,
+                    analysed,
                 },
             );
         }
@@ -476,6 +487,10 @@ struct PlannedTrack {
     key: String,
     /// The Stick tag ids to carry.
     tags: Vec<u32>,
+    /// The Stick's analysis `.DAT`, volume-relative, to carry (its cues,
+    /// loops and beat grid, with its `.EXT` and `.2EX`); `None` when the
+    /// Stick has none or the track keeps its own.
+    analysis: Option<String>,
 }
 
 /// One node, planned: the Stick node id, its parent's Stick id (0 at the
@@ -491,6 +506,10 @@ struct PlannedNode {
 }
 
 struct Plan {
+    /// Where the Stick is mounted, to read its analysis files from.
+    stick: PathBuf,
+    /// The Library's share root, where analysis files go.
+    share_root: PathBuf,
     /// `(Library category, the Stick's name for its slot)`.
     renames: Vec<(String, String)>,
     tracks: Vec<PlannedTrack>,
@@ -700,6 +719,30 @@ fn plan(
             );
             compare("key", json!(track.key), !track.key.is_empty(), None);
         }
+        // Cues, loops and the beat grid: the Stick's analysis files, for a
+        // track with none of its own here.
+        let analysis =
+            (!track.analysis_path.trim().is_empty()).then(|| track.analysis_path.clone());
+        let keeps_own = existing.as_ref().is_some_and(|e| e.analysed);
+        if analysis.is_some() {
+            if keeps_own {
+                outcomes.push(ValueOutcome {
+                    value: "analysis".into(),
+                    outcome: "kept".into(),
+                    from: None,
+                    to: json!("this Library's own cues, loops and beat grid"),
+                });
+            } else {
+                *values.entry("analysis".into()).or_default() += 1;
+                outcomes.push(ValueOutcome {
+                    value: "analysis".into(),
+                    outcome: "set".into(),
+                    from: None,
+                    to: json!("the Stick's cues, loops and beat grid"),
+                });
+            }
+        }
+        let analysis = analysis.filter(|_| !keeps_own);
         let names: Vec<String> = carried_tags.iter().filter_map(|id| tag_name(*id)).collect();
         if !carried_tags.is_empty() {
             *values.entry("my_tags".into()).or_default() += 1;
@@ -740,6 +783,7 @@ fn plan(
             bpm_x100: track.bpm_x100,
             key: track.key.clone(),
             tags: carried_tags,
+            analysis,
         });
     }
 
@@ -814,6 +858,8 @@ fn plan(
     not_carried.extend(NOT_CARRIED.iter().map(|s| (*s).to_owned()));
 
     Ok(Plan {
+        stick: request.stick.clone(),
+        share_root: library.share_root(),
         renames,
         tracks: planned,
         nodes,
@@ -841,15 +887,128 @@ fn plan(
 
 /// The Library's identifiers the apply made, and its Ledger records.
 struct Applied {
+    /// Why a track's analysis could not be carried, by its Stick id.
+    analysis_failed: HashMap<u32, String>,
     tracks: HashMap<u32, String>,
     nodes: HashMap<u32, String>,
     tags: HashMap<u32, String>,
     records: Vec<Value>,
 }
 
+/// Analysis files a track was given, and its cues.
+struct Carried {
+    relative: String,
+    cues: Vec<rbl_anlz::CueEntry>,
+    files: Vec<PathBuf>,
+}
+
+impl Carried {
+    /// Takes the files away again, for an edit that failed after them.
+    fn remove(&self) {
+        for file in &self.files {
+            let _ = std::fs::remove_file(file);
+        }
+    }
+}
+
+/// Gives the track `id`, linked to `audio`, the Stick's analysis at `dat`
+/// (volume-relative) and its `.EXT` and `.2EX`, as Import Playlist gives a
+/// track it copies (`carry_stick_analysis` in the app): every section byte
+/// for byte as on the Stick, the path inside each the share tree's, written
+/// where rekordbox keeps the track's analysis. The cues are the `.EXT`'s
+/// list when there is one (colours and comments), the `.DAT`'s otherwise.
+///
+/// Only for a track with no analysis of its own: the place is new (the
+/// track's UUID-derived path), so nothing is overwritten and the window's
+/// analysis journal, which exists to put overwritten files back, is not
+/// needed. A crash between the files and the row leaves files no row names;
+/// files already at the place are left alone and the track is reported.
+/// The Stick is only read, one read per track, below its mount.
+fn carry_analysis(
+    writer: &rbl_db::write::Writer,
+    plan: &Plan,
+    dat: &str,
+    audio: &Path,
+    id: &str,
+) -> Result<Carried, String> {
+    let dat_relative = Path::new(dat).to_path_buf();
+    let (dat, ext, two_ex) = wreckordbox_stick_outline::read(&plan.stick, |stick| {
+        let read = |relative: &Path| -> Result<Option<rbl_anlz::Anlz>, wreckordbox_stick_outline::ReadError> {
+            let text = relative.to_string_lossy().replace('\\', "/");
+            let at = stick.root().join(text.trim_start_matches('/'));
+            let Ok(real) = at.canonicalize() else { return Ok(None) };
+            if !real.starts_with(stick.root()) || !real.is_file() {
+                return Ok(None);
+            }
+            rbl_anlz::Anlz::read(&real).map(Some).map_err(|e| {
+                wreckordbox_stick_outline::ReadError::Unreadable(format!("{}: {e}", relative.display()))
+            })
+        };
+        Ok((
+            read(&dat_relative)?,
+            read(&dat_relative.with_extension("EXT"))?,
+            read(&dat_relative.with_extension("2EX"))?,
+        ))
+    })
+    .map_err(|e| e.to_string())?;
+    let Some(dat) = dat else {
+        return Err(format!(
+            "its analysis file {} is not on the Stick",
+            dat_relative.display()
+        ));
+    };
+    let relative = writer
+        .analysis_data_path_for(id)
+        .map_err(|e| e.to_string())?;
+    let target = rbl_anlz::resolve(&plan.share_root, &relative);
+    let ppth = rbl_anlz::share_tree_ppth(&audio.to_string_lossy());
+    let mut files = vec![(target.clone(), dat.with_path(&ppth))];
+    for (extension, anlz) in [("EXT", &ext), ("2EX", &two_ex)] {
+        if let Some(anlz) = anlz {
+            files.push((rbl_anlz::sibling(&target, extension), anlz.with_path(&ppth)));
+        }
+    }
+    if let Some((taken, _)) = files.iter().find(|(path, _)| path.exists()) {
+        return Err(format!(
+            "analysis files are already at {}; they were left as they are",
+            taken.display()
+        ));
+    }
+    let mut carried = Carried {
+        relative,
+        cues: ext
+            .as_ref()
+            .map_or_else(|| dat.legacy_cue_entries(), rbl_anlz::Anlz::cue_entries),
+        files: Vec::new(),
+    };
+    for (path, bytes) in &files {
+        if let Err(e) = write_new(path, bytes) {
+            carried.remove();
+            return Err(format!("{} could not be written: {e}", path.display()));
+        }
+        carried.files.push(path.clone());
+    }
+    Ok(carried)
+}
+
+/// Writes a file that does not exist yet, whole or not at all.
+fn write_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let partial = path.with_extension("rebuild-partial");
+    let mut file = std::fs::File::create(&partial)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(&partial, path)
+}
+
 /// Every write of the rebuild, inside the one edit.
 fn apply(writer: &mut rbl_db::write::Writer, plan: &Plan) -> Result<Applied, DbError> {
     let mut records = Vec::new();
+    let mut analysis_failed = HashMap::new();
     // Each renamed category under a name no other has first, so that slots
     // trading names never clash; then under the Stick's name.
     for (category, _) in &plan.renames {
@@ -888,20 +1047,42 @@ fn apply(writer: &mut rbl_db::write::Writer, plan: &Plan) -> Result<Applied, DbE
         };
         by_file.insert(track.file.clone(), id.clone());
         let mut changed = Vec::new();
-        if added {
+        let carried = match &track.analysis {
+            Some(dat) => match carry_analysis(writer, plan, dat, &track.file, &id) {
+                Ok(carried) => Some(carried),
+                Err(reason) => {
+                    changed.push(json!({"field": "analysis", "failed": reason}));
+                    analysis_failed.insert(track.stick_id, reason);
+                    None
+                }
+            },
+            None => None,
+        };
+        // The Stick's tempo and key go with its grid, or to a track that
+        // has neither yet.
+        if added || carried.is_some() {
             if !track.key.is_empty() {
                 writer.ensure_detected_key(&track.key)?;
             }
             let key = Some(track.key.as_str()).filter(|k| !k.is_empty());
-            writer.import_device_analysis(
+            let written = writer.import_device_analysis(
                 &id,
                 &rbl_db::write::DeviceAnalysis {
                     bpm_x100: track.bpm_x100,
                     key,
-                    analysis_data_path: None,
-                    cues: &[],
+                    analysis_data_path: carried.as_ref().map(|c| c.relative.as_str()),
+                    cues: carried.as_ref().map_or(&[], |c| c.cues.as_slice()),
                 },
-            )?;
+            );
+            if let Err(error) = written {
+                if let Some(carried) = &carried {
+                    carried.remove();
+                }
+                return Err(error);
+            }
+            if let Some(carried) = &carried {
+                changed.push(json!({"field": "analysis", "path": carried.relative, "cues": carried.cues.len()}));
+            }
         }
         let before = track.existing.as_ref();
         if before.map_or(track.rating > 0, |e| e.rating != track.rating) {
@@ -978,6 +1159,7 @@ fn apply(writer: &mut rbl_db::write::Writer, plan: &Plan) -> Result<Applied, DbE
         nodes.insert(node.stick_id, id);
     }
     Ok(Applied {
+        analysis_failed,
         tracks,
         nodes,
         tags,
@@ -1050,6 +1232,14 @@ pub(crate) fn answer(
             .and_then(|t| applied.tracks.get(&t.id))
         {
             track.track = Some(found.clone());
+        }
+    }
+    for (track, planned) in plan.answer.matched.iter_mut().zip(&plan.tracks) {
+        if let Some(reason) = applied.analysis_failed.get(&planned.stick_id) {
+            for value in track.values.iter_mut().filter(|v| v.value == "analysis") {
+                value.outcome = "failed".into();
+                value.to = json!(reason);
+            }
         }
     }
     for (outcome, node) in plan.answer.playlists.iter_mut().zip(&plan.nodes) {

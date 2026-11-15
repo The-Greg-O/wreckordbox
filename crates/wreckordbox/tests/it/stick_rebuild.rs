@@ -118,6 +118,48 @@ const TAGS: [(u64, u32, &str, u8, u64); 7] = [
 ];
 const SITUATION_DARK: (u64, u32, &str, u8, u64) = (23, 3, "Dark", 0, 2);
 
+/// The beat grid every analysed Stick track has.
+const BEATS: [(u16, u16, u32); 2] = [(1, 12_000, 25), (2, 12_000, 525)];
+
+fn beats() -> Vec<rbl_anlz::Beat> {
+    BEATS
+        .iter()
+        .map(|&(beat_number, tempo_x100, time_ms)| rbl_anlz::Beat {
+            beat_number,
+            tempo_x100,
+            time_ms,
+        })
+        .collect()
+}
+
+/// Gives a Stick track analysis files: a grid, hot cue A at 25 ms and a
+/// memory loop from 494 to 2369 ms; the `.EXT` too when `ext`.
+fn analysed(track: &mut rbl_export::SourceTrack, ext: bool) {
+    let mut dat = rbl_anlz::write::AnlzBuilder::new();
+    dat.path("/x.wav").beat_grid(&beats()).cue_lists(false);
+    track.analysis = vec![("DAT".into(), dat.finish())];
+    if ext {
+        let mut with_ext = rbl_anlz::write::AnlzBuilder::new();
+        with_ext
+            .path("/x.wav")
+            .waveform_preview(b"PWV3", &[9; 30])
+            .cue_lists(true);
+        track.analysis.push(("EXT".into(), with_ext.finish()));
+    }
+    let cue = |kind: u8, time_ms: u32, loop_time_ms: Option<u32>| rbl_anlz::cues::ExportCue {
+        kind,
+        time_ms,
+        loop_time_ms,
+        color_id: 0,
+        color_code: u8::from(kind != 0),
+        comment: String::new(),
+        active_loop: false,
+        loop_numerator: 0,
+        loop_denominator: 0,
+    };
+    track.cues = Some(vec![cue(1, 25, None), cue(0, 494, Some(2369))]);
+}
+
 struct Rig {
     sandbox: Sandbox,
     _dirs: tempfile::TempDir,
@@ -158,6 +200,10 @@ impl Rig {
                 ..rbl_export::SourceTrack::default()
             });
         }
+        // Analysed on the other computer: "Low Sun" with a grid, a hot cue
+        // and a memory loop (`.DAT` and `.EXT`), "Echo" with a `.DAT` only.
+        analysed(&mut tracks[0], true);
+        analysed(&mut tracks[5], false);
         let my_tags: Vec<rbl_export::SourceMyTag> = TAGS
             .iter()
             .chain(std::iter::once(&SITUATION_DARK))
@@ -517,6 +563,8 @@ fn a_dry_run_lists_what_would_be_carried_and_writes_nothing_anywhere() {
     let carried = &dry["values"];
     assert_eq!(carried["rating"], 3);
     assert_eq!(carried["my_tags"], 3);
+    assert_eq!(carried["analysis"], 2, "Low Sun and Echo");
+    assert_eq!(value_of(low_sun, "analysis")["outcome"], "set");
 
     assert_eq!(rig.runs(), runs_before, "a dry run takes no Run");
     assert_eq!(
@@ -609,6 +657,59 @@ fn applying_links_the_tracks_carries_their_values_and_rebuilds_the_playlists_in_
     );
     assert_eq!(rig.titles_in("Friday"), ["Low Sun", "Paper"]);
     assert_eq!(rig.titles_in("Warm Up"), ["Echo", "Low Sun"]);
+
+    // Cues, loops and the grid came with the Stick's analysis files.
+    let location = rig.sandbox.location().clone();
+    let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
+    for (title, ext) in [("Low Sun", true), ("Echo", false)] {
+        let id = collection[title]["id"].as_str().unwrap().to_owned();
+        let mut stmt = db
+            .connection()
+            .prepare("SELECT InMsec, OutMsec, Kind FROM djmdCue WHERE ContentID = ?1 AND rb_local_deleted = 0 ORDER BY InMsec")
+            .unwrap();
+        let cues: Vec<(i64, Option<i64>, i64)> = stmt
+            .query_map([&id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            cues,
+            [(25, None, 1), (494, Some(2369), 0)],
+            "{title}: hot cue and memory loop"
+        );
+        let path: String = db
+            .connection()
+            .query_row(
+                "SELECT AnalysisDataPath FROM djmdContent WHERE ID = ?1",
+                [&id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let dat_file = rbl_anlz::resolve(&location.share_root, &path);
+        let dat = rbl_anlz::Anlz::read(&dat_file).unwrap();
+        assert_eq!(
+            dat.beat_grid().unwrap(),
+            beats(),
+            "{title}: the Stick's grid"
+        );
+        assert_eq!(
+            rbl_anlz::sibling(&dat_file, "EXT").exists(),
+            ext,
+            "{title}: its .EXT"
+        );
+        assert_eq!(collection[title]["analysed"], true, "{title}");
+    }
+    let echo_values = applied["matched"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["title"] == "Echo")
+        .unwrap();
+    assert_eq!(
+        value_of(echo_values, "analysis")["outcome"],
+        "set",
+        "Echo had none of its own"
+    );
 
     // One Run, an import, under the caller's source.
     let runs = rig.runs();
