@@ -206,6 +206,7 @@ impl Session {
                 insert(&mut args, "source", source);
             }
             Who::Starts => insert(&mut args, "source", source.or_else(|| Some(by_us()))),
+            Who::Run => insert(&mut args, "run", run),
         }
         let mut result: Value = client.call(tool.command, Value::Object(args))?;
         if let (Some(run), Value::Object(object)) = (client.last_run(), &mut result) {

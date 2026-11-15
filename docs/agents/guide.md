@@ -247,6 +247,26 @@ printf '%s\n' '{"track":"10003","kind":"genre","value":["Tech House"],"confidenc
 `project --dry-run` then shows what Projection would write into the Library
 from standing Facts, and what it holds back for the DJ (`review waiting`).
 
+### Look a track up on the web
+
+Wreckordbox never uses the network: you search, with your own tools, and
+hand it what you found. Describe the track, search for it, then check the
+candidate before anything is recorded.
+
+```sh
+wreckordbox --json lookup describe 10001          # artist, title, mix name, duration, label, release date, the file's own tags, "search"
+wreckordbox --json lookup check 10001 --address https://shop.example.test/release/4471 --date 2026-11-10 \
+  --candidate '{"artist":"Kessler, Vane","title":"Night Signal (Extended Mix)","duration":"6:12","genre":["Tech House"]}' --dry-run
+wreckordbox --json lookup check 10001 --address https://shop.example.test/release/4471 --date 2026-11-10 \
+  --candidate '{"artist":"Kessler, Vane","title":"Night Signal (Extended Mix)","duration":"6:12","genre":["Tech House"]}'
+```
+
+The verdict is `accepted`, `held` (perhaps another mix, edit, master or
+release: the DJ looks) or `rejected` (another recording), with a `reason`.
+Only an accepted candidate's fields become Facts, from `web:<address>`;
+they wait for the DJ like any Fact that is not the DJ's. Never accept a held
+candidate yourself.
+
 ### Start and finish a Run so changes are grouped and undoable
 
 ```sh
@@ -947,6 +967,49 @@ Changes the Sidecar: the rule-based Decider answers as `tool:rule-based`.
 cannot answer, nothing is recorded. Also `--fact`, `--fact-track`,
 `--fact-value`, `--run`, `--description`.
 
+### `wreckordbox lookup`
+
+The group for lookups (ADR 0005): describing a track for your search and
+checking a candidate you found. Wreckordbox itself never uses the network.
+
+### `wreckordbox lookup describe`
+
+Reads one track as a search wants it. Argument: `<TRACK_ID>`. Answers
+`{"track", "artist", "artists": [names], "title", "mix_name",
+"duration_seconds", "label", "release_date", "year", "album", "genre",
+"search": "Artist - Title (Mix)", "file": {"path", "tags": {"title", "artist",
+"album", "genre", "label", "comment", "year", "key", "duration_seconds"} | null,
+"problem": text | null}}`. A missing or unreadable file is said in `problem`,
+never guessed. Writes nothing, not even the Sidecar.
+
+### `wreckordbox lookup check`
+
+Changes the Sidecar (none of it with `--dry-run`): checks a candidate
+against a track and records the check as a Decision, topic `lookup_match`,
+answered by `tool:lookup-check`. Argument: `<TRACK_ID>`. Options:
+`--candidate JSON` (`artist` and `title`, and as found `mix_name` or its
+other name `version`, `duration` in seconds or `m:ss`, `label`,
+`release_date`, any declared kind such as `genre`), `--address` (where it was
+found), `--date YYYY-MM-DD` (when), `--tolerance SECONDS` (3), `--run`,
+`--dry-run`. Different title, or no artist in common: `rejected`. Another
+mix, a remaster on one side only, a duration outside the tolerance, another
+release year or label: `held`. Titles are compared ignoring case,
+apostrophes and punctuation; a mix or remaster after a dash counts as one in
+brackets. An accepted candidate's fields (not `duration`) become Facts of
+the kind of the same name (`mix_name` and `version` are the kind `version`)
+from `web:<address>`, in the check's Run, whose description carries the
+address and the date; fields whose kind is not declared are listed in
+`not_recorded`. A `mix_name` and a `version` that disagree are refused
+(`invalid_candidate`); a bad address or date is `invalid_lookup`.
+
+```sh
+wreckordbox --json lookup check 10001 --candidate '{"artist":"Kessler","title":"Day Signal"}' --address https://shop.example.test/1 --date 2026-11-10
+```
+```json
+{"verdict": "rejected", "reason": "the title is \"Day Signal\", not \"Night Signal\"", "findings": [...],
+ "decision": {"id": 4, "topic": "lookup_match", ...}, "run": {...}, "facts": [], "proposed": [], "not_recorded": [], ...}
+```
+
 ### `wreckordbox mutants`
 
 The group for Mutants: a playlist entry's own edited version of its track,
@@ -1379,7 +1442,8 @@ Reads (each named after the CLI command it mirrors in its description):
 `read_protection`, `read_intake`, `read_problems`, `read_intake_counts`,
 `read_prep_colours`, `read_track_tag_panel`, `read_fact_kinds`,
 `read_track_facts`, `read_standing_fact`, `read_runs`, `read_run`,
-`read_decisions`, `read_decision`, `read_mutants`, `read_mutant`,
+`read_decisions`, `read_decision`, `read_lookup_description`,
+`read_lookup_check` (a dry run), `read_mutants`, `read_mutant`,
 `read_review_waiting`, `read_review_rejected`, `read_projection_barriers`,
 `read_projection_plan`, `read_sticks`, `read_stick_load_preview`,
 `read_stems`, `read_intensity`, `read_schema_check`, `read_set_plan_check`,
@@ -1396,6 +1460,8 @@ Changes to the Library: `change_track_rating`, `change_prep_colour`,
 
 Changes to the Sidecar: `change_run_start`, `change_run_finish`,
 `change_record_facts`, `change_decision_create`, `change_decision_answer`,
+`change_lookup_check` (takes `run` only: the check's Decider and the Facts'
+web source are the service's),
 `change_mutant_create`, `change_mutant_edit`, `change_mutant_remove`,
 `change_set_plan_build` (makes its own Run: takes `source`, not `run`).
 

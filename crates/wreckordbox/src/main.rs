@@ -11,6 +11,7 @@ mod facts;
 mod intake;
 mod intensity;
 mod ledger;
+mod lookup;
 mod mutants;
 mod mytag_edits;
 mod playlist_edits;
@@ -141,6 +142,12 @@ enum Commands {
     Decisions {
         #[command(subcommand)]
         command: decisions::DecisionCommands,
+    },
+    /// Describe a track for a lookup, and check a candidate a lookup found
+    /// against it. Wreckordbox itself never uses the network.
+    Lookup {
+        #[command(subcommand)]
+        command: lookup::LookupCommands,
     },
     /// Mutants: a playlist's own edited version of a track, kept for one
     /// playlist entry and never written into the Library.
@@ -408,6 +415,9 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
         }
         Commands::Decisions { command } => {
             print(&decisions::run(&mut connect(&config)?, cli.json, command)?);
+        }
+        Commands::Lookup { command } => {
+            print(&lookup::run(&mut connect(&config)?, cli.json, command)?);
         }
         Commands::Mutants { command } => {
             print(&mutants::run(&mut connect(&config)?, cli.json, command)?);

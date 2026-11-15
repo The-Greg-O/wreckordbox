@@ -205,6 +205,12 @@ fn sweep(s: &Sandbox, id: &str, playlist: &str, tag: &str, populated: bool) {
         ("runs.show", json!({"id":1})),
         ("runs.active", json!({})),
         ("decisions.list", json!({})),
+        ("lookup.describe", json!({"id":id})),
+        (
+            "lookup.check",
+            json!({"id":id,"candidate":{"artist":"A","title":"T","duration":1},
+                   "address":"https://shop.example.test/1","date":"2026-11-10","dry_run":true}),
+        ),
         ("decisions.get", json!({"id":1})),
         ("mutants.list", json!({})),
         ("mutants.list", json!({"check_audio":true})),

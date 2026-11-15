@@ -40,6 +40,9 @@ pub enum Who {
     RunAndSource,
     /// `runs.start`: the source is the Run's.
     Starts,
+    /// `lookup.check`: an open Run to record in, and nothing else; the
+    /// check's own Decider and the Facts' web source are the service's.
+    Run,
 }
 
 /// One tool.
@@ -120,6 +123,7 @@ fn run_properties(who: Who) -> Vec<(&'static str, Value)> {
         ],
         Who::RunAndSource => vec![("run", run), ("source", source_property())],
         Who::Starts => vec![("source", source_property())],
+        Who::Run => vec![("run", run)],
     }
 }
 
@@ -212,6 +216,31 @@ impl Builder {
             json!({}),
         );
     }
+}
+
+/// The arguments of `lookup.check`, for both of its tools.
+fn lookup_check_properties() -> Vec<(&'static str, Value)> {
+    vec![
+        ("id", text(TRACK_ID)),
+        (
+            "candidate",
+            json!({
+                "type": "object",
+                "description": "The candidate's fields as found: `artist` and `title` (required), and \
+                                `mix_name` (or `version`, the same field), `duration` (seconds or \"m:ss\"), \
+                                `label`, `release_date`, any declared kind of Fact (`genre`, ...)."
+            }),
+        ),
+        (
+            "address",
+            text("Where the candidate was found: one address, no spaces."),
+        ),
+        ("date", text("When it was found: YYYY-MM-DD.")),
+        (
+            "tolerance_seconds",
+            json!({"type": "number", "minimum": 0, "description": "How far apart the durations may be (3 when left out)."}),
+        ),
+    ]
 }
 
 /// Every tool, in the order `tools/list` gives them.
@@ -479,6 +508,28 @@ pub fn catalogue() -> Vec<Tool> {
         "One Decision with every answer it has been given (`wreckordbox decisions show`).",
         vec![("id", integer("The Decision's identifier."))],
         vec!["id"],
+    );
+    b.read(
+        "read_lookup_description",
+        "lookup.describe",
+        "A track described for a web search: artist, title, mix name, duration, label, release date, \
+         a ready search line, and the audio file's own tags (`wreckordbox lookup describe`). \
+         Wreckordbox never searches: you do, with your own tools.",
+        vec![("id", text(TRACK_ID))],
+        vec!["id"],
+    );
+    b.add(
+        "read_lookup_check",
+        "lookup.check",
+        Effect::Read,
+        Who::Nobody,
+        "Checks a candidate you found against a track and says what recording it would be: accepted, \
+         held for review or rejected, with the reason and the Facts it would record \
+         (`wreckordbox lookup check --dry-run`). Records no Decision and no Fact; \
+         `change_lookup_check` records them.",
+        lookup_check_properties(),
+        vec!["id", "candidate", "address", "date"],
+        json!({"dry_run": true}),
     );
     b.read(
         "read_mutants",
@@ -999,6 +1050,19 @@ pub fn catalogue() -> Vec<Tool> {
             ("reason", text("Why, in a sentence.")),
         ],
         vec!["id", "choice"],
+        json!({}),
+    );
+    b.add(
+        "change_lookup_check",
+        "lookup.check",
+        Effect::Sidecar,
+        Who::Run,
+        "Checks a candidate you found against a track (`wreckordbox lookup check`) and records the check \
+         as a Decision (topic `lookup_match`): accepted, held for review or rejected, with the reason. \
+         Only an accepted candidate's fields become Facts, from `web:<address>`, waiting for the DJ's \
+         Review like any Fact that is not the DJ's.",
+        lookup_check_properties(),
+        vec!["id", "candidate", "address", "date"],
         json!({}),
     );
     b.add(
