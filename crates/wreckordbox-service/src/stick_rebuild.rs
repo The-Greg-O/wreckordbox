@@ -52,6 +52,10 @@ const NOT_CARRIED: [&str; 3] = [
     "artwork and date added: not carried",
 ];
 
+const fn yes() -> bool {
+    true
+}
+
 pub(crate) fn answers(command: &str) -> bool {
     command == commands::LIBRARY_REBUILD_FROM_STICK
 }
@@ -71,6 +75,18 @@ pub struct Rebuild {
     /// (a file retagged since the export).
     #[serde(default)]
     pub accept_retagged: bool,
+    /// Link a track to the one file of its size whose name agrees only in
+    /// part, or whose length does not agree.
+    #[serde(default)]
+    pub accept_uncertain: bool,
+    /// Read each candidate's length from its header and compare it with
+    /// the Stick's (default). Off for a music folder whose files are slow to
+    /// open (a network mount): names and sizes alone are then compared.
+    #[serde(default = "yes")]
+    pub check_length: bool,
+    /// Test mode only: stop the apply after this step, as a crash would.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fail_after: Option<String>,
 }
 
 /// One value of a matched track.
@@ -100,6 +116,10 @@ pub struct MatchedTrack {
     /// copy's (retagged since the export), accepted by the caller.
     #[serde(default)]
     pub retagged: bool,
+    /// Linked by its size with its name agreeing only in part (or its
+    /// length not agreeing), accepted by the caller.
+    #[serde(default)]
+    pub uncertain: bool,
     /// The collection's track already at that file, if any.
     pub existing: Option<String>,
     /// The collection's track after applying; `null` in a dry run of a new one.
@@ -113,7 +133,9 @@ pub struct UnmatchedTrack {
     pub title: String,
     pub artist: String,
     pub stick_path: String,
-    /// `no_file`; `ambiguous` (several files it could be);
+    /// `no_file`; `ambiguous` (several files it could be); `uncertain` (one
+    /// file of exactly its size whose name agrees only in part or whose
+    /// length does not agree: pass `accept_uncertain` to link it);
     /// `name_disagrees` (one file of exactly its size, whose name does not
     /// start as the Stick's does); `different_size` (one file of its name,
     /// of another size: pass `accept_retagged` to link it).
@@ -190,17 +212,43 @@ pub struct Rebuilt {
     /// Why the Ledger could not record all of it, when it could not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recording_warning: Option<String>,
+    /// The backup of the Library taken before applying (`null` in a dry run).
+    #[serde(default)]
+    pub backup: Option<String>,
+    /// Whether everything was applied (a dry run: `true`).
+    #[serde(default = "yes")]
+    pub complete: bool,
+    /// When the apply stopped part way: what was done and what to do.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incomplete: Option<Incomplete>,
+}
+
+/// An apply that stopped part way. What it wrote is kept.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Incomplete {
+    /// Why it stopped.
+    pub error: String,
+    /// The steps finished ([`STEPS`]), in order.
+    pub done: Vec<String>,
+    /// What to do now, in words.
+    pub advice: String,
 }
 
 /// The rule that links a Stick track to a file of the music folder.
 ///
-/// rekordbox copies each file byte for byte to the Stick but shortens or
-/// cleans up its name, so the size is what really ties the two together;
-/// the start of the name confirms it. In order:
+/// rekordbox copies each file byte for byte to the Stick but cleans up its
+/// name (the characters FAT cannot hold) and may cut it short, so the size
+/// is what really ties the two together and the name confirms it. In order:
 ///
-/// 1. The files whose size is exactly the Stick copy's. One, whose name
-///    starts as the Stick's does ([`matching::names_agree`]): that file. One
-///    whose name does not agree, or several: reported, never guessed.
+/// 1. The files whose size is exactly the Stick copy's. Several:
+///    ambiguous. One: taken when the WHOLE of the Stick's name (its stem,
+///    compared as [`matching::comparable`] makes it) is where the file's
+///    name starts, and, where the Stick's library records a length and the
+///    file's header says its own, the two lengths agree within a second.
+///    One whose name agrees only over its first [`matching::AGREEING_CHARACTERS`]
+///    characters, or whose length does not agree: `uncertain`, taken only
+///    when the caller accepts uncertain matches. One whose name does not
+///    agree at all: reported, never taken.
 /// 2. No file of that size: the files of the same name (case folded). One:
 ///    "same name, different size" (retagged since the export), linked only
 ///    when the caller accepts retagged files. Several: ambiguous.
@@ -212,18 +260,35 @@ pub mod matching {
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
 
-    /// How many characters of the two names' stems must agree: rekordbox
-    /// keeps at least this much of a name it shortens.
+    use unicode_normalization::UnicodeNormalization;
+
+    /// How many characters of the two names' stems must agree for a size
+    /// match to be `uncertain` rather than not a match at all.
     pub const AGREEING_CHARACTERS: usize = 20;
 
+    /// How far apart, in seconds, the Stick's length and the file's may be.
+    pub const LENGTH_TOLERANCE_SECS: u32 = 1;
+
     /// The music folder's audio files, by size and by file name (case
-    /// folded). Links are not followed; only names and sizes are read.
+    /// folded). Links are not followed; only names and sizes are read here.
     #[derive(Debug, Default)]
     pub struct MusicFolder {
         by_size: HashMap<u64, Vec<PathBuf>>,
         by_name: HashMap<String, Vec<PathBuf>>,
         /// How many audio files it holds.
         pub files: usize,
+    }
+
+    /// What the caller accepts besides a certain match.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct Accept {
+        /// The one file of the same name, of another size.
+        pub retagged: bool,
+        /// The one file of exactly the size whose name agrees only in part,
+        /// or whose length does not agree.
+        pub uncertain: bool,
+        /// Read a candidate's length from its header to compare.
+        pub check_length: bool,
     }
 
     /// Where a Stick track's file is.
@@ -233,11 +298,17 @@ pub mod matching {
         /// The one file of that name, of another size: retagged since the
         /// export, linked because the caller asked.
         Retagged(PathBuf),
+        /// The one file of its size, its name agreeing only in part or its
+        /// length not agreeing, linked because the caller asked.
+        AcceptedUncertain(PathBuf),
         NoFile,
         /// Several files it could be.
         Ambiguous(Vec<PathBuf>),
         /// One file of exactly that size whose name does not agree.
         NameDisagrees(PathBuf),
+        /// One file of exactly that size whose name agrees only in part, or
+        /// whose length does not agree; not accepted.
+        Uncertain(PathBuf),
         /// One file of that name, of another size, not accepted.
         DifferentSize(PathBuf),
     }
@@ -304,15 +375,15 @@ pub mod matching {
         }
 
         /// The file of a Stick track recorded as `stick_path`, whose copy on
-        /// the Stick is `stick_size` bytes (`None`: the Stick has no copy).
-        /// `accept_retagged` links the one file of the same name when no
-        /// file has the size.
+        /// the Stick is `stick_size` bytes (`None`: the Stick has no copy)
+        /// and whose library gives it `stick_secs` seconds (0: not recorded).
         #[must_use]
         pub fn find(
             &self,
             stick_path: &str,
             stick_size: Option<u64>,
-            accept_retagged: bool,
+            stick_secs: u32,
+            accept: Accept,
         ) -> Found {
             let name = file_name(stick_path);
             let named: &[PathBuf] = self
@@ -332,10 +403,16 @@ pub mod matching {
                         .file_name()
                         .map(|n| n.to_string_lossy().into_owned())
                         .unwrap_or_default();
-                    return if names_agree(&name, &theirs) {
+                    let certain = whole_name_agrees(&name, &theirs)
+                        && (!accept.check_length || lengths_agree(only, stick_secs));
+                    return if certain {
                         Found::File(only.clone())
-                    } else {
+                    } else if !names_agree(&name, &theirs) {
                         Found::NameDisagrees(only.clone())
+                    } else if accept.uncertain {
+                        Found::AcceptedUncertain(only.clone())
+                    } else {
+                        Found::Uncertain(only.clone())
                     };
                 }
                 [] => {}
@@ -343,25 +420,73 @@ pub mod matching {
             }
             match named {
                 [] => Found::NoFile,
-                [only] if accept_retagged => Found::Retagged(only.clone()),
+                [only] if accept.retagged => Found::Retagged(only.clone()),
                 [only] => Found::DifferentSize(only.clone()),
                 several => Found::Ambiguous(several.to_vec()),
             }
         }
     }
 
-    /// Whether two file names start alike: their stems (the name without
-    /// its extension), case folded, agree on the first
+    /// Whether the file's length, read from its header, agrees with the
+    /// Stick's within [`LENGTH_TOLERANCE_SECS`]. A length that is not
+    /// recorded, or a header that cannot be read, does not disagree.
+    fn lengths_agree(file: &Path, stick_secs: u32) -> bool {
+        if stick_secs == 0 {
+            return true;
+        }
+        match rbl_db::import::read_tags(file) {
+            Ok(tags) if tags.duration_sec > 0 => {
+                tags.duration_sec.abs_diff(stick_secs) <= LENGTH_TOLERANCE_SECS
+            }
+            _ => true,
+        }
+    }
+
+    /// A name as the comparison sees it: Unicode composed (NFC), case
+    /// folded, each character FAT cannot hold (and every control
+    /// character) as `_`, trailing dots and spaces dropped, as rekordbox
+    /// writes a name to a Stick.
+    #[must_use]
+    pub fn comparable(name: &str) -> String {
+        let mut out: String = name
+            .nfc()
+            .flat_map(char::to_lowercase)
+            .map(|c| match c {
+                '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+                c if (c as u32) < 0x20 => '_',
+                c => c,
+            })
+            .collect();
+        while out.ends_with('.') || out.ends_with(' ') {
+            out.pop();
+        }
+        out
+    }
+
+    fn stem(name: &str) -> String {
+        Path::new(name)
+            .file_stem()
+            .map_or_else(|| name.to_owned(), |s| s.to_string_lossy().into_owned())
+    }
+
+    /// Whether the file's name starts with the whole of the Stick's stem
+    /// (rekordbox may cut a name short, never lengthen it), both compared
+    /// as [`comparable`] makes them.
+    #[must_use]
+    pub fn whole_name_agrees(stick: &str, folder: &str) -> bool {
+        let (a, b) = (comparable(&stem(stick)), comparable(&stem(folder)));
+        !a.is_empty() && b.starts_with(&a)
+    }
+
+    /// Whether two file names start alike: their stems, compared as
+    /// [`comparable`] makes them, agree on the first
     /// [`AGREEING_CHARACTERS`] characters, or on all of the shorter one.
     #[must_use]
     pub fn names_agree(stick: &str, folder: &str) -> bool {
-        let stem = |name: &str| -> Vec<char> {
-            let stem = Path::new(name)
-                .file_stem()
-                .map_or_else(|| name.to_owned(), |s| s.to_string_lossy().into_owned());
-            stem.to_lowercase().chars().collect()
-        };
-        let (a, b) = (stem(stick), stem(folder));
+        let (a, b): (Vec<char>, Vec<char>) = (
+            comparable(&stem(stick)).chars().collect(),
+            comparable(&stem(folder)).chars().collect(),
+        );
         let n = AGREEING_CHARACTERS.min(a.len()).min(b.len());
         n > 0 && a[..n] == b[..n]
     }
@@ -459,8 +584,9 @@ struct LibraryState {
     categories: Vec<(String, String)>,
     /// Each category's tags: `(id, name)`.
     tags: HashMap<String, Vec<(String, String)>>,
-    /// `(parent, name, folder)` -> id, for the plain playlists and folders.
-    nodes: HashMap<(String, String, bool), String>,
+    /// `(parent, name, folder)` -> ids in the tree's order, for the plain
+    /// playlists and folders: same-named siblings are each used once.
+    nodes: HashMap<(String, String, bool), Vec<String>>,
 }
 
 fn read_library(library: &OpenLibrary, files: &[PathBuf]) -> Result<LibraryState, ServiceError> {
@@ -561,7 +687,7 @@ fn read_library(library: &OpenLibrary, files: &[PathBuf]) -> Result<LibraryState
                 a if a == rbl_db::write::ATTRIBUTE_PLAYLIST => false,
                 _ => continue,
             };
-            nodes.entry((parent, name, folder)).or_insert(id);
+            nodes.entry((parent, name, folder)).or_insert_with(Vec::new).push(id);
         }
         Ok(LibraryState { existing, categories, tags, nodes })
     })
@@ -609,6 +735,8 @@ struct PlannedNode {
 }
 
 struct Plan {
+    /// Test mode only: the step to stop after ([`Rebuild::fail_after`]).
+    fail_after: Option<String>,
     /// Where the Stick is mounted, to read its analysis files from.
     stick: PathBuf,
     /// The Library's share root, where analysis files go.
@@ -733,16 +861,17 @@ fn plan_tree(
     // parent (a new folder holds nothing yet).
     let mut library_ids: HashMap<u32, Option<String>> =
         HashMap::from([(0, Some("root".to_owned()))]);
+    // Each existing node goes to one Stick node only: same-named siblings
+    // are matched one to one, in order.
+    let mut unused = state.nodes.clone();
     let mut paths: HashMap<u32, String> = HashMap::new();
     let mut nodes = Vec::new();
     let mut playlists = Vec::new();
     for node in &stick.library.nodes {
         let parent_here = library_ids.get(&node.parent).cloned().flatten();
         let reuse = parent_here.and_then(|parent| {
-            state
-                .nodes
-                .get(&(parent, node.name.clone(), node.folder))
-                .cloned()
+            let free = unused.get_mut(&(parent, node.name.clone(), node.folder))?;
+            (!free.is_empty()).then(|| free.remove(0))
         });
         library_ids.insert(node.id, reuse.clone());
         let path = match paths.get(&node.parent) {
@@ -820,6 +949,7 @@ fn plan_tracks(
     state: &LibraryState,
     matched_files: &HashMap<u32, PathBuf>,
     retagged: &std::collections::HashSet<u32>,
+    uncertain: &std::collections::HashSet<u32>,
     tags: &HashMap<u32, TagTarget>,
 ) -> TrackPlan {
     let tag_name = |id: u32| -> Option<String> {
@@ -880,7 +1010,9 @@ fn plan_tracks(
             !track.comment.is_empty(),
             existing.as_ref().map(|e| json!(e.comment)),
         );
-        if existing.is_none() {
+        // A track with no analysis of its own (new, or one a cut-off
+        // apply added) takes the Stick's tempo and key.
+        if existing.as_ref().is_none_or(|e| !e.analysed) {
             compare(
                 "bpm",
                 json!(f64::from(track.bpm_x100) / 100.0),
@@ -940,6 +1072,7 @@ fn plan_tracks(
             stick_path: track.path.clone(),
             file: file.to_string_lossy().into_owned(),
             retagged: retagged.contains(&track.id),
+            uncertain: uncertain.contains(&track.id),
             existing: existing.as_ref().map(|e| e.id.clone()),
             track: existing.as_ref().map(|e| e.id.clone()),
             values: outcomes,
@@ -970,13 +1103,20 @@ fn plan(
 ) -> Result<Plan, ServiceError> {
     let mut matched_files: HashMap<u32, PathBuf> = HashMap::new();
     let mut retagged = std::collections::HashSet::new();
+    let mut uncertain = std::collections::HashSet::new();
     let mut unmatched = Vec::new();
     for track in &stick.library.tracks {
         let shown = |p: &[PathBuf]| p.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+        let accept = matching::Accept {
+            retagged: request.accept_retagged,
+            uncertain: request.accept_uncertain,
+            check_length: request.check_length,
+        };
         let (reason, candidates) = match folder.find(
             &track.path,
             stick.sizes.get(&track.id).copied(),
-            request.accept_retagged,
+            track.duration_sec,
+            accept,
         ) {
             matching::Found::File(file) => {
                 matched_files.insert(track.id, file);
@@ -987,6 +1127,12 @@ fn plan(
                 matched_files.insert(track.id, file);
                 continue;
             }
+            matching::Found::AcceptedUncertain(file) => {
+                uncertain.insert(track.id);
+                matched_files.insert(track.id, file);
+                continue;
+            }
+            matching::Found::Uncertain(file) => ("uncertain", shown(&[file])),
             matching::Found::NoFile => ("no_file", Vec::new()),
             matching::Found::Ambiguous(files) => ("ambiguous", shown(&files)),
             matching::Found::NameDisagrees(file) => ("name_disagrees", shown(&[file])),
@@ -1004,7 +1150,8 @@ fn plan(
     let state = read_library(library, &files)?;
 
     let (tags, renames, categories) = plan_tags(stick, &state, &matched_files)?;
-    let (planned, matched, values) = plan_tracks(stick, &state, &matched_files, &retagged, &tags);
+    let (planned, matched, values) =
+        plan_tracks(stick, &state, &matched_files, &retagged, &uncertain, &tags);
     let (nodes, playlists) = plan_tree(stick, &state, &matched_files);
 
     let mut not_carried: Vec<String> = categories
@@ -1022,6 +1169,7 @@ fn plan(
     not_carried.extend(NOT_CARRIED.iter().map(|s| (*s).to_owned()));
 
     Ok(Plan {
+        fail_after: request.fail_after.clone(),
         stick: request.stick.clone(),
         share_root: library.share_root(),
         renames,
@@ -1045,11 +1193,30 @@ fn plan(
             not_carried,
             generation: None,
             recording_warning: None,
+            backup: None,
+            complete: true,
+            incomplete: None,
         },
     })
 }
 
+/// The steps of an apply, in order. Each is complete before the next
+/// begins; a failure leaves the steps before it done and the one it was in
+/// part done, and running the rebuild again finishes it (each step reads
+/// what the Library has now, and does only what is still to do).
+pub const STEPS: [&str; 8] = [
+    "temporary_names",
+    "category_names",
+    "tags",
+    "imports",
+    "analysis_files",
+    "values",
+    "playlists",
+    "order",
+];
+
 /// The Library's identifiers the apply made, and its Ledger records.
+#[derive(Default)]
 struct Applied {
     /// Why a track's analysis could not be carried, by its Stick id.
     analysis_failed: HashMap<u32, String>,
@@ -1057,17 +1224,22 @@ struct Applied {
     nodes: HashMap<u32, String>,
     tags: HashMap<u32, String>,
     records: Vec<Value>,
+    /// The steps finished.
+    done: Vec<String>,
+    /// Why the apply stopped before its end, when it did.
+    stopped: Option<String>,
 }
 
 /// Analysis files a track was given, and its cues.
 struct Carried {
     relative: String,
     cues: Vec<rbl_anlz::CueEntry>,
+    /// The files this apply wrote (not those already there, byte for byte).
     files: Vec<PathBuf>,
 }
 
 impl Carried {
-    /// Takes the files away again, for an edit that failed after them.
+    /// Takes the files written away again, for an edit that failed after them.
     fn remove(&self) {
         for file in &self.files {
             let _ = std::fs::remove_file(file);
@@ -1085,9 +1257,11 @@ impl Carried {
 /// Only for a track with no analysis of its own: the place is new (the
 /// track's UUID-derived path), so nothing is overwritten and the window's
 /// analysis journal, which exists to put overwritten files back, is not
-/// needed. A crash between the files and the row leaves files no row names;
-/// files already at the place are left alone and the track is reported.
-/// The Stick is only read, one read per track, below its mount.
+/// needed. A crash between the files and the row leaves files no row names:
+/// a file already at the place that is byte for byte the one to write (an
+/// earlier, cut-off rebuild's) is kept as it is; any other is left alone
+/// and the track reported. The Stick is only read, one read per track,
+/// below its mount.
 fn carry_analysis(
     writer: &rbl_db::write::Writer,
     plan: &Plan,
@@ -1132,11 +1306,13 @@ fn carry_analysis(
             files.push((rbl_anlz::sibling(&target, extension), anlz.with_path(&ppth)));
         }
     }
-    if let Some((taken, _)) = files.iter().find(|(path, _)| path.exists()) {
-        return Err(format!(
-            "analysis files are already at {}; they were left as they are",
-            taken.display()
-        ));
+    for (path, bytes) in &files {
+        if path.exists() && std::fs::read(path).ok().as_deref() != Some(bytes.as_slice()) {
+            return Err(format!(
+                "other analysis files are already at {}; they were left as they are",
+                path.display()
+            ));
+        }
     }
     let mut carried = Carried {
         relative,
@@ -1146,6 +1322,9 @@ fn carry_analysis(
         files: Vec::new(),
     };
     for (path, bytes) in &files {
+        if path.exists() {
+            continue;
+        }
         if let Err(e) = write_new(path, bytes) {
             carried.remove();
             return Err(format!("{} could not be written: {e}", path.display()));
@@ -1169,75 +1348,112 @@ fn write_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     std::fs::rename(&partial, path)
 }
 
-/// The categories renamed and the tags made, inside the one edit: each
-/// Stick tag's Library identifier.
-fn apply_tags(
+/// The end of a step: recorded as done, and, in test mode only, where a
+/// test asked the apply to stop as a crash would ([`Rebuild::fail_after`]).
+fn finished(plan: &Plan, applied: &mut Applied, step: &str) -> Result<(), String> {
+    applied.done.push(step.to_owned());
+    if rbl_db::test_mode() && plan.fail_after.as_deref() == Some(step) {
+        return Err(format!("stopped after {step} (test)"));
+    }
+    Ok(())
+}
+
+/// Every write of the rebuild, inside the one edit. A failure part way is
+/// not an error of the edit: what was written is kept (each write committed
+/// on its own), the Library is re-read and clients told as for a whole
+/// apply, and [`Applied::stopped`] says why it stopped.
+#[allow(clippy::unnecessary_wraps, reason = "the edit path's closure shape")]
+fn apply(writer: &mut rbl_db::write::Writer, plan: &Plan) -> Result<Applied, DbError> {
+    let mut applied = Applied::default();
+    if let Err(error) = apply_steps(writer, plan, &mut applied) {
+        applied.stopped = Some(error);
+    }
+    Ok(applied)
+}
+
+fn apply_steps(
     writer: &mut rbl_db::write::Writer,
     plan: &Plan,
-    records: &mut Vec<Value>,
-) -> Result<HashMap<u32, String>, DbError> {
+    applied: &mut Applied,
+) -> Result<(), String> {
+    let db = |e: DbError| e.to_string();
     // Each renamed category under a name no other has first, so that slots
-    // trading names never clash; then under the Stick's name.
+    // trading names never clash; then under the Stick's name. A category
+    // left at its temporary name by a cut-off apply is planned again (its
+    // name is not the Stick's) and takes the Stick's name now.
     for (category, _) in &plan.renames {
-        writer.rename_my_tag(category, &format!("rebuild-from-stick {category}"))?;
+        writer
+            .rename_my_tag(category, &format!("rebuild-from-stick {category}"))
+            .map_err(db)?;
     }
+    finished(plan, applied, "temporary_names")?;
     for (category, name) in &plan.renames {
-        writer.rename_my_tag(category, name)?;
-        records.push(
+        writer.rename_my_tag(category, name).map_err(db)?;
+        applied.records.push(
             json!({"operation": "rebuild_from_stick", "my_tag_category": category, "name": name}),
         );
     }
-    let mut tags = HashMap::new();
+    finished(plan, applied, "category_names")?;
     for (stick_id, target) in &plan.tags {
         let id = match target {
             TagTarget::Exists(id) => id.clone(),
             TagTarget::Create { category, name } => {
                 // As the window makes one: the stock name, then the rename.
-                let made = writer.create_my_tag(category)?;
-                writer.rename_my_tag(&made.id, name)?;
-                records.push(json!({"operation": "rebuild_from_stick", "my_tag": made.id, "name": name, "category": category}));
+                let made = writer.create_my_tag(category).map_err(db)?;
+                writer.rename_my_tag(&made.id, name).map_err(db)?;
+                applied.records.push(json!({"operation": "rebuild_from_stick", "my_tag": made.id, "name": name, "category": category}));
                 made.id
             }
         };
-        tags.insert(*stick_id, id);
+        applied.tags.insert(*stick_id, id);
     }
-    Ok(tags)
-}
+    finished(plan, applied, "tags")?;
 
-/// Every write of the rebuild, inside the one edit.
-fn apply(writer: &mut rbl_db::write::Writer, plan: &Plan) -> Result<Applied, DbError> {
-    let mut records = Vec::new();
-    let mut analysis_failed = HashMap::new();
-    let tags = apply_tags(writer, plan, &mut records)?;
-    let mut tracks = HashMap::new();
-    let mut by_file: HashMap<PathBuf, String> = HashMap::new();
+    // Every new track first, so a cut-off apply leaves tracks a rerun finds
+    // at their files and finishes like any track with nothing of its own.
+    let mut added = std::collections::HashSet::new();
     for track in &plan.tracks {
-        let (id, added) = match (&track.existing, by_file.get(&track.file)) {
-            (Some(existing), _) => (existing.id.clone(), false),
-            (None, Some(id)) => (id.clone(), false),
-            (None, None) => match writer.track_id_at(&track.file)? {
-                Some(id) => (id, false),
-                None => (writer.import_file(&track.file)?, true),
+        let id = match &track.existing {
+            Some(existing) => existing.id.clone(),
+            None => match writer.track_id_at(&track.file).map_err(db)? {
+                Some(id) => id,
+                None => {
+                    let id = writer.import_file(&track.file).map_err(db)?;
+                    added.insert(id.clone());
+                    id
+                }
             },
         };
-        by_file.insert(track.file.clone(), id.clone());
+        applied.tracks.insert(track.stick_id, id);
+    }
+    finished(plan, applied, "imports")?;
+
+    let mut files_step = false;
+    for track in &plan.tracks {
+        let id = applied.tracks[&track.stick_id].clone();
         let mut changed = Vec::new();
         let carried = match &track.analysis {
             Some(dat) => match carry_analysis(writer, plan, dat, &track.file, &id) {
                 Ok(carried) => Some(carried),
                 Err(reason) => {
                     changed.push(json!({"field": "analysis", "failed": reason}));
-                    analysis_failed.insert(track.stick_id, reason);
+                    applied.analysis_failed.insert(track.stick_id, reason);
                     None
                 }
             },
             None => None,
         };
-        // The Stick's tempo and key go with its grid, or to a track that
-        // has neither yet.
-        if added || carried.is_some() {
+        if carried.is_some() && !files_step {
+            // The first files written, their row not yet.
+            files_step = true;
+            finished(plan, applied, "analysis_files")?;
+        }
+        // The Stick's tempo and key go with its grid, or to a track with no
+        // analysis of its own (one just added, or one a cut-off apply added).
+        let own = track.existing.as_ref().is_some_and(|e| e.analysed);
+        if !own || carried.is_some() {
             if !track.key.is_empty() {
-                writer.ensure_detected_key(&track.key)?;
+                writer.ensure_detected_key(&track.key).map_err(db)?;
             }
             let key = Some(track.key.as_str()).filter(|k| !k.is_empty());
             let written = writer.import_device_analysis(
@@ -1253,7 +1469,7 @@ fn apply(writer: &mut rbl_db::write::Writer, plan: &Plan) -> Result<Applied, DbE
                 if let Some(carried) = &carried {
                     carried.remove();
                 }
-                return Err(error);
+                return Err(error.to_string());
             }
             if let Some(carried) = &carried {
                 changed.push(json!({"field": "analysis", "path": carried.relative, "cues": carried.cues.len()}));
@@ -1261,69 +1477,82 @@ fn apply(writer: &mut rbl_db::write::Writer, plan: &Plan) -> Result<Applied, DbE
         }
         let before = track.existing.as_ref();
         if before.map_or(track.rating > 0, |e| e.rating != track.rating) {
-            writer.set_rating(&id, track.rating)?;
+            writer.set_rating(&id, track.rating).map_err(db)?;
             changed.push(
                 json!({"field": "rating", "from": before.map(|e| e.rating), "to": track.rating}),
             );
         }
         if before.map_or(track.colour > 0, |e| e.colour != track.colour) {
             let colour = (track.colour > 0).then(|| track.colour.to_string());
-            writer.set_color(&id, colour.as_deref())?;
+            writer.set_color(&id, colour.as_deref()).map_err(db)?;
             changed.push(
                 json!({"field": "colour", "from": before.map(|e| e.colour), "to": track.colour}),
             );
         }
-        if before.map_or(!track.comment.is_empty(), |e| e.comment != track.comment) {
-            writer.set_comment(&id, &track.comment)?;
+        // A new track's comment is the Stick's, empty included: the file's
+        // own comment, which the import read, is not the DJ's.
+        if before.is_none_or(|e| e.comment != track.comment) {
+            writer.set_comment(&id, &track.comment).map_err(db)?;
             changed.push(json!({"field": "comment", "from": before.map(|e| e.comment.clone()), "to": track.comment}));
         }
         if !track.tags.is_empty() {
             let mut all: Vec<String> = before.map(|e| e.tags.clone()).unwrap_or_default();
             let start = all.len();
             for stick_tag in &track.tags {
-                let tag = &tags[stick_tag];
+                let tag = &applied.tags[stick_tag];
                 if !all.contains(tag) {
                     all.push(tag.clone());
                 }
             }
             if all.len() > start {
-                writer.set_my_tags(&id, &all)?;
+                writer.set_my_tags(&id, &all).map_err(db)?;
                 changed.push(json!({"field": "my_tags", "added": &all[start..]}));
             }
         }
-        records.push(json!({
+        applied.records.push(json!({
             "operation": "rebuild_from_stick",
             "track": id,
             "file": track.file,
-            "added": added,
+            "added": added.contains(&id),
             "changed": changed,
         }));
-        tracks.insert(track.stick_id, id);
     }
-    let mut nodes: HashMap<u32, String> = HashMap::new();
+    if !files_step {
+        finished(plan, applied, "analysis_files")?;
+    }
+    finished(plan, applied, "values")?;
+
+    // The tree: each node made or reused, its entries as the Stick lists
+    // them, a repeated entry included.
+    let mut children: Vec<(String, Vec<String>)> = Vec::new();
     for node in &plan.nodes {
         let parent = if node.stick_parent == 0 {
             "root".to_owned()
         } else {
-            nodes
+            applied
+                .nodes
                 .get(&node.stick_parent)
                 .cloned()
                 .unwrap_or_else(|| "root".to_owned())
         };
         let id = match &node.reuse {
             Some(id) => id.clone(),
-            None if node.folder => writer.create_folder(&node.name, &parent)?,
-            None => writer.create_playlist(&node.name, &parent)?,
+            None if node.folder => writer.create_folder(&node.name, &parent).map_err(db)?,
+            None => writer.create_playlist(&node.name, &parent).map_err(db)?,
         };
         if !node.folder {
             let contents: Vec<String> = node
                 .entries
                 .iter()
-                .filter_map(|t| tracks.get(t).cloned())
+                .filter_map(|t| applied.tracks.get(t).cloned())
                 .collect();
-            writer.set_tracks(&id, &contents)?;
+            set_entries(writer, &id, &contents).map_err(db)?;
         }
-        records.push(json!({
+        match children.iter_mut().find(|(p, _)| *p == parent) {
+            Some((_, ids)) => ids.push(id.clone()),
+            None => children.push((parent.clone(), vec![id.clone()])),
+        }
+        applied.records.push(json!({
             "operation": "rebuild_from_stick",
             "playlist": id,
             "name": node.name,
@@ -1331,21 +1560,83 @@ fn apply(writer: &mut rbl_db::write::Writer, plan: &Plan) -> Result<Applied, DbE
             "made": node.reuse.is_none(),
             "tracks": node.entries.len(),
         }));
-        nodes.insert(node.stick_id, id);
+        applied.nodes.insert(node.stick_id, id);
     }
-    Ok(Applied {
-        analysis_failed,
-        tracks,
-        nodes,
-        tags,
-        records,
-    })
+    finished(plan, applied, "playlists")?;
+
+    // Each parent's children in the Stick's order, the Library's own after.
+    for (parent, ids) in &children {
+        put_in_order(writer, parent, ids).map_err(db)?;
+    }
+    finished(plan, applied, "order")?;
+    Ok(())
+}
+
+/// A playlist's entries in order, each repeat its own entry.
+fn entries_of(writer: &rbl_db::write::Writer, playlist: &str) -> Result<Vec<String>, DbError> {
+    let conn = writer.library().connection();
+    let mut stmt = conn.prepare(
+        "SELECT ContentID FROM djmdSongPlaylist WHERE PlaylistID = ?1 AND rb_local_deleted = 0 ORDER BY TrackNo",
+    )?;
+    let entries = stmt
+        .query_map([playlist], |r| r.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(entries)
+}
+
+/// Makes `playlist` hold `contents` in that order, a repeated track as
+/// often as it is listed (`set_tracks` keeps only the first of a repeat):
+/// emptied, then filled with repeats allowed. Nothing is written when it
+/// holds exactly these already. A cut between the two leaves it empty, and
+/// a rerun fills it.
+fn set_entries(
+    writer: &mut rbl_db::write::Writer,
+    playlist: &str,
+    contents: &[String],
+) -> Result<(), DbError> {
+    if entries_of(writer, playlist)? == contents {
+        return Ok(());
+    }
+    writer.set_tracks(playlist, &[])?;
+    if !contents.is_empty() {
+        writer.add_tracks_allowing(playlist, contents, true)?;
+    }
+    Ok(())
+}
+
+/// Puts the children `ids` of `parent` first, in that order, the parent's
+/// other children after them as they were. Nothing is written when they
+/// are already so.
+fn put_in_order(
+    writer: &mut rbl_db::write::Writer,
+    parent: &str,
+    ids: &[String],
+) -> Result<(), DbError> {
+    let now: Vec<String> = {
+        let conn = writer.library().connection();
+        let mut stmt = conn.prepare(
+            "SELECT ID FROM djmdPlaylist
+             WHERE COALESCE(NULLIF(ParentID, ''), 'root') = ?1 AND rb_local_deleted = 0 ORDER BY Seq, ID",
+        )?;
+        let rows = stmt
+            .query_map([parent], |r| r.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+    if now.len() >= ids.len() && now[..ids.len()] == *ids {
+        return Ok(());
+    }
+    for (place, id) in ids.iter().enumerate() {
+        writer.move_to(id, parent, Some(place))?;
+    }
+    Ok(())
 }
 
 /// Answers `library.rebuild_from_stick`, and what to tell the hosting
 /// window when the Library changed.
 pub(crate) fn answer(
     library: &OpenLibrary,
+    stems: &crate::stems::Stems,
     args: &Value,
 ) -> Result<(Value, Option<LibraryChanged>), ServiceError> {
     let request: Rebuild = serde_json::from_value(args.clone()).map_err(|e| {
@@ -1387,17 +1678,49 @@ pub(crate) fn answer(
             rbl_library::protection::MESSAGE,
         ));
     }
+    // A backup first, so a result the DJ does not want is put back whole;
+    // no backup, no rebuild.
+    let backup = crate::large_run::before_write_backed_up(library, stems)?.ok_or_else(|| {
+        ServiceError::new(
+            shared_codes::WRITE_REFUSED,
+            "a backup of the Library could not be taken, so nothing was changed",
+        )
+    })?;
+    let shown_backup = backup.to_string_lossy().into_owned();
     // One import Run under the caller's source, one edit.
     let operation = library.import_operation();
-    let capacity = plan.tags.len() + plan.tracks.len() + plan.nodes.len();
+    let capacity = 1 + plan.tags.len() + plan.tracks.len() + plan.nodes.len() + plan.renames.len();
     let result = operation.run_many(
         json!({"operation": "rebuild_from_stick", "stick": request.stick, "music": music}),
         capacity,
-        || library.edit(Touched::Tracks, |writer| apply(writer, &plan)),
-        |(applied, _)| applied.records.clone(),
+        || {
+            // The backup is still of the moment before the write; the gate
+            // is held through it (reentrant), and let go before recording.
+            let _gate = crate::large_run::bound(library, stems, &[])?;
+            library.edit(Touched::Tracks, |writer| apply(writer, &plan))
+        },
+        |(applied, _)| {
+            let mut records =
+                vec![json!({"operation": "rebuild_from_stick", "backup": shown_backup})];
+            records.extend(applied.records.iter().cloned());
+            records
+        },
     );
     let warning = operation.finish();
     let (applied, changed) = result?;
+    plan.answer.backup = Some(shown_backup.clone());
+    if let Some(error) = &applied.stopped {
+        plan.answer.complete = false;
+        plan.answer.incomplete = Some(Incomplete {
+            error: error.clone(),
+            done: applied.done.clone(),
+            advice: format!(
+                "The rebuild stopped part way; what it wrote is kept. Nothing is lost: run again to finish it \
+                 (it does only what is still to do), or restore the backup taken before it, {shown_backup} \
+                 (wreckordbox backup restore), to put the Library back as it was."
+            ),
+        });
+    }
     for track in &mut plan.answer.matched {
         if let Some(found) = stick
             .library
@@ -1453,7 +1776,7 @@ fn to_value(answer: &Rebuilt) -> Result<Value, ServiceError> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "test fixtures")]
 mod tests {
-    use super::matching::{Found, MusicFolder};
+    use super::matching::{names_agree, whole_name_agrees, Accept, Found, MusicFolder};
 
     fn folder(files: &[(&str, usize)]) -> (tempfile::TempDir, MusicFolder) {
         let dir = tempfile::tempdir().unwrap();
@@ -1466,8 +1789,24 @@ mod tests {
         (dir, read)
     }
 
+    const PLAIN: Accept = Accept {
+        retagged: false,
+        uncertain: false,
+        check_length: true,
+    };
+    const RETAGGED: Accept = Accept {
+        retagged: true,
+        uncertain: false,
+        check_length: true,
+    };
+    const UNCERTAIN: Accept = Accept {
+        retagged: false,
+        uncertain: true,
+        check_length: true,
+    };
+
     #[test]
-    fn a_file_is_found_by_size_with_its_name_agreeing_and_never_guessed() {
+    fn a_file_is_found_by_its_size_and_its_whole_name_and_never_guessed() {
         let (dir, music) = folder(&[
             ("x/One (Extended Mix).mp3", 10),
             ("Two.mp3", 5),
@@ -1476,74 +1815,150 @@ mod tests {
             ("c/three copy.mp3", 7),
             ("Stranger.mp3", 8),
             ("._Stranger.mp3", 9),
+            ("What? Now.mp3", 12),
             ("notes.txt", 1),
         ]);
         let at = |p: &str| dir.path().join(p);
-        assert_eq!(music.files, 6, "AppleDouble and non-audio files skipped");
-        // A name the Stick shortened: the size, the start of the name agreeing.
+        assert_eq!(music.files, 7, "AppleDouble and non-audio files skipped");
+        // A name the Stick cut short: the size, the whole of its name agreeing.
         assert_eq!(
-            music.find("/Contents/A/B/One (Extended Mi.mp3", Some(10), false),
+            music.find("/Contents/A/B/One (Extended Mi.mp3", Some(10), 0, PLAIN),
             Found::File(at("x/One (Extended Mix).mp3"))
         );
         assert_eq!(
-            music.find("/Contents/Two.mp3", Some(6), false),
+            music.find("/Contents/Two.mp3", Some(6), 0, PLAIN),
             Found::File(at("a/Two.MP3"))
+        );
+        // A character FAT cannot hold, as rekordbox writes it.
+        assert_eq!(
+            music.find("/Contents/What_ Now.mp3", Some(12), 0, PLAIN),
+            Found::File(at("What? Now.mp3"))
         );
         // Several of that size, or one whose name does not agree.
         assert_eq!(
-            music.find("/Contents/Three.mp3", Some(7), false),
+            music.find("/Contents/Three.mp3", Some(7), 0, PLAIN),
             Found::Ambiguous(vec![at("b/Three.mp3"), at("c/three copy.mp3")])
         );
         assert_eq!(
-            music.find("/Contents/Gone.mp3", Some(8), false),
+            music.find("/Contents/Gone.mp3", Some(8), 0, PLAIN),
             Found::NameDisagrees(at("Stranger.mp3"))
         );
         // No file of that size: the same name, retagged.
         assert_eq!(
-            music.find("/Contents/One (Extended Mix).mp3", Some(11), false),
+            music.find("/Contents/One (Extended Mix).mp3", Some(11), 0, PLAIN),
             Found::DifferentSize(at("x/One (Extended Mix).mp3"))
         );
         assert_eq!(
-            music.find("/Contents/One (Extended Mix).mp3", Some(11), true),
+            music.find("/Contents/One (Extended Mix).mp3", Some(11), 0, RETAGGED),
             Found::Retagged(at("x/One (Extended Mix).mp3"))
         );
         assert_eq!(
-            music.find("/Contents/Two.mp3", Some(9), true),
+            music.find("/Contents/Two.mp3", Some(9), 0, RETAGGED),
             Found::Ambiguous(vec![at("Two.mp3"), at("a/Two.MP3")])
         );
         assert_eq!(
-            music.find("/Contents/._Stranger.mp3", Some(9), true),
+            music.find("/Contents/._Stranger.mp3", Some(9), 0, RETAGGED),
             Found::NoFile
         );
         assert_eq!(
-            music.find("/Contents/Four.mp3", Some(1), true),
+            music.find("/Contents/Four.mp3", Some(1), 0, RETAGGED),
             Found::NoFile
         );
         // No Stick copy to measure: a lone file of the name.
         assert_eq!(
-            music.find("/Contents/stranger.MP3", None, false),
+            music.find("/Contents/stranger.MP3", None, 0, PLAIN),
             Found::File(at("Stranger.mp3"))
         );
         assert_eq!(
-            music.find("/Contents/Two.mp3", None, false),
+            music.find("/Contents/Two.mp3", None, 0, PLAIN),
             Found::Ambiguous(vec![at("Two.mp3"), at("a/Two.MP3")])
         );
     }
 
     #[test]
-    fn names_agree_on_their_first_twenty_characters_or_all_of_the_shorter() {
-        use super::matching::names_agree;
-        assert!(names_agree(
-            "Abcdefghijklmnopqrstu-cut.wav",
-            "abcdefghijklmnopqrstuvwxyz.aiff"
-        ));
-        assert!(names_agree(
+    fn another_mix_of_the_same_size_is_uncertain_and_taken_only_when_accepted() {
+        // The Stick's mix is missing; another of exactly its size is there,
+        // its name agreeing over twenty characters but not over the whole.
+        let (dir, music) = folder(&[("Night Drive Anthem (Club Mix).mp3", 40)]);
+        let wrong = dir.path().join("Night Drive Anthem (Club Mix).mp3");
+        let stick = "/Contents/X/Y/Night Drive Anthem (Extended Mix).mp3";
+        assert_eq!(
+            music.find(stick, Some(40), 0, PLAIN),
+            Found::Uncertain(wrong.clone())
+        );
+        assert_eq!(
+            music.find(stick, Some(40), 0, UNCERTAIN),
+            Found::AcceptedUncertain(wrong)
+        );
+    }
+
+    /// A silent 8 kHz mono WAV of `secs` seconds.
+    fn wav(path: &std::path::Path, secs: u32) {
+        let data_len = 8_000 * 2 * secs;
+        let mut out = b"RIFF".to_vec();
+        out.extend_from_slice(&(36 + data_len).to_le_bytes());
+        out.extend_from_slice(b"WAVEfmt ");
+        out.extend_from_slice(&16_u32.to_le_bytes());
+        out.extend_from_slice(&1_u16.to_le_bytes());
+        out.extend_from_slice(&1_u16.to_le_bytes());
+        out.extend_from_slice(&8_000_u32.to_le_bytes());
+        out.extend_from_slice(&16_000_u32.to_le_bytes());
+        out.extend_from_slice(&2_u16.to_le_bytes());
+        out.extend_from_slice(&16_u16.to_le_bytes());
+        out.extend_from_slice(b"data");
+        out.extend_from_slice(&data_len.to_le_bytes());
+        out.resize(44 + data_len as usize, 0);
+        std::fs::write(path, out).unwrap();
+    }
+
+    #[test]
+    fn a_length_that_does_not_agree_makes_a_size_match_uncertain() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("Song.wav");
+        wav(&file, 3);
+        let size = std::fs::metadata(&file).unwrap().len();
+        let music = MusicFolder::read(dir.path()).unwrap();
+        assert_eq!(
+            music.find("/Contents/Song.wav", Some(size), 3, PLAIN),
+            Found::File(file.clone())
+        );
+        assert_eq!(
+            music.find("/Contents/Song.wav", Some(size), 4, PLAIN),
+            Found::File(file.clone()),
+            "within a second"
+        );
+        assert_eq!(
+            music.find("/Contents/Song.wav", Some(size), 200, PLAIN),
+            Found::Uncertain(file.clone())
+        );
+        let names_only = Accept {
+            check_length: false,
+            ..PLAIN
+        };
+        assert_eq!(
+            music.find("/Contents/Song.wav", Some(size), 200, names_only),
+            Found::File(file)
+        );
+    }
+
+    #[test]
+    fn the_whole_of_the_sticks_name_must_agree_for_a_certain_match() {
+        assert!(whole_name_agrees(
             "Short (Original Mi.wav",
             "Short (Original Mix).wav"
         ));
-        assert!(!names_agree(
-            "Abcdefghijklmnopqrsx.wav",
-            "Abcdefghijklmnopqrst.wav"
+        assert!(whole_name_agrees("CAPS.wav", "caps.aiff"));
+        assert!(
+            whole_name_agrees("Cafe\u{301}.wav", "Caf\u{e9}.wav"),
+            "composed and decomposed"
+        );
+        assert!(!whole_name_agrees(
+            "Night Drive Anthem (Extended Mix).wav",
+            "Night Drive Anthem (Club Mix).wav"
+        ));
+        assert!(names_agree(
+            "Night Drive Anthem (Extended Mix).wav",
+            "Night Drive Anthem (Club Mix).wav"
         ));
         assert!(!names_agree("Gone.wav", "Stranger.wav"));
     }

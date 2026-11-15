@@ -41,6 +41,28 @@ fn write_wav(path: &Path, tenths: u32) {
     std::fs::write(path, out).unwrap();
 }
 
+/// [`write_wav`] with a RIFF INFO comment of its own, as a file tagged on
+/// another computer carries one.
+fn write_wav_with_comment(path: &Path, tenths: u32, comment: &str) {
+    write_wav(path, tenths);
+    let mut bytes = std::fs::read(path).unwrap();
+    let mut text = comment.as_bytes().to_vec();
+    text.push(0);
+    if text.len() % 2 == 1 {
+        text.push(0);
+    }
+    let mut info = b"INFO".to_vec();
+    info.extend_from_slice(b"ICMT");
+    info.extend_from_slice(&(text.len() as u32).to_le_bytes());
+    info.extend_from_slice(&text);
+    bytes.extend_from_slice(b"LIST");
+    bytes.extend_from_slice(&(info.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&info);
+    let riff = (bytes.len() - 8) as u32;
+    bytes[4..8].copy_from_slice(&riff.to_le_bytes());
+    std::fs::write(path, bytes).unwrap();
+}
+
 /// One track of the Stick: its title (= file stem), its length, its
 /// rating, colour, comment and the Stick's tag ids.
 struct StickTrack {
@@ -52,7 +74,7 @@ struct StickTrack {
     tags: &'static [u64],
 }
 
-const TRACKS: [StickTrack; 7] = [
+const TRACKS: [StickTrack; 8] = [
     StickTrack {
         title: "Low Sun",
         tenths: 10,
@@ -109,7 +131,22 @@ const TRACKS: [StickTrack; 7] = [
         comment: "",
         tags: &[],
     },
+    StickTrack {
+        title: "Night Drive Anthem (Extended Mix)",
+        tenths: 24,
+        rating: 4,
+        colour: 0,
+        comment: "",
+        tags: &[],
+    },
 ];
+
+/// "Night Drive Anthem (Extended Mix)" is not in the music folder; another
+/// mix of it is, of exactly its size, its name agreeing over 20 characters.
+const WRONG_MIX: &str = "Night Drive Anthem (Club Mix).wav";
+
+/// The comment in "Paper"'s file; the Stick's library has none for it.
+const PAPER_FILE_COMMENT: &str = "a note from the other computer";
 
 /// The Stick's MyTags, its categories in rekordbox's slots: 1 "Situation"
 /// (Peak, Warm-up, Dark), as this Library's first; 2 "Vibe" (Dark) where
@@ -126,11 +163,33 @@ const TAGS: [(u64, u32, &str, u8, u64); 7] = [
 ];
 const SITUATION_DARK: (u64, u32, &str, u8, u64) = (23, 3, "Dark", 0, 2);
 
-/// The beat grid every analysed Stick track has.
-const BEATS: [(u16, u16, u32); 2] = [(1, 12_000, 25), (2, 12_000, 525)];
+/// What one analysed Stick track's files hold: its beat grid as
+/// `(beat, tempo x100, ms)`, a hot cue at `hot` ms and a memory loop from
+/// `loop_in` to `loop_out` ms. Each analysed track has its own.
+struct Analysis {
+    beats: [(u16, u16, u32); 2],
+    hot: u32,
+    loop_in: u32,
+    loop_out: u32,
+}
 
-fn beats() -> Vec<rbl_anlz::Beat> {
-    BEATS
+/// "Low Sun" (with an `.EXT`) and "Echo" (`.DAT` only).
+const LOW_SUN_ANALYSIS: Analysis = Analysis {
+    beats: [(1, 12_000, 25), (2, 12_000, 525)],
+    hot: 25,
+    loop_in: 494,
+    loop_out: 2369,
+};
+const ECHO_ANALYSIS: Analysis = Analysis {
+    beats: [(1, 12_500, 40), (2, 12_500, 520)],
+    hot: 100,
+    loop_in: 800,
+    loop_out: 1600,
+};
+
+fn beats(analysis: &Analysis) -> Vec<rbl_anlz::Beat> {
+    analysis
+        .beats
         .iter()
         .map(|&(beat_number, tempo_x100, time_ms)| rbl_anlz::Beat {
             beat_number,
@@ -140,11 +199,13 @@ fn beats() -> Vec<rbl_anlz::Beat> {
         .collect()
 }
 
-/// Gives a Stick track analysis files: a grid, hot cue A at 25 ms and a
-/// memory loop from 494 to 2369 ms; the `.EXT` too when `ext`.
-fn analysed(track: &mut rbl_export::SourceTrack, ext: bool) {
+/// Gives a Stick track analysis files: its grid, a hot cue and a memory
+/// loop; the `.EXT` too when `ext`.
+fn analysed(track: &mut rbl_export::SourceTrack, analysis: &Analysis, ext: bool) {
     let mut dat = rbl_anlz::write::AnlzBuilder::new();
-    dat.path("/x.wav").beat_grid(&beats()).cue_lists(false);
+    dat.path("/x.wav")
+        .beat_grid(&beats(analysis))
+        .cue_lists(false);
     track.analysis = vec![("DAT".into(), dat.finish())];
     if ext {
         let mut with_ext = rbl_anlz::write::AnlzBuilder::new();
@@ -165,7 +226,10 @@ fn analysed(track: &mut rbl_export::SourceTrack, ext: bool) {
         loop_numerator: 0,
         loop_denominator: 0,
     };
-    track.cues = Some(vec![cue(1, 25, None), cue(0, 494, Some(2369))]);
+    track.cues = Some(vec![
+        cue(1, analysis.hot, None),
+        cue(0, analysis.loop_in, Some(analysis.loop_out)),
+    ]);
 }
 
 struct Rig {
@@ -179,6 +243,12 @@ struct Rig {
 
 impl Rig {
     fn new() -> Self {
+        Self::with_library(|_, _| {})
+    }
+
+    /// As [`Rig::new`], with `edit` making the Library what it is before
+    /// the rebuild (given the music folder), before the service starts.
+    fn with_library(edit: impl FnOnce(&mut rbl_db::write::Writer, &Path)) -> Self {
         let mut sandbox = Sandbox::empty();
         let dirs = tempfile::tempdir().unwrap();
         let source = dirs.path().join("other-computer");
@@ -200,7 +270,12 @@ impl Rig {
                 t.title
             };
             let file = source.join(format!("{stem}.wav"));
-            write_wav(&file, t.tenths);
+            if t.title == "Paper" {
+                // The file carries a comment the Stick's library does not.
+                write_wav_with_comment(&file, t.tenths, PAPER_FILE_COMMENT);
+            } else {
+                write_wav(&file, t.tenths);
+            }
             tracks.push(rbl_export::SourceTrack {
                 id: 500 + at as u64,
                 source_path: file,
@@ -210,14 +285,15 @@ impl Rig {
                 color_id: t.colour,
                 comment: t.comment.into(),
                 bpm_x100: 12_000 + at as u32,
+                duration_sec: (t.tenths / 10) as u16,
                 my_tags: t.tags.to_vec(),
                 ..rbl_export::SourceTrack::default()
             });
         }
         // Analysed on the other computer: "Low Sun" with a grid, a hot cue
         // and a memory loop (`.DAT` and `.EXT`), "Echo" with a `.DAT` only.
-        analysed(&mut tracks[0], true);
-        analysed(&mut tracks[5], false);
+        analysed(&mut tracks[0], &LOW_SUN_ANALYSIS, true);
+        analysed(&mut tracks[5], &ECHO_ANALYSIS, false);
         let my_tags: Vec<rbl_export::SourceMyTag> = TAGS
             .iter()
             .chain(std::iter::once(&SITUATION_DARK))
@@ -238,11 +314,20 @@ impl Rig {
                 folder: true,
                 ..Default::default()
             },
+            // Low Sun twice: a repeated entry is kept.
             rbl_export::SourcePlaylist {
                 id: 11,
                 name: "Friday".into(),
                 parent_id: 10,
-                track_indices: vec![0, 1, 2],
+                track_indices: vec![0, 1, 2, 0],
+                ..Default::default()
+            },
+            // A second playlist of the same name beside it.
+            rbl_export::SourcePlaylist {
+                id: 13,
+                name: "Friday".into(),
+                parent_id: 10,
+                track_indices: vec![5],
                 ..Default::default()
             },
             rbl_export::SourcePlaylist {
@@ -277,7 +362,13 @@ impl Rig {
             match t.title {
                 "Lost" => {}
                 "Gone" => write_wav(&music.join("Stranger.wav"), t.tenths),
-                "Paper" => write_wav(&music.join("Paper (Original Mix).wav"), t.tenths),
+                // Tagged with a comment of its own; the Stick's is empty.
+                "Paper" => write_wav_with_comment(
+                    &music.join("Paper (Original Mix).wav"),
+                    t.tenths,
+                    PAPER_FILE_COMMENT,
+                ),
+                "Night Drive Anthem (Extended Mix)" => write_wav(&music.join(WRONG_MIX), t.tenths),
                 "Odd" => write_wav(&music.join("Odd.wav"), t.tenths + 3),
                 "Kiln" => {
                     write_wav(&music.join("a/Kiln.wav"), t.tenths);
@@ -298,6 +389,7 @@ impl Rig {
             echo = writer.import_file(&echo_file).unwrap();
             writer.set_rating(&echo, 1).unwrap();
             writer.set_color(&echo, Some("5")).unwrap();
+            edit(writer, &music);
         });
         sandbox.sticks = vec![stick.clone()];
         // The service up, so a second client can reach it.
@@ -364,7 +456,26 @@ impl Rig {
     }
 
     fn titles_in(&self, name: &str) -> Vec<String> {
-        let id = self.playlist_id(name);
+        self.titles_of(&self.playlist_id(name))
+    }
+
+    /// The tree as `(depth, name, id)`.
+    fn tree_ids(&self) -> Vec<(u64, String, String)> {
+        self.call("playlists.tree", json!({}))["playlists"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| {
+                (
+                    p["depth"].as_u64().unwrap(),
+                    p["name"].as_str().unwrap().to_owned(),
+                    p["id"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect()
+    }
+
+    fn titles_of(&self, id: &str) -> Vec<String> {
         self.call("playlists.tracks", json!({"id": id}))["tracks"]
             .as_array()
             .unwrap()
@@ -485,7 +596,21 @@ fn a_dry_run_lists_what_would_be_carried_and_writes_nothing_anywhere() {
         .collect();
     assert_eq!(
         unmatched.keys().collect::<Vec<_>>(),
-        ["Gone", "Kiln", "Lost", "Odd"]
+        [
+            "Gone",
+            "Kiln",
+            "Lost",
+            "Night Drive Anthem (Extended Mix)",
+            "Odd"
+        ]
+    );
+    // Another mix of exactly its size, its name agreeing only in part: not
+    // taken without being told to.
+    let wrong = unmatched["Night Drive Anthem (Extended Mix)"];
+    assert_eq!(wrong["reason"], "uncertain", "{wrong}");
+    assert_eq!(
+        wrong["candidates"],
+        json!([rig.music.join(WRONG_MIX).to_str().unwrap()])
     );
     assert_eq!(unmatched["Lost"]["reason"], "no_file");
     assert_eq!(unmatched["Gone"]["reason"], "name_disagrees");
@@ -533,11 +658,12 @@ fn a_dry_run_lists_what_would_be_carried_and_writes_nothing_anywhere() {
         [
             ("Sets".to_owned(), "create".to_owned()),
             ("Sets/Friday".to_owned(), "create".to_owned()),
+            ("Sets/Friday".to_owned(), "create".to_owned()),
             ("Warm Up".to_owned(), "create".to_owned()),
         ]
     );
     let friday = &dry["playlists"][1];
-    assert_eq!(friday["tracks"], 2);
+    assert_eq!(friday["tracks"], 3, "Low Sun twice");
     assert_eq!(friday["left_out"], json!(["Kiln"]));
 
     let categories: BTreeMap<String, &Value> = dry["my_tags"]
@@ -650,6 +776,10 @@ fn applying_links_the_tracks_carries_their_values_and_rebuilds_the_playlists_in_
     assert_eq!(low_sun["comment"], "opener");
     assert_eq!(low_sun["bpm"], 120.0);
     assert_eq!(
+        collection["Paper (Original Mix)"]["comment"], "",
+        "the Stick's empty comment replaces the file's own"
+    );
+    assert_eq!(
         tags_of(low_sun),
         [("Situation", "Peak"), ("Vibe", "Dark")].map(|(c, t)| (c.to_owned(), t.to_owned()))
     );
@@ -688,16 +818,26 @@ fn applying_links_the_tracks_carries_their_values_and_rebuilds_the_playlists_in_
         [
             (1, "Sets".to_owned(), "folder".to_owned()),
             (2, "Friday".to_owned(), "playlist".to_owned()),
+            (2, "Friday".to_owned(), "playlist".to_owned()),
             (1, "Warm Up".to_owned(), "playlist".to_owned()),
         ]
     );
-    assert_eq!(rig.titles_in("Friday"), ["Low Sun", "Paper (Original Mix)"]);
+    let ids = rig.tree_ids();
+    assert_eq!(
+        rig.titles_of(&ids[1].2),
+        ["Low Sun", "Paper (Original Mix)", "Low Sun"],
+        "the repeated entry is kept"
+    );
+    assert_eq!(rig.titles_of(&ids[2].2), ["Echo"]);
     assert_eq!(rig.titles_in("Warm Up"), ["Echo", "Low Sun"]);
 
     // Cues, loops and the grid came with the Stick's analysis files.
     let location = rig.sandbox.location().clone();
     let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
-    for (title, ext) in [("Low Sun", true), ("Echo", false)] {
+    for (title, ext, analysis) in [
+        ("Low Sun", true, &LOW_SUN_ANALYSIS),
+        ("Echo", false, &ECHO_ANALYSIS),
+    ] {
         let id = collection[title]["id"].as_str().unwrap().to_owned();
         let mut stmt = db
             .connection()
@@ -710,8 +850,15 @@ fn applying_links_the_tracks_carries_their_values_and_rebuilds_the_playlists_in_
             .collect();
         assert_eq!(
             cues,
-            [(25, None, 1), (494, Some(2369), 0)],
-            "{title}: hot cue and memory loop"
+            [
+                (i64::from(analysis.hot), None, 1),
+                (
+                    i64::from(analysis.loop_in),
+                    Some(i64::from(analysis.loop_out)),
+                    0
+                )
+            ],
+            "{title}: its own hot cue and memory loop"
         );
         let path: String = db
             .connection()
@@ -725,8 +872,8 @@ fn applying_links_the_tracks_carries_their_values_and_rebuilds_the_playlists_in_
         let dat = rbl_anlz::Anlz::read(&dat_file).unwrap();
         assert_eq!(
             dat.beat_grid().unwrap(),
-            beats(),
-            "{title}: the Stick's grid"
+            beats(analysis),
+            "{title}: its own grid from the Stick"
         );
         assert_eq!(
             rbl_anlz::sibling(&dat_file, "EXT").exists(),
@@ -747,6 +894,14 @@ fn applying_links_the_tracks_carries_their_values_and_rebuilds_the_playlists_in_
         "Echo had none of its own"
     );
 
+    // A backup first, named in the answer and in the Run.
+    let backup = applied["large_run"]["backup"]["path"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a backup: {applied}"))
+        .to_owned();
+    assert!(Path::new(&backup).exists(), "{backup}");
+    assert_eq!(applied["complete"], true);
+
     // One Run, an import, under the caller's source.
     let runs = rig.runs();
     assert_eq!(runs.len(), runs_before + 1, "{runs:#?}");
@@ -755,6 +910,11 @@ fn applying_links_the_tracks_carries_their_values_and_rebuilds_the_playlists_in_
         json!({"kind": "agent", "name": "rebuilder"})
     );
     assert!(runs[0]["changes"].as_u64().unwrap() > 0, "{:#?}", runs[0]);
+    let shown = rig.call("runs.show", json!({"id": runs[0]["id"], "limit": 500}));
+    assert!(
+        shown.to_string().contains(&backup),
+        "the Run names the backup: {shown}"
+    );
 
     // One change for the whole rebuild.
     let first = watcher
@@ -778,10 +938,14 @@ fn applying_links_the_tracks_carries_their_values_and_rebuilds_the_playlists_in_
         .iter()
         .map(|p| p["action"].as_str().unwrap())
         .collect();
-    assert_eq!(actions, ["reuse", "replace", "replace"]);
+    assert_eq!(actions, ["reuse", "replace", "replace", "replace"]);
     assert_eq!(rig.collection().len(), 3);
-    assert_eq!(rig.tree().len(), 3);
-    assert_eq!(rig.titles_in("Friday"), ["Low Sun", "Paper (Original Mix)"]);
+    assert_eq!(rig.tree_ids(), ids, "the same nodes, each used once");
+    assert_eq!(
+        rig.titles_of(&ids[1].2),
+        ["Low Sun", "Paper (Original Mix)", "Low Sun"]
+    );
+    assert_eq!(rig.titles_of(&ids[2].2), ["Echo"], "not the first Friday's");
 }
 
 #[test]
@@ -891,4 +1055,196 @@ fn a_retagged_file_is_linked_by_its_name_only_when_accepted() {
     assert!(!unmatched.contains(&"Odd"), "{unmatched:?}");
     assert!(rig.collection().contains_key("Odd"));
     assert_eq!(rig.titles_in("Warm Up"), ["Echo", "Odd", "Low Sun"]);
+}
+
+#[test]
+fn an_uncertain_match_is_linked_only_when_accepted() {
+    let rig = Rig::new();
+    let applied = rig.rebuilt(&["--accept-uncertain"]);
+    let wrong = applied["matched"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["title"] == "Night Drive Anthem (Extended Mix)")
+        .unwrap_or_else(|| panic!("linked when accepted: {applied}"));
+    assert_eq!(wrong["uncertain"], true);
+    assert_eq!(wrong["file"], rig.music.join(WRONG_MIX).to_str().unwrap());
+}
+
+#[test]
+fn the_tree_takes_the_sticks_order_and_each_existing_node_is_used_once() {
+    // The Library already has the Stick's nodes, in another order, and one
+    // of its own: Warm Up, Mine, then Sets holding two Fridays.
+    let mut before = Vec::new();
+    let rig = Rig::with_library(|writer, _| {
+        let warm_up = writer.create_playlist("Warm Up", "root").unwrap();
+        let mine = writer.create_playlist("Mine", "root").unwrap();
+        let sets = writer.create_folder("Sets", "root").unwrap();
+        let first = writer.create_playlist("Friday", &sets).unwrap();
+        let second = writer.create_playlist("Friday", &sets).unwrap();
+        before = vec![sets, first, second, warm_up, mine];
+    });
+    let applied = rig.rebuilt(&[]);
+    let actions: Vec<&str> = applied["playlists"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["action"].as_str().unwrap())
+        .collect();
+    assert_eq!(actions, ["reuse", "replace", "replace", "replace"]);
+    let tree = rig.tree_ids();
+    assert_eq!(
+        tree.iter()
+            .map(|(depth, name, _)| (*depth, name.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            (1, "Sets"),
+            (2, "Friday"),
+            (2, "Friday"),
+            (1, "Warm Up"),
+            (1, "Mine")
+        ],
+        "the Stick's order, then the Library's own"
+    );
+    assert_eq!(
+        tree.iter().map(|(_, _, id)| id.clone()).collect::<Vec<_>>(),
+        before,
+        "each existing node used once, in order"
+    );
+    assert_eq!(
+        rig.titles_of(&before[1]),
+        ["Low Sun", "Paper (Original Mix)", "Low Sun"]
+    );
+    assert_eq!(rig.titles_of(&before[2]), ["Echo"]);
+
+    // Again: nothing changes.
+    rig.rebuilt(&[]);
+    assert_eq!(rig.tree_ids(), tree);
+    assert_eq!(rig.titles_of(&before[2]), ["Echo"]);
+}
+
+#[test]
+fn without_a_backup_applying_is_refused_and_writes_nothing() {
+    let rig = Rig::new();
+    // The DJ's backup folder is inside what a backup reads (the Sidecar):
+    // no backup can be taken.
+    let library = rig.sandbox.master_db().parent().unwrap().to_path_buf();
+    let folder = rig.sandbox.sidecar_dir().join("backups");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        rig.sandbox.state_dir().join(rbl_backup::DESTINATION_FILE),
+        serde_json::to_vec(&folder).unwrap(),
+    )
+    .unwrap();
+    let runs_before = rig.runs();
+    let library_before = snapshot(&library);
+
+    let run = rig.rebuild(&[]);
+    assert!(!run.status.success(), "{}", run.stdout);
+    assert_eq!(
+        run.error_json()["error"]["code"],
+        "run_backup_failed",
+        "{}",
+        run.stderr
+    );
+    assert_eq!(snapshot(&library), library_before);
+    assert_eq!(rig.runs(), runs_before);
+    assert_eq!(rig.collection().len(), 1);
+}
+
+/// What the Library holds after a rebuild, without identifiers: each
+/// track's values, cues and grid; the tree with each playlist's titles; the
+/// My Tag categories with their tags.
+fn digest(rig: &Rig) -> Value {
+    let location = rig.sandbox.location().clone();
+    let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
+    let mut tracks = serde_json::Map::new();
+    for (title, track) in rig.collection() {
+        let id = track["id"].as_str().unwrap();
+        let mut stmt = db
+            .connection()
+            .prepare("SELECT InMsec, OutMsec, Kind FROM djmdCue WHERE ContentID = ?1 AND rb_local_deleted = 0 ORDER BY InMsec")
+            .unwrap();
+        let cues: Vec<(i64, Option<i64>, i64)> = stmt
+            .query_map([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let path: Option<String> = db
+            .connection()
+            .query_row(
+                "SELECT AnalysisDataPath FROM djmdContent WHERE ID = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let grid = path.filter(|p| !p.is_empty()).map(|p| {
+            let dat = rbl_anlz::Anlz::read(&rbl_anlz::resolve(&location.share_root, &p)).unwrap();
+            format!("{:?}", dat.beat_grid())
+        });
+        tracks.insert(
+            title,
+            json!({
+                "rating": track["rating"], "colour": track["colour_id"], "comment": track["comment"],
+                "bpm": track["bpm"], "key": track["key"], "analysed": track["analysed"],
+                "tags": tags_of(&track), "cues": cues, "grid": grid,
+            }),
+        );
+    }
+    let tree: Vec<Value> = rig
+        .tree_ids()
+        .into_iter()
+        .map(|(depth, name, id)| json!([depth, name, rig.titles_of(&id)]))
+        .collect();
+    let tags: Vec<Value> = rig.call("mytags.list", json!({}))["categories"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            let names: Vec<&str> = c["tags"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| t["name"].as_str().unwrap())
+                .collect();
+            json!([c["name"], names])
+        })
+        .collect();
+    json!({"tracks": tracks, "tree": tree, "tags": tags})
+}
+
+#[test]
+fn an_apply_cut_off_after_any_step_is_finished_by_running_it_again() {
+    let clean = Rig::new();
+    clean.rebuilt(&[]);
+    let expected = digest(&clean);
+    for step in [
+        "temporary_names",
+        "category_names",
+        "tags",
+        "imports",
+        "analysis_files",
+        "values",
+        "playlists",
+        "order",
+    ] {
+        let rig = Rig::new();
+        let cut = rig.call(
+            "library.rebuild_from_stick",
+            json!({"stick": rig.stick, "music": rig.music, "fail_after": step}),
+        );
+        assert_eq!(cut["complete"], false, "{step}: {cut}");
+        let incomplete = cut["incomplete"].to_string();
+        assert!(
+            incomplete.contains("run again") && incomplete.contains("backup"),
+            "{step}: says what to do: {incomplete}"
+        );
+        let finished = rig.rebuilt(&[]);
+        assert_eq!(finished["complete"], true, "{step}: {finished}");
+        assert_eq!(
+            digest(&rig),
+            expected,
+            "{step}: the same Library as an uncut rebuild"
+        );
+    }
 }

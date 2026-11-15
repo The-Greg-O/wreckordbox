@@ -367,11 +367,11 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
             )?);
         }
         Commands::Library { command, .. } => {
-            print(&stick_rebuild::run(
-                &mut connect(&config)?,
-                cli.json,
-                command,
-            )?);
+            let (text, complete) = stick_rebuild::run(&mut connect(&config)?, cli.json, command)?;
+            print(&text);
+            if !complete {
+                return Ok(ExitCode::FAILURE);
+            }
         }
         Commands::History { command } => {
             print(&reading::history(

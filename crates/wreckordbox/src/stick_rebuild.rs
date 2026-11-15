@@ -17,12 +17,15 @@ pub enum LibraryCommands {
     /// each matched track's rating, colour, comment and My Tags, linking
     /// each track to its file in the music folder.
     ///
-    /// A track is matched by the size of its copy on the Stick, the start of
-    /// the file's name agreeing (rekordbox shortens names on a Stick). One
-    /// with no file, several, or a size match whose name does not agree is
-    /// reported by name and left out; one whose file has its name but
-    /// another size is linked only with `--accept-retagged`. A track already in the Library at that file is
-    /// not added again; the Stick's values replace its own. Applying is one
+    /// A track is matched by the size of its copy on the Stick with the
+    /// whole of the Stick's file name agreeing (rekordbox may cut a name
+    /// short) and, where the Stick records it, its length. One with no file,
+    /// several, or a size match whose name does not agree is reported by
+    /// name and left out; one whose name agrees only in part is linked only
+    /// with `--accept-uncertain`, one whose file has its name but another
+    /// size only with `--accept-retagged`. A track already in the Library at
+    /// that file is not added again; the Stick's values replace its own. A
+    /// backup of the Library is taken first; applying is one
     /// import Run, refused while Library Protection is on.
     RebuildFromStick(RebuildArgs),
 }
@@ -41,6 +44,14 @@ pub struct RebuildArgs {
     /// since the export) to that file, when no file has its size.
     #[arg(long)]
     pub accept_retagged: bool,
+    /// Link a track to the one file of its size whose name agrees only in
+    /// part (or whose length does not agree with the Stick's).
+    #[arg(long)]
+    pub accept_uncertain: bool,
+    /// Compare names and sizes only, without reading each candidate's
+    /// length from its header: for a music folder on a slow network mount.
+    #[arg(long)]
+    pub names_only: bool,
 }
 
 impl LibraryCommands {
@@ -51,20 +62,33 @@ impl LibraryCommands {
     }
 }
 
+/// Runs the command; answers what to print and whether it finished
+/// (an apply that stopped part way is a failure, its advice printed).
 pub fn run(
     client: &mut Client,
     as_json: bool,
     command: &LibraryCommands,
-) -> Result<String, ServiceError> {
+) -> Result<(String, bool), ServiceError> {
     let LibraryCommands::RebuildFromStick(args) = command;
-    let answer: Rebuilt = client.call(
+    // The service's answer as it is (it carries `large_run`, the backup).
+    let raw: serde_json::Value = client.call(
         commands::LIBRARY_REBUILD_FROM_STICK,
-        json!({"stick": args.stick, "music": args.music, "dry_run": args.dry_run, "accept_retagged": args.accept_retagged}),
+        json!({"stick": args.stick, "music": args.music, "dry_run": args.dry_run,
+               "accept_retagged": args.accept_retagged, "accept_uncertain": args.accept_uncertain,
+               "check_length": !args.names_only}),
     )?;
-    if as_json {
-        return Ok(json!(answer).to_string());
-    }
-    Ok(text(&answer))
+    let answer: Rebuilt = serde_json::from_value(raw.clone()).map_err(|e| {
+        ServiceError::new(
+            wreckordbox_service::codes::SERVICE_FAILED,
+            format!("the service's answer could not be read: {e}"),
+        )
+    })?;
+    let text = if as_json {
+        raw.to_string()
+    } else {
+        text(&answer)
+    };
+    Ok((text, answer.complete))
 }
 
 fn text(answer: &Rebuilt) -> String {
@@ -87,6 +111,9 @@ fn text(answer: &Rebuilt) -> String {
             "new"
         }
         .to_owned();
+        if track.uncertain {
+            state.push_str(", uncertain: its name agrees only in part or its length differs");
+        }
         if track.retagged {
             state.push_str(", by name: its size differs from the Stick's copy");
         }
@@ -115,6 +142,10 @@ fn text(answer: &Rebuilt) -> String {
             "ambiguous" => format!("several files it could be: {}", track.candidates.join(", ")),
             "different_size" => format!(
                 "a file of that name, of another size (retagged? --accept-retagged links it): {}",
+                track.candidates.join(", ")
+            ),
+            "uncertain" => format!(
+                "a file of its size whose name agrees only in part, or whose length differs (--accept-uncertain links it): {}",
                 track.candidates.join(", ")
             ),
             "name_disagrees" => format!(
@@ -163,6 +194,18 @@ fn text(answer: &Rebuilt) -> String {
     let _ = writeln!(out, "Not carried:");
     for what in &answer.not_carried {
         let _ = writeln!(out, "  {what}");
+    }
+    if let Some(backup) = &answer.backup {
+        let _ = writeln!(out, "Backup taken first: {backup}");
+    }
+    if let Some(incomplete) = &answer.incomplete {
+        let _ = writeln!(
+            out,
+            "NOT COMPLETE: {} (done: {}). {}",
+            incomplete.error,
+            incomplete.done.join(", "),
+            incomplete.advice
+        );
     }
     if let Some(warning) = &answer.recording_warning {
         let _ = writeln!(out, "Recording warning: {warning}");
