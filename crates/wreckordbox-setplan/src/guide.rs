@@ -32,7 +32,7 @@ fn to_json(document: &str) -> Value {
         let bare = line.trim_end();
         if !fenced && title.is_empty() {
             if let Some(text) = bare.strip_prefix("# ") {
-                title = text.to_owned();
+                text.clone_into(&mut title);
             }
         }
         if !fenced {

@@ -2,6 +2,12 @@
 //! the arithmetic: every table and number in it is recomputed here from
 //! first principles (pitch-class sets, equal temperament) and from this
 //! crate's own key arithmetic and scoring, so the document cannot drift.
+#![allow(
+    clippy::pedantic,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
 use std::collections::BTreeSet;
 
 use wreckordbox_setplan::sequence::Candidate;
@@ -151,21 +157,48 @@ fn shared_tones_by_distance_on_the_circle() {
     assert_eq!(g.difference(&c).copied().collect::<Vec<_>>(), [6]);
 }
 
+/// The tonic triad of a key: root, third (major or minor), fifth.
+fn triad(key: (i32, bool)) -> BTreeSet<i32> {
+    let t = tonic(key.0, key.1);
+    let third = if key.1 { 4 } else { 3 };
+    [t, t + third, t + 7]
+        .iter()
+        .map(|x| x.rem_euclid(12))
+        .collect()
+}
+
+/// Open Key from the tonic alone: 1m is A minor, 1d C major, one fifth
+/// up per number.
+fn open_key(key: (i32, bool)) -> String {
+    let p = tonic(key.0, key.1);
+    let zero = if key.1 { 0 } else { 9 };
+    let o = (7 * (p - zero)).rem_euclid(12) + 1;
+    format!("{o}{}", if key.1 { 'd' } else { 'm' })
+}
+
 #[test]
 fn camelot_table_is_the_circle_of_fifths_and_the_apps_parser() {
     let rows = table("camelot");
     assert_eq!(rows.len(), 12);
     for (i, row) in rows.iter().enumerate() {
         let n = i32::try_from(i + 1).unwrap();
-        for (base, major) in [(0, false), (4, true)] {
+        for (base, major) in [(0, false), (5, true)] {
             let wanted = (n, major);
             assert_eq!(code(&row[base]), wanted, "row {n}");
+            let p = tonic(n, major);
+            assert_eq!(num(&row[base + 2]), f64::from(p), "{}", row[base]);
+            // The guide's formulas, both ways.
+            let m = i32::from(major);
+            assert_eq!(((7 * n + 1 + 3 * m).rem_euclid(12)), p);
+            assert_eq!((7 * p + 4 + 3 * m).rem_euclid(12) + 1, n);
+            // Open Key: from the tonic, and by the guide's formula.
+            assert_eq!(row[base + 4], open_key(wanted), "{}", row[base]);
+            let o = (n + 4).rem_euclid(12) + 1;
             assert_eq!(
-                num(&row[base + 2]),
-                f64::from(tonic(n, major)),
-                "{}",
-                row[base]
+                row[base + 4],
+                format!("{o}{}", if major { 'd' } else { 'm' })
             );
+            assert_eq!((o + 6).rem_euclid(12) + 1, n);
             // Every spelling, the musical names and rekordbox's, is that key
             // both by note arithmetic and by the app's own parser.
             let names = row[base + 1]
@@ -174,7 +207,7 @@ fn camelot_table_is_the_circle_of_fifths_and_the_apps_parser() {
                 .chain([row[base + 3].as_str()]);
             for name in names {
                 let (pc, is_major) = pitch_class(name);
-                assert_eq!((pc, is_major), (tonic(n, major), major), "{name}");
+                assert_eq!((pc, is_major), (p, major), "{name}");
                 assert_eq!(code(name), wanted, "{name} in the app's parser");
             }
         }
@@ -182,29 +215,57 @@ fn camelot_table_is_the_circle_of_fifths_and_the_apps_parser() {
 }
 
 #[test]
-fn moves_from_8a() {
-    let from = (8, false);
+fn moves_between_keys() {
     let rows = table("moves");
-    assert_eq!(rows.len(), 11);
+    assert_eq!(rows.len(), 21);
     for row in rows {
-        let to = code(&row[1]);
-        // The arithmetic column: `n`, `n + k`, `n - k`, `, A to B`.
-        let (steps, ring) = row[2]
+        let (move_, from, to) = (&row[0], code(&row[1]), code(&row[2]));
+        // The arithmetic column: `k`, `k + n`, `k - n`, then `, ring`.
+        let (steps, ring) = row[3]
             .split_once(',')
-            .map_or((row[2].as_str(), ""), |(a, b)| (a, b));
+            .map_or((row[3].as_str(), ""), |(a, b)| (a, b));
         let steps = steps.trim();
-        let k: i32 = if steps == "n" {
+        let k: i32 = if steps == "k" {
             0
-        } else if let Some(k) = steps.strip_prefix("n + ") {
+        } else if let Some(k) = steps.strip_prefix("k + ") {
             k.parse().unwrap()
         } else {
-            -steps.strip_prefix("n - ").unwrap().parse::<i32>().unwrap()
+            -steps.strip_prefix("k - ").unwrap().parse::<i32>().unwrap()
         };
-        assert_eq!(to, (wrap(8 + k), ring.trim() == "A to B"), "{}", row[0]);
-        assert_eq!(num(&row[3]), shared(from, to) as f64, "{}", row[0]);
+        let flips = ring.trim() == "ring";
+        assert_eq!(to, (wrap(from.0 + k), from.1 ^ flips), "{move_}");
+        let up = (tonic(to.0, to.1) - tonic(from.0, from.1)).rem_euclid(12);
+        assert_eq!(num(&row[4]), f64::from(up), "{move_}: tonic shift");
+        assert_eq!(num(&row[5]), shared(from, to) as f64, "{move_}: scale");
+        let triads = triad(from).intersection(&triad(to)).count();
+        assert_eq!(num(&row[6]), triads as f64, "{move_}: triad");
         let moves = camelot(from).moves(camelot(to));
-        assert_eq!(num(&row[4]), f64::from(moves), "{}", row[0]);
-        assert_eq!(num(&row[5]), key_score(moves), "{}", row[0]);
+        assert_eq!(num(&row[7]), f64::from(moves), "{move_}: app moves");
+        assert_eq!(num(&row[8]), key_score(moves), "{move_}");
+    }
+}
+
+#[test]
+fn relative_and_parallel_tone_counts() {
+    let set = |steps: &[i32]| -> BTreeSet<i32> { steps.iter().copied().collect() };
+    let major = set(&MAJOR_STEPS);
+    let natural = set(&[0, 2, 3, 5, 7, 8, 10]);
+    let harmonic = set(&[0, 2, 3, 5, 7, 8, 11]);
+    let melodic = set(&[0, 2, 3, 5, 7, 9, 11]);
+    assert_eq!(
+        major.intersection(&natural).copied().collect::<Vec<_>>(),
+        [0, 2, 5, 7]
+    );
+    assert_eq!(major.intersection(&harmonic).count(), 5);
+    assert_eq!(major.intersection(&melodic).count(), 6);
+    // Harmonic minor against its relative major (3 semitones up): 6 of 7.
+    let relative: BTreeSet<i32> = major.iter().map(|x| (x + 3) % 12).collect();
+    assert_eq!(relative, natural);
+    assert_eq!(relative.intersection(&harmonic).count(), 6);
+    // The shared count is max(2, 7 - d).
+    for d in 0..=6 {
+        let expected = (7 - d).max(2);
+        assert_eq!(shared((8, true), (wrap(8 + d), true)), expected as usize);
     }
 }
 
@@ -229,40 +290,146 @@ fn semitone_moves_on_the_wheel_are_plus_seven() {
 #[test]
 fn tempo_to_pitch() {
     let rows = table("tempo-pitch");
-    assert!(rows.len() >= 8);
+    assert_eq!(rows.len(), 8);
     for row in rows {
         let p = num(&row[0]);
-        assert_eq!(num(&row[1]), round(semitones(p), 2), "{p}%");
-        assert_eq!(num(&row[2]), round(semitones(p) * 100.0, 0), "{p}%");
+        assert_eq!(num(&row[1]), round(semitones(p), 4), "+{p}%");
+        assert_eq!(num(&row[2]), round(semitones(p) * 100.0, 1), "+{p}%");
+        assert_eq!(num(&row[3]), round(semitones(-p), 4), "-{p}%");
+        assert_eq!(num(&row[4]), round(semitones(-p) * 100.0, 1), "-{p}%");
     }
 }
 
 #[test]
+fn bpm_steps() {
+    let rows = table("bpm-steps");
+    assert_eq!(rows.len(), 5);
+    for row in rows {
+        let (x, y) = (num(&row[0]), num(&row[1]));
+        let p = (y - x) / x * 100.0;
+        assert_eq!(num(&row[2]), round(p, 3), "{x} to {y}");
+        assert_eq!(num(&row[3]), round(semitones(p), 4), "{x} to {y}");
+        assert_eq!(num(&row[4]), round(semitones(p) * 100.0, 1), "{x} to {y}");
+    }
+}
+
+fn pct(semis: f64) -> f64 {
+    (2f64.powf(semis / 12.0) - 1.0) * 100.0
+}
+
+#[test]
 fn numbers_in_the_text() {
-    let up = (2f64.powf(1.0 / 12.0) - 1.0) * 100.0;
-    let down = (2f64.powf(-1.0 / 12.0) - 1.0) * 100.0;
-    let two = (2f64.powf(2.0 / 12.0) - 1.0) * 100.0;
+    let cents = |ratio: f64| 1200.0 * ratio.log2();
+    let shift = semitones((127.1 / 120.0 - 1.0) * 100.0);
+    let quarter = semitones((129.0 / 125.0 - 1.0) * 100.0);
+    let beat = |f: f64| f * (2f64.powf(quarter / 12.0) - 1.0);
+    let onsets = |bpm: f64| 4.0 * bpm / 60.0;
     let said = [
-        format!("+{up:.2}% (2^(1/12) - 1)"),
-        format!("{down:.2}% (2^(-1/12) - 1)"),
-        format!("{two:.2}%"),
+        format!("2^(1/12) (about {:.6})", 2f64.powf(1.0 / 12.0)),
+        format!("1200 x log2(1.5) = {:.2} cents", cents(1.5)),
+        format!(
+            "2^(7/12) = {:.6}, 700 cents, {:.2} cents flat",
+            2f64.powf(7.0 / 12.0),
+            cents(1.5) - 700.0
+        ),
+        format!(
+            "{:.2} cents sharp of 5:4",
+            cents(2f64.powf(4.0 / 12.0) / 1.25)
+        ),
+        format!(
+            "{:.2} cents flat of 6:5",
+            -cents(2f64.powf(3.0 / 12.0) / 1.2)
+        ),
         format!("{:.2}% at 120", 100.0 / 120.0),
         format!("{:.2}% at 128", 100.0 / 128.0),
-        format!("+{:.2}% of the outgoing", (126.0 - 120.0) / 120.0 * 100.0),
-        format!("{:.2}%", (120.0 / 126.0 - 1.0) * 100.0),
+        format!("120 to 125 is +{:.3}%", 5.0 / 120.0 * 100.0),
+        format!("125 to 120 is {:.3}%", -5.0 / 125.0 * 100.0),
+        format!("|ln(125/120)| = {:.4}", (125f64 / 120.0).ln()),
+        format!("+{:.2}% of the outgoing", 6.0 / 120.0 * 100.0),
+        format!("played at {:.2}%", (120.0 / 126.0 - 1.0) * 100.0),
+        format!("+{:.4}% (2^(1/12) - 1)", pct(1.0)),
+        format!("{:.4}% (2^(-1/12) - 1)", pct(-1.0)),
+        format!("+{:.4}% or {:.4}%; two", pct(0.5), pct(-0.5)),
+        format!("+{:.4}% or {:.4}%.", pct(2.0), pct(-2.0)),
+        format!(
+            "(+{:.2}%) rises {shift:.4} semitones",
+            (127.1 / 120.0 - 1.0) * 100.0
+        ),
+        format!("{:.2} cents flat", (1.0 - shift) * 100.0),
+        format!("from about {:.2}% to {:.2}%", pct(0.25), pct(0.75)),
+        format!("{:.1} cents apart", quarter * 100.0),
+        format!(
+            "110 Hz beats at {:.1} Hz, at 440 Hz at {:.1} Hz",
+            beat(110.0),
+            beat(440.0)
+        ),
         format!("1.5% ({:.0} cents)", semitones(1.5) * 100.0),
         format!(
-            "3% (half a semitone, about {:.0} cents)",
-            (semitones(3.0) * 100.0 / 10.0).round() * 10.0
+            "+{:.1}% for 4% over 16 tracks",
+            (1.04f64.powi(15) - 1.0) * 100.0
         ),
-        format!("2^(1/12) (about {:.6})", 2f64.powf(1.0 / 12.0)),
+        format!("+{:.1}% for 1%", (1.01f64.powi(15) - 1.0) * 100.0),
+        format!(
+            "({:.2} at 120, {:.2} at 128, {:.2} at 140)",
+            onsets(120.0),
+            onsets(128.0),
+            onsets(140.0)
+        ),
+        format!(
+            "detunes a track by {:.0} to {:.0} cents",
+            semitones(3.0) * 100.0,
+            -semitones(-4.0) * 100.0
+        ),
+        format!("about {:.2}% moves it a whole semitone", pct(1.0)),
+        format!("0.70 x 0.70 = {:.0}%", 0.7 * 0.7 * 100.0),
+        "Only the hard limits".to_owned(),
     ];
     let guide = flat();
     for text in said {
         assert!(guide.contains(&text), "the guide should say {text:?}");
     }
-    // A semitone is ~5.95%, so a 6% change is just over one.
-    assert!(semitones(up) - 1.0 < 1e-12);
+    // The compensatory example of section 4.
+    assert!((1.0 + 1.0 + 0.0) > 3.0 * 0.65);
+    assert!(guide.contains("totals 2.0 and beats one scoring 0.65 on all three (1.95)"));
+    // One key move (0.25) is a quarter of S in tempo: 1% at S = 4.
+    assert_eq!(1.0 - key_score(1), 1.0 / 4.0);
+    // 7 is its own inverse mod 12; a semitone is ~5.95%.
+    assert_eq!((7 * 7) % 12, 1);
+    assert!((semitones(pct(1.0)) - 1.0).abs() < 1e-12);
+}
+
+#[test]
+fn the_sawtooth_scores_like_a_steady_offset() {
+    // Section 5: 0.5, 0.7, 0.5 around a flat 0.6 scores 0.9 each, the same
+    // as 0.5, 0.5, 0.5. By the sequencer itself.
+    let recipe = Recipe::parse(
+        "version = 1\ntracks = 3\n[intensity]\nshape = [{ at = 0.0, intensity = 0.6 }]\n",
+    )
+    .unwrap();
+    let scores = |values: [f64; 3]| -> Vec<f64> {
+        let pool: Vec<Candidate> = values
+            .iter()
+            .enumerate()
+            .map(|(i, v)| Candidate {
+                id: format!("{i}"),
+                title: format!("{i}"),
+                bpm: None,
+                key: None,
+                intensity: Some(*v),
+                situations: None,
+                genres: None,
+                added: None,
+            })
+            .collect();
+        let built = serde_json::to_value(plan(&recipe, &pool).unwrap()).unwrap();
+        let mut out = vec![built["opening"][0]["score"].as_f64().unwrap()];
+        for t in built["transitions"].as_array().unwrap() {
+            out.push(t["score"].as_f64().unwrap());
+        }
+        out
+    };
+    assert_eq!(scores([0.5, 0.7, 0.5]), [0.9, 0.9, 0.9]);
+    assert_eq!(scores([0.5, 0.5, 0.5]), [0.9, 0.9, 0.9]);
 }
 
 #[test]
@@ -388,8 +555,8 @@ fn shapes_table_points_match_the_examples() {
     let blocks = toml_blocks();
     for (name, block) in [
         ("Warm-up", 0),
-        ("Peak with waves", 1),
-        ("Release / closing", 2),
+        ("Peak-time hour", 1),
+        ("Closing", 2),
     ] {
         let line = GUIDE
             .lines()
