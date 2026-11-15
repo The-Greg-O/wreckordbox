@@ -245,41 +245,7 @@ fn plan_with(
         if lacks.is_empty() {
             usable.push(candidate);
         } else {
-            let energy = recipe
-                .intensity
-                .as_ref()
-                .is_some_and(|i| i.missing == Missing::Energy);
-            let words: Vec<&str> = lacks
-                .iter()
-                .filter(|l| **l != Lack::TempoRange)
-                .map(|l| match l {
-                    Lack::Intensity if energy => "no Intensity and no Energy",
-                    other => other.words(),
-                })
-                .collect();
-            let mut message = format!("track {} {:?}", candidate.id, candidate.title);
-            if !words.is_empty() {
-                message.push_str(&format!(
-                    " has {}, which this Recipe needs;",
-                    words.join(" and ")
-                ));
-            }
-            if lacks.contains(&Lack::TempoRange) {
-                let t = recipe.tempo.as_ref();
-                let bound = |b: Option<f64>| b.map_or_else(|| "any".to_owned(), |v| format!("{v}"));
-                message.push_str(&format!(
-                    " is at {:.2} BPM, outside the Recipe's tempo range ({} to {} BPM{});",
-                    tempo(candidate).unwrap_or_default(),
-                    bound(t.and_then(|t| t.min_bpm)),
-                    bound(t.and_then(|t| t.max_bpm)),
-                    if t.is_some_and(|t| t.fold) {
-                        ", half or double time counted"
-                    } else {
-                        ""
-                    }
-                ));
-            }
-            message.push_str(" it is left out");
+            let message = left_out_message(recipe, candidate, &lacks);
             left_out.push(LeftOut {
                 id: candidate.id.clone(),
                 title: candidate.title.clone(),
@@ -409,6 +375,50 @@ fn plan_with(
             Err(refused)
         }
     }
+}
+
+/// Why a track is left out, in words: what it lacks, or that its tempo is
+/// outside the Recipe's range.
+fn left_out_message(recipe: &Recipe, candidate: &Candidate, lacks: &[Lack]) -> String {
+    use std::fmt::Write as _;
+    let energy = recipe
+        .intensity
+        .as_ref()
+        .is_some_and(|i| i.missing == Missing::Energy);
+    let words: Vec<&str> = lacks
+        .iter()
+        .filter(|l| **l != Lack::TempoRange)
+        .map(|l| match l {
+            Lack::Intensity if energy => "no Intensity and no Energy",
+            other => other.words(),
+        })
+        .collect();
+    let mut message = format!("track {} {:?}", candidate.id, candidate.title);
+    if !words.is_empty() {
+        let _ = write!(
+            message,
+            " has {}, which this Recipe needs;",
+            words.join(" and ")
+        );
+    }
+    if lacks.contains(&Lack::TempoRange) {
+        let t = recipe.tempo.as_ref();
+        let bound = |b: Option<f64>| b.map_or_else(|| "any".to_owned(), |v| format!("{v}"));
+        let _ = write!(
+            message,
+            " is at {:.2} BPM, outside the Recipe's tempo range ({} to {} BPM{});",
+            tempo(candidate).unwrap_or_default(),
+            bound(t.and_then(|t| t.min_bpm)),
+            bound(t.and_then(|t| t.max_bpm)),
+            if t.is_some_and(|t| t.fold) {
+                ", half or double time counted"
+            } else {
+                ""
+            }
+        );
+    }
+    message.push_str(" it is left out");
+    message
 }
 
 fn lacks(recipe: &Recipe, c: &Candidate) -> Vec<Lack> {
@@ -1269,32 +1279,35 @@ impl Scorer<'_> {
     fn key_move(
         &self,
         key: &crate::recipe::Key,
-        a: &Candidate,
-        b: &Candidate,
+        outgoing: &Candidate,
+        incoming: &Candidate,
         x: Camelot,
         y: Camelot,
         position: usize,
     ) -> Contribution {
-        let r = self.recipe;
-        let heard = self.heard(a, b);
+        use std::fmt::Write as _;
+        let recipe = self.recipe;
+        let heard = self.heard(outgoing, incoming);
         let step = x.step_to(heard.map_or(y, |h| h.key));
         let mut cost = step.cost();
         let mut notes = String::new();
         if let Some(h) = heard {
-            notes.push_str(&format!(
+            let _ = write!(
+                notes,
                 ", heard as {} without key lock ({:+} semitone{}, {:+.0} cents, at {:+.1}%)",
                 h.key,
                 h.shift,
                 if h.shift.abs() == 1 { "" } else { "s" },
                 h.cents,
                 h.percent
-            ));
+            );
         }
         // An energy boost goes with a rising shape, a wind-down with a
         // falling one: half a move cheaper with it, half dearer against it.
-        if let Some(shape) = &r.intensity {
+        if let Some(shape) = &recipe.intensity {
             if step.is_boost() || step.is_wind_down() {
-                let rise = shape.target(r.at(position)) - shape.target(r.at(position - 1));
+                let rise =
+                    shape.target(recipe.at(position)) - shape.target(recipe.at(position - 1));
                 if rise.abs() > 1e-9 {
                     let with = (rise > 0.0) == step.is_boost();
                     cost += if with { -0.5 } else { 0.5 };
@@ -1310,7 +1323,7 @@ impl Scorer<'_> {
         let mut score = key.weight * (1.0 - cost / 6.0).max(0.0) * (1.0 - detune / 50.0);
         if step.cost() == 0.0 && key.variety > 0.0 {
             score -= key.weight * key.variety;
-            notes.push_str(&format!("; the Recipe wants variety (-{})", key.variety));
+            let _ = write!(notes, "; the Recipe wants variety (-{})", key.variety);
         }
         let to = if heard.is_some() {
             format!("{y}")

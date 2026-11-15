@@ -52,7 +52,7 @@ fn pinned(extra: &str, pool: &[Candidate]) -> Plan {
     plan(&recipe(&text), pool).unwrap_or_else(|u| panic!("{}", u.message))
 }
 
-fn criterion<'p>(p: &'p Plan, transition: usize, c: Criterion) -> (f64, &'p str) {
+fn criterion(p: &Plan, transition: usize, c: Criterion) -> (f64, &str) {
     let found = p.transitions[transition]
         .criteria
         .iter()
