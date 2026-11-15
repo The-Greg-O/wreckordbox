@@ -75,17 +75,17 @@ impl Manifest {
         sidecar.append_bulk(&entries).map_err(|e| e.to_string())
     }
 }
-fn read<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
+pub(super) fn read<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display()))
 }
-fn local(path: &Path) -> Result<(), String> {
+pub(super) fn local(path: &Path) -> Result<(), String> {
     if wreckordbox_stick_protection::stick_root(path).is_some() {
         return Err("Ledger recovery storage is on a Stick; named results must remain in memory until local storage is available".into());
     }
     Ok(())
 }
-fn write(path: &Path, value: &impl Serialize) -> Result<(), String> {
+pub(super) fn write(path: &Path, value: &impl Serialize) -> Result<(), String> {
     local(path)?;
     let bytes = serde_json::to_vec(value).map_err(|e| e.to_string())?;
     let tmp = path.with_extension("tmp");
@@ -106,16 +106,18 @@ pub(super) fn save(
     manifest: &Manifest,
     index: u64,
     records: &[Record],
+    binding: super::spill_binding::Binding,
 ) -> Result<(), String> {
     local(dir)?;
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    super::spill_binding::bind(dir, binding)?;
     let header = dir.join("manifest.json");
     if !header.exists() {
         write(&header, manifest)?;
     }
     write(&dir.join(format!("batch-{index:020}.json")), &records)
 }
-fn files(dir: &Path) -> Result<Vec<PathBuf>, String> {
+pub(super) fn files(dir: &Path) -> Result<Vec<PathBuf>, String> {
     if !dir.exists() {
         return Ok(Vec::new());
     }
@@ -126,7 +128,7 @@ fn files(dir: &Path) -> Result<Vec<PathBuf>, String> {
     files.sort();
     Ok(files)
 }
-enum Header {
+pub(super) enum Header {
     Ready(Manifest),
     Empty,
     Orphaned(String),
@@ -135,17 +137,17 @@ enum Header {
 /// Only a missing header is special. Unreadable or malformed manifests retain
 /// the normal recovery failure. Never mistake a batch (even a .tmp batch) for
 /// disposable metadata; conservatively keep unknown files too.
-fn header(dir: &Path) -> Result<Header, String> {
+pub(super) fn header(dir: &Path) -> Result<Header, String> {
     let path = dir.join("manifest.json");
     match std::fs::read(&path) {
         Ok(bytes) => serde_json::from_slice(&bytes)
             .map(Header::Ready)
             .map_err(|e| format!("{}: {e}", path.display())),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            if files(dir)?
-                .iter()
-                .any(|p| p.file_name().is_none_or(|n| n != "manifest.tmp"))
-            {
+            if files(dir)?.iter().any(|p| {
+                p.file_name()
+                    .is_none_or(|n| n != "manifest.tmp" && n != super::spill_binding::FILE)
+            }) {
                 Ok(Header::Orphaned(format!(
                     "Bulk spill {} has no manifest.json; files that may contain accepted writes are kept for recovery",
                     dir.display()
@@ -162,6 +164,7 @@ fn remove_empty(dir: &Path) -> Result<(), String> {
     local(dir)?;
     for result in [
         std::fs::remove_file(dir.join("manifest.tmp")),
+        std::fs::remove_file(dir.join(super::spill_binding::FILE)),
         std::fs::remove_dir(dir),
     ] {
         if let Err(error) = result {
@@ -186,13 +189,20 @@ pub(super) fn mark_complete(dir: &Path) -> Result<(), String> {
     manifest.complete = true;
     write(&file, &manifest)
 }
+/// `own` is the intent of the operation replaying its own spill, if any.
 pub(super) fn replay(
     dir: &Path,
     sidecar: &Sidecar,
+    own: Option<i64>,
     mut before: impl FnMut() -> Result<(), String>,
 ) -> Result<(), String> {
     if !dir.exists() {
         return Ok(());
+    }
+    if dir.join("discard.json").exists() {
+        return Err(
+            "An explicit DJ discard is pending; use runs.spills.discard to finish it".into(),
+        );
     }
     local(dir)?;
     let mut manifest = match header(dir)? {
@@ -200,6 +210,40 @@ pub(super) fn replay(
         Header::Empty => return remove_empty(dir),
         Header::Orphaned(error) => return Err(error),
     };
+    super::spill_binding::authorize(dir, sidecar, &manifest, own)?;
+    // No recovery file is rewritten or claimed where the Sidecar may not write.
+    sidecar.admit_write().map_err(|e| e.to_string())?;
+    for path in files(dir)? {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        if name == "manifest.json" || name == "manifest.tmp" || name == super::spill_binding::FILE {
+            continue;
+        }
+        if !name.starts_with("batch-") || path.extension().is_none_or(|ext| ext != "json") {
+            return Err(format!(
+                "Spill has an unrecognized file {}; inspect it before recovery",
+                path.display()
+            ));
+        }
+        let records = read_batch(&path)?;
+        if manifest.run.is_none() {
+            for record in records {
+                if let Some(id) = record.id {
+                    if let Some(entry) = sidecar.ledger_entry(id).map_err(|e| e.to_string())? {
+                        if entry.source != manifest.source {
+                            return Err(
+                                "Spill source does not match an already recorded entry".into()
+                            );
+                        }
+                        manifest.run = Some(entry.run);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    if let Some(intent) = manifest.intent {
+        super::spill_binding::claim(dir, intent)?;
+    }
     let header = dir.join("manifest.json");
     if manifest.run.is_none() {
         manifest.run = Some(
@@ -208,14 +252,14 @@ pub(super) fn replay(
                 .map_err(|e| e.to_string())?,
         );
         // Persist the Run before any entry: an interrupted replay keeps one Run.
-        write(&header, &manifest)?;
     }
+    write(&header, &manifest)?;
     for path in files(dir)?.into_iter().filter(|p| {
         p.file_name()
             .is_some_and(|n| n.to_string_lossy().starts_with("batch-"))
             && p.extension().is_some_and(|e| e == "json")
     }) {
-        let mut records: Vec<Record> = read(&path)?;
+        let mut records = read_batch(&path)?;
         if records.len() > 128 {
             return Err("Oversized bulk spill batch; left untouched".into());
         }
@@ -250,6 +294,11 @@ pub(super) fn replay(
                 .map_err(|e| e.to_string())?;
         }
     }
+    for disposable in ["manifest.tmp", super::spill_binding::FILE] {
+        if dir.join(disposable).exists() {
+            std::fs::remove_file(dir.join(disposable)).map_err(|e| e.to_string())?;
+        }
+    }
     std::fs::remove_file(header).map_err(|e| e.to_string())?;
     std::fs::remove_dir(dir).map_err(|e| e.to_string())?;
     Ok(())
@@ -260,10 +309,24 @@ pub(super) fn exists(root: &Path) -> bool {
 /// Completed/startup work with no manifest cannot be attributed safely. Keep
 /// it and return a diagnostic separately so unrelated writes can still proceed.
 pub(super) fn recover(dir: &Path, sidecar: &Sidecar) -> Result<Option<String>, String> {
-    if let Header::Orphaned(error) = header(dir)? {
-        return Ok(Some(error));
+    let _lease = super::spill_lease::Lease::take(dir)?;
+    if dir.join("discard.json").exists() {
+        return Ok(Some(format!(
+            "Spill {} has an explicit discard pending; only runs.spills.discard may finish it",
+            dir.display()
+        )));
     }
-    replay(dir, sidecar, || Ok(()))?;
+    match header(dir)? {
+        Header::Orphaned(error) => return Ok(Some(error)),
+        // A refused spill is kept and reported; it cannot block unrelated work.
+        Header::Ready(manifest) => {
+            if let Err(error) = super::spill_binding::authorize(dir, sidecar, &manifest, None) {
+                return Ok(Some(error));
+            }
+        }
+        Header::Empty => {}
+    }
+    replay(dir, sidecar, None, || Ok(()))?;
     Ok(None)
 }
 pub(super) fn replay_all(root: &Path, sidecar: &Sidecar) -> Result<Vec<String>, String> {
@@ -292,8 +355,7 @@ pub(super) fn pending(
         }
         let manifest = match header(&dir)? {
             Header::Ready(manifest) => manifest,
-            Header::Empty => continue,
-            Header::Orphaned(error) => return Err(error),
+            Header::Empty | Header::Orphaned(_) => continue,
         };
         if manifest.run.map(|id| id.0) != run {
             continue;
@@ -303,7 +365,7 @@ pub(super) fn pending(
                 .is_some_and(|n| n.to_string_lossy().starts_with("batch-"))
                 && p.extension().is_some_and(|e| e == "json")
         }) {
-            for record in read::<Vec<Record>>(&path)? {
+            for record in read_batch(&path)? {
                 if total >= offset && records.len() < limit {
                     records.push(json!({"id":record.id,"at":record.at,"result":record.value}));
                 }
@@ -327,4 +389,16 @@ pub(super) fn bind_run(dir: &Path, current: &Manifest) -> Result<(), String> {
         write(&path, &manifest)?;
     }
     Ok(())
+}
+
+/// Disk reads remain bounded even if a spill was damaged or edited externally.
+pub(super) fn read_batch(path: &Path) -> Result<Vec<Record>, String> {
+    if std::fs::metadata(path).map_err(|e| e.to_string())?.len() > 16 * 1024 * 1024 {
+        return Err(format!("Oversized spill batch {}", path.display()));
+    }
+    let records: Vec<Record> = read(path)?;
+    if records.len() > 128 {
+        return Err(format!("Oversized spill batch {}", path.display()));
+    }
+    Ok(records)
 }

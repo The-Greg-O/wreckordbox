@@ -266,6 +266,8 @@ struct Admission {
     lease: OrderLease,
     order_failed: bool,
     intent: Option<i64>,
+    intent_at: Option<i64>,
+    live: Option<super::spill_binding::Live>,
     run: Option<RunId>,
     warning: Option<String>,
 }
@@ -296,6 +298,8 @@ struct Session {
     faults: super::Faults,
     begun: AtomicBool,
     spill: std::path::PathBuf,
+    lease: Mutex<Option<super::spill_lease::Lease>>,
+    lease_error: Option<String>,
 }
 pub(super) fn make(keeper: &Keeper, kind: Kind) -> Arc<dyn Recorder> {
     let (kind, description, source) = match kind {
@@ -333,6 +337,10 @@ pub(super) fn make(keeper: &Keeper, kind: Kind) -> Arc<dyn Recorder> {
         .bulk_recovery_dir()
         .join("ledger-bulk")
         .join(format!("{}-{}-{serial}", super::now(), std::process::id()));
+    let (lease, lease_error) = match super::spill_lease::Lease::take(&spill) {
+        Ok(lease) => (Some(lease), None),
+        Err(error) => (None, Some(error)),
+    };
     Arc::new(Handle(Arc::new(Session {
         owner: Arc::as_ptr(&keeper.stems) as usize,
         keeper: keeper.weak.clone(),
@@ -345,6 +353,8 @@ pub(super) fn make(keeper: &Keeper, kind: Kind) -> Arc<dyn Recorder> {
         left: Condvar::new(),
         faults: super::Faults::from_env(),
         begun: AtomicBool::new(false),
+        lease: Mutex::new(lease),
+        lease_error,
         spill,
     })))
 }
@@ -371,6 +381,9 @@ impl Session {
         state.warning = Some(message);
     }
     fn begin(&self) -> Result<(), String> {
+        if let Some(error) = &self.lease_error {
+            return Err(error.clone());
+        }
         let _ledger = crate::sidecar_stick::ledger_scope();
         let keeper = self.keeper.upgrade().ok_or("wreckordbox has stopped")?;
         if keeper.stopping.load(Ordering::Acquire) {
@@ -385,19 +398,24 @@ impl Session {
         }
         keeper.admit_bulk()?;
         let command = self.command();
+        let at = super::now();
         match self.stems.sidecar() {
             Ok(sidecar) => {
                 match sidecar.begin_intent(
                     &Intent {
                         run: None,
-                        at: super::now(),
+                        at,
                         source: &self.source,
                         description: self.description,
                         command: Some(&command),
                     },
                     &[],
                 ) {
-                    Ok(id) => admission.intent = Some(id),
+                    Ok(id) => {
+                        admission.intent = Some(id);
+                        admission.intent_at = Some(at);
+                        admission.live = Some(super::spill_binding::Live::register(&sidecar, id));
+                    }
                     Err(error) => admission.warning = Some(error.to_string()),
                 }
                 admission.sidecar = Some(sidecar);
@@ -505,9 +523,20 @@ impl Session {
         if let Err(error) = result {
             self.warning(state, error);
             state.spill_index += 1;
-            if let Err(error) =
-                spill::save(&self.spill, &manifest, state.spill_index, &state.pending)
-            {
+            let binding = {
+                let admission = self.admission();
+                super::spill_binding::Binding {
+                    intent: admission.intent,
+                    at: admission.intent_at,
+                }
+            };
+            if let Err(error) = spill::save(
+                &self.spill,
+                &manifest,
+                state.spill_index,
+                &state.pending,
+                binding,
+            ) {
                 self.warning(
                     state,
                     format!("spill failed ({error}); named results retained in memory"),
@@ -534,8 +563,13 @@ impl Session {
             );
         }
         if !self.begun.load(Ordering::Acquire) {
+            state.warning.clone_from(&self.lease_error);
             state.ended = true;
-            return None;
+            self.lease
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            return state.warning.clone();
         }
         self.flush(&mut state);
         let unspilled = std::mem::take(&mut state.unspilled);
@@ -549,7 +583,9 @@ impl Session {
             spill::mark_complete(&self.spill)?;
             let _access = self.stems.bulk_access()?;
             let sidecar = self.stems.sidecar().map_err(|e| e.message)?;
-            spill::replay(&self.spill, &sidecar, || self.before_append())?;
+            spill::replay(&self.spill, &sidecar, manifest.intent, || {
+                self.before_append()
+            })?;
             if !state.unspilled.is_empty() {
                 return Err(format!(
                     "named writes could not be stored: {}",
@@ -601,6 +637,11 @@ impl Session {
             );
         }
         state.ended = true;
+        self.admission().live = None;
+        self.lease
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
         state.warning.clone()
     }
 }

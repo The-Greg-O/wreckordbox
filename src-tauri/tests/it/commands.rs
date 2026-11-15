@@ -2323,7 +2323,7 @@ fn cue_announcements(s: &Shell) -> impl Fn(usize) -> Vec<String> {
 }
 
 #[test]
-fn memory_cues_are_converted_into_the_free_hot_slots_in_position_order_and_each_one_is_announced() {
+fn memory_cues_are_converted_into_the_free_hot_slots_and_announced_once() {
     let s = shell();
     let track = track_id(5);
     let announced = cue_announcements(&s);
@@ -2358,10 +2358,9 @@ fn memory_cues_are_converted_into_the_free_hot_slots_in_position_order_and_each_
         "the loop stayed a loop when it became a hot cue"
     );
 
-    // One `cues:changed` per cue written, so a deck showing the track
-    // refetches after each of them rather than only at the end.
-    let announced = announced(7);
-    assert_eq!(announced.len(), 7);
+    // One conversion event refreshes the deck after the complete burst.
+    let announced = announced(5);
+    assert_eq!(announced.len(), 5);
     assert!(announced.iter().all(|t| *t == track));
 }
 

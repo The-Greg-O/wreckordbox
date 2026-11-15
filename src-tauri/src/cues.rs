@@ -272,11 +272,12 @@ async fn edit_cues<R: tauri::Runtime>(
         };
         match record {
             Record::Entry if !revision.is_empty() => state.edit_history().lock().record(LibraryEdit::Cues(revision), label),
-            Record::Entry => {}
-            Record::Into(whole) => match &mut *whole.lock() {
-                Some(earlier) => earlier.extend(revision),
-                slot @ None => *slot = Some(revision),
-            },
+            Record::Into(whole) if !revision.is_empty() => {
+                let previous = whole.lock().take();
+                let joined = state.edit_history().lock().record_cue_slice(revision, previous.as_ref(), "Convert Memory Cues to Hot Cues");
+                *whole.lock() = Some(joined);
+            }
+            Record::Entry | Record::Into(_) => {}
         }
         // The writer held the file read-write; `write` has closed it before
         // the read-only handle below opens, as an edit in `commands.rs` is.
@@ -288,8 +289,8 @@ async fn edit_cues<R: tauri::Runtime>(
     .await?;
     // The track's id, well inside the 1 KB event cap. Every deck showing the
     // track refetches its cues; nothing else has anything to do.
-    let _ = tauri::Emitter::emit(&app, "cues:changed", &change.track);
     if recorded {
+        let _ = tauri::Emitter::emit(&app, "cues:changed", &change.track);
         announce_history(&app, &state);
     }
     Ok(change)
@@ -414,8 +415,8 @@ pub async fn convert_memory_cues_to_hot<R: tauri::Runtime>(
     };
     let cues = library.cues_of(row);
     let plan = conversion_plan(&cues);
-    // Each cue is written and announced as it is made; the history gets the
-    // whole conversion as one entry once they are, or as far as it got.
+    // Record every accepted slice immediately, joining the preceding history
+    // entry when it still matches. Announce the accepted conversion once.
     let whole = Arc::new(parking_lot::Mutex::new(None));
     let mut made = 0;
     let mut outcome = Ok(());
@@ -432,15 +433,8 @@ pub async fn convert_memory_cues_to_hot<R: tauri::Runtime>(
         }
         made += 1;
     }
-    let revision = whole.lock().take();
-    if let Some(revision) = revision.filter(|revision| !revision.is_empty()) {
-        let writing = Arc::clone(&state);
-        blocking("convert_memory_cues_to_hot", move || {
-            let _gate = writing.edit_gate().lock();
-            writing.edit_history().lock().record(LibraryEdit::Cues(revision), "Convert Memory Cues to Hot Cues");
-            Ok(())
-        })
-        .await?;
+    if whole.lock().is_some() {
+        let _ = tauri::Emitter::emit(&app, "cues:changed", &track);
         announce_history(&app, &state);
     }
     outcome.map(|()| made)
