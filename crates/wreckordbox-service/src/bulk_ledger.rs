@@ -530,20 +530,13 @@ impl Session {
                     at: admission.intent_at,
                 }
             };
-            // Recovery files follow the Sidecar's admission: on a locked
-            // Stick the named results stay in memory (wbx-8yh).
-            if let Err(error) = crate::sidecar_stick::refuse_while_locked(&self.stems)
-                .map_err(|e| e.message)
-                .and_then(|()| {
-                    spill::save(
-                        &self.spill,
-                        &manifest,
-                        state.spill_index,
-                        &state.pending,
-                        binding,
-                    )
-                })
-            {
+            if let Err(error) = spill::save(
+                &self.spill,
+                &manifest,
+                state.spill_index,
+                &state.pending,
+                binding,
+            ) {
                 self.warning(
                     state,
                     format!("spill failed ({error}); named results retained in memory"),
