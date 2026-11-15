@@ -5,6 +5,7 @@
 //! tempo, key, Intensity, Situations, genre and date added, and keeps the
 //! plan in the Sidecar.
 mod camelot;
+pub mod guide;
 pub mod recipe;
 pub mod sequence;
 

@@ -7135,6 +7135,7 @@ dependencies = [
  "tempfile",
  "wreckordbox-render",
  "wreckordbox-service",
+ "wreckordbox-setplan",
  "wreckordbox-sidecar",
  "wreckordbox-stick-outline",
  "wreckordbox-stick-protection",
@@ -7160,6 +7161,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "wreckordbox-service",
+ "wreckordbox-setplan",
 ]
 
 [[package]]

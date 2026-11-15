@@ -149,6 +149,9 @@ fn texts(description: &str) -> Value {
 
 const TRACK_ID: &str = "The track's identifier: `id` in `read_tracks` or `read_tracks_query`.";
 const LIMIT: &str = "The most rows to answer.";
+/// Not a service command: the set planning guide, answered by this server
+/// from the document built into it, with no service and no Library.
+pub const SET_PLANNING_GUIDE: &str = "(the set planning guide, built in)";
 const OFFSET: &str = "How many rows to skip; each page's `next_offset` fetches the next.";
 const LIBRARY_EDIT: &str =
     "Changes the Library through its single edit path: one step of the window's Undo, \
@@ -636,6 +639,15 @@ pub fn catalogue() -> Vec<Tool> {
         "read_schema_check",
         "schema.check",
         "Checks the Library's Tag schema and shows the MyTag categories its deck view makes (`wreckordbox schema check`).",
+        vec![],
+        vec![],
+    );
+    b.read(
+        "read_set_planning_guide",
+        SET_PLANNING_GUIDE,
+        "The set planning guide: harmonic mixing and the Camelot wheel, tempo and pitch, energy flow, \
+         and how the Recipe and the Set plan's scores work, with example Recipes. Read it before \
+         writing a Recipe. In sections; needs no service (`wreckordbox set-plan guide`).",
         vec![],
         vec![],
     );

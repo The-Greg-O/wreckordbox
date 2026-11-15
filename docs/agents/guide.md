@@ -1164,6 +1164,44 @@ Stops the measuring in progress; finished tracks are kept.
 {"cancelled": false}
 ```
 
+### `wreckordbox set-plan`
+
+The group for Recipes and Set plans. A Recipe is a TOML file of the DJ's
+criteria for a journey; a Set plan is the ordered result, kept in the
+Sidecar. Never changes the Library. Read `set-plan guide` before writing a
+Recipe.
+
+### `wreckordbox set-plan guide`
+
+Prints the set planning guide (`docs/agents/set-planning.md`): harmonic
+mixing and the Camelot wheel, tempo and pitch, Energy and Intensity, what
+each Recipe field and score does, and three example Recipes. `--json` gives
+`{title, source, markdown, introduction, sections: [{id, heading, markdown}]}`.
+Needs no service and no Library; writes nothing.
+
+### `wreckordbox set-plan check`
+
+Reads a Recipe file (`<RECIPE>`) and names each mistake and its line. Exits 1
+when the Recipe cannot be used. Writes nothing.
+
+### `wreckordbox set-plan build`
+
+Changes the Sidecar: builds a Set plan from `<RECIPE>` and a pool
+(`[TRACK_ID]...`, or `--playlist`, `--search`, `--genre`, `--energy`,
+`--all`) and keeps it, in one Run (`--source`, default `dj`; pass
+`--source agent:NAME`). The same Recipe, pool and Facts give the same plan.
+When no plan keeps the Recipe's limits it names the criterion in the way,
+keeps nothing and exits 1.
+
+### `wreckordbox set-plan show`
+
+Reads a kept Set plan (`<SET_PLAN_ID>`): the tracks in order and each
+transition's score and reasons; `--json` in full.
+
+### `wreckordbox set-plan list`
+
+Reads the kept Set plans, newest first.
+
 ### `wreckordbox schema`
 
 The group for the Tag schema (`tag-schema.toml` in the Sidecar's folder).
@@ -1447,7 +1485,8 @@ Reads (each named after the CLI command it mirrors in its description):
 `read_review_waiting`, `read_review_rejected`, `read_projection_barriers`,
 `read_projection_plan`, `read_sticks`, `read_stick_load_preview`,
 `read_stems`, `read_intensity`, `read_schema_check`, `read_set_plan_check`,
-`read_set_plans`, `read_set_plan`.
+`read_set_plans`, `read_set_plan`, `read_set_planning_guide`
+(answered by the server itself, with no service).
 
 Changes to the Library: `change_track_rating`, `change_prep_colour`,
 `change_mytag_assign`, `change_mytag_unassign`, `change_mytag_create`,

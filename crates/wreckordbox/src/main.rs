@@ -19,6 +19,7 @@ mod playlist_making;
 mod project;
 mod project_mytags;
 mod set_plan;
+mod set_plan_guide;
 mod spills;
 use playlist_edits as edits;
 mod protection;
@@ -304,6 +305,14 @@ fn main() -> ExitCode {
     reason = "one arm per subcommand; each arm hands off to its module"
 )]
 fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
+    // The guide is a document: no service, no Library, no configuration.
+    if let Commands::SetPlan {
+        command: set_plan::SetPlanCommands::Guide,
+    } = &cli.command
+    {
+        print(&set_plan_guide::render(cli.json));
+        return Ok(ExitCode::SUCCESS);
+    }
     let config = Config::from_env()?;
     // The Run a command that edits the Library was given, sent with it.
     if let Commands::Tracks { run, .. }
