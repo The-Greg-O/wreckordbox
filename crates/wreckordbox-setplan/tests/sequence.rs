@@ -313,3 +313,57 @@ fn recency_is_measured_to_the_newest_addition_without_a_clock() {
     assert_eq!(p.tracks[1].id, "10002");
     assert!((p.transitions[0].criteria[0].score - 0.5).abs() < 0.02);
 }
+
+/// Codex review of wbx-39: the beam used up the only closer early, because
+/// the shape rewards its Intensity at the start, and then reported a
+/// feasible Recipe as unsatisfiable.
+#[test]
+fn a_required_situation_late_in_the_set_keeps_its_track_for_it() {
+    let mut tracks: Vec<Candidate> = (1..=7).map(|i| track(i, 120.0, "8A", 0.0)).collect();
+    for t in &mut tracks {
+        t.situations = Some(vec![]);
+    }
+    tracks[0].intensity = Some(1.0);
+    tracks[0].situations = Some(vec!["closer".to_owned()]);
+    let text = r#"version = 1
+tracks = 7
+[intensity]
+shape = [{ at = 0, intensity = 1 }, { at = 0.1, intensity = 0 }]
+weight = 10
+[situations]
+place = [{ situation = "closer", from = 1, to = 1, require = true }]
+"#;
+    let p = built(text, &tracks);
+    assert_eq!(p.tracks.len(), 7);
+    assert_eq!(p.tracks[6].id, "1", "the only closer closes");
+}
+
+/// However the beam is pruned, a plan the hard limits allow is found: a
+/// chain only one order satisfies (each tempo within 2% of the next only).
+#[test]
+fn a_plan_only_one_order_allows_is_found_and_never_called_unsatisfiable() {
+    // Tempos 100, 102, 104.04, ... each 2% above the last; the shape wants
+    // the fastest first, so the beam prefers starts the chain cannot finish.
+    let mut tracks = Vec::new();
+    let mut bpm = 100.0;
+    for i in 0..12u32 {
+        tracks.push(track(i + 1, bpm, "8A", f64::from(i) / 11.0));
+        bpm *= 1.02;
+    }
+    let text = r#"version = 1
+tracks = 12
+[intensity]
+shape = [{ at = 0, intensity = 1 }, { at = 1, intensity = 1 }]
+weight = 10
+[tempo]
+max_change = 2.01
+"#;
+    let p = built(text, &tracks);
+    let mut ids: Vec<&str> = p.tracks.iter().map(|t| t.id.as_str()).collect();
+    let mut sorted = ids.clone();
+    sorted.sort_by_key(|id| id.parse::<u32>().unwrap());
+    if ids[0] != "1" {
+        ids.reverse();
+    }
+    assert_eq!(ids, sorted, "the chain in tempo order, either way round");
+}

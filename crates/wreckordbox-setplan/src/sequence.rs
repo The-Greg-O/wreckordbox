@@ -189,6 +189,10 @@ pub struct Unsatisfiable {
     /// The position (from 1) no track could take, when the search ran.
     pub position: Option<usize>,
     pub rejected: Vec<Rejection>,
+    /// The complete search reached its bound before finding a plan or
+    /// proving there is none: no plan was found, which is not proof.
+    #[serde(default)]
+    pub search_exhausted: bool,
     pub pool: usize,
     pub usable: usize,
     pub left_out: Vec<LeftOut>,
@@ -200,6 +204,15 @@ pub struct Unsatisfiable {
 /// The Recipe cannot be satisfied from this pool; [`Unsatisfiable`] names
 /// the criterion in the way.
 pub fn plan(recipe: &Recipe, pool: &[Candidate]) -> Result<Plan, Box<Unsatisfiable>> {
+    plan_with(recipe, pool, BEAM)
+}
+
+/// [`plan`] with a beam of `width` partial orders (tests force a beam miss).
+fn plan_with(
+    recipe: &Recipe,
+    pool: &[Candidate],
+    width: usize,
+) -> Result<Plan, Box<Unsatisfiable>> {
     let mut sorted: Vec<&Candidate> = pool.iter().collect();
     sorted.sort_by(|a, b| (a.id.len(), &a.id).cmp(&(b.id.len(), &b.id)));
     sorted.dedup_by(|a, b| a.id == b.id);
@@ -247,6 +260,7 @@ pub fn plan(recipe: &Recipe, pool: &[Candidate]) -> Result<Plan, Box<Unsatisfiab
             message,
             position,
             rejected,
+            search_exhausted: false,
             pool: pool_size,
             usable: usable.len(),
             left_out: left_out.clone(),
@@ -287,13 +301,13 @@ pub fn plan(recipe: &Recipe, pool: &[Candidate]) -> Result<Plan, Box<Unsatisfiab
         ));
     }
     let limits = Limits::of(recipe);
-    match search(&scorer, &usable, limits) {
+    match search(&scorer, &usable, limits, width) {
         Ok(order) => Ok(scorer.write(&order, &usable, pool_size, left_out, as_of)),
         Err(stopped) => {
             let in_the_way: Vec<Blocker> = limits
                 .present()
                 .into_iter()
-                .filter(|&limit| search(&scorer, &usable, limits.without(limit)).is_ok())
+                .filter(|&limit| search(&scorer, &usable, limits.without(limit), width).is_ok())
                 .collect();
             let criterion = in_the_way.first().copied().unwrap_or_else(|| {
                 stopped
@@ -327,13 +341,22 @@ pub fn plan(recipe: &Recipe, pool: &[Candidate]) -> Result<Plan, Box<Unsatisfiab
                     refusals.join(", ")
                 )
             };
-            Err(unsatisfiable(
+            let message = if stopped.exhausted {
+                format!(
+                    "No plan was found within the search's bound of {COMPLETE_SEARCH_BOUND} checks; the limits may still allow one. {message}"
+                )
+            } else {
+                message
+            };
+            let mut refused = unsatisfiable(
                 criterion,
                 in_the_way,
                 message,
                 Some(stopped.position),
                 stopped.rejected,
-            ))
+            );
+            refused.search_exhausted = stopped.exhausted;
+            Err(refused)
         }
     }
 }
@@ -436,6 +459,8 @@ struct Scorer<'a> {
 struct Stopped {
     position: usize,
     rejected: Vec<Rejection>,
+    /// The complete search reached its bound: not proven impossible.
+    exhausted: bool,
 }
 
 #[derive(Clone)]
@@ -451,8 +476,123 @@ fn better(a: &State, b: &State) -> std::cmp::Ordering {
         .then_with(|| a.order.cmp(&b.order))
 }
 
+/// How many candidate checks the complete search may make after the beam
+/// has missed; past it, "no plan found" is said as that, never as proof.
+pub const COMPLETE_SEARCH_BOUND: usize = 4_000_000;
+
+fn is_used(used: &[u64], index: usize) -> bool {
+    used[index / 64] & (1 << (index % 64)) != 0
+}
+
+fn mark(used: &mut [u64], index: usize) {
+    used[index / 64] |= 1 << (index % 64);
+}
+
+/// The positions a required Situation covers, and which tracks may take
+/// each: what every partial order must still be able to fill.
+struct Required {
+    /// (position, the indexes of the tracks that may take it), in position order.
+    positions: Vec<(usize, Vec<usize>)>,
+}
+
+impl Required {
+    fn of(scorer: &Scorer<'_>, pool: &[&Candidate], limits: Limits) -> Self {
+        let mut positions = Vec::new();
+        if limits.situations {
+            for position in 0..scorer.recipe.tracks {
+                let anyone = pool.iter().all(|c| scorer.required_here(c, position));
+                if anyone {
+                    continue; // no place requires anything here
+                }
+                let eligible = (0..pool.len())
+                    .filter(|&i| scorer.required_here(pool[i], position))
+                    .collect();
+                positions.push((position, eligible));
+            }
+        }
+        Self { positions }
+    }
+
+    /// Whether the required positions from `from` on can each still get a
+    /// different unused track (a bipartite matching, Kuhn's, in index order).
+    fn fillable(&self, used: &[u64], from: usize) -> bool {
+        let wanted: Vec<&Vec<usize>> = self
+            .positions
+            .iter()
+            .filter(|(position, _)| *position >= from)
+            .map(|(_, eligible)| eligible)
+            .collect();
+        if wanted.is_empty() {
+            return true;
+        }
+        let mut owner: BTreeMap<usize, usize> = BTreeMap::new();
+        for slot in 0..wanted.len() {
+            let mut seen = std::collections::BTreeSet::new();
+            if !augment(slot, &wanted, used, &mut owner, &mut seen) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+fn augment(
+    slot: usize,
+    wanted: &[&Vec<usize>],
+    used: &[u64],
+    owner: &mut BTreeMap<usize, usize>,
+    seen: &mut std::collections::BTreeSet<usize>,
+) -> bool {
+    for &track in wanted[slot] {
+        if is_used(used, track) || !seen.insert(track) {
+            continue;
+        }
+        let free = match owner.get(&track) {
+            None => true,
+            Some(&other) => augment(other, wanted, used, owner, seen),
+        };
+        if free {
+            owner.insert(track, slot);
+            return true;
+        }
+    }
+    false
+}
+
 /// The best order of `recipe.tracks` of `pool` (indexes), or where it stopped.
-fn search(scorer: &Scorer<'_>, pool: &[&Candidate], limits: Limits) -> Result<Vec<usize>, Stopped> {
+///
+/// The beam first; a partial order that could no longer fill a later
+/// required position is dropped before the beam is cut. If the beam still
+/// empties, a depth-first search that is complete for the hard limits
+/// (bounded by [`COMPLETE_SEARCH_BOUND`], deterministic) looks for any order
+/// that keeps them, so a beam miss alone is never reported as unsatisfiable.
+fn search(
+    scorer: &Scorer<'_>,
+    pool: &[&Candidate],
+    limits: Limits,
+    width: usize,
+) -> Result<Vec<usize>, Stopped> {
+    let required = Required::of(scorer, pool, limits);
+    match beam_search(scorer, pool, limits, &required, width) {
+        Ok(order) => Ok(order),
+        Err(mut stopped) => match complete_search(scorer, pool, limits, &required) {
+            Complete::Found(order) => Ok(order),
+            Complete::None => Err(stopped),
+            Complete::Bounded => {
+                stopped.exhausted = true;
+                Err(stopped)
+            }
+        },
+    }
+}
+
+fn beam_search(
+    scorer: &Scorer<'_>,
+    pool: &[&Candidate],
+    limits: Limits,
+    required: &Required,
+    width: usize,
+) -> Result<Vec<usize>, Stopped> {
     let n = scorer.recipe.tracks;
     let words = pool.len().div_ceil(64);
     let mut refused: BTreeMap<Blocker, usize> = BTreeMap::new();
@@ -463,7 +603,11 @@ fn search(scorer: &Scorer<'_>, pool: &[&Candidate], limits: Limits) -> Result<Ve
             continue;
         }
         let mut used = vec![0u64; words];
-        used[index / 64] |= 1 << (index % 64);
+        mark(&mut used, index);
+        if !required.fillable(&used, 1) {
+            *refused.entry(Blocker::Situations).or_default() += 1;
+            continue;
+        }
         beam.push(State {
             order: vec![index],
             used,
@@ -475,17 +619,18 @@ fn search(scorer: &Scorer<'_>, pool: &[&Candidate], limits: Limits) -> Result<Ve
         });
     }
     beam.sort_by(better);
-    beam.truncate(BEAM);
+    beam.truncate(width);
     for position in 1..n {
         if beam.is_empty() {
-            return Err(stopped(position, &refused));
+            // Nothing could take the position before this one.
+            return Err(stopped(position - 1, &refused));
         }
         refused.clear();
         let mut next: BTreeMap<(usize, Vec<u64>), State> = BTreeMap::new();
         for state in &beam {
             let last = pool[state.order[state.order.len() - 1]];
             for (index, candidate) in pool.iter().enumerate() {
-                if state.used[index / 64] & (1 << (index % 64)) != 0 {
+                if is_used(&state.used, index) {
                     continue;
                 }
                 let broken = scorer.broken(last, candidate, position, limits);
@@ -495,6 +640,14 @@ fn search(scorer: &Scorer<'_>, pool: &[&Candidate], limits: Limits) -> Result<Ve
                     }
                     continue;
                 }
+                let mut used = state.used.clone();
+                mark(&mut used, index);
+                // Taking this track here would leave a later required
+                // position with none to fill it.
+                if !required.fillable(&used, position + 1) {
+                    *refused.entry(Blocker::Situations).or_default() += 1;
+                    continue;
+                }
                 let gained: f64 = scorer
                     .transition(last, candidate, position)
                     .iter()
@@ -502,8 +655,6 @@ fn search(scorer: &Scorer<'_>, pool: &[&Candidate], limits: Limits) -> Result<Ve
                     .sum();
                 let mut order = state.order.clone();
                 order.push(index);
-                let mut used = state.used.clone();
-                used[index / 64] |= 1 << (index % 64);
                 let grown = State {
                     order,
                     used: used.clone(),
@@ -523,12 +674,129 @@ fn search(scorer: &Scorer<'_>, pool: &[&Candidate], limits: Limits) -> Result<Ve
         }
         beam = next.into_values().collect();
         beam.sort_by(better);
-        beam.truncate(BEAM);
+        beam.truncate(width);
     }
     beam.into_iter()
         .next()
         .map(|state| state.order)
-        .ok_or_else(|| stopped(n, &refused))
+        .ok_or_else(|| stopped(n - 1, &refused))
+}
+
+enum Complete {
+    Found(Vec<usize>),
+    /// Proven: no order keeps the hard limits.
+    None,
+    /// The bound was reached first.
+    Bounded,
+}
+
+/// Depth-first over every order that keeps the hard limits, the most
+/// promising extension first (by its score, then by index), remembering
+/// partial orders proven dead (same last track, same tracks used). Complete
+/// within its bound; deterministic.
+fn complete_search(
+    scorer: &Scorer<'_>,
+    pool: &[&Candidate],
+    limits: Limits,
+    required: &Required,
+) -> Complete {
+    struct Walk<'s, 'a> {
+        scorer: &'s Scorer<'a>,
+        pool: &'s [&'s Candidate],
+        limits: Limits,
+        required: &'s Required,
+        dead: std::collections::BTreeSet<(usize, Vec<u64>)>,
+        checks: usize,
+    }
+    impl Walk<'_, '_> {
+        /// `Some(true)` found (in `order`), `Some(false)` dead, `None` bounded.
+        fn extend(&mut self, order: &mut Vec<usize>, used: &mut Vec<u64>) -> Option<bool> {
+            let position = order.len();
+            if position == self.scorer.recipe.tracks {
+                return Some(true);
+            }
+            let last = order.last().copied();
+            if let Some(last) = last {
+                if self.dead.contains(&(last, used.clone())) {
+                    return Some(false);
+                }
+            }
+            let mut next: Vec<(f64, usize)> = Vec::new();
+            for (index, candidate) in self.pool.iter().enumerate() {
+                if is_used(used, index) {
+                    continue;
+                }
+                self.checks += 1;
+                if self.checks > COMPLETE_SEARCH_BOUND {
+                    return None;
+                }
+                let gained: f64 = match last {
+                    None => {
+                        if self.limits.situations && !self.scorer.required_here(candidate, 0) {
+                            continue;
+                        }
+                        self.scorer
+                            .at_position(candidate, 0, None)
+                            .iter()
+                            .map(|c| c.score)
+                            .sum()
+                    }
+                    Some(last) => {
+                        let from = self.pool[last];
+                        if !self
+                            .scorer
+                            .broken(from, candidate, position, self.limits)
+                            .is_empty()
+                        {
+                            continue;
+                        }
+                        self.scorer
+                            .transition(from, candidate, position)
+                            .iter()
+                            .map(|c| c.score)
+                            .sum()
+                    }
+                };
+                mark(used, index);
+                let fillable = self.required.fillable(used, position + 1);
+                used[index / 64] &= !(1 << (index % 64));
+                if fillable {
+                    next.push((gained, index));
+                }
+            }
+            next.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+            for (_, index) in next {
+                order.push(index);
+                mark(used, index);
+                match self.extend(order, used) {
+                    Some(true) => return Some(true),
+                    None => return None,
+                    Some(false) => {}
+                }
+                order.pop();
+                used[index / 64] &= !(1 << (index % 64));
+            }
+            if let Some(last) = last {
+                self.dead.insert((last, used.clone()));
+            }
+            Some(false)
+        }
+    }
+    let mut walk = Walk {
+        scorer,
+        pool,
+        limits,
+        required,
+        dead: std::collections::BTreeSet::new(),
+        checks: 0,
+    };
+    let mut order = Vec::new();
+    let mut used = vec![0u64; pool.len().div_ceil(64)];
+    match walk.extend(&mut order, &mut used) {
+        Some(true) => Complete::Found(order),
+        Some(false) => Complete::None,
+        None => Complete::Bounded,
+    }
 }
 
 fn stopped(position: usize, refused: &BTreeMap<Blocker, usize>) -> Stopped {
@@ -539,6 +807,7 @@ fn stopped(position: usize, refused: &BTreeMap<Blocker, usize>) -> Stopped {
             .iter()
             .map(|(&limit, &refused)| Rejection { limit, refused })
             .collect(),
+        exhausted: false,
     }
 }
 
@@ -899,5 +1168,80 @@ impl Scorer<'_> {
             left_out,
             recency_as_of,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::panic)]
+    use super::*;
+
+    fn candidate(id: &str, key: &str, intensity: f64) -> Candidate {
+        Candidate {
+            id: id.to_owned(),
+            title: id.to_owned(),
+            bpm: Some(120.0),
+            key: Camelot::parse(key),
+            intensity: Some(intensity),
+            situations: None,
+            genres: None,
+            added: None,
+        }
+    }
+
+    /// Two tracks each with one neighbour on the wheel must take both ends;
+    /// a one-wide beam starts on a loud middle track and dies, and the
+    /// complete search finds the one shape of plan there is.
+    #[test]
+    fn a_beam_miss_falls_back_to_the_complete_search() {
+        let pool = vec![
+            candidate("1", "8A", 1.0),
+            candidate("2", "8A", 1.0),
+            candidate("3", "8A", 1.0),
+            candidate("4", "8A", 1.0),
+            candidate("5", "9A", 0.0),
+            candidate("6", "10A", 0.0),
+            candidate("7", "7A", 0.0),
+            candidate("8", "6A", 0.0),
+        ];
+        let recipe = Recipe::parse(
+            "version = 1\ntracks = 8\n[intensity]\nshape = [{ at = 0, intensity = 1 }]\nweight = 10\n[key]\nmax_moves = 1\n",
+        )
+        .unwrap();
+        let refs: Vec<&Candidate> = pool.iter().collect();
+        let scorer = Scorer {
+            recipe: &recipe,
+            as_of: None,
+            as_of_text: String::new(),
+        };
+        let limits = Limits::of(&recipe);
+        let required = Required::of(&scorer, &refs, limits);
+        assert!(
+            beam_search(&scorer, &refs, limits, &required, 1).is_err(),
+            "the one-wide beam misses"
+        );
+        let built = plan_with(&recipe, &pool, 1).unwrap_or_else(|u| panic!("{}", u.message));
+        let ends = (built.tracks[0].id.as_str(), built.tracks[7].id.as_str());
+        assert!(ends == ("6", "8") || ends == ("8", "6"), "{ends:?}");
+        let again = plan_with(&recipe, &pool, 1).unwrap();
+        assert_eq!(
+            serde_json::to_string(&built).unwrap(),
+            serde_json::to_string(&again).unwrap()
+        );
+    }
+
+    /// Proven impossible: the complete search says so, not "exhausted".
+    #[test]
+    fn a_proven_impossible_recipe_is_not_called_exhausted() {
+        let pool = vec![
+            candidate("1", "8A", 0.5),
+            candidate("2", "10A", 0.5),
+            candidate("3", "12A", 0.5),
+        ];
+        let recipe = Recipe::parse("version = 1\ntracks = 3\n[key]\nmax_moves = 1\n").unwrap();
+        let refused = plan_with(&recipe, &pool, 1).unwrap_err();
+        assert!(!refused.search_exhausted);
+        assert_eq!(refused.criterion, Blocker::KeyMoves);
+        assert_eq!(refused.position, Some(2), "{}", refused.message);
     }
 }
