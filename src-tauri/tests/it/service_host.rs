@@ -1551,6 +1551,9 @@ mod import_ledger;
 #[path = "service_host/key_tag_ledger.rs"]
 mod key_tag_ledger;
 
+#[path = "service_host/ledger_failures.rs"]
+mod ledger_failures;
+
 #[path = "service_host/key_evidence.rs"]
 mod key_evidence;
 

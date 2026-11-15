@@ -9,11 +9,12 @@
 //! Decision holds the address and the date in its context and whose
 //! description names both.
 
+use rusqlite::OptionalExtension;
 use serde_json::Value;
 
 use crate::decisions::{
-    answered, checked_answer, insert_answer, insert_decision, read_decision, run_of_answer, Answer,
-    Decision, NewAnswer, NewDecision, RunOfAnswer,
+    answered, checked_answer, insert_answer, insert_question, read_decision, Answer, Decision,
+    NewAnswer, NewDecision, RunOfAnswer,
 };
 use crate::store::{now, record_in};
 use crate::{Fact, Fingerprint, Kind, NewFact, Result, RunId, Sidecar, SidecarError, Source};
@@ -66,13 +67,14 @@ impl Sidecar {
     pub fn record_lookup_check(&self, check: &LookupCheck) -> Result<LookupRecorded> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        let run = run_of_answer(&tx, check.run, check.decider)?;
-        let id = insert_decision(
+        let run = run_of_check(&tx, check.run, check.decider)?;
+        let id = insert_question(
             &tx,
             &NewDecision {
                 run: Some(run),
                 ..check.decision.clone()
             },
+            Some(check.decider),
         )?;
         let decision = read_decision(&tx, id)?.ok_or(SidecarError::NoDecision(id))?;
         let new = NewAnswer {
@@ -124,5 +126,34 @@ impl Sidecar {
             facts,
             run,
         })
+    }
+}
+
+/// The Run a check belongs to, inside its transaction: the open Run
+/// named, checked to be open, or a new one by `decider`.
+fn run_of_check(tx: &rusqlite::Transaction, run: RunOfAnswer, decider: &Source) -> Result<RunId> {
+    match run {
+        RunOfAnswer::Open(run) => {
+            let finished_at: Option<Option<i64>> = tx
+                .query_row(
+                    "SELECT finished_at FROM run WHERE id = ?1",
+                    [run.0],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            match finished_at {
+                Some(None) => Ok(run),
+                Some(Some(_)) => Err(SidecarError::Invalid(format!("Run {} has ended", run.0))),
+                None => Err(SidecarError::Invalid(format!("there is no Run {}", run.0))),
+            }
+        }
+        RunOfAnswer::Made { description } => {
+            tx.execute(
+                "INSERT INTO run (source_kind, source_name, description, started_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![decider.kind.as_str(), decider.name, description, now()],
+            )?;
+            Ok(RunId(tx.last_insert_rowid()))
+        }
     }
 }

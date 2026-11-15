@@ -299,7 +299,7 @@ pub fn collect(sidecar_dir: &Path, options: Options, proceed: &mut dyn FnMut() -
 /// Fact not yet recorded) are therefore never in it; a named file that is
 /// gone is left out, as the Sidecar itself reads it (Stems whose audio is
 /// missing need separating again). `at` is called at named moments
-/// (`sidecar-snapshotted`), for a test to hold it there.
+/// (`sidecar-snapshotted`, `stems-gathering`), for a test to hold it there.
 pub fn collect_of_one_moment(sidecar_dir: &Path, options: Options, at: &dyn Fn(&str)) -> Result<Option<Collected>> {
     collect_inner(sidecar_dir, options, &mut || true, at, true)
 }
@@ -334,6 +334,14 @@ fn collect_inner(sidecar_dir: &Path, options: Options, proceed: &mut dyn FnMut()
 /// checked first ([`Destination::of`]).
 pub fn collect_for(location: &rbl_db::LibraryLocation, options: Options, proceed: &mut dyn FnMut() -> bool) -> Result<Option<Collected>> {
     collect(&Destination::of(location)?.path, options, proceed)
+}
+
+/// [`collect_of_one_moment`] for the Sidecar of the Library at `location`,
+/// its folder checked first ([`Destination::of`]), for a writer that also
+/// shows progress and can be stopped (the window's backup, wbx-hy4):
+/// `proceed` as in [`collect`], `at` as in [`collect_of_one_moment`].
+pub fn collect_of_one_moment_for(location: &rbl_db::LibraryLocation, options: Options, proceed: &mut dyn FnMut() -> bool, at: &dyn Fn(&str)) -> Result<Option<Collected>> {
+    collect_inner(&Destination::of(location)?.path, options, proceed, at, true)
 }
 
 struct Walk<'a> {
@@ -396,7 +404,11 @@ impl Walk<'_> {
     }
 
     /// The Stem files the Facts in the store's snapshot name, each one
-    /// there now: folders parents first, then the files.
+    /// there now: folders parents first, then the files. Every folder on
+    /// the way to a file, and the file itself, is looked at without
+    /// following links: a symbolic link anywhere beneath the Sidecar
+    /// refuses the backup before the file is read (wbx-hy4). `proceed` is
+    /// asked for each name the snapshot gives and before each lookup.
     fn named_stems(&mut self, sidecar_dir: &Path) -> Result<()> {
         let store = format!("{ARCHIVE_FOLDER}/{DATABASE_FILE}");
         let Some(snapshot) = self.files.iter().find(|item| item.name == store).map(|item| item.source.clone()) else {
@@ -408,38 +420,58 @@ impl Walk<'_> {
             Ok(meta) if meta.is_dir() => {}
             _ => return Ok(()),
         }
+        (self.at)("stems-gathering");
         let failed = |e: rusqlite::Error| refused(format!("The Stems the Sidecar records could not be read for the backup: {e}"));
         let db = rusqlite::Connection::open_with_flags(&snapshot, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(failed)?;
         let mut statement = db
             .prepare("SELECT DISTINCT json_extract(stem.value, '$.file') FROM fact, json_each(fact.value, '$.stems') AS stem WHERE fact.kind = 'stems' AND json_valid(fact.value)")
             .map_err(failed)?;
-        let mut named: Vec<String> = statement.query_map([], |r| r.get::<_, Option<String>>(0)).map_err(failed)?.filter_map(std::result::Result::transpose).collect::<rusqlite::Result<_>>().map_err(failed)?;
+        let mut named = Vec::new();
+        for row in statement.query_map([], |r| r.get::<_, Option<String>>(0)).map_err(failed)? {
+            if !(self.proceed)() {
+                return Err(Error::Cancelled);
+            }
+            if let Some(file) = row.map_err(failed)? {
+                named.push(file);
+            }
+        }
         named.sort();
         let top = format!("{ARCHIVE_FOLDER}/{STEMS_FOLDER}");
+        let mut folders = std::collections::HashSet::new();
+        folders.insert(top.clone());
         self.directories.push(top.clone());
-        for file in named {
+        'files: for file in named {
+            if !(self.proceed)() {
+                return Err(Error::Cancelled);
+            }
             let relative = Path::new(&file);
             let mut parts = relative.components();
             // Only a plain path inside `stems/`: a recorded name is data.
             if parts.next() != Some(std::path::Component::Normal(STEMS_FOLDER.as_ref())) || !parts.all(|part| matches!(part, std::path::Component::Normal(_))) {
                 return Err(refused(format!("The Sidecar records a Stem file outside its stems folder: {file}")));
             }
-            let path = sidecar_dir.join(relative);
-            let meta = match fs::symlink_metadata(&path) {
-                Ok(meta) => meta,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(e) => return Err(e.into()),
-            };
-            if meta.file_type().is_symlink() {
-                return Err(refused(format!("Symbolic links are not supported in backups: {}", path.display())));
+            // Each component in turn, from `stems/` down, never followed.
+            let mut path = sidecar_dir.to_path_buf();
+            let mut meta = None;
+            for part in relative.components() {
+                path.push(part);
+                let found = match fs::symlink_metadata(&path) {
+                    Ok(found) => found,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue 'files,
+                    Err(e) => return Err(e.into()),
+                };
+                if found.file_type().is_symlink() {
+                    return Err(refused(format!("Symbolic links are not supported in backups: {}", path.display())));
+                }
+                meta = Some(found);
             }
-            if !meta.is_file() {
+            let Some(meta) = meta.filter(fs::Metadata::is_file) else {
                 continue;
-            }
+            };
             let mut folder = top.clone();
             for part in relative.parent().into_iter().flat_map(Path::components).skip(1) {
                 folder = format!("{folder}/{}", part.as_os_str().to_string_lossy());
-                if !self.directories.contains(&folder) {
+                if folders.insert(folder.clone()) {
                     self.directories.push(folder.clone());
                 }
             }

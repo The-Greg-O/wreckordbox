@@ -299,9 +299,21 @@ impl Sidecar {
     /// Records a Decision to be answered. It is pending until
     /// [`answer_decision`](Self::answer_decision) is called for it.
     pub fn create_decision(&self, new: &NewDecision) -> Result<Decision> {
-        let db = self.db();
-        let id = insert_decision(&db, new)?;
-        read_decision(&db, id)?.ok_or(SidecarError::NoDecision(id))
+        self.create_question(new, None)
+    }
+
+    /// Attribute a newly asked question independently of its Run's owner.
+    /// Without a Run, create its own completed Run in the same transaction.
+    pub fn create_decision_as(&self, new: &NewDecision, source: &Source) -> Result<Decision> {
+        self.create_question(new, Some(source))
+    }
+    fn create_question(&self, new: &NewDecision, source: Option<&Source>) -> Result<Decision> {
+        let mut owned = self.db();
+        let db = owned.transaction()?;
+        let id = insert_question(&db, new, source)?;
+        let decision = read_decision(&db, id)?.ok_or(SidecarError::NoDecision(id))?;
+        db.commit()?;
+        Ok(decision)
     }
 
     /// Records one Decider's answer to a Decision and answers the Decision
@@ -340,7 +352,39 @@ impl Sidecar {
         let decision =
             read_decision(&tx, new.decision)?.ok_or(SidecarError::NoDecision(new.decision))?;
         let checked = checked_answer(&decision, new)?;
-        let run = run_of_answer(&tx, fact.run, new.decider)?;
+        let run = match fact.run {
+            RunOfAnswer::Open(run) => {
+                let finished_at: Option<Option<i64>> = tx
+                    .query_row(
+                        "SELECT finished_at FROM run WHERE id = ?1",
+                        [run.0],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                match finished_at {
+                    Some(None) => run,
+                    Some(Some(_)) => {
+                        return Err(SidecarError::Invalid(format!("Run {} has ended", run.0)))
+                    }
+                    None => {
+                        return Err(SidecarError::Invalid(format!("there is no Run {}", run.0)))
+                    }
+                }
+            }
+            RunOfAnswer::Made { description } => {
+                tx.execute(
+                    "INSERT INTO run (source_kind, source_name, description, started_at)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![
+                        new.decider.kind.as_str(),
+                        new.decider.name,
+                        description,
+                        now()
+                    ],
+                )?;
+                RunId(tx.last_insert_rowid())
+            }
+        };
         let recorded = record_in(
             &tx,
             &NewFact {
@@ -387,9 +431,14 @@ impl Sidecar {
     }
 }
 
-/// Checks a Decision and writes it on `db` (a transaction, for a caller
-/// that writes more with it), answering its identifier.
-pub(crate) fn insert_decision(db: &Connection, new: &NewDecision) -> Result<i64> {
+/// Checks a Decision and writes it inside `db`, a transaction a caller
+/// may write more in (a lookup check, wbx-37), answering its identifier.
+/// `source`, when given, is who asked, as for `create_decision_as`.
+pub(crate) fn insert_question(
+    db: &rusqlite::Transaction,
+    new: &NewDecision,
+    source: Option<&Source>,
+) -> Result<i64> {
     if new.question.trim().is_empty() {
         return Err(SidecarError::Decision(
             "a Decision needs a question".to_owned(),
@@ -412,6 +461,21 @@ pub(crate) fn insert_decision(db: &Connection, new: &NewDecision) -> Result<i64>
         }
     }
     let candidates = candidates_of(new.question_type, new.candidates)?;
+    let mut run = new.run;
+    if let Some(source) = source {
+        if let Some(id) = run {
+            let existing_run = crate::store::run_in(&db, id)?.ok_or(SidecarError::NoRun(id))?;
+            if existing_run.source.kind == SourceKind::Dj && source.kind != SourceKind::Dj {
+                return Err(SidecarError::Invalid(
+                    "An agent or tool cannot ask a Decision in the DJ's Run".into(),
+                ));
+            }
+        } else {
+            let at = now();
+            db.execute("INSERT INTO run(source_kind,source_name,description,started_at,finished_at,outcome) VALUES (?1,?2,'Ask Decision',?3,?3,'question recorded')",params![source.kind.as_str(),source.name,at])?;
+            run = Some(RunId(db.last_insert_rowid()));
+        }
+    }
     db.execute(
         "INSERT INTO decision (question_type, question, context, candidates, track_id, run_id, created_at, topic)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -421,47 +485,18 @@ pub(crate) fn insert_decision(db: &Connection, new: &NewDecision) -> Result<i64>
             new.context.to_string(),
             serde_json::to_string(&candidates).unwrap_or_default(),
             new.track_id,
-            new.run.map(|run| run.0),
+            run.map(|run| run.0),
             now(),
             new.topic,
         ],
     )?;
-    Ok(db.last_insert_rowid())
-}
-
-/// The Run an answer belongs to, inside its transaction: the open Run
-/// named, checked to be open, or a new one by `decider`.
-pub(crate) fn run_of_answer(
-    tx: &rusqlite::Transaction,
-    run: RunOfAnswer,
-    decider: &Source,
-) -> Result<RunId> {
-    Ok(match run {
-        RunOfAnswer::Open(run) => {
-            let finished_at: Option<Option<i64>> = tx
-                .query_row(
-                    "SELECT finished_at FROM run WHERE id = ?1",
-                    [run.0],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            match finished_at {
-                Some(None) => run,
-                Some(Some(_)) => {
-                    return Err(SidecarError::Invalid(format!("Run {} has ended", run.0)))
-                }
-                None => return Err(SidecarError::Invalid(format!("there is no Run {}", run.0))),
-            }
-        }
-        RunOfAnswer::Made { description } => {
-            tx.execute(
-                "INSERT INTO run (source_kind, source_name, description, started_at)
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![decider.kind.as_str(), decider.name, description, now()],
-            )?;
-            RunId(tx.last_insert_rowid())
-        }
-    })
+    let id = db.last_insert_rowid();
+    if let Some(source) = source {
+        crate::native_history::record_as(&db, crate::native_history::Table::Decision, id, source)?;
+    } else {
+        crate::native_history::record(&db, crate::native_history::Table::Decision, id)?;
+    }
+    Ok(id)
 }
 
 /// Writes an answer that has been checked, inside a transaction, and
@@ -492,7 +527,9 @@ pub(crate) fn insert_answer(
             now(),
         ],
     )?;
-    Ok(tx.last_insert_rowid())
+    let id = tx.last_insert_rowid();
+    crate::native_history::record(tx, crate::native_history::Table::Answer, id)?;
+    Ok(id)
 }
 
 /// A Decision and the answer just written to it, read inside the

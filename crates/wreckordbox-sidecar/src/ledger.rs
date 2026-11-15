@@ -525,24 +525,26 @@ impl Sidecar {
             )
             .optional()?)
     }
+
+    /// The `unconfirmed` entries of one Run: the candidates a recovery
+    /// manifest from before spill binding may name.
+    pub fn unconfirmed_in_run(&self, run: RunId) -> Result<Vec<Entry>> {
+        let db = self.db();
+        let mut statement = db.prepare(&format!(
+            "{ENTRY_COLUMNS} FROM ledger WHERE run_id = ?1 AND kind = 'unconfirmed' ORDER BY id"
+        ))?;
+        let entries = statement
+            .query_map([run.0], read_entry)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(entries)
+    }
 }
 
 /// A page of a Run's entries, in the order made: `(store, id, replaced)`
 /// for `?1` the Run, `?2` the limit and `?3` the offset. `store` is 0 for a
 /// `ledger` row, 1 for a Fact, whose `replaced` is the Fact it took the
 /// place of. Every step uses an index.
-pub const PAGE_QUERY: &str = "
-    SELECT store, id, replaced FROM (
-        SELECT 0 AS store, ledger.id AS id, NULL AS replaced, ledger.id AS seq
-        FROM ledger WHERE ledger.run_id = ?1
-        UNION ALL
-        SELECT 1, fact.id,
-               (SELECT before.id FROM fact AS before
-                WHERE before.superseded_by = fact.id ORDER BY before.id DESC LIMIT 1),
-               ledger_order.seq
-        FROM fact JOIN ledger_order ON ledger_order.fact_id = fact.id
-        WHERE fact.run_id = ?1 AND fact.id NOT IN (SELECT fact_id FROM dj_fact))
-    ORDER BY seq LIMIT ?2 OFFSET ?3";
+pub const PAGE_QUERY: &str = crate::native_history::PAGE_QUERY;
 
 fn settle_in(tx: &rusqlite::Transaction, settled: &[i64]) -> Result<()> {
     let mut remove = tx.prepare_cached("DELETE FROM ledger_intent WHERE id = ?1")?;

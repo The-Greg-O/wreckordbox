@@ -1553,6 +1553,7 @@ const SERVICE_NOT_STICK_WRITERS: &[&str] = &[
     // Review (wbx-27): a read, a Library edit through the core, a Sidecar entry.
     "review.accept", "review.reject", "review.rejected", "review.reopen", "review.waiting",
     "runs.active", "runs.finish", "runs.list", "runs.show", "runs.start",
+    "runs.spills.list", "runs.spills.show", "runs.spills.replay", "runs.spills.discard",
     "schema.check", "schema.convert",
     "stems.separate", "stems.show", "stems.status",
     "sticks.dry_run", "sticks.list",
