@@ -136,9 +136,11 @@ pub struct CheckCandidate {
     /// The candidate's fields, as found: `artist` and `title` (required),
     /// `mix_name`, `duration` (seconds, or `m:ss`), `label`,
     /// `release_date` (`YYYY-MM-DD`, or a year), and any other field named
-    /// as a declared kind of Fact (`genre`, ...). If accepted, every field
-    /// but `duration` becomes a Fact of the kind of the same name
-    /// (`mix_name` is the kind `version`).
+    /// as a declared kind of Fact (`genre`, ...). `version` is another name
+    /// for `mix_name` and is compared as the mix name; the two must agree.
+    /// If accepted, every field but `duration` becomes a Fact of the kind
+    /// of the same name (`mix_name` is the kind `version`; with both given,
+    /// one Fact, the mix name's).
     pub candidate: Map<String, Value>,
     /// Where the candidate was found: the source of its Facts.
     pub address: String,
@@ -369,10 +371,24 @@ fn candidate_side(candidate: &Map<String, Value>) -> Result<Side, ServiceError> 
             )))
         }
     };
+    // `version` is the kind a mix name is recorded as, so a candidate may
+    // name its mix either way; two that disagree are refused, not guessed.
+    let mix_name = text_field(candidate, "mix_name")?;
+    let version = text_field(candidate, "version")?;
+    if !mix_name.is_empty() && !version.is_empty() && !lookup_match::same_mix(&mix_name, &version) {
+        return Err(invalid_candidate(format!(
+            "the candidate's mix_name \"{mix_name}\" and version \"{version}\" disagree; \
+             they are one field (version is the kind a mix name is recorded as): give one"
+        )));
+    }
     Ok(Side {
         artist,
         title,
-        mix_name: text_field(candidate, "mix_name")?,
+        mix_name: if mix_name.is_empty() {
+            version
+        } else {
+            mix_name
+        },
         duration_seconds,
         year,
         label: text_field(candidate, "label")?,
@@ -425,6 +441,14 @@ fn proposed(
     let mut yes = Vec::new();
     let mut no = Vec::new();
     for (field, value) in candidate {
+        // The mix name and its alias are one Fact, the mix name's.
+        if field == "version"
+            && candidate
+                .get("mix_name")
+                .is_some_and(|v| v.as_str().is_some_and(|t| !t.trim().is_empty()))
+        {
+            continue;
+        }
         if field == "duration"
             || value.is_null()
             || value.as_str().is_some_and(|t| t.trim().is_empty())

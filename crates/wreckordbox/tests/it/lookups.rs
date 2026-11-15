@@ -631,3 +631,88 @@ fn no_command_in_wreckordbox_uses_the_network() {
     }
     assert!(offending.is_empty(), "{offending:#?}");
 }
+
+/// A 30-second original with no mix name in the Library.
+fn plain_original(sandbox: &Sandbox) -> String {
+    let id = sandbox.import_track("plain.wav", 30);
+    sandbox.edit(|writer| {
+        writer
+            .set_field(&id, TrackField::Title, "Night Signal")
+            .unwrap();
+        writer
+            .set_field(&id, TrackField::Artist, "Kessler")
+            .unwrap();
+    });
+    id
+}
+
+#[test]
+fn a_version_is_the_mix_name_and_one_that_conflicts_with_the_track_is_held() {
+    let s = Sandbox::new();
+    let id = plain_original(&s);
+    let instrumental = json!({
+        "artist": "Kessler", "title": "Night Signal", "duration": 30, "version": "Instrumental",
+    });
+
+    let held = check(&s, &id, &instrumental, &[]);
+
+    assert_eq!(held["verdict"], "held", "{held}");
+    assert!(
+        held["reason"]
+            .as_str()
+            .unwrap()
+            .contains("the mix name is \"Instrumental\""),
+        "{held}"
+    );
+    assert_eq!(held["facts"], json!([]));
+
+    // The original, said either way, is accepted with one version Fact.
+    let original = json!({
+        "artist": "Kessler", "title": "Night Signal", "duration": 30,
+        "mix_name": "Original Mix", "version": "original mix",
+    });
+    let accepted = check(&s, &id, &original, &[]);
+    assert_eq!(accepted["verdict"], "accepted", "{accepted}");
+    let versions: Vec<&Value> = accepted["facts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|fact| fact["kind"] == "version")
+        .map(|fact| &fact["value"])
+        .collect();
+    assert_eq!(versions, [&json!("Original Mix")]);
+}
+
+#[test]
+fn a_candidate_whose_mix_name_and_version_disagree_is_refused_and_records_nothing() {
+    let s = Sandbox::new();
+    let (id, _) = night_signal(&s);
+    let mut torn = listing();
+    torn["mix_name"] = json!("Extended Mix");
+    torn["version"] = json!("Radio Edit");
+    check(&s, &id, &listing(), &["--dry-run"]);
+    let before = everything(&s);
+
+    let torn = torn.to_string();
+    let error = refused(
+        &s,
+        &[
+            "lookup",
+            "check",
+            &id,
+            "--candidate",
+            &torn,
+            "--address",
+            ADDRESS,
+            "--date",
+            LOOKED_UP,
+        ],
+    );
+
+    assert_eq!(error["code"], "invalid_candidate", "{error}");
+    assert!(
+        error["message"].as_str().unwrap().contains("Radio Edit"),
+        "{error}"
+    );
+    assert_eq!(changed(&before, &everything(&s)), Vec::<PathBuf>::new());
+}

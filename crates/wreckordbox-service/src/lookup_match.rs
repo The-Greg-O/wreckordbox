@@ -2,21 +2,25 @@
 //! answers by (wbx-37). Pure: two descriptions in, a verdict and its
 //! findings out. Nothing here reads, writes or fetches anything.
 //!
-//! The comparison, field by field, after [`normalise`]:
+//! The comparison, field by field, after [`normalise`] (titles and mix
+//! names after [`title_key`], which also drops apostrophes):
 //!
 //! | Field | Same | Held for review | Rejected |
 //! |---|---|---|---|
 //! | title | the same | | different |
 //! | artists | the same names, in any order | some names shared, not all | no name shared |
 //! | mix name | the same; none and "Original Mix" are the same | different, or one side has none and the other is not the original | |
+//! | remaster | neither is one, or both are (of the same year when both say) | only one is, or of another year | |
 //! | duration | within the tolerance | outside it, or either side does not say | |
 //! | release year | the same, or either side does not say | different | |
 //! | label | the same, or either side does not say | different | |
 //!
 //! The verdict is the worst finding: one rejection rejects, otherwise one
-//! hold holds, otherwise the candidate is accepted. A mix name written in
-//! the title ("Night Signal (Extended Mix)") is read as the mix name when
-//! that side gives none of its own.
+//! hold holds, otherwise the candidate is accepted. A mix name written at
+//! the end of the title, in brackets or after a spaced dash ("Night Signal
+//! (Extended Mix)", "Night Signal - Extended Mix"), is read as the mix
+//! name when that side gives none of its own; a remaster ending ("- 2019
+//! Remaster", "(Remastered)") is read as the remaster, not the mix.
 
 use serde::{Deserialize, Serialize};
 
@@ -155,7 +159,8 @@ fn original_spelling(credit: &str, name: &str) -> Option<String> {
     credit.get(at..at + name.len()).map(str::to_owned)
 }
 
-/// Words that mark a bracketed end of a title as its mix name.
+/// Words that mark a bracketed end of a title, or an end after a spaced
+/// dash, as its mix name.
 const MIX_WORDS: &[&str] = &[
     "mix",
     "remix",
@@ -170,10 +175,35 @@ const MIX_WORDS: &[&str] = &[
     "remastered",
 ];
 
-/// The title without a bracketed mix name at its end, and that mix name:
-/// "Night Signal (Extended Mix)" is ("Night Signal", "Extended Mix").
+/// Words that mark such an end as a remaster: the same mix, another master.
+const REMASTER_WORDS: &[&str] = &["remaster", "remastered"];
+
+/// The dashes a title's suffix may follow, with a space each side.
+const DASHES: &[&str] = &[" - ", " \u{2013} ", " \u{2014} "];
+
+fn has_word(text: &str, words: &[&str]) -> bool {
+    normalise(text).split(' ').any(|word| words.contains(&word))
+}
+
+/// Whether a mix name or title suffix names a remaster.
+fn is_remaster(text: &str) -> bool {
+    has_word(text, REMASTER_WORDS)
+}
+
+/// A title as it is compared: apostrophes dropped (so "Don't" and "Dont"
+/// are one word), then [`normalise`]d.
 #[must_use]
-pub fn split_title(title: &str) -> (String, Option<String>) {
+pub fn title_key(text: &str) -> String {
+    let joined: String = text
+        .chars()
+        .filter(|c| !matches!(c, '\'' | '\u{2019}' | '\u{2018}' | '`' | '\u{02bc}'))
+        .collect();
+    normalise(&joined)
+}
+
+/// A mix-name ending of a title: "(Extended Mix)", "[VIP Remix]",
+/// " - 2019 Remaster". The rest of the title and the ending.
+fn suffix(title: &str) -> Option<(String, String)> {
     let trimmed = title.trim();
     for (open, close) in [('(', ')'), ('[', ']')] {
         if !trimmed.ends_with(close) {
@@ -183,38 +213,87 @@ pub fn split_title(title: &str) -> (String, Option<String>) {
             continue;
         };
         let inside = &trimmed[at + open.len_utf8()..trimmed.len() - close.len_utf8()];
-        let words = normalise(inside);
-        if words.split(' ').any(|word| MIX_WORDS.contains(&word)) {
-            return (
-                trimmed[..at].trim().to_owned(),
-                Some(inside.trim().to_owned()),
-            );
+        if has_word(inside, MIX_WORDS) {
+            return Some((trimmed[..at].trim().to_owned(), inside.trim().to_owned()));
         }
     }
-    (trimmed.to_owned(), None)
+    let (at, dash) = DASHES
+        .iter()
+        .filter_map(|dash| trimmed.rfind(dash).map(|at| (at, *dash)))
+        .max_by_key(|(at, _)| *at)?;
+    let after = &trimmed[at + dash.len()..];
+    (has_word(after, MIX_WORDS) && !trimmed[..at].trim().is_empty())
+        .then(|| (trimmed[..at].trim().to_owned(), after.trim().to_owned()))
+}
+
+/// The title without a mix name at its end, and that mix name:
+/// "Night Signal (Extended Mix)" and "Night Signal - Extended Mix" are
+/// both ("Night Signal", "Extended Mix").
+#[must_use]
+pub fn split_title(title: &str) -> (String, Option<String>) {
+    suffix(title).map_or_else(
+        || (title.trim().to_owned(), None),
+        |(rest, ending)| (rest, Some(ending)),
+    )
 }
 
 /// The title and mix name of a side, with a mix name in the title moved
 /// out when the side gives none of its own.
-fn title_and_mix(side: &Side) -> (String, String) {
-    let (title, in_title) = split_title(&side.title);
-    if side.mix_name.trim().is_empty() {
+fn title_and_mix(title: &str, mix_name: &str) -> (String, String) {
+    let (bare, in_title) = split_title(title);
+    if mix_name.trim().is_empty() {
         if let Some(mix) = in_title {
-            return (title, mix);
+            return (bare, mix);
         }
-        return (side.title.trim().to_owned(), String::new());
+        return (title.trim().to_owned(), String::new());
     }
-    // Both given: compare the title without its bracket only when the
-    // bracket says the mix name again.
+    // Both given: compare the title without its ending only when the
+    // ending says the mix name again.
     match in_title {
-        Some(mix) if normalise(&mix) == normalise(&side.mix_name) => {
-            (title, side.mix_name.trim().to_owned())
-        }
-        _ => (
-            side.title.trim().to_owned(),
-            side.mix_name.trim().to_owned(),
-        ),
+        Some(mix) if title_key(&mix) == title_key(mix_name) => (bare, mix_name.trim().to_owned()),
+        _ => (title.trim().to_owned(), mix_name.trim().to_owned()),
     }
+}
+
+/// A side's title, mix name and remaster, each taken out of the others:
+/// a remaster ending ("- 2019 Remaster", "(Remastered)") or a mix name
+/// that only says remaster is the remaster, not the mix.
+struct Parsed {
+    title: String,
+    mix: String,
+    remaster: String,
+}
+
+fn parse(side: &Side) -> Parsed {
+    let mut title = side.title.trim().to_owned();
+    let mut remaster = String::new();
+    if let Some((rest, ending)) = suffix(&title) {
+        if is_remaster(&ending) {
+            title = rest;
+            remaster = ending;
+        }
+    }
+    let mut mix_name = side.mix_name.trim().to_owned();
+    if remaster.is_empty() && is_remaster(&mix_name) {
+        remaster = std::mem::take(&mut mix_name);
+    }
+    let (title, mut mix) = title_and_mix(&title, &mix_name);
+    if remaster.is_empty() && is_remaster(&mix) {
+        remaster = std::mem::take(&mut mix);
+    }
+    Parsed {
+        title,
+        mix,
+        remaster,
+    }
+}
+
+/// Whether two mix names are the same mix: equal once compared as titles
+/// are, or both the original. For a caller with two names for one field.
+#[must_use]
+pub fn same_mix(one: &str, other: &str) -> bool {
+    let (one, other) = (title_key(one), title_key(other));
+    one == other || (original(&one) && original(&other))
 }
 
 /// Whether a normalised mix name is the original mix: none, "original" or
@@ -227,12 +306,13 @@ fn original(mix: &str) -> bool {
 /// apart the durations may be.
 #[must_use]
 pub fn check(track: &Side, candidate: &Side, tolerance_seconds: f64) -> Checked {
-    let (track_title, track_mix) = title_and_mix(track);
-    let (candidate_title, candidate_mix) = title_and_mix(candidate);
+    let ours = parse(track);
+    let theirs = parse(candidate);
     let findings = vec![
-        compare_title(&track_title, &candidate_title),
+        compare_title(&ours.title, &theirs.title),
         compare_artists(&track.artist, &candidate.artist),
-        compare_mix(&track_mix, &candidate_mix),
+        compare_mix(&ours.mix, &theirs.mix),
+        compare_remaster(&ours.remaster, &theirs.remaster),
         compare_duration(
             track.duration_seconds,
             candidate.duration_seconds,
@@ -258,7 +338,7 @@ fn finding(field: &str, verdict: Verdict, message: String) -> Finding {
 }
 
 fn compare_title(track: &str, candidate: &str) -> Finding {
-    if normalise(track) == normalise(candidate) {
+    if title_key(track) == title_key(candidate) {
         finding(
             "title",
             Verdict::Accepted,
@@ -305,8 +385,6 @@ fn compare_artists(track: &str, candidate: &str) -> Finding {
 }
 
 fn compare_mix(track: &str, candidate: &str) -> Finding {
-    let ours = normalise(track);
-    let theirs = normalise(candidate);
     let shown = |mix: &str| {
         if mix.is_empty() {
             "none".to_owned()
@@ -314,7 +392,7 @@ fn compare_mix(track: &str, candidate: &str) -> Finding {
             format!("\"{mix}\"")
         }
     };
-    if ours == theirs || (original(&ours) && original(&theirs)) {
+    if same_mix(track, candidate) {
         finding(
             "mix_name",
             Verdict::Accepted,
@@ -330,6 +408,37 @@ fn compare_mix(track: &str, candidate: &str) -> Finding {
                 shown(track)
             ),
         )
+    }
+}
+
+fn compare_remaster(track: &str, candidate: &str) -> Finding {
+    let year = |text: &str| -> String { text.chars().filter(char::is_ascii_digit).collect() };
+    match (track.is_empty(), candidate.is_empty()) {
+        (true, true) => finding(
+            "remaster",
+            Verdict::Accepted,
+            "neither is a remaster".to_owned(),
+        ),
+        (false, false) if year(track).is_empty() || year(candidate).is_empty() || year(track) == year(candidate) => finding(
+            "remaster",
+            Verdict::Accepted,
+            format!("both are the remaster (\"{candidate}\")"),
+        ),
+        (false, false) => finding(
+            "remaster",
+            Verdict::Held,
+            format!("the candidate is the remaster \"{candidate}\", the track \"{track}\": perhaps another master"),
+        ),
+        (true, false) => finding(
+            "remaster",
+            Verdict::Held,
+            format!("the candidate is a remaster (\"{candidate}\") and the track is not: perhaps another master"),
+        ),
+        (false, true) => finding(
+            "remaster",
+            Verdict::Held,
+            format!("the track is a remaster (\"{track}\") and the candidate is not: perhaps another master"),
+        ),
     }
 }
 
@@ -541,6 +650,79 @@ mod tests {
         let mut stranger = track();
         stranger.artist = "Someone Else".to_owned();
         assert_eq!(verdict(&stranger), Verdict::Rejected);
+    }
+
+    #[test]
+    fn apostrophes_and_trivial_punctuation_do_not_make_another_title() {
+        let mut ours = track();
+        ours.title = "Don't Stop".to_owned();
+        for theirs in [
+            "Dont Stop",
+            "Don\u{2019}t Stop",
+            "Don't Stop!",
+            "DON'T  STOP",
+        ] {
+            let mut candidate = ours.clone();
+            candidate.title = theirs.to_owned();
+            assert_eq!(
+                check(&ours, &candidate, 3.0).verdict,
+                Verdict::Accepted,
+                "{theirs}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_remaster_written_with_a_dash_or_in_brackets_is_held_not_rejected() {
+        let mut ours = track();
+        ours.mix_name = String::new();
+        for theirs in [
+            "Night Signal - 2019 Remaster",
+            "Night Signal (Remastered 2019)",
+            "Night Signal \u{2013} Remastered",
+        ] {
+            let mut candidate = ours.clone();
+            candidate.title = theirs.to_owned();
+            let checked = check(&ours, &candidate, 3.0);
+            assert_eq!(
+                checked.verdict,
+                Verdict::Held,
+                "{theirs}: {}",
+                checked.reason()
+            );
+            assert!(
+                checked.reason().contains("remaster"),
+                "{theirs}: {}",
+                checked.reason()
+            );
+        }
+        // The same remaster on both sides is the same recording.
+        let mut both = ours.clone();
+        both.title = "Night Signal - 2019 Remaster".to_owned();
+        let mut candidate = ours.clone();
+        candidate.title = "Night Signal (2019 Remaster)".to_owned();
+        assert_eq!(check(&both, &candidate, 3.0).verdict, Verdict::Accepted);
+        // A remaster of another title is still another title.
+        candidate.title = "Day Signal - 2019 Remaster".to_owned();
+        assert_eq!(check(&ours, &candidate, 3.0).verdict, Verdict::Rejected);
+    }
+
+    #[test]
+    fn a_mix_written_after_a_dash_is_still_a_mix_and_a_real_difference_still_counts() {
+        let mut dashed = track();
+        dashed.title = "Night Signal - Extended Mix".to_owned();
+        dashed.mix_name = String::new();
+        assert_eq!(verdict(&dashed), Verdict::Accepted);
+        dashed.title = "Night Signal - Radio Edit".to_owned();
+        assert_eq!(verdict(&dashed), Verdict::Held);
+        dashed.title = "Night Signal (VIP Remix)".to_owned();
+        assert_eq!(verdict(&dashed), Verdict::Held);
+        // A dash that is part of the title is left alone.
+        let mut ours = track();
+        ours.title = "Signal - Part Two".to_owned();
+        let mut other = ours.clone();
+        other.title = "Signal".to_owned();
+        assert_eq!(check(&ours, &other, 3.0).verdict, Verdict::Rejected);
     }
 
     #[test]
