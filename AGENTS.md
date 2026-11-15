@@ -19,6 +19,7 @@ Wreckordbox is a personal, Linux-first hard fork of rbxport: a rekordbox-compati
 
 ## Orientation
 
+- `docs/agents/guide.md`: for an agent that drives wreckordbox for the DJ (through the `wreckordbox` CLI or the MCP server): every command, what it reads or changes, recipes, and which commands are the DJ's decision only. A new CLI command needs a section there (a test checks).
 - `CONTEXT.md`: the project's glossary. Use its terms exactly.
 - `docs/adr/`: decisions already made. Design within them; do not reopen them.
 - `docs/design/`: the window's design (requirements, tokens, a render and note per screen). ADR 0007 is the structure and look; ADR 0008 is Mutants.
