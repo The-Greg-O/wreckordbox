@@ -53,6 +53,8 @@ struct Record {
 pub struct LeftoverOffer {
     /// The backup folder is on a Stick.
     pub on_stick: bool,
+    /// The Stick's mount path (the backup folder may be inside it).
+    pub stick_root: String,
     pub stick_name: String,
     /// Stick Protection refuses the removal now: the DJ must unlock it.
     pub protected: bool,
@@ -177,6 +179,7 @@ pub fn offer(state: &AppState) -> AppResult<LeftoverOffer> {
     };
     Ok(LeftoverOffer {
         on_stick: true,
+        stick_root: root.to_string_lossy().into_owned(),
         stick_name: protection.name,
         protected: protection.protected,
         leftovers: leftovers.into_iter().map(|l| l.name).collect(),

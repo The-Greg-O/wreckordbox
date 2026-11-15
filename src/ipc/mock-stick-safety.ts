@@ -167,6 +167,7 @@ function key(op: StickWriteOperation): string {
     case "format": return canonical({ kind: op.kind, layout: op.layout });
     case "ensureLibrary": return canonical({ kind: op.kind, defaults: bound(op.defaults) });
     case "settle": return canonical({ kind: op.kind });
+    case "sweepBackupLeftovers": return canonical({ kind: op.kind, names: op.names });
   }
 }
 
@@ -400,6 +401,51 @@ export function withStickSafetyLog(backend: Backend): Backend {
         bump(state, path);
         return result;
       });
+    };
+  }
+
+  // What refused backups left on a Stick (wbx-45.25): offered with a plan
+  // bound to the names, removed only on an unlocked Stick with its token.
+  const leftovers = original("backupLeftovers");
+  const sweep = original("sweepBackupLeftovers");
+  if (leftovers && sweep) {
+    type Offer = { onStick: boolean; stickRoot: string; leftovers: string[]; plan: string | null; protected: boolean };
+    wrapped.backupLeftovers = async () => {
+      const found = await (leftovers() as Promise<Offer>);
+      if (!found.onStick) return found;
+      const state = log();
+      const path = found.stickRoot;
+      let plan: string | null = null;
+      if (found.leftovers.length > 0) {
+        plan = `plan-${Math.random().toString(36).slice(2)}-${Date.now()}`;
+        state.tokens.set(plan, {
+          path,
+          volume: state.volume.get(path) ?? 0,
+          revision: state.revision.get(path) ?? 0,
+          op: key({ kind: "sweepBackupLeftovers", names: [...found.leftovers] }),
+          approved: false,
+        });
+      }
+      return { ...found, protected: protection(state, path).protected, plan };
+    };
+    wrapped.sweepBackupLeftovers = async (token?: string) => {
+      const found = await (leftovers() as Promise<Offer>);
+      const state = log();
+      const path = found.stickRoot;
+      const call: StickCall = { method: "sweepBackupLeftovers", path, args: { names: found.leftovers } };
+      if (protection(state, path).protected) {
+        state.refused.push(call);
+        throw protectedError(path);
+      }
+      const refusal = consume(state, token, { kind: "sweepBackupLeftovers", names: [...found.leftovers] }, path);
+      if (refusal !== null) {
+        state.refused.push(call);
+        throw new Error(refusal);
+      }
+      state.writes.push(call);
+      const removed = await (sweep(token) as Promise<string[]>);
+      bump(state, path);
+      return removed;
     };
   }
 

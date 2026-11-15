@@ -59,7 +59,7 @@ pub(crate) fn stopped(
         format!("nothing of it was written to {name}")
     } else {
         format!(
-            "what it wrote stays in the backup folder on {name}, the Stick as it was when the backup began: {} (delete what is unfinished once that Stick is back and unlocked)",
+            "what it wrote stays in the backup folder on {name}, the Stick as it was when the backup began: {} (once that Stick is back and unlocked, Backups in Preferences offers to remove what is unfinished)",
             left.join(", ")
         )
     };

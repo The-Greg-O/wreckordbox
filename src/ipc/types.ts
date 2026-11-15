@@ -680,6 +680,10 @@ export interface Backend {
   /** Persist the default folder used for future backups. Existing files stay where they are. */
   setBackupDirectory(directory: string): Promise<string>;
   deleteBackup(path: string): Promise<void>;
+  /** What refused backups left in the backup folder on a Stick; reads only (wbx-45.25). */
+  backupLeftovers(): Promise<BackupLeftoverOffer>;
+  /** Removes what `backupLeftovers` offered, with the DJ's token for its plan; resolves to the names removed. */
+  sweepBackupLeftovers(approval?: string): Promise<string[]>;
   /** Called after each track of an export, while one runs. Returns its own unsubscribe. */
   onExportProgress(listener: (progress: ExportProgress) => void): () => void;
   exportProgress(): Promise<ExportProgress[]>;
@@ -1696,7 +1700,23 @@ export type StickWriteOperation =
   | { kind: "saveSettings"; settings: DeviceSettings }
   | { kind: "settle" }
   | { kind: "ensureLibrary"; defaults?: StickDefaults }
-  | { kind: "format"; layout: FormatLayout };
+  | { kind: "format"; layout: FormatLayout }
+  /** The unfinished copies a refused backup left in the backup folder, by name (wbx-45.25). */
+  | { kind: "sweepBackupLeftovers"; names: string[] };
+
+/**
+ * What this app's refused backups left in the backup folder on a Stick,
+ * offered for removal (wbx-45.25). `plan` is confirmed with the hold
+ * (`stickWriteApprove`) and the token given to `sweepBackupLeftovers`.
+ */
+export interface BackupLeftoverOffer {
+  onStick: boolean;
+  stickRoot: string;
+  stickName: string;
+  protected: boolean;
+  leftovers: string[];
+  plan: string | null;
+}
 
 /** Stick Protection (wbx-45.11): whether a Stick may be written to now. */
 export interface StickProtection {

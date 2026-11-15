@@ -280,8 +280,12 @@ Stick: it is never unlocked on its own.
   the Library's key is put back. A backup to a Stick checks it before every
   write it makes: locked, ejected or replaced mid-copy, the backup stops,
   says how much it copied and names the unfinished copy it left on that
-  Stick. That copy is not removed for you yet: delete it once the Stick is
-  back and unlocked.
+  Stick. Once that Stick is back, **Backups** in Preferences offers to
+  remove that unfinished copy: unlock the Stick in the dialog and hold to
+  confirm. Only the copies this app's own stopped backups left (recorded by
+  the app as they were made) are removed; nothing else in the folder is
+  touched, a Stick still locked keeps everything, and a Stick swapped for
+  another since the offer has nothing removed.
 - **Stem separation and Intensity measurement are never done for a Sidecar
   kept on a Stick**, locked or unlocked (`sidecar_on_stick`): they write the
   Sidecar for minutes, and a Stick must stay free to lock and eject. Keep

@@ -7,6 +7,7 @@ import { useTranslation } from "@/i18n";
 import { useBackupProgress } from "@/store/useBackupProgress";
 import { Button, Section } from "./controls";
 import styles from "./BackupsPane.module.css";
+import { BackupLeftovers } from "./BackupLeftovers";
 import { BackupSizeChart } from "./BackupSizeChart";
 import layout from "./PaneLayout.module.css";
 
@@ -106,6 +107,7 @@ export function BackupsPane() {
         return t("Default backup folder updated.");
       })}>{t("Change folder…")}</Button>
     </section>
+    <BackupLeftovers refreshKey={job.progress.phase} disabled={unavailable} />
     <h4 className={`${styles.sectionHeading} ${styles.savedHeading}`}>{t("Saved backups")}</h4>
     {loading ? <p className={styles.status} role="status">{t("Loading backups…")}</p> : null}
     {!loading && backups.length === 0 ? <div className={layout.empty}>

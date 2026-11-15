@@ -3216,6 +3216,20 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       if (!backups.delete(path)) return notFound("Backup not found.");
       return wait(undefined);
     },
+    // What refused backups left on a Stick (wbx-45.25): a spec sets
+    // `window.__backupLeftovers = { stickRoot, names }`. Stick Protection and
+    // the confirmation are the safety log's (`mock-stick-safety`).
+    backupLeftovers: () => {
+      const left = mockBackupLeftovers();
+      return wait(left === undefined
+        ? { onStick: false, stickRoot: "", stickName: "", protected: false, leftovers: [], plan: null }
+        : { onStick: true, stickRoot: left.stickRoot, stickName: left.stickRoot.split("/").filter(Boolean).at(-1) ?? left.stickRoot, protected: false, leftovers: [...left.names], plan: null });
+    },
+    sweepBackupLeftovers: () => {
+      const left = mockBackupLeftovers();
+      const removed = left === undefined ? [] : left.names.splice(0);
+      return wait(removed);
+    },
     // A browser cannot ask; the answer is yes, so the flow can be driven. A
     // test sets `window.__confirmAnswer = false` to answer Cancel instead, and
     // reads what was asked from `window.__confirmed`.
@@ -4568,4 +4582,10 @@ function readLatencyFromUrl(): number | null {
   const raw = new URLSearchParams(location.search).get("latency");
   const n = raw ? Number.parseInt(raw, 10) : NaN;
   return Number.isFinite(n) && n >= 0 && n <= 2000 ? n : null;
+}
+
+/** The leftovers a spec put in the mock's backup folder on a Stick (wbx-45.25). */
+function mockBackupLeftovers(): { stickRoot: string; names: string[] } | undefined {
+  if (typeof window === "undefined") return undefined;
+  return (window as unknown as { __backupLeftovers?: { stickRoot: string; names: string[] } }).__backupLeftovers;
 }

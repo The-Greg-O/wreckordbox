@@ -9,7 +9,7 @@ import { fromServiceStatus } from "@/lib/stemsStatus";
 import type { SplitOutcome, StemsProgress } from "@/lib/stemSplits";
 import { confirmHandler } from "./confirmHost";
 import type {
-  AnalysisStageDescriptor, AnalysisResult, AudioDevices, Backend, Backup, BackupProgress, BackupSizes, ConfirmReplace, Cue, SyncEstimate, StickWritePlan, StickProtection, DeckEvent, Device, DeviceLibrary,
+  AnalysisStageDescriptor, AnalysisResult, AudioDevices, Backend, Backup, BackupLeftoverOffer, BackupProgress, BackupSizes, ConfirmReplace, Cue, SyncEstimate, StickWritePlan, StickProtection, DeckEvent, Device, DeviceLibrary,
   DevicePlaylistEditResult, DevicePlaylistImportPlan, DevicePlaylistImportResult, DeviceSettings, DeviceSyncState,
   Diagnostics, Duplicates, LibraryProtection, LogPage, GridState, Limiter, PreferencesRequest, SavedFilterPlaylist, SmartRule, SyncDeviceReport, SyncProgress, XmlImportReport,
   ExportProgress, ExportReport, ExplorerChildren, ExplorerRoot, FilterValues, FolderPlaylistReport, Phrase, ImportReport,
@@ -389,6 +389,8 @@ async function realBackend(): Promise<Backend> {
     backUpLibrary: () => invoke<string>("back_up_library"),
     setBackupDirectory: (directory) => invoke<string>("set_backup_directory", { directory }),
     deleteBackup: (path) => invoke<void>("delete_backup", { path }),
+    backupLeftovers: () => invoke<BackupLeftoverOffer>("backup_leftovers"),
+    sweepBackupLeftovers: (approval) => invoke<string[]>("sweep_backup_leftovers", { approval }),
     confirm: async (message, labels) => {
       const inApp = confirmHandler();
       if (inApp) return inApp(message, labels);
