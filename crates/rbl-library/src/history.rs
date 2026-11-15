@@ -126,7 +126,7 @@ pub enum LibraryEdit {
     },
     /// The categories, or one category's tags, put in a new order (#584).
     MyTagOrder(rbl_db::write::MyTagOrder),
-    /// A MyTag Projection (wbx-14.14): the MyTags it made, renamed and put
+    /// A My Tag projection (wbx-14.14): the My Tags it made, renamed and put
     /// in order, and the tracks' assignments written with them, in one
     /// transaction; undone and redone as one step
     /// ([`crate::my_tag_definitions`]).
@@ -396,7 +396,7 @@ fn step_track_tags(
     Ok(())
 }
 
-/// Undoes or redoes a MyTag Projection: Undo takes the assignments off
+/// Undoes or redoes a My Tag projection: Undo takes the assignments off
 /// before the tags they use, Redo makes the tags before the assignments; a
 /// second half that fails has the first put back.
 fn step_my_tag_projection(

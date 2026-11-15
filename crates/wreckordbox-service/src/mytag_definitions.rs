@@ -205,6 +205,10 @@ fn not_owned(row: &Row, marks: &DefinitionMarks, barriers: &[Barrier]) -> Option
 
 /// The definitions part of the plan for the deck view's categories, each
 /// placed at its Library category (`None`: missing or ambiguous).
+#[allow(
+    clippy::too_many_lines,
+    reason = "one pass over the deck view, in order, as the assignments' plan"
+)]
 pub(crate) fn plan(
     views: &[DeckView],
     placed: &[Option<String>],

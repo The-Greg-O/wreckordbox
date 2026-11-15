@@ -411,14 +411,12 @@ fn a_dry_run_lists_each_change_and_keeps_what_the_dj_set_by_hand() {
     blocked.sort();
     assert_eq!(
         blocked,
-        [
-            (
-                "10005".into(),
-                "90s".into(),
-                "add".into(),
-                "no_category".into()
-            ),
-        ]
+        [(
+            "10005".into(),
+            "90s".into(),
+            "add".into(),
+            "no_category".into()
+        ),]
     );
     assert_eq!(
         dry["definitions"],

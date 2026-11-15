@@ -265,7 +265,7 @@ impl Writer {
     }
 
     /// [`Self::set_my_tags_if_unchanged`], with `first` run in the same
-    /// immediate transaction before the comparisons (wbx-14.14: MyTag
+    /// immediate transaction before the comparisons (wbx-14.14: My Tag
     /// Projection makes the tags its assignments use). `first` must keep the
     /// registry's update counter itself; an error from it, or anything
     /// after it, rolls the whole transaction back.

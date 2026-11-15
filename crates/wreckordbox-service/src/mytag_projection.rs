@@ -88,6 +88,7 @@ use wreckordbox_sidecar::tag_schema::{DeckView, Dimension};
 use wreckordbox_sidecar::{Fact, FactsSnapshot, Source, TagSchema, TAG_SCHEMA_FILE};
 
 use crate::library::OpenLibrary;
+use crate::mytag_definitions::Resolved;
 use crate::projection::{hash_of, Apply, Wanted, POLICY_FILE};
 use crate::protocol::{codes as service_codes, LibraryChanged, Request, ServiceError};
 use crate::stems::Stems;
@@ -330,12 +331,12 @@ fn read_native(library: &OpenLibrary) -> Result<Native, ServiceError> {
     })
 }
 
+/// What the plan reads from the Sidecar.
+type SidecarRead = (HashMap<String, Vec<Fact>>, TagProvenance, DefinitionMarks);
+
 /// The Facts of each deck dimension's kind and the provenance of
 /// assignments, read without creating, migrating or tidying a Sidecar.
-fn read_sidecar(
-    stems: &Stems,
-    kinds: &[String],
-) -> Result<(HashMap<String, Vec<Fact>>, TagProvenance, DefinitionMarks), ServiceError> {
+fn read_sidecar(stems: &Stems, kinds: &[String]) -> Result<SidecarRead, ServiceError> {
     let failed = |why: String| ServiceError::new(crate::stems::codes::SIDECAR_FAILED, why);
     stems
         .with_sidecar_wait(|open| -> Result<_, String> {
@@ -695,7 +696,7 @@ fn decide(
     rules: &Rules,
     rule: &Rule,
     native: &Native,
-    resolved: &HashMap<(String, String), crate::mytag_definitions::Resolved>,
+    resolved: &HashMap<(String, String), Resolved>,
     provenance: &TagProvenance,
     tag_parents: bool,
 ) {
@@ -769,7 +770,6 @@ fn decide(
             }
             continue;
         }
-        use crate::mytag_definitions::Resolved;
         let category = one.category.unwrap_or_default().to_owned();
         let (tag, made) = match resolved.get(&(category, deck_tag.id.clone())) {
             Some(Resolved::Tag(id)) => (id.clone(), None),

@@ -291,7 +291,7 @@ pub struct RunShown {
 /// | kind | payload |
 /// |---|---|
 /// | `track` | `{"edits": [{"track", "column", "before": value, "after": value}]}` |
-/// | `track_tags` | `{"tags": [{"track", "before": [tag ids], "after": [tag ids]}], "comments": [as a `track` edit]}`; a MyTag Projection's adds `"definitions"` (`crate::mytag_definitions::stored`) |
+/// | `track_tags` | `{"tags": [{"track", "before": [tag ids], "after": [tag ids]}], "comments": [as a `track` edit]}`; a My Tag projection's adds `"definitions"` (`crate::mytag_definitions::stored`) |
 /// | `my_tag_order` | `{"parent", "before": [{"id", "seq"}], "after": [{"id", "seq"}]}` |
 /// | `reorder_playlist_entries` | `{"playlist", "before": [{"entry", "number"}], "after": [{"entry", "number"}]}` |
 ///
