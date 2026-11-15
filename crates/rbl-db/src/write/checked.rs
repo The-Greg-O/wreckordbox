@@ -278,7 +278,14 @@ impl Writer {
                  WHERE ID = ?4 AND rb_local_deleted = 0
                    AND COALESCE(rb_local_usn, 0) = ?5 AND COALESCE(updated_at, '') = ?6"
             ),
-            params![stored, next, stamp, content, expected.usn, expected.updated_at],
+            params![
+                stored,
+                next,
+                stamp,
+                content,
+                expected.usn,
+                expected.updated_at
+            ],
         )?;
         if rows != 1 {
             return Err(DbError::Conflict(format!(
