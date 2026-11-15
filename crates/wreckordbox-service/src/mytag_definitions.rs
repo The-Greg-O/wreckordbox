@@ -524,6 +524,38 @@ pub(crate) fn marks_after(
     kept
 }
 
+/// The links (no ownership) an apply that writes nothing keeps: one for
+/// each deck tag found whose MyTag has no mark for its term.
+pub(crate) fn links_to_keep(plan: &Plan) -> Vec<(String, DefinitionMark)> {
+    plan.links
+        .iter()
+        .filter(|(id, _, dimension, term)| {
+            plan.marks
+                .marks
+                .get(id)
+                .is_none_or(|m| m.dimension != *dimension || m.term != *term)
+        })
+        .filter_map(|(id, category, dimension, term)| {
+            let row = plan.read.iter().find(|r| r.id == *id)?;
+            Some((
+                id.clone(),
+                DefinitionMark {
+                    category: category.clone(),
+                    dimension: dimension.clone(),
+                    term: term.clone(),
+                    owned: false,
+                    name: row.name.clone(),
+                    seq: row.seq,
+                    usn: row.usn,
+                    updated_at: row.updated_at.clone(),
+                    entry: 0,
+                    ledger_seq: 0,
+                },
+            ))
+        })
+        .collect()
+}
+
 /// The stored form of [`Definitions`], in a `track_tags` Ledger payload.
 #[must_use]
 pub fn stored(definitions: &Definitions) -> Value {

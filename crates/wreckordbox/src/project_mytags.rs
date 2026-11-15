@@ -89,14 +89,53 @@ fn text(report: &Report) -> String {
             .collect();
         let _ = writeln!(out, "Not on the deck, never written: {}.", names.join(", "));
     }
-    if !report.definitions.is_empty() {
-        let _ = writeln!(
-            out,
-            "MyTags the schema has and the Library does not: {} (make them by hand first; applying refuses until then).",
-            report.definitions.len()
-        );
-        for d in &report.definitions {
-            let _ = writeln!(out, "  {}: {:?} ({})", d.category, d.label, d.term);
+    for (heading, list) in [
+        (
+            if report.dry_run {
+                "MyTag definitions to change, with the assignments"
+            } else {
+                "MyTag definitions changed, with the assignments"
+            },
+            &report.definitions,
+        ),
+        (
+            "MyTag definitions the projection does not own, kept",
+            &report.definitions_kept,
+        ),
+    ] {
+        if list.is_empty() {
+            continue;
+        }
+        let _ = writeln!(out, "{heading}: {}.", list.len());
+        for d in list {
+            let what = match d.change.as_str() {
+                "create_tag" => format!("make {:?} ({})", d.label, d.term),
+                "rename_tag" => format!(
+                    "rename {:?} to {:?} ({})",
+                    d.from.as_deref().unwrap_or(""),
+                    d.label,
+                    d.term
+                ),
+                "rename_category" => format!(
+                    "the category {:?} is {:?} in the Library",
+                    d.label,
+                    d.from.as_deref().unwrap_or("")
+                ),
+                _ => format!("order {}", d.order.join(", ")),
+            };
+            let _ = writeln!(
+                out,
+                "  {}{what}{}",
+                if d.category.is_empty() {
+                    String::new()
+                } else {
+                    format!("{}: ", d.category)
+                },
+                d.reason
+                    .as_ref()
+                    .map(|r| format!("; {r}"))
+                    .unwrap_or_default()
+            );
         }
     }
     for (name, list) in [

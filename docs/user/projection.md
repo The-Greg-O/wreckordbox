@@ -204,11 +204,34 @@ apply = 0.8      # or "wait"; no section waits
 - **Matching.** A deck category is the Library's category of the same
   name, a deck tag the MyTag of exactly the same text in it. A category
   the deck view does not name, a dimension it leaves out, and a MyTag the
-  schema does not have are never written. A term with no MyTag yet is
-  listed under `definitions` and its assignments under `blocked`; applying
-  is refused until the MyTag exists (make it with `wreckordbox mytags
-  create`). Categories and tags are not renamed, reordered or made by a
-  projection yet.
+  schema does not have are never written.
+- **MyTags the schema adds.** A term with no MyTag yet is listed under
+  `definitions` (`create_tag`) and the apply makes it, at the end of its
+  category, with the assignments that use it: the same Run, the same
+  Ledger entry and the same step of Undo. Definitions take no confidence
+  and wait for no policy: they are what your own schema says.
+- **Relabelling and order.** When you change a term's label in the
+  schema, the MyTag a projection made for it is renamed (`rename_tag`); a
+  MyTag you made, or renamed, or touched in any way since, keeps its name
+  and is listed under `definitions_kept` with the reason, and its
+  assignments are `blocked` (`definition_kept`) instead of a second MyTag
+  being made beside it. The deck's order places the projection's own
+  MyTags (`order_tags`); yours keep the order they have among themselves,
+  and an order that would move them is kept and listed. Categories are
+  always yours: a different label or order in the deck view is listed,
+  never written. A MyTag a projection made that you took away again (by
+  Undo or by deleting it) is never made again: listed as `removed`.
+- **What counts as the projection's.** A MyTag is the projection's only
+  while it is exactly as the projection's own recorded write left it (its
+  name, place and update number). Your edit, rekordbox's, or an Undo or
+  Redo of the projection, makes it yours. A label in the schema is linked
+  to its MyTag by the first apply that finds it (an apply with nothing to
+  change still keeps the links, and makes no Run); before that, a
+  relabelled term whose old MyTag is yours is not recognised and a new
+  MyTag would be made: run `wreckordbox project --mytags` once after
+  converting, before you relabel.
+- **Comments.** Writing MyTags into the comments field is not built: a
+  projection never touches comments.
 - **Parents.** With `[deck.genre] tag_parents = true`, a track whose Fact
   names a child term gets the parent's MyTag too (`implied`), with no Fact
   of its own.

@@ -480,6 +480,22 @@ fn plan_or_apply(
         }
     }
     if planned.is_empty() && !defined.writes() {
+        // Nothing to write to the Library, but the links of the deck's
+        // terms to their MyTags are kept, so a label changed later is told
+        // from a new term. Only in a Sidecar that exists; never a Run.
+        let links = crate::mytag_definitions::links_to_keep(&defined);
+        if !links.is_empty() {
+            let kept = stems.with_sidecar_wait(|open| {
+                open.map_or(Ok(()), |sidecar| sidecar.set_definition_marks(&links))
+            });
+            if !matches!(kept, Ok(Ok(()))) {
+                let mut report = report;
+                report
+                    .warnings
+                    .push("the links of the deck's terms to their MyTags could not be kept".into());
+                return Ok((report, None));
+            }
+        }
         return Ok((report, None));
     }
     let tracks: Vec<String> = planned.iter().map(|p| p.track.clone()).collect();

@@ -363,3 +363,38 @@ fn the_deck_order_places_only_the_projections_own_mytags() {
     ok(&s, &["project", "--mytags"]);
     assert_eq!(vocabulary(&s), before);
 }
+
+/// An apply with nothing to change makes no Run and writes no Library, but
+/// links the deck's terms to their MyTags: a label the DJ changes in the
+/// schema afterwards is then told from a new term, and their MyTag is kept
+/// rather than a second one made beside it.
+#[test]
+fn an_apply_with_nothing_to_change_still_links_the_terms_so_a_relabel_is_recognised() {
+    let s = by_hand();
+    write(
+        &s,
+        "tag-schema.toml",
+        &schema(&[("dark", "Dark"), ("uplifting", "Uplifting")], &[]),
+    );
+    fact(&s, "10001", "mood", &["dark"]);
+    let runs = ok(&s, &["runs", "list"])["total"].clone();
+    let applied = ok(&s, &["project", "--mytags"]);
+    assert_eq!(applied["changes"], json!([]), "{applied}");
+    assert_eq!(ok(&s, &["runs", "list"])["total"], runs);
+
+    write(
+        &s,
+        "tag-schema.toml",
+        &schema(&[("dark", "Darkest"), ("uplifting", "Uplifting")], &[]),
+    );
+    let dry = ok(&s, &["project", "--mytags", "--dry-run"]);
+    assert_eq!(definitions(&dry, "definitions"), [], "{dry}");
+    assert_eq!(
+        definitions(&dry, "definitions_kept"),
+        [d("rename_tag", "Mood", "Darkest", "set_by_dj")],
+        "{dry}"
+    );
+    ok(&s, &["project", "--mytags"]);
+    assert_eq!(tags_in(&s, "Mood"), ["Dark", "Uplifting"]);
+    assert_eq!(tags_of(&s, "10001"), ["Mood: Dark"]);
+}
