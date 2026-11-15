@@ -511,11 +511,12 @@ pub fn catalogue() -> Vec<Tool> {
     b.read(
         "read_review_waiting",
         "review.waiting",
-        "The Facts Projection held back for the DJ to decide (`wreckordbox review waiting`). Show them to the \
+        "The Facts Projection held back, and the titles and artists agents proposed, for the DJ to decide \
+         (`wreckordbox review waiting`). Show them to the \
          DJ: accepting or rejecting them is the DJ's decision and is not a tool.",
         vec![
             ("tracks", texts("Only these tracks.")),
-            ("field", json!({"type": "string", "enum": ["energy", "prep_colour"]})),
+            ("field", json!({"type": "string", "enum": ["energy", "prep_colour", "title", "artist"]})),
             ("at_least", number("Only at or above this confidence, 0 to 1.")),
         ],
         vec![],
@@ -528,7 +529,7 @@ pub fn catalogue() -> Vec<Tool> {
             ("tracks", texts("Only these tracks.")),
             (
                 "field",
-                json!({"type": "string", "enum": ["energy", "prep_colour"]}),
+                json!({"type": "string", "enum": ["energy", "prep_colour", "title", "artist"]}),
             ),
         ],
         vec![],
