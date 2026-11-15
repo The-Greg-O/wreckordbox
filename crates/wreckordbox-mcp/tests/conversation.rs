@@ -434,3 +434,90 @@ fn every_tool_is_named_in_the_agent_guide() {
         "docs/agents/guide.md does not name: {missing:?}"
     );
 }
+
+#[test]
+fn a_nested_argument_the_schema_does_not_advertise_is_refused_so_a_fact_is_never_the_djs() {
+    let sandbox = Sandbox::new();
+    let mut server = sandbox.server();
+    server.start();
+    // The reviewer's call: a DJ source smuggled inside one Fact.
+    let error = refused(&server.call(
+        "change_record_facts",
+        json!({"facts":[{"track":"10001","kind":"energy","value":3,"source":{"kind":"dj","name":"dj"}}]}),
+    ));
+    assert_eq!(error["code"], "bad_request", "{error}");
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("facts[0].source"),
+        "{error}"
+    );
+    // A wrong type deep inside is refused the same way, before the service.
+    let error = refused(&server.call(
+        "read_tracks_query",
+        json!({"my_tag_picks": [{"category": "Situation", "tags": "Peak", "any": false}]}),
+    ));
+    assert_eq!(error["code"], "bad_request", "{error}");
+    let shown = structured(&server.call("read_track_facts", json!({"id": "10001"}))).clone();
+    assert_eq!(shown["facts"], json!([]), "{shown}");
+}
+
+#[test]
+fn a_change_never_joins_the_djs_run_so_it_never_inherits_the_djs_attribution() {
+    let sandbox = Sandbox::new();
+    let mut server = sandbox.server();
+    server.start();
+    structured(&server.call("read_status", json!({})));
+    let mut dj = sandbox.client();
+    let run: Value = dj
+        .call(
+            "runs.start",
+            json!({"source": {"kind": "dj"}, "description": "The DJ's own work"}),
+        )
+        .unwrap();
+    let run = run["id"].as_i64().unwrap();
+    for (tool, arguments) in [
+        (
+            "change_record_facts",
+            json!({"facts": [{"track": "10001", "kind": "energy", "value": 3}], "run": run}),
+        ),
+        (
+            "change_track_rating",
+            json!({"id": "10001", "rating": 5, "run": run}),
+        ),
+        (
+            "change_track_rating",
+            json!({"id": "10001", "rating": 5, "run": run, "source": "agent:test-agent"}),
+        ),
+    ] {
+        let error = refused(&server.call(tool, arguments));
+        assert_eq!(error["code"], "invalid_source", "{tool}: {error}");
+    }
+    let mut client = sandbox.client();
+    assert_eq!(rating_of(&mut client, "10001"), 0);
+    let facts: Value = client
+        .call("facts.of_track", json!({"id": "10001"}))
+        .unwrap();
+    assert_eq!(facts["facts"], json!([]), "{facts}");
+}
+
+#[test]
+fn a_decision_asked_without_a_run_or_source_is_the_agents() {
+    let sandbox = Sandbox::new();
+    let mut server = sandbox.server();
+    server.start();
+    let asked = structured(&server.call(
+        "change_decision_create",
+        json!({"question_type": "yes_no", "question": "Is it a dub?", "track": "10001"}),
+    ))
+    .clone();
+    // The asker is the source of the Run the Decision was asked in.
+    let run = asked["run"].as_i64().expect("asked in a Run");
+    let shown = structured(&server.call("read_run", json!({"id": run}))).clone();
+    assert_eq!(
+        shown["run"]["source"],
+        json!({"kind": "agent", "name": "test-agent"}),
+        "{shown}"
+    );
+}

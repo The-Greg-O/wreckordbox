@@ -36,8 +36,8 @@ pub enum Who {
     InArgs,
     /// `decisions.answer`: the source is the Decider.
     Decider,
-    /// `decisions.create`: only a Run.
-    RunOnly,
+    /// `decisions.create`: a Run and the asker's source, no description.
+    RunAndSource,
     /// `runs.start`: the source is the Run's.
     Starts,
 }
@@ -118,7 +118,7 @@ fn run_properties(who: Who) -> Vec<(&'static str, Value)> {
             ("source", source_property()),
             ("description", description),
         ],
-        Who::RunOnly => vec![("run", run)],
+        Who::RunAndSource => vec![("run", run), ("source", source_property())],
         Who::Starts => vec![("source", source_property())],
     }
 }
@@ -843,7 +843,7 @@ pub fn catalogue() -> Vec<Tool> {
         "change_decision_create",
         "decisions.create",
         Effect::Sidecar,
-        Who::RunOnly,
+        Who::RunAndSource,
         "Asks a Decision: a question between fixed candidates, pending until a Decider answers (`wreckordbox decisions create`).",
         vec![
             ("question_type", json!({"type": "string", "enum": ["choice", "yes_no"]})),

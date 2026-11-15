@@ -20,6 +20,7 @@
 //! `docs/agents/guide.md`.
 
 mod rpc;
+mod schema;
 pub mod tools;
 
 pub use rpc::serve;

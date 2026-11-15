@@ -96,8 +96,9 @@ reading protection are tools.
   playlists and removals change the rekordbox Library (`master.db`). Facts,
   Runs, Decisions, Mutants, Stems and Intensity live in the **Sidecar** beside
   it and never change the Library. Every Library change goes through one edit
-  path, is a step the window's Undo takes back, is recorded in the Ledger, and
-  is refused while Library Protection is on.
+  path, is recorded in the Ledger, and is refused while Library Protection is
+  on. Most are a step the window's Undo takes back; some are not (see
+  [Undo](#undo)).
 
 ### Runs and sources
 
@@ -124,9 +125,20 @@ meaning (see each command).
 
 ### Undo
 
-Each Library change is one step of the window's Undo history, so the DJ can
-take back your most recent changes from the window. **The CLI has no undo
-command.** Reversing a whole Run later and out of order (Unwind) is planned
+Most Library changes are one step of the window's Undo history, so the DJ can
+take back your most recent changes from the window. **Not all of them:**
+
+- **Permanent, and they empty the window's Undo and Redo history:**
+  `mytags merge`, `mytags delete` and `tracks remove --confirm`. Nothing in the
+  window brings them back; a restore from a backup is the only way. Ask the DJ
+  first, every time.
+- **Outside the Undo history** (they are not Undo steps, and they end the
+  window's Redo): `mytags create` and `mytags rename`. To take one back, delete
+  the new tag or rename it again.
+
+Every other Library change (ratings, Prep colours, MyTag assign and unassign,
+`mytags move`, `intake tag`, playlist edits, Projection) is an Undo step.
+**The CLI has no undo command.** Reversing a whole Run later and out of order (Unwind) is planned
 (beads `wbx-23`, `wbx-24`) and not built yet; until then `runs show` lists
 every change with its value before and after, which is what you, or the DJ,
 need to put things back by hand.
@@ -238,7 +250,8 @@ wreckordbox --json runs finish <id> --outcome "how it went"
 ```
 
 A Run left open can still be recorded in; finish it when the work is done.
-Each Library change inside it is still its own step of the window's Undo.
+Each Library change inside it is still its own step of the window's Undo,
+apart from the permanent and outside-history ones named under [Undo](#undo).
 
 ### List a Run, and take it back
 
@@ -247,8 +260,11 @@ wreckordbox --json runs list --limit 10
 wreckordbox --json runs show 7     # every change: "values": [{"subject","field","before","after"}]
 ```
 
-To reverse it now: the DJ can Undo in the window (newest first), or you can
-set each `before` value again in a new Run, after asking. Unwind is not built.
+To reverse it now: the DJ can Undo in the window (newest first), except for
+`mytags merge`, `mytags delete` and `tracks remove`, which are permanent, and
+`mytags create` and `rename`, which are outside the Undo history (see
+[Undo](#undo)). Or you can set each `before` value again in a new Run, after
+asking. Unwind is not built.
 
 ### Preview a Stick load
 
@@ -364,7 +380,8 @@ Fails: `track_not_found`, `invalid_rating` (over 5), `library_protected`,
 **Changes the Library** only with `--confirm`: removes tracks from the
 collection and every playlist (the audio files stay). Without `--confirm` it
 says which tracks and Mutants would go and removes nothing. Arguments:
-`<TRACK_ID>...`. Ask the DJ before `--confirm`.
+`<TRACK_ID>...`. **Permanent:** no Undo takes it back, and it empties the
+window's Undo history. Ask the DJ before `--confirm`.
 
 ```sh
 wreckordbox --json tracks remove 10039
@@ -419,7 +436,8 @@ Fails: an unknown tag identifier.
 
 **Changes the Library**: adds a tag at the end of a category. Arguments:
 `<CATEGORY_ID> <NAME>` (unique in the category). Answers the new tag and the
-Run. Fails: a duplicate name, an unknown category, `library_protected`.
+Run. Not an Undo step (delete the tag to take it back). Fails: a duplicate
+name, an unknown category, `library_protected`.
 
 ### `wreckordbox mytags create-category`
 
@@ -430,7 +448,8 @@ explained.
 ### `wreckordbox mytags rename`
 
 **Changes the Library**: renames a tag or a category; tracks keep the tag.
-Arguments: `<ID> <NAME>`, `--comments`.
+Arguments: `<ID> <NAME>`, `--comments`. Not an Undo step: rename it back to
+take it back.
 
 ```sh
 wreckordbox --json mytags rename 700003 "Warm up" --run 1
@@ -772,7 +791,7 @@ Reads one Run and every change it made, in order, with before and after.
 Arguments: `<RUN_ID>`, `--limit`, `--offset`.
 
 ```json
-{"run": {"run": {"id": 1, ...}, ...},
+{"run": {"id": 1, "source": {...}, "description": "...", "changes": 3, "counts": [...], ...},
  "entries": [{"id": 2, "action": "edit", "store": "library", "label": "Track Edit", "reversible": true,
               "command": {"name": "tracks.rate", "args": {...}},
               "values": [{"subject": "track 10001", "field": "Rating", "before": 0, "after": 4}]},
@@ -821,7 +840,10 @@ Deciders (you, a rule, the DJ). In the Sidecar; never changes the Library.
 
 Changes the Sidecar: asks a Decision. Options: `--type choice|yes-no`,
 `--question`, `--candidate NAME[=DESCRIPTION]` (two or more for `choice`),
-`--context JSON`, `--topic`, `--track`, `--run`.
+`--context JSON`, `--topic`, `--track`, `--run`, `--source` (who asks:
+`agent:NAME` and so on). The asker is the source of the Run the Decision is
+asked in: without `--run` or `--source`, `tool:wreckordbox-decisions`. An
+agent or tool cannot ask in the DJ's Run.
 
 ```sh
 wreckordbox --json decisions create --type choice --question "Genre?" --candidate House --candidate Techno --track 10001 --topic genre
@@ -1201,8 +1223,11 @@ name (or `RBXPORT_OPTIONS`), `WRECKORDBOX_RUNTIME_DIR`,
   the Library (through the edit path, refused while Library Protection is on),
   the Sidecar, or Library Protection.
 - Each tool's input is a typed JSON schema whose properties are the service
-  command's own arguments (no others are accepted); they are passed to the
-  service as they are, and the service checks them.
+  command's own arguments. The server checks every call against that schema
+  at every level before anything reaches the service: an argument it does not
+  advertise, at the top or nested (such as a `source` inside one Fact), or a
+  value of the wrong type, is refused with `bad_request` naming its path
+  (`facts[0].source`). What passes is sent to the service as it is.
 - A result is the service's JSON, in `structuredContent` and as text, with a
   `run` key when the call's changes are in a Run, as the CLI's `--json`. A
   refusal is a tool result with `isError: true` and the text
@@ -1213,6 +1238,10 @@ name (or `RBXPORT_OPTIONS`), `WRECKORDBOX_RUNTIME_DIR`,
   neither `run` nor `source`, the change is recorded as
   `agent:<the MCP client's name>`, the `clientInfo.name` it sent with
   `initialize` (anything but letters, digits, `-`, `_` and `.` becomes `-`).
+  That holds for every changing tool, `change_decision_create` included. A
+  `run` the DJ started is refused (`invalid_source`), with or without a
+  `source`: an agent's change never joins the DJ's Run, so it never inherits
+  the DJ's attribution. Start a Run of your own with `change_run_start`.
 
 ### Tools
 

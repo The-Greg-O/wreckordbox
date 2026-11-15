@@ -152,23 +152,16 @@ impl Session {
     /// Sends the tool's command to the service and answers its result, with
     /// the Run its changes are in as `run`, as the CLI prints it.
     fn run(&self, tool: &Tool, mut arguments: Map<String, Value>) -> Result<Value, ServiceError> {
-        let schema = tool.input_schema();
-        for key in arguments.keys() {
-            if schema["properties"].get(key).is_none() {
-                return Err(bad_request(format!(
-                    "{} takes no argument {key}",
-                    tool.name
-                )));
-            }
+        // A source that is not an agent, tool or web lookup (the DJ) is
+        // refused as a source, before its form is checked.
+        if let Some(text) = arguments.get("source") {
+            text.as_str()
+                .map_or_else(|| Err(invalid_source()), source)?;
         }
-        for key in &tool.required {
-            if !arguments.contains_key(*key) {
-                return Err(bad_request(format!(
-                    "{} needs the argument {key}",
-                    tool.name
-                )));
-            }
-        }
+        // Every level, so nothing the schema does not advertise (a `source`
+        // inside one Fact) reaches the service.
+        crate::schema::check(&tool.input_schema(), &Value::Object(arguments.clone()), "")
+            .map_err(|why| bad_request(format!("{}: {why}", tool.name)))?;
         let run = arguments.remove("run");
         // `runs.start` takes its description as its own argument.
         let description = if tool.who == Who::Starts {
@@ -187,6 +180,9 @@ impl Session {
         let mut args = tool.fixed.clone();
         args.extend(arguments);
         let mut client = connect()?;
+        if let Some(id) = run.as_ref().and_then(Value::as_i64) {
+            refuse_the_djs_run(&mut client, id)?;
+        }
         match tool.who {
             Who::Nobody => {}
             Who::Request => {
@@ -205,7 +201,10 @@ impl Session {
                 insert(&mut args, "decider", source.or_else(|| Some(by_us())));
                 insert(&mut args, "description", description);
             }
-            Who::RunOnly => insert(&mut args, "run", run),
+            Who::RunAndSource => {
+                insert(&mut args, "run", run);
+                insert(&mut args, "source", source);
+            }
             Who::Starts => insert(&mut args, "source", source.or_else(|| Some(by_us()))),
         }
         let mut result: Value = client.call(tool.command, Value::Object(args))?;
@@ -214,6 +213,23 @@ impl Session {
         }
         Ok(result)
     }
+}
+
+/// An agent's change never joins the DJ's Run: it would be recorded with
+/// the DJ's attribution, or beside the DJ's own work. Asked before the
+/// change, on the same connection.
+fn refuse_the_djs_run(client: &mut Client, id: i64) -> Result<(), ServiceError> {
+    let shown: Value = client.call("runs.show", json!({"id": id, "limit": 1}))?;
+    if shown["run"]["source"]["kind"] == "dj" {
+        return Err(ServiceError::new(
+            "invalid_source",
+            format!(
+                "Run {id} is the DJ's: an agent's change never joins the DJ's Run. \
+                 Start a Run of your own with change_run_start"
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn insert(args: &mut Map<String, Value>, key: &str, value: Option<Value>) {
