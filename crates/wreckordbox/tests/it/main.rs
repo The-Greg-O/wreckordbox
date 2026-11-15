@@ -11,6 +11,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod agent_guide;
 mod backup;
 mod decisions;
 mod dj_facts;
