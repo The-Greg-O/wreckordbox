@@ -13,14 +13,22 @@
 //!   { at = 1.0, intensity = 0.5 },
 //! ]
 //! max_step = 0.3                # optional hard limit on the change between neighbours
-//! missing = "leave_out"         # a track with no Intensity: "leave_out" (default) or "allow"
+//! missing = "leave_out"         # a track with no Intensity: "leave_out" (default), "allow"
+//!                               # or "energy" (the DJ's Energy stands in, (Energy - 1) / 4)
+//! step_weight = 0.5             # the step off the shape's own step costs this much; default 0.5
 //! weight = 1.0                  # every section has one; default 1
 //!
 //! [tempo]
-//! max_change = 4.0              # optional hard limit, in percent of the outgoing tempo
+//! max_change = 4.0              # optional hard limit, in percent: the larger tempo over the smaller
+//! fold = false                  # true: half and double time are the same tempo
+//! min_bpm = 118                 # optional hard range for the whole set
+//! max_bpm = 128
 //!
 //! [key]
-//! max_moves = 1                 # optional hard limit, in moves on the Camelot wheel
+//! max_moves = 1                 # optional hard limit on a move's cost (`KeyStep::cost`)
+//! key_lock = true               # false: a tempo change shifts the incoming key
+//! max_detune = 25               # with key_lock = false: optional hard limit in cents
+//! variety = 0.0                 # 0..1: how much a same-key transition is marked down
 //!
 //! [situations]                  # which Situations belong where
 //! place = [
@@ -50,7 +58,8 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use toml::Spanned;
 
-/// The only version of the format there is.
+/// The only version of the format there is. Fields added since (wbx-b59)
+/// are optional with defaults that read an older Recipe as written.
 pub const VERSION: i64 = 1;
 
 /// One mistake in a Recipe: the line it is on when known, and what is wrong.
@@ -87,6 +96,9 @@ pub struct Intensity {
     pub shape: Vec<Point>,
     pub max_step: Option<f64>,
     pub missing: Missing,
+    /// How much a step between neighbours that differs from the step the
+    /// shape wants costs, against the distance from the shape; default 0.5.
+    pub step_weight: f64,
     pub weight: f64,
 }
 
@@ -105,17 +117,36 @@ pub enum Missing {
     LeaveOut,
     /// Used, with no Intensity score; its reasons say so.
     Allow,
+    /// The DJ's Energy rating (1 to 5 stars) stands in, as (Energy - 1) / 4;
+    /// a track with neither is left out.
+    Energy,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Tempo {
+    /// Percent, measured symmetrically: the larger tempo over the smaller.
     pub max_change: Option<f64>,
+    /// Half and double time count as the same tempo (70 meets 140).
+    pub fold: bool,
+    /// The set's tempo range: a track outside it (folded, with `fold`) is
+    /// left out.
+    pub min_bpm: Option<f64>,
+    pub max_bpm: Option<f64>,
     pub weight: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Key {
+    /// The most a move may cost (see [`crate::KeyStep::cost`]).
     pub max_moves: Option<u32>,
+    /// The DJ plays with key lock (Master Tempo) on: a tempo change keeps
+    /// the key. Off, the incoming key is shifted by the tempo change.
+    pub key_lock: bool,
+    /// Without key lock, the most detuning (cents) left after the shift.
+    pub max_detune: Option<f64>,
+    /// How much a same-key transition is marked down (0 to 1), so a set
+    /// does not sit in one key when the pool allows otherwise.
+    pub variety: f64,
     pub weight: f64,
 }
 
@@ -265,6 +296,7 @@ struct RawIntensity {
     max_step: Option<Spanned<f64>>,
     #[serde(default)]
     missing: Missing,
+    step_weight: Option<Spanned<f64>>,
     weight: Option<Spanned<f64>>,
 }
 
@@ -279,6 +311,10 @@ struct RawPoint {
 #[serde(deny_unknown_fields)]
 struct RawTempo {
     max_change: Option<Spanned<f64>>,
+    #[serde(default)]
+    fold: bool,
+    min_bpm: Option<Spanned<f64>>,
+    max_bpm: Option<Spanned<f64>>,
     weight: Option<Spanned<f64>>,
 }
 
@@ -286,6 +322,9 @@ struct RawTempo {
 #[serde(deny_unknown_fields)]
 struct RawKey {
     max_moves: Option<Spanned<i64>>,
+    key_lock: Option<bool>,
+    max_detune: Option<Spanned<f64>>,
+    variety: Option<Spanned<f64>>,
     weight: Option<Spanned<f64>>,
 }
 
@@ -429,8 +468,35 @@ impl Check<'_> {
                     None
                 }
             });
+            let mut bpm = |limit: Option<Spanned<f64>>, name: &str| {
+                limit.and_then(|limit| {
+                    let value = *limit.get_ref();
+                    if value.is_finite() && value > 0.0 {
+                        Some((value, limit))
+                    } else {
+                        self.at(
+                            &limit,
+                            format!("tempo.{name} is {value}; it is a tempo in BPM above 0"),
+                        );
+                        None
+                    }
+                })
+            };
+            let min_bpm = bpm(section.min_bpm, "min_bpm");
+            let max_bpm = bpm(section.max_bpm, "max_bpm");
+            if let (Some((low, _)), Some((high, spanned))) = (&min_bpm, &max_bpm) {
+                if low > high {
+                    self.at(
+                        spanned,
+                        format!("tempo.max_bpm is {high}, below tempo.min_bpm {low}"),
+                    );
+                }
+            }
             Tempo {
                 max_change,
+                fold: section.fold,
+                min_bpm: min_bpm.map(|(v, _)| v),
+                max_bpm: max_bpm.map(|(v, _)| v),
                 weight: self.weight("tempo", section.weight.as_ref()),
             }
         });
@@ -451,8 +517,42 @@ impl Check<'_> {
                     }
                 }
             });
+            let key_lock = section.key_lock.unwrap_or(true);
+            let max_detune = section.max_detune.and_then(|limit| {
+                let value = *limit.get_ref();
+                if key_lock {
+                    self.at(
+                        &limit,
+                        "key.max_detune needs key.key_lock = false: with key lock a tempo change does not detune".to_owned(),
+                    );
+                    None
+                } else if value.is_finite() && value > 0.0 && value <= 50.0 {
+                    Some(value)
+                } else {
+                    self.at(
+                        &limit,
+                        format!("key.max_detune is {value}; it is in cents, above 0 and at most 50"),
+                    );
+                    None
+                }
+            });
+            let variety = match section.variety {
+                None => 0.0,
+                Some(spanned) => {
+                    let value = *spanned.get_ref();
+                    if value.is_finite() && (0.0..=1.0).contains(&value) {
+                        value
+                    } else {
+                        self.at(&spanned, format!("key.variety is {value}; it is from 0 to 1"));
+                        0.0
+                    }
+                }
+            };
             Key {
                 max_moves,
+                key_lock,
+                max_detune,
+                variety,
                 weight: self.weight("key", section.weight.as_ref()),
             }
         });
@@ -616,11 +716,27 @@ impl Check<'_> {
                 "intensity.missing = \"allow\" cannot be used with intensity.max_step: a step to or from a track with no Intensity cannot be checked".to_owned(),
             );
         }
+        let step_weight = match &raw.step_weight {
+            None => 0.5,
+            Some(spanned) => {
+                let value = *spanned.get_ref();
+                if value.is_finite() && value >= 0.0 {
+                    value
+                } else {
+                    self.at(
+                        spanned,
+                        format!("intensity.step_weight is {value}; it is 0 or more"),
+                    );
+                    0.5
+                }
+            }
+        };
         let weight = self.weight("intensity", raw.weight.as_ref());
         (!shape.is_empty()).then_some(Intensity {
             shape,
             max_step,
             missing: raw.missing,
+            step_weight,
             weight,
         })
     }

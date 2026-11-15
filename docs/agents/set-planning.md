@@ -111,38 +111,40 @@ app reads all the spellings in the table, Camelot codes and Open Key.
 ### Moves between keys
 
 For keys (k1, ring1) to (k2, ring2): the clockwise step is
-(k2 - k1) mod 12, the tonic shift is (p2 - p1) mod 12 semitones up. "App
-moves" is what this app counts (`Camelot::moves`: the shorter way round
-the wheel, plus 1 for a change of ring) and "Key score" its contribution at
-weight 1, max(0, 1 - moves / 4). Shared tones and triad tones are derived;
-names and uses are **convention** (Mixed In Key unless marked; the
+(k2 - k1) mod 12, the tonic shift is (p2 - p1) mod 12 semitones up. "Cost"
+is what this app charges for the move (`Camelot::step_to`: directed, by the
+clockwise step and the two rings), and "Key score" its contribution at
+weight 1, 1 - cost / 6. Shared tones and triad tones are derived; names,
+uses and the costs are **convention** (Mixed In Key unless marked; the
 consonant/clashing diagonal split is Mixed In Key's *Beyond Beatmatching*,
 ch. 8, as reported by the research review, and agrees with the triad
-count).
+count). The costs follow the triad count and the review's grading: the
+parallel key keeps the root and fifth and costs 2, the tritone ring flip
+keeps nothing and costs 6, like the tritone.
 
 <!-- table: moves -->
-| Move | From | To | Arithmetic | Tonic up | Shared tones | Triad tones | App moves | Key score | Use |
+| Move | From | To | Arithmetic | Tonic up | Shared tones | Triad tones | Cost | Key score | Use |
 |---|---|---|---|---|---|---|---|---|---|
 | Same key | 8A | 8A | k | 0 | 7 | 3 | 0 | 1 | long blends |
-| +1, fifth up | 8A | 9A | k + 1 | 7 | 6 | 1 | 1 | 0.75 | long blends |
-| -1, fifth down | 8A | 7A | k - 1 | 5 | 6 | 1 | 1 | 0.75 | long blends |
-| Relative major | 8A | 8B | k, ring | 3 | 7 | 2 | 1 | 0.75 | long blends; brighter |
-| Relative minor | 8B | 8A | k, ring | 9 | 7 | 2 | 1 | 0.75 | long blends; darker |
-| Consonant diagonal | 8A | 7B | k - 1, ring | 8 | 6 | 2 | 2 | 0.5 | medium blends |
-| Consonant diagonal | 8B | 9A | k + 1, ring | 4 | 6 | 2 | 2 | 0.5 | medium blends |
-| Clashing diagonal | 8A | 9B | k + 1, ring | 10 | 6 | 0 | 2 | 0.5 | drums only, or a cut |
-| Clashing diagonal | 8B | 7A | k - 1, ring | 2 | 6 | 0 | 2 | 0.5 | drums only, or a cut |
-| +2, "Energy Boost" | 8A | 10A | k + 2 | 2 | 5 | 0 | 2 | 0.5 | short blends, drops |
-| -2, whole tone down | 8A | 6A | k - 2 | 10 | 5 | 0 | 2 | 0.5 | short blends; a release |
-| Parallel major | 8A | 11B | k + 3, ring | 0 | 4 | 2 | 4 | 0 | breakdown to drop |
-| Parallel minor | 8B | 5A | k - 3, ring | 0 | 4 | 2 | 4 | 0 | breakdown to drop |
-| Tritone ring flip | 8A | 5B | k - 3, ring | 6 | 4 | 0 | 4 | 0 | avoid |
-| -3, "Pay Attention" | 8A | 5A | k - 3 | 3 | 4 | 1 | 3 | 0.25 | short blends, cuts |
-| +3 | 8A | 11A | k + 3 | 9 | 4 | 1 | 3 | 0.25 | short blends, cuts |
-| +4, major third | 8A | 12A | k + 4 | 4 | 3 | 1 | 4 | 0 | cuts |
-| -4 | 8A | 4A | k - 4 | 8 | 3 | 1 | 4 | 0 | cuts |
-| +7, semitone up ("Jaws Mix") | 8A | 3A | k + 7 | 1 | 2 | 0 | 5 | 0 | cuts only |
-| -7, semitone down | 8A | 1A | k - 7 | 11 | 2 | 0 | 5 | 0 | cuts only |
+| +1, fifth up | 8A | 9A | k + 1 | 7 | 6 | 1 | 1 | 0.8333 | long blends |
+| -1, fifth down | 8A | 7A | k - 1 | 5 | 6 | 1 | 1 | 0.8333 | long blends |
+| Relative major | 8A | 8B | k, ring | 3 | 7 | 2 | 1 | 0.8333 | long blends; brighter |
+| Relative minor | 8B | 8A | k, ring | 9 | 7 | 2 | 1 | 0.8333 | long blends; darker |
+| Consonant diagonal | 8A | 7B | k - 1, ring | 8 | 6 | 2 | 1.5 | 0.75 | medium blends |
+| Consonant diagonal | 8B | 9A | k + 1, ring | 4 | 6 | 2 | 1.5 | 0.75 | medium blends |
+| Clashing diagonal | 8A | 9B | k + 1, ring | 10 | 6 | 0 | 3 | 0.5 | drums only, or a cut |
+| Clashing diagonal | 8B | 7A | k - 1, ring | 2 | 6 | 0 | 3 | 0.5 | drums only, or a cut |
+| +2, "Energy Boost" | 8A | 10A | k + 2 | 2 | 5 | 0 | 2 | 0.6667 | short blends, drops |
+| -2, whole tone down | 8A | 6A | k - 2 | 10 | 5 | 0 | 2 | 0.6667 | short blends; a release |
+| Parallel major | 8A | 11B | k + 3, ring | 0 | 4 | 2 | 2 | 0.6667 | breakdown to drop |
+| Parallel minor | 8B | 5A | k - 3, ring | 0 | 4 | 2 | 2 | 0.6667 | breakdown to drop |
+| Tritone ring flip | 8A | 5B | k - 3, ring | 6 | 4 | 0 | 6 | 0 | avoid |
+| -3, "Pay Attention" | 8A | 5A | k - 3 | 3 | 4 | 1 | 3 | 0.5 | short blends, cuts |
+| +3 | 8A | 11A | k + 3 | 9 | 4 | 1 | 3 | 0.5 | short blends, cuts |
+| +4, major third | 8A | 12A | k + 4 | 4 | 3 | 1 | 4 | 0.3333 | cuts |
+| -4 | 8A | 4A | k - 4 | 8 | 3 | 1 | 4 | 0.3333 | cuts |
+| +7, semitone up ("Jaws Mix") | 8A | 3A | k + 7 | 1 | 2 | 0 | 5 | 0.1667 | cuts only |
+| -7, semitone down | 8A | 1A | k - 7 | 11 | 2 | 0 | 5 | 0.1667 | cuts only |
 | +6, tritone | 8A | 2A | k + 6 | 6 | 2 | 0 | 6 | 0 | hard cuts only |
 
 Notes:
@@ -184,7 +186,9 @@ Percent of the outgoing tempo is not symmetric: 120 to 125 is +4.167%,
 125 to 120 is -4.000%, though both are the same stretch (|ln(125/120)| =
 0.0408). The fader setting the incoming track needs to meet the outgoing
 one is x / y - 1: from 120 to 126 BPM the change is +5.00% of the outgoing
-tempo, but the incoming track is played at -4.76%.
+tempo, but the incoming track is played at -4.76%. This app measures a
+change symmetrically, as the larger tempo over the smaller less 1: 120 to
+125 and 125 to 120 are both 4.17%.
 
 ### Pitch without key lock (derived)
 
@@ -224,7 +228,10 @@ that as n + e, n the nearest whole number of semitones, e the rest:
 
 As a working rule, a tempo change of up to about 1.5% (26 cents) leaves the
 labelled key usable without key lock (**convention**; the threshold is a
-judgement, not a measurement).
+judgement, not a measurement). A Recipe for a DJ who plays without key lock
+says `key.key_lock = false`: the sequencer then shifts each incoming key by
+the whole semitones of the change before scoring the move, and
+`key.max_detune = 25` (cents) refuses what is left beyond that rule.
 
 **Key lock.** Pioneer DJ's Master Tempo, Serato's and Engine DJ's Key
 Lock, Traktor's Key Lock keep pitch while changing tempo by
@@ -251,13 +258,16 @@ of some 3 to 8 BPM upwards is typical (**convention**, from the research
 review's sources; **unverified** here). A per-transition limit does not
 bound the drift: m percent per step over n tracks allows up to
 (1 + m / 100)^(n - 1) - 1, which is +80.1% for 4% over 16 tracks and
-+16.1% for 1%.
++16.1% for 1%. In a Recipe, `tempo.fold = true` measures by the folded
+distance, and `tempo.min_bpm` / `tempo.max_bpm` bound the whole set.
 
 ## 3. Energy and Intensity
 
 - **Energy** is the DJ's own 1 to 5 judgement, stored as the track's star
-  rating. It is not measured and the Recipe has no field for it; use it to
-  choose the pool (`set-plan build ... --energy 3..5`). Mixed In Key's own
+  rating. It is not measured; use it to choose the pool (`set-plan build
+  ... --energy 3..5`), or let it stand in for a track with no Intensity
+  (`intensity.missing = "energy"`, as (Energy - 1) / 4: 1 star 0, 3 stars
+  0.5, 5 stars 1). Mixed In Key's own
   Energy Level runs 1 to 10 and is a different, measured scale
   (**convention**).
 - **Intensity** is this app's measurement (0 to 1) of how hard a track hits
@@ -320,8 +330,10 @@ Raising the tonal centre (+2, +7) is heard as a lift and lowering it (-2,
 -7) as a release; minor to major brightens, major to minor darkens. Mixed
 In Key pairs energy boosts with rising Energy and suggests one every 20 to
 30 minutes, and cautions that a key change alone does not guarantee a rise
-in energy (as reported by the research review). This app scores key moves
-by distance only, without direction (section 5).
+in energy (as reported by the research review). This app costs +2 and -2
+alike against `key.max_moves`, but in the score an energy boost where the
+Recipe's Intensity shape rises, or a wind-down where it falls, costs half a
+move less, and half a move more against the shape (section 4).
 
 ## 4. How this app sequences: the Recipe and the scores
 
@@ -339,9 +351,15 @@ line.
 | `tracks` | how many tracks the plan holds, 2 to 200 | yes |
 | `intensity.shape` | the curve of section 3 | |
 | `intensity.max_step` | most Intensity change between neighbours, above 0, at most 1 | yes |
-| `intensity.missing` | `"leave_out"` (default) or `"allow"` a track with no Intensity; `"allow"` cannot go with `max_step` | |
-| `tempo.max_change` | most tempo change in percent of the outgoing tempo, above 0 | yes |
-| `key.max_moves` | most app moves on the wheel, 0 to 7 | yes |
+| `intensity.missing` | a track with no Intensity: `"leave_out"` (default), `"allow"` (unscored; cannot go with `max_step`) or `"energy"` (its Energy stands in, (Energy - 1) / 4; a track with neither is left out) | |
+| `intensity.step_weight` | how much a step between neighbours that differs from the shape's own step costs, 0 or more, default 0.5 (0: the curve only) | |
+| `tempo.max_change` | most tempo change in percent, the larger tempo over the smaller, above 0 | yes |
+| `tempo.fold` | `true`: half and double time count as the same tempo (70 meets 140); default `false` | |
+| `tempo.min_bpm`, `tempo.max_bpm` | the set's tempo range; a track outside it (folded, with `fold`) is left out and named | yes |
+| `key.max_moves` | the most a move may cost (moves table), 0 to 7 | yes |
+| `key.key_lock` | `true` (default): a tempo change keeps the key; `false`: the incoming key is heard shifted by the change | |
+| `key.max_detune` | with `key_lock = false` only: the most detuning in cents left after the shift, above 0, at most 50 | yes |
+| `key.variety` | 0 to 1, default 0: how much of the weight a same-key transition loses, so a set does not sit in one key | |
 | `situations.place` | `{ situation, from, to, require }`: where a Situation belongs, as fractions; `require = true` makes every track there carry it | `require` only |
 | `recency.half_life_days`, `recency.as_of` | favour recent additions; `as_of` YYYY-MM-DD, default the newest addition in the pool | |
 | `genre.mix` | `"vary"` (neighbours of different genres) or `"stay"` | |
@@ -352,10 +370,13 @@ Library has a schema; `set-plan check` lists them when one is wrong. A
 required place makes the Recipe unsatisfiable when no track of the pool
 carries that Situation.
 
-What `key.max_moves` admits, by the moves table: 0 = same key only; 1 = the
-basic moves (+1, -1, relative), all safe for long blends; 2 adds both
-diagonals (consonant and clashing) and +2/-2; 3 adds +3/-3; the parallel
-keys need 4 and the semitone moves 5, which admit nearly everything.
+What `key.max_moves` admits, by the moves table's cost: 0 = same key only;
+1 = the basic moves (+1, -1, relative), all safe for long blends; 2 adds
+the consonant diagonal (1.5), +2/-2 and the parallel keys; 3 adds the
+clashing diagonal and +3/-3; 4 the major thirds; 5 the semitone moves; 6
+or 7 any key. A Recipe written for the old count reads the same at 0 and
+1; at 2 it no longer admits the clashing diagonal, and the parallel keys
+now need 2 instead of 4. Without key lock the cost is of the key as heard.
 
 ### The scores
 
@@ -366,25 +387,32 @@ position criteria) plus every transition.
 
 | Criterion | Contribution (w = the section's weight) |
 |---|---|
-| `intensity` | w x (1 - abs(Intensity - target)) |
-| `key` | w x max(0, 1 - moves / 4) |
-| `tempo` | w x max(0, 1 - abs(change %) / S), S = `max_change`, or 8 without one |
+| `intensity` | w x (1 - abs(Intensity - target)) - w x `step_weight` x abs(step - the shape's step); the first track has no step |
+| `key` | w x (1 - cost / 6) x (1 - detuning cents / 50), cost from the moves table (+2 or -2 half a move less with the shape, half more against it); a same key loses w x `variety` |
+| `tempo` | w x max(0, 1 - change % / S), S = `max_change`, or 8 without one; the change is the larger tempo over the smaller (folded with `fold`) |
 | `situations` | +w if the track carries a Situation placed here, -w if it carries one placed elsewhere, else 0 |
 | `recency` | w x 0.5 ^ (age in days / half_life_days) |
 | `genre` | w if the mix is as wanted, else 0 |
 
+A key or tempo the data does not give (a track with no key or no tempo)
+scores half the weight, between a clash (0) and a match (w), and the
+reason names the track: unknown is not the worst case.
+
 <!-- table: key-score -->
-| App moves | Key score at weight 1 |
+| Cost | Key score at weight 1 |
 |---|---|
 | 0 | 1 |
-| 1 | 0.75 |
-| 2 | 0.5 |
-| 3 | 0.25 |
-| 4 | 0 |
+| 1 | 0.8333 |
+| 1.5 | 0.75 |
+| 2 | 0.6667 |
+| 3 | 0.5 |
+| 4 | 0.3333 |
+| 5 | 0.1667 |
+| 6 | 0 |
 
-Exchange rates at weight 1: one key move costs 0.25, the same as an
-Intensity 0.25 off its target or a tempo change of a quarter of S (1% at
-S = 4). The sum is compensatory: a transition scoring 1, 1 and 0 (a perfect
+Exchange rates at weight 1: a basic key move (cost 1) costs 1/6 (0.1667),
+the same as an Intensity 0.1667 off its target or a tempo change of a
+sixth of S (0.67% at S = 4). The sum is compensatory: a transition scoring 1, 1 and 0 (a perfect
 Intensity and tempo with a tritone) totals 2.0 and beats one scoring 0.65
 on all three (1.95). Only the hard limits stop a bad move; set them for
 what must never happen, and use weights for preferences. The research
@@ -395,28 +423,31 @@ weights (0.3 to 0.6) (**convention**, a starting point to adjust).
 Hard limits are never broken in a returned plan. The search is a beam of
 48 partial orders, so under very tight limits it can report a Recipe
 unsatisfiable when a plan exists; loosen the limit it names. Missing data
-is named: a track without Intensity (unless `missing = "allow"`), without
-tempo under a tempo limit or without key under a key limit is listed in
-`left_out` with what it lacks; a criterion scored without data gives 0 and
-says why.
+is named: a track without Intensity (unless `missing = "allow"`, or
+`"energy"` and it has an Energy rating), without tempo under a tempo limit
+or range (or `max_detune`), without key under a key limit, or with a tempo
+outside the range, is listed in `left_out` with what it lacks; a key or
+tempo scored without data gives half the weight and says why, Intensity,
+Situations, recency and genre give 0 and say why.
 
 ### Reading a transition
 
 `set-plan show ID --json` gives `plan.transitions[]` with `score` and
 `criteria[] { criterion, score, reason }`. Worked example, weights 1,
-`tempo.max_change = 4`, from a track at 124 BPM in 8A to one at 126 BPM in
-9A with Intensity 0.62 where the shape wants 0.60:
+`tempo.max_change = 4`, from a track at 124 BPM in 8A with Intensity 0.60
+to one at 126 BPM in 9A with Intensity 0.62, where a flat shape wants 0.60:
 
 <!-- table: worked-transition -->
 | Criterion | Arithmetic | Score |
 |---|---|---|
-| intensity | 1 - abs(0.62 - 0.60) | 0.98 |
-| key | 1 - 1 / 4 | 0.75 |
-| tempo | 1 - (2 / 124 x 100) / 4 = 1 - 1.6129 / 4 | 0.5968 |
-| total | | 2.3268 |
+| intensity | 1 - abs(0.62 - 0.60) - 0.5 x abs(0.02 - 0) | 0.97 |
+| key | 1 - 1 / 6 | 0.8333 |
+| tempo | 1 - (126 / 124 - 1) x 100 / 4 = 1 - 1.6129 / 4 | 0.5968 |
+| total | | 2.4001 |
 
 The reasons read "Intensity 0.62 where the shape wants 0.60, a step of
-+0.02 from 0.60", "8A to 9A, 1 move" and "124.00 to 126.00 BPM, +1.6%". A
++0.02 from 0.60 where the shape steps +0.00", "8A to 9A, +1, a fifth up"
+and "124.00 to 126.00 BPM, +1.6%". A
 low criterion in a good plan is the cost of keeping another; an
 unsatisfiable Recipe names the criterion in the way, the limits that alone
 block it, and the position where it stopped.
@@ -432,8 +463,9 @@ Save one to a file, check it, then build from a pool:
 The Situation names are examples: use the Tag schema's terms, or leave the
 section out. Adapted from the research review's examples.
 
-A warm-up hour: 12 tracks at about 5 minutes each, a steady ramp, tight
-tempo, basic key moves only, one genre, an opener first.
+A warm-up hour: 12 tracks at about 5 minutes each, a steady ramp with no
+zigzag, tight tempo, basic key moves only and not all in one key, one
+genre, an opener first.
 
 ```toml
 version = 1
@@ -448,6 +480,7 @@ shape = [
   { at = 1.0, intensity = 0.62 },
 ]
 max_step = 0.12
+step_weight = 0.6
 weight = 1.4
 
 [tempo]
@@ -456,6 +489,7 @@ weight = 1.2
 
 [key]
 max_moves = 1
+variety = 0.1
 weight = 1.0
 
 [situations]
@@ -472,7 +506,9 @@ weight = 0.6
 ```
 
 A peak-time hour: 15 tracks at about 4 minutes, high with one breather
-before the climax, +2 and diagonals allowed, fresher tracks favoured.
+before the climax, +2, -2, the consonant diagonal and the parallel keys
+allowed (not the clashing diagonal), half and double time folded, fresher
+tracks favoured.
 
 ```toml
 version = 1
@@ -492,10 +528,12 @@ weight = 1.5
 
 [tempo]
 max_change = 3.5
+fold = true
 weight = 1.0
 
 [key]
 max_moves = 2
+variety = 0.15
 weight = 1.0
 
 [situations]
@@ -512,7 +550,8 @@ weight = 0.5
 ```
 
 A closing set: 13 tracks at about 5.5 minutes, a short hold and then a
-landing, room for a slow tempo wind-down, a closer last.
+landing, room for a slow tempo wind-down but not below 100 BPM, the DJ's
+Energy standing in for unmeasured tracks, a closer last.
 
 ```toml
 version = 1
@@ -528,10 +567,12 @@ shape = [
   { at = 1.0, intensity = 0.35 },
 ]
 max_step = 0.18
+missing = "energy"
 weight = 1.4
 
 [tempo]
 max_change = 4.0
+min_bpm = 100
 weight = 0.9
 
 [key]
@@ -567,61 +608,70 @@ Intensity per unit of `at`; step = slope / (tracks - 1)):
 The warm-up's steepest segment is 0.45 to 0.8, the peak hour's the
 breather from 0.3 to 0.5, the closing set's the last, from 0.9 to 1.
 
-## 5. Known limits of the current sequencer
+## 5. What the sequencer handles, and its known limits
 
 Checked against `crates/wreckordbox-setplan` (`camelot.rs`, `sequence.rs`)
-and the service's feed. Each is a gap between the theory above and what
-the sequencer computes; work round it in the Recipe until the DJ decides.
+and the service's feed. The research review found six gaps between the
+theory above and the sequencer (wbx-wjl confirmed them); wbx-b59 closed
+most of them. New fields are optional, and a version 1 Recipe without them
+reads as before, except where a default is now better (the Intensity step,
+the symmetric tempo measure, the key costs and unknown data).
 
-1. **It assumes key lock.** Key moves are counted on the stored keys and
-   tempo separately; a tempo change never shifts the key. Without key lock
-   a 3 to 4% change detunes a track by 51 to 71 cents, and about 5.95%
-   moves it a whole semitone (7 places), while the key still scores as
-   before. Workaround: if the DJ plays without key lock, set
-   `tempo.max_change = 1.5` or less; with key lock, keep it within 4 to 6%
-   for the artefacts' sake.
-2. **The key distance has no direction and no triad.** `moves` is the
-   shorter way round plus 1 for a ring change, so the consonant and the
-   clashing diagonal both cost 2, as do +2 and -2; the parallel keys and
-   the tritone ring flip both cost 4 and score 0, like a missing key.
-   Workaround: `key.max_moves = 1` admits only moves that are safe for long
-   blends. With `max_moves = 2`, read each transition's key reason in the
-   built plan and check the 2-move ones against the moves table (a
-   clashing diagonal is 8A to 9B or 8B to 7A in shape: k + 1 from A to B,
-   k - 1 from B to A); "boost" is +2 clockwise on the same ring only.
-3. **Tempo: no half or double time, no drift bound, and a one-sided
-   percent.** 70 to 140 BPM is a 100% change. A per-step limit allows
-   compound drift ((1 + m / 100)^(n - 1) - 1). The limit is a percent of
-   the outgoing tempo, so 120 to 125 (+4.167%) breaks `max_change = 4`
-   while 125 to 120 (-4.000%) keeps it. Workaround: keep half-time and
-   double-time tracks in separate pools (or leave `[tempo]` out and check
-   by hand); bound drift by the pool, choosing tracks from a BPM range
-   (`tracks query --bpm 122..128`, then pass their ids); set `max_change`
-   a little under the stretch you accept upwards.
-4. **Intensity is scored against the curve only.** The step from the
-   previous track appears in the reason but not in the score, so
-   0.5, 0.7, 0.5 around a flat target of 0.6 scores 0.9 each time, the same
-   as a steady 0.5, 0.5, 0.5. The value is the whole-track mean
-   (`summary.intensity`), uncalibrated; a track without it is left out under
-   `max_step` (there is no fallback to Energy); mix-in and mix-out points
-   are not in the plan. Workaround: set `max_step` just above the shape's
-   steepest step plus slack, as in section 4; choose shape values inside
-   the pool's measured range; measure the pool first.
-5. **Same key wins ties, and missing data scores like the worst case.**
-   Moves 0 scores 1 and every other move less, so with other criteria
-   equal the beam prefers staying in one key. Without hard limits a track
-   with no key or no tempo scores 0, like a tritone or an 8% jump. A track
-   with no Situation recorded scores 0, more than one known to belong
-   elsewhere (-w): `situations` swings over 2w, the others over w.
-   Workaround: lower `key.weight` against `intensity.weight` (section 4) or
-   vary the genre to break same-key runs; set `max_moves` and `max_change`
-   so tracks lacking key or tempo are left out and named rather than
-   scored 0; record Situations for the pool, or keep their weight low.
-6. **The design mock labels 8A to 6A "boost".** In
+Now handled:
+
+1. **The effective key without key lock.** `key.key_lock = false` shifts
+   the incoming key by the rounded semitones of 12 x log2(outgoing BPM /
+   incoming BPM) (7 places on the wheel each) before the move is costed,
+   and the key score is scaled by 1 - cents / 50 for what is left;
+   `key.max_detune` refuses a remainder above it (25 cents matches the
+   1.5% working rule of section 2). A 1A track at 120 BPM after an 8A
+   track at 127.1 is heard as 8A, 0.48 cents off, and scores
+   1 x (1 - 0.48 / 50), about 0.99. The default (`key_lock = true`) keeps
+   the stored keys.
+2. **Directed, graded key moves.** Each move is costed by direction and
+   ring (the moves table): the consonant diagonal 1.5 and the clashing one
+   3; the parallel keys 2 and the tritone ring flip 6. Each transition's
+   reason names the move ("8A to 11B, parallel major"). +2 (energy boost)
+   and -2 (wind-down) both cost 2 against `max_moves`, and the score
+   prefers the one going the way the Intensity shape goes.
+3. **Tempo.** The change is the larger tempo over the smaller, so 120 to
+   125 and 125 to 120 are both 4.17%. `tempo.fold = true` counts 85 and
+   170 as one tempo (the reason says "played at double time");
+   `tempo.min_bpm` and `tempo.max_bpm` bound the set and leave out, by
+   name, a track outside them.
+4. **The Intensity step.** The step from the previous track is scored
+   against the step the shape takes (`intensity.step_weight`, default 0.5),
+   so 0.5, 0.7, 0.5 round a flat 0.6 now scores 0.8 a transition against
+   0.9 for a steady 0.5, 0.5, 0.5, and the sequencer avoids the zigzag.
+   `intensity.missing = "energy"` lets the DJ's Energy stand in for a
+   track never measured, also under `max_step`.
+5. **Variety and missing data.** `key.variety` marks a same-key transition
+   down by that share of the weight, so a set leaves one key when the pool
+   allows (the default 0 keeps the old preference). A missing key or tempo
+   scores half the weight, apart from a tritone or a jump (0), and the
+   reason names the track.
+
+Still not handled (work round them in the Recipe):
+
+1. **Drift from the first track.** The range is absolute: there is no
+   "at most m% from where the set began" yet. Workaround: set
+   `tempo.min_bpm` and `tempo.max_bpm` around the tempo the set should
+   start at.
+2. **Intensity is the whole-track mean,** uncalibrated against Energy;
+   mix-in and mix-out points are not in the plan. Workaround: choose shape
+   values inside the pool's measured range; measure the pool first.
+3. **Situations swing over 2w.** A track with no Situation recorded scores
+   0, more than one known to belong elsewhere (-w), while the other
+   criteria run over w. Workaround: record Situations for the pool, or
+   keep their weight low.
+4. **The direction of a move beyond ±2** (+7 lifts, -7 releases) and minor
+   to major brightening are named in the reason but not scored by the
+   shape.
+5. **The design mock labels 8A to 6A "boost".** In
    `docs/design/screens/mock.html` that is -2, a whole tone down; only +2
-   on the same ring is Mixed In Key's Energy Boost. Since `moves` has no
-   direction, a view must compute (k2 - k1) mod 12 = 2 with the same ring
-   itself.
+   on the same ring is Mixed In Key's Energy Boost. The plan's key reason
+   now names the move ("+2, energy boost" or "-2, wind-down"); the view
+   should show that (filed for the window, wbx-76).
 
 ## 6. Limits and honesty
 
@@ -643,8 +693,8 @@ the sequencer computes; work round it in the Recipe until the DJ decides.
   al., ISMIR 2015) and 41 to 86% across programs in a 66-track DJ
   TechTools test (2015). At 70% per track both keys of a pair are right
   0.70 x 0.70 = 49% of the time. A fifth error turns a planned +1 into a
-  real +2; a parallel error makes this app count 4 moves against the
-  true key. The DJ's ear and the DJ's corrections win.
+  real +2; a parallel error makes a same-key pair a parallel move (cost
+  2) to this app. The DJ's ear and the DJ's corrections win.
 - **Intensity** is not yet calibrated against Energy.
 - These are defaults. The DJ overrides any of them.
 

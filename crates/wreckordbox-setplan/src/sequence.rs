@@ -16,8 +16,11 @@
 //!
 //! **Scores.** Each criterion the Recipe uses contributes to each
 //! transition, with a reason in words: `intensity` (the incoming track
-//! against the shape, with the step), `key` (moves on the wheel), `tempo`
-//! (the change in percent), `situations` (does the incoming track's
+//! against the shape, and its step against the shape's step), `key` (the
+//! directed move, named and costed by [`crate::KeyStep`]; without key lock
+//! on the key as heard after the tempo change), `tempo` (the stretch in
+//! percent, the larger tempo over the smaller, folded by half or double
+//! time when asked), `situations` (does the incoming track's
 //! Situation belong here), `recency` (how recently it was added) and
 //! `genre` (the mix). The first track has the position criteria only, in
 //! [`Plan::opening`]. A weight scales a criterion; most contributions run
@@ -26,14 +29,22 @@
 //! **Missing data is named.** A track the Recipe's hard limits cannot be
 //! checked on (no tempo under a tempo limit, no key under a key limit) is
 //! left out of the plan and listed in `left_out` with what it lacks, as is
-//! a track with no Intensity unless the Recipe says `missing = "allow"`.
-//! Where a criterion is scored without data, its reason says so.
+//! a track with no Intensity unless the Recipe says `missing = "allow"` (or
+//! `"energy"` and it has an Energy rating), and a track whose tempo is
+//! outside the Recipe's range. Where a criterion is scored without data,
+//! its reason says so; a missing key or tempo scores [`UNKNOWN`] of the
+//! weight, apart from the worst case.
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
 use crate::recipe::{day_number, Missing, Mix, Recipe};
 use crate::Camelot;
+
+/// The share of a criterion's weight a transition gets when the data it
+/// needs is missing: between a clash (0) and a perfect match (1), so a
+/// missing key or tempo is scored apart from the worst case, and named.
+pub const UNKNOWN: f64 = 0.5;
 
 /// How many partial orders are kept at each position.
 pub const BEAM: usize = 48;
@@ -48,6 +59,10 @@ pub struct Candidate {
     pub key: Option<Camelot>,
     /// The track's Intensity (0..1), or `None` when it has none.
     pub intensity: Option<f64>,
+    /// The DJ's Energy rating, 1 to 5 stars; `None` unrated. Stands in for
+    /// a missing Intensity under `intensity.missing = "energy"`.
+    #[serde(default)]
+    pub energy: Option<u8>,
     /// The standing Situation Fact's term identifiers; `None` when there is
     /// no Situation Fact at all (unknown, not "none").
     pub situations: Option<Vec<String>>,
@@ -116,6 +131,9 @@ pub enum Lack {
     Intensity,
     Tempo,
     Key,
+    /// Not a lack of data: the track's tempo is outside the Recipe's
+    /// `tempo.min_bpm` to `tempo.max_bpm`.
+    TempoRange,
 }
 
 impl Lack {
@@ -124,6 +142,7 @@ impl Lack {
             Self::Intensity => "no Intensity",
             Self::Tempo => "no tempo",
             Self::Key => "no key",
+            Self::TempoRange => "a tempo outside the Recipe's range",
         }
     }
 }
@@ -167,6 +186,8 @@ pub enum Blocker {
     TempoChange,
     /// A place with `require = true`.
     Situations,
+    /// `key.max_detune`, without key lock.
+    KeyDetune,
 }
 
 /// How often a limit refused a choice at the position where the search
@@ -224,16 +245,11 @@ fn plan_with(
         if lacks.is_empty() {
             usable.push(candidate);
         } else {
-            let words: Vec<&str> = lacks.iter().map(|l| l.words()).collect();
+            let message = left_out_message(recipe, candidate, &lacks);
             left_out.push(LeftOut {
                 id: candidate.id.clone(),
                 title: candidate.title.clone(),
-                message: format!(
-                    "track {} {:?} has {}, which this Recipe needs; it is left out",
-                    candidate.id,
-                    candidate.title,
-                    words.join(" and ")
-                ),
+                message,
                 lacks,
             });
         }
@@ -361,32 +377,127 @@ fn plan_with(
     }
 }
 
+/// Why a track is left out, in words: what it lacks, or that its tempo is
+/// outside the Recipe's range.
+fn left_out_message(recipe: &Recipe, candidate: &Candidate, lacks: &[Lack]) -> String {
+    use std::fmt::Write as _;
+    let energy = recipe
+        .intensity
+        .as_ref()
+        .is_some_and(|i| i.missing == Missing::Energy);
+    let words: Vec<&str> = lacks
+        .iter()
+        .filter(|l| **l != Lack::TempoRange)
+        .map(|l| match l {
+            Lack::Intensity if energy => "no Intensity and no Energy",
+            other => other.words(),
+        })
+        .collect();
+    let mut message = format!("track {} {:?}", candidate.id, candidate.title);
+    if !words.is_empty() {
+        let _ = write!(
+            message,
+            " has {}, which this Recipe needs;",
+            words.join(" and ")
+        );
+    }
+    if lacks.contains(&Lack::TempoRange) {
+        let t = recipe.tempo.as_ref();
+        let bound = |b: Option<f64>| b.map_or_else(|| "any".to_owned(), |v| format!("{v}"));
+        let _ = write!(
+            message,
+            " is at {:.2} BPM, outside the Recipe's tempo range ({} to {} BPM{});",
+            tempo(candidate).unwrap_or_default(),
+            bound(t.and_then(|t| t.min_bpm)),
+            bound(t.and_then(|t| t.max_bpm)),
+            if t.is_some_and(|t| t.fold) {
+                ", half or double time counted"
+            } else {
+                ""
+            }
+        );
+    }
+    message.push_str(" it is left out");
+    message
+}
+
 fn lacks(recipe: &Recipe, c: &Candidate) -> Vec<Lack> {
     let mut lacks = Vec::new();
     if recipe
         .intensity
         .as_ref()
-        .is_some_and(|i| i.missing == Missing::LeaveOut)
-        && c.intensity.is_none()
+        .is_some_and(|i| i.missing != Missing::Allow)
+        && level(recipe, c).is_none()
     {
         lacks.push(Lack::Intensity);
     }
-    if recipe
+    let tempo_needed = recipe
         .tempo
         .as_ref()
-        .is_some_and(|t| t.max_change.is_some())
-        && tempo(c).is_none()
-    {
+        .is_some_and(|t| t.max_change.is_some() || t.min_bpm.is_some() || t.max_bpm.is_some())
+        || recipe.key.as_ref().is_some_and(|k| k.max_detune.is_some());
+    if tempo_needed && tempo(c).is_none() {
         lacks.push(Lack::Tempo);
     }
     if recipe.key.as_ref().is_some_and(|k| k.max_moves.is_some()) && c.key.is_none() {
         lacks.push(Lack::Key);
+    }
+    if let (Some(t), Some(bpm)) = (&recipe.tempo, tempo(c)) {
+        let low = t.min_bpm.unwrap_or(0.0);
+        let high = t.max_bpm.unwrap_or(f64::INFINITY);
+        let factors: &[f64] = if t.fold { &[1.0, 0.5, 2.0] } else { &[1.0] };
+        let inside = factors
+            .iter()
+            .any(|f| bpm * f >= low - 1e-9 && bpm * f <= high + 1e-9);
+        if !inside {
+            lacks.push(Lack::TempoRange);
+        }
     }
     lacks
 }
 
 fn tempo(c: &Candidate) -> Option<f64> {
     c.bpm.filter(|b| b.is_finite() && *b > 0.0)
+}
+
+/// The track's Intensity, or under `missing = "energy"` its Energy as
+/// (Energy - 1) / 4 (and the Energy, to say so).
+fn level(recipe: &Recipe, c: &Candidate) -> Option<(f64, Option<u8>)> {
+    match (c.intensity, recipe.intensity.as_ref().map(|i| i.missing)) {
+        (Some(value), _) => Some((value, None)),
+        (None, Some(Missing::Energy)) => c
+            .energy
+            .filter(|e| (1..=5).contains(e))
+            .map(|e| ((f64::from(e) - 1.0) / 4.0, Some(e))),
+        _ => None,
+    }
+}
+
+/// The stretch between two tempos in percent, the same both ways: the
+/// larger over the smaller. With `fold`, half and double time are tried
+/// too. Returns the stretch, its sign (+ when `y` as played is faster) and
+/// the factor `y` is played at (1, 2 or 0.5).
+fn tempo_step(x: f64, y: f64, fold: bool) -> (f64, f64, f64) {
+    let factors: &[f64] = if fold { &[1.0, 2.0, 0.5] } else { &[1.0] };
+    let mut best = (f64::INFINITY, 1.0, 1.0);
+    for &f in factors {
+        let played = y * f;
+        let stretch = (x.max(played) / x.min(played) - 1.0) * 100.0;
+        if stretch < best.0 - 1e-12 {
+            best = (stretch, if played >= x { 1.0 } else { -1.0 }, f);
+        }
+    }
+    best
+}
+
+/// The incoming key as heard without key lock: shifted by the whole
+/// semitones of the tempo change, and the cents left over.
+#[derive(Debug, Clone, Copy)]
+struct Heard {
+    key: Camelot,
+    shift: i32,
+    cents: f64,
+    percent: f64,
 }
 
 fn round4(x: f64) -> f64 {
@@ -406,6 +517,7 @@ struct Limits {
     moves: Option<u32>,
     change: Option<f64>,
     situations: bool,
+    detune: Option<f64>,
 }
 
 impl Limits {
@@ -418,6 +530,7 @@ impl Limits {
                 .situations
                 .as_ref()
                 .is_some_and(|s| s.place.iter().any(|p| p.require)),
+            detune: recipe.key.as_ref().and_then(|k| k.max_detune),
         }
     }
 
@@ -435,6 +548,9 @@ impl Limits {
         if self.situations {
             present.push(Blocker::Situations);
         }
+        if self.detune.is_some() {
+            present.push(Blocker::KeyDetune);
+        }
         present
     }
 
@@ -444,6 +560,7 @@ impl Limits {
             Blocker::KeyMoves => self.moves = None,
             Blocker::TempoChange => self.change = None,
             Blocker::Situations => self.situations = false,
+            Blocker::KeyDetune => self.detune = None,
             Blocker::Tracks => {}
         }
         self
@@ -834,6 +951,13 @@ impl Scorer<'_> {
                     .and_then(|t| t.max_change)
                     .unwrap_or_default()
             ),
+            Blocker::KeyDetune => format!(
+                "the detuning limit without key lock (key.max_detune {} cents)",
+                r.key
+                    .as_ref()
+                    .and_then(|k| k.max_detune)
+                    .unwrap_or_default()
+            ),
             Blocker::Situations => {
                 let required: Vec<String> = r
                     .situations
@@ -863,6 +987,32 @@ impl Scorer<'_> {
             })
     }
 
+    fn fold(&self) -> bool {
+        self.recipe.tempo.as_ref().is_some_and(|t| t.fold)
+    }
+
+    /// `b`'s key as heard after `a` without key lock: `None` with key lock,
+    /// or when either tempo or `b`'s key is unknown.
+    fn heard(&self, a: &Candidate, b: &Candidate) -> Option<Heard> {
+        let key = self.recipe.key.as_ref()?;
+        if key.key_lock {
+            return None;
+        }
+        let (x, y, to) = (tempo(a)?, tempo(b)?, b.key?);
+        let (_, _, factor) = tempo_step(x, y, self.fold());
+        // `b` is played at `x`: faster by x / (y * factor).
+        let semitones = 12.0 * (x / (y * factor)).log2();
+        let whole = semitones.round();
+        #[allow(clippy::cast_possible_truncation, reason = "a few semitones")]
+        let shift = whole as i32;
+        Some(Heard {
+            key: to.shifted(shift),
+            shift,
+            cents: (semitones - whole) * 100.0,
+            percent: (x / (y * factor) - 1.0) * 100.0,
+        })
+    }
+
     /// The hard limits going from `a` to `b` at `position` would break.
     fn broken(
         &self,
@@ -872,18 +1022,26 @@ impl Scorer<'_> {
         limits: Limits,
     ) -> Vec<Blocker> {
         let mut broken = Vec::new();
-        if let (Some(step), Some(x), Some(y)) = (limits.step, a.intensity, b.intensity) {
+        let r = self.recipe;
+        if let (Some(step), Some((x, _)), Some((y, _))) = (limits.step, level(r, a), level(r, b)) {
             if (y - x).abs() > step + 1e-9 {
                 broken.push(Blocker::IntensityStep);
             }
         }
+        let heard = self.heard(a, b);
         if let (Some(moves), Some(x), Some(y)) = (limits.moves, a.key, b.key) {
-            if x.moves(y) > moves {
+            let y = heard.map_or(y, |h| h.key);
+            if x.step_to(y).cost() > f64::from(moves) + 1e-9 {
                 broken.push(Blocker::KeyMoves);
             }
         }
+        if let (Some(detune), Some(h)) = (limits.detune, heard) {
+            if h.cents.abs() > detune + 1e-9 {
+                broken.push(Blocker::KeyDetune);
+            }
+        }
         if let (Some(change), Some(x), Some(y)) = (limits.change, tempo(a), tempo(b)) {
-            if ((y - x) / x * 100.0).abs() > change + 1e-9 {
+            if tempo_step(x, y, self.fold()).0 > change + 1e-9 {
                 broken.push(Blocker::TempoChange);
             }
         }
@@ -906,16 +1064,30 @@ impl Scorer<'_> {
         let mut out = Vec::new();
         if let Some(shape) = &r.intensity {
             let target = shape.target(at);
-            out.push(match c.intensity {
-                Some(value) => {
-                    let step = match from.and_then(|f| f.intensity) {
-                        Some(before) => format!(", a step of {:+.2} from {before:.2}", value - before),
-                        None => String::new(),
+            out.push(match level(r, c) {
+                Some((value, energy)) => {
+                    let mut score = shape.weight * (1.0 - (value - target).abs());
+                    let step = match from.and_then(|f| level(r, f)) {
+                        Some((before, _)) if position > 0 => {
+                            // The step taken against the step the shape takes.
+                            let wanted = target - shape.target(r.at(position - 1));
+                            let off = (value - before) - wanted;
+                            score -= shape.weight * shape.step_weight * off.abs();
+                            format!(
+                                ", a step of {:+.2} from {before:.2} where the shape steps {wanted:+.2}",
+                                value - before
+                            )
+                        }
+                        _ => String::new(),
+                    };
+                    let what = match energy {
+                        Some(e) => format!("Energy {e} standing in for Intensity: {value:.2}"),
+                        None => format!("Intensity {value:.2}"),
                     };
                     Contribution {
                         criterion: Criterion::Intensity,
-                        score: round4(shape.weight * (1.0 - (value - target).abs())),
-                        reason: format!("Intensity {value:.2} where the shape wants {target:.2}{step}"),
+                        score: round4(score),
+                        reason: format!("{what} where the shape wants {target:.2}{step}"),
                     }
                 }
                 None => Contribution {
@@ -1011,25 +1183,14 @@ impl Scorer<'_> {
         let mut out = self.at_position(b, position, Some(a));
         if let Some(key) = &r.key {
             out.push(match (a.key, b.key) {
-                (Some(x), Some(y)) => {
-                    let moves = x.moves(y);
-                    let score = key.weight * (1.0 - f64::from(moves) / 4.0).max(0.0);
-                    Contribution {
-                        criterion: Criterion::Key,
-                        score: round4(score),
-                        reason: format!(
-                            "{x} to {y}, {moves} move{}",
-                            if moves == 1 { "" } else { "s" }
-                        ),
-                    }
-                }
+                (Some(x), Some(y)) => self.key_move(key, a, b, x, y, position),
                 _ => {
                     let without = if a.key.is_none() { &a.id } else { &b.id };
                     Contribution {
                         criterion: Criterion::Key,
-                        score: 0.0,
+                        score: round4(key.weight * UNKNOWN),
                         reason: format!(
-                            "track {without} has no key, so the key move is not scored"
+                            "track {without} has no key, so the move is unknown: scored at {UNKNOWN} of the weight, not as a clash"
                         ),
                     }
                 }
@@ -1038,21 +1199,28 @@ impl Scorer<'_> {
         if let Some(t) = &r.tempo {
             out.push(match (tempo(a), tempo(b)) {
                 (Some(x), Some(y)) => {
-                    let change = (y - x) / x * 100.0;
+                    let (stretch, sign, factor) = tempo_step(x, y, t.fold);
                     let scale = t.max_change.unwrap_or(8.0);
+                    let folded = if factor > 1.0 {
+                        " played at double time,"
+                    } else if factor < 1.0 {
+                        " played at half time,"
+                    } else {
+                        ""
+                    };
                     Contribution {
                         criterion: Criterion::Tempo,
-                        score: round4(t.weight * (1.0 - change.abs() / scale).max(0.0)),
-                        reason: format!("{x:.2} to {y:.2} BPM, {change:+.1}%"),
+                        score: round4(t.weight * (1.0 - stretch / scale).max(0.0)),
+                        reason: format!("{x:.2} to {y:.2} BPM,{folded} {:+.1}%", sign * stretch),
                     }
                 }
                 _ => {
                     let without = if tempo(a).is_none() { &a.id } else { &b.id };
                     Contribution {
                         criterion: Criterion::Tempo,
-                        score: 0.0,
+                        score: round4(t.weight * UNKNOWN),
                         reason: format!(
-                            "track {without} has no tempo, so the change is not scored"
+                            "track {without} has no tempo, so the change is unknown: scored at {UNKNOWN} of the weight, not as a jump"
                         ),
                     }
                 }
@@ -1105,6 +1273,68 @@ impl Scorer<'_> {
         }
         out.sort_by_key(|c| c.criterion);
         out
+    }
+
+    /// The key contribution of a move between two known keys.
+    fn key_move(
+        &self,
+        key: &crate::recipe::Key,
+        outgoing: &Candidate,
+        incoming: &Candidate,
+        x: Camelot,
+        y: Camelot,
+        position: usize,
+    ) -> Contribution {
+        use std::fmt::Write as _;
+        let recipe = self.recipe;
+        let heard = self.heard(outgoing, incoming);
+        let step = x.step_to(heard.map_or(y, |h| h.key));
+        let mut cost = step.cost();
+        let mut notes = String::new();
+        if let Some(h) = heard {
+            let _ = write!(
+                notes,
+                ", heard as {} without key lock ({:+} semitone{}, {:+.0} cents, at {:+.1}%)",
+                h.key,
+                h.shift,
+                if h.shift.abs() == 1 { "" } else { "s" },
+                h.cents,
+                h.percent
+            );
+        }
+        // An energy boost goes with a rising shape, a wind-down with a
+        // falling one: half a move cheaper with it, half dearer against it.
+        if let Some(shape) = &recipe.intensity {
+            if step.is_boost() || step.is_wind_down() {
+                let rise =
+                    shape.target(recipe.at(position)) - shape.target(recipe.at(position - 1));
+                if rise.abs() > 1e-9 {
+                    let with = (rise > 0.0) == step.is_boost();
+                    cost += if with { -0.5 } else { 0.5 };
+                    notes.push_str(if with {
+                        ", with the shape"
+                    } else {
+                        ", against the shape"
+                    });
+                }
+            }
+        }
+        let detune = heard.map_or(0.0, |h| h.cents.abs());
+        let mut score = key.weight * (1.0 - cost / 6.0).max(0.0) * (1.0 - detune / 50.0);
+        if step.cost() == 0.0 && key.variety > 0.0 {
+            score -= key.weight * key.variety;
+            let _ = write!(notes, "; the Recipe wants variety (-{})", key.variety);
+        }
+        let to = if heard.is_some() {
+            format!("{y}")
+        } else {
+            format!("{}", step.to)
+        };
+        Contribution {
+            criterion: Criterion::Key,
+            score: round4(score),
+            reason: format!("{x} to {to}, {}{notes}", step.name()),
+        }
     }
 
     fn write(
@@ -1183,6 +1413,7 @@ mod tests {
             bpm: Some(120.0),
             key: Camelot::parse(key),
             intensity: Some(intensity),
+            energy: None,
             situations: None,
             genres: None,
             added: None,

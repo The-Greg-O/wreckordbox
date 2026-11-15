@@ -86,7 +86,7 @@ fn json_gives_the_same_document_in_sections() {
             "2. Tempo",
             "3. Energy and Intensity",
             "4. How this app sequences: the Recipe and the scores",
-            "5. Known limits of the current sequencer",
+            "5. What the sequencer handles, and its known limits",
             "6. Limits and honesty",
             "7. References",
         ]
