@@ -20,6 +20,7 @@ fn track(id: u32, bpm: f64, key: &str, intensity: f64) -> Candidate {
         bpm: Some(bpm),
         key: Camelot::parse(key),
         intensity: Some(intensity),
+        energy: None,
         situations: None,
         genres: None,
         added: None,

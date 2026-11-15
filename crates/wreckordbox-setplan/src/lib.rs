@@ -9,6 +9,6 @@ pub mod guide;
 pub mod recipe;
 pub mod sequence;
 
-pub use camelot::Camelot;
+pub use camelot::{Camelot, KeyStep};
 pub use recipe::{Problem, Recipe};
 pub use sequence::{plan, Plan, Unsatisfiable};
