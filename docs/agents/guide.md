@@ -818,7 +818,11 @@ either. Audio key-tag edits (`key_edit`) retain values but have no durable inver
 Other Sidecar writes without a supported inverse (including Decisions and Mutants)
 are also reported by kind; this command does not silently undo only their Facts.
 The result's `reversed` counts entries selected for reversal (planned in a dry
-run, applied otherwise). `run` identifies the new Run when anything was reversed.
+run, accepted otherwise). `run` identifies the new Run when anything was reversed.
+If accepted changes await Ledger recording, `recording_pending: true` and a
+`warning` say so: Fact effects may still be pending. Inspect `runs show` and
+resolve the recording failure before retrying; Unwind refuses to plan around
+pending Ledger entries or recovery spills.
 
 ```sh
 wreckordbox --json runs unwind 7 --dry-run

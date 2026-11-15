@@ -189,15 +189,13 @@ fn a_subscriber_hears_one_change_and_restart_does_not_lose_unwind() {
     ok(&s, &["status"]);
     let mut observer = s.client();
     observer.subscribe().unwrap();
+    crate::common::barrier::settle(&mut observer);
     let plan = ok(&s, &["runs", "unwind", &run, "--dry-run"]);
     assert_eq!(plan["entries"][0]["status"], "will_reverse");
+    crate::common::barrier::told_nothing(&mut observer);
     let answer = ok(&s, &["runs", "unwind", &run]);
     assert_eq!(answer["reversed"], 1);
-    let event = observer
-        .next_event(std::time::Duration::from_secs(5))
-        .unwrap()
-        .unwrap();
-    assert_eq!(event.event, "library_changed");
+    crate::common::barrier::one_library_change(&mut observer);
     assert_eq!(ok(&s, &["tracks", "show", "10003"])["rating"], 0);
 }
 
@@ -401,4 +399,73 @@ fn unfinished_and_missing_runs_are_refused_without_creating_an_unwind() {
     }
     assert_eq!(ok(&s, &["runs", "list"]), before);
     assert_eq!(ok(&s, &["tracks", "show", "10003"])["rating"], 4);
+}
+
+#[test]
+fn tag_and_playlist_order_unwind_through_the_same_run() {
+    let s = Sandbox::new();
+    let playlist = rbl_db::fixture::playlist_id(0);
+    let before_tags = ok(&s, &["mytags", "list"])["categories"].clone();
+    let before_entries = ok(&s, &["playlists", "tracks", &playlist])["tracks"].clone();
+    let original = ok(
+        &s,
+        &[
+            "runs",
+            "start",
+            "--source",
+            "agent:test",
+            "--description",
+            "Orders",
+        ],
+    )["id"]
+        .to_string();
+    ok(
+        &s,
+        &["mytags", "reorder", "700003", "700002", "--run", &original],
+    );
+    let ids: Vec<_> = before_entries
+        .as_array()
+        .unwrap()
+        .iter()
+        .rev()
+        .map(|row| row["entry_id"].as_str().unwrap())
+        .collect();
+    let mut args = vec!["playlists", "reorder", &playlist];
+    args.extend(ids);
+    args.extend(["--run", &original]);
+    ok(&s, &args);
+    ok(&s, &["runs", "finish", &original]);
+    let plan = ok(&s, &["runs", "unwind", &original, "--dry-run"]);
+    assert_eq!(plan["reversed"], 2, "{plan}");
+    ok(&s, &["runs", "unwind", &original]);
+    assert_eq!(ok(&s, &["mytags", "list"])["categories"], before_tags);
+    assert_eq!(
+        ok(&s, &["playlists", "tracks", &playlist])["tracks"],
+        before_entries
+    );
+}
+
+#[test]
+fn an_accepted_unwind_reports_pending_recording_and_refuses_a_stale_retry() {
+    let s = Sandbox::new();
+    let original =
+        ok(&s, &["tracks", "rate", "10003", "4", "--source", "dj"])["run"]["id"].to_string();
+    s.client().stop().unwrap();
+    crate::common::released::wait_until_released(&s, "service stopped before fault injection");
+    let mut command = s.command();
+    command
+        .env("WRECKORDBOX_LEDGER_FAULTS", "fail_append=1")
+        .args(["--json", "runs", "unwind", &original]);
+    let accepted = s.run(&mut command);
+    assert!(accepted.status.success(), "{}", accepted.stderr);
+    let answer = accepted.json();
+    assert_eq!(answer["recording_pending"], true, "{answer}");
+    assert!(answer["warning"].as_str().unwrap().contains("Ledger"));
+    assert_eq!(ok(&s, &["tracks", "show", "10003"])["rating"], 0);
+    let refused = s.cli(&["--json", "runs", "unwind", &original]);
+    assert!(!refused.status.success());
+    assert_eq!(
+        refused.error_json()["error"]["code"],
+        "unwind_pending_recording"
+    );
 }

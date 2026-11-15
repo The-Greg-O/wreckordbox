@@ -48,7 +48,7 @@ pub(crate) fn answer(
         shown.command = crate::ledger::commands::RUNS_SHOW.into();
         shown.args = json!({"id":args.id,"limit":1});
         let evidence = crate::ledger::answer(keeper, stems, &shown)?;
-        if evidence["pending_recording"]["total"].as_u64().unwrap_or(0)>0 || !evidence["pending_recording"]["error"].is_null() || !evidence["recovery"]["error"].is_null() {
+        if keeper.recording_pending() || evidence["recovery"]["total"].as_u64().unwrap_or(0)>0 || evidence["pending_recording"]["total"].as_u64().unwrap_or(0)>0 || !evidence["pending_recording"]["error"].is_null() || !evidence["recovery"]["error"].is_null() {
             return Err(ServiceError::new("unwind_pending_recording", format!("Run {} has unresolved Ledger recording; inspect runs show and runs spills before Unwind. {evidence}",args.id)));
         }
         let planned = stems.with_sidecar_wait(|sidecar| {
@@ -70,6 +70,10 @@ pub(crate) fn answer(
         report["dry_run"] = json!(false);
         // The Ledger may have accepted the write into a spill. Never hide that.
         report["ledger_entry"] = json!(library.latest_ledger_entry());
+        report["recording_pending"] = json!(keeper.recording_pending());
+        if keeper.recording_pending() {
+            report["warning"] = json!("Unwind was accepted, but its Ledger entry and Fact effects await recording. Inspect runs show and resolve Ledger recording before retrying.");
+        }
         Ok((report,Some(changed)))
     })
 }

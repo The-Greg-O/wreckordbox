@@ -1591,6 +1591,12 @@ impl Keeper {
         result.and_then(|()| self.state().recovery_error.clone().map_or(Ok(()), Err))
     }
 
+    /// Whether accepted entries still await recording. Inspection never replays them.
+    pub(crate) fn recording_pending(&self) -> bool {
+        let state = self.state();
+        !state.unwritten.is_empty() || !state.bulk_waiting.is_empty()
+    }
+
     /// Bulk starts share recovery/catch-up admission. New recording failures
     /// remain separate from accepted writes; earlier unresolved work does not.
     fn admit_bulk(&self) -> Result<(), String> {

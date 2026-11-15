@@ -31,6 +31,8 @@ pub enum Who {
     /// request as its Run, as the CLI's `--run`, `--source` and
     /// `--description` are.
     Request,
+    /// A Library edit with its own Run: source and description, never a joined Run.
+    OwnRun,
     /// A Sidecar write whose arguments carry `run`, `source` and
     /// `description` themselves.
     InArgs,
@@ -118,6 +120,7 @@ fn run_properties(who: Who) -> Vec<(&'static str, Value)> {
             ("source", source_property()),
             ("description", description),
         ],
+        Who::OwnRun => vec![("source", source_property()), ("description", description)],
         Who::RunAndSource => vec![("run", run), ("source", source_property())],
         Who::Starts => vec![("source", source_property())],
     }
@@ -223,7 +226,7 @@ pub fn catalogue() -> Vec<Tool> {
     b.read("read_run_unwind", "runs.unwind.plan",
         "Preview Unwind of a finished Run: values to reverse, changed-since conflicts kept, and kinds that cannot be reversed (`wreckordbox runs unwind --dry-run`).",
         vec![("id", integer("The original Run's identifier.")), ("force", json!({"type":"boolean","description":"Preview explicit conflict replacement."}))], vec!["id"]);
-    b.add("change_run_unwind", "runs.unwind", Effect::Library, Who::Request,
+    b.add("change_run_unwind", "runs.unwind", Effect::Library, Who::OwnRun,
         "Unwind a finished Run through the edit path, in a new Run and one Undo step. Keep conflicts unless force is explicitly requested (`wreckordbox runs unwind`).",
         vec![("id", integer("The original Run's identifier.")), ("force", json!({"type":"boolean","description":"Replace conflicting values only when the DJ explicitly requested it."}))], vec!["id"], json!({}));
     // Reads.

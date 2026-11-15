@@ -57,5 +57,8 @@ pub fn run(
             lines.push(format!("  {value}"));
         }
     }
+    if let Some(warning) = report["warning"].as_str() {
+        lines.push(format!("Warning: {warning}"));
+    }
     Ok(lines.join("\n"))
 }
