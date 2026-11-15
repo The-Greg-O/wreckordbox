@@ -250,7 +250,21 @@ fn hand_off_unplaced(recovery_dir: &Path, master_db: &Path, ledger: &Owed) -> Re
 
 fn write_entry(recovery_dir: &Path, folder: &Path, ledger: &mut Owed) -> Result<i64, String> {
     use wreckordbox_sidecar::ledger::{Action, Intent, NewEntry, Store};
+    // Opening writes (it clears the work folder, may migrate): a Sidecar on
+    // a Stick is opened and recorded in only under that Stick's
+    // authorization, held to the end of the entry (wbx-8yh).
+    let _authorized =
+        wreckordbox_stick_protection::authorize(recovery_dir, folder).map_err(|e| e.to_string())?;
     let sidecar = wreckordbox_sidecar::Sidecar::open(folder).map_err(|e| e.to_string())?;
+    // The restore's entry is the Ledger's own record of a Library change:
+    // on a Stick it is kept only while the Stick is unlocked (wbx-8yh); a
+    // refusal keeps the journal owed, for the next start to retry.
+    sidecar.set_write_admission(crate::sidecar_stick::admission(
+        folder.parent().unwrap_or(folder),
+        folder,
+        recovery_dir.to_path_buf(),
+    ));
+    let _ledger = crate::sidecar_stick::ledger_scope();
     let source = wreckordbox_sidecar::Source::new(wreckordbox_sidecar::SourceKind::Dj, "dj");
     let command =
         serde_json::json!({ "name": "backup.restore", "args": { "backup": ledger.backup } });

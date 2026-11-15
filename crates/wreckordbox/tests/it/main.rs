@@ -42,6 +42,7 @@ mod review_view_reads;
 mod run_status;
 mod service_exit;
 mod sidecar_on_stick;
+mod sidecar_read_only_on_stick;
 mod standing_facts;
 mod status;
 mod stems_separate;

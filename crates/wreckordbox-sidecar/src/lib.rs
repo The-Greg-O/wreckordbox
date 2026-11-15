@@ -56,6 +56,7 @@ pub mod review;
 pub mod stems;
 mod store;
 pub mod tag_schema;
+mod write_admission;
 
 use std::path::{Path, PathBuf};
 
@@ -68,6 +69,13 @@ pub use store::{
     Fact, Kind, Nature, NewFact, Run, RunId, Sidecar, Source, SourceKind, SCHEMA_VERSION,
 };
 pub use tag_schema::{TagSchema, TAG_SCHEMA_FILE};
+pub use write_admission::WriteAdmission;
+
+impl From<rusqlite::Error> for SidecarError {
+    fn from(error: rusqlite::Error) -> Self {
+        write_admission::refusal_of(&error).map_or(Self::Db(error), Self::Refused)
+    }
+}
 
 /// The Sidecar's folder when nothing says otherwise: beside the Library's
 /// `master.db`, in the same folder.
@@ -92,7 +100,11 @@ pub enum SidecarError {
         source: std::io::Error,
     },
     #[error("the Sidecar's database failed: {0}")]
-    Db(#[from] rusqlite::Error),
+    Db(rusqlite::Error),
+    /// The handle's write admission refused the write (wbx-8yh): nothing
+    /// of it was kept. Its words, for the DJ.
+    #[error("{0}")]
+    Refused(String),
     /// The store was written by a newer wreckordbox.
     #[error("the Sidecar at {} is version {found}; this wreckordbox reads up to version {supported}", path.display())]
     Newer {

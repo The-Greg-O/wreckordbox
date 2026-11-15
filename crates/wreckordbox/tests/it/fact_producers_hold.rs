@@ -26,12 +26,12 @@ use serde_json::{json, Value};
 /// The service's test-mode holds: `hold-P` stops at point `P`, says so in
 /// `at-P`, and waits for `go-P`. A Fact command kept waiting by the
 /// coordination writes `facts-waiting`.
-struct Gate {
+pub(crate) struct Gate {
     dir: tempfile::TempDir,
 }
 
 impl Gate {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             dir: tempfile::tempdir().unwrap(),
         }
@@ -41,11 +41,11 @@ impl Gate {
         self.dir.path()
     }
 
-    fn hold(&self, point: &str) {
+    pub(crate) fn hold(&self, point: &str) {
         std::fs::write(self.path().join(format!("hold-{point}")), b"").unwrap();
     }
 
-    fn go(&self, point: &str) {
+    pub(crate) fn go(&self, point: &str) {
         std::fs::write(self.path().join(format!("go-{point}")), b"").unwrap();
     }
 
@@ -53,7 +53,7 @@ impl Gate {
         self.path().join(name).exists()
     }
 
-    fn reached(&self, name: &str) {
+    pub(crate) fn reached(&self, name: &str) {
         let deadline = Instant::now() + Duration::from_secs(60);
         while !self.has(name) {
             assert!(Instant::now() < deadline, "{name} never appeared");
@@ -63,7 +63,7 @@ impl Gate {
 }
 
 /// A service of this test's, killed and waited for when dropped.
-struct Serving(Child);
+pub(crate) struct Serving(Child);
 
 impl Drop for Serving {
     fn drop(&mut self) {
@@ -92,12 +92,12 @@ fn serve_with(s: &Sandbox, env: &[(&str, &Path)]) -> Serving {
     Serving(child)
 }
 
-fn gated(s: &Sandbox, gate: &Gate) -> Serving {
+pub(crate) fn gated(s: &Sandbox, gate: &Gate) -> Serving {
     serve_with(s, &[("WRECKORDBOX_REVIEW_GATE", gate.path())])
 }
 
 /// A CLI command running alongside, its JSON output read when it ends.
-fn spawn(s: &Sandbox, args: &[&str]) -> Child {
+pub(crate) fn spawn(s: &Sandbox, args: &[&str]) -> Child {
     let mut words = vec!["--json"];
     words.extend_from_slice(args);
     s.command()
@@ -110,7 +110,7 @@ fn spawn(s: &Sandbox, args: &[&str]) -> Child {
 
 /// Waits for `child` to end (at most a minute: a deadlock fails the test
 /// rather than hanging it) and reads its JSON answer.
-fn finished(mut child: Child) -> (bool, Value) {
+pub(crate) fn finished(mut child: Child) -> (bool, Value) {
     let deadline = Instant::now() + Duration::from_secs(60);
     while child.try_wait().unwrap().is_none() {
         if Instant::now() > deadline {
@@ -157,7 +157,7 @@ fn db_rating(s: &Sandbox, id: &str) -> i64 {
 
 /// How many Facts of `kind` the Sidecar holds for `track`, read past the
 /// service (a read through it would wait for the hold too).
-fn facts_in_sidecar(s: &Sandbox, track: &str, kind: &str) -> i64 {
+pub(crate) fn facts_in_sidecar(s: &Sandbox, track: &str, kind: &str) -> i64 {
     let db = rusqlite::Connection::open_with_flags(
         s.sidecar_dir().join("sidecar.db"),
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
@@ -219,7 +219,7 @@ fn an_accept_waits_while_a_separation_records_its_stems_and_then_is_written() {
 
 /// Adds a track with this audio (16-bit mono WAV at the generators' rate)
 /// to the Library, as rekordbox imports one. Before any service starts.
-fn import_audio(s: &Sandbox, name: &str, samples: &[f32]) -> String {
+pub(crate) fn import_audio(s: &Sandbox, name: &str, samples: &[f32]) -> String {
     let path = s.path().join("audio").join(name);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let data_len = u32::try_from(samples.len() * 2).unwrap();
