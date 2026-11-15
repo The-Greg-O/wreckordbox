@@ -19,8 +19,12 @@ fn powershell_literal(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
-pub fn shell(master_db: &Path) -> String {
+/// The shell script for the Library at `master_db`, handing its Ledger
+/// receipts off in `recovery_dir` (the state folder the window and the
+/// service share; `WRECKORDBOX_RECOVERY_DIR` overrides it when run).
+pub fn shell(master_db: &Path, recovery_dir: &Path) -> String {
     let default_db = shell_literal(&master_db.to_string_lossy());
+    let default_recovery = shell_literal(&recovery_dir.to_string_lossy());
     format!(
         r#"#!/usr/bin/env bash
 set -Eeuo pipefail
@@ -28,6 +32,9 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${{BASH_SOURCE[0]}}")" && pwd -P)"
 DEFAULT_MASTER_DB={default_db}
 MASTER_DB="${{1:-$DEFAULT_MASTER_DB}}"
+if [[ "$MASTER_DB" != /* ]]; then MASTER_DB="$PWD/$MASTER_DB"; fi
+DEFAULT_RECOVERY_DIR={default_recovery}
+RECOVERY_DIR="${{WRECKORDBOX_RECOVERY_DIR:-$DEFAULT_RECOVERY_DIR}}"
 DB_DIR="$(dirname -- "$MASTER_DB")"
 SHARE_DIR="$DB_DIR/share"
 STAMP="$(date +%Y%m%d-%H%M%S)"
@@ -48,10 +55,10 @@ if pgrep -ix rekordbox >/dev/null 2>&1 || pgrep -ix rekordboxAgent >/dev/null 2>
 fi
 echo "rekordbox is not running."
 
+WRECKORDBOX="${{WRECKORDBOX_BIN:-$(command -v wreckordbox || true)}}"
+ARCHIVE="${{WRECKORDBOX_BACKUP:-$SCRIPT_DIR.zip}}"
 if [[ -f "$SCRIPT_DIR/sidecar.json" ]]; then
   echo "This backup holds wreckordbox's Sidecar, which must be restored together with the library."
-  WRECKORDBOX="${{WRECKORDBOX_BIN:-$(command -v wreckordbox || true)}}"
-  ARCHIVE="${{WRECKORDBOX_BACKUP:-$SCRIPT_DIR.zip}}"
   if [[ -z "$WRECKORDBOX" || ! -x "$WRECKORDBOX" ]]; then
     echo "This script cannot restore a backup that holds the Sidecar, and the wreckordbox command was not found. Nothing was changed." >&2
     echo "Install wreckordbox, then run: wreckordbox backup restore <this backup's .zip file> --yes" >&2
@@ -73,16 +80,64 @@ if [[ -f "$SCRIPT_DIR/sidecar.json" ]]; then
   exec "$WRECKORDBOX" backup restore "$ARCHIVE" --yes
 fi
 
+# wreckordbox records a restore in the Ledger: given the backup's .zip and
+# no library path, the restore is its own.
+if [[ -z "${{1:-}}" && -n "$WRECKORDBOX" && -x "$WRECKORDBOX" && -f "$ARCHIVE" ]]; then
+  echo "This will replace the rekordbox library with the backup's, using:"
+  echo "  $WRECKORDBOX backup restore $ARCHIVE"
+  read -r -p "Continue? [y/N] " answer
+  case "$answer" in [yY]|[yY][eE][sS]) ;; *) echo "Restore cancelled."; exit 0 ;; esac
+  exec "$WRECKORDBOX" backup restore "$ARCHIVE" --yes
+fi
+
+# Library Protection, where wreckordbox has recorded it on this machine.
+PROTECTION="$RECOVERY_DIR/library-protection.json"
+if [[ -e "$PROTECTION" ]] && ! grep -Eq '"protect_library"[[:space:]]*:[[:space:]]*false' "$PROTECTION" 2>/dev/null; then
+  echo "Library Protection is on in wreckordbox, so the library cannot be restored. Nothing was changed." >&2
+  echo "Turn Library Protection off in wreckordbox first." >&2
+  exit 1
+fi
+
 echo "This will replace the rekordbox library at:"
 echo "  $MASTER_DB"
 read -r -p "Continue? [y/N] " answer
 case "$answer" in [yY]|[yY][eE][sS]) ;; *) echo "Restore cancelled."; exit 0 ;; esac
+
+# A receipt for wreckordbox's Ledger, handed off before anything is
+# replaced; `wreckordbox backup receipts --record` records it.
+OPERATION="restore-script-$STAMP-$$"
+RECEIPTS="$RECOVERY_DIR/ledger-receipts"
+AT="$(date +%s)000"
+json_string() {{
+  local value
+  value="$(printf '%s' "$1" | LC_ALL=C tr -d '\000-\010\013\014\016-\037')"
+  value="${{value//\\/\\\\}}"
+  value="${{value//\"/\\\"}}"
+  value="${{value//$'\t'/\\t}}"
+  value="${{value//$'\n'/\\n}}"
+  value="${{value//$'\r'/\\r}}"
+  printf '"%s"' "$value"
+}}
+write_receipt() {{
+  local outcome="$1" temp="$RECEIPTS/.$OPERATION.json.tmp-$$"
+  mkdir -p -- "$RECEIPTS"
+  printf '{{"format":1,"operation":%s,"kind":"restore","source":"restore-script","library":%s,"at":%s,"outcome":%s,"uncertainty":%s,"details":{{"backup":%s,"rollback":%s,"script":"{SHELL_NAME}"}}}}\n' \
+    "$(json_string "$OPERATION")" "$(json_string "$MASTER_DB")" "$AT" "$(json_string "$outcome")" \
+    "$(json_string "The standalone restore script replaced the library's files outside wreckordbox, with no Ledger open; it cannot say who ran it, and entries before this one may describe changes the restored library does not have.")" \
+    "$(json_string "$(basename -- "$SCRIPT_DIR")")" "$(json_string "$ROLLBACK")" > "$temp"
+  sync "$temp" 2>/dev/null || sync
+  mv -f -- "$temp" "$RECEIPTS/$OPERATION.json"
+  sync "$RECEIPTS" 2>/dev/null || sync
+}}
+echo "Handing a receipt for wreckordbox's Ledger to: $RECEIPTS/$OPERATION.json"
+write_receipt begun
 
 echo "Creating rollback folder: $ROLLBACK"
 mkdir -p -- "$ROLLBACK/database" "$ROLLBACK/share/PIONEER"
 failed() {{
   echo "Restore failed. The previous files are preserved at:" >&2
   echo "  $ROLLBACK" >&2
+  write_receipt failed || echo "The Ledger receipt still says the restore began: $RECEIPTS/$OPERATION.json" >&2
 }}
 trap failed ERR
 
@@ -148,15 +203,26 @@ done
 trap - ERR
 echo "rekordbox was restored successfully."
 echo "The previous files are saved at: $ROLLBACK"
+if write_receipt restored; then
+  echo "Run 'wreckordbox backup receipts --record' to record this restore in wreckordbox's Ledger."
+else
+  echo "The Ledger receipt still says the restore began: $RECEIPTS/$OPERATION.json" >&2
+fi
 "#
     )
 }
 
-pub fn powershell(master_db: &Path) -> String {
+/// The PowerShell script, as [`shell`].
+pub fn powershell(master_db: &Path, recovery_dir: &Path) -> String {
     let default_db = powershell_literal(&master_db.to_string_lossy());
+    let default_recovery = powershell_literal(&recovery_dir.to_string_lossy());
     format!(
         r#"param([string]$MasterDb = {default_db})
 $ErrorActionPreference = 'Stop'
+$GivenLibrary = $PSBoundParameters.ContainsKey('MasterDb')
+$MasterDb = [System.IO.Path]::GetFullPath($MasterDb)
+$RecoveryDir = $env:WRECKORDBOX_RECOVERY_DIR
+if (!$RecoveryDir) {{ $RecoveryDir = {default_recovery} }}
 $SourceDir = $PSScriptRoot
 $DbDir = Split-Path -Parent $MasterDb
 $ShareDir = Join-Path $DbDir 'share'
@@ -178,12 +244,12 @@ if (Get-Process -Name rekordbox, rekordboxAgent -ErrorAction SilentlyContinue) {
 }}
 Write-Host 'rekordbox is not running.'
 
+$Wreckordbox = $env:WRECKORDBOX_BIN
+if (!$Wreckordbox) {{ $Found = Get-Command wreckordbox -ErrorAction SilentlyContinue; if ($Found) {{ $Wreckordbox = $Found.Source }} }}
+$Archive = $env:WRECKORDBOX_BACKUP
+if (!$Archive) {{ $Archive = "$SourceDir.zip" }}
 if (Test-Path -LiteralPath (Join-Path $SourceDir 'sidecar.json') -PathType Leaf) {{
   Write-Host "This backup holds wreckordbox's Sidecar, which must be restored together with the library."
-  $Wreckordbox = $env:WRECKORDBOX_BIN
-  if (!$Wreckordbox) {{ $Found = Get-Command wreckordbox -ErrorAction SilentlyContinue; if ($Found) {{ $Wreckordbox = $Found.Source }} }}
-  $Archive = $env:WRECKORDBOX_BACKUP
-  if (!$Archive) {{ $Archive = "$SourceDir.zip" }}
   if (!$Wreckordbox) {{
     throw "This script cannot restore a backup that holds the Sidecar, and the wreckordbox command was not found. Nothing was changed. Install wreckordbox, then run: wreckordbox backup restore <this backup's .zip file> --yes"
   }}
@@ -198,10 +264,49 @@ if (Test-Path -LiteralPath (Join-Path $SourceDir 'sidecar.json') -PathType Leaf)
   exit $LASTEXITCODE
 }}
 
+# wreckordbox records a restore in the Ledger: given the backup's .zip and
+# no library path, the restore is its own.
+if (!$GivenLibrary -and $Wreckordbox -and (Test-Path -LiteralPath $Wreckordbox -PathType Leaf) -and (Test-Path -LiteralPath $Archive -PathType Leaf)) {{
+  Write-Host "This will replace the rekordbox library with the backup's, using:"
+  Write-Host "  $Wreckordbox backup restore $Archive"
+  $Answer = Read-Host 'Continue? [y/N]'
+  if ($Answer -notmatch '^(?i:y|yes)$') {{ Write-Host 'Restore cancelled.'; exit 0 }}
+  & $Wreckordbox backup restore $Archive --yes
+  exit $LASTEXITCODE
+}}
+
+# Library Protection, where wreckordbox has recorded it on this machine.
+$Protection = Join-Path $RecoveryDir 'library-protection.json'
+if (Test-Path -LiteralPath $Protection) {{
+  $Off = $false
+  try {{ $Off = ((Get-Content -LiteralPath $Protection -Raw | ConvertFrom-Json).protect_library -eq $false) }} catch {{ $Off = $false }}
+  if (!$Off) {{ throw 'Library Protection is on in wreckordbox, so the library cannot be restored. Nothing was changed. Turn Library Protection off in wreckordbox first.' }}
+}}
+
 Write-Host 'This will replace the rekordbox library at:'
 Write-Host "  $MasterDb"
 $Answer = Read-Host 'Continue? [y/N]'
 if ($Answer -notmatch '^(?i:y|yes)$') {{ Write-Host 'Restore cancelled.'; exit 0 }}
+
+# A receipt for wreckordbox's Ledger, handed off before anything is
+# replaced; `wreckordbox backup receipts --record` records it.
+$Operation = "restore-script-$Stamp-$PID"
+$Receipts = Join-Path $RecoveryDir 'ledger-receipts'
+$At = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+function Write-Receipt([string]$Outcome) {{
+  New-Item -ItemType Directory -Force -Path $Receipts | Out-Null
+  $Receipt = [ordered]@{{
+    format = 1; operation = $Operation; kind = 'restore'; source = 'restore-script'
+    library = $MasterDb; at = $At; outcome = $Outcome
+    uncertainty = "The standalone restore script replaced the library's files outside wreckordbox, with no Ledger open; it cannot say who ran it, and entries before this one may describe changes the restored library does not have."
+    details = [ordered]@{{ backup = (Split-Path -Leaf $SourceDir); rollback = $Rollback; script = '{POWERSHELL_NAME}' }}
+  }}
+  $Temp = Join-Path $Receipts ".$Operation.json.tmp-$PID"
+  [System.IO.File]::WriteAllText($Temp, ($Receipt | ConvertTo-Json -Depth 4 -Compress))
+  Move-Item -LiteralPath $Temp -Destination (Join-Path $Receipts "$Operation.json") -Force
+}}
+Write-Host "Handing a receipt for wreckordbox's Ledger to: $(Join-Path $Receipts "$Operation.json")"
+Write-Receipt 'begun'
 
 Write-Host "Creating rollback folder: $Rollback"
 New-Item -ItemType Directory -Force -Path (Join-Path $Rollback 'database'), (Join-Path $Rollback 'share/PIONEER') | Out-Null
@@ -266,15 +371,24 @@ try {{
     }}
   }}
 }} catch {{
+  try {{ Write-Receipt 'failed' }} catch {{ Write-Warning "The Ledger receipt still says the restore began: $Receipts" }}
   Write-Error "Restore failed. The previous files are preserved at: $Rollback`n$_"
   exit 1
 }}
 
 Write-Host 'rekordbox was restored successfully.'
 Write-Host "The previous files are saved at: $Rollback"
+try {{
+  Write-Receipt 'restored'
+  Write-Host "Run 'wreckordbox backup receipts --record' to record this restore in wreckordbox's Ledger."
+}} catch {{ Write-Warning "The Ledger receipt still says the restore began: $Receipts" }}
 "#
     )
 }
+
+#[cfg(test)]
+#[path = "backup_restore_receipts_tests.rs"]
+mod receipts_tests;
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
@@ -284,8 +398,11 @@ mod tests {
     #[test]
     fn paths_are_quoted_for_each_shell() {
         let path = Path::new("/tmp/Chris's library/master.db");
-        assert!(shell(path).contains("'/tmp/Chris'\\''s library/master.db'"));
-        assert!(powershell(path).contains("'/tmp/Chris''s library/master.db'"));
+        let state = Path::new("/tmp/Chris's state");
+        assert!(shell(path, state).contains("'/tmp/Chris'\\''s library/master.db'"));
+        assert!(shell(path, state).contains("'/tmp/Chris'\\''s state'"));
+        assert!(powershell(path, state).contains("'/tmp/Chris''s library/master.db'"));
+        assert!(powershell(path, state).contains("'/tmp/Chris''s state'"));
     }
 
     #[cfg(unix)]
@@ -323,10 +440,12 @@ mod tests {
         .unwrap();
         fs::write(live.join("masterPlaylists6.xml"), b"current playlists").unwrap();
         let script = extracted.join(SHELL_NAME);
-        fs::write(&script, shell(&database)).unwrap();
+        fs::write(&script, shell(&database, &dir.path().join("state"))).unwrap();
 
         let mut child = Command::new("bash")
             .arg(&script)
+            .env_remove("WRECKORDBOX_RECOVERY_DIR")
+            .env("WRECKORDBOX_BIN", dir.path().join("no-wreckordbox"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -427,7 +546,11 @@ mod tests {
             .unwrap();
         }
         let script = extracted.join(SHELL_NAME);
-        fs::write(&script, shell(&live.join("master.db"))).unwrap();
+        fs::write(
+            &script,
+            shell(&live.join("master.db"), &dir.path().join("state")),
+        )
+        .unwrap();
         let mut command = Command::new("/bin/bash");
         command
             .arg(&script)
@@ -504,7 +627,7 @@ mod tests {
 
     #[test]
     fn the_powershell_script_hands_a_sidecar_backup_to_wreckordbox_or_refuses() {
-        let script = powershell(Path::new("/tmp/master.db"));
+        let script = powershell(Path::new("/tmp/master.db"), Path::new("/tmp/state"));
         let sidecar = script.find("'sidecar.json'").unwrap();
         // Before anything is created or moved.
         assert!(sidecar < script.find("New-Item").unwrap());
