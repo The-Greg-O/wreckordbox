@@ -382,8 +382,9 @@ fn listing(
 
 /// Everything waiting for the DJ on `tracks` (every track when empty): what
 /// Projection's dry run holds back, then the proposed titles and artists
-/// ([`crate::review_text`], wbx-66); whether Library Protection is on; and
-/// the Ledger watermark they were read at.
+/// ([`crate::review_text`], wbx-66), then the proposed tags
+/// ([`crate::review_tags`], wbx-45.26); whether Library Protection is on;
+/// and the Ledger watermark they were read at.
 fn held(
     library: &OpenLibrary,
     stems: &Stems,
@@ -392,6 +393,7 @@ fn held(
     let (report, watermark) = crate::projection::dry_run(library, stems, tracks.to_vec())?;
     let mut rows = report.held;
     rows.extend(crate::review_text::waiting(library, stems, tracks)?);
+    rows.extend(crate::review_tags::waiting(library, stems, tracks)?);
     Ok((rows, report.library_protected, watermark))
 }
 
@@ -680,6 +682,9 @@ fn shows(row: &Row, field: Field, value: &Value) -> bool {
         Field::PrepColour => row.colour == native_number(value),
         Field::Title => value.as_str() == Some(row.title.as_str()),
         Field::Artist => value.as_str() == Some(row.artist.as_str()),
+        // A tag's before is the panel selection, already covered by the
+        // row token. It is not a column of this content row.
+        Field::Tag => true,
     }
 }
 
@@ -735,7 +740,20 @@ fn accept(
     // one was taken, is checked still of the moment before (wbx-25).
     let _gate = crate::large_run::bound(library, stems, &outside).map_err(early)?;
     let (chosen, watermark) = to_accept(library, stems, asked).map_err(early)?;
-    if chosen.is_empty() {
+    // Tags are applied after the native asserting edit, each as the tag
+    // panel's own edit (wbx-45.26): nesting that writer inside this one
+    // would be a second history step on a second connection.
+    let listed = chosen.clone();
+    let tags: Vec<Held> = chosen
+        .iter()
+        .filter(|held| crate::review_tags::is_tag(held.field))
+        .cloned()
+        .collect();
+    let chosen: Vec<Held> = chosen
+        .into_iter()
+        .filter(|held| !crate::review_tags::is_tag(held.field))
+        .collect();
+    if chosen.is_empty() && tags.is_empty() {
         return Ok((
             Decided {
                 large_run: None,
@@ -746,6 +764,31 @@ fn accept(
             None,
         ));
     }
+    let (native_changed, native_applied) = if chosen.is_empty() {
+        (None, Vec::new())
+    } else {
+        accept_natives(library, stems, &chosen, &listed, watermark)?
+    };
+    settle_tags(
+        library,
+        stems,
+        listed,
+        &tags,
+        native_changed,
+        native_applied,
+    )
+}
+
+/// The native rows of one accept, as one asserting edit. `listed` includes
+/// any tag rows, so a partial names what was not applied.
+fn accept_natives(
+    library: &OpenLibrary,
+    stems: &Stems,
+    chosen: &[Held],
+    listed: &[Held],
+    watermark: i64,
+) -> Result<(Option<LibraryChanged>, Vec<i64>), Failure> {
+    let early = |error: ServiceError| (None, error);
     let mut tracks: Vec<String> = chosen.iter().map(|h| h.track.clone()).collect();
     tracks.sort();
     tracks.dedup();
@@ -758,7 +801,7 @@ fn accept(
                 .collect())
         })
         .map_err(early)?;
-    for held in &chosen {
+    for held in chosen {
         let fine = rows
             .get(&held.track)
             .is_some_and(|row| shows(row, held.field, &held.before));
@@ -769,13 +812,13 @@ fn accept(
             ))));
         }
     }
-    let facts_then = facts_state(stems, &chosen).map_err(early)?;
+    let facts_then = facts_state(stems, chosen).map_err(early)?;
     hold("selected");
     let refused = |why: String| DbError::WriteRefused(format!("{CHANGED_MARK}{why}"));
     let mut applied: Vec<i64> = Vec::new();
     let made = library.asserting_edit_refreshing(
         &Touched::Metadata(tracks.clone()),
-        refresh_of(&chosen, &tracks),
+        refresh_of(chosen, &tracks),
         UNDO_LABEL,
         |writer| {
             // Something recorded wrote one of these tracks since the list was
@@ -795,7 +838,7 @@ fn accept(
             }
             // The selected tracks' Facts again, under the same hold of Fact
             // commands: none recorded, replaced, moved or marked since.
-            match facts_state(stems, &chosen) {
+            match facts_state(stems, chosen) {
                 Ok(now) if now == facts_then => {}
                 Ok(_) => {
                     return Err(refused(
@@ -839,6 +882,7 @@ fn accept(
                                 Field::PrepColour => row.colour = wrote,
                                 Field::Title => row.title = text(),
                                 Field::Artist => row.artist = text(),
+                                Field::Tag => {}
                             }
                         }
                         if done.len() == 1 {
@@ -856,17 +900,9 @@ fn accept(
         },
     );
     match made {
-        Ok((None, changed)) => Ok((
-            Decided {
-                large_run: None,
-                count: chosen.len(),
-                decided: chosen,
-                rejection: None,
-            },
-            Some(changed),
-        )),
+        Ok((None, changed)) => Ok((Some(changed), applied)),
         Ok((Some(failure), changed)) => {
-            let not: Vec<i64> = chosen
+            let not: Vec<i64> = listed
                 .iter()
                 .map(|h| h.fact)
                 .filter(|f| !applied.contains(f))
@@ -886,6 +922,62 @@ fn accept(
         ))),
         Err(e) => Err(early(e)),
     }
+}
+
+/// Applies the tag rows after the natives, and assembles the decision.
+/// A tag failure with nothing applied returns that error unchanged.
+fn settle_tags(
+    library: &OpenLibrary,
+    stems: &Stems,
+    listed: Vec<Held>,
+    tags: &[Held],
+    mut changed: Option<LibraryChanged>,
+    mut applied: Vec<i64>,
+) -> Result<(Decided, Option<LibraryChanged>), Failure> {
+    match crate::review_tags::apply(library, stems, tags) {
+        Ok(next) => {
+            if next.is_some() {
+                changed = next;
+            }
+        }
+        Err((applied_tags, next, error)) => {
+            if next.is_some() {
+                changed = next;
+            }
+            applied.extend(applied_tags);
+            if applied.is_empty() {
+                return Err((None, error));
+            }
+            let not: Vec<i64> = listed
+                .iter()
+                .map(|held| held.fact)
+                .filter(|fact| !applied.contains(fact))
+                .collect();
+            return Err((
+                changed,
+                ServiceError::new(
+                    codes::PARTIAL,
+                    format!(
+                        "the accept stopped part-way ({error}); applied: {applied:?}, recorded as the DJ's and undoable; not applied: {not:?}, still waiting"
+                    ),
+                ),
+            ));
+        }
+    }
+    applied.extend(tags.iter().map(|held| held.fact));
+    let decided: Vec<Held> = listed
+        .into_iter()
+        .filter(|held| applied.contains(&held.fact))
+        .collect();
+    Ok((
+        Decided {
+            large_run: None,
+            count: decided.len(),
+            decided,
+            rejection: None,
+        },
+        changed,
+    ))
 }
 
 /// [`listed`] for an accept: refused when it names a title or an artist by
@@ -919,16 +1011,22 @@ fn by_name(asked: &Selection) -> Result<(), ServiceError> {
 /// cannot be the DJ's value, and writing both would leave the last one
 /// written and an Undo step that cannot be taken back (wbx-66 review).
 fn competing(chosen: &[Held]) -> Result<(), ServiceError> {
-    let mut seen: std::collections::BTreeMap<(&str, Field), i64> =
+    let mut seen: std::collections::BTreeMap<(String, String), i64> =
         std::collections::BTreeMap::new();
     for h in chosen {
-        if let Some(other) = seen.insert((h.track.as_str(), h.field), h.fact) {
+        // Two tag dimensions of one track are different proposals. Two
+        // proposals of one dimension are not (wbx-45.26).
+        let slot = if crate::review_tags::is_tag(h.field) {
+            crate::review_tags::compete_slot(h)
+        } else {
+            h.field.name().to_owned()
+        };
+        if let Some(other) = seen.insert((h.track.clone(), slot.clone()), h.fact) {
             return Err(ServiceError::new(
                 codes::COMPETING,
                 format!(
-                    "Facts {other} and {} both propose a {} for track {}: choose one; nothing was written",
+                    "Facts {other} and {} both propose a {slot} for track {}: choose one; nothing was written",
                     h.fact,
-                    h.field.name(),
                     h.track
                 ),
             ));
@@ -997,6 +1095,9 @@ fn write_one(
         Field::Artist => {
             writer.set_text_if_unchanged(&held.track, CheckedText::Artist, text, &revision)
         }
+        Field::Tag => Err(DbError::WriteRefused(
+            "a tag is applied through the tag panel, not as a track column".into(),
+        )),
     };
     wrote.map_err(|e| match e {
         DbError::Conflict(why) => DbError::WriteRefused(format!("{CHANGED_MARK}{why}")),
@@ -1050,10 +1151,16 @@ fn offered(held: &Held) -> Offered {
     Offered {
         fact: held.fact,
         track: held.track.clone(),
-        field: held.field.name().to_owned(),
+        field: if crate::review_tags::is_tag(held.field) {
+            crate::review_tags::rejection_of(held).0
+        } else {
+            held.field.name().to_owned()
+        },
         value: held.after.clone(),
         canonical: if crate::review_text::is_text(held.field) {
             crate::review_text::canonical(held.after.as_str().unwrap_or_default())
+        } else if crate::review_tags::is_tag(held.field) {
+            crate::review_tags::rejection_of(held).1
         } else {
             native_number(&held.after)
         },

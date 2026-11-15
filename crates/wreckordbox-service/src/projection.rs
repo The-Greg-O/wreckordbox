@@ -194,9 +194,11 @@ pub struct Wanted {
 
 /// A native field a Projection writes, or one Review decides on.
 ///
-/// Energy and Prep colour are projected. Title and Artist never are: an
-/// agent's proposed title or artist only ever waits for the DJ in Review
-/// ([`crate::review_text`], wbx-66), and only the DJ's accept writes it.
+/// Energy and Prep colour are projected. Title, Artist and Tag never are:
+/// an agent's proposal only ever waits for the DJ in Review
+/// ([`crate::review_text`], wbx-66; [`crate::review_tags`], wbx-45.26), and
+/// only the DJ's accept writes it. A tag's dimension and terms are in the
+/// row's `before` and `after`, not in this variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Field {
@@ -208,6 +210,8 @@ pub enum Field {
     Title,
     /// The artist (Review only; never projected).
     Artist,
+    /// A tag of some dimension (Review only; never projected).
+    Tag,
 }
 
 impl Field {
@@ -221,6 +225,7 @@ impl Field {
             Self::PrepColour => "prep_colour",
             Self::Title => "title",
             Self::Artist => "artist",
+            Self::Tag => "tag",
         }
     }
 
@@ -230,6 +235,8 @@ impl Field {
             Self::PrepColour => "ColorID",
             Self::Title => "Title",
             Self::Artist => "ArtistID",
+            // Never projected, so never a column of a plan.
+            Self::Tag => "tag",
         }
     }
 }
@@ -298,7 +305,7 @@ impl Policy {
         match field {
             Field::Energy => &self.energy,
             Field::PrepColour => &self.prep_colour,
-            Field::Title | Field::Artist => &ALWAYS_WAIT,
+            Field::Title | Field::Artist | Field::Tag => &ALWAYS_WAIT,
         }
     }
 
@@ -1029,6 +1036,7 @@ fn native(index: &rbl_index::Library, row: u32, field: Field, labels: &[PrepColo
                 .map_or(Value::Null, |colour| json!(colour))
         }
         Field::Title | Field::Artist => json!(crate::review_text::native(index, row, field)),
+        Field::Tag => Value::Null,
     }
 }
 
@@ -1062,7 +1070,9 @@ fn target(field: Field, value: &Value, labels: &[PrepColour]) -> Result<Value, S
                 .map(|colour| json!(colour))
                 .ok_or_else(|| format!("there is no colour label {id}"))
         }
-        Field::Title | Field::Artist => Err(format!("{} is never projected", field.name())),
+        Field::Title | Field::Artist | Field::Tag => {
+            Err(format!("{} is never projected", field.name()))
+        }
     }
 }
 
@@ -1148,7 +1158,7 @@ fn write(
                     Some(i64::from(now.color.get(row as usize).copied().unwrap_or(0)))
                 }
                 // Never projected: never part of a plan to write.
-                Field::Title | Field::Artist => None,
+                Field::Title | Field::Artist | Field::Tag => None,
             });
             if stamp.as_ref() != Some(&p.row) || current != Some(native_number(&change.before)) {
                 return Err(refused(format!(
@@ -1170,7 +1180,7 @@ fn write(
                     &change.track,
                     Some(&native_number(&change.after).to_string()),
                 ),
-                Field::Title | Field::Artist => Err(DbError::WriteRefused(format!(
+                Field::Title | Field::Artist | Field::Tag => Err(DbError::WriteRefused(format!(
                     "{} is never projected",
                     change.field.name()
                 ))),

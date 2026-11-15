@@ -79,6 +79,24 @@
   border-color: var(--c-key-boost, #e0af68);
   color: var(--role-text-dim);
 }
+/* An agent's proposal (wbx-45.26, tokens.md): dashed key-boost yellow, with
+   a "proposed" mark, written in the text colour so it is not the yellow
+   itself and not a set tag's hue. */
+.chip[data-state="proposed"] {
+  border-style: dashed;
+  border-color: var(--c-key-boost, #e0af68);
+  color: var(--role-text);
+  background: transparent;
+  font-style: italic;
+}
+.proposedMark {
+  color: var(--c-key-boost, #e0af68);
+  font-style: normal;
+  font-size: var(--f-size-shell-label);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.chip .key { margin-left: var(--s-shell-space-2); font-style: normal; font-size: var(--f-size-shell-label); }
 .failures { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--s-shell-space-2); color: var(--c-energy-5); }
 
 .backdrop {
@@ -124,4 +142,14 @@
 :global(:root[data-theme-mode="light"]) .chip[data-state="implied"] {
   border-color: var(--tag-hue);
   color: var(--role-text-dim);
+}
+/* Light ground: the yellow is only the outline, mixed toward the text so
+   the mark stays readable. The name is the theme's text, not yellow. */
+:global(:root[data-theme-mode="light"]) .chip[data-state="proposed"] {
+  color: var(--role-text);
+  background: transparent;
+  border-color: color-mix(in srgb, var(--c-key-boost, #e0af68) 65%, var(--role-text));
+}
+:global(:root[data-theme-mode="light"]) .chip[data-state="proposed"] .proposedMark {
+  color: color-mix(in srgb, var(--c-key-boost, #e0af68) 45%, var(--role-text));
 }

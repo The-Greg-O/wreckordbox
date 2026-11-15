@@ -313,5 +313,11 @@ export function createMockTagPanel(source: MockTagPanelSource) {
     return () => { sidecarListeners.delete(listener); };
   };
 
-  return { intakeTagPanel, intakeSetTags, onSidecarChanged };
+  /** Accepts a proposed tag at the panel's current version (wbx-45.26). */
+  const applyProposed = (track: string, dimensionId: string, terms: readonly string[]) => {
+    const now = panel(track) as { track: { versions: Record<string, string> } };
+    return intakeSetTags(track, dimensionId, terms, now.track.versions[dimensionId] ?? "", []);
+  };
+
+  return { intakeTagPanel, intakeSetTags, onSidecarChanged, applyProposed };
 }

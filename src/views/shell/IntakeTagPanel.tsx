@@ -17,12 +17,19 @@
  * its parents, deck-facing or not; turning a parent off narrows to it. A
  * single-tag dimension replaces its tag. Values no tag stands for are
  * dashed chips marked "not in the schema"; clicking one takes it off.
+ *
+ * An agent's proposed tag (wbx-45.26) is a different chip: dashed in the
+ * key-boost yellow, marked "proposed", never a toggle. A click accepts the
+ * whole proposal. Y, Enter and Space are the track panel's guarded path
+ * (the same one as a proposed title), so this chip does not stop them.
  */
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent } from "react";
 
 import { useTranslation } from "@/i18n";
 import { getBackend } from "@/ipc/client";
+import type { IntakeSuggestion } from "@/lib/intakeQueue";
 import { tagState, type PanelDimension } from "@/lib/tagPanel";
+import { proposalFor } from "@/lib/tagSuggestions";
 import type { TagStore } from "@/lib/tagStore";
 import styles from "./IntakeTagPanel.module.css";
 
@@ -60,9 +67,13 @@ function useTagReads(store: TagStore, trackId: string) {
 export interface IntakeTagPanelProps {
   store: TagStore;
   trackId: string;
+  /** The on-screen track's proposals, including tag rows (wbx-45.26). */
+  suggestions?: readonly IntakeSuggestion[];
+  /** Accepts one proposal with Review's own decision. */
+  onAccept?: (suggestion: IntakeSuggestion) => void;
 }
 
-export function IntakeTagPanel({ store, trackId }: IntakeTagPanelProps) {
+export function IntakeTagPanel({ store, trackId, suggestions = [], onAccept }: IntakeTagPanelProps) {
   const t = useTranslation();
   useStore(store);
   useTagReads(store, trackId);
@@ -96,14 +107,18 @@ export function IntakeTagPanel({ store, trackId }: IntakeTagPanelProps) {
       {panel && panel.dimensions.length === 0 ? <p className={styles.hint}>{t("There are no tags to set: the Library has no MyTags and there is no Tag schema.")}</p> : null}
       <div className={styles.dimensions}>
         {panel?.dimensions.map((dimension, at) => (
-          <DimensionChips key={dimension.id} store={store} trackId={trackId} dimension={dimension} hue={at % 6} disabled={dimension.edit === "fact" && factsUnavailable !== null} />
+          <DimensionChips key={dimension.id} store={store} trackId={trackId} dimension={dimension} hue={at % 6} disabled={dimension.edit === "fact" && factsUnavailable !== null} suggestions={suggestions} onAccept={onAccept} />
         ))}
       </div>
     </section>
   );
 }
 
-function DimensionChips({ store, trackId, dimension, hue, disabled }: { store: TagStore; trackId: string; dimension: PanelDimension; hue: number; disabled: boolean }) {
+function DimensionChips({ store, trackId, dimension, hue, disabled, suggestions, onAccept }: {
+  store: TagStore; trackId: string; dimension: PanelDimension; hue: number; disabled: boolean;
+  suggestions: readonly IntakeSuggestion[];
+  onAccept: ((suggestion: IntakeSuggestion) => void) | undefined;
+}) {
   const t = useTranslation();
   const set = store.shown(trackId, dimension);
   const unmapped = store.unmapped(trackId, dimension);
@@ -114,6 +129,12 @@ function DimensionChips({ store, trackId, dimension, hue, disabled }: { store: T
     event.stopPropagation();
     if (!event.repeat) act();
   };
+  const acceptProposed = (suggestion: IntakeSuggestion) => (event: MouseEvent<HTMLButtonElement>) => {
+    // A double click is one decision. Enter or Space (detail 0) was already
+    // decided by the guarded key path and must not accept a second time.
+    if (event.detail !== 1 || !onAccept) return;
+    onAccept(suggestion);
+  };
   return (
     <div className={styles.dimension} role="group" aria-label={dimension.label} data-deck={dimension.deck ? "true" : "false"} data-single={dimension.single ? "true" : undefined} data-hue={hue}>
       <span className={styles.label} aria-hidden="true">
@@ -123,6 +144,29 @@ function DimensionChips({ store, trackId, dimension, hue, disabled }: { store: T
       </span>
       <div className={styles.chips}>
         {dimension.tags.map((tag) => {
+          const proposal = onAccept ? proposalFor(suggestions, dimension.id, tag.id) : null;
+          if (proposal) {
+            const confidence = proposal.confidence.toFixed(2);
+            return (
+              <button
+                key={tag.id}
+                type="button"
+                className={styles.chip}
+                data-tag={tag.id}
+                data-state="proposed"
+                data-suggestion={proposal.fact}
+                data-own-activation=""
+                aria-pressed={false}
+                aria-label={`${t("Accept proposed")} ${dimension.label} “${tag.name}” ${t("from")} ${proposal.source} (${confidence})`}
+                title={`${t("Accept")} (Y)`}
+                onClick={acceptProposed(proposal)}
+              >
+                <span className={styles.proposedMark} aria-hidden="true">{t("proposed")}</span>
+                {tag.name}
+                <kbd className={styles.key} aria-hidden="true">Y</kbd>
+              </button>
+            );
+          }
           const state = tagState(dimension, set, tag.id);
           const notOnDeck = dimension.edit === "my_tag" && tag.myTag === null;
           return (

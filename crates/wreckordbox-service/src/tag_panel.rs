@@ -494,7 +494,7 @@ fn track_tags(
 
 /// `selection` without any tag that is an ancestor of another in it, in
 /// the dimension's order: a Fact names the most specific tags.
-fn most_specific(dimension: &PanelDimension, selection: &[String]) -> Vec<String> {
+pub(crate) fn most_specific(dimension: &PanelDimension, selection: &[String]) -> Vec<String> {
     let implied: BTreeSet<String> = selection
         .iter()
         .flat_map(|id| ancestors(dimension, id))
@@ -741,7 +741,7 @@ fn djs_facts(
 }
 
 /// A Fact's value as term ids: a list, or one text.
-fn term_ids(value: &Value) -> Vec<String> {
+pub(crate) fn term_ids(value: &Value) -> Vec<String> {
     match value {
         Value::Array(items) => items
             .iter()
@@ -751,6 +751,56 @@ fn term_ids(value: &Value) -> Vec<String> {
         Value::String(text) => vec![text.clone()],
         _ => Vec::new(),
     }
+}
+
+/// The panel's dimensions, in the panel's order. A read.
+pub(crate) fn dimensions(
+    library: &OpenLibrary,
+    stems: &Stems,
+) -> Result<Vec<PanelDimension>, ServiceError> {
+    Ok(Resolved::read(library, stems)?.dimensions)
+}
+
+/// The explicit selection of one track, by dimension id. A read.
+pub(crate) fn explicit_selection(
+    library: &OpenLibrary,
+    stems: &Stems,
+    track: &str,
+) -> Result<BTreeMap<String, Vec<String>>, ServiceError> {
+    let resolved = Resolved::read(library, stems)?;
+    Ok(track_tags(library, stems, &resolved, track)?.set)
+}
+
+/// `values` that this dimension knows, reduced to the explicit selection.
+pub(crate) fn explicit_terms(dimension: &PanelDimension, values: &[String]) -> Vec<String> {
+    let known: Vec<String> = values
+        .iter()
+        .filter(|id| dimension.tags.iter().any(|tag| tag.id == **id))
+        .cloned()
+        .collect();
+    most_specific(dimension, &known)
+}
+
+/// The DJ's accept of a proposed tag: `intake.set_tags` with the row's
+/// terms, asserted, and no panel version (the accept is bound to the
+/// Review row, which was checked already). One Undo step.
+pub(crate) fn accept_proposed(
+    library: &OpenLibrary,
+    stems: &Stems,
+    track: &str,
+    dimension: &str,
+    terms: &[String],
+) -> Result<Option<LibraryChanged>, ServiceError> {
+    let set = SetTags {
+        id: track.to_owned(),
+        dimension: dimension.to_owned(),
+        terms: terms.to_vec(),
+        version: None,
+        drop_unmapped: Vec::new(),
+        comments: false,
+        assert: true,
+    };
+    Ok(set_tags(library, stems, &set)?.1)
 }
 
 fn refused(code: &str, message: impl Into<String>) -> ServiceError {

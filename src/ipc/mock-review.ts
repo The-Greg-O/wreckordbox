@@ -38,8 +38,18 @@
  * title (Run 41). They are Review rows like any other, and the Intake
  * queue lists exactly them (`suggestionsOf`), with their row tokens.
  * `__reviewPropose(track, field, value)` records one more live in Run 41.
+ *
+ * Proposed tags (wbx-45.26), with `?tagProposals` (not `?proposals`): the
+ * first Intake track has a proposed Situation "Warm-up" (dimension "setting"
+ * in the five-dimension schema, Run 41, confidence 0.84). The fixture's
+ * first Intake track already carries Peak, so the proposal is the other
+ * term. It is a Review
+ * row whose field is "tag"; Intake lists it with field "setting" and the
+ * term ids. `__reviewProposeTag(track, dimension, terms, label, dimensionLabel)`
+ * records one more. Accepting it sets the tags through the tag panel.
  */
 import type { RowDto } from "./types";
+import type { IntakeSuggestion } from "@/lib/intakeQueue";
 import {
   fromServiceListing, fromServiceRejected, outcomeOf,
   type DecisionOutcome, type RejectedFact, type ReviewListing,
@@ -59,12 +69,14 @@ export interface MockReviewSource {
   setText?: (id: string, field: "title" | "artist", value: string) => Promise<unknown>;
   /** The tracks proposals go on with `?proposals`: Intake's first ones. */
   proposalTracks?: () => string[];
+  /** Sets a proposed tag (wbx-45.26). Late-bound: the tag panel is built after Review. */
+  applyTag?: (track: string, dimension: string, terms: readonly string[]) => Promise<unknown>;
 }
 
 interface Held {
   fact: number;
   track: string;
-  field: "energy" | "prep_colour" | "title" | "artist";
+  field: "energy" | "prep_colour" | "title" | "artist" | "tag";
   before: unknown;
   after: unknown;
   source: { kind: string; name: string };
@@ -133,10 +145,13 @@ export function createMockReview(source: MockReviewSource) {
   const energy = (row: RowDto) => (row.rating ? row.rating : null);
   const add = (h: Omit<Held, "fact" | "before">) => {
     const row = source.all.find((r) => r.id === h.track);
+    const proposed = h.after as { dimension?: string; dimension_label?: string };
     const before = h.field === "energy" ? (row ? energy(row) : null)
       : h.field === "title" ? (row?.title ?? "")
         : h.field === "artist" ? (row?.artist ?? "")
-          : null;
+          : h.field === "tag"
+            ? { dimension: proposed.dimension ?? "", terms: [] as string[], label: "", dimension_label: proposed.dimension_label ?? "" }
+            : null;
     waiting.push({ ...h, fact: nextFact++, before });
   };
   if (url.get("review") !== "empty") {
@@ -159,6 +174,17 @@ export function createMockReview(source: MockReviewSource) {
       add({ track: first, field: "artist", after: "The Proposed Artist", source: runs[2]!.source, confidence: 0.66, reason: "waits_for_dj", run: 41 });
     }
     if (second) add({ track: second, field: "title", after: "Second Proposal", source: runs[2]!.source, confidence: 0.71, reason: "waits_for_dj", run: 41 });
+  }
+
+  if (url.has("tagProposals")) {
+    const [first] = source.proposalTracks?.() ?? [];
+    if (first) {
+      add({
+        track: first, field: "tag",
+        after: { dimension: "setting", terms: ["warm-up"], label: "Warm-up", dimension_label: "Situation" },
+        source: runs[2]!.source, confidence: 0.84, reason: "waits_for_dj", run: 41,
+      });
+    }
   }
 
   const rowVersion = new Map<number, number>();
@@ -206,7 +232,10 @@ export function createMockReview(source: MockReviewSource) {
     for (const h of apply as Held[]) {
       if (h.field === "energy") await source.rate(h.track, Number(h.after));
       else if (h.field === "title" || h.field === "artist") await source.setText?.(h.track, h.field, String(h.after));
-      else await source.colour(h.track, Number((h.after as { id: number }).id));
+      else if (h.field === "tag") {
+        const after = h.after as { dimension?: string; terms?: string[] };
+        await source.applyTag?.(h.track, String(after.dimension ?? ""), after.terms ?? []);
+      } else await source.colour(h.track, Number((h.after as { id: number }).id));
     }
     const applied = new Set((apply as Held[]).map((h) => h.fact));
     waiting = waiting.filter((h) => !applied.has(h.fact));
@@ -269,6 +298,15 @@ export function createMockReview(source: MockReviewSource) {
       changed();
       return nextFact - 1;
     };
+    hooks.__reviewProposeTag = (track: string, dimension: string, terms: string[], label: string, dimensionLabel: string) => {
+      add({
+        track, field: "tag",
+        after: { dimension, terms, label, dimension_label: dimensionLabel },
+        source: runs[2]!.source, confidence: 0.77, reason: "waits_for_dj", run: 41,
+      });
+      changed();
+      return nextFact - 1;
+    };
     hooks.__reviewChange = (fact: number, after: unknown) => {
       const h = waiting.find((w) => w.fact === fact);
       if (h) h.after = after;
@@ -298,14 +336,23 @@ export function createMockReview(source: MockReviewSource) {
   }
 
   return {
-    /** The proposed titles and artists of `track`, as the service's Intake queue lists them (wbx-66). */
-    suggestionsOf: (track: string) => waiting
-      .filter((h) => h.track === track && (h.field === "title" || h.field === "artist"))
+    /** The track's proposals, as the service's Intake queue lists them (wbx-66, wbx-45.26). */
+    suggestionsOf: (trackId: string): IntakeSuggestion[] => waiting
+      .filter((h) => h.track === trackId && (h.field === "title" || h.field === "artist" || h.field === "tag"))
       .sort((a, b) => b.fact - a.fact)
-      .map((h) => ({
-        field: h.field, value: String(h.after), source: h.source.name, confidence: h.confidence,
-        fact: h.fact, token: rowToken(h.fact), before: typeof h.before === "string" ? h.before : "",
-      })),
+      .map((h) => {
+        if (h.field === "tag") {
+          const after = h.after as { dimension?: string; label?: string; terms?: string[] };
+          return {
+            field: String(after.dimension ?? ""), value: String(after.label ?? ""), source: h.source.name,
+            confidence: h.confidence, fact: h.fact, token: rowToken(h.fact), before: "", terms: [...(after.terms ?? [])],
+          };
+        }
+        return {
+          field: h.field, value: String(h.after), source: h.source.name, confidence: h.confidence,
+          fact: h.fact, token: rowToken(h.fact), before: typeof h.before === "string" ? h.before : "",
+        };
+      }),
     reviewWaiting: async (): Promise<ReviewListing> => {
       reads.waiting += 1;
       if (stallNext) {

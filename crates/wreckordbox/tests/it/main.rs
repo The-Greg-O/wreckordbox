@@ -41,6 +41,7 @@ mod projection_failures;
 mod projection_marks;
 mod review;
 mod review_races;
+mod review_tags;
 mod review_titles;
 mod review_view_reads;
 mod run_status;

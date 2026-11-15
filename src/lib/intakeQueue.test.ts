@@ -73,6 +73,28 @@ describe("fromServicePage", () => {
     });
   });
 
+  it("keeps a proposed tag's terms, which a title suggestion does not carry", () => {
+    const page = fromServicePage({
+      queue: {
+        tracks: [{
+          id: "10", title: "Row title", artist: "Who", bpm: null, key: "",
+          needs: ["tags"], empty_dimensions: [], grid: "not_confirmed",
+          suggestions: [{
+            field: "situation", fact_id: 8, value: "Peak", terms: ["peak"],
+            source: { kind: "agent", name: "tagger" }, confidence: 0.84, token: "row", before: "",
+          }],
+        }],
+        total: 1, offset: 0, next_offset: null,
+      },
+      rows: [row],
+      unavailable: null,
+    });
+    expect(page.tracks[0]?.suggestions).toEqual([{
+      field: "situation", value: "Peak", source: "tagger", confidence: 0.84,
+      fact: 8, token: "row", before: "", terms: ["peak"],
+    }]);
+  });
+
   it("keeps why a queue cannot be listed", () => {
     const page = fromServicePage({ queue: null, rows: [], unavailable: { code: "problem_colour_not_found", message: "No colour is named Problem." } });
     expect(page.tracks).toEqual([]);
