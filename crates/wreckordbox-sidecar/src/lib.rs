@@ -197,3 +197,4 @@ mod fingerprint_format;
 mod query_reads;
 
 pub mod key_evidence;
+mod native_history;

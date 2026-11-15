@@ -795,7 +795,7 @@ fn decisions_print_as_tables() {
         "{said}"
     );
     assert!(
-        said.contains("Recorded Fact 1 in Run 1: track 10003 genre = [\"Tech House\"]."),
+        said.contains("Recorded Fact 1 in Run 2: track 10003 genre = [\"Tech House\"]."),
         "{said}"
     );
 

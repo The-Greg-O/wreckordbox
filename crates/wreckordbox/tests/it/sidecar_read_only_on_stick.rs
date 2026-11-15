@@ -72,6 +72,12 @@ const LIBRARY_EDITS: &[&str] = &[
 /// controls.
 const OTHERS: &[&str] = &[
     "intensity.cancel",
+    // A spill's inspection (needs a real spill id) and the Ledger's own
+    // recovery of accepted writes: on a Stick only while it is unlocked,
+    // nothing written while locked (service bulk_recording spill_review::).
+    "runs.spills.discard",
+    "runs.spills.replay",
+    "runs.spills.show",
     "stems.write",
     "sticks.dry_run",
     "sticks.load",
@@ -112,6 +118,7 @@ fn reads(track: &str) -> Vec<(&'static str, Value)> {
         ("runs.active", json!({})),
         ("runs.list", json!({})),
         ("runs.show", json!({ "id": 1 })),
+        ("runs.spills.list", json!({})),
         ("schema.check", json!({})),
         ("stems.show", json!({ "id": track })),
         ("stems.status", json!({ "id": track })),

@@ -377,6 +377,7 @@ impl Sidecar {
             )?;
             tx.commit()?;
         }
+        crate::native_history::catch_up(&mut db)?;
         let latest: i64 =
             db.query_row("SELECT COALESCE(MAX(seq),0) FROM ledger_order", [], |row| {
                 row.get(0)
