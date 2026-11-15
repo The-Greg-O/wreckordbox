@@ -866,6 +866,21 @@ fn a_backup_whose_sidecar_schema_is_newer_than_this_build_reads_is_refused_befor
     assert_eq!(testing::rating(&fixture.location), 4);
 }
 
+/// Mutant follow is 9, Set plans 10 and the lyrics index 11: a backup at
+/// each of them restores with this build.
+#[test]
+fn a_backup_whose_sidecar_schema_is_9_10_or_11_restores() {
+    assert_eq!(wreckordbox_sidecar::SCHEMA_VERSION, 11);
+    let fixture = fixture();
+    testing::archive(&fixture.location, &fixture.archive, None);
+    for version in [9, 10, 11] {
+        fixture.change();
+        let backup = with_schema(&fixture, version);
+        fixture.restore(&backup, Parts::ALL).unwrap();
+        assert_eq!(testing::rating(&fixture.location), 4, "version {version}");
+    }
+}
+
 #[test]
 fn a_databases_companion_files_in_a_backup_are_refused_at_any_depth() {
     let fixture = fixture();

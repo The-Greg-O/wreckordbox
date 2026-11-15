@@ -118,3 +118,56 @@ fn a_store_from_before_the_index_is_migrated_with_its_lyrics_searchable() {
     assert_eq!(version, SCHEMA_VERSION.to_string());
     assert_eq!(hits(&sidecar, "thunder"), [("10003".to_owned(), id)]);
 }
+
+/// Set plans took schema version 10 and the lyrics index 11 (the two
+/// branches both claimed 10; the integration renumbered lyrics). A store
+/// at 10 holding a Set plan comes up to 11 with the plan as it was kept.
+#[test]
+fn a_version_10_store_with_a_set_plan_is_migrated_to_11_with_the_plan_intact() {
+    use wreckordbox_sidecar::set_plans::NewSetPlan;
+
+    assert_eq!(SCHEMA_VERSION, 11);
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("sidecar");
+    let kept = {
+        let sidecar = Sidecar::open(&folder).unwrap();
+        let pool = ["10001".to_owned(), "10002".to_owned()];
+        sidecar
+            .record_set_plan(&NewSetPlan {
+                source: &agent("planner"),
+                description: "Set plan",
+                name: "Warm-up",
+                recipe: "version = 1\ntracks = 2\n",
+                recipe_file: None,
+                pool: &pool,
+                plan: r#"{"tracks":["10002","10001"]}"#,
+                outcome: "Built",
+            })
+            .unwrap()
+    };
+    // Back to version 10 exactly: the Set plan table, no lyrics index.
+    {
+        let db = Connection::open(folder.join("sidecar.db")).unwrap();
+        db.execute_batch(
+            "DROP TRIGGER lyrics_search_add; DROP TRIGGER lyrics_search_drop;
+             DROP TABLE lyrics_search;
+             UPDATE meta SET value = '10' WHERE key = 'schema_version';",
+        )
+        .unwrap();
+    }
+    let sidecar = Sidecar::open(&folder).unwrap();
+    let version: String = Connection::open(folder.join("sidecar.db"))
+        .unwrap()
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'schema_version'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(version, "11");
+    assert_eq!(sidecar.set_plan(kept.id).unwrap(), Some(kept.clone()));
+    assert_eq!(sidecar.set_plans().unwrap(), [kept]);
+    // And the index the migration added works.
+    let id = record(&sidecar, "10003", &agent("a"), "Harbour lights at dawn");
+    assert_eq!(hits(&sidecar, "harbour"), [("10003".to_owned(), id)]);
+}
