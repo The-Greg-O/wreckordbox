@@ -126,8 +126,9 @@ fn semitones(percent: f64) -> f64 {
     12.0 * (1.0 + percent / 100.0).log2()
 }
 
-fn key_score(moves: u32) -> f64 {
-    (1.0 - f64::from(moves) / 4.0).max(0.0)
+/// The key score at weight 1 of a move of this cost (section 4).
+fn key_score(cost: f64) -> f64 {
+    1.0 - cost / 6.0
 }
 
 fn round(x: f64, places: i32) -> f64 {
@@ -239,9 +240,9 @@ fn moves_between_keys() {
         assert_eq!(num(&row[5]), shared(from, to) as f64, "{move_}: scale");
         let triads = triad(from).intersection(&triad(to)).count();
         assert_eq!(num(&row[6]), triads as f64, "{move_}: triad");
-        let moves = camelot(from).moves(camelot(to));
-        assert_eq!(num(&row[7]), f64::from(moves), "{move_}: app moves");
-        assert_eq!(num(&row[8]), key_score(moves), "{move_}");
+        let cost = camelot(from).step_to(camelot(to)).cost();
+        assert_eq!(num(&row[7]), cost, "{move_}: cost");
+        assert_eq!(num(&row[8]), round(key_score(cost), 4), "{move_}");
     }
 }
 
@@ -376,11 +377,16 @@ fn numbers_in_the_text() {
             onsets(140.0)
         ),
         format!(
-            "detunes a track by {:.0} to {:.0} cents",
-            semitones(3.0) * 100.0,
-            -semitones(-4.0) * 100.0
+            "120 to 125 and 125 to 120 are both {:.2}%",
+            (125.0 / 120.0 - 1.0) * 100.0
         ),
-        format!("about {:.2}% moves it a whole semitone", pct(1.0)),
+        format!("is heard as 8A, {:.2} cents off", (1.0 - shift) * 100.0),
+        format!("a sixth of S ({:.2}% at S = 4)", 4.0 / 6.0),
+        format!(
+            "costs 1/6 ({:.4}), the same as an Intensity {:.4} off",
+            1.0 - key_score(1.0),
+            1.0 - key_score(1.0)
+        ),
         format!("0.70 x 0.70 = {:.0}%", 0.7 * 0.7 * 100.0),
         "Only the hard limits".to_owned(),
     ];
@@ -392,53 +398,81 @@ fn numbers_in_the_text() {
     let (lopsided, even): (f64, f64) = ([1.0, 1.0, 0.0].iter().sum(), 3.0 * 0.65);
     assert!(lopsided > even && (even - 1.95).abs() < 1e-12);
     assert!(guide.contains("totals 2.0 and beats one scoring 0.65 on all three (1.95)"));
-    // One key move (0.25) is a quarter of S in tempo: 1% at S = 4.
-    assert_eq!(1.0 - key_score(1), 1.0 / 4.0);
+    // A basic key move (cost 1) is a sixth of S in tempo.
+    assert!((1.0 - key_score(1.0) - 1.0 / 6.0).abs() < 1e-12);
+    // The working rule of 1.5% is about 26 cents, so max_detune = 25 fits it.
+    assert!(guide.contains("`key.max_detune = 25` (cents)"));
+    assert_eq!(round(semitones(1.5) * 100.0, 0), 26.0);
     // 7 is its own inverse mod 12; a semitone is ~5.95%.
     assert_eq!((7 * 7) % 12, 1);
     assert!((semitones(pct(1.0)) - 1.0).abs() < 1e-12);
 }
 
-#[test]
-fn the_sawtooth_scores_like_a_steady_offset() {
-    // Section 5: 0.5, 0.7, 0.5 around a flat 0.6 scores 0.9 each, the same
-    // as 0.5, 0.5, 0.5. By the sequencer itself.
-    let recipe = Recipe::parse(
-        "version = 1\ntracks = 3\n[intensity]\nshape = [{ at = 0.0, intensity = 0.6 }]\n",
-    )
+/// Transition scores of `values`, pinned in that order by required
+/// Situations of weight 0, round a flat Intensity of 0.6.
+fn pinned_scores(values: &[f64]) -> Vec<f64> {
+    let n = values.len();
+    let places: Vec<String> = (0..n)
+        .map(|i| {
+            let at = i as f64 / (n - 1) as f64;
+            format!("{{ situation = \"p{i}\", from = {at}, to = {at}, require = true }}")
+        })
+        .collect();
+    let recipe = Recipe::parse(&format!(
+        "version = 1\ntracks = {n}\n[intensity]\nshape = [{{ at = 0.0, intensity = 0.6 }}]\n[situations]\nweight = 0.0\nplace = [{}]\n",
+        places.join(", ")
+    ))
     .unwrap();
-    let scores = |values: [f64; 3]| -> Vec<f64> {
-        let pool: Vec<Candidate> = values
-            .iter()
-            .enumerate()
-            .map(|(i, v)| Candidate {
-                id: format!("{i}"),
-                title: format!("{i}"),
-                bpm: None,
-                key: None,
-                intensity: Some(*v),
-                energy: None,
-                situations: None,
-                genres: None,
-                added: None,
-            })
-            .collect();
-        let built = serde_json::to_value(plan(&recipe, &pool).unwrap()).unwrap();
-        let mut out = vec![built["opening"][0]["score"].as_f64().unwrap()];
-        for t in built["transitions"].as_array().unwrap() {
-            out.push(t["score"].as_f64().unwrap());
-        }
-        out
-    };
-    assert_eq!(scores([0.5, 0.7, 0.5]), [0.9, 0.9, 0.9]);
-    assert_eq!(scores([0.5, 0.5, 0.5]), [0.9, 0.9, 0.9]);
+    let pool: Vec<Candidate> = values
+        .iter()
+        .enumerate()
+        .map(|(i, v)| Candidate {
+            id: format!("{i}"),
+            title: format!("{i}"),
+            bpm: None,
+            key: None,
+            intensity: Some(*v),
+            energy: None,
+            situations: Some(vec![format!("p{i}")]),
+            genres: None,
+            added: None,
+        })
+        .collect();
+    let built = serde_json::to_value(plan(&recipe, &pool).unwrap()).unwrap();
+    built["transitions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["score"].as_f64().unwrap())
+        .collect()
+}
+
+#[test]
+fn the_zigzag_scores_below_a_steady_run() {
+    // Section 5: 0.5, 0.7, 0.5 round a flat 0.6 now scores 0.8 a
+    // transition (0.9 off the curve, less 0.5 x the 0.2 step the shape does
+    // not take) against 0.9 for a steady 0.5, 0.5, 0.5. By the sequencer.
+    assert_eq!(pinned_scores(&[0.5, 0.7, 0.5]), [0.8, 0.8]);
+    assert_eq!(pinned_scores(&[0.5, 0.5, 0.5]), [0.9, 0.9]);
+    assert_eq!(round(1.0 - 0.1 - 0.5 * 0.2, 4), 0.8);
+    assert!(flat().contains("so 0.5, 0.7, 0.5 round a flat 0.6 now scores 0.8 a transition against 0.9 for a steady 0.5, 0.5, 0.5"));
 }
 
 #[test]
 fn key_score_table_is_the_sequencers() {
+    let rows = table("key-score");
+    assert_eq!(rows.len(), 8);
+    for row in rows {
+        assert_eq!(num(&row[1]), round(key_score(num(&row[0])), 4));
+    }
+    // Every cost in the table is one the moves table uses.
+    let costs: BTreeSet<String> = table("moves").iter().map(|r| r[7].clone()).collect();
     for row in table("key-score") {
-        let moves: u32 = row[0].parse().unwrap();
-        assert_eq!(num(&row[1]), key_score(moves));
+        assert!(
+            costs.contains(&row[0]),
+            "cost {} is not in the moves table",
+            row[0]
+        );
     }
 }
 
@@ -499,6 +533,8 @@ weight = 0.0
     assert!((num(&rows[3][2]) - round(total, 4)).abs() < 1e-9);
     assert!((transition["score"].as_f64().unwrap() - num(&rows[3][2])).abs() < 1e-9);
     // And from first principles.
+    assert_eq!(round(1.0 - 0.02 - 0.5 * 0.02, 4), num(&rows[0][2]));
+    assert_eq!(round(1.0 - 1.0 / 6.0, 4), num(&rows[1][2]));
     assert_eq!(round(1.0 - 2.0 / 124.0 * 100.0 / 4.0, 4), num(&rows[2][2]));
 }
 

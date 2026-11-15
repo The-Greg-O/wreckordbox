@@ -16,8 +16,11 @@
 //!
 //! **Scores.** Each criterion the Recipe uses contributes to each
 //! transition, with a reason in words: `intensity` (the incoming track
-//! against the shape, with the step), `key` (moves on the wheel), `tempo`
-//! (the change in percent), `situations` (does the incoming track's
+//! against the shape, and its step against the shape's step), `key` (the
+//! directed move, named and costed by [`crate::KeyStep`]; without key lock
+//! on the key as heard after the tempo change), `tempo` (the stretch in
+//! percent, the larger tempo over the smaller, folded by half or double
+//! time when asked), `situations` (does the incoming track's
 //! Situation belong here), `recency` (how recently it was added) and
 //! `genre` (the mix). The first track has the position criteria only, in
 //! [`Plan::opening`]. A weight scales a criterion; most contributions run
@@ -26,8 +29,11 @@
 //! **Missing data is named.** A track the Recipe's hard limits cannot be
 //! checked on (no tempo under a tempo limit, no key under a key limit) is
 //! left out of the plan and listed in `left_out` with what it lacks, as is
-//! a track with no Intensity unless the Recipe says `missing = "allow"`.
-//! Where a criterion is scored without data, its reason says so.
+//! a track with no Intensity unless the Recipe says `missing = "allow"` (or
+//! `"energy"` and it has an Energy rating), and a track whose tempo is
+//! outside the Recipe's range. Where a criterion is scored without data,
+//! its reason says so; a missing key or tempo scores [`UNKNOWN`] of the
+//! weight, apart from the worst case.
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -253,7 +259,10 @@ fn plan_with(
                 .collect();
             let mut message = format!("track {} {:?}", candidate.id, candidate.title);
             if !words.is_empty() {
-                message.push_str(&format!(" has {}, which this Recipe needs;", words.join(" and ")));
+                message.push_str(&format!(
+                    " has {}, which this Recipe needs;",
+                    words.join(" and ")
+                ));
             }
             if lacks.contains(&Lack::TempoRange) {
                 let t = recipe.tempo.as_ref();
@@ -263,7 +272,11 @@ fn plan_with(
                     tempo(candidate).unwrap_or_default(),
                     bound(t.and_then(|t| t.min_bpm)),
                     bound(t.and_then(|t| t.max_bpm)),
-                    if t.is_some_and(|t| t.fold) { ", half or double time counted" } else { "" }
+                    if t.is_some_and(|t| t.fold) {
+                        ", half or double time counted"
+                    } else {
+                        ""
+                    }
                 ));
             }
             message.push_str(" it is left out");
@@ -408,9 +421,11 @@ fn lacks(recipe: &Recipe, c: &Candidate) -> Vec<Lack> {
     {
         lacks.push(Lack::Intensity);
     }
-    let tempo_needed = recipe.tempo.as_ref().is_some_and(|t| {
-        t.max_change.is_some() || t.min_bpm.is_some() || t.max_bpm.is_some()
-    }) || recipe.key.as_ref().is_some_and(|k| k.max_detune.is_some());
+    let tempo_needed = recipe
+        .tempo
+        .as_ref()
+        .is_some_and(|t| t.max_change.is_some() || t.min_bpm.is_some() || t.max_bpm.is_some())
+        || recipe.key.as_ref().is_some_and(|k| k.max_detune.is_some());
     if tempo_needed && tempo(c).is_none() {
         lacks.push(Lack::Tempo);
     }
@@ -928,7 +943,10 @@ impl Scorer<'_> {
             ),
             Blocker::KeyDetune => format!(
                 "the detuning limit without key lock (key.max_detune {} cents)",
-                r.key.as_ref().and_then(|k| k.max_detune).unwrap_or_default()
+                r.key
+                    .as_ref()
+                    .and_then(|k| k.max_detune)
+                    .unwrap_or_default()
             ),
             Blocker::Situations => {
                 let required: Vec<String> = r
@@ -995,9 +1013,7 @@ impl Scorer<'_> {
     ) -> Vec<Blocker> {
         let mut broken = Vec::new();
         let r = self.recipe;
-        if let (Some(step), Some((x, _)), Some((y, _))) =
-            (limits.step, level(r, a), level(r, b))
-        {
+        if let (Some(step), Some((x, _)), Some((y, _))) = (limits.step, level(r, a), level(r, b)) {
             if (y - x).abs() > step + 1e-9 {
                 broken.push(Blocker::IntensityStep);
             }

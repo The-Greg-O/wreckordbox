@@ -13,14 +13,22 @@
 //!   { at = 1.0, intensity = 0.5 },
 //! ]
 //! max_step = 0.3                # optional hard limit on the change between neighbours
-//! missing = "leave_out"         # a track with no Intensity: "leave_out" (default) or "allow"
+//! missing = "leave_out"         # a track with no Intensity: "leave_out" (default), "allow"
+//!                               # or "energy" (the DJ's Energy stands in, (Energy - 1) / 4)
+//! step_weight = 0.5             # the step off the shape's own step costs this much; default 0.5
 //! weight = 1.0                  # every section has one; default 1
 //!
 //! [tempo]
-//! max_change = 4.0              # optional hard limit, in percent of the outgoing tempo
+//! max_change = 4.0              # optional hard limit, in percent: the larger tempo over the smaller
+//! fold = false                  # true: half and double time are the same tempo
+//! min_bpm = 118                 # optional hard range for the whole set
+//! max_bpm = 128
 //!
 //! [key]
-//! max_moves = 1                 # optional hard limit, in moves on the Camelot wheel
+//! max_moves = 1                 # optional hard limit on a move's cost (`KeyStep::cost`)
+//! key_lock = true               # false: a tempo change shifts the incoming key
+//! max_detune = 25               # with key_lock = false: optional hard limit in cents
+//! variety = 0.0                 # 0..1: how much a same-key transition is marked down
 //!
 //! [situations]                  # which Situations belong where
 //! place = [
@@ -50,7 +58,8 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use toml::Spanned;
 
-/// The only version of the format there is.
+/// The only version of the format there is. Fields added since (wbx-b59)
+/// are optional with defaults that read an older Recipe as written.
 pub const VERSION: i64 = 1;
 
 /// One mistake in a Recipe: the line it is on when known, and what is wrong.
@@ -465,7 +474,10 @@ impl Check<'_> {
                     if value.is_finite() && value > 0.0 {
                         Some((value, limit))
                     } else {
-                        self.at(&limit, format!("tempo.{name} is {value}; it is a tempo in BPM above 0"));
+                        self.at(
+                            &limit,
+                            format!("tempo.{name} is {value}; it is a tempo in BPM above 0"),
+                        );
                         None
                     }
                 })

@@ -56,7 +56,10 @@ fn a_pool_with_no_intensity_is_planned_on_its_energy_when_the_recipe_asks() {
     let refused = sandbox.cli(&args).json();
     assert_eq!(refused["built"], false, "{refused}");
     assert_eq!(
-        refused["unsatisfiable"]["left_out"].as_array().unwrap().len(),
+        refused["unsatisfiable"]["left_out"]
+            .as_array()
+            .unwrap()
+            .len(),
         3,
         "{refused}"
     );

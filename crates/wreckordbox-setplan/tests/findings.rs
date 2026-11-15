@@ -230,10 +230,20 @@ fn without_key_lock_a_tempo_change_shifts_the_incoming_key() {
     assert!(reason.contains("+7, a semitone up"), "{reason}");
     // And a key limit is checked on the key as heard.
     assert_eq!(
-        pair("[key]\nkey_lock = false\nmax_moves = 1\n", (127.1, "8A"), (120.0, "8A")).unwrap_err(),
+        pair(
+            "[key]\nkey_lock = false\nmax_moves = 1\n",
+            (127.1, "8A"),
+            (120.0, "8A")
+        )
+        .unwrap_err(),
         Blocker::KeyMoves
     );
-    assert!(pair("[key]\nkey_lock = false\nmax_moves = 1\n", (127.1, "8A"), (120.0, "1A")).is_ok());
+    assert!(pair(
+        "[key]\nkey_lock = false\nmax_moves = 1\n",
+        (127.1, "8A"),
+        (120.0, "1A")
+    )
+    .is_ok());
 }
 
 #[test]
@@ -241,7 +251,10 @@ fn residual_detuning_beyond_the_limit_is_refused_and_named() {
     // Two 8A tracks at 125 and 129 BPM: 54.5 cents apart, 45.5 cents from
     // the nearest semitone.
     let limited = "[key]\nkey_lock = false\nmax_detune = 25\n";
-    assert_eq!(pair(limited, (129.0, "8A"), (125.0, "8A")).unwrap_err(), Blocker::KeyDetune);
+    assert_eq!(
+        pair(limited, (129.0, "8A"), (125.0, "8A")).unwrap_err(),
+        Blocker::KeyDetune
+    );
     // 124 to 125.5 BPM (1.2%, 20.7 cents) is within it.
     let fine = pair(limited, (124.0, "8A"), (125.5, "8A")).unwrap();
     let (score, reason) = criterion(&fine, 0, Criterion::Key);
@@ -249,7 +262,10 @@ fn residual_detuning_beyond_the_limit_is_refused_and_named() {
     assert!(score < 1.0 && score > 0.5, "detuning costs: {score}");
     // max_detune means nothing with key lock on.
     let problems = Recipe::parse("version = 1\ntracks = 2\n[key]\nmax_detune = 25\n").unwrap_err();
-    assert!(problems[0].message.contains("key_lock = false"), "{problems:?}");
+    assert!(
+        problems[0].message.contains("key_lock = false"),
+        "{problems:?}"
+    );
     assert_eq!(problems[0].line, Some(4));
 }
 
@@ -259,8 +275,14 @@ fn residual_detuning_beyond_the_limit_is_refused_and_named() {
 fn a_tempo_change_is_the_same_up_and_down() {
     // 120 to 125 and 125 to 120 are the same stretch (25/24, 4.17%).
     let limit = "[tempo]\nmax_change = 4.0\n";
-    assert_eq!(pair(limit, (120.0, "8A"), (125.0, "8A")).unwrap_err(), Blocker::TempoChange);
-    assert_eq!(pair(limit, (125.0, "8A"), (120.0, "8A")).unwrap_err(), Blocker::TempoChange);
+    assert_eq!(
+        pair(limit, (120.0, "8A"), (125.0, "8A")).unwrap_err(),
+        Blocker::TempoChange
+    );
+    assert_eq!(
+        pair(limit, (125.0, "8A"), (120.0, "8A")).unwrap_err(),
+        Blocker::TempoChange
+    );
     let wider = "[tempo]\nmax_change = 4.2\n";
     let up = pair(wider, (120.0, "8A"), (125.0, "8A")).unwrap();
     let down = pair(wider, (125.0, "8A"), (120.0, "8A")).unwrap();
@@ -273,7 +295,12 @@ fn a_tempo_change_is_the_same_up_and_down() {
 
 #[test]
 fn half_and_double_time_fold_when_asked() {
-    let folded = pair("[tempo]\nfold = true\nmax_change = 3\n", (170.0, "8A"), (85.0, "8A")).unwrap();
+    let folded = pair(
+        "[tempo]\nfold = true\nmax_change = 3\n",
+        (170.0, "8A"),
+        (85.0, "8A"),
+    )
+    .unwrap();
     let (score, reason) = criterion(&folded, 0, Criterion::Tempo);
     assert_eq!(score, 1.0);
     assert!(reason.contains("double time"), "{reason}");
@@ -299,7 +326,13 @@ fn a_set_wide_tempo_range_leaves_out_and_names_tracks_outside_it() {
     let out: Vec<&str> = p.left_out.iter().map(|l| l.id.as_str()).collect();
     assert_eq!(out, ["2", "3"]);
     assert_eq!(p.left_out[0].lacks, [Lack::TempoRange]);
-    assert!(p.left_out[0].message.contains("140.00 BPM, outside the Recipe's tempo range (120 to 130 BPM)"), "{}", p.left_out[0].message);
+    assert!(
+        p.left_out[0]
+            .message
+            .contains("140.00 BPM, outside the Recipe's tempo range (120 to 130 BPM)"),
+        "{}",
+        p.left_out[0].message
+    );
     // Folded, 63 BPM is 126 at double time.
     let folded = plan(
         &recipe("version = 1\ntracks = 2\n[tempo]\nfold = true\nmin_bpm = 120\nmax_bpm = 130\n"),
@@ -308,7 +341,9 @@ fn a_set_wide_tempo_range_leaves_out_and_names_tracks_outside_it() {
     .unwrap();
     let out: Vec<&str> = folded.left_out.iter().map(|l| l.id.as_str()).collect();
     assert_eq!(out, ["2"]);
-    assert!(Recipe::parse("version = 1\ntracks = 2\n[tempo]\nmin_bpm = 130\nmax_bpm = 120\n").is_err());
+    assert!(
+        Recipe::parse("version = 1\ntracks = 2\n[tempo]\nmin_bpm = 130\nmax_bpm = 120\n").is_err()
+    );
 }
 
 // ---- 4. Intensity: the step between neighbours; Energy as a fallback ----
@@ -334,7 +369,10 @@ fn a_zigzag_round_the_shape_scores_below_a_steady_run() {
     assert_eq!(scores(&zigzag), [0.8, 0.8], "0.9 - 0.5 x 0.2");
     assert!(zigzag.score < steady.score);
     let (_, reason) = criterion(&zigzag, 0, Criterion::Intensity);
-    assert!(reason.contains("a step of +0.20 from 0.50 where the shape steps +0.00"), "{reason}");
+    assert!(
+        reason.contains("a step of +0.20 from 0.50 where the shape steps +0.00"),
+        "{reason}"
+    );
     // Free to order them, the sequencer does not zigzag.
     let free = plan(
         &recipe(&format!("version = 1\ntracks = 3\n{FLAT}")),
@@ -343,7 +381,10 @@ fn a_zigzag_round_the_shape_scores_below_a_steady_run() {
     .unwrap();
     assert_ne!(free.tracks[1].intensity, Some(0.7), "{:?}", free.tracks);
     // step_weight = 0 scores the curve only, as before.
-    let curve_only = pinned(&format!("{FLAT}step_weight = 0.0\n"), &intensities(&[0.5, 0.7, 0.5]));
+    let curve_only = pinned(
+        &format!("{FLAT}step_weight = 0.0\n"),
+        &intensities(&[0.5, 0.7, 0.5]),
+    );
     assert_eq!(scores(&curve_only), [0.9, 0.9]);
 }
 
@@ -360,7 +401,11 @@ fn energy_stands_in_for_a_missing_intensity_when_asked() {
     let p = plan(&recipe(text), &pool).unwrap();
     assert_eq!(p.left_out.len(), 1);
     assert_eq!(p.left_out[0].id, "3");
-    assert!(p.left_out[0].message.contains("no Intensity and no Energy"), "{}", p.left_out[0].message);
+    assert!(
+        p.left_out[0].message.contains("no Intensity and no Energy"),
+        "{}",
+        p.left_out[0].message
+    );
     let reasons: Vec<&str> = p
         .opening
         .iter()
@@ -369,12 +414,17 @@ fn energy_stands_in_for_a_missing_intensity_when_asked() {
         .map(|c| c.reason.as_str())
         .collect();
     assert!(
-        reasons.iter().any(|r| r.starts_with("Energy 4 standing in for Intensity: 0.75")),
+        reasons
+            .iter()
+            .any(|r| r.starts_with("Energy 4 standing in for Intensity: 0.75")),
         "{reasons:?}"
     );
     // Energy 4 is 0.75, more than 0.3 above 0.5... the step limit holds on it.
     let tight = text.replace("max_step = 0.3", "max_step = 0.2");
-    assert_eq!(plan(&recipe(&tight), &pool).unwrap_err().criterion, Blocker::IntensityStep);
+    assert_eq!(
+        plan(&recipe(&tight), &pool).unwrap_err().criterion,
+        Blocker::IntensityStep
+    );
 }
 
 // ---- 5. Variety, and missing data apart from a clash ----
@@ -390,15 +440,27 @@ fn variety_keeps_a_set_from_sitting_in_one_key() {
     let keys = |p: &Plan| p.tracks.iter().map(|t| t.key.clone()).collect::<Vec<_>>();
     let monotone = plan(&recipe("version = 1\ntracks = 3\n[key]\n"), &pool).unwrap();
     assert_eq!(keys(&monotone), ["8A", "8A", "8A"]);
-    let varied = plan(&recipe("version = 1\ntracks = 3\n[key]\nvariety = 0.5\n"), &pool).unwrap();
-    assert!(keys(&varied).contains(&"9A".to_owned()), "{:?}", keys(&varied));
+    let varied = plan(
+        &recipe("version = 1\ntracks = 3\n[key]\nvariety = 0.5\n"),
+        &pool,
+    )
+    .unwrap();
+    assert!(
+        keys(&varied).contains(&"9A".to_owned()),
+        "{:?}",
+        keys(&varied)
+    );
     let same = varied
         .transitions
         .iter()
         .flat_map(|t| t.criteria.iter())
         .find(|c| c.reason.contains("same key"));
     if let Some(same) = same {
-        assert!(same.reason.contains("the Recipe wants variety"), "{}", same.reason);
+        assert!(
+            same.reason.contains("the Recipe wants variety"),
+            "{}",
+            same.reason
+        );
     }
 }
 
@@ -413,7 +475,10 @@ fn a_missing_key_or_tempo_is_scored_apart_from_the_worst_case_and_named() {
     let p = pinned("[key]\n[tempo]\n", &pool);
     let (key, reason) = criterion(&p, 0, Criterion::Key);
     assert_eq!(key, 0.5);
-    assert!(reason.contains("track 1 has no key") && reason.contains("not as a clash"), "{reason}");
+    assert!(
+        reason.contains("track 1 has no key") && reason.contains("not as a clash"),
+        "{reason}"
+    );
     let (tempo, reason) = criterion(&p, 0, Criterion::Tempo);
     assert_eq!(tempo, 0.5);
     assert!(reason.contains("track 1 has no tempo"), "{reason}");
