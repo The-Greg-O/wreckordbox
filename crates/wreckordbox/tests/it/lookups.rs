@@ -502,13 +502,17 @@ fn a_missing_file_is_said_and_its_tags_are_not_guessed() {
     assert_eq!(described["title"], "Night Signal");
 }
 
+/// One version of a package in `Cargo.lock`: its source (none for this
+/// repository's own crates) and the names of what it depends on.
+type Locked = (Option<String>, Vec<String>);
+
 /// The packages `Cargo.lock` says `root` is built from, itself included.
 fn dependencies_of(root: &str) -> BTreeMap<String, Option<String>> {
     let lock =
         std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.lock"))
             .unwrap();
     // name -> (source, dependency names)
-    let mut packages: BTreeMap<String, Vec<(Option<String>, Vec<String>)>> = BTreeMap::new();
+    let mut packages: BTreeMap<String, Vec<Locked>> = BTreeMap::new();
     for block in lock.split("[[package]]").skip(1) {
         let mut name = String::new();
         let mut source = None;

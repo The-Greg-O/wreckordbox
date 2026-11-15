@@ -221,7 +221,7 @@ pub(crate) fn answer(
         described.file = file_of(&described.file.path);
         serde_json::to_value(described)
     } else {
-        serde_json::to_value(check(stems, facts::arguments(request)?, describe, lookup)?)
+        serde_json::to_value(check(stems, &facts::arguments(request)?, describe, lookup)?)
     };
     answer.map_err(|e| ServiceError::new(service_codes::SERVICE_FAILED, e.to_string()))
 }
@@ -269,7 +269,9 @@ fn search_text(artist: &str, title: &str, mix_name: &str) -> String {
         format!("{} - {}", artist.trim(), title.trim())
     };
     if !mix_name.is_empty() && in_title.is_none() {
-        text.push_str(&format!(" ({mix_name})"));
+        text.push_str(" (");
+        text.push_str(mix_name);
+        text.push(')');
     }
     text
 }
@@ -479,7 +481,7 @@ fn proposed(
 
 fn check(
     stems: &Arc<Stems>,
-    given: CheckCandidate,
+    given: &CheckCandidate,
     describe: &dyn Fn(&str) -> Result<TrackDescription, ServiceError>,
     lookup: &dyn Fn(&str) -> Result<ParentAudio, ServiceError>,
 ) -> Result<CandidateChecked, ServiceError> {
@@ -539,7 +541,7 @@ fn check(
     if given.dry_run {
         return Ok(answer);
     }
-    record(stems, &given, &track, tolerance, lookup, &mut answer)?;
+    record(stems, given, &track, tolerance, lookup, &mut answer)?;
     Ok(answer)
 }
 

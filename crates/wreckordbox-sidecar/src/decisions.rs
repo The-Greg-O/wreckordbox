@@ -464,7 +464,7 @@ pub(crate) fn insert_question(
     let mut run = new.run;
     if let Some(source) = source {
         if let Some(id) = run {
-            let existing_run = crate::store::run_in(&db, id)?.ok_or(SidecarError::NoRun(id))?;
+            let existing_run = crate::store::run_in(db, id)?.ok_or(SidecarError::NoRun(id))?;
             if existing_run.source.kind == SourceKind::Dj && source.kind != SourceKind::Dj {
                 return Err(SidecarError::Invalid(
                     "An agent or tool cannot ask a Decision in the DJ's Run".into(),
@@ -492,9 +492,9 @@ pub(crate) fn insert_question(
     )?;
     let id = db.last_insert_rowid();
     if let Some(source) = source {
-        crate::native_history::record_as(&db, crate::native_history::Table::Decision, id, source)?;
+        crate::native_history::record_as(db, crate::native_history::Table::Decision, id, source)?;
     } else {
-        crate::native_history::record(&db, crate::native_history::Table::Decision, id)?;
+        crate::native_history::record(db, crate::native_history::Table::Decision, id)?;
     }
     Ok(id)
 }

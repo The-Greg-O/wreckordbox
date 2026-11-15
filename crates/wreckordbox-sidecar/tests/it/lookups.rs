@@ -85,7 +85,10 @@ fn a_check_its_answer_and_its_facts_are_one_run() {
     let recorded = record(&sidecar).unwrap();
 
     assert_eq!(recorded.decision.run, Some(recorded.run));
-    assert_eq!(recorded.decision.answers, [recorded.answer.clone()]);
+    assert_eq!(
+        recorded.decision.answers,
+        std::slice::from_ref(&recorded.answer)
+    );
     assert_eq!(recorded.answer.choice, "accepted");
     assert_eq!(recorded.answer.run, Some(recorded.run));
     assert_eq!(recorded.facts.len(), 2);
