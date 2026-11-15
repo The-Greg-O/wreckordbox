@@ -37,6 +37,21 @@ pub enum BackupCommands {
     },
     /// List this Library's backups in the backup folder, newest first.
     List,
+    /// List the Ledger receipts waiting for this Library, or record them.
+    ///
+    /// A receipt is left by a write wreckordbox could not record when it
+    /// was made: a backup's standalone restore script restoring the
+    /// Library by itself, or the window finishing or rolling back an
+    /// interrupted analysis edit from its journal. Listing changes
+    /// nothing. With --record each becomes a named Ledger entry in a Run of
+    /// its own, under the tool that made the write (never the DJ), and is
+    /// then removed; one that cannot be recorded is kept and shown.
+    /// Recording needs the Library to itself, like a restore.
+    Receipts {
+        /// Record the receipts in the Ledger.
+        #[arg(long)]
+        record: bool,
+    },
 }
 
 pub fn run(config: &Config, json: bool, command: &BackupCommands) -> Result<String, ServiceError> {
@@ -67,6 +82,14 @@ pub fn run(config: &Config, json: bool, command: &BackupCommands) -> Result<Stri
                 restored_text(&restored)
             })
         }
+        BackupCommands::Receipts { record: false } => Ok(crate::backup_receipts::listed(
+            &wreckordbox_service::ledger_receipts::list(&config.recovery_dir, &library.master_db)?,
+            json,
+        )),
+        BackupCommands::Receipts { record: true } => crate::backup_receipts::recorded(
+            &wreckordbox_service::ledger_receipts::record_owned(&library, config)?,
+            json,
+        ),
         BackupCommands::List => {
             let backups = backup::list(&library, config)?;
             Ok(if json {

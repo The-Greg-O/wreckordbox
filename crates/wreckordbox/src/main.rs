@@ -5,6 +5,7 @@
 //! `--json` as JSON; errors go to standard error with a non-zero status.
 
 mod backup;
+mod backup_receipts;
 mod barriers;
 mod decisions;
 mod facts;

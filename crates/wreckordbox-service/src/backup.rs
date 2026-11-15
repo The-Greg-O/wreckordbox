@@ -136,7 +136,7 @@ pub(crate) fn recover(recovery_dir: &Path, library: &LibraryLocation) -> Result<
             format!("a restore of the Library stopped midway and could not be finished: {e}"),
         )
     })?;
-    record_owed(recovery_dir).map(|_| ())
+    record_owed(recovery_dir, library).map(|_| ())
 }
 
 /// The record a restore owes the Ledger, kept in its journal
@@ -167,7 +167,10 @@ struct Owing {
 /// Writes the Ledger entry a finished restore owes, if it owes one, and
 /// lets go of its journal. Safe to repeat: the entry's identifier is
 /// reserved and saved before it is appended.
-fn record_owed(recovery_dir: &Path) -> Result<Option<i64>, ServiceError> {
+fn record_owed(
+    recovery_dir: &Path,
+    library: &LibraryLocation,
+) -> Result<Option<i64>, ServiceError> {
     let unrecorded = |why: &dyn std::fmt::Display| {
         ServiceError::new(
             codes::RESTORE_UNRECORDED,
@@ -185,19 +188,64 @@ fn record_owed(recovery_dir: &Path) -> Result<Option<i64>, ServiceError> {
             &"the journal owes something this wreckordbox does not know",
         ));
     };
+    // With no Sidecar yet, the entry makes one: a restore is recorded
+    // whether or not the Library had a Sidecar before it (wbx-14.15). The
+    // caller owns the Library, so no service has that Sidecar open.
     let id = match ledger.folder.clone().as_deref() {
-        Some(folder)
-            if folder
-                .join(rbl_backup::sidecar_part::DATABASE_FILE)
-                .is_file() =>
-        {
+        Some(folder) => {
             Some(write_entry(recovery_dir, folder, &mut ledger).map_err(|e| unrecorded(&e))?)
         }
-        // No Sidecar to record it in.
-        _ => None,
+        // No usable Sidecar folder: the record is handed off as a receipt
+        // for `backup receipts --record` instead.
+        None => {
+            hand_off_unplaced(recovery_dir, &library.master_db, &ledger)
+                .map_err(|e| unrecorded(&e))?;
+            None
+        }
     };
     rbl_backup::journal::discharge(recovery_dir).map_err(|e| unrecorded(&e))?;
     Ok(id)
+}
+
+/// A restore whose Library has no usable Sidecar folder leaves a receipt
+/// ([`crate::ledger_receipts`]), named by the backup and when it was
+/// made, so the restore is not left with no record at all.
+fn hand_off_unplaced(recovery_dir: &Path, master_db: &Path, ledger: &Owed) -> Result<(), String> {
+    let stem: String = ledger
+        .backup
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(80)
+        .collect();
+    let at = i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_millis()),
+    )
+    .unwrap_or(i64::MAX);
+    crate::ledger_receipts::hand_off(
+        recovery_dir,
+        &crate::ledger_receipts::Receipt {
+            format: crate::ledger_receipts::FORMAT,
+            operation: format!("backup-restore-{stem}-{at}"),
+            kind: RESTORED.to_owned(),
+            source: "wreckordbox-backup-restore".to_owned(),
+            library: master_db.to_path_buf(),
+            at,
+            outcome: "restored".to_owned(),
+            uncertainty: "The Library had no usable Sidecar folder when it was restored, so the entry could not be written then.".to_owned(),
+            details: serde_json::json!({ "backup": ledger.backup, "created_at": ledger.created_at, "sidecar": ledger.sidecar }),
+            reserved: None,
+        },
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
 }
 
 fn write_entry(recovery_dir: &Path, folder: &Path, ledger: &mut Owed) -> Result<i64, String> {
@@ -372,7 +420,7 @@ pub fn restore_owned(
             from_backup(&e)
         }
     })?;
-    let ledger_entry = record_owed(&config.recovery_dir)?;
+    let ledger_entry = record_owed(&config.recovery_dir, library)?;
     Ok(Restored {
         archive: archive.to_path_buf(),
         library: library.master_db.clone(),

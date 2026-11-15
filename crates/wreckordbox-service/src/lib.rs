@@ -22,6 +22,7 @@ pub mod intake;
 pub mod intensity;
 pub mod large_run;
 pub mod ledger;
+pub mod ledger_receipts;
 mod library;
 pub mod mutant_edits;
 mod mutant_follow;
