@@ -31,6 +31,7 @@ pub mod mytag_edits;
 pub mod mytag_projection;
 pub mod native_stems;
 pub mod playlist_edits;
+pub mod playlist_making;
 pub mod preview_fingerprints;
 pub mod projection;
 pub mod projection_barriers;

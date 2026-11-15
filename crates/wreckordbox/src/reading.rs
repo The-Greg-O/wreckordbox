@@ -57,6 +57,8 @@ pub enum PlaylistCommands {
     },
     #[command(flatten)]
     Edit(crate::playlist_edits::PlaylistEditCommands),
+    #[command(flatten)]
+    Make(crate::playlist_making::PlaylistMakeCommands),
 }
 
 #[derive(Subcommand)]
@@ -118,6 +120,7 @@ pub fn playlists(
             Ok(shown(as_json, &json!(found), playlist_tracks_text(&found)))
         }
         PlaylistCommands::Edit(command) => crate::playlist_edits::run(client, as_json, command),
+        PlaylistCommands::Make(command) => crate::playlist_making::run(client, as_json, command),
     }
 }
 

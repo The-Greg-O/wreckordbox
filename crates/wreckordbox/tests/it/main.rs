@@ -32,6 +32,7 @@ mod mutants;
 mod mutants_follow;
 mod mytag_edits;
 mod mytag_projection;
+mod playlist_making;
 mod projection;
 mod projection_barriers;
 mod projection_failures;
