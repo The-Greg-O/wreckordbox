@@ -41,6 +41,7 @@ const RECORDS: &[&str] = &[
     "review.reopen",
     "runs.start",
     "schema.convert",
+    "setplans.build",
     "stems.separate",
 ];
 
@@ -125,6 +126,12 @@ fn reads(track: &str) -> Vec<(&'static str, Value)> {
         ("runs.show", json!({ "id": 1 })),
         ("runs.spills.list", json!({})),
         ("schema.check", json!({})),
+        (
+            "setplans.check",
+            json!({ "recipe": "version = 1\ntracks = 2\n" }),
+        ),
+        ("setplans.list", json!({})),
+        ("setplans.show", json!({ "id": 1 })),
         ("stems.show", json!({ "id": track })),
         ("stems.status", json!({ "id": track })),
         ("sticks.list", json!({})),
@@ -143,6 +150,7 @@ const ANSWERED_ERRORS: &[&str] = &[
     "tag_schema_missing",
     "mutant_not_found",
     "run_not_found",
+    "set_plan_not_found",
     "track_not_found",
     "playlist_not_found",
     "my_tag_not_found",

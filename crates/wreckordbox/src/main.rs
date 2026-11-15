@@ -17,6 +17,7 @@ mod playlist_edits;
 mod playlist_making;
 mod project;
 mod project_mytags;
+mod set_plan;
 mod spills;
 use playlist_edits as edits;
 mod protection;
@@ -161,6 +162,13 @@ enum Commands {
     Intensity {
         #[command(subcommand)]
         command: intensity::IntensityCommands,
+    },
+    /// Recipes and Set plans: check a Recipe, build a Set plan from one
+    /// and a pool of tracks, and read the plans kept in the Sidecar. Never
+    /// changes the Library.
+    SetPlan {
+        #[command(subcommand)]
+        command: set_plan::SetPlanCommands,
     },
     /// Check the Tag schema, or write a first one from the Library's
     /// MyTags.
@@ -409,6 +417,13 @@ fn run(cli: &Cli) -> Result<ExitCode, ServiceError> {
         }
         Commands::Intensity { command } => {
             print(&intensity::run(&mut connect(&config)?, cli.json, command)?);
+        }
+        Commands::SetPlan { command } => {
+            let (text, ok) = set_plan::run(&mut connect(&config)?, cli.json, command)?;
+            print(&text);
+            if !ok {
+                return Ok(ExitCode::FAILURE);
+            }
         }
         Commands::Schema { command } => {
             let (text, ok) = schema::run(&mut connect(&config)?, cli.json, command)?;

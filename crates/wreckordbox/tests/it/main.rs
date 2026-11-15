@@ -43,6 +43,7 @@ mod review_titles;
 mod review_view_reads;
 mod run_status;
 mod service_exit;
+mod set_plans;
 mod sidecar_on_stick;
 mod sidecar_read_only_on_stick;
 mod standing_facts;

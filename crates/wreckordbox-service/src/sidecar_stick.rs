@@ -45,6 +45,7 @@ pub(crate) const RECORDS: &[&str] = &[
     "review.reopen",
     "runs.start",
     "schema.convert",
+    "setplans.build",
     "stems.separate",
 ];
 

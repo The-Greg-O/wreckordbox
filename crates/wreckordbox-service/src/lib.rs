@@ -47,6 +47,7 @@ pub mod run_status;
 pub mod schema;
 mod separation;
 mod server;
+pub mod set_plans;
 mod sidecar_stick;
 pub mod standing;
 pub mod stems;

@@ -630,6 +630,13 @@ impl Shared {
                     self.with_library(|library| crate::intensity::targets(library, wanted))?
                 })
             }
+            plans if crate::set_plans::answers(plans) => {
+                // Only finding the pool takes the Library; a plan is kept
+                // in the Sidecar alone (wbx-39).
+                crate::set_plans::answer(&self.stems, request, &|wanted| {
+                    self.with_library(|library| crate::set_plans::pool(library, wanted))?
+                })
+            }
             decisions if crate::decisions::answers(decisions) => {
                 let _facts = crate::review::exclude(&self.stems);
                 // The Sidecar's too: the Library is only read, to find a

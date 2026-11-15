@@ -53,6 +53,7 @@ pub mod precedence;
 pub mod projection;
 pub mod projection_barriers;
 pub mod review;
+pub mod set_plans;
 pub mod stems;
 mod store;
 pub mod tag_schema;
