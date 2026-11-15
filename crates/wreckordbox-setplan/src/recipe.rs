@@ -347,7 +347,10 @@ impl Check<'_> {
         if value.is_finite() && (0.0..=1.0).contains(&value) {
             true
         } else {
-            self.at(spanned, format!("{what} is {value}; it must be from 0 to 1"));
+            self.at(
+                spanned,
+                format!("{what} is {value}; it must be from 0 to 1"),
+            );
             false
         }
     }
@@ -370,6 +373,10 @@ impl Check<'_> {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one block per section of the file, in the file's order"
+    )]
     fn recipe(&mut self, raw: Raw) -> Option<Recipe> {
         match &raw.version {
             None => self.nowhere(format!(
@@ -499,7 +506,9 @@ impl Check<'_> {
                     } else {
                         self.at(
                             spanned,
-                            format!("recency.half_life_days is {value}; it is a number of days above 0"),
+                            format!(
+                                "recency.half_life_days is {value}; it is a number of days above 0"
+                            ),
                         );
                         90.0
                     }
@@ -619,8 +628,9 @@ impl Check<'_> {
 
 /// The line (from 1) of a byte offset.
 fn line_of(text: &str, offset: usize) -> usize {
-    text.get(..offset)
-        .map_or(1, |before| before.bytes().filter(|&b| b == b'\n').count() + 1)
+    text.get(..offset).map_or(1, |before| {
+        before.bytes().filter(|&b| b == b'\n').count() + 1
+    })
 }
 
 /// Days since 1970-01-01 of a `YYYY-MM-DD` date (also the first ten

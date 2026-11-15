@@ -23,6 +23,8 @@ rbl-backup = { path = "../rbl-backup" }
 wreckordbox-sidecar = { path = "../wreckordbox-sidecar" }
 # Intensity: the measurement itself, and the beat grid it is aligned to.
 wreckordbox-intensity = { path = "../wreckordbox-intensity" }
+# Recipes and the Set plan sequencer (wbx-39), pure.
+wreckordbox-setplan = { path = "../wreckordbox-setplan" }
 rbl-anlz = { path = "../rbl-anlz" }
 # Native stems: the writer of a track's Stems to a Stick, which the service
 # drives because it owns the Sidecar the Stems are in.

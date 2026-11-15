@@ -199,7 +199,7 @@ pub struct Unsatisfiable {
 /// # Errors
 /// The Recipe cannot be satisfied from this pool; [`Unsatisfiable`] names
 /// the criterion in the way.
-pub fn plan(recipe: &Recipe, pool: &[Candidate]) -> Result<Plan, Unsatisfiable> {
+pub fn plan(recipe: &Recipe, pool: &[Candidate]) -> Result<Plan, Box<Unsatisfiable>> {
     let mut sorted: Vec<&Candidate> = pool.iter().collect();
     sorted.sort_by(|a, b| (a.id.len(), &a.id).cmp(&(b.id.len(), &b.id)));
     sorted.dedup_by(|a, b| a.id == b.id);
@@ -240,15 +240,17 @@ pub fn plan(recipe: &Recipe, pool: &[Candidate]) -> Result<Plan, Unsatisfiable> 
         as_of: as_of.as_deref().and_then(day_number),
         as_of_text: as_of.clone().unwrap_or_default(),
     };
-    let unsatisfiable = |criterion, in_the_way, message, position, rejected| Unsatisfiable {
-        criterion,
-        in_the_way,
-        message,
-        position,
-        rejected,
-        pool: pool_size,
-        usable: usable.len(),
-        left_out: left_out.clone(),
+    let unsatisfiable = |criterion, in_the_way, message, position, rejected| {
+        Box::new(Unsatisfiable {
+            criterion,
+            in_the_way,
+            message,
+            position,
+            rejected,
+            pool: pool_size,
+            usable: usable.len(),
+            left_out: left_out.clone(),
+        })
     };
     if usable.len() < recipe.tracks {
         let mut counts: BTreeMap<Lack, usize> = BTreeMap::new();
@@ -259,7 +261,13 @@ pub fn plan(recipe: &Recipe, pool: &[Candidate]) -> Result<Plan, Unsatisfiable> 
         }
         let why: Vec<String> = counts
             .iter()
-            .map(|(lack, n)| format!("{n} {} {}", if *n == 1 { "has" } else { "have" }, lack.words()))
+            .map(|(lack, n)| {
+                format!(
+                    "{n} {} {}",
+                    if *n == 1 { "has" } else { "have" },
+                    lack.words()
+                )
+            })
             .collect();
         let why = if why.is_empty() {
             String::new()
@@ -340,7 +348,12 @@ fn lacks(recipe: &Recipe, c: &Candidate) -> Vec<Lack> {
     {
         lacks.push(Lack::Intensity);
     }
-    if recipe.tempo.as_ref().is_some_and(|t| t.max_change.is_some()) && tempo(c).is_none() {
+    if recipe
+        .tempo
+        .as_ref()
+        .is_some_and(|t| t.max_change.is_some())
+        && tempo(c).is_none()
+    {
         lacks.push(Lack::Tempo);
     }
     if recipe.key.as_ref().is_some_and(|k| k.max_moves.is_some()) && c.key.is_none() {
@@ -433,7 +446,9 @@ struct State {
 }
 
 fn better(a: &State, b: &State) -> std::cmp::Ordering {
-    b.score.total_cmp(&a.score).then_with(|| a.order.cmp(&b.order))
+    b.score
+        .total_cmp(&a.score)
+        .then_with(|| a.order.cmp(&b.order))
 }
 
 /// The best order of `recipe.tracks` of `pool` (indexes), or where it stopped.
@@ -452,7 +467,11 @@ fn search(scorer: &Scorer<'_>, pool: &[&Candidate], limits: Limits) -> Result<Ve
         beam.push(State {
             order: vec![index],
             used,
-            score: scorer.at_position(candidate, 0, None).iter().map(|c| c.score).sum(),
+            score: scorer
+                .at_position(candidate, 0, None)
+                .iter()
+                .map(|c| c.score)
+                .sum(),
         });
     }
     beam.sort_by(better);
@@ -530,7 +549,10 @@ impl Scorer<'_> {
             Blocker::Tracks => "the number of tracks".to_owned(),
             Blocker::IntensityStep => format!(
                 "the Intensity step limit (intensity.max_step {})",
-                r.intensity.as_ref().and_then(|i| i.max_step).unwrap_or_default()
+                r.intensity
+                    .as_ref()
+                    .and_then(|i| i.max_step)
+                    .unwrap_or_default()
             ),
             Blocker::KeyMoves => format!(
                 "the key limit (key.max_moves {})",
@@ -538,7 +560,10 @@ impl Scorer<'_> {
             ),
             Blocker::TempoChange => format!(
                 "the tempo limit (tempo.max_change {}%)",
-                r.tempo.as_ref().and_then(|t| t.max_change).unwrap_or_default()
+                r.tempo
+                    .as_ref()
+                    .and_then(|t| t.max_change)
+                    .unwrap_or_default()
             ),
             Blocker::Situations => {
                 let required: Vec<String> = r
@@ -556,17 +581,27 @@ impl Scorer<'_> {
     /// Whether `c` carries every Situation required at `position`.
     fn required_here(&self, c: &Candidate, position: usize) -> bool {
         let at = self.recipe.at(position);
-        self.recipe.situations.iter().flat_map(|s| s.place.iter()).all(|p| {
-            !p.require
-                || !p.covers(at)
-                || c.situations
-                    .as_ref()
-                    .is_some_and(|carried| carried.contains(&p.situation))
-        })
+        self.recipe
+            .situations
+            .iter()
+            .flat_map(|s| s.place.iter())
+            .all(|p| {
+                !p.require
+                    || !p.covers(at)
+                    || c.situations
+                        .as_ref()
+                        .is_some_and(|carried| carried.contains(&p.situation))
+            })
     }
 
     /// The hard limits going from `a` to `b` at `position` would break.
-    fn broken(&self, a: &Candidate, b: &Candidate, position: usize, limits: Limits) -> Vec<Blocker> {
+    fn broken(
+        &self,
+        a: &Candidate,
+        b: &Candidate,
+        position: usize,
+        limits: Limits,
+    ) -> Vec<Blocker> {
         let mut broken = Vec::new();
         if let (Some(step), Some(x), Some(y)) = (limits.step, a.intensity, b.intensity) {
             if (y - x).abs() > step + 1e-9 {
@@ -591,7 +626,12 @@ impl Scorer<'_> {
 
     /// The criteria of the track at `position` alone: Intensity against the
     /// shape, Situations, recency. `from` is the track before, for the step.
-    fn at_position(&self, c: &Candidate, position: usize, from: Option<&Candidate>) -> Vec<Contribution> {
+    fn at_position(
+        &self,
+        c: &Candidate,
+        position: usize,
+        from: Option<&Candidate>,
+    ) -> Vec<Contribution> {
         let r = self.recipe;
         let at = r.at(position);
         let mut out = Vec::new();
@@ -628,10 +668,7 @@ impl Scorer<'_> {
                 .map(|p| p.situation.as_str())
                 .collect();
             let (score, reason) = match &c.situations {
-                None => (
-                    0.0,
-                    format!("track {} has no Situation recorded", c.id),
-                ),
+                None => (0.0, format!("track {} has no Situation recorded", c.id)),
                 Some(carried) => {
                     if let Some(fits) = carried.iter().find(|s| here.contains(&s.as_str())) {
                         (w, format!("{fits} belongs here"))
@@ -650,7 +687,10 @@ impl Scorer<'_> {
                     } else if here.is_empty() {
                         (0.0, format!("no Situation is placed here at {at:.2}"))
                     } else {
-                        (0.0, format!("the track is not {} as wanted here", here.join(" or ")))
+                        (
+                            0.0,
+                            format!("the track is not {} as wanted here", here.join(" or ")),
+                        )
                     }
                 }
             };
@@ -661,7 +701,10 @@ impl Scorer<'_> {
             });
         }
         if let Some(recency) = &r.recency {
-            let added = c.added.as_deref().and_then(|d| day_number(d).map(|n| (n, d)));
+            let added = c
+                .added
+                .as_deref()
+                .and_then(|d| day_number(d).map(|n| (n, d)));
             out.push(match (added, self.as_of) {
                 (Some((day, text)), Some(as_of)) => {
                     let age = (as_of - day).max(0);
@@ -689,6 +732,11 @@ impl Scorer<'_> {
 
     /// Every criterion of the transition from `a` to `b` at `position`, in
     /// the order of [`Criterion`].
+    #[allow(
+        clippy::many_single_char_names,
+        clippy::single_match_else,
+        reason = "a and b are the transition's two tracks, x and y their values; each criterion is known or not"
+    )]
     fn transition(&self, a: &Candidate, b: &Candidate, position: usize) -> Vec<Contribution> {
         let r = self.recipe;
         let mut out = self.at_position(b, position, Some(a));
@@ -696,8 +744,7 @@ impl Scorer<'_> {
             out.push(match (a.key, b.key) {
                 (Some(x), Some(y)) => {
                     let moves = x.moves(y);
-                    #[allow(clippy::cast_precision_loss, reason = "at most 7")]
-                    let score = key.weight * (1.0 - moves as f64 / 4.0).max(0.0);
+                    let score = key.weight * (1.0 - f64::from(moves) / 4.0).max(0.0);
                     Contribution {
                         criterion: Criterion::Key,
                         score: round4(score),
@@ -712,7 +759,9 @@ impl Scorer<'_> {
                     Contribution {
                         criterion: Criterion::Key,
                         score: 0.0,
-                        reason: format!("track {without} has no key, so the key move is not scored"),
+                        reason: format!(
+                            "track {without} has no key, so the key move is not scored"
+                        ),
                     }
                 }
             });
@@ -733,7 +782,9 @@ impl Scorer<'_> {
                     Contribution {
                         criterion: Criterion::Tempo,
                         score: 0.0,
-                        reason: format!("track {without} has no tempo, so the change is not scored"),
+                        reason: format!(
+                            "track {without} has no tempo, so the change is not scored"
+                        ),
                     }
                 }
             });
@@ -750,7 +801,11 @@ impl Scorer<'_> {
                     let reason = if same {
                         format!(
                             "both {}",
-                            shared.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                            shared
+                                .iter()
+                                .map(|s| s.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
                         )
                     } else {
                         format!("{} to {}", x.join(", "), y.join(", "))

@@ -1552,6 +1552,8 @@ const SERVICE_NOT_STICK_WRITERS: &[&str] = &[
     "review.accept", "review.reject", "review.rejected", "review.reopen", "review.waiting",
     "runs.active", "runs.finish", "runs.list", "runs.show", "runs.start",
     "schema.check", "schema.convert",
+    // Set plans (wbx-39): Sidecar only; never the Library or a Stick.
+    "setplans.build", "setplans.check", "setplans.list", "setplans.show",
     "stems.separate", "stems.show", "stems.status",
     "sticks.dry_run", "sticks.list",
     "tracks.get", "tracks.list", "tracks.query", "tracks.rate", "tracks.remove_from_collection",

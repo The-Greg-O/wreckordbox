@@ -2,7 +2,9 @@
 use std::fmt;
 
 /// `number` 1..=12 round the wheel; `major` is the B ring.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct Camelot {
     pub number: u8,
     pub major: bool,
