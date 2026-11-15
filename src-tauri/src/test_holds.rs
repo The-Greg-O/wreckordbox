@@ -62,6 +62,10 @@ pub const BACKUP_PUBLISHED: &str = "backup.published";
 /// and not yet reported it (wbx-45.14).
 pub const BACKUP_DATABASE_COPYING: &str = "backup.database_copying";
 
+/// A backup has snapshotted the Sidecar's store and not yet gathered its
+/// Stem audio (wbx-hy4).
+pub const BACKUP_SIDECAR_SNAPSHOTTED: &str = "backup.sidecar_snapshotted";
+
 static ANY: AtomicBool = AtomicBool::new(false);
 static POINTS: Mutex<Option<Points>> = Mutex::new(None);
 static CHANGED: Condvar = Condvar::new();

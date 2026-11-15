@@ -336,6 +336,14 @@ pub fn collect_for(location: &rbl_db::LibraryLocation, options: Options, proceed
     collect(&Destination::of(location)?.path, options, proceed)
 }
 
+/// [`collect_of_one_moment`] for the Sidecar of the Library at `location`,
+/// its folder checked first ([`Destination::of`]), for a writer that also
+/// shows progress and can be stopped (the window's backup, wbx-hy4):
+/// `proceed` as in [`collect`], `at` as in [`collect_of_one_moment`].
+pub fn collect_of_one_moment_for(location: &rbl_db::LibraryLocation, options: Options, proceed: &mut dyn FnMut() -> bool, at: &dyn Fn(&str)) -> Result<Option<Collected>> {
+    collect_inner(&Destination::of(location)?.path, options, proceed, at, true)
+}
+
 struct Walk<'a> {
     options: Options,
     proceed: &'a mut dyn FnMut() -> bool,
