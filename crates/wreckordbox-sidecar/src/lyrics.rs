@@ -128,7 +128,7 @@ impl Lyrics {
                 "lyrics need words; for a track with none, record it as instrumental".to_owned(),
             );
         }
-        if self.synced != !self.lines.is_empty() {
+        if self.synced == self.lines.is_empty() {
             return Err("synced lyrics are exactly those with timed lines".to_owned());
         }
         if let Some(language) = &self.language {

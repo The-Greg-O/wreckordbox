@@ -2,8 +2,8 @@
 //!
 //! Where each format keeps them:
 //!
-//! - ID3v2 (MP3, AIFF's `ID3 ` chunk, WAV's `id3 ` chunk, and the rare
-//!   ID3v2 in FLAC): `SYLT` (synced, with millisecond times) is preferred
+//! - `ID3v2` (MP3, AIFF's `ID3 ` chunk, WAV's `id3 ` chunk, and the rare
+//!   `ID3v2` in FLAC): `SYLT` (synced, with millisecond times) is preferred
 //!   to `USLT` (unsynced). A `SYLT` timed in MPEG frames is taken as plain
 //!   lines, since its times cannot be read without decoding.
 //! - Vorbis comments (FLAC, Ogg Vorbis, Opus): `LYRICS`, else
@@ -81,7 +81,7 @@ pub(crate) fn read(path: &Path) -> Result<Option<Embedded>, String> {
             file.ilst().and_then(|ilst| {
                 let atom = ilst.get(&AtomIdent::Fourcc(*b"\xa9lyr"))?;
                 let text = atom.data().find_map(|data| match data {
-                    AtomData::UTF8(text) | AtomData::UTF16(text) => Some(text.clone()),
+                    AtomData::UTF8(text) | AtomData::UTF16(text) => Some(text.as_str()),
                     _ => None,
                 })?;
                 plain(text, None, "MP4 ©lyr")
@@ -93,7 +93,7 @@ pub(crate) fn read(path: &Path) -> Result<Option<Embedded>, String> {
 }
 
 /// Words with something in them, or nothing.
-fn plain(text: String, language: Option<String>, tag: &'static str) -> Option<Embedded> {
+fn plain(text: &str, language: Option<String>, tag: &'static str) -> Option<Embedded> {
     let text = text.replace("\r\n", "\n").replace('\r', "\n");
     (!text.trim().is_empty()).then(|| Embedded {
         text: text.trim().to_owned(),
@@ -142,7 +142,7 @@ fn from_id3(tag: &Id3v2Tag) -> Option<Embedded> {
             .join("\n");
         let code = language(synced.language);
         if synced.timestamp_format != TimestampFormat::MS {
-            return plain(text, code, "ID3v2 SYLT");
+            return plain(&text, code, "ID3v2 SYLT");
         }
         return Some(Embedded {
             text,
@@ -153,13 +153,7 @@ fn from_id3(tag: &Id3v2Tag) -> Option<Embedded> {
     }
     tag.unsync_text()
         .find(|frame| !frame.content.trim().is_empty())
-        .and_then(|frame| {
-            plain(
-                frame.content.clone(),
-                language(frame.language),
-                "ID3v2 USLT",
-            )
-        })
+        .and_then(|frame| plain(&frame.content, language(frame.language), "ID3v2 USLT"))
 }
 
 fn from_vorbis(comments: &VorbisComments) -> Option<Embedded> {
@@ -172,6 +166,6 @@ fn from_vorbis(comments: &VorbisComments) -> Option<Embedded> {
         comments
             .get_all(key)
             .find(|text| !text.trim().is_empty())
-            .and_then(|text| plain(text.to_owned(), None, tag))
+            .and_then(|text| plain(text, None, tag))
     })
 }

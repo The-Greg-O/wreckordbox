@@ -119,7 +119,7 @@ pub enum StatusArg {
 }
 
 impl Who {
-    fn into_args(&self, args: &mut serde_json::Map<String, Value>) {
+    fn add_to(&self, args: &mut serde_json::Map<String, Value>) {
         if let Some(source) = &self.source {
             args.insert("source".to_owned(), json!(source));
         }
@@ -182,7 +182,7 @@ pub fn run(
             if let Some(confidence) = confidence {
                 args.insert("confidence".to_owned(), json!(confidence));
             }
-            who.into_args(&mut args);
+            who.add_to(&mut args);
             let recorded: LyricsRecorded =
                 client.call(commands::LYRICS_SET, Value::Object(args))?;
             Ok(if as_json {
@@ -209,7 +209,7 @@ pub fn run(
             if *dry_run {
                 args.insert("dry_run".to_owned(), json!(true));
             }
-            who.into_args(&mut args);
+            who.add_to(&mut args);
             let imported: Imported =
                 client.call(commands::LYRICS_IMPORT_EMBEDDED, Value::Object(args))?;
             Ok(if as_json {
@@ -429,6 +429,7 @@ fn search_text(found: &LyricsFound) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

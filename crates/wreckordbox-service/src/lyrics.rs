@@ -392,7 +392,10 @@ fn show(
         Store::Snapshot(s) => s.facts(id, LYRICS.name),
         Store::Absent => Ok(Vec::new()),
     })?;
-    let live: Vec<_> = stored.into_iter().filter(|f| f.is_live()).collect();
+    let live: Vec<_> = stored
+        .into_iter()
+        .filter(wreckordbox_sidecar::Fact::is_live)
+        .collect();
     let (standing, _) = rules.standing(&live);
     Ok(TrackLyrics {
         track: found.parent().clone(),
@@ -466,7 +469,7 @@ fn set(
         stems,
         &caller,
         &description,
-        vec![Pending {
+        &[Pending {
             found,
             fingerprint,
             lyrics,
@@ -597,7 +600,7 @@ fn import(
             )
         });
         let (at, items): (Vec<usize>, Vec<Pending>) = pending.into_iter().unzip();
-        let (written_in, _, facts) = write(stems, caller, &description, items)?;
+        let (written_in, _, facts) = write(stems, caller, &description, &items)?;
         for (at, fact) in at.into_iter().zip(facts) {
             tracks[at].fact = Some(fact.id);
         }
@@ -767,12 +770,13 @@ fn write(
     stems: &Arc<Stems>,
     caller: &Caller,
     description: &str,
-    items: Vec<Pending>,
+    items: &[Pending],
 ) -> Result<(Run, bool, Vec<Fact>), ServiceError> {
     let sidecar = stems.sidecar()?;
-    let (run, created) = match &caller.run {
-        Some(run) => (run.clone(), false),
-        None => {
+    let (run, created) = if let Some(run) = &caller.run {
+        (run.clone(), false)
+    } else {
+        {
             let id = sidecar
                 .begin_run(&caller.source, description.trim())
                 .map_err(|e| stems::sidecar_error(&e))?;
@@ -787,7 +791,7 @@ fn write(
     };
     // The point every Fact producer shares: re-attach by fingerprint, and
     // mark the track's Measurements made from other audio.
-    for item in &items {
+    for item in items {
         stems.before_record(&item.found, item.fingerprint.as_ref(), Some(run.id))?;
     }
     let values: Vec<Value> = items.iter().map(|item| json!(item.lyrics)).collect();
