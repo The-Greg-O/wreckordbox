@@ -1035,6 +1035,7 @@ fn write(
             }
             done.push(written.edit);
         }
+        hold_after_commit();
         let after = crate::mytag_definitions::rows(writer.library().connection())?;
         let definition_marks = crate::mytag_definitions::marks_after(defined, &ids, &after);
         if let Err(why) = keep_marks(stems, left, definition_marks) {
@@ -1077,6 +1078,26 @@ fn write(
 /// so a test can write from another connection at exactly that point. Read
 /// only in test mode.
 pub const HOLD_ENV: &str = "WRECKORDBOX_MYTAG_PROJECTION_HOLD";
+
+/// A folder in which `projection.mytags.apply`, once its transaction has
+/// committed and before it keeps its marks, makes a file `committed` and
+/// waits until a file `mark` appears (at most 30 seconds). Read only in
+/// test mode.
+pub const COMMIT_HOLD_ENV: &str = "WRECKORDBOX_MYTAG_PROJECTION_COMMIT_HOLD";
+
+fn hold_after_commit() {
+    if !rbl_db::test_mode() {
+        return;
+    }
+    let Some(dir) = std::env::var_os(COMMIT_HOLD_ENV).map(PathBuf::from) else {
+        return;
+    };
+    let _ = std::fs::write(dir.join("committed"), b"");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !dir.join("mark").exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
 
 fn hold_before_write() {
     if !rbl_db::test_mode() {
