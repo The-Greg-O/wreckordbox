@@ -246,7 +246,8 @@ pub struct Incomplete {
 ///
 /// 1. The files whose size is exactly the Stick copy's. Several:
 ///    ambiguous. One: taken when the WHOLE of the Stick's name (its stem,
-///    compared as [`matching::comparable`] makes it) is where the file's
+///    compared as [`matching::comparable`] makes it, a name rekordbox cut to
+///    41 characters and numbered `-N` taken as those 41) is where the file's
 ///    name starts, and, where the Stick's library records a length and the
 ///    file's header says its own, the two lengths agree within a second.
 ///    One whose name agrees only over its first [`matching::AGREEING_CHARACTERS`]
@@ -478,8 +479,27 @@ pub mod matching {
     /// as [`comparable`] makes them.
     #[must_use]
     pub fn whole_name_agrees(stick: &str, folder: &str) -> bool {
-        let (a, b) = (comparable(&stem(stick)), comparable(&stem(folder)));
+        let (a, b) = (uncut(&comparable(&stem(stick))), comparable(&stem(folder)));
         !a.is_empty() && b.starts_with(&a)
+    }
+
+    /// How many characters of a long stem rekordbox keeps when it cuts it.
+    pub const CUT_STEM_CHARS: usize = 41;
+
+    /// A Stick stem rekordbox cut: its first [`CUT_STEM_CHARS`] characters
+    /// then `-N` (`-1`, `-2`, ...), seen on every cut name of a real Stick.
+    /// What is left of the name is those characters; any other stem is as
+    /// it is.
+    fn uncut(stem: &str) -> String {
+        let chars: Vec<char> = stem.chars().collect();
+        let cut = chars.len() > CUT_STEM_CHARS + 1
+            && chars[CUT_STEM_CHARS] == '-'
+            && chars[CUT_STEM_CHARS + 1..].iter().all(char::is_ascii_digit);
+        if cut {
+            chars[..CUT_STEM_CHARS].iter().collect()
+        } else {
+            stem.to_owned()
+        }
     }
 
     /// Whether two file names start alike: their stems, compared as
@@ -1982,5 +2002,23 @@ mod tests {
             "Night Drive Anthem (Club Mix).wav"
         ));
         assert!(!names_agree("Gone.wav", "Stranger.wav"));
+    }
+
+    #[test]
+    fn a_name_rekordbox_cut_to_forty_one_characters_and_numbered_agrees() {
+        // rekordbox cuts a long stem to its first 41 characters and adds
+        // `-N`: the whole of what is left of the name is those 41.
+        let folder = "Abcdefghij Klmnopqrst Uvwxyzabcd (Extended Original Mix).aiff";
+        let cut: String = folder.chars().take(41).collect();
+        assert!(whole_name_agrees(&format!("{cut}-1.aiff"), folder));
+        assert!(whole_name_agrees(&format!("{cut}-12.aiff"), folder));
+        // Not the 41 characters: a number that is part of the name.
+        assert!(!whole_name_agrees(
+            "Abcdefghij Klmnopqrst Uvwxyz-1.aiff",
+            folder
+        ));
+        let other: String =
+            "Abcdefghij Klmnopqrst Uvwxyzabcd (Radio Edit and more words).aiff".to_owned();
+        assert!(!whole_name_agrees(&format!("{cut}-1.aiff"), &other));
     }
 }
