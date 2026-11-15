@@ -9,7 +9,10 @@
 //! every apply that wrote, for each deck tag it found or made), when it is
 //! still in that category: the deck tag was relabelled in the schema.
 //! Failing both, the MyTag is made (`create_tag`), at the end of its
-//! category, unless the category already holds its fifty.
+//! category, unless the category already holds its fifty, or a MyTag
+//! linked to the term was removed since (an Undo of the projection that
+//! made it, or a delete by hand): that absence is the DJ's (`removed`), as
+//! an Undone assignment is.
 //!
 //! **Who owns a definition.** A projection may rename or move a MyTag only
 //! when its mark says a projection made or renamed it, that write's Ledger
@@ -77,7 +80,9 @@ pub struct Definition {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub order: Vec<String>,
     /// Why it is kept: `set_by_dj`, `no_record`, `written_since`,
-    /// `provenance_incomplete`, `category_full`.
+    /// `provenance_incomplete`, `category_full`, `removed` (a MyTag linked
+    /// to the term was taken away since, by an Undo or by hand: never made
+    /// again by a projection).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
@@ -281,7 +286,22 @@ pub(crate) fn plan(
                             .is_some_and(|m| m.dimension == view.dimension && m.term == tag.id)
                             && !labels.contains(&r.name.as_str())
                     });
+                    // A MyTag linked to this term that is gone (an Undo, a
+                    // delete by hand): its absence is the DJ's.
+                    let removed = linked.is_none()
+                        && marks.marks.iter().any(|(id, m)| {
+                            m.dimension == view.dimension
+                                && m.term == tag.id
+                                && m.category == *category
+                                && live(id).is_none()
+                        });
                     match linked {
+                        None if removed => {
+                            let mut kept = base("create_tag", tag);
+                            kept.reason = Some("removed".into());
+                            plan.kept.push(kept);
+                            Resolved::Blocked("definition_kept")
+                        }
                         Some(row) => match not_owned(row, marks, barriers) {
                             None => {
                                 let mut listed = base("rename_tag", tag);
