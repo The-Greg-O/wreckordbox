@@ -157,6 +157,8 @@ pub(crate) struct PoolTrack {
     genre: String,
     added: Option<String>,
     path: PathBuf,
+    /// The DJ's Energy rating (stars), for `intensity.missing = "energy"`.
+    energy: Option<u8>,
 }
 
 /// The pool's tracks, from the Library, in the order asked, each once.
@@ -187,6 +189,7 @@ pub(crate) fn pool(library: &OpenLibrary, build: &Build) -> Result<Vec<PoolTrack
                 key: Camelot::from_rank(rbl_index::key::camelot_rank(&record.key)),
                 genre: record.genre,
                 added: record.date_added,
+                energy: record.energy,
                 path: found.path().to_path_buf(),
                 id: record.id,
                 title: record.title,
@@ -485,6 +488,7 @@ fn candidates(
             bpm: track.bpm,
             key: track.key,
             intensity,
+            energy: track.energy,
             situations,
             genres,
             added: track.added.clone(),

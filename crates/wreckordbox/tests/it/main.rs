@@ -41,6 +41,7 @@ mod review_races;
 mod review_view_reads;
 mod run_status;
 mod service_exit;
+mod set_plan_energy;
 mod set_plan_guide;
 mod set_plans;
 mod sidecar_on_stick;
