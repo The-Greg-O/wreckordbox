@@ -688,7 +688,7 @@ and the service's own runtime files in the system's temp and state folders.
 Matching: a track is linked to the one file of exactly its Stick copy's size
 whose name starts with the whole of the Stick's file name (compared with case
 folded and the characters FAT cannot hold as `_`; rekordbox may cut a name
-short) and, where the Stick records a length, whose length agrees within a
+short, keeping its first 41 characters and adding `-1`, `-2`, ...) and, where the Stick records a length, whose length agrees within a
 second (`--names-only` skips reading lengths, for a slow network folder).
 Several files of that size are `ambiguous`; one whose name agrees only over its
 first 20 characters, or whose length differs, is `uncertain` and linked only
