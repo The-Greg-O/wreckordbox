@@ -141,8 +141,10 @@ pub trait Ledger: Send + Sync {
         &self,
         _payload: &serde_json::Value,
         _undo: bool,
-    ) -> Result<Box<dyn crate::unwind::Hold + '_>, String> {
-        Err("The Ledger cannot validate this Unwind's Facts".into())
+    ) -> Result<Box<dyn crate::unwind::Hold + '_>, crate::unwind::HoldRefused> {
+        Err(crate::unwind::HoldRefused::Busy(
+            "The Ledger cannot validate this Unwind's Facts".into(),
+        ))
     }
 
     /// Inspect existing Measurements and a byte-verified staged key write,

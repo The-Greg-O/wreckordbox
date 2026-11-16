@@ -2452,20 +2452,29 @@ impl rbl_library::ledger::Ledger for Keeper {
         &self,
         payload: &Value,
         undo: bool,
-    ) -> Result<Box<dyn rbl_library::unwind::Hold + '_>, String> {
+    ) -> Result<Box<dyn rbl_library::unwind::Hold + '_>, rbl_library::unwind::HoldRefused> {
+        use rbl_library::unwind::HoldRefused;
         // History already holds the Library gate. Never wait for a Fact writer
         // which might itself be waiting for that gate.
         let held = self.stems.fact_writes.try_lock().ok_or_else(|| {
-            "Facts are being changed; retry Undo after that command finishes".to_owned()
+            HoldRefused::Busy(
+                "Facts are being changed; retry Undo after that command finishes".into(),
+            )
         })?;
         self.stems
             .with_sidecar_wait(|sidecar| {
-                let sidecar = sidecar.ok_or_else(|| "The Sidecar is not open".to_owned())?;
+                let sidecar =
+                    sidecar.ok_or_else(|| HoldRefused::Busy("The Sidecar is not open".into()))?;
                 sidecar
                     .check_unwind_history(payload, undo)
-                    .map_err(|e| e.to_string())
+                    .map_err(|e| match e {
+                        wreckordbox_sidecar::SidecarError::Invalid(reason) => {
+                            HoldRefused::Conflict(reason)
+                        }
+                        other => HoldRefused::Busy(other.to_string()),
+                    })
             })
-            .map_err(|e| e.message)??;
+            .map_err(|e| HoldRefused::Busy(e.message))??;
         Ok(Box::new(held))
     }
 

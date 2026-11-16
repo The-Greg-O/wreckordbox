@@ -1630,6 +1630,23 @@ fn unwind_keeps_an_entry_already_undone_even_when_the_value_matches_again() {
 }
 
 #[test]
+fn a_run_whose_unwind_was_undone_in_the_window_can_be_unwound_again() {
+    let window = window();
+    window.host().unwrap();
+    let original = window
+        .cli(&["--json", "tracks", "rate", "10001", "4", "--source", "agent:test"])
+        .json()["run"]["id"]
+        .to_string();
+    window.cli(&["runs", "unwind", &original]).succeeded();
+    assert_eq!(window.rating("10001"), 0);
+    window.undo().unwrap();
+    assert_eq!(window.rating("10001"), 4);
+    let again = window.cli(&["--json", "runs", "unwind", &original]).json();
+    assert_eq!(again["reversed"], 1, "{again}");
+    assert_eq!(window.rating("10001"), 0);
+}
+
+#[test]
 fn unwind_window_undo_keeps_a_later_fact() {
     let window = window();
     window.host().unwrap();
@@ -1644,6 +1661,14 @@ fn unwind_window_undo_keeps_a_later_fact() {
     assert!(
         window.undo().is_err(),
         "Undo must not restore an old DJ Fact over a new opinion"
+    );
+    // The refused step leaves the window's history, as any changed-since
+    // step does, so earlier edits can still be undone.
+    assert_eq!(
+        commands::current_history(window.state().inner())
+            .undo_label
+            .as_deref(),
+        Some("Track Edit"),
     );
     assert_eq!(window.rating("10001"), 0);
     assert_eq!(

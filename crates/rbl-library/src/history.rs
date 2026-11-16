@@ -881,10 +881,12 @@ impl crate::LibraryCore {
                     "Unwind needs its Library service to validate the Facts".into(),
                 ))
             })?;
-            Some(ledger.hold_unwind(&edit.metadata, undo).map_err(|reason| {
-                StepError::Conflict {
-                    label: entry.label,
-                    reason,
+            Some(ledger.hold_unwind(&edit.metadata, undo).map_err(|refused| match refused {
+                crate::unwind::HoldRefused::Busy(reason) => StepError::Write(DbError::WriteRefused(reason)),
+                crate::unwind::HoldRefused::Conflict(reason) => {
+                    // Like any changed-since step: it leaves the history.
+                    self.history.lock().drop_next(undo);
+                    StepError::Conflict { label: entry.label, reason }
                 }
             })?)
         } else {

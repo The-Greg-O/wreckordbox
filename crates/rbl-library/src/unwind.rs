@@ -7,6 +7,15 @@ use rbl_db::{write::Writer, DbError};
 pub trait Hold {}
 impl<T> Hold for T {}
 
+/// Why an Unwind history step cannot be held now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HoldRefused {
+    /// Not now (Facts being written, Sidecar closed): the step stays.
+    Busy(String),
+    /// Its Facts changed since: the step can never run and leaves history.
+    Conflict(String),
+}
+
 #[derive(Clone)]
 pub struct Unwind {
     pub edits: Vec<LibraryEdit>,
