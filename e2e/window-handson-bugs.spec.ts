@@ -19,6 +19,22 @@ const title = (page: Page) => page.getByTestId("browser-title");
 const rows = (page: Page) => page.getByRole("row").filter({ has: page.getByRole("gridcell") });
 const titles = (page: Page) => rows(page).locator('[data-col="title"]').allInnerTexts();
 
+/** The full-track waveform of the one deck each layout draws. */
+const overviewOf = (page: Page, layout: string) => layout === "view shell"
+  ? page.getByTestId("shell-player").getByTestId("compact-player-overview")
+  : page.getByTestId("player-overview").first();
+
+/** Clicks once at `fraction` across the overview and gives where the deck says it is, over the length. */
+async function clickAt(page: Page, overview: Locator, fraction: number): Promise<void> {
+  const box = await overview.boundingBox();
+  if (!box) throw new Error("the overview is not drawn");
+  await page.mouse.click(box.x + box.width * fraction, box.y + box.height / 2);
+}
+const positionOf = async (overview: Locator) => {
+  const [now, max] = await Promise.all([overview.getAttribute("aria-valuenow"), overview.getAttribute("aria-valuemax")]);
+  return Number(now) / Number(max);
+};
+
 for (const layout of ["old layout", "view shell"] as const) {
   test.describe(layout, () => {
     test.beforeEach(async ({ page }) => {
@@ -63,5 +79,35 @@ for (const layout of ["old layout", "view shell"] as const) {
       await expect(page.getByTestId("list-error")).toHaveCount(0);
       await expect.poll(() => titles(page)).toEqual(before);
     });
+
+    test("wbx-52f: one click on the full-track waveform moves the deck there", async ({ page }) => {
+      await page.goto("/");
+      await rows(page).nth(3).locator('[data-col="title"]').dblclick();
+      const overview = overviewOf(page, layout);
+      await expect(overview).toHaveAttribute("aria-valuemax", /^[1-9]/);
+      await clickAt(page, overview, 0.5);
+      await expect.poll(() => positionOf(overview)).toBeCloseTo(0.5, 1);
+      await clickAt(page, overview, 0.2);
+      await expect.poll(() => positionOf(overview)).toBeCloseTo(0.2, 1);
+    });
   });
 }
+
+test.describe("view shell, narrow", () => {
+  test.beforeEach(async ({ page }) => enableViewShell(page));
+  for (const width of [640, 436, 360]) {
+    test(`wbx-iwl: at ${width} px a click on the full-track waveform lands under the pointer`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 700 });
+      await page.goto("/");
+      await rows(page).nth(3).locator('[data-col="title"]').dblclick();
+      const overview = overviewOf(page, "view shell");
+      await expect(overview).toHaveAttribute("aria-valuemax", /^[1-9]/);
+      for (const fraction of [0.25, 0.75]) {
+        await clickAt(page, overview, fraction);
+        await expect.poll(() => positionOf(overview)).toBeCloseTo(fraction, 1);
+      }
+      // Nothing is laid out wider than the window, so nothing can be squeezed.
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    });
+  }
+});

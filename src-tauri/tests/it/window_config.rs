@@ -160,3 +160,20 @@ fn no_window_enables_the_built_in_zoom_hotkeys() {
         }
     }
 }
+
+/// wbx-iwl. A tiling compositor gives the window the tile it has, whatever
+/// minimum the window asks for. Asked for more than the tile, the webview
+/// was laid out at the minimum and the compositor squeezed it into the tile,
+/// so every click landed to one side of the pointer. The window's own layout
+/// goes down to the design's narrow width and the top bar's 360 px, so the
+/// minimum asks for no more than that, on every platform.
+#[test]
+fn the_main_window_asks_for_no_more_room_than_its_narrowest_layout() {
+    for (name, platform) in [("base", "{}"), ("linux", LINUX)] {
+        let window = windows(&merged(platform))[0].clone();
+        let min_width = window.get("minWidth").and_then(Value::as_f64).unwrap_or(0.0);
+        let min_height = window.get("minHeight").and_then(Value::as_f64).unwrap_or(0.0);
+        assert!(min_width <= 360.0, "{name}: minWidth {min_width} is wider than the narrowest layout");
+        assert!(min_height <= 360.0, "{name}: minHeight {min_height} is taller than half a 800 px screen's tile");
+    }
+}
