@@ -651,8 +651,9 @@ fn exec_path(state_dir: &Path, root: &Path) -> std::io::Result<PathBuf> {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     // macOS reaches its temporary and home folders through symbolic links
     // (`/var`, `/tmp`): one Stick, one lock, however its root was spelled.
+    // A root that is gone is resolved through what is left of its path.
     #[cfg(target_os = "macos")]
-    let root = &root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let root = &resolve(root).unwrap_or_else(|| root.to_path_buf());
     root.as_os_str().hash(&mut hasher);
     Ok(dir.join(format!("{:016x}.lock", hasher.finish())))
 }

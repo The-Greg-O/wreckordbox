@@ -290,3 +290,21 @@ fn a_stick_with_a_hidden_export_is_protected_and_refuses_a_write_until_unlocked_
     let writing = authorize(state.path(), &inside).unwrap();
     assert_eq!(writing.stick(), Some(gig.canonicalize().unwrap().as_path()));
 }
+
+/// A Stick's root that is gone, spelled through a symbolic link (macOS's
+/// `/var`), still names the lock its writer holds.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_vanished_root_spelled_through_a_link_is_the_same_execution_lock() {
+    let (state, sticks) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let spelled = sticks.path().join("GONE");
+    let canonical = sticks.path().canonicalize().unwrap().join("GONE");
+    assert_ne!(spelled, canonical, "the temporary folder is behind a link");
+    let held = exec_lock(state.path(), &canonical).unwrap();
+    let dir = state.path().to_path_buf();
+    let free = std::thread::spawn(move || try_exec_lock(&dir, &spelled).unwrap().is_some())
+        .join()
+        .unwrap();
+    assert!(!free, "one Stick, one lock");
+    drop(held);
+}
