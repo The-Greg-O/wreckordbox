@@ -662,7 +662,11 @@ export function createMockBackend(options: MockOptions = {}): Backend {
   const candidatesFor = (spec: ViewSpec): number[] => {
     let candidates: number[];
     const saved = spec.source.kind === "playlist" ? filterPlaylists.get(spec.source.id) : undefined;
-    if (saved) {
+    if (spec.source.kind === "playlist" && !findNode(spec.source.id)) {
+      // A playlist the Library no longer has opens as the whole collection,
+      // as the real backend's `spec_from_wire` answers it (wbx-w41).
+      candidates = Array.from({ length: all.length }, (_, i) => i);
+    } else if (saved) {
       candidates = all.flatMap((row, i) =>
         passesFilter(row, colors[i] ?? 0, saved, detailsOf(row).myTags, myTagCategories) ? [i] : []);
     } else if (spec.source.kind === "playlist") {

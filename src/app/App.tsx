@@ -95,6 +95,7 @@ import { columnContextFor, useColumns, type ColumnContext } from "@/store/useCol
 import { useExplorer } from "@/store/useExplorer";
 import { hasLooseId, importLoose, isLooseId } from "@/lib/explorer";
 import { childrenOf, parentFor, playlistPaths, withSources } from "@/lib/tree";
+import { selectionInTree } from "@/lib/treeSelection";
 import { DETAIL_BARS } from "@/lib/player";
 import type { Deck as SyncDeck } from "@/lib/sync";
 import { LayoutDualIcon } from "@/components/icons";
@@ -1072,6 +1073,17 @@ function AppBody() {
       stopTagList?.();
     };
   }, []);
+
+  // The open node as the tree read again has it: renamed, followed; gone
+  // (deleted here, by Undo or by another client), left for All Tracks and
+  // said (wbx-w41). Only the tree changing is a reason.
+  useEffect(() => {
+    const { node, gone } = selectionInTree(selectedNode, tree);
+    if (node === selectedNode) return;
+    setSelectedNode(node);
+    if (gone !== null) report(`${gone} is no longer in the Library.`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tree]);
 
   const bounds = useCallback(
     () => ({ ...TREE_BOUNDS, available: bodyRef.current?.clientWidth ?? 0 }),

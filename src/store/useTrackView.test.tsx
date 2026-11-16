@@ -47,6 +47,10 @@ let generation: number;
 let gone: Set<string>;
 /** How many times a track's file was looked at again. */
 let rechecks: number;
+/** Opens refused from now on, as a backend that cannot read the list (wbx-w41). */
+let failOpens: boolean;
+/** Views the backend has dropped: their pages are refused, as an evicted view's are. */
+let dropped: Set<number>;
 
 const SPEC: ViewSpec = {
   source: { kind: "collection" },
@@ -83,6 +87,7 @@ function makeBackend(): Backend {
   return {
     openView: (opened: ViewSpec) => {
       opens += 1;
+      if (failOpens) return Promise.reject(new Error("The list could not be read."));
       // Every open is a new view with a new generation, as the backend
       // answers one after an edit. A playlist comes with its tally.
       const totals = opened.source.kind === "playlist"
@@ -91,8 +96,9 @@ function makeBackend(): Backend {
         ? Promise.resolve({ viewId: opens, len: 500, gen: opens, ...totals })
         : Promise.reject(new Error("The library has not finished loading yet."));
     },
-    fetchRows: (_viewId: number, offset: number, len: number) => {
+    fetchRows: (viewId: number, offset: number, len: number) => {
       if (!ready) return Promise.reject(new Error("The library has not finished loading yet."));
+      if (dropped.has(viewId)) return Promise.reject(new Error("That list is no longer open. Reselect it to continue."));
       const rows = () => Array.from({ length: len }, (_, i) => row(offset + i));
       if (!holdFetches) return Promise.resolve(rows());
       // Answered when the test says, with the rows as they read then.
@@ -177,6 +183,8 @@ beforeEach(async () => {
   extraColumns = [];
   gone = new Set();
   rechecks = 0;
+  failOpens = false;
+  dropped = new Set();
   ({ __setBackend: setBackend } = await import("@/ipc/client"));
   setBackend(makeBackend());
   ({ useTrackView } = await import("./useTrackView"));
@@ -547,5 +555,49 @@ describe("useTrackView, for the status bar's playlist tally", () => {
     spec = SPEC;
     act(() => root.render(<Probe />));
     expect(latest.totals).toBeUndefined();
+  });
+
+});
+
+describe("useTrackView, when a list cannot be read (wbx-w41)", () => {
+  const PLAYLIST: ViewSpec = { ...SPEC, source: { kind: "playlist", id: "7" } };
+
+  it("a list that cannot be opened draws none of the list before, and says why (wbx-w41)", async () => {
+    ready = true;
+    act(() => root.render(<Probe />));
+    await settle();
+    expect(latest.rowAt(0)?.title).toBe("Track 0");
+    failOpens = true;
+    spec = PLAYLIST;
+    act(() => root.render(<Probe />));
+    await settle();
+    expect(latest.loading).toBe(false);
+    expect(latest.error).toBe("The list could not be read.");
+    expect(latest.count).toBe(0);
+    expect(latest.rowAt(0)).toBeUndefined();
+  });
+
+  it("opens a view again when the backend has dropped it, and its rows land (wbx-w41)", async () => {
+    ready = true;
+    // The first view is gone before its first page is asked for.
+    dropped = new Set([1]);
+    act(() => root.render(<Probe />));
+    await settle();
+    await settle();
+    expect(opens).toBe(2);
+    expect(latest.error).toBeNull();
+    expect(latest.fresh(0)).toBe(true);
+    expect(latest.rowAt(0)?.title).toBe("Track 0");
+  });
+
+  it("says so when the view opened again cannot be read either, and stops asking (wbx-w41)", async () => {
+    ready = true;
+    dropped = new Set([1, 2, 3, 4, 5]);
+    act(() => root.render(<Probe />));
+    await settle();
+    await settle();
+    await settle();
+    expect(opens).toBe(2);
+    expect(latest.error).toBe("That list is no longer open. Reselect it to continue.");
   });
 });
