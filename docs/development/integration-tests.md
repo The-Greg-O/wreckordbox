@@ -6,24 +6,25 @@ ordinary integration-test binary. Each former
 file is a module with its original name; its tests keep their names after
 that module prefix.
 
-Run one module through the machine-wide queue:
+Run one module with `RBXPORT_TEST=1`:
 
 ```sh
-/home/go/code/wreckordbox-notes/bin/heavy rust mise exec -- cargo build -p wreckordbox
-/home/go/code/wreckordbox-notes/bin/heavy rust mise exec -- cargo test -p rbxport --test it service_host::
-/home/go/code/wreckordbox-notes/bin/heavy rust mise exec -- cargo test -p rbxport --test it stick_protection::
-/home/go/code/wreckordbox-notes/bin/heavy rust mise exec -- cargo test -p wreckordbox --test it library_protection::
+RBXPORT_TEST=1 mise exec -- cargo build -p wreckordbox
+RBXPORT_TEST=1 mise exec -- cargo test -p rbxport --test it service_host::
+RBXPORT_TEST=1 mise exec -- cargo test -p rbxport --test it stick_protection::
+RBXPORT_TEST=1 mise exec -- cargo test -p wreckordbox --test it library_protection::
 ```
 
 The CLI must be built in the same target directory and profile before hosted
 shell tests. Helpers find that prebuilt executable beside the test binary's
 `deps` directory; they must never invoke Cargo inside a test.
 
-Five shell tests deliberately keep their own binaries:
+Six shell tests deliberately keep their own binaries:
 
 | Target | Why it needs a separate process |
 | --- | --- |
 | `identity` | Changes `XDG_DATA_HOME` and removes logging/backup overrides. |
+| `intake_stems_hosted` | Sets the separation-engine command override in the process environment. |
 | `logging` | Installs the process-global logger and changes log environment variables. |
 | `omarchy_theme` | Changes the colours-file override read by the theme watcher. |
 | `theme_file` | Changes both theme-file and colours-file overrides; conflicts with `omarchy_theme`. |
@@ -54,11 +55,11 @@ make the totals match.
 ## Library service
 
 The service's environment-independent suites share
-`crates/wreckordbox-service/tests/it/main.rs`. Select one through the queue:
+`crates/wreckordbox-service/tests/it/main.rs`. Select one module with:
 
 ```sh
-/home/go/code/wreckordbox-notes/bin/heavy rust mise exec -- cargo test -p wreckordbox-service --test it one_edit_gate::
-/home/go/code/wreckordbox-notes/bin/heavy rust mise exec -- cargo test -p wreckordbox-service --test it intake::
+RBXPORT_TEST=1 mise exec -- cargo test -p wreckordbox-service --test it one_edit_gate::
+RBXPORT_TEST=1 mise exec -- cargo test -p wreckordbox-service --test it intake::
 ```
 
 These suites retain `--test <name>`. They must not share a process with tests
@@ -98,8 +99,8 @@ All ten Sidecar integration suites share
 `crates/wreckordbox-sidecar/tests/it/main.rs`; none needs process isolation.
 
 ```sh
-/home/go/code/wreckordbox-notes/bin/heavy rust mise exec -- cargo test -p wreckordbox-sidecar --test it ledger::
-/home/go/code/wreckordbox-notes/bin/heavy rust mise exec -- cargo test -p wreckordbox-sidecar --test it attachment_migration::
+RBXPORT_TEST=1 mise exec -- cargo test -p wreckordbox-sidecar --test it ledger::
+RBXPORT_TEST=1 mise exec -- cargo test -p wreckordbox-sidecar --test it attachment_migration::
 ```
 
 The common audio fixture helper is declared once by `it/main.rs`, with

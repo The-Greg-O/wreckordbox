@@ -1,5 +1,7 @@
 # Auto Relocate Search Folders
 
+> From upstream [rbxport](https://github.com/chrisle/rbxport).
+
 [Documentation](../README.md)
 
 Research record for #487 (settings to add Auto Relocate search folders). It

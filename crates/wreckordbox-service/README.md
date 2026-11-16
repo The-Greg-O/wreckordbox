@@ -6,7 +6,7 @@ The Library service: one process owns the Library, and the window and the `wreck
 
 ## Start here
 
-Read the crate docs in [`src/lib.rs`](src/lib.rs), then [`src/protocol.rs`](src/protocol.rs) for what goes over the socket. [`tests/in_process.rs`](tests/in_process.rs) hosts a service in the test's own process; [`../wreckordbox/tests/status.rs`](../wreckordbox/tests/status.rs) drives the real command against one.
+Read the crate docs in [`src/lib.rs`](src/lib.rs), then [`src/protocol.rs`](src/protocol.rs) for what goes over the socket. [`tests/it/in_process.rs`](tests/it/in_process.rs) hosts a service in the test's own process; [`../wreckordbox/tests/it/status.rs`](../wreckordbox/tests/it/status.rs) drives the real command against one.
 
 ## Code map
 

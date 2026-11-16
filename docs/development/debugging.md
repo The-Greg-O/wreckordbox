@@ -3,83 +3,101 @@
 [Documentation](../README.md) · Next: [Releases](releases.md)
 
 Reproduce a problem at the smallest boundary first: browser/mock, Rust fixture,
-protocol client, desktop app, firmware emulator, or physical device. Record
-which boundary failed before comparing results from another one.
+CLI sandbox, loopback protocol client (`rbl-fakecdj`), desktop window, or
+physical player on a Spare stick. Record which boundary failed before comparing
+results from another one.
 
 ## Logs
 
-The app writes stdout and a daily file under the OS data directory plus
-`wreckordbox/logs`. Typical paths are `~/.local/share/wreckordbox/logs` on Linux,
-`~/Library/Application Support/wreckordbox/logs`
-on macOS and `%APPDATA%\wreckordbox\logs` on Windows. The newest five daily
-files are retained. See `src-tauri/src/logging.rs` for filter and retention logic.
+The desktop app writes stdout and a daily log file under the OS data directory
+plus `wreckordbox/logs`:
 
-The same lines, the newest 10,000 since the app started, are kept in memory
-for the Log window (`src-tauri/src/log_window.rs`, `src/views/log/`). Clicking
-the status bar's message or error opens it, or brings the open one forward;
-the messages the status bar shows are logged under `rbxport::status` (errors
-at `warn`, the rest at `info`). The window filters by level and text, copies
-or saves the lines it shows, and opens the log folder. Right-clicking the
-app name in the status bar still opens the current log file itself.
+- Linux: `~/.local/share/wreckordbox/logs` (or `$XDG_DATA_HOME/wreckordbox/logs`)
+- macOS: `~/Library/Application Support/wreckordbox/logs`
+- Windows: `%APPDATA%\wreckordbox\logs`
+
+The newest five daily files are retained; see `src-tauri/src/logging.rs`.
+
+The newest 10,000 log lines since app start are also held in memory for the Log
+window (`src-tauri/src/log_window.rs`, `src/views/log/`). Clicking a message or
+error in the status bar opens the Log window (status messages are logged under
+`rbxport::status`: errors at `warn`, others at `info`); right-clicking the app
+name in the status bar opens the current log file directly.
+
+From the command line, inspect which Library and service socket are active:
+
+```sh
+wreckordbox status          # human-readable Library path, protection state, and service info
+wreckordbox --json status   # structured JSON
+wreckordbox stop            # stop a standalone background service (refused if hosted by an open window)
+```
+
+### Environment variables
+
+Several inherited environment variables (`RBXPORT_*`) and Rust log targets
+(`rbxport_lib`, `rbxport::status`, `rbl_*`) keep upstream's names for now
+pending a separate rename migration, while newer service and Sidecar hooks use
+`WRECKORDBOX_*`:
 
 | Variable | Effect |
 | --- | --- |
-| `LOG_LEVEL` | App-crate level: error, warn, info, debug (default), or trace. |
-| `RUST_LOG` | Replaces the filter; for example `rbl_link=trace,rbxport_lib=info`. |
-| `RBXPORT_LOG_DIR` | Overrides the log directory. |
-| `RBXPORT_TEST` / `RB_LITE_TEST` | Refuses installed-library writes; does not create a fixture. |
-| `RBXPORT_OPTIONS` | Names an options file, used by private harnesses to select a fixture library. |
-| `E2E_PORT` | Selects the Playwright dev-server port; the production preview uses the next port. |
-| `RBXPORT_PRIVATE_REPO` | Overrides the private test checkout location. |
-| `ATEMU_DIR` | Selects the emulator checkout for private firmware harnesses. |
+| `RBXPORT_TEST` / `RB_LITE_TEST` | Refuses writes to any detected installed rekordbox Library; does not supply a fixture. |
+| `RBXPORT_OPTIONS` | Points Library discovery at a custom rekordbox options file (used by CLI/service sandboxes and tests). |
+| `RBXPORT_LOG_DIR` | Overrides the desktop app's log directory. |
+| `LOG_LEVEL` | App-crate log level (`error`, `warn`, `info`, `debug` default, or `trace`) when `RUST_LOG` is unset. |
+| `RUST_LOG` | Overrides tracing filters explicitly (for example `rbl_link=trace,rbxport_lib=info`). |
+| `WRECKORDBOX_SIDECAR_DIR` | Overrides the Sidecar folder location (defaults to `wreckordbox-sidecar/` beside `master.db`). |
+| `WRECKORDBOX_RUNTIME_DIR` | Overrides the service socket directory (defaults to `$XDG_RUNTIME_DIR/wreckordbox`). |
+| `WRECKORDBOX_IDLE_EXIT_SECS` | Overrides the standalone service's 5-minute idle exit timeout. |
+| `WRECKORDBOX_LOADING_WAIT_SECS` | Overrides the 15-second wait when a newly opened window is still loading the Library. |
+| `WRECKORDBOX_THEME_FILE` / `WRECKORDBOX_THEME_COLORS` | Overrides `~/.config/wreckordbox/theme.toml` or the active Omarchy `colors.toml` palette. |
+| `E2E_PORT` | Selects the Playwright server port so multiple worktrees do not collide. |
 
-`pnpm dev` supplies a `RUST_LOG` filter in `package.json`. To change it for
-that launch, adjust the invocation or run the Tauri command with your chosen
-filter; setting `LOG_LEVEL` will not override an explicit `RUST_LOG`.
+`pnpm dev` supplies a `RUST_LOG` filter in `package.json`; adjust that launch
+command if you want `LOG_LEVEL` or another filter to take effect.
 
 ## Read-only diagnostics
 
-The database SQL example accepts a SELECT for inspecting library state:
+Inspect `master.db` with a read-only `SELECT`:
 
 ```sh
-cargo run -q -p rbl-db --example sql -- "SELECT ID, Name FROM djmdPlaylist LIMIT 5"
+mise exec -- cargo run -q -p rbl-db --example sql -- "SELECT ID, Name FROM djmdPlaylist LIMIT 5"
 ```
 
-Use `cargo run -p rbl-difftool -- record <name>` to compare snapshots around
-one deliberate action in rekordbox. The tool observes that action; it is not
-a writable development test. Keep captured user data in the private repository.
-
-For analysis diagnostics that read an audio file and write separate output:
+Compare `master.db` snapshots before and after one deliberate action in
+rekordbox:
 
 ```sh
-cargo run --release -p rbl-analysis --example waveform_probe -- AUDIO OUTPUT_DIRECTORY
+mise exec -- cargo run -p rbl-difftool -- record <name>
 ```
 
-Emulator and physical LINK investigations use the private evidence locations
-listed in [Hardware coverage](../reference/link-testing.md).
+Inspect waveform analysis output into a separate directory without touching the
+Library:
+
+```sh
+mise exec -- cargo run --release -p rbl-analysis --example waveform_probe -- AUDIO OUTPUT_DIRECTORY
+```
 
 ## Common setup failures
 
 | Symptom | Check |
 | --- | --- |
-| Native Linux build cannot find WebKit or ALSA | Install the packages in [Getting started](getting-started.md). |
-| Playwright cannot launch a browser | Run `pnpm exec playwright install chromium webkit`. |
-| Production preview tests cannot find assets | Run `pnpm e2e`; it builds the mock preview before starting Playwright. |
-| Two checkouts attach to the same test server | Give each an `E2E_PORT`. |
-| A write test is refused | Confirm it uses a fixture; do not disable protection to target the real library. |
-| Desktop startup changes version files | Inspect tag-derived synchronization in [Releases](releases.md). |
-| Private test harness is missing | Check the sibling checkout or set `RBXPORT_PRIVATE_REPO`. |
-| LINK ports are occupied | Quit rekordbox and other Pro DJ Link sources before a private firmware run. |
+| Native Linux build cannot find WebKitGTK or ALSA | Install the system packages in [Getting started](getting-started.md). |
+| `pnpm dev` fails with `No valid release version` | Fetch git tags (`git fetch --tags`); `scripts/sync-version.mjs` looks for merged `v*` tags. |
+| Playwright cannot launch a browser | Run `mise exec -- pnpm exec playwright install chromium`. |
+| Two worktrees collide on the Playwright server port | Set `E2E_PORT` per worktree. |
+| A write test is refused with `write_refused` or `library_protected` | Ensure the test builds a disposable fixture Library and turns protection off only on that fixture — never on a real Library. |
+| `wreckordbox-stick-protection` or CLI fails to compile on macOS | Run Linux-specific crate tests inside an `aarch64` Linux environment; Linux is the reference platform. |
 
 ## Cleanup
 
-Preview cleanup with `npm run clean -- --dry-run`, then run `npm run clean`
-to remove generated build and test output from this checkout.
+Preview local build-artifact cleanup with `pnpm clean -- --dry-run`, then run
+`pnpm clean` to remove generated build and test output from the current
+checkout.
 
 Optional flags extend it: `--dependencies` removes `node_modules`; `--app-data`
 removes app caches and abandoned partial backups (close the app first);
-`--git` prunes missing worktrees and local branches already merged into HEAD.
-It preserves `main`, `dev`, the current branch, and checked-out worktree branches.
-
-Cleanup preserves completed backups, preferences, logs, recovery journals,
-and rekordbox libraries. Inspect the preview before using optional flags.
+`--git` prunes missing worktrees and local branches already merged into `HEAD`
+(preserving `main`, `dev`, the current branch, and checked-out worktree
+branches). Completed backups, preferences, logs, recovery journals, and
+rekordbox Libraries are never deleted by `pnpm clean`.

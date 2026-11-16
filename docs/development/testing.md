@@ -2,177 +2,120 @@
 
 [Documentation](../README.md) · Next: [Contributing](../../CONTRIBUTING.md)
 
-Choose a test boundary that exercises the behavior you changed. A mock UI
-pass, a socket test, an emulator run, and a physical-device result establish
-different things. Report the command, source revision, and relevant boundary.
-
-## Choose the validation boundary
-
-Use the smallest check that can catch the defect, then add the relevant wider
-boundary checks. These are complementary evidence layers, not a ladder where
-one passing result automatically establishes the next.
+Choose the smallest test boundary that catches the defect, then verify at the
+project's observable seams: the real `wreckordbox` CLI against a service on a
+fixture Library, hosted shell tests where the window is involved, Vitest for
+frontend logic, and mock-backed Playwright specs for UI flows.
 
 ```mermaid
 flowchart TD
-    Change[Behavior being changed] --> Logic[Pure logic or format bytes]
-    Change --> UI[UI and IPC behavior]
-    Change --> Network[Network service behavior]
-    Change --> Device[Device-facing compatibility]
+    Change[Behavior being changed] --> Logic[Pure logic, Sidecar, or format bytes]
+    Change --> Service[CLI, MCP, and Library service]
+    Change --> UI[Window UI and IPC]
+    Change --> Network[PRO DJ LINK]
+    Change --> Device[Player / Stick compatibility]
     Logic --> Unit[Crate tests with disposable fixtures]
-    UI --> Frontend[Vitest and mock-backed Playwright]
-    Network --> Socket[Loopback protocol integration]
-    Device --> Firmware[Booted firmware assertions]
-    Device --> Physical[Named physical-device check]
-    Device --> Filesystem[Filesystem acceptance check when applicable]
+    Service --> Sandbox[Real wreckordbox CLI + event client on fixture Library]
+    UI --> Frontend[Vitest + mock-backed Playwright + hosted src-tauri tests]
+    Network --> Socket[Loopback rbl-fakecdj integration]
+    Device --> Physical[Manual physical-player check on a Spare stick]
 ```
 
-A mock UI test cannot prove native database writes; a protocol client cannot
-prove firmware navigation; emulator playback cannot prove physical audio or
-FAT32 behavior on a real USB device. Record each result separately.
+A mock UI pass does not prove native SQLCipher writes, and a fixture export test
+does not prove playback on a physical Pioneer deck. State plainly in completion
+notes or PRs what you ran and what could not be verified on hardware.
 
-## Protect library data
+## Protect Library and Stick data
 
-Set `RB_LITE_TEST=1` for Rust checks; `RBXPORT_TEST=1` is the current equivalent.
-These guards refuse writes to a detected installed library. Writable tests
-must use `rbl_db::fixture::build` or another explicitly disposable fixture;
-the environment variable does not redirect the app to test data.
-
-Never use an installed rekordbox library as a writable development/test target.
-Do not disable protection to make a test pass. Browser mocks do not open it.
+- Always set `RBXPORT_TEST=1` (`RB_LITE_TEST=1` is a legacy alias) when running
+  Rust tests or launching a test app instance. It refuses writes to any
+  detected installed rekordbox Library; it does **not** supply a fixture.
+- Writable tests must create a disposable Library in a temporary directory via
+  `rbl_db::fixture::build` or `crates/wreckordbox/tests/common/`.
+- **Never write to a mounted USB Stick in automated or agent runs.** Temporary
+  directories stand in for Sticks across the test suites. Never set
+  `RBX_REAL_USB` or `RBX_USB_STICK` from an agent session.
+- Never run a real stem separation in tests (`separation-engine` takes over
+  twenty minutes per track on CPU); tests use the fake separation worker.
 
 ## Public checks
 
-Which of these runs when, and where, is in [Test tiers](test-tiers.md).
+See [Test tiers](test-tiers.md) for how lanes are grouped and
+[Integration-test binaries](integration-tests.md) for the consolidated `it`
+targets and process-isolated suites.
 
-| Layer | Location / command | What it checks |
+| Layer | Command | What it checks |
 | --- | --- | --- |
-| Frontend lint | `pnpm lint` | React, TypeScript, and architectural restrictions. |
-| Frontend build | `pnpm build` | TypeScript and the production bundle. |
-| Frontend unit | `pnpm test` | Vitest behavior in the configured source/test paths. |
-| Rust unit and integration | `RB_LITE_TEST=1 cargo test --workspace` | Crate behavior, generated audio, temporary databases, and protocol sessions. |
-| Rust lint | `cargo clippy --workspace --all-targets -- -D warnings` | Workspace lint and warning policy. |
-| Performance budget | `pnpm budget` | Budget schema and production start-up code size. |
-| Browser interaction | `pnpm e2e` | Chromium/WebKit UI with the mock backend and production-preview checks. |
+| Frontend typecheck | `mise exec -- pnpm typecheck` | Strict TypeScript types across `src/` and `e2e/`. |
+| Frontend lint | `mise exec -- pnpm lint` | ESLint rules and architectural restrictions (`--max-warnings 0`). |
+| Frontend unit | `mise exec -- pnpm test` | Vitest unit and component tests. |
+| Frontend build & budget | `mise exec -- pnpm build && mise exec -- pnpm budget` | Production Vite build and start-up bundle budget (`perf-budgets.json`). |
+| Browser interaction | `mise exec -- pnpm e2e` | Playwright specs against `dist-mock/` (`--project chromium --trace off` for targeted runs). |
+| Node & CI script tests | `mise exec -- node --test scripts/*.test.mjs scripts/ci/*.test.mjs` | Build-hook, release-note, and CI lane-selection tests. |
+| Rust crate tests | `RBXPORT_TEST=1 mise exec -- cargo test -p <crate>` | Unit and integration suites with installed-Library writes refused. |
+| Rust lint & format | `mise exec -- cargo clippy -p <crate> --all-targets -- -D warnings && mise exec -- cargo fmt -p <crate> --check` | Workspace Clippy rules and formatting on touched crates. |
 
-Install Playwright browsers once with
-`pnpm exec playwright install chromium webkit`. Run `pnpm build` before the
-bundle budget; `pnpm e2e` builds the mock preview into `dist-mock/` and serves
-it through Python's HTTP server. Use `E2E_PORT=1500 pnpm e2e` when another
-checkout uses the default port.
+### Targeted integration and documentation guard tests
 
-Start small, for example:
+Several crates consolidate ordinary integration suites into a single `it` binary
+so Cargo links once per crate (see [Integration-test binaries](integration-tests.md)):
 
 ```sh
-pnpm exec vitest run src/store/useAnalysis.test.tsx
-pnpm exec playwright test e2e/analysis.spec.ts
-RB_LITE_TEST=1 cargo test -p rbl-analysis
-RB_LITE_TEST=1 cargo test -p rbl-dbserver --test session
-RB_LITE_TEST=1 cargo test -p rbl-link --test link
+# Build the CLI first in the same profile when running hosted app-shell tests:
+RBXPORT_TEST=1 mise exec -- cargo build -p wreckordbox
+RBXPORT_TEST=1 mise exec -- cargo test -p rbxport --test it service_host::
+RBXPORT_TEST=1 mise exec -- cargo test -p rbxport --test it upstream_pointers::
+RBXPORT_TEST=1 mise exec -- cargo test -p rbxport --test identity
+
+# CLI, service, MCP, and Sidecar integration modules:
+RBXPORT_TEST=1 mise exec -- cargo test -p wreckordbox --test it agent_guide::
+RBXPORT_TEST=1 mise exec -- cargo test -p wreckordbox --test it set_plan_guide::
+RBXPORT_TEST=1 mise exec -- cargo test -p wreckordbox --test it library_protection::
+RBXPORT_TEST=1 mise exec -- cargo test -p wreckordbox-mcp --test conversation
+RBXPORT_TEST=1 mise exec -- cargo test -p wreckordbox-setplan --test guide
+RBXPORT_TEST=1 mise exec -- cargo test -p wreckordbox-service --test it one_edit_gate::
+RBXPORT_TEST=1 mise exec -- cargo test -p wreckordbox-sidecar --test it ledger::
 ```
 
-`rbl-fakecdj` drives protocol servers over loopback. It exercises socket
-framing and server behavior without booting vendor firmware.
-Some script checks use Node's own test runner rather than the Vitest glob;
-run the relevant file with `node --test scripts/<name>.test.mjs` when changing it.
-
-## Private suites
-
-Tests requiring AlphaTheta Emulator, imported firmware, private assets, or
-physical hardware live in `rbxport-private`. Registered firmware suites run
-from this public checkout:
-
-```sh
-npm run tests:private
-npm run tests:private -- cdj-3000
-npm run tests:private -- xdj-az
-```
-
-The default runs CDJ-3000 then XDJ-AZ, sequentially, and stops on failure.
-The runner validates suite names and harness paths before starting either.
-Set `RBXPORT_PRIVATE_REPO` when the private repository is not a sibling;
-`ATEMU_DIR` selects the emulator checkout.
-
-| Suite | Harness in rbxport-private | Behavior |
-| --- | --- | --- |
-| `cdj-3000` | `scripts/e2e-link/run.sh` | Build RBX, create a three-track fixture, boot a bridged CDJ-3000, and drive LINK browsing/loading/interactions through its firmware panel. |
-| `xdj-az` | `scripts/e2e-xdj-az/run.sh` | Generate a disposable FAT32 export, browse its playlist, load deck 1, and run audio/cue assertions. |
-
-The CDJ suite needs the built emulator, imported firmware, Python with pytest
-and Pillow, and bridge-helper access (`sudo -n` on its documented host setup).
-The AZ suite additionally uses macOS disk-image tools and an imported cabinet
-image (`ATEMU_XDJ_AZ_CABINET` overrides its path). The harness calls audio tests
-in AtEmu's `tests/test_xdj_az_playback.py`; the current gate uses 44100 Hz and
-exclusive audio capture. Follow the private harness README for host setup.
-
-Evidence is saved in the private repository's `verification/` directory.
-Physical USB formatting has a separate destructive opt-in harness and is not
-included in this default run. Private macOS/Windows app harnesses also retain
-their own entry points. Do not infer a physical pass from emulator audio.
+Note that Linux is the reference platform: crates with Linux mount/theme hooks
+(such as `wreckordbox-stick-protection` and the full `wreckordbox` CLI) must be
+compiled and tested on Linux (or in an `aarch64` Linux VM when developing on
+macOS).
 
 ## Real USB sticks
 
-The removable-media tests run on FAT32, exFAT and HFS+ disk images by
-default. To run them on real sticks instead, name two disposable sticks
-`USB A` and `USB B`, put an empty `.rbxport-disposable` file at the root of
-each, and run:
+> **Agents: stop here.** Per [`AGENTS.md`](../../AGENTS.md), an agent must never
+> set `RBX_REAL_USB` or `RBX_USB_STICK` and must never write to any mounted
+> volume. The opt-in harnesses below are inherited from upstream `rbl-export`
+> for manual human-run filesystem verification on dedicated blank drives only.
 
-```sh
-RBX_REAL_USB=1 RB_LITE_TEST=1 cargo test -p rbl-export --test removable_media
-```
-
-The marker says the stick may be overwritten; without it the tests refuse to
-write. Before each test, `PIONEER`, `.PIONEER`, `Contents`, the tests' own
-folders and rbxport's working files are deleted from both sticks; nothing
-else on them is touched. The tests take the sticks one at a time, and one of
-them syncs both at once as the Sync Manager does. What the last test leaves
-need not be a library a player can read; for one at each stick's root, run
-that test on its own. Its tracks are placeholder bytes, so a player can browse
-them but not play them.
-
-```sh
-RBX_REAL_USB=1 RB_LITE_TEST=1 cargo test -p rbl-export --test removable_media a_sync_writes_every_stick_at_once
-```
-
-Every other test that exports to a stick writes to a temporary directory on
-the local disk. `RBX_USB_STICK` puts that directory on a real stick instead,
-so the whole export suite and the app's stick tests run through the stick's
-filesystem and driver. It takes one stick at a time, and the same
-`.rbxport-disposable` marker:
-
-```sh
-RBX_USB_STICK="/Volumes/USB A" RB_LITE_TEST=1 cargo test -p rbl-export -p rbxport
-```
-
-Each test's directory is named `.rbxport-test-*` and removed when the test
-ends. On FAT32 and exFAT, macOS keeps extended attributes in `._` sidecar
-files; listings in these tests leave them out (`common::is_os_metadata`).
-Add `-- --include-ignored` to the export crate's run for the opt-in
-200/2,000/10,000-track benchmark. It is slow on a stick: on 2026-10-13 its
-10,000-track first export alone took 16 minutes on a FAT32 stick and 32 on a
-journaled HFS+ one.
+By default `crates/rbl-export/tests/removable_media.rs` runs against loopback
+FAT32, exFAT, and HFS+ disk images. A human operator testing physical USB
+filesystems can place an empty `.rbxport-disposable` marker at the root of
+dedicated blank drives named `USB A` and `USB B` and run
+`RBX_REAL_USB=1 RBXPORT_TEST=1 cargo test -p rbl-export --test removable_media`
+(or `RBX_USB_STICK="/path/to/disposable" RBXPORT_TEST=1 cargo test -p rbl-export`).
+Never place `.rbxport-disposable` on a Gig stick.
 
 ## Before review
 
-For a substantial change, run all applicable checks:
+Before handing off or merging a change to `main`, run the full tests, Clippy
+(`-D warnings`), and `cargo fmt --check` for touched Rust crates, plus
+`pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`, `pnpm budget`, and the
+relevant Playwright specs for frontend changes. Report plainly what passed, what
+you did not run, and what remains unverified on physical hardware.
 
-```sh
-cargo clippy --workspace --all-targets -- -D warnings
-RB_LITE_TEST=1 cargo test --workspace
-pnpm lint
-pnpm build
-pnpm test
-pnpm budget
-pnpm e2e
-```
+## Private suites
 
-Run relevant private suites for firmware-facing changes when the tools are
-available. Explain missing checks, failures, and remaining physical-device
-coverage in the PR. Required generator output accompanies source changes;
-see [Conventions](conventions.md).
+Upstream `rbxport` maintained a separate private repository (`rbxport-private`,
+invoked via `pnpm tests:private`) for proprietary CDJ-3000 / XDJ-AZ firmware
+emulators. That repository is not part of `wreckordbox`; hardware verification
+in this fork is performed manually by the DJ on a Spare stick and physical deck.
 
 ## Feature-specific validation
 
-- [LINK behavior catalog](../reference/link-testing.md): firmware/model coverage and physical result format.
-- [Analysis evaluation](../../crates/rbl-analysis/docs/validation/reference-playlist.md): private reference playlists and recorded scores.
-- [USB format verification](../reference/usb-export-db.md#11-verifying-the-result): structural comparisons and compatibility limits.
-- [Performance conventions](conventions.md#performance): enforced budgets and measurements.
+- [Integration-test binaries](integration-tests.md): `it` module layout and process-isolated test targets.
+- [LINK behavior catalog](../reference/link-testing.md): protocol/device evidence format.
+- [Analysis evaluation](../../crates/rbl-analysis/docs/validation/reference-playlist.md): reference playlist evaluation tools.
+- [USB format verification](../reference/usb-export-db.md#11-verifying-the-result): structural export checks and limits.
+- [Performance conventions](conventions.md#performance): enforced startup budgets and frame measurements.

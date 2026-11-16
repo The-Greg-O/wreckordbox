@@ -1,6 +1,6 @@
 # Working on wreckordbox
 
-Wreckordbox is a personal, Linux-first hard fork of rbxport: a rekordbox-compatible DJ library and USB export app (Tauri 2, React, Rust crates), with a background Library service, a `wreckordbox` CLI, and a Sidecar for what rekordbox cannot hold. Read this file before doing anything.
+Wreckordbox is a personal, Linux-first hard fork of rbxport: a rekordbox-compatible DJ library and USB export app (Tauri 2, React, Rust crates), with a background Library service, a `wreckordbox` CLI, a `wreckordbox-mcp` MCP server, and a Sidecar for what rekordbox cannot hold. Read this file before doing anything.
 
 ## Safety rules (these override everything else)
 
@@ -25,20 +25,20 @@ Wreckordbox is a personal, Linux-first hard fork of rbxport: a rekordbox-compati
 - `docs/design/`: the window's design (requirements, tokens, a render and note per screen). ADR 0007 is the structure and look; ADR 0008 is Mutants.
 - `docs/development/` and `crates/README.md`: upstream's architecture, conventions and testing guides, still accurate for the parts we have not changed.
 - The four specs are the epics `wbx-1` (foundation), `wbx-14` (agent capabilities), `wbx-45` (the window) and `wbx-49` (Mutants). Every ticket is a child bead with acceptance criteria. Bead `wbx-N` was GitHub issue `#N`; `#N` in a description means `wbx-N`.
-- Working notes from earlier implementers live outside the repo in `/home/go/code/wreckordbox-notes/` on this machine: start with `README.md` and `IMPLEMENTER.md` there, then the file for your area (`service-protocol.md`, `edit-path.md`, `sidecar.md`, `ui-scale-and-headless-driving.md`, and others as they appear). Keep them current when you learn something a later worker needs. Where that folder's instructions about worktrees, branches or reporting differ from your orchestrator's, follow your orchestrator.
+- Working notes from earlier implementers live outside the repo in `../wreckordbox-notes/` when present alongside the checkout: start with `README.md` and `IMPLEMENTER.md` there, then the file for your area (`service-protocol.md`, `edit-path.md`, `sidecar.md`, `ui-scale-and-headless-driving.md`, and others as they appear). Keep them current when you learn something a later worker needs. Where that folder's instructions about worktrees, branches or reporting differ from your orchestrator's, follow your orchestrator.
 
 ## Branches
 
-- The integration branch is `foundation`. All work merges there. `main` is upstream's release and is not used.
+- The integration branch is `main`. All work merges there.
 - Some tickets have work in progress from an earlier implementer on a branch named `ticket/<number>-<name>` on the remote; the bead's notes say so. Start from that branch's work (merge or cherry-pick it into your own branch) instead of starting again, after judging it on its merits: its last commit may be an unreviewed "wip" snapshot that does not build.
 
 ## Toolchain
 
 - Versions are pinned in `mise.toml`: run tools as `mise exec -- <command>` (run `mise trust` once in a new checkout).
-- Heavy commands use the machine-wide queue: `/home/go/code/wreckordbox-notes/bin/heavy rust mise exec -- cargo ...` for build/test/run, `heavy check mise exec -- cargo ...` for check/clippy, and `heavy web mise exec -- pnpm ...` for install/typecheck/lint/test/build/Playwright (use the same absolute wrapper path). Never run these bare or in the background; a queued command waits its turn. `cargo fmt` runs without the queue.
-- Front end: install with `pnpm install --frozen-lockfile` through the web lane. Browser specs use the mock bundle, Chromium at `/usr/bin/chromium`, `--workers=1 --trace off`. `pnpm dev:mock` serves the real interface against a mock backend with no Rust build.
-- Rust: the queue sets the build-job limit, `CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 RBXPORT_TEST=1 RUSTC_WRAPPER=sccache SCCACHE_CACHE_SIZE=30G`. Export these for unqueued formatting too. Leave the worktree and its `target/` for review and the orchestrator's gate.
-- The machine is an Apple M2 under Asahi Linux (aarch64, 16K pages, 8 cores, 15 GB RAM), running Omarchy (Arch, Hyprland, Wayland).
+- On a memory-constrained machine where the external `../wreckordbox-notes/bin/heavy` queue wrapper is present, run heavy commands through it: `heavy rust mise exec -- cargo ...` for build/test/run, `heavy check mise exec -- cargo ...` for check/clippy, and `heavy web mise exec -- pnpm ...` for install/typecheck/lint/test/build/Playwright; otherwise run `mise exec -- <command>` directly with bounded Cargo parallelism as instructed by your orchestrator. `cargo fmt` runs without the queue.
+- Front end: install with `pnpm install --frozen-lockfile`. Browser specs use the mock bundle (`pnpm build:mock`), Chromium, `--workers=1 --trace off`. `pnpm dev:mock` serves the real interface against a mock backend with no Rust build.
+- Rust: set `CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 RBXPORT_TEST=1` (and `RUSTC_WRAPPER=sccache` where installed). Leave the worktree and its `target/` for review and the orchestrator's gate.
+- The reference platform is `aarch64` Linux (Asahi Linux, 16K pages) running Omarchy (Arch, Hyprland, Wayland); macOS `arm64` is also used for development.
 
 ## How to build a ticket
 
@@ -48,7 +48,7 @@ Wreckordbox is a personal, Linux-first hard fork of rbxport: a rekordbox-compati
 - Every command that changes the Library goes through the single edit path, tells the hosting window, and honours Library Protection. Writing to the Sidecar is not a Library edit.
 - Finish with the targeted checks below. Say plainly in your completion notes what failed, what you did not run, and what you could not verify.
 - If a ticket is too large to finish well in one sitting, land the largest coherent, green part and file the remainder as a new bead blocked appropriately.
-- Ask the human (escalate) instead of guessing when a ticket cannot be done as specified, when it would change something an ADR decided, or when it needs hardware (a physical XDJ-AZ, a real Stick, rekordbox on macOS). Nothing has been verified on hardware yet.
+- Ask the human (escalate) instead of guessing when a ticket cannot be done as specified, when it would change something an ADR decided, or when it needs hardware verification (a physical player, a real Stick, rekordbox on macOS).
 
 ## Which tests to run
 
@@ -85,6 +85,6 @@ Wreckordbox is a personal, Linux-first hard fork of rbxport: a rekordbox-compati
   Reasons and new-file/merge guidance: [integration tests](docs/development/integration-tests.md).
 - Front end: typecheck, lint, relevant Vitest files and the requested browser
   specs through the web lane; leave full suites to the orchestrator.
-- Merge current `foundation` before reporting. Re-run the affected crate
+- Merge current `main` before reporting. Re-run the affected crate
   checks and your changed integration modules; include the guards if a
   command changed. Do not repeat unrelated full suites after the merge.

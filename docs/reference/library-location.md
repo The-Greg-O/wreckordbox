@@ -1,5 +1,7 @@
 # Library location
 
+> From upstream [rbxport](https://github.com/chrisle/rbxport).
+
 How rbxport decides which rekordbox library to open, how it switches to
 another one, and what it does when the library is on a drive that is not
 connected. It does each the way rekordbox does, with rekordbox's screens and

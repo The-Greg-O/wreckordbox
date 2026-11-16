@@ -1,5 +1,7 @@
 # Companion waveform overview
 
+> From upstream [rbxport](https://github.com/chrisle/rbxport); last checked against this fork on 2026-11-15.
+
 The `read waveform overview` automation command is read-only. Its JSON input
 contains `library_id` (from `my tag catalog`) and `track_id`, both strings. The
 catalog advertises `waveform.overview.read` so companions can detect older builds.

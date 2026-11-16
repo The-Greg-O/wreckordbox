@@ -1,5 +1,7 @@
 # Extending analysis
 
+> From upstream [rbxport](https://github.com/chrisle/rbxport); last checked against this fork on 2026-11-15.
+
 `rbl-analysis::stages` is a public Rust registration API. A host registers
 compiled stages; the runner executes exactly the user's selected order. It
 never silently adds prerequisites or moves a stage. For example, independent

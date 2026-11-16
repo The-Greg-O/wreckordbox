@@ -2,82 +2,68 @@
 
 [Documentation](../README.md) · Next: [Testing](testing.md)
 
-Follow the neighboring code's layout and naming. The enforced rules live in
-`Cargo.toml`, `eslint.config.js`, and `tsconfig.json`; keep changes focused
-instead of reformatting unrelated files.
+Follow the neighboring code's layout, naming, and glossary terms from
+[`CONTEXT.md`](../../CONTEXT.md). Enforced lint and compiler rules live in
+`Cargo.toml`, `eslint.config.js`, and `tsconfig.json`; keep diffs focused rather
+than reformatting unrelated files.
 
 ## Rust
 
-- Keep Tauri commands and native app integration in `src-tauri/`. Shared `rbl-*` crates remain independent of Tauri.
-- Return contextual errors. Workspace linting forbids `unwrap`, `expect`, and `panic!` outside tests unless a file explicitly opts out; do not add an exemption to hide a production failure.
-- No panic may cross the IPC boundary. Use the app's error conversion and blocking-worker patterns when exposing crate operations.
-- Avoid holding locks across `await`. Workspace Clippy also rejects unnecessary ownership, cloning, large enum variants, debug macros, and stdout printing.
-- Keep database mutations in `rbl-db` and route app edits through `AppState::write_then` and refresh/event handling.
-- Preserve publication and recovery behavior when changing files. A successful write to a staging file is not proof that final publication succeeded.
+- Keep Tauri commands and window integration in `src-tauri/`. Crates under `crates/` (`rbl-*` and `wreckordbox*`) remain independent of Tauri.
+- Respect [ADR 0003](../adr/0003-hard-fork-with-a-protected-core.md): do not reshape `rbl-pdb`, `rbl-onelibrary`, `rbl-export`, `rbl-anlz`, or `rbl-db`. Put fork additions in modules or `wreckordbox-*` crates beside them so player-compatibility fixes stay clean.
+- Do not rename existing `rbl-*` / `rbxport` crate names or `RBXPORT_*` environment variables in unrelated changes; that migration is tracked separately.
+- Return contextual errors. Workspace linting forbids `unwrap`, `expect`, and `panic!` outside tests unless a module explicitly opts out; never add an exemption to paper over a runtime failure.
+- No panic may cross the IPC or service socket boundary.
+- Avoid holding locks across `await`. Workspace Clippy denies `perf` lints, enables `pedantic`, and rejects unnecessary ownership, cloning, large enum variants, debug macros, and stdout printing (`-D warnings`).
+- Route every Library mutation through `rbl-library` (`LibraryCore`) / `wreckordbox-service` so it honours Library Protection, records in the Sidecar's Ledger, and notifies open views. Writing to the Sidecar alone is not a Library edit.
+- Preserve durable staging, fsync, and recovery behavior when touching files. A write to a staging path is not proof that publication succeeded.
+- Run `cargo fmt -p <crate> --check` on crates you touch.
 
-Clippy's performance lints are denied, its pedantic group is enabled, and
-validation treats warnings as errors. Before changing Rust formatting across
-a file, check its existing style; the repository has no dedicated rustfmt
-configuration or formatting gate in the documented validation commands.
+## CLI and MCP surface
+
+- Every new `wreckordbox` CLI subcommand must have a matching heading in [`docs/agents/guide.md`](../agents/guide.md) (`crates/wreckordbox/tests/it/agent_guide.rs` checks `--help` against the guide).
+- Decisions that belong solely to the DJ (turning Library Protection off, unlocking a Stick, accepting/rejecting/reopening Review items, acknowledging a Projection barrier, discarding Ledger spills, restoring a backup) remain CLI-only and must never be exposed as MCP tools on `wreckordbox-mcp`.
+- Keep the Library service completely offline ([ADR 0005](../adr/0005-the-library-service-stays-offline.md)).
 
 ## TypeScript and React
 
-- Use strict types. `tsconfig.json` enables unchecked-index protection, exact optional properties, and unused symbol checks.
-- Put backend calls in `src/ipc/`. Views use the typed backend interface; do not import Tauri `invoke` into them.
-- Add the corresponding mock behavior when extending the backend interface, so browser development remains useful.
-- Sorting, filtering, and searching the library belong in `rbl-index`. Render fetched row windows rather than transforming the collection in React.
-- Use events and observers for updates. ESLint forbids `setInterval` polling and deep-cloning row arrays.
-- Follow React hook dependency rules. A leading underscore marks an argument or variable deliberately unused by a required signature.
-- A keyboard action is a command. Register what it does with `useCommands` (`src/lib/commands.ts`) in the component that owns its state, and have the key handler, menu item and any other entry point call `runCommand`; a key handler only decides whether a press is the command. See [Keyboard commands](../reference/shortcut-commands.md).
-- Use `console.warn` or `console.error` for meaningful diagnostics; frontend linting rejects ordinary console output outside test exceptions.
+- Use strict types (`tsconfig.json` enables `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, and unused-symbol checks).
+- Put all backend calls in `src/ipc/`. Views call the typed `Backend` interface and never import Tauri's `invoke` directly.
+- Extend `src/ipc/backend-mock.ts` alongside real IPC additions so `pnpm dev:mock` and Playwright tests stay truthful.
+- Colour view-shell components only through role tokens (`--role-*` in `src/styles/tokens.css`), never hard-coded greys, so every skin and Omarchy theme renders cleanly. Meaningful musical colours (waveforms, cues, phrases, Camelot lights, Energy, Prep colours) use their dedicated tokens.
+- Sorting, filtering, and searching happen in `rbl-index` / `wreckordbox-service`; render windowed rows rather than materialising the collection in React.
+- Use events and observers rather than `setInterval` polling.
+- Register keyboard actions through `useCommands` (`src/lib/commands.ts`); see [Keyboard commands](../reference/shortcut-commands.md).
 
 ## User-facing strings and generated files
 
-Use `useTranslation()` from `src/i18n` for all user-visible strings. Inspect
-existing keys before adding new ones. `pnpm locales` rebuilds
-`public/locales/` from installed rekordbox `.lang` files; the script's
-`--translate-missing` option handles missing translations. CI can add English
-fallbacks, which keep the catalog complete but are not native translations.
-
-Commit generated output when its source changes. The local agent guide also
-calls for `pnpm tokens` or `pnpm icons` after token/icon source changes;
-those commands are not currently in the public `package.json`. Locate the
-owning generator in the relevant checkout rather than documenting or running
-an unavailable public command.
+Use `useTranslation()` from `src/i18n` for translated strings in shared views.
+When adding keys to `src/i18n/ui.json`, run `node scripts/fill-missing-locales.mjs`
+if needed so `public/locales/*.json` keep complete English fallbacks, and commit
+generated files with their source change.
 
 ## Performance
 
-`perf-budgets.json` distinguishes measured baselines, enforced gates, and
-manual targets. `pnpm budget` checks budget schema and the production build's
-start-up code: the chunks the main window loads before first paint (entry,
-its static imports, and the `App` chunk `src/main.tsx` awaits, with its static
-imports). Code loaded on demand is listed but not gated;
-`npm run perf:gate` runs isolated browser frame checks.
-`npm run perf:measure` builds and measures the production preview.
+`perf-budgets.json` defines enforced start-up bundle and frame gates.
+`pnpm budget` checks the budget schema and start-up bundle size (345 KB gzipped
+limit across initial chunks). `pnpm perf:gate` runs browser frame checks;
+`pnpm perf:measure` measures the production preview. Never raise a budget gate
+to make a regression pass.
 
-Do not materialize the full library in the frontend, add idle polling, or
-silently loosen a budget to make a regression pass. When rebaselining, record
-the environment, command, observed result, and reason.
+## Formats, evidence, and privacy
 
-## Formats and protocol evidence
+Keep `[OBS]`, `[ASSUME]`, and `[UNKNOWN]` tags accurate when working near player
+formats or protocols. Distinguish static diffs, loopback tests (`rbl-fakecdj`),
+and physical-player verification.
 
-Keep `[OBS]`, `[ASSUME]`, and `[UNKNOWN]` accurate. Identify whether evidence
-comes from a library diff, packet capture, static firmware analysis, an
-emulator, or a physical device. Static source behavior and a passing emulator
-run are different evidence layers.
-
-Use `rbl-difftool` and captures to establish rekordbox behavior before changing
-format writers. A result for one firmware/model does not establish compatibility
-with another. Technical references belong beside the code or in `docs/`;
-private captures and detailed incident investigations belong in `rbxport-private`.
+**Nothing private belongs in this public repository:** never commit real audio,
+model weights, screenshots, logs, personal filesystem paths, machine hostnames,
+or real track, playlist, or tag names.
 
 ## Tests and comments
 
-Test observable behavior at the smallest useful boundary. Use generated audio
-and temporary database fixtures for writable tests. Add regression coverage
-for a bug's trigger and expected result, rather than assertions that mirror
-the implementation.
-
-Comments explain a constraint, evidence source, or non-obvious decision.
-Keep usage instructions short and executable. Update the relevant guide when
-a command, interface boundary, or user behavior changes.
+Test observable behavior at the project's seams: CLI commands against a service
+on a disposable fixture Library, hosted shell integration modules, Vitest unit
+tests, and mock-backed Playwright browser specs. Comments should explain
+constraints, format evidence, or non-obvious invariants rather than restating
+code.
