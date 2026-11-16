@@ -1,14 +1,17 @@
 name: Feature request
-description: Propose an improvement to rbxport
+description: Propose an improvement to wreckordbox
 title: ""
 labels:
   - enhancement
 body:
+  - type: markdown
+    attributes:
+      value: Note that wreckordbox is a personal fork guided by the architecture decisions in `docs/adr/`; feature ideas outside that scope may be declined.
   - type: textarea
     id: problem
     attributes:
       label: Problem to solve
-      description: Describe the workflow or limitation behind the request.
+      description: Describe the DJ or agent workflow behind the request.
     validations:
       required: true
   - type: textarea
@@ -22,4 +25,4 @@ body:
     id: context
     attributes:
       label: Additional context
-      description: Include hardware, rekordbox version, screenshots, or related links when relevant.
+      description: Include hardware, rekordbox version, or related ADRs/docs when relevant.

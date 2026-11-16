@@ -4,17 +4,20 @@
 }:
 
 let
+  # Cargo package name (`src-tauri/Cargo.toml`) keeps upstream's name for now;
+  # the built desktop binary is `wreckordbox-desktop`.
   pname = "rbxport";
+  binName = "wreckordbox-desktop";
 
   icon = file: "${../..}/src-tauri/icons/${file}";
 
   desktopItem = makeDesktopItem {
-    name = pname;
-    desktopName = pname;
+    name = "wreckordbox";
+    desktopName = "wreckordbox";
     comment = "DJ library and USB export manager";
-    exec = pname;
-    icon = pname;
-    startupWMClass = pname;
+    exec = binName;
+    icon = "wreckordbox";
+    startupWMClass = binName;
     terminal = false;
     categories = [
       "AudioVideo"
@@ -27,22 +30,23 @@ in
   inherit pname icon desktopItem;
 
   installDesktop = ''
-    install -Dm644 ${desktopItem}/share/applications/rbxport.desktop \
-      "$out/share/applications/rbxport.desktop"
-    install -Dm644 ${icon "32x32.png"} "$out/share/icons/hicolor/32x32/apps/rbxport.png"
-    install -Dm644 ${icon "128x128.png"} "$out/share/icons/hicolor/128x128/apps/rbxport.png"
-    install -Dm644 ${icon "128x128@2x.png"} "$out/share/icons/hicolor/256x256@2/apps/rbxport.png"
+    install -Dm644 ${desktopItem}/share/applications/wreckordbox.desktop \
+      "$out/share/applications/wreckordbox.desktop"
+    install -Dm644 ${icon "32x32.png"} "$out/share/icons/hicolor/32x32/apps/wreckordbox.png"
+    install -Dm644 ${icon "128x128.png"} "$out/share/icons/hicolor/128x128/apps/wreckordbox.png"
+    install -Dm644 ${icon "128x128@2x.png"} "$out/share/icons/hicolor/256x256@2/apps/wreckordbox.png"
   '';
 
   meta = {
-    description = "Rekordbox-compatible export-mode library manager";
+    description = "Linux-first DJ library and USB export app, forked from rbxport";
     longDescription = ''
-      Manage a DJ library, analyze tracks, write USB exports, and serve a
-      library to supported players over a local network.
+      Manage a rekordbox-compatible DJ library, run a background Library
+      service for the desktop window, CLI, and MCP server, and load playable
+      USB Sticks.
     '';
-    homepage = "https://rbxport.com";
+    homepage = "https://github.com/The-Greg-O/wreckordbox";
     license = lib.licenses.gpl2Plus;
-    mainProgram = pname;
-    platforms = [ "x86_64-linux" ];
+    mainProgram = binName;
+    platforms = [ "x86_64-linux" "aarch64-linux" ];
   };
 }

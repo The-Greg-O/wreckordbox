@@ -1,5 +1,7 @@
 # How library backups work
 
+> From upstream [rbxport](https://github.com/chrisle/rbxport); for Sidecar backup and `wreckordbox backup restore` behaviour in this fork, see [Backups](../user/backups.md).
+
 [Documentation](../README.md) · [Backups user guide](../user/backups.md)
 
 This reference describes how RBXport creates a library backup, what the

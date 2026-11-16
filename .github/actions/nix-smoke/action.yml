@@ -1,18 +1,12 @@
 name: Nix smoke test
 description: >-
-  Build a Nix package and require it to open a window under Xvfb. The `bin`
-  package runs the AppImage it ships; the `source` package runs the
-  source-built binary.
+  Build the source Nix package and require it to open a window under Xvfb.
 
 inputs:
   package:
-    description: "Package to smoke-test: bin or source"
+    description: "Package to smoke-test: source"
     required: false
-    default: "bin"
-  appimage:
-    description: "Absolute path to a locally built AppImage; empty uses packaging/nix/pin.json (bin only)"
-    required: false
-    default: ""
+    default: "source"
 
 runs:
   using: composite
@@ -21,8 +15,6 @@ runs:
       shell: bash
       run: |
         sudo apt-get update
-        # The AppImage and the source build both expect the host's EGL/GL base
-        # libraries, which a minimal runner does not ship.
         sudo apt-get install -y xvfb x11-utils \
           libegl1 libegl-mesa0 libgl1 libgles2 libglx-mesa0 libgl1-mesa-dri \
           libgbm1 libdrm2 libfribidi0
@@ -33,13 +25,9 @@ runs:
       shell: bash
       env:
         PACKAGE: ${{ inputs.package }}
-        RBXPORT_APPIMAGE: ${{ inputs.appimage }}
       run: |
         set -euo pipefail
         case "$PACKAGE" in
-          bin)
-            out="$(nix build --no-link --print-out-paths --impure -f packaging/nix/ci.nix)"
-            ;;
           source)
             out="$(nix build --no-link --print-out-paths .#source)"
             ;;
@@ -50,27 +38,8 @@ runs:
         esac
         echo "out=$out" >> "$GITHUB_OUTPUT"
 
-    - name: Require the bin launcher to leave updates to Nix
-      if: inputs.package == 'bin'
-      shell: bash
-      run: |
-        set -euo pipefail
-        # A Nix install must not use the built-in updater (#177): the launcher
-        # marks the app as Nix-managed and runs the read-only store AppImage
-        # rather than a writable copy the updater could replace.
-        launcher="${{ steps.build.outputs.out }}/bin/rbxport"
-        grep -Fq 'export RBXPORT_PACKAGE_MANAGER=nix' "$launcher"
-        grep -Fq "APPIMAGE=\"\$appimage\"" "$launcher"
-        grep -Fq "${{ steps.build.outputs.out }}/share/rbxport/rbxport.AppImage" "$launcher"
-        if grep -Fq 'chmod u+w' "$launcher"; then
-          echo "::error::the Nix launcher seeds a writable AppImage"
-          exit 1
-        fi
-
     - name: Require a native Linux window
       shell: bash
-      env:
-        PACKAGE: ${{ inputs.package }}
       run: |
         set -euo pipefail
         export RBXPORT_TEST=1
@@ -82,24 +51,11 @@ runs:
         chmod 700 "$XDG_RUNTIME_DIR"
 
         package="${{ steps.build.outputs.out }}"
-        case "$PACKAGE" in
-          bin)
-            # Run the AppImage the package ships. It runs directly rather than
-            # through appimage-run's FHS because GitHub-hosted runners block the
-            # unprivileged user namespaces bubblewrap needs; the AppImage
-            # carries its own libraries.
-            executable="$package/share/rbxport/rbxport.AppImage"
-            export APPIMAGE_EXTRACT_AND_RUN=1
-            ;;
-          source)
-            # The source-built binary, wrapped with its Nix runtime.
-            executable="$package/bin/rbxport"
-            export LIBGL_ALWAYS_SOFTWARE=1
-            export WEBKIT_DISABLE_DMABUF_RENDERER=1
-            ;;
-        esac
+        executable="$package/bin/wreckordbox-desktop"
+        export LIBGL_ALWAYS_SOFTWARE=1
+        export WEBKIT_DISABLE_DMABUF_RENDERER=1
 
-        log="$RUNNER_TEMP/rbxport-nix-window.log"
+        log="$RUNNER_TEMP/wreckordbox-nix-window.log"
         # shellcheck disable=SC2016 # $1/$2 expand in the child shell below.
         xvfb-run -a bash -c '
           set -euo pipefail
@@ -107,11 +63,11 @@ runs:
           pid=$!
           trap "kill $pid 2>/dev/null || true; wait $pid 2>/dev/null || true" EXIT
           for _ in $(seq 1 120); do
-            if xwininfo -root -tree | grep -Fq "rbxport"; then exit 0; fi
+            if xwininfo -root -tree | grep -Fq "wreckordbox"; then exit 0; fi
             if ! kill -0 "$pid" 2>/dev/null; then break; fi
             sleep 1
           done
           cat "$2"
-          echo "::error::rbxport did not create a Linux window"
+          echo "::error::wreckordbox did not create a Linux window"
           exit 1
         ' _ "$executable" "$log"

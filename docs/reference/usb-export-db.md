@@ -1,5 +1,7 @@
 # rekordbox USB export format
 
+> From upstream [rbxport](https://github.com/chrisle/rbxport).
+
 This document describes the files and binary records in a normal rekordbox
 USB export: where they are stored, how they refer to one another, and how
 the player uses them. The concrete reference data comes from rekordbox 7

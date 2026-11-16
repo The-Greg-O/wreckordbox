@@ -35,6 +35,6 @@ The tests decode with `lewton`, a Vorbis decoder written in Rust, so the reader 
 ## Run focused checks
 
 ```sh
-cargo test -p wreckordbox-native-stems
-/home/go/code/wreckordbox-notes/bin/heavy rust mise exec -- cargo test -p wreckordbox --test it stems_write::
+RBXPORT_TEST=1 cargo test -p wreckordbox-native-stems
+RBXPORT_TEST=1 cargo test -p wreckordbox --test it stems_write::
 ```

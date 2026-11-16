@@ -1,102 +1,59 @@
 # Contributing
 
-Start with [Getting started](docs/development/getting-started.md), then read
-[Architecture](docs/development/architecture.md) and
-[Development conventions](docs/development/conventions.md).
-The [documentation index](docs/README.md) links to feature-specific references.
+`wreckordbox` is a personal, Linux-first hard fork of
+[rbxport](https://github.com/chrisle/rbxport) by Chris Le, shaped around one
+working DJ's setup: a background Library service, the `wreckordbox` CLI and
+`wreckordbox-mcp` MCP server for agent-driven work, a Sidecar of Facts with
+Projection and a durable Ledger, and an Omarchy-themed desktop window.
 
-## Report or choose an issue
+The repository is public under [GPL-2.0-or-later](LICENSE) so others can read,
+build, or fork it. Bug reports and small, well-tested fixes are welcome, **but
+this is not a community-governed general-purpose project**: feature direction is
+set by the owner's own DJ workflow and the settled architecture decisions in
+[`docs/adr/`](docs/adr/), and unsolicited feature pull requests may be declined
+or sit unreviewed. If you are looking for upstream's minimal, cross-platform
+rekordbox export manager, see [chrisle/rbxport](https://github.com/chrisle/rbxport).
 
-Use the GitHub bug or feature request form in `.github/ISSUE_TEMPLATE/`.
-For a bug, provide reproduction steps, expected and actual behavior, app
-version, OS, and exact hardware/firmware when relevant. Attach a redacted log
-excerpt or report. Keep credentials, private databases, and unrelated personal
-data out of issues and the public repository.
+## Orientation
 
-For a substantial change, explain the problem and proposed behavior before
-implementation. Keep the change scoped so a reviewer can understand its
-trigger, result, and validation without reading a chat history.
+Start with:
 
-## Feature proposals
+1. [`CONTEXT.md`](CONTEXT.md): the project glossary. Use its terms (`Library`, `Stick`, `Sidecar`, `Fact`, `Projection`, `Run`, `Ledger`, `Unwind`, `Intake`, `Mutant`, and so on).
+2. [`AGENTS.md`](AGENTS.md) (`CLAUDE.md`): safety rules that bind every human and agent working on the codebase.
+3. [`docs/adr/`](docs/adr/): decisions already made — design within them rather than reopening them. In particular, [ADR 0003](docs/adr/0003-hard-fork-with-a-protected-core.md) keeps the player-format crates (`rbl-pdb`, `rbl-onelibrary`, `rbl-export`, `rbl-anlz`, `rbl-db`) close to upstream: add beside them rather than reshaping them.
+4. [Getting started](docs/development/getting-started.md), [Architecture](docs/development/architecture.md), [Conventions](docs/development/conventions.md), and [Testing](docs/development/testing.md).
 
-The core vision of rbxport is **fewer features**. It is not a version of
-rekordbox customized by the community: a project that keeps accumulating
-features ends up as the full-featured DJ software that rekordbox already is. You are welcome to fork
-rbxport and extend it however you like, but the core project stays small.
+## Issues and tracking
 
-Every contribution that adds a feature is carefully considered against this
-vision, and a working, well-tested feature can still be declined. Before writing
-code, open an issue that explains the problem and why it belongs in the core
-project. Bug fixes, performance improvements, compatibility work, and simplifying
-internal code are always in scope.
+- Day-to-day development work is tracked privately by the owner as beads (`wbx-*`; `.beads/` is excluded from git). In fork documentation and commit messages, `wbx-N` (or `#N` in early fork notes) refers to a bead, while three-digit `#NNN` references in inherited `rbl-*` code and reference docs refer to historical issues in `chrisle/rbxport`.
+- External bug reports and questions can be opened in [GitHub Issues](https://github.com/The-Greg-O/wreckordbox/issues) using `.github/ISSUE_TEMPLATE/`. Include reproduction steps, commit hash, OS, and player model/firmware where relevant.
+- **Keep everything private out of issues, commits, and tests:** no real rekordbox databases, audio files, personal filesystem paths, machine names, or personal track, playlist, or tag names.
 
-A change must also respect two commitments:
+## Branches
 
-- **Compatibility.** rbxport aims to be fully compatible with the current
-  version of rekordbox and all the hardware that rekordbox supports. A change
-  must not break existing libraries, USB exports, or supported devices.
-- **Performance.** rbxport maintains its speed through the performance budget
-  in `perf-budgets.json`. A change must stay within it; run `pnpm budget` for
-  interface changes. Do not raise a budget gate to fit a new feature. See
-  [Development conventions](docs/development/conventions.md).
-
-## Create a branch
-
-Branch from the target branch for the change, normally `dev`:
+The integration branch is `main` (earlier fork commits used `foundation`, which has been retired into `main`; upstream's `dev` branch is not used here). Branch from `origin/main`:
 
 ```sh
 git fetch origin
-git switch -c fix/short-description origin/dev
+git switch -c fix/short-description origin/main
 ```
 
-Preserve unrelated working-tree changes. Use a separate checkout or worktree
-when another task needs a different baseline. Do not include generated logs,
-private fixtures, or incidental version synchronization in the patch.
+Do not include generated logs, screenshots, virtual environments, model weights, or incidental version-file edits in a branch.
+
+## Naming in the codebase
+
+Internal Cargo crate names (`rbl-*`, and the desktop shell's package `rbxport` / `rbxport_lib`), `package.json`'s `"name"`, and several inherited environment variables (`RBXPORT_TEST`, `RBXPORT_OPTIONS`, `RBXPORT_LOG_DIR`, `RBXPORT_WAYLAND_PRELOAD`) still keep upstream's names for now; renaming them requires a coordinated migration and is tracked separately. Do not rename them piecemeal in unrelated changes.
+
+The built binaries already carry wreckordbox's names:
+
+- `wreckordbox-desktop` (from package `rbxport` in `src-tauri/`)
+- `wreckordbox` (headless CLI in `crates/wreckordbox/`)
+- `wreckordbox-mcp` (stdio MCP server in `crates/wreckordbox-mcp/`)
 
 ## Implement and validate
 
-Use the owning layer, typed IPC, translated strings, and temporary fixtures
-as described in [Conventions](docs/development/conventions.md).
-Never write to an installed rekordbox library during development or tests.
-Set `RB_LITE_TEST=1` (or `RBXPORT_TEST=1`) for Rust tests and supply fixtures
-for write coverage.
-
-Run the smallest relevant checks first. Before handing off a substantial
-change, run the applicable checks in [Testing](docs/development/testing.md),
-including frontend lint/build/unit/budget/Playwright checks for interface
-changes and workspace Clippy/tests for Rust changes. Run affected internal
-firmware suites when tools and firmware are available. Report unavailable
-checks and unresolved device behavior explicitly.
-
-Update the appropriate user guide or technical reference, along with generated
-output when its source changed. Validate new documentation links and commands.
-
-## Commit and open a pull request
-
-Use Conventional Commit titles such as `fix: preserve playlist order` or
-`feat: add export progress`. Write a concise, imperative subject and a short
-body explaining what changed and why. Keep commits grouped by logical change.
-
-Push the topic branch and open a PR against its target. The description should
-state the problem, resulting behavior, relevant checks, and any material
-limitations. Include issue references and separate local, CI, emulator, and
-physical-device evidence. Public contributors do not need access to private
-firmware or test assets.
-
-Same-repository PR CI may commit machine-applicable Clippy fixes and missing
-English locale fallbacks to the branch, then validate that updated SHA.
-Inspect those changes and use the newest PR head when reporting validation.
-Fork PRs are excluded from self-hosted runner execution by the workflow;
-a maintainer must arrange appropriate validation before integration.
-
-## Review and integration
-
-Address review findings and rerun checks affected by the updates. Keep `main`
-and `dev` linear: rebase the topic branch onto its target, then integrate with
-a fast-forward. Do not create merge commits between them. A rebased topic
-branch may be force-pushed with `--force-with-lease`, including one with an
-open PR. Never force-push `main` or `dev`, and never move or replace a
-release tag.
-
-Opening or merging a PR does not publish a release. Release operators follow
-[Releases](docs/development/releases.md) from a clean, pushed `dev` checkout.
+- **Never write to an installed rekordbox Library or a mounted USB Stick** during development or testing. Always set `RBXPORT_TEST=1` for Rust runs, use `rbl_db::fixture::build` or the CLI test sandbox for writable Library tests, and use temporary directories in place of Sticks (never set `RBX_REAL_USB` or `RBX_USB_STICK` in automated or agent runs).
+- Every command that changes the Library must go through the single edit path (`rbl-library` / `wreckordbox-service`), notify the hosting window, record in the Ledger, and honour Library Protection.
+- Every new `wreckordbox` CLI subcommand must have a matching section in [`docs/agents/guide.md`](docs/agents/guide.md) (checked by `crates/wreckordbox/tests/it/agent_guide.rs`).
+- Interface changes must stay within `perf-budgets.json` (`pnpm budget`) and use role tokens (`--role-*` in `src/styles/tokens.css`) rather than hard-coded greys.
+- Run the targeted checks described in [Testing](docs/development/testing.md) (`cargo test`, `cargo clippy ... -- -D warnings`, `cargo fmt --check` on touched crates; `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`, `pnpm budget`, and relevant Playwright specs for frontend changes). State plainly in your pull request what passed, what you did not run, and what could not be verified on physical hardware.

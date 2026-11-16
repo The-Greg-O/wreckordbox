@@ -1,104 +1,40 @@
 # Nix
 
-The repository is a flake that packages rbxport for Nix on `x86_64-linux` only;
-there is no aarch64 Linux build to seed from.
+The repository retains a Nix flake inherited from upstream `rbxport` and
+adjusted to build from source only (upstream's pre-built AppImage wrapper has
+been removed, as `wreckordbox` publishes no binary releases).
 
-## Run without installing
+> **Status note:** `wreckordbox` is primarily developed using `mise.toml` on
+> Arch Linux / Omarchy (`aarch64`). When `Cargo.lock` or `pnpm-lock.yaml`
+> changes, the fixed-output hashes in `packaging/nix/pin.json` must be refreshed
+> with `bash packaging/nix/update-source-hashes.sh` before `nix build` will
+> succeed. Note also that `packaging/nix/source.nix` currently builds only the
+> desktop package (`-p rbxport`, binary `wreckordbox-desktop`); build the CLI
+> (`wreckordbox`) and MCP server (`wreckordbox-mcp`) with Cargo directly or in
+> `nix develop`.
+
+## Development shell
+
+Inside a checkout, `nix develop` opens a shell with Rust, Node 24, `pnpm`, and
+the Linux Tauri system libraries:
 
 ```sh
-nix run github:chrisle/rbxport
+nix develop
+pnpm install --frozen-lockfile
+RBXPORT_TEST=1 pnpm dev
 ```
 
-## Run a source build
+## Build or run from source
 
-The default package wraps the pinned AppImage. The flake also exposes a
-`source` package that builds rbxport from the checkout Nix is given, rather
-than running the pinned AppImage:
+From a local checkout (after refreshing `packaging/nix/pin.json` if lockfiles
+have moved):
 
 ```sh
 nix run .#source
 ```
 
-From GitHub, use `nix run github:chrisle/rbxport#source`. The build takes longer
-because Nix compiles the Rust workspace and builds the frontend with pnpm. Like
-the AppImage package, the source build is managed by Nix.
-
-## Install
+Or directly from GitHub:
 
 ```sh
-nix profile install github:chrisle/rbxport
-```
-
-The pin is pushed to `dev` before `main`, so `github:chrisle/rbxport/dev` has
-the newest release first; the default branch lags one release.
-
-## Install declaratively
-
-Add the flake as an input (with `inputs.nixpkgs.follows` so there is one
-nixpkgs), then reference its package from a module.
-
-```nix
-# flake.nix
-{
-  inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    rbxport = {
-      url = "github:chrisle/rbxport";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-  };
-
-  outputs = { nixpkgs, ... }@inputs:
-    nixpkgs.lib.nixosSystem {
-      specialArgs = { inherit inputs; };
-      modules = [ ./configuration.nix ];
-    };
-}
-```
-
-```nix
-# configuration.nix (or a home-manager module)
-{ pkgs, inputs, ... }:
-{
-  environment.systemPackages = [
-    inputs.rbxport.packages.${pkgs.stdenv.hostPlatform.system}.default
-  ];
-}
-```
-
-## How updates work under Nix
-
-Nix owns a Nix install, including its updates. The package runs the AppImage
-straight from the read-only Nix store. The app has no updater of its own: it
-never checks a download server, downloads, or replaces anything.
-
-To update, move your flake input or profile to the newer release, for example:
-
-```sh
-nix profile upgrade <name>   # an imperative install; `nix profile list` shows the name
-nix flake update rbxport     # a system flake that lists rbxport as an input, then rebuild
-```
-
-The version Nix records for the package is the version you run.
-
-## Development
-
-Inside a checkout, `nix develop` opens a shell with the Rust and Node
-toolchains and the Tauri system dependencies:
-
-```sh
-nix develop
-pnpm install
-pnpm dev
-```
-
-## Removing
-
-`nix profile remove` removes the package but leaves its extraction cache (and,
-from an earlier package, a copied AppImage) behind. Delete both to reclaim the
-space:
-
-```sh
-rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/rbxport" \
-       "${XDG_CACHE_HOME:-$HOME/.cache}/rbxport"
+nix run github:The-Greg-O/wreckordbox
 ```

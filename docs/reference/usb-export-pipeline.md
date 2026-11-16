@@ -1,5 +1,7 @@
 # How a USB export runs
 
+> From upstream [rbxport](https://github.com/chrisle/rbxport); for Stick Protection and CLI dry-run/load behaviour in this fork, see [Loading a Stick from the command line](../user/stick-load.md) and [USB export preferences](../user/usb-export.md#stick-protection).
+
 [Documentation](../README.md) · [USB export format](usb-export-db.md) · [Export preferences](../user/usb-export.md)
 
 This reference follows one USB export through the code, from the click in the
@@ -1036,7 +1038,7 @@ as the stick, or a disposable stick named through `RBX_USB_STICK` /
 | `tests/device_library.rs` | Editing a stick's playlists | `--test device_library` |
 | `tests/pipeline.rs` | Analyse generated audio, author analysis, export, verify | `--test pipeline` |
 | `rbl-core` `durable` unit tests | Journal replay, retained generations, rollback, moves, set-aside, NFC/NFD, no exclusive rename | `RB_LITE_TEST=1 cargo test -p rbl-core` |
-| `src-tauri/tests/it/commands.rs` | The real commands against `rbl_db::fixture::build` libraries: preflight, Export Track, multi-stick sync, folders, intelligent playlists, a pulled stick | `/home/go/code/wreckordbox-notes/bin/heavy rust mise exec -- cargo test -p rbxport --test it commands::` |
+| `src-tauri/tests/it/commands.rs` | The real commands against `rbl_db::fixture::build` libraries: preflight, Export Track, multi-stick sync, folders, intelligent playlists, a pulled stick | `RBXPORT_TEST=1 cargo test -p rbxport --test it commands::` |
 | `src/views/sync/SyncManager.test.tsx`, `src/lib/exportProgress.test.ts` | Sync Manager behavior on the mock backend; stage measures and labels | `pnpm test` |
 | `e2e/sync-manager.spec.ts`, `e2e/sync-production.spec.ts` | Sync Manager in Chromium/WebKit on the mock backend, and the built window at `#sync` | `pnpm e2e` |
 

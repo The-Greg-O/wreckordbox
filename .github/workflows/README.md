@@ -1,57 +1,38 @@
 # GitHub Actions layout
 
-The entry-point workflows describe orchestration. Reusable workflows and local
-composite actions own implementation details.
+This fork keeps only read-only validation workflows and issue-platform labelling.
+Upstream's release, R2 CDN publication, Microsoft Store submission, installer
+signing, and scheduled Nix AppImage-seeding workflows have been removed so
+nothing in this repository can publish to upstream's channels or mutate branches.
 
-Pull requests use a focused validation profile selected from changed paths.
-Manual full validation and the release workflow keep every input at its default
-and therefore run the exhaustive cross-platform, browser, budget, MSRV, and
-workspace test gates before deployment.
+Note: the validation jobs declare upstream's `[self-hosted, ...]` runner labels
+and are only active if matching self-hosted runners are registered on this
+repository.
 
 ## Entry points
 
-- `ci.yml` uses `scripts/ci/validation-plan.mjs` to classify changed files,
-  applies deterministic fixes, and requests only the relevant validation lanes.
-  After successful validation, ready same-repository PRs targeting `dev` are
-  automatically fast-forwarded into `dev`. The PR head must still equal the validated SHA,
-  and the current `dev` must be an ancestor of that head. Conflicts, changed heads,
-  and divergent bases require a rebase and fresh checks. This also permits stacked
-  PRs whose tested head includes earlier PRs. Concurrent divergent pushes are
-  refused atomically. Drafts, fork PRs, manual
-  validation runs, and PRs targeting `main` are excluded.
-- `release.yml` resolves and records a version, validates it, promotes `main`,
-  builds installers, publishes them, and requests Store submission.
-- `label-issue-platform.yml` labels incoming issues independently of delivery.
+- `ci.yml` runs on same-repository pull requests targeting `main` and on manual
+  `workflow_dispatch`. It uses `scripts/ci/validation-plan.mjs` to classify
+  changed files and requests only the matching validation lanes (or every lane
+  on a manual run), with `contents: read` permissions only.
+- `label-issue-platform.yml` applies the `macos`, `windows`, or `linux` label
+  from `.github/ISSUE_TEMPLATE/bug.yml`.
 
 ## Reusable validation workflows
 
 - `validation.yml` coordinates the aggregate validation gate.
-- `validate-rust.yml` runs current-toolchain tests and the MSRV check.
-- `validate-windows.yml` checks Windows-native compilation and file paths.
-- `validate-linux.yml` proves the Tauri shell opens a native Linux window.
-- `validate-macos.yml` proves the Intel build launches through Rosetta and runs
-  31 real Apple Silicon desktop scenarios, including native Finder drag/drop,
-  against a disposable SQLCipher fixture (`pnpm desktop:test`). The desktop
-  scenarios run only when the release workflow explicitly enables
-  `validate_desktop`, before packaging and publication; PR checks and manual
-  validation do not run them.
-- `validate-frontend.yml` independently selects lint, build, unit, browser, and
+- `validate-rust.yml` runs Clippy, unit/integration/doc tests, and (on full
+  runs) the Rust 1.89 MSRV check. On pull requests, `scripts/ci/affected-rust-packages.mjs`
+  narrows checks to changed workspace crates and their reverse dependents.
+- `validate-frontend.yml` selects lint, typecheck, build, unit, Playwright, and
   bundle-budget checks.
-- `validate-scripts.yml` runs the dependency-free Node script tests.
-
-On pull requests, Rust test and Clippy selection is narrowed by
-`scripts/ci/affected-rust-packages.mjs` to changed workspace crates and their
-reverse dependents. Deploy validation runs workspace-wide Clippy, tests, and
-MSRV checks.
-
-## Reusable release workflows
-
-- `build-installer.yml` coordinates one platform package.
-- `release-publish.yml` publishes and verifies the R2 feed, prunes old payloads,
-  and announces the release.
-- `release-store.yml` verifies and submits the MSIX to Partner Center.
-
-Installer implementation is further divided under `.github/actions/` into
-builder setup, signing setup, packaging, verification, and cleanup. Keep
-platform-specific commands in those actions so the release state machine stays
-readable and every cleanup path remains explicit.
+- `validate-linux.yml` proves the Tauri shell (`wreckordbox-desktop`) opens a
+  native Linux window under Xvfb.
+- `validate-macos.yml` checks Intel macOS launch under Rosetta and (when
+  `validate_desktop` is enabled) Apple Silicon desktop scenarios against a
+  disposable SQLCipher fixture.
+- `validate-windows.yml` checks Windows-native compilation, backup locking, and
+  file-drop path handling.
+- `validate-nix.yml` builds and smoke-tests the source Nix package via
+  `.github/actions/nix-smoke`.
+- `validate-scripts.yml` runs the Node and Python script unit tests.

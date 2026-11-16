@@ -1,7 +1,7 @@
 name: Shared validation
 
 # Coordinates independently selectable validation lanes. Pull requests pass a
-# path-derived plan; releases use the defaults and therefore run every lane.
+# path-derived plan; manual full runs use the defaults and therefore run every lane.
 on:
   workflow_call:
     inputs:

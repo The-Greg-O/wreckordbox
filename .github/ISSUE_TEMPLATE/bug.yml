@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a reproducible problem in rbxport
+description: Report a reproducible problem in wreckordbox
 title: ""
 labels:
   - bug
@@ -7,7 +7,7 @@ labels:
 body:
   - type: markdown
     attributes:
-      value: Thanks for reporting this. Do not include private library files or credentials.
+      value: Thanks for reporting this. Do not include private library files, personal paths, track/playlist names, or credentials.
   - type: textarea
     id: problem
     attributes:
@@ -28,7 +28,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: rbxport version
+      label: wreckordbox commit or version
     validations:
       required: true
   - type: dropdown
@@ -36,9 +36,9 @@ body:
     attributes:
       label: Operating system
       options:
+        - Linux
         - macOS
         - Windows
-        - Linux
         - Other
     validations:
       required: true
@@ -46,9 +46,9 @@ body:
     id: hardware
     attributes:
       label: Relevant DJ hardware and firmware
-      description: Include exact model and firmware version when this involves a player or controller.
+      description: Include exact model and firmware version when this involves a player.
   - type: textarea
     id: evidence
     attributes:
       label: Logs and other evidence
-      description: Attach the rbxport report or a redacted excerpt. Remove credentials and unrelated personal data.
+      description: Attach a redacted log excerpt. Remove personal filesystem paths, track/playlist/tag names, and credentials.

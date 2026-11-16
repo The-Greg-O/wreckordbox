@@ -1,7 +1,9 @@
 # Licensing
 
-rbxport is licensed as a whole under GPL-2.0-or-later. See
-[`LICENSE`](LICENSE); the complete GPL text is included in
+wreckordbox (forked from [rbxport](https://github.com/chrisle/rbxport) by Chris
+Le) is licensed as a whole under GPL-2.0-or-later. Both upstream's copyright
+(`Copyright (c) 2026 Chris Le`) and the fork's (`Copyright (c) 2026 Greg Overton`)
+apply; see [`LICENSE`](LICENSE). The complete GPL text is included in
 [`crates/rbl-deck/vendor/rubberband/COPYING`](crates/rbl-deck/vendor/rubberband/COPYING).
 
 ## Rubber Band
@@ -42,3 +44,12 @@ notices travel in those crates' sources.
 The layout Native stems follow is published by the AZ-MODS project, which is
 GPL-3.0-only. The writer is implemented from the layout's specification and
 contains no AZ-MODS code.
+
+## Separation engine
+
+[`separation-engine/`](separation-engine/README.md) is an out-of-process Python
+worker written by the fork's author and included under this repository's
+GPL-2.0-or-later licence; it is run over standard input/output and is not
+linked into any Rust binary. Its optional full backend installs third-party
+Python packages (such as `audio-separator`, MIT) and downloads model weights at
+run time rather than vendoring them in this repository.

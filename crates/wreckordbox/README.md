@@ -6,7 +6,7 @@ The headless `wreckordbox` command: a thin client of the Library service. It ope
 
 ## Start here
 
-[`src/main.rs`](src/main.rs) is the whole command. [`tests/status.rs`](tests/status.rs) runs the built binary against a service on a fixture Library; [`tests/common/mod.rs`](tests/common/mod.rs) is the sandbox those tests share.
+[`src/main.rs`](src/main.rs) is the whole command. [`tests/it/status.rs`](tests/it/status.rs) runs the built binary against a service on a fixture Library; [`tests/common/mod.rs`](tests/common/mod.rs) is the sandbox those tests share.
 
 ## Contracts and safety
 
