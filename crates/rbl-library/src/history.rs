@@ -81,6 +81,8 @@ pub type OutsideHold = Box<dyn std::any::Any + Send>;
 /// files; text fields keep `WebKit`'s native history.
 #[derive(Clone)]
 pub enum LibraryEdit {
+    /// A Run reversed through the Ledger, as one Undo step.
+    Unwind(crate::unwind::Unwind),
     DeletePlaylist(rbl_db::write::PlaylistDeletion),
     RenamePlaylist(rbl_db::write::PlaylistRename),
     MovePlaylist(rbl_db::write::PlaylistMove),
@@ -157,6 +159,9 @@ pub enum LibraryEdit {
 impl LibraryEdit {
     pub fn is_empty(&self) -> bool {
         match self {
+            Self::Unwind(edit) => edit.metadata["reverses"]
+                .as_array()
+                .is_none_or(Vec::is_empty),
             Self::DeletePlaylist(edit) => edit.is_empty(),
             Self::RemovePlaylistTracks(edit) => edit.is_empty(),
             Self::ReplacePlaylistContents(edits) => edits.is_empty(),
@@ -196,7 +201,7 @@ impl LibraryEdit {
             // Tokens keep their database row ids private; a full reload after an
             // undo is uncommon and guarantees every view and sort follows it.
             // The index's My Tag list (filters, panel) is read in a full load.
-            Self::Track(_) | Self::KeyEdit { .. } | Self::TrackTags { .. } | Self::Relocate(_)
+            Self::Unwind(_) | Self::Track(_) | Self::KeyEdit { .. } | Self::TrackTags { .. } | Self::Relocate(_)
             | Self::MyTagOrder(_) => Touched::Tracks,
             Self::Cues(revision) => Touched::Cues(revision.content().to_owned()),
             Self::ListRemoval(removal) => match removal.list() {
@@ -217,6 +222,7 @@ impl LibraryEdit {
     /// transaction, is checked by the writer as it runs.
     pub fn check(&self, writer: &rbl_db::write::Writer, undo: bool) -> Result<(), DbError> {
         match self {
+            Self::Unwind(edit) => edit.check(writer, undo),
             Self::Track(values) => values.iter().try_for_each(|value| writer.check_track_edit(value, undo)),
             // The library's rows and every file the edit wrote, before either is
             // written (#507).
@@ -267,6 +273,7 @@ impl LibraryEdit {
     /// Undoes (`undo`) or redoes this entry through `writer`.
     pub fn apply(&self, writer: &mut rbl_db::write::Writer, undo: bool) -> Result<(), DbError> {
         match self {
+            Self::Unwind(edit) => edit.apply(writer, undo),
             Self::DeletePlaylist(value) => if undo { writer.restore_playlist(value) } else { writer.redo_playlist_deletion(value) }.map(|_| ()),
             Self::RenamePlaylist(value) => if undo { writer.undo_rename(value) } else { writer.redo_rename(value) }.map(|_| ()),
             Self::MovePlaylist(value) => if undo { writer.undo_move(value) } else { writer.redo_move(value) }.map(|_| ()),
@@ -867,6 +874,33 @@ impl crate::LibraryCore {
         if matches!(entry.edit, LibraryEdit::Grid(_)) {
             return Err(StepError::Write(DbError::WriteRefused(crate::grid_step::GridStep::NOT_HERE.to_owned())));
         }
+        let ledger = self.history.lock().ledger();
+        let _unwind = if let LibraryEdit::Unwind(edit) = executable {
+            let ledger = ledger.as_ref().ok_or_else(|| {
+                StepError::Write(DbError::WriteRefused(
+                    "Unwind needs its Library service to validate the Facts".into(),
+                ))
+            })?;
+            Some(
+                ledger
+                    .hold_unwind(&edit.metadata, undo)
+                    .map_err(|refused| match refused {
+                        crate::unwind::HoldRefused::Busy(reason) => {
+                            StepError::Write(DbError::WriteRefused(reason))
+                        }
+                        crate::unwind::HoldRefused::Conflict(reason) => {
+                            // Like any changed-since step: it leaves the history.
+                            self.history.lock().drop_next(undo);
+                            StepError::Conflict {
+                                label: entry.label,
+                                reason,
+                            }
+                        }
+                    })?,
+            )
+        } else {
+            None
+        };
         let touched = entry.edit.touched();
         let mut preparation = crate::ledger::Preparation::edit(&entry.edit);
         if undo { preparation.undo_of = entry.ledger; } else { preparation.redo_of = entry.ledger; }

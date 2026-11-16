@@ -100,6 +100,10 @@ type Stacks = HashMap<(String, String), Vec<(i64, Option<FieldState>)>>;
 /// edit writes each tag in exactly one of its `before` and `after`; an
 /// assertion writes each it names. `None` when the payload does not read.
 pub(crate) fn writes(kind: &str, payload: Option<&str>) -> Option<Vec<(String, String, bool)>> {
+    if kind == "unwind" {
+        let tags = crate::projection_unwind::tag_payload(payload)?;
+        return writes("track_tags", Some(&tags));
+    }
     if kind == ASSERTION_KIND {
         let payload: Value = serde_json::from_str(payload?).ok()?;
         return payload["assertions"]
@@ -128,6 +132,10 @@ pub(crate) fn writes(kind: &str, payload: Option<&str>) -> Option<Vec<(String, S
 
 /// The tracks a MyTag entry names, when its payload reads.
 pub(crate) fn tracks_of(kind: &str, payload: Option<&str>) -> Option<Vec<String>> {
+    if kind == "unwind" {
+        let tags = crate::projection_unwind::tag_payload(payload)?;
+        return tracks_of("track_tags", Some(&tags));
+    }
     if kind == ASSERTION_KIND {
         return writes(kind, payload).map(|w| w.into_iter().map(|(track, _, _)| track).collect());
     }
@@ -171,7 +179,7 @@ fn rows(db: &Connection) -> Result<Vec<Row>> {
     let mut statement = db.prepare_cached(
         "SELECT id, action, source_kind, source_name, json_extract(command, '$.name'),
                 reverses, payload, kind
-         FROM ledger WHERE store = 'library' AND kind IN ('track_tags', ?1) ORDER BY id",
+         FROM ledger WHERE store = 'library' AND kind IN ('track_tags', 'unwind', ?1) ORDER BY id",
     )?;
     let rows = statement
         .query_map([ASSERTION_KIND], |row| {
@@ -249,6 +257,8 @@ fn provenance(db: &Connection) -> Result<TagProvenance> {
                 }
             }
         };
+        let unwound = (row.kind == "unwind" && row.action == "edit")
+            .then(|| crate::projection_unwind::reversed(row.payload.as_deref(), &steps));
         // A payload that does not read is a barrier (`projection::barriers`).
         let Some(written) = writes(&row.kind, row.payload.as_deref()) else {
             continue;
@@ -264,6 +274,12 @@ fn provenance(db: &Connection) -> Result<TagProvenance> {
                     entry: row.id,
                 };
                 let next = match (row.action.as_str(), &origin) {
+                    ("edit", _) if unwound.is_some() => crate::projection_unwind::restore(
+                        stack,
+                        unwound.as_ref().and_then(Option::as_ref),
+                        current,
+                        row.id,
+                    ),
                     ("undo", Some((origin, _))) => {
                         match stack.iter().rposition(|(step, _)| step == origin) {
                             Some(at) => {
@@ -309,7 +325,7 @@ fn provenance(db: &Connection) -> Result<TagProvenance> {
 fn written_since(db: &Connection, watermark: i64, tracks: &[String]) -> Result<bool> {
     let mut statement = db.prepare_cached(
         "SELECT kind, payload, command FROM ledger
-         WHERE id > ?1 AND store = 'library' AND kind IN ('track_tags', ?2, 'unconfirmed')",
+         WHERE id > ?1 AND store = 'library' AND kind IN ('track_tags', ?2, 'unconfirmed', 'unwind')",
     )?;
     let rows = statement
         .query_map(params![watermark, ASSERTION_KIND], |row| {

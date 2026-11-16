@@ -559,6 +559,26 @@ fn a_decision_asked_without_a_run_or_source_is_the_agents() {
 }
 
 #[test]
+fn unwind_tools_preview_and_apply_the_same_service_operation() {
+    let sandbox = Sandbox::new();
+    let mut server = sandbox.server();
+    server.start();
+    let changed = server.call("change_track_rating", json!({"id":"10003","rating":4}));
+    let original = structured(&changed)["run"]["id"].clone();
+    let plan = server.call("read_run_unwind", json!({"id":original}));
+    assert_eq!(structured(&plan)["entries"][0]["status"], "will_reverse");
+    assert_eq!(rating_of(&mut sandbox.client(), "10003"), 4);
+    let applied = server.call("change_run_unwind", json!({"id":original}));
+    assert_eq!(structured(&applied)["reversed"], 1);
+    assert_eq!(structured(&applied)["run"]["source"]["kind"], "agent");
+    assert_eq!(rating_of(&mut sandbox.client(), "10003"), 0);
+    assert_eq!(
+        structured(&server.call("change_run_unwind", json!({"id":original})))["reversed"],
+        0
+    );
+}
+
+#[test]
 fn a_playlist_is_made_with_tracks_filled_and_arranged_through_the_tools_as_the_agents() {
     let sandbox = Sandbox::new();
     let mut server = sandbox.server();

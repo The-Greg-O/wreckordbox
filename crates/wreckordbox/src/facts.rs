@@ -117,6 +117,19 @@ pub struct RecordOptions {
 
 #[derive(Subcommand)]
 pub enum RunCommands {
+    /// Unwind a finished Run, keeping values changed since unless forced.
+    Unwind {
+        #[arg(value_name = "RUN_ID")]
+        id: i64,
+        /// Read the plan without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// Explicitly replace conflicting values, keeping their actual values in the Unwind.
+        #[arg(long)]
+        force: bool,
+        #[command(flatten)]
+        how: crate::ledger::RunOptions,
+    },
     /// Inspect or explicitly recover local accepted-write Ledger spills.
     Spills {
         #[command(subcommand)]
@@ -262,6 +275,9 @@ pub fn runs(
     command: &RunCommands,
 ) -> Result<String, ServiceError> {
     let (run, did): (Run, &str) = match command {
+        RunCommands::Unwind {
+            id, dry_run, force, ..
+        } => return crate::unwind::run(client, as_json, *id, *dry_run, *force),
         RunCommands::Spills { command } => return crate::spills::run(client, command),
         RunCommands::Start {
             source,

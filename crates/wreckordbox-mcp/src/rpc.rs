@@ -188,7 +188,7 @@ impl Session {
         }
         match tool.who {
             Who::Nobody => {}
-            Who::Request => {
+            Who::Request | Who::OwnRun => {
                 let named = json!({"id": run, "source": source, "description": description});
                 let named: RunArg = serde_json::from_value(strip_nulls(named))
                     .map_err(|e| bad_request(format!("run, source or description: {e}")))?;

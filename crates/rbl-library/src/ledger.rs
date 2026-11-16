@@ -136,6 +136,17 @@ impl Preparation {
 /// already made: it is the implementation's to keep (and to refuse the
 /// next write for, in [`Self::ready`]).
 pub trait Ledger: Send + Sync {
+    /// Validate and hold the Sidecar effects of an Unwind through Undo/Redo.
+    fn hold_unwind(
+        &self,
+        _payload: &serde_json::Value,
+        _undo: bool,
+    ) -> Result<Box<dyn crate::unwind::Hold + '_>, crate::unwind::HoldRefused> {
+        Err(crate::unwind::HoldRefused::Busy(
+            "The Ledger cannot validate this Unwind's Facts".into(),
+        ))
+    }
+
     /// Inspect existing Measurements and a byte-verified staged key write,
     /// outside the Library gate. Neither captures nor queries publish evidence.
     fn prepare_key_evidence(
