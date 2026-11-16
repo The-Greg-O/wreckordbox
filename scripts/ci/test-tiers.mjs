@@ -25,24 +25,24 @@ export const tiers = [
   },
   {
     id: "integration",
-    status: "planned",
-    trigger: "push to dev; only the latest tip runs",
-    lanes: [],
-    selection: "full Rust workspace and full frontend on Linux",
+    status: "active",
+    trigger: "push to main; runs are not cancelled",
+    lanes: validationKeys,
+    selection: "every lane on Linux",
   },
   {
     id: "nightly",
     status: "planned",
-    trigger: "scheduled, and only when dev changed since the last green run",
-    lanes: ["windows_rust", "windows_file_drop", "linux_window", "macos_intel"],
+    trigger: "scheduled, and only when main changed since the last green run",
+    lanes: [],
     selection: "the cross-platform lanes",
   },
   {
     id: "release",
     status: "active",
-    trigger: "the Release workflow",
+    trigger: "manual workflow_dispatch",
     lanes: validationKeys,
-    selection: "every lane, plus packaging, signing and installer checks",
+    selection: "every lane on Linux; no publishing",
   },
 ];
 

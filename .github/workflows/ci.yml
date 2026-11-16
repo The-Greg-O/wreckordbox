@@ -3,8 +3,10 @@ name: Validate
 # This workflow never receives deployment secrets and never runs packaging,
 # publication, or branch mutations. It detects which parts of a pull request
 # changed, then asks the shared validation workflow to run only the matching
-# lanes. Manual validation runs every lane.
+# lanes. Pushes and manual validation run every supported lane.
 on:
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -28,8 +30,7 @@ permissions:
 jobs:
   changes:
     name: Detect affected validation lanes
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
     outputs:
       base_ref: ${{ steps.paths.outputs.base_ref }}
       frontend: ${{ steps.paths.outputs.frontend }}
@@ -41,14 +42,11 @@ jobs:
       frontend_budget: ${{ steps.paths.outputs.frontend_budget }}
       scripts: ${{ steps.paths.outputs.scripts }}
       rust: ${{ steps.paths.outputs.rust }}
-      windows_rust: ${{ steps.paths.outputs.windows_rust }}
-      windows_file_drop: ${{ steps.paths.outputs.windows_file_drop }}
       linux_window: ${{ steps.paths.outputs.linux_window }}
-      macos_intel: ${{ steps.paths.outputs.macos_intel }}
-      nix_source: ${{ steps.paths.outputs.nix_source }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || inputs.source_ref || github.sha }}
           fetch-depth: 0
 
@@ -79,11 +77,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   validate:
-    # Never execute untrusted fork code on self-hosted runners.
-    if: >-
-      always() && needs.changes.result == 'success' &&
-      (github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository)
+    if: always() && needs.changes.result == 'success'
     needs: [changes]
     uses: ./.github/workflows/validation.yml
     with:
@@ -91,11 +85,7 @@ jobs:
       base_ref: ${{ needs.changes.outputs.base_ref }}
       full: ${{ github.event_name != 'pull_request' }}
       validate_rust: ${{ needs.changes.outputs.rust == 'true' }}
-      validate_windows_rust: ${{ needs.changes.outputs.windows_rust == 'true' }}
-      validate_windows_file_drop: ${{ needs.changes.outputs.windows_file_drop == 'true' }}
       validate_linux: ${{ needs.changes.outputs.linux_window == 'true' }}
-      validate_macos: ${{ needs.changes.outputs.macos_intel == 'true' }}
-      validate_nix: ${{ needs.changes.outputs.nix_source == 'true' }}
       validate_scripts: ${{ needs.changes.outputs.scripts == 'true' }}
       validate_frontend_lint: ${{ needs.changes.outputs.frontend_lint == 'true' }}
       validate_frontend_typecheck: ${{ needs.changes.outputs.frontend_typecheck == 'true' }}

@@ -1,7 +1,7 @@
 name: Shared validation
 
 # Coordinates independently selectable validation lanes. Pull requests pass a
-# path-derived plan; manual full runs use the defaults and therefore run every lane.
+# path-derived plan; pushes and manual runs validate every supported lane.
 on:
   workflow_call:
     inputs:
@@ -15,7 +15,7 @@ on:
         default: ""
         type: string
       full:
-        description: "Run exhaustive deploy validation instead of focused PR checks"
+        description: "Run full validation instead of focused PR checks"
         required: false
         default: true
         type: boolean
@@ -27,28 +27,7 @@ on:
         required: false
         default: true
         type: boolean
-      validate_windows_rust:
-        required: false
-        default: true
-        type: boolean
-      validate_windows_file_drop:
-        required: false
-        default: true
-        type: boolean
       validate_linux:
-        required: false
-        default: true
-        type: boolean
-      validate_macos:
-        required: false
-        default: true
-        type: boolean
-      validate_desktop:
-        description: "Run native desktop regressions (deployment only)"
-        required: false
-        default: false
-        type: boolean
-      validate_nix:
         required: false
         default: true
         type: boolean
@@ -94,17 +73,6 @@ jobs:
       base_ref: ${{ inputs.base_ref }}
       full: ${{ inputs.full }}
 
-  windows:
-    name: Windows
-    if: >-
-      !inputs.skip_tests &&
-      (inputs.validate_windows_rust || inputs.validate_windows_file_drop)
-    uses: ./.github/workflows/validate-windows.yml
-    with:
-      source_ref: ${{ inputs.source_ref }}
-      check_rust: ${{ inputs.validate_windows_rust }}
-      check_file_drop: ${{ inputs.validate_windows_file_drop }}
-
   linux-window:
     name: Linux window
     needs: rust
@@ -141,59 +109,23 @@ jobs:
       run_e2e: ${{ inputs.validate_frontend_e2e }}
       run_budget: ${{ inputs.validate_frontend_budget }}
 
-  macos-intel:
-    name: Intel macOS
-    needs: frontend
-    if: >-
-      always() && !inputs.skip_tests && inputs.validate_macos &&
-      (!(inputs.validate_frontend_lint || inputs.validate_frontend_typecheck ||
-      inputs.validate_frontend_build ||
-      inputs.validate_frontend_unit || inputs.validate_frontend_e2e ||
-      inputs.validate_frontend_budget) || needs.frontend.result == 'success')
-    uses: ./.github/workflows/validate-macos.yml
-    with:
-      source_ref: ${{ inputs.source_ref }}
-      run_desktop: ${{ inputs.validate_desktop }}
-
-  # Runs after every non-packaging lane, so a packaging-only failure is the
-  # last thing that can block validation rather than a duplicate of the Rust or
-  # frontend build.
-  nix-source:
-    name: Nix source smoke
-    needs: [rust, windows, linux-window, scripts, frontend, macos-intel]
-    if: >-
-      !cancelled() && !inputs.skip_tests && inputs.validate_nix &&
-      needs.rust.result != 'failure' &&
-      needs.windows.result != 'failure' &&
-      needs.linux-window.result != 'failure' &&
-      needs.scripts.result != 'failure' &&
-      needs.frontend.result != 'failure' &&
-      needs.macos-intel.result != 'failure'
-    uses: ./.github/workflows/validate-nix.yml
-    with:
-      source_ref: ${{ inputs.source_ref }}
-
   validated:
     name: Validation complete
-    needs: [rust, windows, linux-window, scripts, frontend, macos-intel, nix-source]
-    if: >-
-      always() && (inputs.skip_tests ||
-      ((!inputs.validate_rust || needs.rust.result == 'success') &&
-      (!(inputs.validate_windows_rust || inputs.validate_windows_file_drop) ||
-      needs.windows.result == 'success') &&
-      (!inputs.validate_linux || needs.linux-window.result == 'success') &&
-      (!inputs.validate_scripts || needs.scripts.result == 'success') &&
-      (!(inputs.validate_frontend_lint || inputs.validate_frontend_typecheck ||
-      inputs.validate_frontend_build ||
-      inputs.validate_frontend_unit || inputs.validate_frontend_e2e ||
-      inputs.validate_frontend_budget) || needs.frontend.result == 'success') &&
-      (!inputs.validate_nix || needs.nix-source.result == 'success') &&
-      (!inputs.validate_macos || needs.macos-intel.result == 'success')))
-    runs-on: [self-hosted, linux, x64]
+    needs: [rust, linux-window, scripts, frontend]
+    if: always()
+    runs-on: ubuntu-latest
+    env:
+      RESULTS: ${{ toJSON(needs) }}
     steps:
-      - run: |
-          if [ "${{ inputs.skip_tests }}" = true ]; then
-            echo "Tests were explicitly skipped for previously validated ${{ inputs.source_ref }}."
-          else
-            echo "Requested validation gates passed for ${{ inputs.source_ref }}."
-          fi
+      - name: Require successful selected lanes
+        run: |
+          node --input-type=module <<'JS'
+          const results = JSON.parse(process.env.RESULTS);
+          const failed = Object.entries(results).filter(([, job]) =>
+            !["success", "skipped"].includes(job.result));
+          if (failed.length) {
+            console.error("Validation failed:", failed.map(([name, job]) => `${name}: ${job.result}`).join(", "));
+            process.exit(1);
+          }
+          console.log("All selected validation lanes passed.");
+          JS

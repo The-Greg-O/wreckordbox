@@ -21,46 +21,34 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RBXPORT_TEST: "1"
-  # Debug info made each integration-test binary ~0.8 GB and a job's target/
-  # ~24 GB, and six jobs share one disk. Nothing in CI reads it: failures
-  # still print panic messages and line numbers. Keep this equal to the
-  # autofix job in ci.yml, or the two stop sharing a cache.
+  # Keep integration-test binaries small enough for hosted runner disks.
   CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_BUILD_JOBS: "2"
 
 jobs:
   rust:
     name: Rust tests
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
           ref: ${{ inputs.source_ref }}
           fetch-depth: 0
 
       - name: Install the Linux build dependencies
         run: |
-          sudo flock /var/lock/rbxport-ci-apt.lock bash -c '\
-            apt-get update && \
-            apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
-              librsvg2-dev patchelf libgtk-3-dev libasound2-dev'
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+              librsvg2-dev patchelf libgtk-3-dev libasound2-dev
 
-      - name: Ensure rustup
+      - name: Install Rust 1.99.0
         run: |
-          if [ ! -x "$HOME/.cargo/bin/rustup" ]; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-              | sh -s -- -y --no-modify-path --profile minimal --default-toolchain stable
-          fi
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          rustup toolchain install 1.99.0 --profile minimal --component clippy --component rustfmt
+          rustup override set 1.99.0
 
-      - name: Give cargo a home of its own
-        run: echo "CARGO_HOME=$RUNNER_TEMP/cargo-home" >> "$GITHUB_ENV"
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.99.0
-          components: clippy, rustfmt
-
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           cache-bin: false
           shared-key: clippy-linux
@@ -93,6 +81,9 @@ jobs:
             exit 1
           fi
 
+      - name: Formatting
+        run: cargo fmt --all -- --check
+
       - name: Clippy
         run: |
           read -ra packages <<< "$RUST_PACKAGES"
@@ -109,6 +100,10 @@ jobs:
         run: |
           set -euo pipefail
           read -ra packages <<< "$RUST_PACKAGES"
+          # Hosted shell tests invoke this executable, including narrowed PR runs.
+          if [ "${packages[0]}" = --workspace ] || printf '%s\n' "${packages[@]}" | grep -Fxq rbxport; then
+            cargo build -p wreckordbox
+          fi
           # Examples are only built, never run, by `cargo test`; Clippy's
           # --all-targets already checks that they compile, and building them
           # cost ~8 GB of disk per job. Doctests need their own invocation.
@@ -130,49 +125,32 @@ jobs:
           du -sh target/debug/* 2>/dev/null | sort -rh | head -5 || true
           df -h . | tail -1
 
-      - name: Clean the runner
-        if: always()
-        uses: ./.github/actions/clean-runner
 
   msrv:
     name: Rust MSRV check
     needs: rust
     if: inputs.full
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
           ref: ${{ inputs.source_ref }}
 
       - name: Install the Linux build dependencies
         run: |
-          sudo flock /var/lock/rbxport-ci-apt.lock bash -c '\
-            apt-get update && \
-            apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
-              librsvg2-dev patchelf libgtk-3-dev libasound2-dev'
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+              librsvg2-dev patchelf libgtk-3-dev libasound2-dev
 
-      - name: Ensure rustup
+      - name: Install Rust 1.89.0
         run: |
-          if [ ! -x "$HOME/.cargo/bin/rustup" ]; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-              | sh -s -- -y --no-modify-path --profile minimal --default-toolchain stable
-          fi
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          rustup toolchain install 1.89.0 --profile minimal --component clippy --component rustfmt
+          rustup override set 1.89.0
 
-      - name: Give cargo a home of its own
-        run: echo "CARGO_HOME=$RUNNER_TEMP/cargo-home" >> "$GITHUB_ENV"
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.89.0
-
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           cache-bin: false
 
       - name: Check the declared MSRV
         run: cargo +1.89.0 check --workspace --all-targets
-
-      - name: Clean the runner
-        if: always()
-        uses: ./.github/actions/clean-runner

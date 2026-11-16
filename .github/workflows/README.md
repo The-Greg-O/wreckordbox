@@ -1,38 +1,30 @@
 # GitHub Actions layout
 
-This fork keeps only read-only validation workflows and issue-platform labelling.
-Upstream's release, R2 CDN publication, Microsoft Store submission, installer
-signing, and scheduled Nix AppImage-seeding workflows have been removed so
-nothing in this repository can publish to upstream's channels or mutate branches.
+`ci.yml` validates pull requests targeting `main` (including fork PRs), pushes
+to `main`, and manual dispatches. All jobs use ephemeral `ubuntu-latest`
+runners, read-only permissions and no secrets. Checkouts do not persist token
+credentials. External actions are pinned to verified commit SHAs; comments
+name the tags resolved when updating them.
 
-Note: the validation jobs declare upstream's `[self-hosted, ...]` runner labels
-and are only active if matching self-hosted runners are registered on this
-repository.
+PRs select lanes by changed paths. Pushes and manual runs run every supported
+lane. Superseded PR runs are cancelled; main-branch runs are not.
 
-## Entry points
+- `validate-rust.yml`: formatting, Clippy, unit/integration/doc tests, plus the
+  declared MSRV on full runs. Hosted shell tests build the CLI first.
+- `validate-frontend.yml`: lint, typecheck, build, budget, Vitest and Chromium
+  mock E2E tests with one browser worker. WebKit is not in this gate.
+- `validate-scripts.yml`: dependency-free Node script tests.
+- `validate-linux.yml`: native Tauri window smoke under Xvfb.
+- `validation.yml`: coordinates lanes and reports `Validation complete`,
+  failing when a dependency fails or is cancelled. Docs-only PRs may skip lanes.
 
-- `ci.yml` runs on same-repository pull requests targeting `main` and on manual
-  `workflow_dispatch`. It uses `scripts/ci/validation-plan.mjs` to classify
-  changed files and requests only the matching validation lanes (or every lane
-  on a manual run), with `contents: read` permissions only.
-- `label-issue-platform.yml` applies the `macos`, `windows`, or `linux` label
-  from `.github/ISSUE_TEMPLATE/bug.yml`.
+macOS Rosetta/TCC automation and Windows persistent-host/vcpkg checks have been
+removed: neither was a cheap portable hosted lane. Nix smoke is also off until
+its source hashes and hosted build cost are validated. The planner retains
+historical path classification but excludes these disabled lanes from outputs.
+These platforms are not covered by a green gate.
 
-## Reusable validation workflows
-
-- `validation.yml` coordinates the aggregate validation gate.
-- `validate-rust.yml` runs Clippy, unit/integration/doc tests, and (on full
-  runs) the Rust 1.89 MSRV check. On pull requests, `scripts/ci/affected-rust-packages.mjs`
-  narrows checks to changed workspace crates and their reverse dependents.
-- `validate-frontend.yml` selects lint, typecheck, build, unit, Playwright, and
-  bundle-budget checks.
-- `validate-linux.yml` proves the Tauri shell (`wreckordbox-desktop`) opens a
-  native Linux window under Xvfb.
-- `validate-macos.yml` checks Intel macOS launch under Rosetta and (when
-  `validate_desktop` is enabled) Apple Silicon desktop scenarios against a
-  disposable SQLCipher fixture.
-- `validate-windows.yml` checks Windows-native compilation, backup locking, and
-  file-drop path handling.
-- `validate-nix.yml` builds and smoke-tests the source Nix package via
-  `.github/actions/nix-smoke`.
-- `validate-scripts.yml` runs the Node and Python script unit tests.
+Release/signing/CDN/store workflows, persistent-runner cleanup and issue-label
+write automation are removed. Nothing here publishes, labels issues or mutates
+branches. Enabling fork Actions and configuring branch rules are separate
+repository-owner actions; first verify a hosted run and its exact check names.

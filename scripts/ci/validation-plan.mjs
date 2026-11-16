@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-export const validationKeys = [
+const knownLanes = [
   "frontend_lint",
   "frontend_typecheck",
   "frontend_build",
@@ -18,12 +18,18 @@ export const validationKeys = [
   "nix_source",
 ];
 
+// Disabled until portable hosted implementations are available.
+export const disabledLanes = ["windows_rust", "windows_file_drop", "macos_intel", "nix_source"];
+export const validationKeys = knownLanes.filter(key => !disabledLanes.includes(key));
+
 function emptyPlan() {
   return Object.fromEntries(validationKeys.map(key => [key, false]));
 }
 
 function enable(plan, ...keys) {
-  for (const key of keys) plan[key] = true;
+  for (const key of keys) {
+    if (validationKeys.includes(key)) plan[key] = true;
+  }
 }
 
 function enableFrontend(plan) {
@@ -46,9 +52,9 @@ export function planValidation(paths, { all = false } = {}) {
     const path = rawPath.replace(/^\.\//, "").trim();
     if (!path) continue;
 
-    // PR checks stay intentionally focused; deploy runs the entire graph.
+    // PR checks stay intentionally focused; pushes run all supported lanes.
     // A lane's own workflow change exercises that lane, while orchestration
-    // and packaging changes rely on actionlint here and the full deploy gate.
+    // and packaging changes rely on actionlint here and the full main-branch gate.
     if (/^\.github\/workflows\/.*\.ya?ml$/.test(path)) {
       enable(plan, "scripts");
       if (path.endsWith("validate-rust.yml")) enable(plan, "rust");

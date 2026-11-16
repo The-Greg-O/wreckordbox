@@ -45,17 +45,18 @@ permissions:
 jobs:
   frontend:
     name: Frontend checks
-    runs-on: [self-hosted, macos, arm64]
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
           ref: ${{ inputs.source_ref }}
           fetch-depth: 0
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           dest: ${{ runner.temp }}/setup-pnpm
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: pnpm
@@ -79,7 +80,6 @@ jobs:
             pnpm lint
             exit 0
           fi
-          # macOS runners ship bash 3.2, which has no mapfile.
           files=()
           while IFS= read -r file; do
             files+=("$file")
@@ -102,7 +102,7 @@ jobs:
 
       - name: Install Playwright browsers
         if: inputs.run_e2e
-        run: pnpm exec playwright install --with-deps chromium webkit
+        run: pnpm exec playwright install --with-deps chromium
 
       - name: End-to-end
         if: inputs.run_e2e
@@ -110,12 +110,9 @@ jobs:
           BASE_REF: ${{ inputs.base_ref }}
           FULL: ${{ inputs.full }}
         run: |
-          lock=/tmp/rbxport-playwright.lock
-          until mkdir "$lock" 2>/dev/null; do sleep 2; done
-          trap 'rmdir "$lock"' EXIT
           port="$((20000 + GITHUB_RUN_NUMBER % 10000))"
           if [ "$FULL" = true ] || [ -z "$BASE_REF" ]; then
-            E2E_PORT="$port" pnpm e2e
+            E2E_PORT="$port" pnpm e2e --project chromium --workers=1 --trace off
             exit 0
           fi
 
@@ -123,14 +120,14 @@ jobs:
           git diff --name-only "$BASE_REF...HEAD" > "$changed"
           if grep -Fxq playwright.config.ts "$changed" || \
             grep '^e2e/' "$changed" | grep -vqE '\.spec\.[cm]?[jt]s$'; then
-            E2E_PORT="$port" pnpm e2e
+            E2E_PORT="$port" pnpm e2e --project chromium --workers=1 --trace off
           else
             pnpm build:mock
             E2E_PREVIEW_DIR=dist-mock E2E_PORT="$port" pnpm exec playwright test \
-              --only-changed "$BASE_REF" --pass-with-no-tests
+              --only-changed "$BASE_REF" --pass-with-no-tests --project chromium --workers=1 --trace off
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: failure() && inputs.run_e2e
         with:
           name: playwright-report
@@ -140,19 +137,18 @@ jobs:
   unit:
     name: Frontend unit tests
     if: inputs.run_unit
-    # These tests do not need the Mac desktop. Keep their concurrency bounded
-    # on Linux while the Mac handles browser and native builds.
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
           ref: ${{ inputs.source_ref }}
           fetch-depth: 0
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           dest: ${{ runner.temp }}/setup-pnpm
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: pnpm
