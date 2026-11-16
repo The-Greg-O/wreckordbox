@@ -68,7 +68,7 @@ jobs:
           XDG_DATA_HOME: ${{ runner.temp }}/xdg-data-intel
         run: |
           set -euo pipefail
-          binary=target/x86_64-apple-darwin/debug/rbxport
+          binary=target/x86_64-apple-darwin/debug/wreckordbox-desktop
           log="$RUNNER_TEMP/rbxport-intel-window.log"
           arch -x86_64 "$binary" >"$log" 2>&1 &
           pid=$!

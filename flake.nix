@@ -1,5 +1,5 @@
 {
-  description = "Rekordbox-compatible export-mode library manager";
+  description = "Linux-first DJ library and USB export app, forked from rbxport";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -12,13 +12,12 @@
       system:
       let
         pkgs = import nixpkgs { inherit system; };
-        bin = pkgs.callPackage ./packaging/nix/bin.nix { };
         source = pkgs.callPackage ./packaging/nix/source.nix { };
       in
       {
         packages = {
-          inherit bin source;
-          default = bin;
+          inherit source;
+          default = source;
         };
 
         devShells.default = pkgs.mkShell {

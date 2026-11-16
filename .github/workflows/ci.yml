@@ -1,12 +1,12 @@
 name: Validate
 
-# This workflow never receives deployment secrets and never runs packaging or
-# publication. It detects which parts of a pull request changed, then asks the
-# shared validation workflow to run only the matching lanes. Manual validation
-# and real releases still run every lane.
+# This workflow never receives deployment secrets and never runs packaging,
+# publication, or branch mutations. It detects which parts of a pull request
+# changed, then asks the shared validation workflow to run only the matching
+# lanes. Manual validation runs every lane.
 on:
   pull_request:
-    branches: [dev, main]
+    branches: [main]
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
@@ -23,9 +23,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
-  # Same-repository PRs may receive deterministic autofix commits. The shared
-  # validation workflow itself is read-only; fork PRs remain excluded below.
-  contents: write
+  contents: read
 
 jobs:
   changes:
@@ -80,123 +78,16 @@ jobs:
             done < "$plan"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  autofix:
-    name: Apply safe merge fixes
-    # A fork's token is read-only and must never be used to modify its branch.
-    # Same-repository PRs get deterministic Clippy rewrites and English locale
-    # fallbacks, then this run validates the resulting exact SHA.
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-    needs: changes
-    runs-on: [self-hosted, linux, x64]
-    outputs:
-      source_ref: ${{ steps.commit.outputs.source_ref }}
-    env:
-      # Keep equal to validate-rust.yml so both jobs restore the same cache.
-      CARGO_PROFILE_DEV_DEBUG: "0"
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
-          persist-credentials: true
-
-      - name: Install the Linux build dependencies
-        if: needs.changes.outputs.rust == 'true'
-        run: |
-          sudo flock /var/lock/rbxport-ci-apt.lock bash -c '\
-            apt-get update && \
-            apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
-              librsvg2-dev patchelf libgtk-3-dev libasound2-dev'
-
-      - name: Ensure rustup
-        if: needs.changes.outputs.rust == 'true'
-        run: |
-          if [ ! -x "$HOME/.cargo/bin/rustup" ]; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-              | sh -s -- -y --no-modify-path --profile minimal --default-toolchain stable
-          fi
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-
-      - name: Give cargo a home of its own
-        if: needs.changes.outputs.rust == 'true'
-        run: echo "CARGO_HOME=$RUNNER_TEMP/cargo-home" >> "$GITHUB_ENV"
-
-      - uses: dtolnay/rust-toolchain@stable
-        if: needs.changes.outputs.rust == 'true'
-        with:
-          toolchain: 1.99.0
-          components: clippy
-
-      # Same key as the Rust lane's Clippy job, so this run starts from a warm
-      # target directory instead of recompiling every dependency.
-      - uses: Swatinem/rust-cache@v2
-        if: needs.changes.outputs.rust == 'true'
-        with:
-          cache-bin: false
-          shared-key: clippy-linux
-
-      # Fix only the packages the Rust lane will lint, and leave enforcement
-      # (-D warnings) to that lane so Clippy gates the PR exactly once.
-      - name: Apply Clippy's machine-applicable fixes
-        if: needs.changes.outputs.rust == 'true'
-        env:
-          BASE_REF: ${{ needs.changes.outputs.base_ref }}
-        run: |
-          set -euo pipefail
-          metadata="$RUNNER_TEMP/cargo-metadata.json"
-          cargo metadata --format-version 1 --no-deps > "$metadata"
-          mapfile -t packages < <(
-            git diff --name-only -z "$BASE_REF...HEAD" \
-              | node scripts/ci/affected-rust-packages.mjs "$metadata"
-          )
-          if [ "${packages[0]}" = --workspace ]; then
-            args=(--workspace)
-          else
-            args=()
-            for package in "${packages[@]}"; do args+=(-p "$package"); done
-            printf 'Fixing affected Rust packages: %s\n' "${packages[*]}"
-          fi
-          cargo clippy --fix --allow-dirty --allow-staged "${args[@]}" --all-targets
-
-      - uses: actions/setup-node@v4
-        if: needs.changes.outputs.frontend == 'true'
-        with:
-          node-version: 24
-
-      - name: Add missing locale fallbacks
-        if: needs.changes.outputs.frontend == 'true'
-        run: node scripts/fill-missing-locales.mjs
-
-      - id: commit
-        name: Commit applied fixes
-        env:
-          PR_HEAD_REF: ${{ github.head_ref }}
-        run: |
-          set -euo pipefail
-          if git diff --quiet; then
-            echo "source_ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add crates src-tauri public/locales
-          git commit -m "chore: apply merge fixes" \
-            -m "Apply Clippy rewrites and locale fallbacks before validation."
-          git push origin "HEAD:$PR_HEAD_REF"
-          echo "source_ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
   validate:
-    # GITHUB_TOKEN pushes do not start another workflow run. Validate the SHA
-    # written by autofix here, and never execute untrusted fork code on ARC.
+    # Never execute untrusted fork code on self-hosted runners.
     if: >-
       always() && needs.changes.result == 'success' &&
-      (needs.autofix.result == 'success' || needs.autofix.result == 'skipped') &&
       (github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository)
-    needs: [changes, autofix]
+    needs: [changes]
     uses: ./.github/workflows/validation.yml
     with:
-      source_ref: ${{ needs.autofix.outputs.source_ref || inputs.source_ref || github.sha }}
+      source_ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || inputs.source_ref || github.sha }}
       base_ref: ${{ needs.changes.outputs.base_ref }}
       full: ${{ github.event_name != 'pull_request' }}
       validate_rust: ${{ needs.changes.outputs.rust == 'true' }}
@@ -212,45 +103,3 @@ jobs:
       validate_frontend_unit: ${{ needs.changes.outputs.frontend_unit == 'true' }}
       validate_frontend_e2e: ${{ needs.changes.outputs.frontend_e2e == 'true' }}
       validate_frontend_budget: ${{ needs.changes.outputs.frontend_budget == 'true' }}
-
-  merge:
-    name: Merge validated PR into dev
-    needs: [changes, autofix, validate]
-    if: >-
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.base.ref == 'dev' &&
-      !github.event.pull_request.draft &&
-      github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, linux, x64]
-    permissions:
-      contents: write
-      pull-requests: write
-    steps:
-      - uses: actions/github-script@v7
-        env:
-          VALIDATED_HEAD: ${{ needs.autofix.outputs.source_ref }}
-        with:
-          script: |
-            const { owner, repo } = context.repo;
-            const event = context.payload.pull_request;
-            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: event.number });
-            if (pr.state !== 'open' || pr.draft || pr.base.ref !== 'dev' ||
-                pr.head.repo?.full_name !== `${owner}/${repo}` ||
-                !process.env.VALIDATED_HEAD || pr.head.sha !== process.env.VALIDATED_HEAD ||
-                pr.head.sha !== event.head.sha) {
-              core.notice('PR changed since validation; leaving it open.');
-              return;
-            }
-            const { data: base } = await github.rest.repos.getBranch({ owner, repo, branch: 'dev' });
-            const { data: comparison } = await github.rest.repos.compareCommitsWithBasehead({
-              owner, repo, basehead: `${base.commit.sha}...${pr.head.sha}`
-            });
-            if (comparison.status !== 'ahead') {
-              core.notice('PR needs a rebase onto dev and fresh checks.');
-              return;
-            }
-            // A non-forced ref update atomically refuses a concurrent divergent
-            // dev push. Preserve the exact tested commits and linear history.
-            await github.rest.git.updateRef({
-              owner, repo, ref: 'heads/dev', sha: pr.head.sha, force: false
-            });
