@@ -1,5 +1,5 @@
 /**
- * Y and N in the Review view (wbx-mvr; decisions.md 2026-11-14 item 5).
+ * Y and N in the Review view.
  *
  * Y accepts and N rejects the ONE row the keyboard focus is in, through the
  * same decision as that row's ✓ and ✕ (so bound to the row's token in the

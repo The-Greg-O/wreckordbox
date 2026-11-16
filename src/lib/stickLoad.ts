@@ -1,7 +1,7 @@
 /**
  * The Stick view's reading of a load (wbx-71): the Library service's
  * `sticks.list`, `sticks.dry_run` and `sticks.load` answers (snake_case,
- * see `service-protocol.md` and `stick-load.md` in the notes) in the view's
+ * see `docs/user/stick-load.md` and `crates/wreckordbox-service`) in the view's
  * terms, and the plain sentences the view shows. Pure: no backend, no DOM.
  */
 

@@ -84,7 +84,7 @@ removes its live diagnostic; errors are not accumulated forever in Keeper state.
 - Each accepted cue-conversion slice records immediately with `part_of` linking
   to its first slice; its exact preceding history revision joins one Undo entry.
   Intervening history is never swallowed. Notifications are coalesced at the end.
-  The orchestrator explicitly accepted this behavior: one refresh per conversion;
+  By design, conversion runs one refresh at the end;
   an intervening edit splits the conversion into two Undo steps.
 - Ordinary spill replay creates a missing recovery Run in the same transaction
   as its entry, Facts and Mutant consequences. Stable-id replay creates no Run.

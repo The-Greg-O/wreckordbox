@@ -6,7 +6,7 @@ labels:
 body:
   - type: markdown
     attributes:
-      value: Note that wreckordbox is a personal fork guided by the architecture decisions in `docs/adr/`; feature ideas outside that scope may be declined.
+      value: Discuss proposed changes here before opening a pull request. Note that wreckordbox is a personal fork guided by the architecture decisions in `docs/adr/`; feature ideas outside that scope may be declined.
   - type: textarea
     id: problem
     attributes:

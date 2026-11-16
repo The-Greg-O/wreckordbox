@@ -1,7 +1,7 @@
 # macOS desktop regression tests
 
 Run `pnpm desktop:test` in a logged-in macOS 14+ GUI session. The Apple Silicon
-CI lane runs on `chris-m2-mac`. Requires Rust, Node/pnpm, the Swift compiler,
+CI lane runs on macOS. Requires Rust, Node/pnpm, the Swift compiler,
 Finder, an audio output, and Accessibility/event-posting permission for the
 runner. Missing input permission fails the suite; native cases are never
 silently skipped.

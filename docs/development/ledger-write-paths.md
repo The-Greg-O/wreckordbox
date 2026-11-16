@@ -104,14 +104,14 @@ Disposition of the older unrecorded-path list:
   by the recorded paths in the table; their separate source/Run rules remain.
 - Analysis lock: **now covered** as above. A repeated setter is a no-op,
   not a DJ assertion: Analysis Lock is not a value Projection writes, so
-  there is no ownership to preserve (orchestrator decision, 2026-11-14).
+  there is no ownership to preserve.
   A changed hand choice uses the existing
   explicit-set path used by wbx-26/29; tools never use that hand-action wrapper.
 - History clearing, `wrote_outside_history`, index reload, local editor locks,
   preferences, logging and backup creation: **deliberately excluded**, because
   these do not independently mutate Library rows or owned audio/analysis files.
 - Restore and legacy analysis-journal publication: **still open where noted**,
-  filed as **wbx-14.15**. Thus the epic's universal entry criterion is not yet met.
+  tracked as **wbx-14.15**.
 - External applications and standalone low-level library consumers:
   **deliberately excluded from app-owned writes**, for the ownership reasons
   above; never presented as automatically recorded.
@@ -122,8 +122,7 @@ The audit does not turn known gaps into exclusions merely because a path runs
 at startup or outside the hosted service. Recorded named-only history kinds still need durable inverse payloads
 before Unwind can reverse them. Audio key tags have values and quick Undo/Redo,
 not a crash-atomic transaction across audio and SQLite or an Unwind implementation.
-The earlier bulk/player/import review hardening remains listed in the bead and
-implementation notes; this audit does not silently mark it complete.
+This inventory does not claim that every bulk, player or import operation is reversible.
 
 The audit was traced from native write wrappers, file publication helpers,
 service Run admission, window command registration and scripting dispatch.

@@ -107,10 +107,8 @@ you did not run, and what remains unverified on physical hardware.
 
 ## Private suites
 
-Upstream `rbxport` maintained a separate private repository (`rbxport-private`,
-invoked via `pnpm tests:private`) for proprietary CDJ-3000 / XDJ-AZ firmware
-emulators. That repository is not part of `wreckordbox`; hardware verification
-in this fork is performed manually by the DJ on a Spare stick and physical deck.
+Hardware verification is performed manually by the DJ on a Spare stick and
+physical deck. Proprietary firmware emulator suites are not included in this fork.
 
 ## Feature-specific validation
 

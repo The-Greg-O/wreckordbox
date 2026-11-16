@@ -206,10 +206,8 @@ blocking lock acquisition.
 | Preferences and About | `src-tauri/src/preferences.rs`, `src/views/settings/`. (There is no updater; see `src-tauri/tests/it/upstream_pointers.rs`.) |
 | macOS scripting | `src-tauri/src/scripting/`; see [AppleScript](../user/applescript.md). |
 
-## Upstream private harnesses
+## Fixture-based tests
 
-Some inherited scripts (`scripts/tests-private.mjs`) and comments mention
-`rbxport-private` and AlphaTheta Emulator. Those belonged to upstream's private
-firmware test repository and are not part of this fork. All public crates and
-tests in this repository build and run self-contained against generated audio
-and disposable SQLCipher fixtures.
+The fork’s public tests use generated audio and disposable SQLCipher fixtures.
+Upstream-only proprietary firmware harness scripts have been removed. Physical
+player verification remains a separate manual check by the DJ.

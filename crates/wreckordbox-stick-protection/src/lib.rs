@@ -917,8 +917,8 @@ mod tests {
     #[test]
     fn mount_points_with_spaces_are_read() {
         assert_eq!(
-            unescape("/run/media/go/DJ\\040STICK"),
-            "/run/media/go/DJ STICK"
+            unescape("/run/media/dj/DJ\\040STICK"),
+            "/run/media/dj/DJ STICK"
         );
     }
 

@@ -1,13 +1,14 @@
 # wreckordbox
 
-`wreckordbox` is a personal, Linux-first DJ library and USB export application,
-hard-forked from [rbxport](https://github.com/chrisle/rbxport) by Chris Le.
+Wreckordbox helps DJs organise a rekordbox-compatible music library, prepare
+tracks, and export USB Sticks for Pioneer / AlphaTheta players on Linux.
+Listen, check beat grids and cues, and edit tracks in the desktop window, or
+ask an assistant to prepare your Library through the CLI or MCP server.
+It is a personal project maintained by one DJ and a hard fork of
+[rbxport](https://github.com/chrisle/rbxport) by Chris Le.
 
-It is built for a DJ who prepares music on a computer and carries a USB
-**Stick** to Pioneer / AlphaTheta players — and who wants to ask an AI
-assistant in a terminal to do the library work they would otherwise do by hand,
-while using the desktop window for listening, checking beat grids and cues, and
-hand edits.
+Issues are welcome; please discuss a change in an issue before opening a pull
+request. See [Contributing](CONTRIBUTING.md).
 
 The vocabulary used across the app, CLI, and documentation is defined in
 [`CONTEXT.md`](CONTEXT.md).
@@ -238,7 +239,8 @@ For full setup, fixture-sandbox rules, and troubleshooting, read
 `wreckordbox` is free software licensed under **GPL-2.0-or-later**
 (Copyright (c) 2026 Chris Le; Copyright (c) 2026 Greg Overton). See
 [`LICENSE`](LICENSE) and [`LICENSING.md`](LICENSING.md) for bundled components
-and distribution obligations.
+and the [fork distribution checklist](LICENSING.md#fork-distribution-checklist),
+including which obligations are met and which remain unverified.
 
 `wreckordbox` is provided "as is", without warranty of any kind, to the extent
 permitted by applicable law. Use it at your own risk and keep independent

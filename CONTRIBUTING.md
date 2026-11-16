@@ -7,12 +7,10 @@ working DJ's setup: a background Library service, the `wreckordbox` CLI and
 Projection and a durable Ledger, and an Omarchy-themed desktop window.
 
 The repository is public under [GPL-2.0-or-later](LICENSE) so others can read,
-build, or fork it. Bug reports and small, well-tested fixes are welcome, **but
-this is not a community-governed general-purpose project**: feature direction is
-set by the owner's own DJ workflow and the settled architecture decisions in
-[`docs/adr/`](docs/adr/), and unsolicited feature pull requests may be declined
-or sit unreviewed. If you are looking for upstream's minimal, cross-platform
-rekordbox export manager, see [chrisle/rbxport](https://github.com/chrisle/rbxport).
+build, or fork it. **Issues are welcome; open a pull request only after discussing
+the change in an issue.** One maintainer sets the direction around their DJ
+workflow and the settled architecture decisions in [`docs/adr/`](docs/adr/).
+Discussion does not guarantee acceptance or a review timetable.
 
 ## Orientation
 
@@ -25,7 +23,7 @@ Start with:
 
 ## Issues and tracking
 
-- Day-to-day development work is tracked privately by the owner as beads (`wbx-*`; `.beads/` is excluded from git). In fork documentation and commit messages, `wbx-N` (or `#N` in early fork notes) refers to a bead, while three-digit `#NNN` references in inherited `rbl-*` code and reference docs refer to historical issues in `chrisle/rbxport`.
+- Historical `wbx-*` references identify development tasks. Numeric `wbx-N` identifiers through 90 correspond to this fork’s early GitHub issues; inherited three-digit issue references usually belong to upstream.
 - External bug reports and questions can be opened in [GitHub Issues](https://github.com/The-Greg-O/wreckordbox/issues) using `.github/ISSUE_TEMPLATE/`. Include reproduction steps, commit hash, OS, and player model/firmware where relevant.
 - **Keep everything private out of issues, commits, and tests:** no real rekordbox databases, audio files, personal filesystem paths, machine names, or personal track, playlist, or tag names.
 
@@ -57,3 +55,7 @@ The built binaries already carry wreckordbox's names:
 - Every new `wreckordbox` CLI subcommand must have a matching section in [`docs/agents/guide.md`](docs/agents/guide.md) (checked by `crates/wreckordbox/tests/it/agent_guide.rs`).
 - Interface changes must stay within `perf-budgets.json` (`pnpm budget`) and use role tokens (`--role-*` in `src/styles/tokens.css`) rather than hard-coded greys.
 - Run the targeted checks described in [Testing](docs/development/testing.md) (`cargo test`, `cargo clippy ... -- -D warnings`, `cargo fmt --check` on touched crates; `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`, `pnpm budget`, and relevant Playwright specs for frontend changes). State plainly in your pull request what passed, what you did not run, and what could not be verified on physical hardware.
+
+Preserve upstream copyright and licence notices and submit only code you may
+license under GPL-2.0-or-later. See the [fork distribution checklist](LICENSING.md#fork-distribution-checklist)
+for current compliance evidence and remaining distribution checks.

@@ -22,7 +22,7 @@ Repository inspected at `96921d33ea3814a0da0af6549c48898e4b87e313` (local workin
 | [OBS] Vite targets Safari 16 / Edge 110 | `vite.config.ts` | Lowering bundle metadata cannot make the frontend compatible |
 | [OBS] Modern runtime calls exist | `.at`, `Object.hasOwn`, `crypto.randomUUID`, `replaceAll`, observers in `src/` | Inventory and bootstrap compatibility before application evaluation |
 | [OBS] Modern styling and native dialogs exist | `src/styles/reset.css`, player/device/sync CSS; multiple `<dialog>` users | CSS and modal behavior require structural work |
-| [OBS] Intel smoke uses Rosetta on an ARM host, debug shell, ten-second process check | `.github/workflows/validate-macos.yml` | Does not verify old WebKit, a visible UI, or an actual Intel CPU |
+| [OBS] Intel smoke uses Rosetta on an ARM host, debug shell, ten-second process check | Upstream’s former `validate-macos.yml` (removed from this fork) | Does not verify old WebKit, a visible UI, or an actual Intel CPU |
 | [OBS] Updater 2.11.0 uses reqwest 0.13.4; lockfile includes platform verifier | `Cargo.lock`, `src-tauri/Cargo.toml` | Re-resolve features and inspect the produced binary |
 | [OBS, historical] #145 reports a 10.13 release cross-build and a `SecTrustEvaluateWithError` dependency | Issue investigation comments | Useful lead; rebuild and verify current lockfile, do not treat as new runtime evidence |
 | [UNKNOWN] Actual 10.13 launch, request bodies, IPC, rendering, playback and updater behavior | No target runtime run performed for this plan | First milestone is a feasibility experiment |

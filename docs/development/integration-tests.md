@@ -83,15 +83,12 @@ other suites, and some deliberately leave overrides set until process exit.
 | `render_stems_hosted` | Changes the Sidecar path and fake separation command. |
 | `stems_hosted` | Changes the Sidecar path and fake separation command. |
 
-When merging the pending branches `ticket/26-project-energy-prep` and
-`ticket/14-11-ledger-bulk-writes`, retain new top-level `projection_hosted.rs`,
-`bulk_recording.rs`, and `bulk_failures.rs` as independent tests. Projection
-uses environment overrides; the bulk tests use subprocess/fault machinery
-and exact-name filters, including helpers under `tests/support/`. Preserve
-that support tree and its paths. Run these targets by their existing names;
-do not silently omit them from Cargo discovery or blindly add them to `it`.
-Any later consolidation must audit the entire helper tree and update child
-filters as well as module declarations, with before/after test inventories.
+`projection_hosted`, `bulk_recording`, and `bulk_failures` remain standalone
+targets alongside their helpers under `tests/support/`: Projection uses
+environment overrides, and the bulk suites spawn subprocesses with fault
+injection and exact-name test filters. Any later consolidation must audit the
+helper tree and update child filters and module declarations with before/after
+test inventories.
 
 ## Sidecar
 

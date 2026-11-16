@@ -311,7 +311,8 @@ To reverse it now: the DJ can Undo in the window (newest first), except for
 `mytags merge`, `mytags delete` and `tracks remove`, which are permanent, and
 `mytags create` and `rename`, which are outside the Undo history (see
 [Undo](#undo)). Or you can set each `before` value again in a new Run, after
-asking. Unwind is not built.
+asking, or preview and reverse supported changes from a whole Run with
+[`runs unwind`](#unwind-a-run).
 
 ### Preview a Stick load
 

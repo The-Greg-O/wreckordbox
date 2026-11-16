@@ -77,8 +77,7 @@ export function targetCandidates(tree: readonly TreeNode[]): TargetCandidate[] {
  * playlist of the Library has an order of its own that tracks are added to.
  *
  * A Stick's playlist is refused outright: writing to a Stick must go
- * through Stick Protection (wbx-45.11), which is not built yet, and the
- * second list makes no Stick write of its own.
+ * through Stick Protection. The second list makes no Stick write of its own.
  */
 export function targetRefusal(node: TreeNode | null | undefined): string | null {
   if (!node) return "Choose a playlist as the target.";
@@ -91,7 +90,7 @@ export function targetRefusal(node: TreeNode | null | undefined): string | null 
     case "devicePlaylists":
     case "deviceLibrary":
     case "device":
-      return "A Stick's playlist cannot be the target: writing to a Stick needs Stick Protection, which is not built yet.";
+      return "A Stick's playlist cannot be the target: use the Stick view to load it with Stick Protection.";
     case "smartPlaylist":
       return "An intelligent playlist cannot be the target: its rule chooses its tracks.";
     case "folder":

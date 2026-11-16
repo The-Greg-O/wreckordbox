@@ -53,3 +53,20 @@ GPL-2.0-or-later licence; it is run over standard input/output and is not
 linked into any Rust binary. Its optional full backend installs third-party
 Python packages (such as `audio-separator`, MIT) and downloads model weights at
 run time rather than vendoring them in this repository.
+
+## Fork distribution checklist
+
+This is a source-distributed GPL-2.0-or-later fork, not a new licence grant for
+upstream’s work. The status below describes files in this repository; it is not
+a certification of future binary distributions.
+
+| Obligation | Repository status |
+| --- | --- |
+| Preserve upstream copyright, licence and warranty notices; include the GPL text | Retained in `LICENSE`, the vendored `COPYING`, source headers and this document. Chris Le’s notice remains beside Greg Overton’s. |
+| License the combined derivative work under compatible GPL terms | Met by the repository’s GPL-2.0-or-later declaration; vendored Rubber Band uses those same terms. |
+| Identify modified files and dates of changes (GPLv2 section 2(a)) | Fork provenance is documented here and in the README, and changes are dated in Git history. A complete per-file notice audit has not been performed; this obligation is not claimed fully verified. |
+| Supply complete corresponding source, including build/install scripts, when distributing binaries (GPLv2 section 3) | Source and build scripts are public here. No fork binary release channel is configured; any future distributor must provide the exact corresponding source for their binaries and preserve required notices. |
+| Retain third-party notices | Existing vendored notices are retained; dependency-source notices are described above. Binary packaging must carry the applicable notices too. |
+
+Contributors must have the right to submit their changes under GPL-2.0-or-later
+and preserve existing notices. Do not import GPL-3.0-only AZ-MODS code.

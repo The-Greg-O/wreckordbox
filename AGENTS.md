@@ -24,20 +24,17 @@ Wreckordbox is a personal, Linux-first hard fork of rbxport: a rekordbox-compati
 - `docs/adr/`: decisions already made. Design within them; do not reopen them.
 - `docs/design/`: the window's design (requirements, tokens, a render and note per screen). ADR 0007 is the structure and look; ADR 0008 is Mutants.
 - `docs/development/` and `crates/README.md`: upstream's architecture, conventions and testing guides, still accurate for the parts we have not changed.
-- The four specs are the epics `wbx-1` (foundation), `wbx-14` (agent capabilities), `wbx-45` (the window) and `wbx-49` (Mutants). Every ticket is a child bead with acceptance criteria. Bead `wbx-N` was GitHub issue `#N`; `#N` in a description means `wbx-N`.
-- Working notes from earlier implementers live outside the repo in `../wreckordbox-notes/` when present alongside the checkout: start with `README.md` and `IMPLEMENTER.md` there, then the file for your area (`service-protocol.md`, `edit-path.md`, `sidecar.md`, `ui-scale-and-headless-driving.md`, and others as they appear). Keep them current when you learn something a later worker needs. Where that folder's instructions about worktrees, branches or reporting differ from your orchestrator's, follow your orchestrator.
+- Design history uses `wbx-*` task identifiers; public contributor guidance is in `CONTRIBUTING.md`.
 
 ## Branches
 
 - The integration branch is `main`. All work merges there.
-- Some tickets have work in progress from an earlier implementer on a branch named `ticket/<number>-<name>` on the remote; the bead's notes say so. Start from that branch's work (merge or cherry-pick it into your own branch) instead of starting again, after judging it on its merits: its last commit may be an unreviewed "wip" snapshot that does not build.
 
 ## Toolchain
 
 - Versions are pinned in `mise.toml`: run tools as `mise exec -- <command>` (run `mise trust` once in a new checkout).
-- On a memory-constrained machine where the external `../wreckordbox-notes/bin/heavy` queue wrapper is present, run heavy commands through it: `heavy rust mise exec -- cargo ...` for build/test/run, `heavy check mise exec -- cargo ...` for check/clippy, and `heavy web mise exec -- pnpm ...` for install/typecheck/lint/test/build/Playwright; otherwise run `mise exec -- <command>` directly with bounded Cargo parallelism as instructed by your orchestrator. `cargo fmt` runs without the queue.
-- Front end: install with `pnpm install --frozen-lockfile`. Browser specs use the mock bundle (`pnpm build:mock`), Chromium, `--workers=1 --trace off`. `pnpm dev:mock` serves the real interface against a mock backend with no Rust build.
-- Rust: set `CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 RBXPORT_TEST=1` (and `RUSTC_WRAPPER=sccache` where installed). Leave the worktree and its `target/` for review and the orchestrator's gate.
+- Front end: install with `mise exec -- pnpm install --frozen-lockfile`. Browser specs use the mock bundle (`pnpm build:mock`), Chromium, `--workers=1 --trace off`. `pnpm dev:mock` serves the real interface against a mock backend with no Rust build.
+- Rust: set `CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 RBXPORT_TEST=1` (and `RUSTC_WRAPPER=sccache` where installed). Bound Cargo parallelism to available memory (for example, `CARGO_BUILD_JOBS=2`).
 - The reference platform is `aarch64` Linux (Asahi Linux, 16K pages) running Omarchy (Arch, Hyprland, Wayland); macOS `arm64` is also used for development.
 
 ## How to build a ticket
@@ -47,15 +44,17 @@ Wreckordbox is a personal, Linux-first hard fork of rbxport: a rekordbox-compati
 - Many workers change the same crates. Put your code in modules of its own and touch shared files (service dispatch, the CLI entry point, the app root, shared styles, workspace manifests) with the smallest possible additions.
 - Every command that changes the Library goes through the single edit path, tells the hosting window, and honours Library Protection. Writing to the Sidecar is not a Library edit.
 - Finish with the targeted checks below. Say plainly in your completion notes what failed, what you did not run, and what you could not verify.
-- If a ticket is too large to finish well in one sitting, land the largest coherent, green part and file the remainder as a new bead blocked appropriately.
+- If a ticket is too large to finish well in one sitting, land the largest coherent, green part and document the remaining follow-up clearly.
 - Ask the human (escalate) instead of guessing when a ticket cannot be done as specified, when it would change something an ADR decided, or when it needs hardware verification (a physical player, a real Stick, rekordbox on macOS).
 
 ## Which tests to run
 
-- While building, use the check lane for `cargo check` / `cargo clippy` and
-  the Rust lane for one integration module or test name.
+Prefix the commands below with `mise exec --` and set `RBXPORT_TEST=1` for Rust.
+
+- While building, run `cargo check` / `cargo clippy` and
+  `cargo test` for one integration module or test name.
 - At the end, run the full tests of crates whose `src/` changed, plus
-  `cargo clippy -p <crate> --all-targets -- -D warnings` and unqueued
+  `cargo clippy -p <crate> --all-targets -- -D warnings` and
   `cargo fmt -p <crate> --check` (only touched files need to be clean).
 - For unchanged dependent crates, use `cargo check -p <crate> --tests` and
   the specific integration modules that exercise the change, not every suite.
@@ -64,27 +63,26 @@ Wreckordbox is a personal, Linux-first hard fork of rbxport: a rekordbox-compati
 - App-shell integration files now live in `src-tauri/tests/it/`. Select one
   with `cargo test -p rbxport --test it <module>::`; for example,
   `--test it service_host::` or `--test it stick_protection::` (command
-  classification and shared-planner source guards). These commands all use
-  the Rust queue. First build `cargo build -p wreckordbox` through that queue
+  classification and shared-planner source guards). First build `cargo build -p wreckordbox`
   in the same target/profile for the hosted tests' prebuilt CLI.
 - CLI integration files use the same layout: `cargo test -p wreckordbox --test it
-  <module>::` through the Rust queue (for example `library_protection::`).
+  <module>::` (for example `library_protection::`).
   Its `tests/common/` stays at the original path so new top-level tests can
   still declare `mod common;`; `it/main.rs` shares it once across modules.
 - Sidecar integration files also use `cargo test -p wreckordbox-sidecar --test it
-  <module>::` through the Rust queue (for example `ledger::`). Its `common/`
+  <module>::` (for example `ledger::`). Its `common/`
   helper and SQL fixtures stay under `tests/` for new standalone files.
 - Service integration modules use `cargo test -p wreckordbox-service --test it
-  <module>::` through the Rust queue (for example `one_edit_gate::`). Ten
+  <module>::` (for example `one_edit_gate::`). Ten
   suites that mutate process state or use crash workers remain separate;
   their names and reasons are in the integration-test guide below. Keep
-  incoming `projection_hosted`, `bulk_recording`, and `bulk_failures` tests
+  the `projection_hosted`, `bulk_recording`, and `bulk_failures` tests
   independently discoverable with their support files and child filters.
 - `identity`, `logging`, `omarchy_theme`, `theme_file`, and the custom-harness
   `menu` remain separate shell targets; use `--test <name>` for them.
   Reasons and new-file/merge guidance: [integration tests](docs/development/integration-tests.md).
 - Front end: typecheck, lint, relevant Vitest files and the requested browser
-  specs through the web lane; leave full suites to the orchestrator.
+  specs with `mise exec -- pnpm ...`; run full suites when shared UI primitives change.
 - Merge current `main` before reporting. Re-run the affected crate
   checks and your changed integration modules; include the guards if a
   command changed. Do not repeat unrelated full suites after the merge.

@@ -7,7 +7,7 @@ labels:
 body:
   - type: markdown
     attributes:
-      value: Thanks for reporting this. Do not include private library files, personal paths, track/playlist names, or credentials.
+      value: For security vulnerabilities, follow SECURITY.md instead of this public form. Thanks for reporting this. Do not include private library files, personal paths, track/playlist names, or credentials.
   - type: textarea
     id: problem
     attributes:

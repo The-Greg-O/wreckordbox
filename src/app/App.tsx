@@ -20,8 +20,7 @@ import { useCommands } from "@/store/useCommands";
  * Export-mode shell.
  *
  * Composes the measured regions: top bar, library tree, track browser, status
- * bar. The preview player region is reserved but not yet implemented (it lands
- * with `rbl-audio` in Milestone 1).
+ * bar and preview player.
  */
 import type { TrackSearchField } from "@/lib/search";
 
