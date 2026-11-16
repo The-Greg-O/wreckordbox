@@ -29,6 +29,13 @@ pub struct DryRunArgs {
     /// stands for everything in it.
     #[arg(value_name = "PLAYLIST_ID", required = true)]
     pub playlists: Vec<String>,
+    /// Replace the deck's settings files the Stick already holds
+    /// (`DEVSETTING.DAT`, `MYSETTING.DAT`, `MYSETTING2.DAT`,
+    /// `DJMMYSETTING.DAT`, `djprofile.nxs`) with the Library's My Settings.
+    /// Without it a Stick keeps its own. Give it to the dry run and the load
+    /// alike: the plan id is for one or the other.
+    #[arg(long)]
+    pub replace_settings: bool,
 }
 
 #[derive(Args)]
@@ -42,6 +49,13 @@ pub struct LoadArgs {
     /// The plan id `stick dry-run` printed for exactly this load.
     #[arg(long, value_name = "PLAN_ID", required = true)]
     pub plan: String,
+    /// Replace the deck's settings files the Stick already holds
+    /// (`DEVSETTING.DAT`, `MYSETTING.DAT`, `MYSETTING2.DAT`,
+    /// `DJMMYSETTING.DAT`, `djprofile.nxs`) with the Library's My Settings.
+    /// Without it a Stick keeps its own. Give it to the dry run and the load
+    /// alike: the plan id is for one or the other.
+    #[arg(long)]
+    pub replace_settings: bool,
 }
 
 /// Whether `command` is one of these, which need the service.
@@ -67,7 +81,11 @@ pub fn run(
         StickCommands::DryRun(args) => {
             let dry: DryRun = client.call(
                 commands::STICKS_DRY_RUN,
-                json!({ "stick": absolute(&args.stick), "playlists": args.playlists }),
+                json!({
+                    "stick": absolute(&args.stick),
+                    "playlists": args.playlists,
+                    "replace_settings": args.replace_settings,
+                }),
             )?;
             let text = if as_json {
                 json!(dry).to_string()
@@ -85,6 +103,7 @@ pub fn run(
                     "stick": absolute(&args.stick),
                     "playlists": args.playlists,
                     "plan": args.plan,
+                    "replace_settings": args.replace_settings,
                 }),
                 |event| {
                     if event.event != events::STICK_LOAD_PROGRESS {
@@ -248,6 +267,24 @@ fn changes_text(text: &mut String, changes: &Changes) {
     for t in &changes.native_stems {
         let _ = writeln!(text, "  Native stems for track {}", line(t));
     }
+    for s in &changes.settings {
+        let what = match s.action.as_str() {
+            "write" => format!("Write settings file {}", s.file),
+            "replace" => format!("Replace settings file {} on the Stick", s.file),
+            "keep" => format!("Keep the Stick's own {}", s.file),
+            _ => format!("Settings file {} not written", s.file),
+        };
+        let from = match s.from.as_deref() {
+            Some("defaults") => " (rekordbox's defaults)",
+            Some(_) => " (the Library's My Settings)",
+            None => "",
+        };
+        let why = s
+            .reason
+            .as_deref()
+            .map_or(String::new(), |r| format!(": {r}"));
+        let _ = writeln!(text, "  {what}{from}{why}");
+    }
 }
 
 fn space_text(text: &mut String, space: &Space) {
@@ -317,7 +354,7 @@ fn dry_run_text(dry: &DryRun) -> String {
 }
 
 fn held_text(text: &mut String, heading: &str, held: &Held) {
-    if held.tracks.is_empty() && held.playlists.is_empty() {
+    if held.tracks.is_empty() && held.playlists.is_empty() && held.settings.is_empty() {
         return;
     }
     let _ = writeln!(text, "{heading}");
@@ -326,6 +363,9 @@ fn held_text(text: &mut String, heading: &str, held: &Held) {
     }
     for name in &held.playlists {
         let _ = writeln!(text, "  Playlist {name}");
+    }
+    for name in &held.settings {
+        let _ = writeln!(text, "  Settings file {name}");
     }
 }
 

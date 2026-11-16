@@ -31,6 +31,7 @@
 
 mod identity;
 mod load;
+mod settings;
 pub mod sticks;
 
 use std::path::PathBuf;
@@ -126,6 +127,10 @@ pub struct DryRunArgs {
     /// The playlists to put on it, by identifier (`playlists.tree`); a
     /// folder stands for everything in it.
     pub playlists: Vec<String>,
+    /// Replace the deck's settings files the Stick holds with the Library's
+    /// My Settings (wbx-8z2). Without it a Stick keeps its own.
+    #[serde(default)]
+    pub replace_settings: bool,
 }
 
 /// The arguments of `sticks.load`.
@@ -136,6 +141,9 @@ pub struct LoadArgs {
     pub playlists: Vec<String>,
     /// The plan id the dry run of exactly this load answered.
     pub plan: String,
+    /// As the dry run's: the plan id is for one or the other.
+    #[serde(default)]
+    pub replace_settings: bool,
     /// The window's confirmation of exactly that plan: the token its hold
     /// was exchanged for (`approve` on `plan`). Given, it is used up here,
     /// under the Stick's execution lock, and must be for `plan`; absent,
@@ -222,6 +230,23 @@ pub struct TrackChanges {
     pub kept: Vec<TrackLine>,
 }
 
+/// One of the deck's settings files (`DEVSETTING.DAT`, `MYSETTING.DAT`,
+/// `MYSETTING2.DAT`, `DJMMYSETTING.DAT`, `djprofile.nxs`) in a load
+/// (wbx-8z2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SettingsLine {
+    pub file: String,
+    /// `write` (the Stick has none), `replace` (asked for), `keep` (the
+    /// Stick's own stays), `unavailable` (the Stick has none and the Library
+    /// none to give it: not written, `reason` says why).
+    pub action: String,
+    /// Where what is written comes from: `my_settings` (the Library's) or
+    /// `defaults` (rekordbox's own, `DEVSETTING.DAT` only); `null` when
+    /// nothing is written.
+    pub from: Option<String>,
+    pub reason: Option<String>,
+}
+
 /// The playlists a load changes, by kind (folders are not listed).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlaylistChanges {
@@ -252,6 +277,9 @@ pub struct Changes {
     /// Whether the audio lists were worked out: not on a Stick whose
     /// library could not be inspected without writing to it.
     pub audio_estimated: bool,
+    /// Each of the deck's five settings files, in order (wbx-8z2).
+    #[serde(default)]
+    pub settings: Vec<SettingsLine>,
 }
 
 /// The room a load needs and leaves.
@@ -307,6 +335,9 @@ pub struct DryRun {
 pub struct Held {
     pub tracks: Vec<TrackLine>,
     pub playlists: Vec<String>,
+    /// The settings files planned to be written, by name.
+    #[serde(default)]
+    pub settings: Vec<String>,
 }
 
 /// A track's Native stems in a load.
