@@ -107,7 +107,17 @@ fn an_unlock_recorded_in_another_boot_is_never_taken_for_this_one() {
     let spare = stick(sticks.path(), "SPARE", true);
     unlock(state.path(), &spare, None).unwrap();
     let record = std::fs::read_to_string(state.path().join(FILE)).unwrap();
+    #[cfg(target_os = "linux")]
     let boot = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").unwrap();
+    #[cfg(target_os = "macos")]
+    let boot = String::from_utf8(
+        std::process::Command::new("/usr/sbin/sysctl")
+            .args(["-n", "kern.bootsessionuuid"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
     let boot = boot.trim();
     assert!(
         record.contains(boot),

@@ -43,9 +43,13 @@ impl HeldVolume {
     /// For `path`, read against this machine's mount table.
     #[must_use]
     pub fn new(path: &Path) -> Self {
+        let at = resolve(path);
         Self::reading(
             path,
-            Box::new(|| std::fs::read_to_string("/proc/self/mountinfo")),
+            Box::new(move || match &at {
+                Some(at) => crate::mount_table(at),
+                None => Err(std::io::Error::other("the path cannot be resolved")),
+            }),
         )
     }
 

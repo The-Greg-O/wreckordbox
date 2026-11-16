@@ -59,6 +59,7 @@ pub const CODE: &str = "stick_protected";
 
 /// `statx`'s `STATX_MNT_ID_UNIQUE` (Linux 6.8): a mount id never reused
 /// while the machine runs.
+#[cfg(target_os = "linux")]
 const STATX_MNT_ID_UNIQUE: u32 = 0x4000;
 
 /// What a path is on.
@@ -74,9 +75,11 @@ pub enum Volume {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Identity {
     pub root: PathBuf,
-    /// `/proc/sys/kernel/random/boot_id`: a restart ends every unlock.
+    /// `/proc/sys/kernel/random/boot_id` (macOS: `kern.bootsessionuuid`): a
+    /// restart ends every unlock.
     pub boot: String,
-    /// The kernel's unique mount id, never reused within a boot.
+    /// The kernel's unique mount id, never reused within a boot (macOS,
+    /// which has none: see the `macos` module).
     pub mount: u64,
     pub dev: u64,
     pub ino: u64,
@@ -212,6 +215,8 @@ pub struct VolumeFacts {
 }
 
 mod held_volume;
+#[cfg(target_os = "macos")]
+mod macos;
 pub use held_volume::HeldVolume;
 
 /// The rule: a player export makes a Stick; a root that cannot be read is
@@ -250,9 +255,19 @@ pub fn classify(path: &Path) -> Volume {
 
 /// The facts of the volume holding `resolved` (canonical).
 fn facts_of(resolved: &Path) -> Option<VolumeFacts> {
-    let table = std::fs::read_to_string("/proc/self/mountinfo").ok()?;
+    let table = mount_table(resolved).ok()?;
     facts_in(&table, resolved)
 }
+
+/// This machine's mount table, in `/proc/self/mountinfo`'s shape, as far as
+/// the volume holding `resolved` (canonical) needs it.
+#[cfg(target_os = "linux")]
+fn mount_table(_resolved: &Path) -> std::io::Result<String> {
+    std::fs::read_to_string("/proc/self/mountinfo")
+}
+
+#[cfg(target_os = "macos")]
+use macos::{boot_id, mount_id, mount_table, removable};
 
 /// The facts of the volume holding `resolved`, from the mount table `table`.
 fn facts_in(table: &str, resolved: &Path) -> Option<VolumeFacts> {
@@ -336,6 +351,7 @@ fn unescape(text: &str) -> String {
 }
 
 /// Whether the block device `major:minor` is removable or on USB.
+#[cfg(target_os = "linux")]
 fn removable(device: &str) -> Option<bool> {
     if device.starts_with("0:") {
         // No block device behind it (tmpfs, a network or virtual filesystem).
@@ -412,6 +428,7 @@ pub fn device_root(path: &Path) -> Option<PathBuf> {
 // ---------------------------------------------------------------------------
 // Identity
 
+#[cfg(target_os = "linux")]
 fn boot_id() -> Option<String> {
     let id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?;
     let id = id.trim();
@@ -425,22 +442,29 @@ pub fn identity(root: &Path) -> Option<Identity> {
     identity_in(root, boot_id())
 }
 
+/// The kernel's unique id of the mount holding `root` (canonical).
+#[cfg(target_os = "linux")]
+fn mount_id(root: &Path) -> Option<u64> {
+    let mask =
+        rustix::fs::StatxFlags::from_bits_retain(STATX_MNT_ID_UNIQUE) | rustix::fs::StatxFlags::INO;
+    let found =
+        rustix::fs::statx(rustix::fs::CWD, root, rustix::fs::AtFlags::empty(), mask).ok()?;
+    if found.stx_mask & STATX_MNT_ID_UNIQUE == 0 {
+        return None;
+    }
+    Some(found.stx_mnt_id)
+}
+
 fn identity_in(root: &Path, boot: Option<String>) -> Option<Identity> {
     use std::os::unix::fs::MetadataExt as _;
     let boot = boot?;
     let root = root.canonicalize().ok()?;
-    let mask =
-        rustix::fs::StatxFlags::from_bits_retain(STATX_MNT_ID_UNIQUE) | rustix::fs::StatxFlags::INO;
-    let found =
-        rustix::fs::statx(rustix::fs::CWD, &root, rustix::fs::AtFlags::empty(), mask).ok()?;
-    if found.stx_mask & STATX_MNT_ID_UNIQUE == 0 {
-        return None;
-    }
+    let mount = mount_id(&root)?;
     let meta = std::fs::metadata(&root).ok()?;
     Some(Identity {
         root,
         boot,
-        mount: found.stx_mnt_id,
+        mount,
         dev: meta.dev(),
         ino: meta.ino(),
     })
@@ -623,6 +647,10 @@ fn exec_path(state_dir: &Path, root: &Path) -> std::io::Result<PathBuf> {
     let dir = state_dir.join(EXEC_LOCKS);
     std::fs::create_dir_all(&dir)?;
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    // macOS reaches its temporary and home folders through symbolic links
+    // (`/var`, `/tmp`): one Stick, one lock, however its root was spelled.
+    #[cfg(target_os = "macos")]
+    let root = &root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     root.as_os_str().hash(&mut hasher);
     Ok(dir.join(format!("{:016x}.lock", hasher.finish())))
 }
