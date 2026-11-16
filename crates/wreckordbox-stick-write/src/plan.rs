@@ -118,6 +118,15 @@ pub struct ExportPlan {
     pub missing: Vec<PlannedTrack>,
     /// This Library's playlists on the Stick that the write takes off it.
     pub playlists_removed: Vec<String>,
+    /// Tracks another writer put on the Stick (rekordbox on another
+    /// computer, a player) that the write keeps as they are: their audio is
+    /// neither copied nor removed (wbx-dc0).
+    #[serde(default)]
+    pub kept: Vec<PlannedTrack>,
+    /// Playlists on the Stick the write keeps as they are, not being this
+    /// Library's to take off (another writer's).
+    #[serde(default)]
+    pub playlists_kept: Vec<String>,
 }
 
 /// The audio from the export's own preview, and the rest from comparing the
@@ -329,8 +338,14 @@ pub fn export_plan_of(
             .map(rbl_export::ManifestTrack::key)
             .collect();
         let mut written: HashSet<String> = HashSet::new();
+        let kept = crate::kept::of(destination, selection, preview);
         for track in &preview.tracks {
             let key = rbl_export::track_key(track.id, &track.source_path.to_string_lossy());
+            // Another writer's, kept as it is: listed in `kept`, not here.
+            if crate::kept::carried(track, destination) {
+                written.insert(key);
+                continue;
+            }
             if !written.insert(key.clone()) {
                 continue;
             }
@@ -386,7 +401,14 @@ pub fn export_plan_of(
                     .collect();
             }
         }
-        plan.peak_bytes = preview.peak_bytes;
+        // The estimate counted another writer's audio as copied: it is not.
+        plan.peak_bytes = preview.peak_bytes.saturating_sub(kept.counted_bytes);
+        plan.net_additional_bytes = preview
+            .net_additional_bytes
+            .saturating_sub(i64::try_from(kept.counted_bytes).unwrap_or(i64::MAX));
+        plan.tracks_new = found_new(preview, &kept);
+        plan.kept = kept.tracks;
+        plan.playlists_kept = kept.playlists;
         plan.size_uncertain = preview.unknown_size || preview.estimate.approximate;
     }
     let found = preview
@@ -395,7 +417,11 @@ pub fn export_plan_of(
         .unwrap_or_default();
     Ok(ExportPlan {
         audio_estimated,
-        tracks_new: found.tracks_new,
+        tracks_new: if preview.is_some() {
+            plan.tracks_new
+        } else {
+            found.tracks_new
+        },
         tracks_changed: found.tracks_changed,
         audio_reused: found.tracks_kept,
         tracks_removed: found.tracks_removed,
@@ -403,9 +429,14 @@ pub fn export_plan_of(
         track_changes,
         analysis_written: selection.tracks.len().saturating_sub(found.tracks_missing),
         playlists,
-        net_additional_bytes: preview.as_ref().map_or(0, |p| p.net_additional_bytes),
         ..plan
     })
+}
+
+/// The tracks whose audio the write copies new, without those the estimate
+/// counted that are another writer's and stay as they are.
+fn found_new(preview: &rbl_export::plan::SyncPlan, kept: &crate::kept::Kept) -> usize {
+    preview.estimate.tracks_new.saturating_sub(kept.counted_new)
 }
 
 /// Whether the entries `before` and `next` share are in another order in

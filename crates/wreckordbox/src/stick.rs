@@ -53,12 +53,14 @@ pub enum StickCommands {
     List,
     /// Show what loading playlists onto a Stick would do, and write
     /// nothing: tracks added, changed (by field) and removed; playlists
-    /// created, reordered and removed; Native stems written; the room
-    /// before and after. Answers the plan id `stick load` needs.
+    /// created, reordered and removed; what another writer put on the Stick
+    /// and stays; Native stems written; the room before and after. Answers
+    /// the plan id `stick load` needs.
     DryRun(crate::stick_load::DryRunArgs),
     /// Load playlists onto a Stick: exactly what `stick dry-run` reported,
     /// with the export the window uses. The Stick ends up holding these
-    /// playlists and no other playlist of the Library.
+    /// playlists and no other playlist of the Library; what another writer
+    /// put on it (rekordbox on another computer) stays as it is.
     ///
     /// Refused unless the Stick is unlocked (`stick unlock`) and `--plan`
     /// carries the plan id of a dry run of this very load, made in the last

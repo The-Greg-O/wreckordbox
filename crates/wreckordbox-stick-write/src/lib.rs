@@ -17,6 +17,7 @@
 //! ADR 0003: the export crates are used as they are; this sits beside them.
 
 pub mod approval;
+mod kept;
 pub mod plan;
 pub mod selection;
 

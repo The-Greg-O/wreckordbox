@@ -5,7 +5,11 @@
 The `wreckordbox` command can load chosen playlists onto a mounted Stick,
 with the same export the window uses. A load is a sync: the Stick ends up
 holding the chosen playlists and no other playlist of your Library (tracks
-put on it on their own with Export Track stay). On a Spare stick (one with
+put on it on their own with Export Track stay). What another writer put on
+the Stick, such as rekordbox on another computer, stays as it is, as
+rekordbox's own export leaves it: the dry run lists those tracks and
+playlists as kept, and their audio is neither copied again nor counted in
+the room needed. On a Spare stick (one with
 an empty `.rbxport-disposable` file at its root) the tracks' Native stems
 are written too; a Gig stick never gets them.
 

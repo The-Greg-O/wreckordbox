@@ -190,6 +190,13 @@ fn changes_text(text: &mut String, changes: &Changes) {
         "Playlists  {} created, {} written again ({} reordered), {} removed",
         c.playlists_created, c.playlists_rewritten, c.playlists_reordered, c.playlists_removed
     );
+    if c.tracks_kept + c.playlists_kept > 0 {
+        let _ = writeln!(
+            text,
+            "Kept       {} tracks and {} playlists another writer put on the Stick, as they are",
+            c.tracks_kept, c.playlists_kept
+        );
+    }
     let _ = writeln!(text, "Native stems  {}", c.native_stems);
     let line = |t: &wreckordbox_service::stick_load::TrackLine| {
         if t.id.is_empty() {
@@ -234,6 +241,9 @@ fn changes_text(text: &mut String, changes: &Changes) {
     }
     for name in &changes.playlists.removed {
         let _ = writeln!(text, "  Remove playlist {name}");
+    }
+    for name in &changes.playlists.kept {
+        let _ = writeln!(text, "  Keep playlist {name}");
     }
     for t in &changes.native_stems {
         let _ = writeln!(text, "  Native stems for track {}", line(t));

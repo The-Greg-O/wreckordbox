@@ -18,7 +18,9 @@
 //!
 //! A load is a sync of the chosen playlists: the Stick ends up holding them
 //! and no other playlist of this Library (tracks put on it on their own by
-//! Export Track stay, as the Sync Manager keeps them). On a Spare stick the
+//! Export Track stay, as the Sync Manager keeps them). What another writer
+//! put on the Stick (rekordbox on another computer) stays as it is, as
+//! rekordbox's own export leaves it: the dry run lists it as kept. On a Spare stick the
 //! tracks' Native stems are written after the export.
 //!
 //! Not a Library edit: the Library is only read, so nothing here goes
@@ -196,6 +198,12 @@ pub struct Counts {
     pub playlists_reordered: usize,
     pub playlists_removed: usize,
     pub native_stems: usize,
+    /// Another writer's tracks and playlists that stay (`tracks.kept`,
+    /// `playlists.kept`).
+    #[serde(default)]
+    pub tracks_kept: usize,
+    #[serde(default)]
+    pub playlists_kept: usize,
 }
 
 /// The tracks a load changes, by kind.
@@ -207,6 +215,11 @@ pub struct TrackChanges {
     pub removed: Vec<TrackLine>,
     /// Chosen tracks whose audio file is missing: not loaded.
     pub missing: Vec<TrackLine>,
+    /// Tracks another writer put on the Stick (rekordbox on another
+    /// computer, a player) that stay as they are: not copied, not removed
+    /// (wbx-dc0).
+    #[serde(default)]
+    pub kept: Vec<TrackLine>,
 }
 
 /// The playlists a load changes, by kind (folders are not listed).
@@ -220,6 +233,9 @@ pub struct PlaylistChanges {
     pub reordered: Vec<String>,
     /// This Library's playlists on the Stick that the load takes off it.
     pub removed: Vec<String>,
+    /// Playlists on the Stick that stay as they are: another writer's.
+    #[serde(default)]
+    pub kept: Vec<String>,
 }
 
 /// What a load does to a Stick: counts and full lists.

@@ -58,6 +58,7 @@ mod stems_write;
 mod stick;
 mod stick_library;
 mod stick_load;
+mod stick_load_kept;
 mod stick_preview_fingerprints;
 mod stick_rebuild;
 mod tag_schema;

@@ -407,6 +407,7 @@ fn change_lines(changes: &Changes) -> Vec<String> {
     );
     out.extend(changes.tracks.removed.iter().map(|l| t("remove", l)));
     out.extend(changes.tracks.missing.iter().map(|l| t("missing", l)));
+    out.extend(changes.tracks.kept.iter().map(|l| t("keep", l)));
     out.extend(
         changes
             .playlists
@@ -426,6 +427,13 @@ fn change_lines(changes: &Changes) -> Vec<String> {
             .removed
             .iter()
             .map(|n| format!("remove playlist {n}")),
+    );
+    out.extend(
+        changes
+            .playlists
+            .kept
+            .iter()
+            .map(|n| format!("keep playlist {n}")),
     );
     out.extend(
         changes
@@ -458,9 +466,11 @@ fn changes(plan: &ExportPlan, stems: &[PlannedStems]) -> Changes {
         audio_changed: lines(&plan.audio_changed),
         removed: lines(&plan.removed),
         missing: lines(&plan.missing),
+        kept: lines(&plan.kept),
     };
     let mut playlists = PlaylistChanges {
         removed: plan.playlists_removed.clone(),
+        kept: plan.playlists_kept.clone(),
         ..PlaylistChanges::default()
     };
     for p in plan.playlists.iter().filter(|p| !p.folder) {
@@ -498,6 +508,8 @@ fn changes(plan: &ExportPlan, stems: &[PlannedStems]) -> Changes {
         playlists_reordered: playlists.reordered.len(),
         playlists_removed: playlists.removed.len(),
         native_stems: native_stems.len(),
+        tracks_kept: tracks.kept.len(),
+        playlists_kept: playlists.kept.len(),
     };
     Changes {
         counts,
