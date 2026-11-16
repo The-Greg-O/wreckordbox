@@ -1,6 +1,6 @@
 ## What and why
 
-Related discussion issue:
+Related issue (optional):
 
 ## How tested
 

@@ -7,8 +7,8 @@ ask an assistant to prepare your Library through the CLI or MCP server.
 It is a personal project maintained by one DJ and a hard fork of
 [rbxport](https://github.com/chrisle/rbxport) by Chris Le.
 
-Issues are welcome; please discuss a change in an issue before opening a pull
-request. See [Contributing](CONTRIBUTING.md).
+Issues and pull requests are welcome; you do not need to open an issue first.
+See [Contributing](CONTRIBUTING.md).
 
 The vocabulary used across the app, CLI, and documentation is defined in
 [`CONTEXT.md`](CONTEXT.md).

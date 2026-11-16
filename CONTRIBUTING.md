@@ -7,10 +7,11 @@ working DJ's setup: a background Library service, the `wreckordbox` CLI and
 Projection and a durable Ledger, and an Omarchy-themed desktop window.
 
 The repository is public under [GPL-2.0-or-later](LICENSE) so others can read,
-build, or fork it. **Issues are welcome; open a pull request only after discussing
-the change in an issue.** One maintainer sets the direction around their DJ
-workflow and the settled architecture decisions in [`docs/adr/`](docs/adr/).
-Discussion does not guarantee acceptance or a review timetable.
+build, or fork it. **Issues and pull requests are both welcome; you do not need to open
+an issue before a pull request.** One maintainer sets the direction around their DJ
+workflow and the settled architecture decisions in [`docs/adr/`](docs/adr/), so a
+pull request may be declined or take a while to be reviewed. For a large change, an
+issue first can save you work, but it is not required.
 
 ## Orientation
 
