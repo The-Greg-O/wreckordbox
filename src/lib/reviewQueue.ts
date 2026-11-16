@@ -452,11 +452,17 @@ export function fromServiceRejected(answer: unknown): RejectedFact[] {
   return arr(obj(answer).rejected).map((r) => {
     const row = obj(r);
     const offered = obj(row.offered ?? row);
+    const value = offered.value ?? null;
+    // A rejected tag is filed under its dimension's id, with the tag row's
+    // value (dimension, terms, labels): the same Tag row Waiting showed.
+    const tag = typeof value === "object" && value !== null
+      && typeof (value as { dimension?: unknown }).dimension === "string"
+      && Array.isArray((value as { terms?: unknown }).terms);
     return {
       fact: num(offered.fact),
       track: str(offered.track),
-      field: str(offered.field),
-      value: offered.value ?? null,
+      field: tag ? "tag" : str(offered.field),
+      value,
       source: source(offered.source),
       confidence: num(offered.confidence),
       entry: num(obj(row.rejection).entry),

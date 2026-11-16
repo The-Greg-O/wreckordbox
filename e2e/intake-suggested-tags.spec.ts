@@ -9,7 +9,10 @@
  *
  * Mock (`?tagSchema=five&tagProposals`): the first Intake track has a
  * proposed Situation "Warm-up" (dimension "setting", confidence 0.84).
- * The fixture's first Intake track already carries Peak.
+ * The fixture's first Intake track already carries Peak, so the proposal
+ * says it replaces Peak, and accepting takes Peak off: the proposal is the
+ * dimension's whole value. A tag already set keeps its set chip even when
+ * a proposal names it. A tag rejected in Review is in its Rejected list.
  */
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { player, playButton, pauseButton, seedShell } from "./compactPlayer";
@@ -75,12 +78,20 @@ test("a proposed tag is dashed and marked proposed, and a click accepts it as Re
   expect(look?.plain).not.toBe("dashed");
   expect(look?.color).not.toBe(look?.plainColor);
   expect(await myTags(page, id)).not.toContain("Warm-up");
+  // Peak is set, and the chip says an accept replaces it.
+  await expect(setTag(page, "Peak")).toHaveAttribute("aria-pressed", "true");
+  expect(await myTags(page, id)).toContain("Peak");
+  await expect(warm).toHaveAttribute("aria-label", /replaces “Peak” with “Warm-up”$/);
+  await expect(warm).toHaveAttribute("title", "Accept (Y): replaces “Peak” with “Warm-up”");
 
   await warm.click();
 
   await expect(setTag(page, "Warm-up")).toHaveAttribute("aria-pressed", "true");
   await expect(proposed(page, "Warm-up")).toHaveCount(0);
   expect(await myTags(page, id)).toContain("Warm-up");
+  // As the chip said: the proposal is the dimension's whole value.
+  await expect(setTag(page, "Peak")).toHaveAttribute("aria-pressed", "false");
+  expect(await myTags(page, id)).not.toContain("Peak");
   const calls = await accepts(page);
   expect(calls).toHaveLength(1);
   expect(calls[0]!.rows).toHaveLength(1);
@@ -90,6 +101,52 @@ test("a proposed tag is dashed and marked proposed, and a click accepts it as Re
   const review = page.getByTestId("review-view");
   await expect(review.locator('[data-run="41"]').getByTestId("review-bulk-accept")).toBeVisible();
   await expect(review.getByRole("button", { name: /^Accept Tag Situation: Warm-up/ })).toHaveCount(0);
+});
+
+test("a tag already set keeps its set chip and its toggle when a proposal names it", async ({ page }) => {
+  await openIntake(page);
+  const { id } = await choose(page);
+  await hook(page, "__reviewProposeTag", id, "setting", ["peak", "warm-up"], "Peak, Warm-up", "Situation");
+  const warm = proposed(page, "Warm-up");
+  await expect(warm).toHaveAttribute("title", "Accept (Y): replaces “Peak” with “Peak, Warm-up”");
+  const peak = setTag(page, "Peak");
+  await expect(peak).toHaveAttribute("data-state", "set");
+  await expect(peak).toHaveAttribute("aria-pressed", "true");
+  await expect(proposed(page, "Peak")).toHaveCount(0);
+
+  // Still a toggle: off, and then the proposal's chip for it shows.
+  await peak.click();
+  await expect(proposed(page, "Peak")).toBeVisible();
+  expect(await myTags(page, id)).not.toContain("Peak");
+  expect(await accepts(page)).toHaveLength(0);
+  // Nothing is set now, so nothing is replaced.
+  await expect(proposed(page, "Peak")).toHaveAttribute("title", "Accept (Y)");
+
+  await proposed(page, "Peak").click();
+  await expect(setTag(page, "Peak")).toHaveAttribute("aria-pressed", "true");
+  await expect(setTag(page, "Warm-up")).toHaveAttribute("aria-pressed", "true");
+  expect(await myTags(page, id)).toEqual(expect.arrayContaining(["Peak", "Warm-up"]));
+});
+
+test("a tag rejected in Review is in the Rejected list, and reopened it is proposed again", async ({ page }) => {
+  await openIntake(page);
+  await choose(page);
+  await tab(page, "Review").click();
+  const review = page.getByTestId("review-view");
+  await review.getByRole("button", { name: /^Reject Tag Situation: Warm-up/ }).click();
+  await expect(review.getByRole("button", { name: /^Accept Tag Situation: Warm-up/ })).toHaveCount(0);
+
+  const rejected = review.getByTestId("review-rejected");
+  await rejected.locator("summary").click();
+  await expect(rejected.getByRole("listitem")).toContainText("Tag Situation: Warm-up");
+  await rejected.getByRole("button", { name: /^Reopen Tag Situation: Warm-up/ }).click();
+  // Review moves no row under the pointer: it shows once the pointer leaves.
+  await page.mouse.move(2, 2);
+  await expect(review.getByRole("button", { name: /^Accept Tag Situation: Warm-up/ })).toBeVisible();
+
+  await tab(page, "Intake").click();
+  await choose(page);
+  await expect(proposed(page, "Warm-up")).toBeVisible();
 });
 
 test("a tag decided in Review leaves Intake, and one recorded live appears without reloading", async ({ page }) => {

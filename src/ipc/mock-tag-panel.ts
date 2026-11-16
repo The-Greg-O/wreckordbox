@@ -319,5 +319,14 @@ export function createMockTagPanel(source: MockTagPanelSource) {
     return intakeSetTags(track, dimensionId, terms, now.track.versions[dimensionId] ?? "", []);
   };
 
-  return { intakeTagPanel, intakeSetTags, onSidecarChanged, applyProposed };
+  /** What a track holds in a dimension now, as a tag row's `before` says it. */
+  const selectionOf = (track: string, dimensionId: string) => {
+    const dimension = describe().find((d) => d.id === dimensionId);
+    if (!dimension || !source.all.some((row) => row.id === track)) return { terms: [], label: "" };
+    const terms = stateOf(track, dimension).set;
+    const label = terms.map((id) => dimension.tags.find((tag) => tag.id === id)?.name ?? id).join(", ");
+    return { terms, label };
+  };
+
+  return { intakeTagPanel, intakeSetTags, onSidecarChanged, applyProposed, selectionOf };
 }

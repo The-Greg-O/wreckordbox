@@ -71,6 +71,8 @@ export interface MockReviewSource {
   proposalTracks?: () => string[];
   /** Sets a proposed tag (wbx-45.26). Late-bound: the tag panel is built after Review. */
   applyTag?: (track: string, dimension: string, terms: readonly string[]) => Promise<unknown>;
+  /** What a track holds in a dimension now: a tag row's `before`. Late-bound too. */
+  tagsNow?: (track: string, dimension: string) => { terms: string[]; label: string };
 }
 
 interface Held {
@@ -154,6 +156,12 @@ export function createMockReview(source: MockReviewSource) {
             : null;
     waiting.push({ ...h, fact: nextFact++, before });
   };
+  /** A row's `before` as the service lists it: a tag's is what the track holds at the read. */
+  const beforeOf = (h: Held): unknown => {
+    if (h.field !== "tag") return h.before;
+    const after = h.after as { dimension?: string };
+    return { ...(h.before as object), ...(source.tagsNow?.(h.track, String(after.dimension ?? "")) ?? {}) };
+  };
   if (url.get("review") !== "empty") {
     const confidences = [0.91, 0.62, 0.74, 0.83, 0.58, 0.88, 0.81, 0.44, 0.97];
     confidences.forEach((confidence, i) => {
@@ -198,7 +206,7 @@ export function createMockReview(source: MockReviewSource) {
   const answer = () => {
     const titled = waiting.map((h) => ({
       track: h.track, title: source.all.find((r) => r.id === h.track)?.title ?? h.track, field: h.field,
-      before: h.before, after: h.after, fact: h.fact, source: h.source, confidence: h.confidence, reason: h.reason,
+      before: beforeOf(h), after: h.after, fact: h.fact, source: h.source, confidence: h.confidence, reason: h.reason,
       ...(h.threshold === undefined ? {} : { threshold: h.threshold }),
     }));
     const used = runs.filter((r) => waiting.some((h) => h.run === r.id));
@@ -345,7 +353,8 @@ export function createMockReview(source: MockReviewSource) {
           const after = h.after as { dimension?: string; label?: string; terms?: string[] };
           return {
             field: String(after.dimension ?? ""), value: String(after.label ?? ""), source: h.source.name,
-            confidence: h.confidence, fact: h.fact, token: rowToken(h.fact), before: "", terms: [...(after.terms ?? [])],
+            confidence: h.confidence, fact: h.fact, token: rowToken(h.fact),
+            before: String((beforeOf(h) as { label?: string }).label ?? ""), terms: [...(after.terms ?? [])],
           };
         }
         return {
@@ -376,7 +385,9 @@ export function createMockReview(source: MockReviewSource) {
     reviewRejected: async (): Promise<RejectedFact[]> =>
       fromServiceRejected(await source.wait({
         rejected: rejected.map((r) => ({
-          fact: r.held.fact, track: r.held.track, field: r.held.field, value: r.held.after,
+          // As the service files it: a tag under its dimension's id.
+          fact: r.held.fact, track: r.held.track, value: r.held.after,
+          field: r.held.field === "tag" ? String((r.held.after as { dimension?: string }).dimension ?? "") : r.held.field,
           source: r.held.source, confidence: r.held.confidence, rejection: { entry: r.entry, run: 900 + r.entry, at: 0 },
         })),
       })),

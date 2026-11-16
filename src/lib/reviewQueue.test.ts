@@ -5,6 +5,7 @@ import {
   fieldText,
   emptyBoard,
   fromServiceListing,
+  fromServiceRejected,
   groupByRun,
   isLow,
   listingChanges,
@@ -241,6 +242,17 @@ describe("a proposed tag in Review (wbx-45.26)", () => {
   it("names the field Tag and shows the dimension with the label", () => {
     expect(fieldText("tag")).toBe("Tag");
     expect(valueText("tag", after)).toBe("Situation: Peak");
+  });
+
+  it("is a Tag row in the rejected list, though the service files it under the dimension's id", () => {
+    const [row] = fromServiceRejected({
+      rejected: [{
+        fact: 7, track: "10001", field: "situation", value: after, canonical: 1, source: { kind: "agent", name: "tagger" }, confidence: 0.84,
+        rejection: { entry: 12, run: 3, at: 0 },
+      }],
+    });
+    expect(row).toMatchObject({ fact: 7, field: "tag", entry: 12 });
+    expect(`${fieldText(row!.field)} ${valueText(row!.field, row!.value)}`).toBe("Tag Situation: Peak");
   });
 
   it("is taken by a confidence bulk accept, which still leaves title and artist", () => {

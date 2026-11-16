@@ -20,8 +20,11 @@
  *
  * An agent's proposed tag (wbx-45.26) is a different chip: dashed in the
  * key-boost yellow, marked "proposed", never a toggle. A click accepts the
- * whole proposal. Y, Enter and Space are the track panel's guarded path
- * (the same one as a proposed title), so this chip does not stop them.
+ * whole proposal, which becomes the dimension's whole value: the chip's
+ * title and name say what that replaces. A tag the track already holds
+ * keeps its set chip, and its toggle, even when the proposal names it. Y,
+ * Enter and Space are the track panel's guarded path (the same one as a
+ * proposed title), so this chip does not stop them.
  */
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent } from "react";
 
@@ -144,9 +147,14 @@ function DimensionChips({ store, trackId, dimension, hue, disabled, suggestions,
       </span>
       <div className={styles.chips}>
         {dimension.tags.map((tag) => {
-          const proposal = onAccept ? proposalFor(suggestions, dimension.id, tag.id) : null;
+          const state = tagState(dimension, set, tag.id);
+          // A tag already set is shown as set: the proposal's chips are the ones it would add.
+          const proposal = onAccept && state !== "set" ? proposalFor(suggestions, dimension.id, tag.id) : null;
           if (proposal) {
             const confidence = proposal.confidence.toFixed(2);
+            // An accept sets the dimension to exactly the proposal: say what goes.
+            const replaces = proposal.before === "" || proposal.before === proposal.value ? ""
+              : `${t("replaces")} “${proposal.before}” ${t("with")} “${proposal.value}”`;
             return (
               <button
                 key={tag.id}
@@ -157,8 +165,9 @@ function DimensionChips({ store, trackId, dimension, hue, disabled, suggestions,
                 data-suggestion={proposal.fact}
                 data-own-activation=""
                 aria-pressed={false}
-                aria-label={`${t("Accept proposed")} ${dimension.label} “${tag.name}” ${t("from")} ${proposal.source} (${confidence})`}
-                title={`${t("Accept")} (Y)`}
+                data-replaces={replaces === "" ? undefined : proposal.before}
+                aria-label={`${t("Accept proposed")} ${dimension.label} “${tag.name}” ${t("from")} ${proposal.source} (${confidence})${replaces === "" ? "" : `; ${replaces}`}`}
+                title={replaces === "" ? `${t("Accept")} (Y)` : `${t("Accept")} (Y): ${replaces}`}
                 onClick={acceptProposed(proposal)}
               >
                 <span className={styles.proposedMark} aria-hidden="true">{t("proposed")}</span>
@@ -167,7 +176,6 @@ function DimensionChips({ store, trackId, dimension, hue, disabled, suggestions,
               </button>
             );
           }
-          const state = tagState(dimension, set, tag.id);
           const notOnDeck = dimension.edit === "my_tag" && tag.myTag === null;
           return (
             <button
