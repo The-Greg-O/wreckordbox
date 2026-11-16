@@ -118,7 +118,7 @@ mod tests {
             .unwrap()
     }
 
-    /// An unwound MyTag assignment is no longer the unwound agent's, so a
+    /// An unwound My Tag assignment is no longer the unwound agent's, so a
     /// Projection may fill it; an assignment the Unwind left stays theirs.
     #[test]
     fn an_unwound_assignment_goes_back_to_its_state_before_the_run() {

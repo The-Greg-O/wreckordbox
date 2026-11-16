@@ -1634,7 +1634,15 @@ fn a_run_whose_unwind_was_undone_in_the_window_can_be_unwound_again() {
     let window = window();
     window.host().unwrap();
     let original = window
-        .cli(&["--json", "tracks", "rate", "10001", "4", "--source", "agent:test"])
+        .cli(&[
+            "--json",
+            "tracks",
+            "rate",
+            "10001",
+            "4",
+            "--source",
+            "agent:test",
+        ])
         .json()["run"]["id"]
         .to_string();
     window.cli(&["runs", "unwind", &original]).succeeded();
