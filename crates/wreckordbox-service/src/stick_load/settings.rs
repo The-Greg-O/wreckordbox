@@ -7,9 +7,10 @@
 //! Gig stick restored everything (confirmed on the deck 2026-11-15).
 //!
 //! Where they come from: the Library's **My Settings**, the folder the
-//! window keeps beside its state folder (`usb-settings`), which Round-trip
-//! import fills from a Stick and `library rebuild-from-stick` fills from the
-//! Stick it rebuilds from. Without one there, `DEVSETTING.DAT` is rekordbox's
+//! window keeps beside its state folder (`usb-settings`), which
+//! `library rebuild-from-stick` fills with all five from the Stick it
+//! rebuilds from (the window's Round-trip import brings only the three
+//! `*MYSETTING*.DAT` files). Without one there, `DEVSETTING.DAT` is rekordbox's
 //! own defaults (as every rekordbox export writes one) and the others are
 //! reported as not written, never invented.
 //!
@@ -106,7 +107,13 @@ fn from_library(state_dir: &Path, name: &str) -> Result<Vec<u8>, String> {
     match std::fs::read(&path) {
         Ok(bytes) => damaged(name, &bytes).map_or(Ok(bytes), Err),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(format!(
-            "the Library has no {name} in its My Settings: carry them from a Stick with `wreckordbox library rebuild-from-stick` or the window's Round-trip import"
+            "the Library has no {name} in its My Settings: carry them from a Stick with `wreckordbox library rebuild-from-stick`{}",
+            // Round-trip brings these three and no other.
+            if matches!(name, "MYSETTING.DAT" | "MYSETTING2.DAT" | "DJMMYSETTING.DAT") {
+                " or the window's Round-trip import"
+            } else {
+                ""
+            }
         )),
         Err(e) => Err(format!("{name} in My Settings could not be read: {e}")),
     }
@@ -137,12 +144,14 @@ pub(crate) fn plan(state_dir: &Path, root: &Path, replace: bool) -> PlannedSetti
                 planned.files.push((name.to_owned(), bytes));
                 line("write", Some("my_settings"), None)
             }
-            (false, Err(_)) if name == "DEVSETTING.DAT" => {
+            (false, Err(why)) if name == "DEVSETTING.DAT" => {
                 planned.files.push((
                     name.to_owned(),
                     rbl_devices::settings::DevSetting::default().encode(),
                 ));
-                line("write", Some("defaults"), None)
+                // My Settings has one that cannot be used: say so.
+                let unusable = my_settings(state_dir).join(name).exists();
+                line("write", Some("defaults"), unusable.then_some(why))
             }
             (false, Err(why)) => line("unavailable", None, Some(why)),
         };

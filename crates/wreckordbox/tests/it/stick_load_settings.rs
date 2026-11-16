@@ -5,8 +5,8 @@
 //! `MYSETTING2.DAT`, `DJMMYSETTING.DAT` and `djprofile.nxs` (confirmed on
 //! the deck 2026-11-15: those five are all it needs). A load gives a Stick
 //! the Library's My Settings, the files the window keeps beside its state
-//! folder (`usb-settings`, filled by Round-trip import and by
-//! rebuild-from-stick), in the same publication as the export; a Stick's own
+//! folder (`usb-settings`, filled by rebuild-from-stick; Round-trip import
+//! brings three of the five), in the same publication as the export; a Stick's own
 //! files are kept unless the DJ asks for them to be replaced. The dry run
 //! says, file by file, what the load does, and writes nothing.
 //!
@@ -339,6 +339,12 @@ fn without_my_settings_a_stick_gets_rekordbox_display_defaults_and_is_told_what_
                 .is_some_and(|r| r.contains("rebuild-from-stick")),
             "{line}"
         );
+        // Round-trip import brings the three `*MYSETTING*.DAT` files only.
+        assert_eq!(
+            line["reason"].as_str().unwrap().contains("Round-trip"),
+            line["file"] != "djprofile.nxs",
+            "{line}"
+        );
     }
     assert_eq!(load["outcome"], "loaded", "{load}");
     let dev = rig
@@ -493,4 +499,122 @@ fn rebuild_from_stick_carries_the_sticks_settings_into_my_settings_for_the_next_
             "{name} on the loaded Stick"
         );
     }
+}
+
+/// The command a dry run prints is the one to type: with
+/// `--replace-settings` when the dry run had it, since the plan is bound to
+/// it and a load without it is refused.
+#[test]
+fn the_load_command_a_dry_run_prints_repeats_replace_settings() {
+    let rig = Rig::new();
+    rig.give_library_settings();
+    rig.unlock();
+    std::fs::create_dir_all(rig.pioneer()).unwrap();
+    std::fs::write(
+        rig.pioneer().join("MYSETTING.DAT"),
+        setting("MYSETTING.DAT", 40, 0x99),
+    )
+    .unwrap();
+    let printed = |extra: &[&str]| -> String {
+        let mut args = vec!["stick", "dry-run", rig.path(), rig.set.as_str()];
+        args.extend_from_slice(extra);
+        let run = rig.sandbox.cli(&args);
+        assert!(run.status.success(), "{}", run.stderr);
+        run.stdout
+            .lines()
+            .find_map(|l| l.strip_prefix("To load exactly this: wreckordbox "))
+            .unwrap_or_else(|| panic!("no command printed: {}", run.stdout))
+            .to_owned()
+    };
+
+    let plain = printed(&[]);
+    assert!(!plain.contains("--replace-settings"), "{plain}");
+
+    let replacing = printed(&["--replace-settings"]);
+    assert!(replacing.ends_with(" --replace-settings"), "{replacing}");
+    // Typed as printed, it loads and replaces the Stick's own file.
+    let mut args = vec!["--json"];
+    args.extend(replacing.split(' '));
+    let run = rig.sandbox.cli(&args);
+    assert!(run.status.success(), "{replacing}: {}", run.stderr);
+    assert_eq!(run.json()["outcome"], "loaded");
+    assert_eq!(
+        rig.on_stick("MYSETTING.DAT"),
+        Some(library_settings()[1].1.clone())
+    );
+}
+
+/// The plan id is bound to the bytes the dry run saw, not only to what is
+/// done with each file: My Settings changed since, the load is refused.
+#[test]
+fn a_load_is_refused_when_my_settings_changed_since_its_dry_run() {
+    let rig = Rig::new();
+    rig.give_library_settings();
+    rig.unlock();
+    let dry = rig.dry_run(&[]);
+    assert_eq!(actions(&dry), all("write"), "{dry}");
+    let plan = dry["plan"].as_str().unwrap().to_owned();
+
+    // Another file as good as the first: the same action, other bytes.
+    std::fs::write(
+        rig.my_settings().join("MYSETTING.DAT"),
+        setting("MYSETTING.DAT", 40, 0x77),
+    )
+    .unwrap();
+
+    let refused = rig.load(&plan, &[]);
+    assert!(!refused.status.success(), "{}", refused.stdout);
+    assert_eq!(rig.on_stick("MYSETTING.DAT"), None, "nothing written");
+}
+
+/// Without `--json` too, a rebuild says what became of each settings file:
+/// a damaged one, or one the Stick lacks, is not carried, and the DJ is told.
+#[test]
+fn rebuild_from_stick_says_in_words_what_became_of_each_settings_file() {
+    let rig = Rig::new();
+    let dirs = tempfile::tempdir().unwrap();
+    let (gig, music) = gig_stick_from_elsewhere(dirs.path());
+    let export = rbl_export::export_root(&gig);
+    let mut broken = setting("MYSETTING2.DAT", 40, 0x33);
+    broken[110] ^= 0xff;
+    std::fs::write(export.join("MYSETTING2.DAT"), broken).unwrap();
+    std::fs::remove_file(export.join("djprofile.nxs")).unwrap();
+    let rebuild = |extra: &[&str]| -> String {
+        let mut args = vec![
+            "library",
+            "rebuild-from-stick",
+            gig.to_str().unwrap(),
+            "--music",
+            music.to_str().unwrap(),
+        ];
+        args.extend_from_slice(extra);
+        let run = rig.sandbox.cli(&args);
+        assert!(run.status.success(), "{}", run.stderr);
+        run.stdout
+    };
+
+    let dry = rebuild(&["--dry-run"]);
+    assert!(dry.contains("  MYSETTING.DAT: would be carried"), "{dry}");
+    assert!(
+        dry.contains(
+            "  MYSETTING2.DAT: NOT carried, damaged: MYSETTING2.DAT on the Stick is damaged"
+        ),
+        "{dry}"
+    );
+    assert!(dry.contains("  djprofile.nxs: not on the Stick"), "{dry}");
+    assert!(!rig.my_settings().exists(), "a dry run writes nothing");
+
+    let applied = rebuild(&[]);
+    assert!(applied.contains("  MYSETTING.DAT: carried"), "{applied}");
+    assert!(
+        applied.contains("  MYSETTING2.DAT: NOT carried, damaged"),
+        "{applied}"
+    );
+    assert!(
+        applied.contains("  djprofile.nxs: not on the Stick"),
+        "{applied}"
+    );
+    assert!(rig.my_settings().join("MYSETTING.DAT").is_file());
+    assert!(!rig.my_settings().join("MYSETTING2.DAT").exists());
+    assert!(!rig.my_settings().join("djprofile.nxs").exists());
 }

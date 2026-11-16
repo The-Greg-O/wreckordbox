@@ -90,7 +90,7 @@ pub fn run(
             let text = if as_json {
                 json!(dry).to_string()
             } else {
-                dry_run_text(&dry)
+                dry_run_text(&dry, args.replace_settings)
             };
             Ok((text, true))
         }
@@ -305,7 +305,7 @@ fn space_text(text: &mut String, space: &Space) {
     }
 }
 
-fn dry_run_text(dry: &DryRun) -> String {
+fn dry_run_text(dry: &DryRun, replace_settings: bool) -> String {
     let names: Vec<&str> = dry.playlists.iter().map(|p| p.name.as_str()).collect();
     let mut text = format!(
         "Dry run: loading {} onto {} ({}, {}) at {}\n",
@@ -335,9 +335,15 @@ fn dry_run_text(dry: &DryRun) -> String {
         Some(plan) => {
             let _ = write!(
                 text,
-                "To load exactly this: wreckordbox stick load {} {} --plan {plan}",
+                "To load exactly this: wreckordbox stick load {} {} --plan {plan}{}",
                 dry.stick.path.display(),
                 ids.join(" "),
+                // The plan is bound to it: a load without it is refused.
+                if replace_settings {
+                    " --replace-settings"
+                } else {
+                    ""
+                },
             );
         }
         None => {

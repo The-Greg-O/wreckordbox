@@ -199,6 +199,24 @@ fn text(answer: &Rebuilt) -> String {
     for what in &answer.not_carried {
         let _ = writeln!(out, "  {what}");
     }
+    if !answer.settings.is_empty() {
+        let _ = writeln!(out, "Settings files (into the Library's My Settings):");
+    }
+    for line in &answer.settings {
+        let what = match (line.action.as_str(), answer.dry_run) {
+            ("carry", true) => "would be carried",
+            ("carry", false) => "carried",
+            ("absent", _) => "not on the Stick",
+            ("damaged", _) => "NOT carried, damaged",
+            ("failed", _) => "NOT carried",
+            (other, _) => other,
+        };
+        let why = line
+            .reason
+            .as_deref()
+            .map_or(String::new(), |r| format!(": {r}"));
+        let _ = writeln!(out, "  {}: {what}{why}", line.file);
+    }
     if let Some(backup) = &answer.backup {
         let _ = writeln!(out, "Backup taken first: {backup}");
     }

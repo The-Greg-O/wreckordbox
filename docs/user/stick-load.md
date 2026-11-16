@@ -14,8 +14,9 @@ the room needed.
 A load also gives the Stick the deck's settings files (`DEVSETTING.DAT`,
 `MYSETTING.DAT`, `MYSETTING2.DAT`, `DJMMYSETTING.DAT`, `djprofile.nxs`: the
 colours, columns and fields the deck shows) from your Library's My Settings,
-which `wreckordbox library rebuild-from-stick` and the window's Round-trip
-import carry from a Stick. A file the Stick already has is its own and is
+which `wreckordbox library rebuild-from-stick` carries from a Stick, all
+five of them (the window's Round-trip import brings only `MYSETTING.DAT`,
+`MYSETTING2.DAT` and `DJMMYSETTING.DAT`). A file the Stick already has is its own and is
 kept, unless you add `--replace-settings` to both the dry run and the load.
 Without My Settings a Stick gets rekordbox's default display settings and the
 dry run says which files it cannot give. On a Spare stick (one with
