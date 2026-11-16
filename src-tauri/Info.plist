@@ -5,7 +5,7 @@
 <dict>
   <!-- Explain the system prompt shown when library audio is on an NFS or SMB volume. -->
   <key>NSNetworkVolumesUsageDescription</key>
-  <string>rbxport needs access to network volumes to read music files in your rekordbox library.</string>
+  <string>wreckordbox needs access to network volumes to read music files in your rekordbox library.</string>
 
   <!-- Turn on Cocoa Scripting and point it at the bundled dictionary. -->
   <key>NSAppleScriptEnabled</key>
