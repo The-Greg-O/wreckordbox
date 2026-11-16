@@ -171,9 +171,21 @@ fn no_window_enables_the_built_in_zoom_hotkeys() {
 fn the_main_window_asks_for_no_more_room_than_its_narrowest_layout() {
     for (name, platform) in [("base", "{}"), ("linux", LINUX)] {
         let window = windows(&merged(platform))[0].clone();
-        let min_width = window.get("minWidth").and_then(Value::as_f64).unwrap_or(0.0);
-        let min_height = window.get("minHeight").and_then(Value::as_f64).unwrap_or(0.0);
-        assert!(min_width <= 360.0, "{name}: minWidth {min_width} is wider than the narrowest layout");
-        assert!(min_height <= 360.0, "{name}: minHeight {min_height} is taller than half a 800 px screen's tile");
+        let min_width = window
+            .get("minWidth")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        let min_height = window
+            .get("minHeight")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        assert!(
+            min_width <= 360.0,
+            "{name}: minWidth {min_width} is wider than the narrowest layout"
+        );
+        assert!(
+            min_height <= 360.0,
+            "{name}: minHeight {min_height} is taller than half a 800 px screen's tile"
+        );
     }
 }
