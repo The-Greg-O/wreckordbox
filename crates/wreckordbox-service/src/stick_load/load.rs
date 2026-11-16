@@ -220,6 +220,8 @@ struct Planned {
     /// read-back plans against them, without taking the Library again.
     db_id: u64,
     index: Arc<rbl_index::Library>,
+    /// The deck's settings files (wbx-8z2).
+    settings: super::settings::PlannedSettings,
 }
 
 /// Works out a load of `playlists` to the Stick at `root`. Call holding
@@ -231,6 +233,10 @@ struct Planned {
 /// entry's track in `selection` before it is planned, so the plan, the
 /// bound result, the confirmation and the export all see the rendered
 /// audio (and the rendered file's identity joins `tracks` in the bound).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the load's inputs, each from its own caller's context"
+)]
 fn plan_load(
     state_dir: &Path,
     library: &OpenLibrary,
@@ -239,6 +245,7 @@ fn plan_load(
     root: &Path,
     playlists: &[String],
     audio: native_stems::Audio,
+    replace_settings: bool,
 ) -> Result<Planned, ServiceError> {
     crate::preview_fingerprints::inject_for_test(state_dir);
     let share = library.share_root();
@@ -285,7 +292,9 @@ fn plan_load(
                 .map_or_else(String::new, |i| names.name(i).to_owned()),
         })
         .collect();
-    let changes = changes(&plan, &planned_stems);
+    let settings = super::settings::plan(state_dir, root, replace_settings);
+    let mut changes = changes(&plan, &planned_stems);
+    changes.settings.clone_from(&settings.lines);
     let space = space(state_dir, root, &plan, &planned_stems);
     let mut bound = Bound::new();
     bound.insert("tracks".to_owned(), track_identities(&selection));
@@ -295,6 +304,7 @@ fn plan_load(
         "native_stems".to_owned(),
         planned_stems.iter().map(stems_line).collect(),
     );
+    bound.insert("settings".to_owned(), super::settings::bound(&settings));
     Ok(Planned {
         playlists: chosen,
         selection,
@@ -304,6 +314,7 @@ fn plan_load(
         bound,
         db_id,
         index: Arc::clone(index),
+        settings,
     })
 }
 
@@ -407,6 +418,7 @@ fn change_lines(changes: &Changes) -> Vec<String> {
     );
     out.extend(changes.tracks.removed.iter().map(|l| t("remove", l)));
     out.extend(changes.tracks.missing.iter().map(|l| t("missing", l)));
+    out.extend(changes.tracks.kept.iter().map(|l| t("keep", l)));
     out.extend(
         changes
             .playlists
@@ -426,6 +438,13 @@ fn change_lines(changes: &Changes) -> Vec<String> {
             .removed
             .iter()
             .map(|n| format!("remove playlist {n}")),
+    );
+    out.extend(
+        changes
+            .playlists
+            .kept
+            .iter()
+            .map(|n| format!("keep playlist {n}")),
     );
     out.extend(
         changes
@@ -458,9 +477,11 @@ fn changes(plan: &ExportPlan, stems: &[PlannedStems]) -> Changes {
         audio_changed: lines(&plan.audio_changed),
         removed: lines(&plan.removed),
         missing: lines(&plan.missing),
+        kept: lines(&plan.kept),
     };
     let mut playlists = PlaylistChanges {
         removed: plan.playlists_removed.clone(),
+        kept: plan.playlists_kept.clone(),
         ..PlaylistChanges::default()
     };
     for p in plan.playlists.iter().filter(|p| !p.folder) {
@@ -498,6 +519,8 @@ fn changes(plan: &ExportPlan, stems: &[PlannedStems]) -> Changes {
         playlists_reordered: playlists.reordered.len(),
         playlists_removed: playlists.removed.len(),
         native_stems: native_stems.len(),
+        tracks_kept: tracks.kept.len(),
+        playlists_kept: playlists.kept.len(),
     };
     Changes {
         counts,
@@ -506,6 +529,7 @@ fn changes(plan: &ExportPlan, stems: &[PlannedStems]) -> Changes {
         native_stems,
         analysis_written: plan.analysis_written,
         audio_estimated: plan.audio_estimated,
+        settings: Vec::new(),
     }
 }
 
@@ -655,6 +679,7 @@ pub(crate) fn dry_run(
             &root,
             &args.playlists,
             native_stems::Audio::Preview,
+            args.replace_settings,
         )?;
         // A plan that could not be worked out in full is never executable.
         let (plan, not_loadable) = if planned.changes.audio_estimated {
@@ -750,6 +775,7 @@ pub(crate) fn load(
             &root,
             &args.playlists,
             native_stems::Audio::Fresh,
+            args.replace_settings,
         )?;
         // The confirmation: the dry run's plan id, for exactly this load, on
         // the Stick and the Library as they were planned, and for exactly
@@ -884,6 +910,8 @@ pub(crate) fn load(
             root: preferred,
             keep_unlisted: selection.keep_unlisted,
             cache: Some(&EXPORT_CACHE),
+            // The deck's settings files, in the same publication (wbx-8z2).
+            settings_files: &planned.settings.files,
             ..Default::default()
         },
         &mut |p| {
@@ -1016,11 +1044,16 @@ pub(crate) fn load(
         &planned.selection,
         None,
     );
-    let report = read_back(&planned.selection, &planned.changes, after.ok().as_ref());
+    let mut report = read_back(&planned.selection, &planned.changes, after.ok().as_ref());
+    let (settings_written, settings_not_written) =
+        super::settings::read_back(&root, &planned.settings);
+    report.0.settings = settings_written;
+    report.1.settings = settings_not_written;
     let outcome = if error.is_some() {
         "failed"
     } else if report.1.tracks.is_empty()
         && report.1.playlists.is_empty()
+        && report.1.settings.is_empty()
         && native.iter().all(|n| n.outcome == "written")
     {
         "loaded"

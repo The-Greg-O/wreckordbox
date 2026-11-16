@@ -118,6 +118,15 @@ pub struct ExportPlan {
     pub missing: Vec<PlannedTrack>,
     /// This Library's playlists on the Stick that the write takes off it.
     pub playlists_removed: Vec<String>,
+    /// Tracks another writer put on the Stick (rekordbox on another
+    /// computer, a player) that the write keeps as they are: their audio is
+    /// neither copied nor removed (wbx-dc0).
+    #[serde(default)]
+    pub kept: Vec<PlannedTrack>,
+    /// Playlists on the Stick the write keeps as they are, not being this
+    /// Library's to take off (another writer's).
+    #[serde(default)]
+    pub playlists_kept: Vec<String>,
 }
 
 /// The audio from the export's own preview, and the rest from comparing the
@@ -329,8 +338,25 @@ pub fn export_plan_of(
             .map(rbl_export::ManifestTrack::key)
             .collect();
         let mut written: HashSet<String> = HashSet::new();
+        let kept = match &manifest {
+            // Nothing to do: the preview does not hold the Stick's own
+            // tracks, and the Stick's record says which they are.
+            Some(manifest) if crate::kept::from_record_alone(preview) => {
+                let titles = stick_tracks
+                    .iter()
+                    .map(|(id, t)| (*id, t.title.as_str()))
+                    .collect();
+                crate::kept::of_record(destination, manifest, &titles)
+            }
+            _ => crate::kept::of(destination, selection, preview, &recorded),
+        };
         for track in &preview.tracks {
             let key = rbl_export::track_key(track.id, &track.source_path.to_string_lossy());
+            // Another writer's, kept as it is: listed in `kept`, not here.
+            if crate::kept::carried(track, destination) {
+                written.insert(key);
+                continue;
+            }
             if !written.insert(key.clone()) {
                 continue;
             }
@@ -367,6 +393,8 @@ pub fn export_plan_of(
                 .iter()
                 .filter(|t| !written.contains(&t.key()) && !t.in_place)
                 .filter(|t| !loose.contains(&t.library_id))
+                // Another writer's, which the export never takes off.
+                .filter(|t| !crate::kept::carried_in_record(t, destination))
             {
                 plan.removed.push(PlannedTrack {
                     id: entry.library_id,
@@ -386,7 +414,16 @@ pub fn export_plan_of(
                     .collect();
             }
         }
+        // The most room at once is the export's own figure, the one it
+        // checks the Stick against before it writes. What stays taken
+        // afterwards is less: another writer's analysis files are written
+        // over those already there.
         plan.peak_bytes = preview.peak_bytes;
+        plan.net_additional_bytes = preview
+            .net_additional_bytes
+            .saturating_sub(i64::try_from(kept.rewritten_bytes).unwrap_or(i64::MAX));
+        plan.kept = kept.tracks;
+        plan.playlists_kept = kept.playlists;
         plan.size_uncertain = preview.unknown_size || preview.estimate.approximate;
     }
     let found = preview
@@ -403,7 +440,6 @@ pub fn export_plan_of(
         track_changes,
         analysis_written: selection.tracks.len().saturating_sub(found.tracks_missing),
         playlists,
-        net_additional_bytes: preview.as_ref().map_or(0, |p| p.net_additional_bytes),
         ..plan
     })
 }

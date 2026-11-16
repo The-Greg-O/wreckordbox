@@ -277,6 +277,7 @@ pub fn stick_revision(stick: &Path) -> String {
                 "MYSETTING.DAT",
                 "MYSETTING2.DAT",
                 "DJMMYSETTING.DAT",
+                "djprofile.nxs",
                 "rbxport/manifest.json",
             ] {
                 files.push(root.join(name));
