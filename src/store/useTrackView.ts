@@ -129,6 +129,17 @@ export function useTrackView(
   const tokenRef = useRef(token);
   tokenRef.current = token;
   const cachedSource = useRef("");
+  // Bumped to open the same spec again: a page was refused because the
+  // backend has dropped the view (every edit and reload drops them all, and a
+  // burst of opens evicts the oldest). Once per spec until a page lands, so a
+  // list that cannot be read is said rather than asked for forever (wbx-w41).
+  const [reopen, setReopen] = useState(0);
+  const reopenedFor = useRef<string | null>(null);
+  // The view whose pages could not be read even opened again: asked no more.
+  const failedToken = useRef<CacheToken | null>(null);
+  // Whether any open has answered. Before that a refusal is the start-up race
+  // the ready listener below recovers from, not a failure to show anyone.
+  const everOpened = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -149,6 +160,7 @@ export function useTrackView(
         const handle = await backend.openView(spec);
         if (cancelled) return;
         opened = true;
+        everOpened.current = true;
         setState({
           viewId: handle.viewId,
           count: handle.len,
@@ -161,8 +173,12 @@ export function useTrackView(
       } catch (e) {
         if (cancelled) return;
         // Mark the failure as belonging to this spec, or it reads as still
-        // loading and retries forever.
-        setState((s) => ({ ...s, specKey, sourceKey, totals: undefined, error: e instanceof Error ? e.message : String(e) }));
+        // loading and retries forever. A different list that failed shows
+        // none of the list before under its own name (wbx-w41).
+        setState((s) => ({
+          ...s, specKey, sourceKey, totals: undefined, error: e instanceof Error ? e.message : String(e),
+          count: s.sourceKey === sourceKey ? s.count : 0,
+        }));
       }
     };
 
@@ -194,7 +210,7 @@ export function useTrackView(
     // specKey captures every field that changes the view, the source among
     // them, so sourceKey cannot change without it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [specKey]);
+  }, [specKey, reopen]);
 
   useEffect(() => {
     let stop: (() => void) | undefined;
@@ -261,7 +277,7 @@ export function useTrackView(
       const { viewId, count } = state;
       // Fetching while a view swap is in flight would fill the cache from the
       // outgoing view under the incoming token.
-      if (!viewId || count === 0 || swapping) return;
+      if (!viewId || count === 0 || swapping || failedToken.current === token) return;
       const missing = cache.current.missingPages(start, Math.min(end, count), token);
       const toFetch = planFetches(missing, inFlight.current);
       if (toFetch.length === 0) return;
@@ -277,9 +293,21 @@ export function useTrackView(
             // has fetched: the two answers can arrive in either order.
             if (tokenRef.current !== token || cache.current.hasPage(page, token)) return;
             cache.current.setPage(page, token, rows);
+            reopenedFor.current = null;
             setPagesLoaded((n) => n + 1);
-          } catch {
-            // Leave the page missing; the next scroll retries it.
+          } catch (e) {
+            // An answer for a view already replaced says nothing about this one.
+            if (tokenRef.current !== token) return;
+            if (reopenedFor.current !== specKey) {
+              // Opened again; until it answers the rows on screen stay, as
+              // for any other refetch of the same list.
+              reopenedFor.current = specKey;
+              setState((s) => ({ ...s, specKey: "" }));
+              setReopen((n) => n + 1);
+            } else {
+              failedToken.current = token;
+              setState((s) => ({ ...s, error: e instanceof Error ? e.message : String(e) }));
+            }
           } finally {
             inFlight.current.delete(page);
           }
@@ -291,7 +319,7 @@ export function useTrackView(
     // here would fill the cache from the outgoing view.
     // extraKey changes only with visible extra columns, not on width drags.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [state, token, swapping, extraKey],
+    [state, token, swapping, extraKey, specKey],
   );
 
   /*
@@ -398,7 +426,7 @@ export function useTrackView(
       loading: state.sourceKey !== sourceKey,
       sourceKey,
       totals: state.sourceKey === sourceKey ? state.totals : undefined,
-      error: state.error,
+      error: everOpened.current ? state.error : null,
       rowAt: rows ? (index: number) => rows[index] : rowAt,
       fresh: rows ? () => false : fresh,
       ensureRange,

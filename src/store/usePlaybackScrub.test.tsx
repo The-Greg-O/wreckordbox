@@ -343,3 +343,47 @@ it("lands a drag where the snap puts it, and sends that landing", async () => {
   expect(sent).not.toContain("to:20000");
   expect(sent.at(-1)).toBe("end");
 });
+
+/*
+ * wbx-52f. Each deck command is its own task in the shell, so one sent before
+ * the last has answered can overtake it: a click's landing (to, end) reached
+ * the engine before its begin, the engine had no drag to aim and ended it
+ * where it started, and a click on the overview did nothing the first time.
+ */
+it("sends a click's landing only once the engine has taken the drag's begin", async () => {
+  let answerBegin: () => void = () => {};
+  const backend = stubBackend();
+  backend.deckScrubBegin = () => {
+    sent.push("begin");
+    return new Promise<void>((resolve) => { answerBegin = resolve; });
+  };
+  __setBackend(backend);
+  deliver(tickAt(10, 2, false));
+  act(() => { deck.scrubBegin(); deck.scrubTo(150); deck.scrubEnd(); });
+  await settle();
+  await settle();
+  expect(sent).toEqual(["begin"]);
+  answerBegin();
+  await settle();
+  await settle();
+  expect(sent).toEqual(["begin", "to:150000", "end"]);
+});
+
+it("moves a drag only once the engine has taken its begin", async () => {
+  let answerBegin: () => void = () => {};
+  const backend = stubBackend();
+  backend.deckScrubBegin = () => {
+    sent.push("begin");
+    return new Promise<void>((resolve) => { answerBegin = resolve; });
+  };
+  __setBackend(backend);
+  deliver(tickAt(10, 2, false));
+  act(() => { deck.scrubBegin(); deck.scrubTo(40); });
+  runFrames();
+  await settle();
+  expect(sent).toEqual(["begin"]);
+  answerBegin();
+  await settle();
+  await settle();
+  expect(sent).toEqual(["begin", "to:40000"]);
+});

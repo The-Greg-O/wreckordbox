@@ -728,6 +728,24 @@ export function usePlayback(trackId: string | null, DECK: DeckId = DEFAULT_DECK,
     })();
   }, [idle, isLoaded, DECK]);
 
+  /*
+   * A drag's messages, one after another (wbx-52f). Each deck command runs
+   * as its own task in the shell, so one sent before the last has answered
+   * can overtake it: a click's landing reached the engine ahead of its begin,
+   * the engine had no drag to aim and ended it where it started, and the
+   * first click on the overview did nothing.
+   */
+  const dragQueue = useRef<Promise<void>>(Promise.resolve());
+  const inDragOrder = useCallback((send: (backend: Backend) => Promise<void>) => {
+    dragQueue.current = dragQueue.current.then(async () => {
+      try {
+        await send(await getBackend());
+      } catch (failure) {
+        setError(reasonFrom(failure));
+      }
+    });
+  }, []);
+
   /**
    * Audio follows the pointer while a waveform is dragged.
    *
@@ -745,15 +763,8 @@ export function usePlayback(trackId: string | null, DECK: DeckId = DEFAULT_DECK,
     // its transport — the drag is not a pause — but what is drawn is the hand,
     // and the hand has not moved yet.
     anchor.current = pinned(anchor.current, positionRef.current, performance.now());
-    void (async () => {
-      try {
-        const backend = await getBackend();
-        await backend.deckScrubBegin(DECK);
-      } catch (failure) {
-        setError(reasonFrom(failure));
-      }
-    })();
-  }, [idle, isReady, DECK]);
+    inDragOrder((backend) => backend.deckScrubBegin(DECK));
+  }, [idle, isReady, DECK, inDragOrder]);
 
   /**
    * Where the drag is now.
@@ -786,22 +797,16 @@ export function usePlayback(trackId: string | null, DECK: DeckId = DEFAULT_DECK,
         const target = pending.current;
         pending.current = null;
         if (target === null) return;
-        void (async () => {
-          try {
-            const backend = await getBackend();
-            // Not rounded: the engine works the head's speed out from how far
-            // this moved since the last one, and a whole millisecond is 44
-            // frames — enough to quantise a slow drag's speed into a stall and
-            // a lurch.
-            if (scrubbing.current) await backend.deckScrubTo(DECK, target * 1000);
-            else await backend.deckSeek(DECK, target * 1000);
-          } catch (failure) {
-            setError(reasonFrom(failure));
-          }
-        })();
+        // Whether this is a drag is decided now, not once the queue gets to it.
+        const dragging = scrubbing.current;
+        // Not rounded: the engine works the head's speed out from how far
+        // this moved since the last one, and a whole millisecond is 44
+        // frames — enough to quantise a slow drag's speed into a stall and
+        // a lurch.
+        inDragOrder((backend) => dragging ? backend.deckScrubTo(DECK, target * 1000) : backend.deckSeek(DECK, target * 1000));
       });
     },
-    [idle, emit, isReady, seek, DECK, setPosition],
+    [idle, emit, isReady, seek, DECK, setPosition, inDragOrder],
   );
 
   /** Lets go. The playhead stays where the drag left it. */
@@ -904,16 +909,11 @@ export function usePlayback(trackId: string | null, DECK: DeckId = DEFAULT_DECK,
         emit(target);
       }
     }
-    void (async () => {
-      try {
-        const backend = await getBackend();
-        if (target !== null) await backend.deckScrubTo(DECK, Math.round(target * 1000));
-        await backend.deckScrubEnd(DECK);
-      } catch (failure) {
-        setError(reasonFrom(failure));
-      }
-    })();
-  }, [DECK, emit, setPosition]);
+    inDragOrder(async (backend) => {
+      if (target !== null) await backend.deckScrubTo(DECK, Math.round(target * 1000));
+      await backend.deckScrubEnd(DECK);
+    });
+  }, [DECK, emit, setPosition, inDragOrder]);
 
   // A drag that is still pending when the player goes away must not fire.
   useEffect(

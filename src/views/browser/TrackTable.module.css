@@ -32,6 +32,9 @@
 
 .title { margin-right: auto; font-size: var(--f-size-ui); color: var(--c-text); }
 
+/* A list that could not be read (wbx-w41): one line in the alarm colour. */
+.listError { padding: 2px 12px; font-size: var(--f-size-ui); color: var(--c-on-error); background: var(--c-error); }
+
 /* The Track Filter button: an outlined square that goes blue when the bar is
    showing, the glyph white either way. The controls sit together to the
    right of the title, immediately before the search box. */

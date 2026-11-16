@@ -2558,6 +2558,9 @@ export const TrackTable = memo(function TrackTable({
       </div>
 
       {filterOpen ? filterBar : null}
+      {/* A list that could not be read says so, rather than standing on rows
+          and a count from before (wbx-w41). */}
+      {view.error ? <div role="alert" className={styles.listError} data-testid="list-error">This list could not be read: {view.error}</div> : null}
 
       <div className={styles.scroll} ref={scrollRef} data-testid="track-scroll" role="grid" aria-rowcount={view.count}>
         {/*
