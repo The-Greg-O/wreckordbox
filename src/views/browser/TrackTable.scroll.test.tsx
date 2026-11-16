@@ -28,7 +28,10 @@ let viewHeight = 600;
 let root: Root;
 
 const COLLECTION: ViewSpec = { source: { kind: "collection" }, sort: "trackNo", descending: false, query: "" };
-const PLAYLIST: ViewSpec = { source: { kind: "playlist", id: "cue" }, sort: "trackNo", descending: false, query: "" };
+// A playlist the mock's tree holds ("Melodic Vox"). One it does not hold opens
+// as the whole collection, as the real backend answers it (wbx-w41), and
+// would be no playlist at all for the tests below.
+const PLAYLIST: ViewSpec = { source: { kind: "playlist", id: "pl-0-0" }, sort: "trackNo", descending: false, query: "" };
 const columns = resolve(defaultLayout());
 const noop = () => {};
 

@@ -44,6 +44,10 @@ for (const layout of ["old layout", "view shell"] as const) {
     test("wbx-w41: Undo that takes away the open playlist leaves a list that follows the tree", async ({ page }) => {
       await page.goto("/?writable=1");
       await expect(title(page)).toContainText("Tracks)");
+      // The window opens on the first playlist: its rows, to know them again.
+      await expect(title(page)).toContainText("Melodic Vox");
+      await expect.poll(async () => (await titles(page)).length).toBeGreaterThan(0);
+      const ofMelodicVox = await titles(page);
       await item(page, "Melodic Vox").click({ button: "right" });
       await page.getByRole("menu", { name: "Playlist" }).getByRole("menuitem", { name: "Create New Playlist", exact: true }).click();
       const made = item(page, "New playlist");
@@ -57,11 +61,15 @@ for (const layout of ["old layout", "view shell"] as const) {
       await expect(title(page)).not.toContainText("New playlist");
       await expect(title(page)).toContainText("All Tracks");
       await expect(page.getByText("New playlist is no longer in the Library.")).toBeVisible();
+      await expect.poll(async () => (await titles(page)).length).toBeGreaterThan(0);
+      const ofAllTracks = await titles(page);
+      expect(ofAllTracks).not.toEqual(ofMelodicVox);
 
       // And choosing another playlist opens it.
       await item(page, "Melodic Vox").click();
       await expect(title(page)).toContainText("Melodic Vox");
-      await expect.poll(async () => (await titles(page)).length).toBeGreaterThan(0);
+      // Its own rows, not All Tracks' rows under its name.
+      await expect.poll(() => titles(page)).toEqual(ofMelodicVox);
     });
 
     test("wbx-w41: a list that cannot be read says so instead of showing the list before, and the next choice reads", async ({ page }) => {
