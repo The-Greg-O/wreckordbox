@@ -65,10 +65,21 @@ impl StickAccess {
 
     /// [`Self::recheck`] for the one Stick holding `path` (none for a path
     /// on an ordinary folder): a write to that file may go on (wbx-45.14).
+    ///
+    /// A Stick's root is canonical and `path` may not be (a symbolic link
+    /// on the way, another letter case on a volume that ignores case), so
+    /// the path is resolved too; one that cannot be resolved (its Stick may
+    /// be the one that went) rechecks every Stick held.
     pub fn recheck_for(&self, path: &Path) -> AppResult<()> {
+        let resolved = path.canonicalize().ok();
         self.held
             .iter()
-            .filter(|held| held.stick().is_some_and(|root| path.starts_with(root)))
+            .filter(|held| {
+                held.stick().is_some_and(|root| {
+                    path.starts_with(root)
+                        || resolved.as_ref().is_none_or(|found| found.starts_with(root))
+                })
+            })
             .try_for_each(|held| held.recheck().map_err(|e| refused(&e)))
     }
 }
@@ -325,5 +336,45 @@ pub(crate) mod testing {
         crate::stick_approval::propose(stick, op, Some(0))
             .and_then(|plan| crate::stick_approval::approve(state.backup_dir(), &plan))
             .ok()
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    /// A file on a held Stick, named through a path that is not the
+    /// Stick's canonical root (a symbolic link on the way), is still that
+    /// Stick's: once the Stick is replaced, the write to it stops.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_named_through_a_link_is_rechecked_against_its_stick() {
+        let (state, sticks) = (
+            tempfile::tempdir().expect("a state folder"),
+            tempfile::tempdir().expect("a folder of Sticks"),
+        );
+        let root = sticks.path().join("GIG");
+        std::fs::create_dir_all(root.join("Contents")).expect("made");
+        std::fs::write(root.join("Contents/a.mp3"), b"x").expect("written");
+        std::fs::write(
+            root.join(wreckordbox_stick_protection::STAND_IN_MARKER),
+            b"",
+        )
+        .expect("marked");
+        let link = sticks.path().join("link");
+        std::os::unix::fs::symlink(&root, &link).expect("linked");
+        let through_link = link.join("Contents/a.mp3");
+
+        wreckordbox_stick_protection::unlock(state.path(), &root, Some("GIG")).expect("unlocked");
+        let access = super::enter(state.path(), &root).expect("entered");
+        access.recheck_for(&through_link).expect("still the same Stick");
+
+        // The DJ locks it again meanwhile: the write may not go on.
+        std::fs::write(state.path().join(wreckordbox_stick_protection::FILE), b"{}")
+            .expect("the unlock is gone");
+        assert!(access.recheck_for(&through_link).is_err(), "through the link");
+        assert!(
+            access.recheck_for(&sticks.path().join("gone/a.mp3")).is_err(),
+            "a path that cannot be resolved rechecks every Stick held"
+        );
     }
 }

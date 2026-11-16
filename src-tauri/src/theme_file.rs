@@ -311,7 +311,7 @@ pub(crate) fn read_small(path: &Path, limit: u64) -> Result<Vec<u8>, Unread> {
     use std::io::Read;
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(libc::O_NONBLOCK);

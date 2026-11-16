@@ -50,7 +50,7 @@
     "category": "Music",
     "shortDescription": "DJ library and USB export manager",
     "longDescription": "Manage a DJ library, analyze tracks, write USB exports, and serve a library to supported players over a local network.",
-    "copyright": "Chris Le",
+    "copyright": "Copyright © Chris Le and the rbxport contributors. wreckordbox is a fork, by its contributors.",
     "macOS": {
       "entitlements": "entitlements.plist",
       "minimumSystemVersion": "11.0",

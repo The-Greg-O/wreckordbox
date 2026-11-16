@@ -1231,3 +1231,59 @@ fn stopping_the_service_waits_past_its_patience_for_a_load_and_its_report() {
 
 #[path = "stick_load/identity.rs"]
 mod identity;
+
+/// rekordbox keeps the export hidden, as `.PIONEER`, on a Stick formatted
+/// HFS+: the same Stick to everything here.
+#[test]
+fn a_stick_with_a_hidden_export_is_listed_protected_and_loaded_once_unlocked_by_name() {
+    let rig = Rig::new(&["FRIDAY"]);
+    let root = &rig.paths[0];
+    // Made the way a load makes one, then hidden and locked again.
+    rig.unlock(0);
+    rig.load_confirmed(0, &[&rig.set]);
+    let locked = rig.sandbox.cli(&["stick", "lock", rig.path(0)]);
+    assert!(locked.status.success(), "{}", locked.stderr);
+    std::fs::rename(root.join("PIONEER"), root.join(".PIONEER")).unwrap();
+    assert!(root.join(".PIONEER/rekordbox/export.pdb").is_file());
+
+    let listed = rig.json(&["stick", "list"]);
+    let sticks = listed["sticks"].as_array().unwrap();
+    assert_eq!(sticks.len(), 1, "{listed}");
+    assert_eq!(sticks[0]["name"], "FRIDAY");
+    assert_eq!(sticks[0]["kind"], "gig");
+    assert_eq!(sticks[0]["protected"], true, "protected by default");
+    assert_eq!(sticks[0]["tracks"], 2, "its hidden export is read: {listed}");
+
+    // Protected: a load is refused and nothing is written.
+    let dry = rig.dry_run(0, &[&rig.set, &rig.other]);
+    let before = snapshot(root);
+    let refused = rig.load(0, &[&rig.set, &rig.other], dry["plan"].as_str().unwrap());
+    assert_eq!(
+        refused.error_json()["error"]["code"],
+        "stick_protected",
+        "{}",
+        refused.stderr
+    );
+    assert_eq!(snapshot(root), before, "nothing written");
+    // Its name is needed to unlock it.
+    let unnamed = rig.sandbox.cli(&["stick", "unlock", rig.path(0)]);
+    assert!(!unnamed.status.success(), "a Gig stick needs its name");
+
+    rig.unlock(0);
+    let load = rig.load_confirmed(0, &[&rig.set, &rig.other]);
+    assert_eq!(load["outcome"], "loaded", "{load}");
+    assert!(
+        !root.join("PIONEER").exists(),
+        "the export stays where rekordbox keeps it"
+    );
+    assert_eq!(
+        rig.on_stick(0),
+        [
+            (
+                "Set".to_owned(),
+                vec!["Alpha".to_owned(), "Bravo".to_owned()]
+            ),
+            ("Other".to_owned(), vec!["Charlie".to_owned()]),
+        ]
+    );
+}
