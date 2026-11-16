@@ -602,3 +602,56 @@ fn a_fact_changed_while_an_unwind_awaits_recording_does_not_wedge_later_edits() 
     ok(&s, &["tracks", "rate", "10004", "5"]);
     assert_eq!(ok(&s, &["tracks", "show", "10004"])["rating"], 5);
 }
+
+#[test]
+fn a_projection_may_fill_a_value_whose_only_change_was_unwound() {
+    let s = Sandbox::new();
+    std::fs::create_dir_all(s.sidecar_dir()).unwrap();
+    std::fs::write(
+        s.sidecar_dir().join("projection-policy.toml"),
+        "[energy]\napply = 0.5\n",
+    )
+    .unwrap();
+    let mistaken = ok(
+        &s,
+        &["tracks", "rate", "10003", "4", "--source", "agent:bad"],
+    )["run"]["id"]
+        .to_string();
+    // A second track keeps its other-owned rating, so the check is not vacuous.
+    ok(
+        &s,
+        &["tracks", "rate", "10004", "1", "--source", "agent:bad"],
+    );
+    assert_eq!(ok(&s, &["runs", "unwind", &mistaken])["reversed"], 1);
+    assert_eq!(ok(&s, &["tracks", "show", "10003"])["rating"], 0);
+    for track in ["10003", "10004"] {
+        ok(
+            &s,
+            &[
+                "facts",
+                "record",
+                track,
+                "energy",
+                "3",
+                "--source",
+                "agent:tagger",
+                "--confidence",
+                "0.6",
+            ],
+        );
+    }
+    let applied = ok(&s, &["project"]);
+    let changed: Vec<_> = applied["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| (c["track"].clone(), c["field"].clone()))
+        .collect();
+    assert_eq!(
+        changed,
+        vec![(serde_json::json!("10003"), serde_json::json!("energy"))],
+        "{applied}"
+    );
+    assert_eq!(ok(&s, &["tracks", "show", "10003"])["rating"], 3);
+    assert_eq!(ok(&s, &["tracks", "show", "10004"])["rating"], 1);
+}

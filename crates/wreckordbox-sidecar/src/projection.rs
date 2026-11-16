@@ -165,6 +165,7 @@ struct Row {
     command: Option<String>,
     reverses: Option<i64>,
     payload: Option<String>,
+    kind: String,
 }
 
 /// The tracks a command's JSON (`{"name","args"}`) names, if it names any,
@@ -222,7 +223,7 @@ pub(crate) fn barriers(db: &Connection) -> Result<Vec<Barrier>> {
     let mut found = Vec::new();
     let mut statement = db.prepare_cached(
         "SELECT id, kind, payload, command FROM ledger
-         WHERE store = 'library' AND kind IN ('unconfirmed', 'track', 'track_tags', ?1)
+         WHERE store = 'library' AND kind IN ('unconfirmed', 'track', 'track_tags', 'unwind', ?1)
          ORDER BY id",
     )?;
     let rows = statement
@@ -237,7 +238,19 @@ pub(crate) fn barriers(db: &Connection) -> Result<Vec<Barrier>> {
         .collect::<rusqlite::Result<Vec<_>>>()?;
     for (seq, kind, payload, command) in rows {
         // A MyTag entry (wbx-29) that does not read is one too, listed and
-        // cleared like any other.
+        // cleared like any other. So is an Unwind whose edits do not read.
+        if kind == "unwind" {
+            if crate::projection_unwind::track_edits(payload.as_deref()).is_none()
+                || crate::projection_unwind::tag_payload(payload.as_deref()).is_none()
+            {
+                found.push(Barrier {
+                    seq,
+                    tracks: tracks_named(command.as_deref()),
+                    cleared: None,
+                });
+            }
+            continue;
+        }
         if kind != "unconfirmed" && kind != "track" {
             if crate::mytag_projection::writes(&kind, payload.as_deref()).is_none() {
                 found.push(Barrier {
@@ -317,8 +330,8 @@ fn provenance(db: &Connection, columns: &[&str]) -> Result<Provenance> {
     })?;
     let mut statement = db.prepare_cached(
         "SELECT id, action, source_kind, source_name,
-                json_extract(command, '$.name'), reverses, payload
-         FROM ledger WHERE store = 'library' AND kind = 'track' ORDER BY id",
+                json_extract(command, '$.name'), reverses, payload, kind
+         FROM ledger WHERE store = 'library' AND kind IN ('track', 'unwind') ORDER BY id",
     )?;
     let rows = statement
         .query_map([], |row| {
@@ -332,6 +345,7 @@ fn provenance(db: &Connection, columns: &[&str]) -> Result<Provenance> {
                 command: row.get(4)?,
                 reverses: row.get(5)?,
                 payload: row.get(6)?,
+                kind: row.get(7)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<Row>>>()?;
@@ -370,7 +384,14 @@ fn provenance(db: &Connection, columns: &[&str]) -> Result<Provenance> {
             }
         };
         // A payload that does not read is a barrier (`barriers`).
-        let Some(edits) = edits_of(row.payload.as_deref()) else {
+        let unwound = (row.kind == "unwind" && row.action == "edit")
+            .then(|| crate::projection_unwind::reversed(row.payload.as_deref(), &steps));
+        let edits = if row.kind == "unwind" {
+            crate::projection_unwind::track_edits(row.payload.as_deref())
+        } else {
+            edits_of(row.payload.as_deref())
+        };
+        let Some(edits) = edits else {
             continue;
         };
         for edit in edits {
@@ -390,6 +411,15 @@ fn provenance(db: &Connection, columns: &[&str]) -> Result<Provenance> {
                 entry: row.id,
             };
             let next = match (row.action.as_str(), &origin) {
+                // An Unwind puts the field back to its state before the
+                // oldest edit it reverses, so that edit's owner no longer
+                // owns it; its own Undo then returns to `current`.
+                ("edit", _) if unwound.is_some() => crate::projection_unwind::restore(
+                    stack,
+                    unwound.as_ref().and_then(Option::as_ref),
+                    current,
+                    row.id,
+                ),
                 ("undo", Some((origin, _))) => {
                     match stack.iter().rposition(|(step, _)| step == origin) {
                         Some(at) => {
@@ -441,7 +471,7 @@ pub(crate) fn open_intent_of(db: &Connection, command: &str) -> Result<Option<i6
 fn written_since(db: &Connection, watermark: i64, tracks: &[String]) -> Result<bool> {
     let mut statement = db.prepare_cached(
         "SELECT kind, payload, command FROM ledger
-         WHERE id > ?1 AND store = 'library' AND kind IN ('track', 'unconfirmed')",
+         WHERE id > ?1 AND store = 'library' AND kind IN ('track', 'unconfirmed', 'unwind')",
     )?;
     let rows = statement
         .query_map(params![watermark], |row| {
@@ -454,8 +484,13 @@ fn written_since(db: &Connection, watermark: i64, tracks: &[String]) -> Result<b
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let named = |track: &str| tracks.iter().any(|t| t == track);
     Ok(rows.into_iter().any(|(kind, payload, command)| {
-        match (kind.as_str(), edits_of(payload.as_deref())) {
-            ("track", Some(edits)) => edits
+        let edits = if kind == "unwind" {
+            crate::projection_unwind::track_edits(payload.as_deref())
+        } else {
+            edits_of(payload.as_deref())
+        };
+        match (kind.as_str(), edits) {
+            ("track" | "unwind", Some(edits)) => edits
                 .iter()
                 .any(|edit| edit["track"].as_str().is_some_and(named)),
             // Unconfirmed, or unreadable: newer than the plan and possibly
