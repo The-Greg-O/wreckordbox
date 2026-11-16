@@ -9,7 +9,7 @@ use crate::{
 use rbl_library::{history::LibraryEdit, Touched};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use wreckordbox_sidecar::{
     ledger::{Action, Entry},
     unwind::{FactChange, Visibility},
@@ -96,19 +96,16 @@ fn plan(
     let entries = run_entries(sidecar, run.id)?;
     let mut virtual_native: BTreeMap<String, Part> = BTreeMap::new();
     let mut virtual_facts: BTreeMap<i64, FactChange> = BTreeMap::new();
+    // Values a newer entry of this Run kept because they changed since. An
+    // older entry of the same value must not compare against the live value
+    // again: a later edit may happen to equal that older entry's after.
+    let mut kept_native: BTreeSet<String> = BTreeSet::new();
     let mut reports = Vec::new();
     let mut reversed = Vec::new();
     let mut reversed_native = Vec::new();
     for entry in entries.into_iter().rev() {
         let mut report = json!({"id":entry.id,"store":entry.store,"kind":entry.kind,"status":"cannot_reverse","values":[],"reason":null});
-        if sidecar
-            .was_unwound(entry.id, entry.fact.is_some())
-            .map_err(|e| sidecar_error(&e))?
-            || (entry.fact.is_none()
-                && sidecar
-                    .undone_outside_run(&entry)
-                    .map_err(|e| sidecar_error(&e))?)
-        {
+        if sidecar.is_reversed(&entry).map_err(|e| sidecar_error(&e))? {
             report["status"] = json!("already_reversed");
             reports.push(report);
             continue;
@@ -131,7 +128,7 @@ fn plan(
                 std::mem::swap(&mut part.before, &mut part.after);
             }
         }
-        let mut conflicts = false;
+        let mut conflicts = parts.iter().any(|part| kept_native.contains(&part.key));
         let mut missing = false;
         let mut values = Vec::new();
         for part in &mut parts {
@@ -181,6 +178,7 @@ fn plan(
         }
         report["values"] = json!(values);
         if missing || (conflicts && !args.force) {
+            kept_native.extend(parts.iter().map(|part| part.key.clone()));
             report["status"] = json!("changed_since");
             report["reason"] = json!(if missing {
                 "The native row is missing; kept even with force."

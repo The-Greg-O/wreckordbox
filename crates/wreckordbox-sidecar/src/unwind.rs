@@ -19,38 +19,16 @@ pub struct FactChange {
 }
 
 impl Sidecar {
-    /// A successful Unwind is a durable receipt, even after restart. Fact
+    /// Whether an entry's effect is currently taken back, by an Unwind or by
+    /// a window Undo/Redo step from another Run. A reversing step counts only
+    /// while it is itself still in effect: an Unwind that was unwound, or
+    /// undone in the window, no longer reverses anything. Steps inside the
+    /// entry's own Run are handled by the reverse-order planner itself. Fact
     /// identifiers and Ledger identifiers are different namespaces.
-    pub fn was_unwound(&self, id: i64, fact: bool) -> Result<bool> {
-        Ok(self.db().query_row(
-            "SELECT EXISTS(SELECT 1 FROM ledger l, json_each(l.payload, '$.reverses') r
-             WHERE l.kind='unwind' AND l.action='edit'
-               AND json_extract(r.value,'$.id')=?1 AND json_extract(r.value,'$.fact')=?2)",
-            params![id, fact],
-            |r| r.get(0),
-        )?)
-    }
-
-    /// A window Undo already took this entry back. Follow Redo links too;
-    /// entries within the Run are handled by the reverse-order planner itself.
-    pub fn undone_outside_run(&self, entry: &Entry) -> Result<bool> {
+    pub fn is_reversed(&self, entry: &Entry) -> Result<bool> {
         let db = self.db();
-        let mut at = entry.id;
-        let mut reversed = false;
-        let mut last_run = entry.run.0;
-        loop {
-            let next: Option<(i64, i64)> = db.query_row(
-                "SELECT id,run_id FROM ledger WHERE reverses=?1 AND id>?1 AND action IN ('undo','redo') ORDER BY id DESC LIMIT 1",
-                [at], |r| Ok((r.get(0)?,r.get(1)?)),
-            ).optional()?;
-            let Some((id, run)) = next else {
-                break;
-            };
-            at = id;
-            last_run = run;
-            reversed = !reversed;
-        }
-        Ok(reversed && last_run != entry.run.0)
+        let fact = entry.fact.is_some();
+        reversed(&db, entry.id, fact, (!fact).then_some(entry.run.0))
     }
 
     pub fn fact_visibility(&self, id: i64) -> Result<Option<Visibility>> {
@@ -185,6 +163,31 @@ impl Sidecar {
     }
 }
 
+/// Whether any step reversing `id` is still in effect. Reversing steps are
+/// Unwind rows listing it and, for a Ledger entry, window Undo/Redo rows
+/// pointing at it (outside `own_run`). Reversers always have larger ids.
+fn reversed(db: &rusqlite::Connection, id: i64, fact: bool, own_run: Option<i64>) -> Result<bool> {
+    let mut q = db.prepare_cached(
+        "SELECT l.id FROM ledger l, json_each(l.payload, '$.reverses') r
+         WHERE l.kind='unwind' AND l.action='edit'
+           AND json_extract(r.value,'$.id')=?1 AND json_extract(r.value,'$.fact')=?2
+         UNION
+         SELECT id FROM ledger WHERE ?2=0 AND reverses=?1 AND id>?1
+           AND action IN ('undo','redo') AND (?3 IS NULL OR run_id<>?3)
+         ORDER BY 1",
+    )?;
+    let steps = q
+        .query_map(params![id, fact, own_run], |r| r.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(q);
+    for step in steps {
+        if !reversed(db, step, false, None)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn visibility(db: &rusqlite::Connection, id: i64) -> Result<Option<Visibility>> {
     Ok(db
         .query_row(
@@ -199,6 +202,25 @@ fn visibility(db: &rusqlite::Connection, id: i64) -> Result<Option<Visibility>> 
             },
         )
         .optional()?)
+}
+
+/// The payload an Unwind is recorded with when its Fact changes could not be
+/// made: no Fact change is claimed, and Fact entries are not listed as
+/// reversed, so a later Unwind or window step does not act on them.
+pub(crate) fn without_fact_changes(payload: Option<&Value>, edit: bool, error: &str) -> Value {
+    let mut payload = payload.cloned().unwrap_or_else(|| serde_json::json!({}));
+    if edit {
+        payload["fact_changes"] = serde_json::json!([]);
+        if let Some(reverses) = payload["reverses"].as_array_mut() {
+            reverses.retain(|r| r["fact"] != true);
+        }
+    }
+    payload["facts_not_recorded"] = serde_json::json!([{
+        "track": "",
+        "kind": "unwind",
+        "reason": format!("Fact changes not made: {error}"),
+    }]);
+    payload
 }
 
 pub(crate) fn apply_in(tx: &Transaction<'_>, entry: i64, payload: &Value) -> Result<()> {

@@ -469,3 +469,136 @@ fn an_accepted_unwind_reports_pending_recording_and_refuses_a_stale_retry() {
         "unwind_pending_recording"
     );
 }
+
+fn finished_run(s: &Sandbox, description: &str) -> String {
+    ok(
+        s,
+        &[
+            "runs",
+            "start",
+            "--source",
+            "agent:test",
+            "--description",
+            description,
+        ],
+    )["id"]
+        .to_string()
+}
+
+#[test]
+fn a_skipped_later_edit_also_keeps_an_older_edit_of_the_same_value() {
+    let s = Sandbox::new();
+    let run = finished_run(&s, "Two ratings");
+    ok(&s, &["tracks", "rate", "10003", "2", "--run", &run]);
+    ok(&s, &["tracks", "rate", "10003", "4", "--run", &run]);
+    ok(&s, &["runs", "finish", &run]);
+    // The DJ later happens to choose the Run's intermediate value.
+    ok(&s, &["tracks", "rate", "10003", "2"]);
+    let plan = ok(&s, &["runs", "unwind", &run, "--dry-run"]);
+    assert_eq!(plan["entries"][0]["status"], "changed_since", "{plan}");
+    assert_eq!(plan["entries"][1]["status"], "changed_since", "{plan}");
+    assert_eq!(plan["reversed"], 0, "{plan}");
+    assert_eq!(ok(&s, &["runs", "unwind", &run])["reversed"], 0);
+    assert_eq!(ok(&s, &["tracks", "show", "10003"])["rating"], 2);
+    // Forcing still takes the whole Run back to its before value.
+    assert_eq!(ok(&s, &["runs", "unwind", &run, "--force"])["reversed"], 2);
+    assert_eq!(ok(&s, &["tracks", "show", "10003"])["rating"], 0);
+}
+
+#[test]
+fn a_run_whose_unwind_was_itself_unwound_can_be_unwound_again() {
+    let s = Sandbox::new();
+    let original = ok(
+        &s,
+        &["tracks", "rate", "10003", "4", "--source", "agent:test"],
+    )["run"]["id"]
+        .to_string();
+    let first = ok(&s, &["runs", "unwind", &original]);
+    assert_eq!(first["reversed"], 1);
+    let inverse = first["run"]["id"].to_string();
+    assert_eq!(ok(&s, &["runs", "unwind", &inverse])["reversed"], 1);
+    assert_eq!(ok(&s, &["tracks", "show", "10003"])["rating"], 4);
+    let again = ok(&s, &["runs", "unwind", &original]);
+    assert_eq!(again["entries"][0]["status"], "will_reverse", "{again}");
+    assert_eq!(again["reversed"], 1, "{again}");
+    assert_eq!(ok(&s, &["tracks", "show", "10003"])["rating"], 0);
+}
+
+#[test]
+fn a_fact_changed_while_an_unwind_awaits_recording_does_not_wedge_later_edits() {
+    let s = Sandbox::new();
+    let run = finished_run(&s, "Rating and Fact");
+    ok(&s, &["tracks", "rate", "10003", "4", "--run", &run]);
+    ok(
+        &s,
+        &[
+            "facts",
+            "record",
+            "10003",
+            "mood",
+            "Warm",
+            "--source",
+            "agent:test",
+            "--confidence",
+            "0.8",
+            "--run",
+            &run,
+        ],
+    );
+    ok(&s, &["runs", "finish", &run]);
+    s.client().stop().unwrap();
+    crate::common::released::wait_until_released(&s, "service stopped before fault injection");
+    let mut command = s.command();
+    command
+        .env("WRECKORDBOX_LEDGER_FAULTS", "fail_append=1")
+        .args(["--json", "runs", "unwind", &run]);
+    let accepted = s.run(&mut command);
+    assert!(accepted.status.success(), "{}", accepted.stderr);
+    assert_eq!(accepted.json()["recording_pending"], true);
+    // A Sidecar-only Fact write in the same slot is either refused while the
+    // Unwind awaits recording, or is accepted without wedging the Library.
+    ok(
+        &s,
+        &[
+            "facts",
+            "record",
+            "10003",
+            "mood",
+            "Dark",
+            "--source",
+            "agent:test",
+            "--confidence",
+            "0.9",
+        ],
+    );
+    ok(&s, &["tracks", "rate", "10004", "3"]);
+    assert_eq!(ok(&s, &["tracks", "show", "10004"])["rating"], 3);
+    // The Library change was recorded; the moved Fact was left as it is now
+    // and the Unwind entry says its Fact changes were not made.
+    assert_eq!(ok(&s, &["tracks", "show", "10003"])["rating"], 0);
+    let facts = ok(&s, &["facts", "show", "10003", "--kind", "mood"]);
+    let live: Vec<_> = facts["facts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["value"].clone())
+        .collect();
+    assert_eq!(live, vec![serde_json::json!(["Dark"])], "{facts}");
+    let runs = ok(&s, &["runs", "list", "--limit", "10"]);
+    let unwind = runs["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["counts"].to_string().contains("\"unwind\""))
+        .unwrap_or_else(|| panic!("no Unwind Run: {runs}"))["id"]
+        .to_string();
+    let shown = ok(&s, &["runs", "show", &unwind]);
+    assert!(
+        shown.to_string().contains("Fact changes not made"),
+        "{shown}"
+    );
+    s.client().stop().unwrap();
+    crate::common::released::wait_until_released(&s, "service stopped before restart");
+    ok(&s, &["tracks", "rate", "10004", "5"]);
+    assert_eq!(ok(&s, &["tracks", "show", "10004"])["rating"], 5);
+}
