@@ -4,16 +4,23 @@
 //! export from another computer, a player's edits), as rekordbox's own export
 //! does: `rbl_export::reconcile` carries each such track into the write with
 //! `device.preserve`, its source the Stick's own file, and the export leaves
-//! that file where it is (`retained_audio`). The export's estimate does not
-//! know that: it reckons such a track as audio to copy whenever no record
-//! of ours names it, so a plan built on it reported every one of them as
+//! that file where it is (`retained_audio`). The export's estimate did not
+//! know that: it reckoned such a track as audio to copy whenever no record
+//! of ours named it, so a plan built on it reported every one of them as
 //! "added" and counted their audio again in the room needed (an 11-track
 //! playlist onto a rekordbox Stick of 280 tracks: 291 added, 10.7 GB).
 //!
 //! This module tells those tracks and playlists apart from the preview, so
-//! the plan says they stay, and works out the room the estimate counted for
-//! them, so it can be taken off again. `rbl_export` is left as it is
-//! (ADR 0003).
+//! the plan says they stay. The room is the export's own to reckon: its
+//! estimate now knows such a track's audio is not copied (it has to, since
+//! the export checks the Stick's room with it before it writes); what is
+//! taken off here is only the analysis files the export writes over those
+//! already there, which take room while it works but none afterwards.
+//!
+//! Once a load of ours has been on the Stick, its record (the manifest)
+//! names those tracks too, marked as carried, and an unchanged selection is
+//! answered from that record alone, without the Stick's tracks in the
+//! preview: they are then read from the record ([`of_record`]).
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -27,16 +34,67 @@ pub(crate) struct Kept {
     pub tracks: Vec<PlannedTrack>,
     /// The playlists (not folders) the write keeps without being asked to.
     pub playlists: Vec<String>,
-    /// Of those tracks, how many the estimate counted as new audio.
-    pub counted_new: usize,
-    /// The room the estimate counted to copy their audio again, in whole
-    /// clusters, as it counted it.
-    pub counted_bytes: u64,
+    /// The room the preview counted for their analysis files, which the
+    /// export writes over those already there: needed while it works, not
+    /// taken afterwards. In whole clusters, as the preview counted it.
+    pub rewritten_bytes: u64,
 }
 
 /// Whether `track` is the Stick's own copy, carried as it is.
 pub(crate) fn carried(track: &rbl_export::SourceTrack, destination: &Path) -> bool {
-    track.device.as_ref().is_some_and(|d| d.preserve) && track.source_path.starts_with(destination)
+    // Not a chosen track whose file here is gone, which the export carries
+    // from the Stick's copy the same way: that one is this Library's.
+    track.device.as_ref().is_some_and(|d| d.preserve)
+        && !track.source_unavailable
+        && track.source_path.starts_with(destination)
+}
+
+/// Whether `entry` of the Stick's record is a track another writer put
+/// there, which the export carried (as `rbl_export` tells them: the record
+/// says so, and an older record names the Stick's own file as its source).
+pub(crate) fn carried_in_record(entry: &rbl_export::ManifestTrack, destination: &Path) -> bool {
+    entry.preserved.unwrap_or_else(|| {
+        entry.library_id == 0
+            && !entry.audio.is_empty()
+            && Path::new(&entry.source) == destination.join(entry.audio.trim_start_matches('/'))
+    })
+}
+
+/// Whether `preview` was answered from the Stick's record alone: nothing to
+/// do, so the export did not read the Stick's own tracks and playlists into
+/// it. (Every other preview is an estimate, and says so.)
+pub(crate) fn from_record_alone(preview: &rbl_export::plan::SyncPlan) -> bool {
+    !preview.approximate
+}
+
+/// [`of`] when the preview was answered from the Stick's record alone
+/// ([`from_record_alone`]): what that record says another writer put there.
+/// `titles` are the Stick's tracks' titles by the id a player sees.
+pub(crate) fn of_record(
+    destination: &Path,
+    manifest: &rbl_export::Manifest,
+    titles: &std::collections::HashMap<u32, &str>,
+) -> Kept {
+    Kept {
+        tracks: manifest
+            .tracks
+            .iter()
+            .filter(|t| carried_in_record(t, destination))
+            .map(|t| PlannedTrack {
+                id: t.library_id,
+                title: titles
+                    .get(&t.export_id)
+                    .map_or_else(|| t.audio.clone(), |title| (*title).to_owned()),
+            })
+            .collect(),
+        playlists: manifest
+            .playlists
+            .iter()
+            .filter(|p| p.device_only && !p.folder)
+            .map(|p| p.name.clone())
+            .collect(),
+        rewritten_bytes: 0,
+    }
 }
 
 /// The tracks and playlists of `preview` that the write keeps rather than
@@ -45,6 +103,7 @@ pub(crate) fn of(
     destination: &Path,
     selection: &crate::selection::ExportSelection,
     preview: &rbl_export::plan::SyncPlan,
+    recorded: &HashSet<String>,
 ) -> Kept {
     let unit = rbl_export::plan::allocation_unit(destination);
     let mut kept = Kept::default();
@@ -58,20 +117,14 @@ pub(crate) fn of(
             id: track.id,
             title: track.title.clone(),
         });
-        if matches!(
-            preview.estimate.actions.get(&key),
-            Some(rbl_export::estimate::AudioAction::Copy)
-        ) {
-            kept.counted_new += 1;
-            let size = std::fs::metadata(&track.source_path).map_or(0, |m| m.len());
-            kept.counted_bytes += size.div_ceil(unit).saturating_mul(unit);
-            // Its analysis files, which the export does not write again
-            // either, counted as the preview counts them for a track it
-            // copies (each 256 bytes longer).
+        // A track no record of ours names has its analysis files written
+        // again, over those the Stick has: counted as the preview counts
+        // them (each 256 bytes longer).
+        if !recorded.contains(&key) {
             if let Some(base) = &track.analysis_source {
                 for ext in ["DAT", "EXT", "2EX"] {
                     if let Ok(m) = std::fs::metadata(base.with_extension(ext)) {
-                        kept.counted_bytes += (m.len() + 256).div_ceil(unit).saturating_mul(unit);
+                        kept.rewritten_bytes += (m.len() + 256).div_ceil(unit).saturating_mul(unit);
                     }
                 }
             }

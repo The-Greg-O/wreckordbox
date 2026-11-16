@@ -39,6 +39,8 @@ struct Rig {
     _other_music: tempfile::TempDir,
     stick: PathBuf,
     set: String,
+    /// A third track of the Library, in no playlist.
+    charlie: String,
 }
 
 /// A WAV file of `frames` frames of silence (16-bit mono, 44.1 kHz),
@@ -66,7 +68,7 @@ fn wav(path: &Path, frames: u32, bytes: usize) {
 }
 
 impl Rig {
-    /// A Library with "Set" (Alpha, Bravo), and a Stick holding another
+    /// A Library with "Set" (Alpha, Bravo) and Charlie, and a Stick holding another
     /// Library's export: `OTHER_TRACKS` tracks in "Their Set".
     fn new() -> Self {
         let mut sandbox = Sandbox::empty();
@@ -81,6 +83,7 @@ impl Rig {
         sandbox.sticks = vec![stick.clone()];
         let a = sandbox.import_track("Alpha.wav", 2);
         let b = sandbox.import_track("Bravo.wav", 2);
+        let charlie = sandbox.import_track("Charlie.wav", 2);
         let mut set = String::new();
         sandbox.edit(|writer| {
             set = writer.create_playlist("Set", "root").unwrap();
@@ -133,6 +136,7 @@ impl Rig {
             _other_music: other_music,
             stick,
             set,
+            charlie,
         }
     }
 
@@ -149,7 +153,45 @@ impl Rig {
     }
 
     fn dry_run(&self) -> Value {
-        self.json(&["stick", "dry-run", self.path(), &self.set])
+        self.dry_run_with(&[])
+    }
+
+    fn dry_run_with(&self, extra: &[&str]) -> Value {
+        let mut args = vec!["stick", "dry-run", self.path(), self.set.as_str()];
+        args.extend_from_slice(extra);
+        self.json(&args)
+    }
+
+    /// The DJ unlocks the Stick (the test plays the DJ).
+    fn unlock(&self) {
+        let name = self.stick.file_name().unwrap().to_str().unwrap().to_owned();
+        let run = self
+            .sandbox
+            .cli(&["stick", "unlock", self.path(), "--name", &name]);
+        assert!(run.status.success(), "{}", run.stderr);
+    }
+
+    /// A dry run, then the load it planned: both answers.
+    fn load_confirmed(&self, extra: &[&str]) -> (Value, Value) {
+        let dry = self.dry_run_with(extra);
+        let plan = dry["plan"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no plan: {dry}"))
+            .to_owned();
+        let mut args = vec![
+            "--json",
+            "stick",
+            "load",
+            self.path(),
+            self.set.as_str(),
+            "--plan",
+            plan.as_str(),
+        ];
+        args.extend_from_slice(extra);
+        let run = self.sandbox.cli(&args);
+        let load: Value = serde_json::from_str(&run.stdout)
+            .unwrap_or_else(|e| panic!("{e}: {} {}", run.stdout, run.stderr));
+        (dry, load)
     }
 
     fn playlists_on_stick(&self) -> Vec<(String, Vec<String>)> {
@@ -243,11 +285,7 @@ fn the_load_does_what_that_dry_run_said() {
     let theirs_before = audio(&rig.stick);
     assert_eq!(theirs_before.len(), OTHER_TRACKS);
 
-    let name = rig.stick.file_name().unwrap().to_str().unwrap().to_owned();
-    let run = rig
-        .sandbox
-        .cli(&["stick", "unlock", rig.path(), "--name", &name]);
-    assert!(run.status.success(), "{}", run.stderr);
+    rig.unlock();
     let dry = rig.dry_run();
     let plan = dry["plan"].as_str().unwrap().to_owned();
     let run = rig.sandbox.cli(&[
@@ -282,4 +320,163 @@ fn the_load_does_what_that_dry_run_said() {
             path.display()
         );
     }
+}
+
+/// What every dry run onto this Stick says of the other export, whether or
+/// not a load of ours has been there before.
+fn assert_theirs_stay(dry: &Value, when: &str) {
+    let changes = &dry["changes"];
+    assert_eq!(
+        titles(&changes["tracks"]["removed"]),
+        Vec::<String>::new(),
+        "{when}: {changes}"
+    );
+    assert_eq!(changes["counts"]["tracks_removed"], 0, "{when}: {changes}");
+    assert_eq!(
+        titles(&changes["tracks"]["kept"]),
+        theirs(),
+        "{when}: {changes}"
+    );
+    assert_eq!(
+        changes["counts"]["tracks_kept"], OTHER_TRACKS,
+        "{when}: {changes}"
+    );
+    assert_eq!(
+        changes["playlists"]["kept"],
+        serde_json::json!(["Their Set"]),
+        "{when}: {changes}"
+    );
+    assert_eq!(
+        changes["playlists"]["removed"],
+        serde_json::json!([]),
+        "{when}: {changes}"
+    );
+}
+
+/// The DJ loads the same Stick again: ordinary use. The first load left a
+/// record of ours on the Stick, and an unchanged selection is answered from
+/// that record alone; the other export's tracks are still kept, not removed.
+#[test]
+fn loading_the_same_stick_again_still_keeps_the_other_export() {
+    let rig = Rig::new();
+    rig.unlock();
+    let (first, load) = rig.load_confirmed(&[]);
+    assert_theirs_stay(&first, "first dry run");
+    assert_eq!(load["outcome"], "loaded", "{load}");
+
+    // Nothing changed: the second dry run adds nothing and removes nothing.
+    let (second, load) = rig.load_confirmed(&[]);
+    assert_theirs_stay(&second, "second dry run");
+    assert_eq!(
+        titles(&second["changes"]["tracks"]["added"]),
+        Vec::<String>::new(),
+        "{second}"
+    );
+    assert_eq!(load["outcome"], "loaded", "second load: {load}");
+    assert_eq!(
+        load["not_written"]["tracks"],
+        serde_json::json!([]),
+        "{load}"
+    );
+
+    // And again, replacing the Stick's settings files this time.
+    let (third, load) = rig.load_confirmed(&["--replace-settings"]);
+    assert_theirs_stay(&third, "third dry run, --replace-settings");
+    assert_eq!(load["outcome"], "loaded", "third load: {load}");
+
+    // A changed selection (the record no longer answers alone) keeps them too.
+    let run = rig
+        .sandbox
+        .cli(&["playlists", "add", &rig.set, &rig.charlie]);
+    assert!(run.status.success(), "{}", run.stderr);
+    let (fourth, load) = rig.load_confirmed(&[]);
+    assert_theirs_stay(&fourth, "fourth dry run, one track more");
+    assert_eq!(
+        titles(&fourth["changes"]["tracks"]["added"]),
+        ["Charlie"],
+        "{fourth}"
+    );
+    assert_eq!(load["outcome"], "loaded", "fourth load: {load}");
+    assert_eq!(
+        rig.playlists_on_stick(),
+        vec![
+            (
+                "Set".to_owned(),
+                vec!["Alpha".to_owned(), "Bravo".to_owned(), "Charlie".to_owned()]
+            ),
+            ("Their Set".to_owned(), theirs()),
+        ]
+    );
+}
+
+/// A Stick with less room free than the other export takes (a Stick more
+/// than half full of rekordbox's tracks): the load fits, as the dry run
+/// says, and the room it leaves is not charged for their audio.
+#[test]
+fn a_load_fits_a_stick_with_less_room_than_the_kept_audio_takes() {
+    let rig = Rig::new();
+    let theirs_bytes = (OTHER_TRACKS * OTHER_AUDIO_BYTES) as u64;
+    let free = theirs_bytes / 2;
+    rig.sandbox.set_stick_free_bytes(free);
+    rig.unlock();
+
+    let (dry, load) = rig.load_confirmed(&[]);
+
+    let space = &dry["space"];
+    assert_eq!(space["free_before"], free, "{space}");
+    assert_eq!(space["shortfall_bytes"], Value::Null, "{space}");
+    assert!(space["needed_bytes"].as_u64().unwrap() < free, "{space}");
+    let after = space["free_after"].as_u64().unwrap();
+    assert!(
+        free - after < theirs_bytes / 4,
+        "the room left is charged for their audio: {space}"
+    );
+    assert_eq!(load["outcome"], "loaded", "{load}");
+}
+
+/// The export checks the room itself before it writes, with its own
+/// reckoning (`rbl_export::plan`), against the Stick's real free space,
+/// which no test can set. So this pins that reckoning: the room it asks for
+/// on a Stick holding another export does not count that export's audio,
+/// which it leaves where it is. (It did: a load onto a Stick more than half
+/// full of rekordbox's tracks was refused after its dry run said it fits.)
+#[test]
+fn the_exports_own_room_check_does_not_count_the_kept_audio() {
+    let rig = Rig::new();
+    let mine = tempfile::tempdir().unwrap();
+    let path = mine.path().join("Mine.wav");
+    wav(&path, 44_100, 0);
+    let tracks = vec![rbl_export::SourceTrack {
+        id: 1,
+        source_path: path,
+        title: "Mine".into(),
+        duration_sec: 1,
+        sample_rate: 44_100,
+        ..Default::default()
+    }];
+    let playlists = vec![rbl_export::SourcePlaylist {
+        id: 5,
+        name: "Mine".into(),
+        track_indices: vec![0],
+        ..Default::default()
+    }];
+    let sync = rbl_export::sync_record::SyncSource {
+        db_id: 0x1234,
+        ..Default::default()
+    };
+    let options = rbl_export::ExportOptions {
+        sync: Some(&sync),
+        ..Default::default()
+    };
+
+    let plan = rbl_export::plan::preview(&rig.stick, &tracks, &playlists, &[], &options).unwrap();
+
+    let theirs_bytes = (OTHER_TRACKS * OTHER_AUDIO_BYTES) as u64;
+    assert!(!plan.unknown_size, "the check is not skipped");
+    assert!(
+        plan.peak_bytes < theirs_bytes / 2,
+        "the export asks for {} bytes: their {theirs_bytes} counted again",
+        plan.peak_bytes
+    );
+    assert_eq!(plan.tracks.len(), OTHER_TRACKS + 1, "theirs are carried");
 }

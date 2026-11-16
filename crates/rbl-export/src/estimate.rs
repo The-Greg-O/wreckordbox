@@ -122,6 +122,14 @@ pub(crate) fn estimate_inspected(
             result.actions.insert(key, AudioAction::InPlace);
             continue;
         }
+        // Another writer's track the sync carries, its file left where the
+        // stick has it (the export's `retained_audio`): nothing is copied.
+        if track.device.as_ref().is_some_and(|d| d.preserve && crate::same_file(&track.source_path, &under(destination, &d.audio))) {
+            result.tracks_kept += 1;
+            result.reuse_bytes += size;
+            result.actions.insert(key, AudioAction::Reuse);
+            continue;
+        }
         let conversion = compatibility
             .filter(|_| !track.device.as_ref().is_some_and(|d| d.preserve))
             .map(CompatibilityFormat::audio)
