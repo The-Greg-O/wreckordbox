@@ -233,6 +233,10 @@ struct Planned {
 /// entry's track in `selection` before it is planned, so the plan, the
 /// bound result, the confirmation and the export all see the rendered
 /// audio (and the rendered file's identity joins `tracks` in the bound).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the load's inputs, each from its own caller's context"
+)]
 fn plan_load(
     state_dir: &Path,
     library: &OpenLibrary,

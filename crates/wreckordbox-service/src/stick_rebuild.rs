@@ -1768,7 +1768,7 @@ pub(crate) fn answer(
             .iter_mut()
             .filter(|l| l.action == "carry")
         {
-            line.action = "failed".to_owned();
+            "failed".clone_into(&mut line.action);
             line.reason = Some(format!("could not be put in My Settings: {error}"));
         }
     }
