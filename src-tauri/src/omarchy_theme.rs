@@ -649,6 +649,7 @@ pub struct Watch {
 }
 
 /// Writes the theme file's mistakes to the log.
+#[cfg(target_os = "linux")]
 fn log_problems(sources: &Sources, theme: &Theme) {
     let file = sources.theme_file.as_deref().unwrap_or(Path::new(""));
     for problem in &theme.problems {
