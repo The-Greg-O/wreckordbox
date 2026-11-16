@@ -265,3 +265,28 @@ fn the_execution_lock_is_reentrant_for_its_thread_and_exclusive_for_others() {
         "free once the last hold is let go"
     );
 }
+
+/// rekordbox writes its export hidden (`.PIONEER`) on an HFS+ Stick: the
+/// same Stick, protected the same way.
+#[test]
+fn a_stick_with_a_hidden_export_is_protected_and_refuses_a_write_until_unlocked_by_name() {
+    let (state, sticks) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let gig = sticks.path().join("GIG");
+    std::fs::create_dir_all(gig.join(".PIONEER/rekordbox")).unwrap();
+    std::fs::write(gig.join(".PIONEER/rekordbox/export.pdb"), b"x").unwrap();
+    std::fs::write(gig.join(STAND_IN_MARKER), b"").unwrap();
+    let inside = gig.join(".PIONEER/rekordbox/export.pdb");
+
+    assert!(status(state.path(), &gig).protected);
+    assert!(matches!(
+        authorize(state.path(), &inside),
+        Err(Refused::Protected { .. })
+    ));
+    assert_eq!(
+        unlock(state.path(), &gig, None).unwrap_err(),
+        UnlockError::NameRequired { name: "GIG".into() }
+    );
+    unlock(state.path(), &gig, Some("GIG")).unwrap();
+    let writing = authorize(state.path(), &inside).unwrap();
+    assert_eq!(writing.stick(), Some(gig.canonicalize().unwrap().as_path()));
+}

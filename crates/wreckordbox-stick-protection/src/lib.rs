@@ -8,7 +8,7 @@
 //!
 //! - **What is a Stick** ([`classify`]) is decided from the volume itself,
 //!   never from a list the interface was shown: the volume (mount) holding
-//!   the path carries a player export (a `PIONEER` folder or the Spare stick
+//!   the path carries a player export (a `PIONEER` or `.PIONEER` folder or the Spare stick
 //!   marker at its root), or, when its root cannot be read, it is removable
 //!   or mounted under the media folders (fail closed). Any other volume,
 //!   an ordinary external disk with no player export included, is not a
@@ -289,7 +289,9 @@ fn player_export(root: &Path) -> Option<bool> {
     for entry in entries {
         let name = entry.ok()?.file_name();
         let name = name.to_string_lossy();
-        if name.eq_ignore_ascii_case("PIONEER") || name == SPARE_MARKER {
+        // `.PIONEER` too: rekordbox writes the export hidden on an HFS+ Stick.
+        let export = name.strip_prefix('.').unwrap_or(&name);
+        if export.eq_ignore_ascii_case("PIONEER") || name == SPARE_MARKER {
             found = true;
         }
     }
@@ -917,6 +919,24 @@ mod tests {
             unescape("/run/media/go/DJ\\040STICK"),
             "/run/media/go/DJ STICK"
         );
+    }
+
+    /// rekordbox writes its export hidden, as `.PIONEER`, on an HFS+ Stick.
+    #[test]
+    fn a_hidden_player_export_makes_a_stick_too() {
+        for export in ["PIONEER", ".PIONEER", ".pioneer"] {
+            let dir = tempfile::tempdir().expect("a temporary folder");
+            let root = dir.path().canonicalize().expect("it exists");
+            assert_eq!(player_export(&root), Some(false), "nothing on it yet");
+            std::fs::create_dir_all(root.join(export).join("rekordbox")).expect("made");
+            std::fs::write(root.join(export).join("rekordbox/export.pdb"), b"x").expect("written");
+            assert_eq!(player_export(&root), Some(true), "{export}");
+            // As the mount table would name it: a fixed disk outside the
+            // media folders, so only the export makes it a Stick.
+            let table = format!("1 0 8:1 / {} rw - ext4 /dev/x rw\n", root.display());
+            let facts = facts_in(&table, &root.join("Contents/a.mp3")).expect("the mount is found");
+            assert!(is_stick(&facts), "{export}");
+        }
     }
 
     #[test]
