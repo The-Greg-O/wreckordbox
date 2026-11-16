@@ -188,6 +188,69 @@ pub(crate) fn read_back(root: &Path, planned: &PlannedSettings) -> (Vec<String>,
     (written, not_written)
 }
 
+/// One of the five files as a Stick holds it: its bytes, or why it cannot
+/// be taken (`None`: the Stick has none).
+pub(crate) type OnStick = (String, Option<Result<Vec<u8>, String>>);
+
+/// Reads the five files from the Stick at `root` (its resolved root, inside
+/// a non-recovering Stick read): only files that are really on the Stick.
+pub(crate) fn read_from_stick(root: &Path) -> Vec<OnStick> {
+    let export = rbl_export::export_root(root);
+    FILES
+        .iter()
+        .map(|name| {
+            let path = export.join(name);
+            let found = path
+                .canonicalize()
+                .ok()
+                .filter(|real| real.starts_with(root))
+                .map(|real| {
+                    let bytes = std::fs::read(real)
+                        .map_err(|e| format!("{name} on the Stick could not be read: {e}"))?;
+                    damaged(name, &bytes)
+                        .map(|why| why.replace("in My Settings", "on the Stick"))
+                        .map_or(Ok(bytes), Err)
+                });
+            ((*name).to_owned(), found)
+        })
+        .collect()
+}
+
+/// What `library.rebuild_from_stick` does with each file: `carry` (into
+/// the Library's My Settings, replacing what is there), `absent` (the Stick
+/// has none; My Settings keeps its own), `damaged` (not carried).
+pub(crate) fn carry_lines(found: &[OnStick]) -> Vec<SettingsLine> {
+    found
+        .iter()
+        .map(|(name, found)| {
+            let (action, reason) = match found {
+                Some(Ok(_)) => ("carry", None),
+                None => ("absent", None),
+                Some(Err(why)) => ("damaged", Some(why.clone())),
+            };
+            SettingsLine {
+                file: name.clone(),
+                action: action.to_owned(),
+                from: found.as_ref().map(|_| "stick".to_owned()),
+                reason,
+            }
+        })
+        .collect()
+}
+
+/// Puts each file `carry_lines` carries into the Library's My Settings.
+/// Not a Library edit and not a Stick write: the window's own folder.
+pub(crate) fn carry(state_dir: &Path, found: &[OnStick]) -> std::io::Result<()> {
+    let folder = my_settings(state_dir);
+    for (name, found) in found {
+        if let Some(Ok(bytes)) = found {
+            rbl_core::durable::create_dir_all(&folder)?;
+            rbl_core::durable::write(&folder.join(name), bytes)?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {

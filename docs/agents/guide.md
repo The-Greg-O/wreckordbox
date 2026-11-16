@@ -745,13 +745,22 @@ wreckordbox --json stick dry-run /run/media/dj/SPARE 900000
  "not_loadable": null, "stick": {...}}
 ```
 
-`missing` tracks have no audio file to copy. Fails: an unknown playlist, a
-path that is not a mounted Stick.
+`missing` tracks have no audio file to copy. `tracks.kept` and
+`playlists.kept` (counts `tracks_kept`, `playlists_kept`) are what another
+writer put on the Stick (rekordbox on another computer): they stay as they
+are, their audio neither copied nor counted in `space`. `changes.settings`
+lists the deck's five settings files (`DEVSETTING.DAT`, `MYSETTING.DAT`,
+`MYSETTING2.DAT`, `DJMMYSETTING.DAT`, `djprofile.nxs`), each `write` (from the
+Library's My Settings, or rekordbox's defaults for `DEVSETTING.DAT`), `keep`
+(the Stick's own), `replace` (only with `--replace-settings`, on the dry run
+and the load alike) or `unavailable` (the Library has none: carry them with
+`library rebuild-from-stick`). Fails: an unknown playlist, a path that is not a
+mounted Stick.
 
 ### `wreckordbox stick load`
 
 **Writes to a Stick**: exactly what the dry run reported. Arguments:
-`<STICK> <PLAYLIST_ID>... --plan <PLAN_ID>`. Refused with `stick_protected`
+`<STICK> <PLAYLIST_ID>... --plan <PLAN_ID> [--replace-settings]`. Refused with `stick_protected`
 unless the DJ unlocked the Stick; refused when the plan is not from a dry run
 of this very load in the last ten minutes, or anything changed since; refused
 before writing when it would not fit. Exits 1 unless everything planned was
@@ -799,7 +808,10 @@ and put in the Stick's order. One import Run under your source and one change
 event. If an apply stops part way, its answer has `"complete": false` and
 `incomplete` (what was done and the advice) and the command exits 1: what it
 wrote is kept; run it again to finish (it does only what is still to do), or
-the DJ restores the backup. Play history is not carried.
+the DJ restores the backup. Play history is not carried. The Stick's five
+settings files are carried into the Library's My Settings (`settings`: each
+`carry`, `absent` or `damaged`), so the next `stick load` gives them to the
+Sticks it loads.
 
 ```sh
 wreckordbox --json library rebuild-from-stick /run/media/dj/GIG --music ~/Music --dry-run

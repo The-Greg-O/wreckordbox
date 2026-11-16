@@ -225,6 +225,12 @@ pub struct Rebuilt {
     /// When the apply stopped part way: what was done and what to do.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub incomplete: Option<Incomplete>,
+    /// The deck's five settings files (`DEVSETTING.DAT`, `MYSETTING.DAT`,
+    /// `MYSETTING2.DAT`, `DJMMYSETTING.DAT`, `djprofile.nxs`): each `carry`
+    /// (into the Library's My Settings, which a Stick load gives a Stick),
+    /// `absent` or `damaged`; `failed` when carrying it failed (wbx-8z2).
+    #[serde(default)]
+    pub settings: Vec<crate::stick_load::SettingsLine>,
 }
 
 /// An apply that stopped part way. What it wrote is kept.
@@ -531,6 +537,8 @@ struct StickState {
     /// Each track's audio file size on the Stick, by its id; absent when the
     /// Stick holds no copy (or it lies outside the Stick).
     sizes: HashMap<u32, u64>,
+    /// The deck's five settings files, carried into My Settings (wbx-8z2).
+    settings: Vec<crate::stick_load::settings::OnStick>,
 }
 
 fn read_stick(mount: &Path) -> Result<StickState, ServiceError> {
@@ -584,6 +592,7 @@ fn read_stick(mount: &Path) -> Result<StickState, ServiceError> {
             library,
             my_tags,
             sizes,
+            settings: crate::stick_load::settings::read_from_stick(root),
         })
     })
     .map_err(|e| unreadable(&e))
@@ -1220,6 +1229,7 @@ fn plan(
             backup: None,
             complete: true,
             incomplete: None,
+            settings: crate::stick_load::settings::carry_lines(&stick.settings),
         },
     })
 }
@@ -1749,6 +1759,19 @@ pub(crate) fn answer(
     );
     let warning = operation.finish();
     let (applied, changed) = result?;
+    // The Stick's settings files into My Settings, once the Library is
+    // rebuilt; a failure is reported and changes nothing else.
+    if let Err(error) = crate::stick_load::settings::carry(stems.state_dir(), &stick.settings) {
+        for line in plan
+            .answer
+            .settings
+            .iter_mut()
+            .filter(|l| l.action == "carry")
+        {
+            line.action = "failed".to_owned();
+            line.reason = Some(format!("could not be put in My Settings: {error}"));
+        }
+    }
     plan.answer.backup = Some(shown_backup.clone());
     if let Some(error) = &applied.stopped {
         plan.answer.complete = false;

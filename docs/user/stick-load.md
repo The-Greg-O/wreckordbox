@@ -9,7 +9,16 @@ put on it on their own with Export Track stay). What another writer put on
 the Stick, such as rekordbox on another computer, stays as it is, as
 rekordbox's own export leaves it: the dry run lists those tracks and
 playlists as kept, and their audio is neither copied again nor counted in
-the room needed. On a Spare stick (one with
+the room needed.
+
+A load also gives the Stick the deck's settings files (`DEVSETTING.DAT`,
+`MYSETTING.DAT`, `MYSETTING2.DAT`, `DJMMYSETTING.DAT`, `djprofile.nxs`: the
+colours, columns and fields the deck shows) from your Library's My Settings,
+which `wreckordbox library rebuild-from-stick` and the window's Round-trip
+import carry from a Stick. A file the Stick already has is its own and is
+kept, unless you add `--replace-settings` to both the dry run and the load.
+Without My Settings a Stick gets rekordbox's default display settings and the
+dry run says which files it cannot give. On a Spare stick (one with
 an empty `.rbxport-disposable` file at its root) the tracks' Native stems
 are written too; a Gig stick never gets them.
 

@@ -31,7 +31,7 @@
 
 mod identity;
 mod load;
-mod settings;
+pub(crate) mod settings;
 pub mod sticks;
 
 use std::path::PathBuf;

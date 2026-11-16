@@ -367,3 +367,130 @@ fn without_my_settings_a_stick_gets_rekordbox_display_defaults_and_is_told_what_
         json!("MYSETTING2.DAT in My Settings is damaged (its checksum does not match)")
     );
 }
+
+/// A WAV file of `seconds` of silence (16-bit mono, 8 kHz).
+fn write_wav(path: &Path, seconds: u32) {
+    let rate: u32 = 8_000;
+    let data = rate * 2 * seconds;
+    let mut out = Vec::new();
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&rate.to_le_bytes());
+    out.extend_from_slice(&(rate * 2).to_le_bytes());
+    out.extend_from_slice(&2u16.to_le_bytes());
+    out.extend_from_slice(&16u16.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data.to_le_bytes());
+    out.resize(44 + data as usize, 0);
+    std::fs::write(path, out).unwrap();
+}
+
+/// A Stick from another computer holding one track, "Low Sun", and the
+/// DJ's five settings files; the same track in a music folder here.
+fn gig_stick_from_elsewhere(dir: &Path) -> (PathBuf, PathBuf) {
+    let elsewhere = dir.join("other-computer");
+    let music = dir.join("music");
+    let gig = dir.join("GIG");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::fs::create_dir_all(&music).unwrap();
+    std::fs::create_dir_all(&gig).unwrap();
+    std::fs::write(gig.join(wreckordbox_stick_protection::STAND_IN_MARKER), b"").unwrap();
+    let audio = elsewhere.join("Low Sun.wav");
+    write_wav(&audio, 3);
+    std::fs::copy(&audio, music.join("Low Sun.wav")).unwrap();
+    let track = rbl_export::SourceTrack {
+        id: 500,
+        source_path: audio,
+        title: "Low Sun".into(),
+        artist: "Somebody".into(),
+        ..Default::default()
+    };
+    let playlist = rbl_export::SourcePlaylist {
+        id: 11,
+        name: "Friday".into(),
+        track_indices: vec![0],
+        ..Default::default()
+    };
+    let sync = rbl_export::SyncSource {
+        db_id: 0x0bad_cafe,
+        ..Default::default()
+    };
+    rbl_export::export_full(
+        &gig,
+        &[track],
+        &[playlist],
+        &[],
+        None,
+        Some(&sync),
+        &mut |_| {},
+    )
+    .unwrap();
+    std::fs::remove_dir_all(rbl_export::export_root(&gig).join("rbxport")).unwrap();
+    for (name, bytes) in library_settings() {
+        std::fs::write(rbl_export::export_root(&gig).join(name), bytes).unwrap();
+    }
+    (gig, music)
+}
+
+#[test]
+fn rebuild_from_stick_carries_the_sticks_settings_into_my_settings_for_the_next_load() {
+    let rig = Rig::new();
+    let dirs = tempfile::tempdir().unwrap();
+    let (gig, music) = gig_stick_from_elsewhere(dirs.path());
+    let rebuild = |extra: &[&str]| -> Value {
+        let mut args = vec![
+            "--json",
+            "library",
+            "rebuild-from-stick",
+            gig.to_str().unwrap(),
+            "--music",
+            music.to_str().unwrap(),
+        ];
+        args.extend_from_slice(extra);
+        let run = rig.sandbox.cli(&args);
+        assert!(run.status.success(), "{}", run.stderr);
+        run.json()
+    };
+
+    let dry = rebuild(&["--dry-run"]);
+    let carried: Vec<(String, String)> = dry["settings"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no settings: {dry}"))
+        .iter()
+        .map(|l| {
+            (
+                l["file"].as_str().unwrap().to_owned(),
+                l["action"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(carried, all("carry"), "{dry}");
+    assert!(!rig.my_settings().exists(), "a dry run writes nothing");
+
+    let applied = rebuild(&[]);
+    assert_eq!(applied["complete"], true, "{applied}");
+    for (name, bytes) in library_settings() {
+        assert_eq!(
+            std::fs::read(rig.my_settings().join(name)).ok(),
+            Some(bytes),
+            "{name} in My Settings"
+        );
+    }
+
+    // The next load gives a fresh Stick those files.
+    rig.unlock();
+    let (dry, load) = rig.load_confirmed(&[]);
+    assert_eq!(actions(&dry), all("write"), "{dry}");
+    assert_eq!(load["outcome"], "loaded", "{load}");
+    for (name, bytes) in library_settings() {
+        assert_eq!(
+            rig.on_stick(name),
+            Some(bytes),
+            "{name} on the loaded Stick"
+        );
+    }
+}
