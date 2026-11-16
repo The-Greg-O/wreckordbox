@@ -91,8 +91,14 @@ export function IntakeTrackPanel(props: IntakeTrackPanelProps) {
   const key = (chord: KeyChord) => (chord.key === "" ? null : <kbd className={styles.key}>{describeChord(chord, platform)}</kbd>);
 
   return (
-    <section className={styles.panel} aria-label={t("Track")} data-testid="intake-panel">
-      <div className={styles.fields} onFocusCapture={proposalKeys.onFocusCapture} onKeyDown={proposalKeys.onKeyDown}>
+    <section
+      className={styles.panel}
+      aria-label={t("Track")}
+      data-testid="intake-panel"
+      onFocusCapture={proposalKeys.onFocusCapture}
+      onKeyDown={proposalKeys.onKeyDown}
+    >
+      <div className={styles.fields}>
         <div className={styles.fieldWithProposals}>
           <InPlaceField key={`title:${track.id}`} label={t("Title")} value={track.title} onCommit={props.onTitle} onSaveThenMark={props.onSaveThenMark} />
           <FieldSuggestions field={t("Title")} suggestions={proposed("title")} accepting={accepting} busy={busy || accepting !== null} onAccept={accept} />
@@ -165,7 +171,7 @@ export function IntakeTrackPanel(props: IntakeTrackPanelProps) {
       {props.tags}
 
       {props.suggestionsUnavailable !== null ? (
-        <p className={styles.hint} data-testid="intake-suggestions-unavailable">{t("Proposed titles and artists could not be read")}: {props.suggestionsUnavailable}</p>
+        <p className={styles.hint} data-testid="intake-suggestions-unavailable">{t("Proposed titles, artists and tags could not be read")}: {props.suggestionsUnavailable}</p>
       ) : null}
       {failure !== null ? <p className={styles.failed} data-testid="intake-edit-failed" role="alert">{failure}</p> : null}
       {note !== null ? <p className={styles.note} data-testid="intake-note" role="status">{note}</p> : null}

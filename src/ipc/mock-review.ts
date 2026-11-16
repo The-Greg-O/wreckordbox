@@ -38,8 +38,18 @@
  * title (Run 41). They are Review rows like any other, and the Intake
  * queue lists exactly them (`suggestionsOf`), with their row tokens.
  * `__reviewPropose(track, field, value)` records one more live in Run 41.
+ *
+ * Proposed tags (wbx-45.26), with `?tagProposals` (not `?proposals`): the
+ * first Intake track has a proposed Situation "Warm-up" (dimension "setting"
+ * in the five-dimension schema, Run 41, confidence 0.84). The fixture's
+ * first Intake track already carries Peak, so the proposal is the other
+ * term. It is a Review
+ * row whose field is "tag"; Intake lists it with field "setting" and the
+ * term ids. `__reviewProposeTag(track, dimension, terms, label, dimensionLabel)`
+ * records one more. Accepting it sets the tags through the tag panel.
  */
 import type { RowDto } from "./types";
+import type { IntakeSuggestion } from "@/lib/intakeQueue";
 import {
   fromServiceListing, fromServiceRejected, outcomeOf,
   type DecisionOutcome, type RejectedFact, type ReviewListing,
@@ -59,12 +69,16 @@ export interface MockReviewSource {
   setText?: (id: string, field: "title" | "artist", value: string) => Promise<unknown>;
   /** The tracks proposals go on with `?proposals`: Intake's first ones. */
   proposalTracks?: () => string[];
+  /** Sets a proposed tag (wbx-45.26). Late-bound: the tag panel is built after Review. */
+  applyTag?: (track: string, dimension: string, terms: readonly string[]) => Promise<unknown>;
+  /** What a track holds in a dimension now: a tag row's `before`. Late-bound too. */
+  tagsNow?: (track: string, dimension: string) => { terms: string[]; label: string };
 }
 
 interface Held {
   fact: number;
   track: string;
-  field: "energy" | "prep_colour" | "title" | "artist";
+  field: "energy" | "prep_colour" | "title" | "artist" | "tag";
   before: unknown;
   after: unknown;
   source: { kind: string; name: string };
@@ -133,11 +147,20 @@ export function createMockReview(source: MockReviewSource) {
   const energy = (row: RowDto) => (row.rating ? row.rating : null);
   const add = (h: Omit<Held, "fact" | "before">) => {
     const row = source.all.find((r) => r.id === h.track);
+    const proposed = h.after as { dimension?: string; dimension_label?: string };
     const before = h.field === "energy" ? (row ? energy(row) : null)
       : h.field === "title" ? (row?.title ?? "")
         : h.field === "artist" ? (row?.artist ?? "")
-          : null;
+          : h.field === "tag"
+            ? { dimension: proposed.dimension ?? "", terms: [] as string[], label: "", dimension_label: proposed.dimension_label ?? "" }
+            : null;
     waiting.push({ ...h, fact: nextFact++, before });
+  };
+  /** A row's `before` as the service lists it: a tag's is what the track holds at the read. */
+  const beforeOf = (h: Held): unknown => {
+    if (h.field !== "tag") return h.before;
+    const after = h.after as { dimension?: string };
+    return { ...(h.before as object), ...(source.tagsNow?.(h.track, String(after.dimension ?? "")) ?? {}) };
   };
   if (url.get("review") !== "empty") {
     const confidences = [0.91, 0.62, 0.74, 0.83, 0.58, 0.88, 0.81, 0.44, 0.97];
@@ -161,6 +184,17 @@ export function createMockReview(source: MockReviewSource) {
     if (second) add({ track: second, field: "title", after: "Second Proposal", source: runs[2]!.source, confidence: 0.71, reason: "waits_for_dj", run: 41 });
   }
 
+  if (url.has("tagProposals")) {
+    const [first] = source.proposalTracks?.() ?? [];
+    if (first) {
+      add({
+        track: first, field: "tag",
+        after: { dimension: "setting", terms: ["warm-up"], label: "Warm-up", dimension_label: "Situation" },
+        source: runs[2]!.source, confidence: 0.84, reason: "waits_for_dj", run: 41,
+      });
+    }
+  }
+
   const rowVersion = new Map<number, number>();
   const rowToken = (fact: number) => `r${fact}.${rowVersion.get(fact) ?? 0}`;
   const changed = () => {
@@ -172,7 +206,7 @@ export function createMockReview(source: MockReviewSource) {
   const answer = () => {
     const titled = waiting.map((h) => ({
       track: h.track, title: source.all.find((r) => r.id === h.track)?.title ?? h.track, field: h.field,
-      before: h.before, after: h.after, fact: h.fact, source: h.source, confidence: h.confidence, reason: h.reason,
+      before: beforeOf(h), after: h.after, fact: h.fact, source: h.source, confidence: h.confidence, reason: h.reason,
       ...(h.threshold === undefined ? {} : { threshold: h.threshold }),
     }));
     const used = runs.filter((r) => waiting.some((h) => h.run === r.id));
@@ -206,7 +240,10 @@ export function createMockReview(source: MockReviewSource) {
     for (const h of apply as Held[]) {
       if (h.field === "energy") await source.rate(h.track, Number(h.after));
       else if (h.field === "title" || h.field === "artist") await source.setText?.(h.track, h.field, String(h.after));
-      else await source.colour(h.track, Number((h.after as { id: number }).id));
+      else if (h.field === "tag") {
+        const after = h.after as { dimension?: string; terms?: string[] };
+        await source.applyTag?.(h.track, String(after.dimension ?? ""), after.terms ?? []);
+      } else await source.colour(h.track, Number((h.after as { id: number }).id));
     }
     const applied = new Set((apply as Held[]).map((h) => h.fact));
     waiting = waiting.filter((h) => !applied.has(h.fact));
@@ -269,6 +306,15 @@ export function createMockReview(source: MockReviewSource) {
       changed();
       return nextFact - 1;
     };
+    hooks.__reviewProposeTag = (track: string, dimension: string, terms: string[], label: string, dimensionLabel: string) => {
+      add({
+        track, field: "tag",
+        after: { dimension, terms, label, dimension_label: dimensionLabel },
+        source: runs[2]!.source, confidence: 0.77, reason: "waits_for_dj", run: 41,
+      });
+      changed();
+      return nextFact - 1;
+    };
     hooks.__reviewChange = (fact: number, after: unknown) => {
       const h = waiting.find((w) => w.fact === fact);
       if (h) h.after = after;
@@ -298,14 +344,24 @@ export function createMockReview(source: MockReviewSource) {
   }
 
   return {
-    /** The proposed titles and artists of `track`, as the service's Intake queue lists them (wbx-66). */
-    suggestionsOf: (track: string) => waiting
-      .filter((h) => h.track === track && (h.field === "title" || h.field === "artist"))
+    /** The track's proposals, as the service's Intake queue lists them (wbx-66, wbx-45.26). */
+    suggestionsOf: (trackId: string): IntakeSuggestion[] => waiting
+      .filter((h) => h.track === trackId && (h.field === "title" || h.field === "artist" || h.field === "tag"))
       .sort((a, b) => b.fact - a.fact)
-      .map((h) => ({
-        field: h.field, value: String(h.after), source: h.source.name, confidence: h.confidence,
-        fact: h.fact, token: rowToken(h.fact), before: typeof h.before === "string" ? h.before : "",
-      })),
+      .map((h) => {
+        if (h.field === "tag") {
+          const after = h.after as { dimension?: string; label?: string; terms?: string[] };
+          return {
+            field: String(after.dimension ?? ""), value: String(after.label ?? ""), source: h.source.name,
+            confidence: h.confidence, fact: h.fact, token: rowToken(h.fact),
+            before: String((beforeOf(h) as { label?: string }).label ?? ""), terms: [...(after.terms ?? [])],
+          };
+        }
+        return {
+          field: h.field, value: String(h.after), source: h.source.name, confidence: h.confidence,
+          fact: h.fact, token: rowToken(h.fact), before: typeof h.before === "string" ? h.before : "",
+        };
+      }),
     reviewWaiting: async (): Promise<ReviewListing> => {
       reads.waiting += 1;
       if (stallNext) {
@@ -329,7 +385,9 @@ export function createMockReview(source: MockReviewSource) {
     reviewRejected: async (): Promise<RejectedFact[]> =>
       fromServiceRejected(await source.wait({
         rejected: rejected.map((r) => ({
-          fact: r.held.fact, track: r.held.track, field: r.held.field, value: r.held.after,
+          // As the service files it: a tag under its dimension's id.
+          fact: r.held.fact, track: r.held.track, value: r.held.after,
+          field: r.held.field === "tag" ? String((r.held.after as { dimension?: string }).dimension ?? "") : r.held.field,
           source: r.held.source, confidence: r.held.confidence, rejection: { entry: r.entry, run: 900 + r.entry, at: 0 },
         })),
       })),

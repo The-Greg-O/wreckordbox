@@ -19,9 +19,10 @@ export type IntakeNeed = "title" | "artist" | "energy" | "tags" | "hot_cues" | "
 export type IntakeGrid = "not_analysed" | "not_confirmed" | "confirmed";
 
 /**
- * An agent's proposed title or artist, waiting for the DJ: exactly a row
- * of Review's queue (wbx-66), accepted with Review's own decision, named by
- * its Fact and its row token.
+ * An agent's proposal waiting for the DJ: a title or artist (wbx-66), or a
+ * tag (wbx-45.26). Exactly a row of Review's queue, accepted with Review's
+ * own decision, named by its Fact and its row token. For a tag, `field` is
+ * the dimension and `terms` are the term ids that proposal would set.
  */
 export interface IntakeSuggestion {
   field: string;
@@ -35,6 +36,8 @@ export interface IntakeSuggestion {
   token: string;
   /** What the Library held when the row was listed. */
   before: string;
+  /** A tag proposal's term ids. Absent for a title or an artist. */
+  terms?: string[];
 }
 
 /** One track in a queue, and what it still needs. */
@@ -63,7 +66,7 @@ export interface IntakeQueuePage {
   nextOffset: number | null;
   /** Why the queue cannot be listed now (Problems with no colour named Problem); `null` when it can. */
   unavailable: string | null;
-  /** Why proposed titles and artists could not be read (the Sidecar busy or unreadable); `null` when they were. */
+  /** Why proposed titles, artists and tags could not be read (the Sidecar busy or unreadable); `null` when they were. */
   suggestionsUnavailable: string | null;
 }
 
@@ -81,7 +84,7 @@ export interface ServiceQueuePage {
       needs: string[];
       empty_dimensions: { id: string; name: string; kind?: string }[];
       grid: IntakeGrid;
-      suggestions: { field: string; fact_id?: number; value: string; source: { kind: string; name: string }; confidence: number; token?: string; before?: string }[];
+      suggestions: { field: string; fact_id?: number; value: string; terms?: string[]; source: { kind: string; name: string }; confidence: number; token?: string; before?: string }[];
     }[];
     total: number;
     offset: number;
@@ -106,8 +109,9 @@ export function fromServicePage(raw: ServiceQueuePage): IntakeQueuePage {
       needs: [...track.needs],
       emptyDimensions: track.empty_dimensions.map(({ id, name }) => ({ id, name })),
       grid: track.grid,
-      suggestions: track.suggestions.map(({ field, value, source, confidence, fact_id, token, before }) => ({
+      suggestions: track.suggestions.map(({ field, value, source, confidence, fact_id, token, before, terms }) => ({
         field, value, source: source.name, confidence, fact: fact_id ?? 0, token: token ?? "", before: before ?? "",
+        ...(terms && terms.length > 0 ? { terms: [...terms] } : {}),
       })),
     })),
     rows: raw.rows,

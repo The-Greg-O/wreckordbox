@@ -106,7 +106,7 @@ pub enum ReviewCommands {
 
 fn parse_field(text: &str) -> Result<Field, String> {
     serde_json::from_value(json!(text))
-        .map_err(|_| format!("{text:?} is not a field: energy, prep_colour, title or artist"))
+        .map_err(|_| format!("{text:?} is not a field: energy, prep_colour, title, artist or tag"))
 }
 
 fn selection(facts: &[i64], filter: &Filter, all: bool, source: Option<&SourceArg>) -> Selection {
@@ -240,6 +240,7 @@ fn field_name(field: Field) -> &'static str {
         Field::PrepColour => "prep_colour",
         Field::Title => "title",
         Field::Artist => "artist",
+        Field::Tag => "tag",
     }
 }
 
@@ -257,7 +258,7 @@ fn line(out: &mut String, h: &Held) {
         h.confidence,
         match (h.reason.as_str(), h.threshold) {
             ("below_confidence", Some(at)) => format!("below the policy's {at}"),
-            ("waits_for_dj", _) if matches!(h.field, Field::Title | Field::Artist) => {
+            ("waits_for_dj", _) if matches!(h.field, Field::Title | Field::Artist | Field::Tag) => {
                 "proposed; only the DJ decides".to_owned()
             }
             ("waits_for_dj", _) => "the policy waits for the DJ".to_owned(),

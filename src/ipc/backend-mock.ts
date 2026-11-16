@@ -2572,6 +2572,9 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     // Called only after `review` below exists (wbx-66).
     suggestionsOf: (id) => review.suggestionsOf(id),
   });
+  // The tag panel is built after Review, so a tag accept calls it through this cell.
+  const tagApply: { fn: ((track: string, dimension: string, terms: readonly string[]) => Promise<unknown>) | null } = { fn: null };
+  const tagsNow: { fn: ((track: string, dimension: string) => { terms: string[]; label: string }) | null } = { fn: null };
   // The Review queue (wbx-74): `mock-review.ts`.
   const review = createMockReview({
     all, wait, ready: () => ready,
@@ -2580,6 +2583,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     colour: (id, colour) => edits.setTrackColor([id], String(colour)),
     setText: (id, field, value) => writeTrackField([id], field, value),
     proposalTracks: () => all.filter((_, at) => (colors[at] ?? 0) === 0).slice(0, 2).map((row) => row.id),
+    applyTag: (track, dimension, terms) => tagApply.fn?.(track, dimension, terms) ?? Promise.resolve(),
+    tagsNow: (track, dimension) => tagsNow.fn?.(track, dimension) ?? { terms: [], label: "" },
   });
   // The Intake tag panel (wbx-65): `mock-tag-panel.ts`.
   const tagPanel = createMockTagPanel({
@@ -2588,6 +2593,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     setTags: (id, tags) => { const row = all.find((r) => r.id === id); if (row) detailsOf(row).myTags = [...tags]; },
     recordEdit: (label, apply, undo) => { apply(); return recordEdit({ label, undo, redo: apply }); },
   });
+  tagApply.fn = tagPanel.applyProposed;
+  tagsNow.fn = tagPanel.selectionOf;
   // Stems split from Intake (wbx-67): `mock-stems.ts`, a fake separation.
   const stems = createMockStems({
     titleOf: (id) => all.find((row) => row.id === id)?.title ?? id,

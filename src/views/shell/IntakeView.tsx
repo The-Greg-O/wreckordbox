@@ -290,7 +290,7 @@ export function IntakeView(props: IntakeViewProps) {
   });
 
   /**
-   * Accepts a proposed title or artist (wbx-66) with Review's own decision
+   * Accepts a proposed title, artist (wbx-66) or tag (wbx-45.26) with Review's own decision
    * (`review.accept` naming exactly this row and its token), through the
    * window's edit path (Library Protection, the status line). A refusal
    * (changed or decided since it was shown, a Stick-hosted Library) is
@@ -676,7 +676,7 @@ export function IntakeView(props: IntakeViewProps) {
           }}
           platform={platform}
           suggestionsUnavailable={page.suggestionsUnavailable}
-          tags={<IntakeTagPanel store={tagStore} trackId={selected.id} />}
+          tags={<IntakeTagPanel store={tagStore} trackId={selected.id} suggestions={selected.suggestions} onAccept={(suggestion) => { void acceptSuggestion(suggestion); }} />}
           onAcceptSuggestion={(suggestion) => { void acceptSuggestion(suggestion); }}
           accepting={accepting}
           protectLibrary={protectLibrary}
@@ -686,7 +686,7 @@ export function IntakeView(props: IntakeViewProps) {
           <p className={styles.hint}>{t("Choose a track in the queue to load it into the player.")}</p>
           {note !== null ? <p className={styles.hint} data-testid="intake-note" role="status">{note}</p> : null}
           {page.suggestionsUnavailable !== null ? (
-            <p className={styles.hint} data-testid="intake-suggestions-unavailable">{t("Proposed titles and artists could not be read")}: {page.suggestionsUnavailable}</p>
+            <p className={styles.hint} data-testid="intake-suggestions-unavailable">{t("Proposed titles, artists and tags could not be read")}: {page.suggestionsUnavailable}</p>
           ) : null}
         </section>
       )}

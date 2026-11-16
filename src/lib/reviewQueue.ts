@@ -169,6 +169,14 @@ export function valueText(field: ReviewField, value: unknown): string {
     const v = value as { label?: unknown; colour?: unknown };
     return str(v.label) || str(v.colour) || "—";
   }
+  // A proposed tag carries its dimension and the label the chip would show.
+  if (field === "tag" && typeof value === "object" && value !== null) {
+    const v = value as { dimension_label?: unknown; label?: unknown };
+    const dimension = str(v.dimension_label);
+    const label = str(v.label);
+    if (dimension && label) return `${dimension}: ${label}`;
+    return label || dimension || "—";
+  }
   return typeof value === "string" ? value : JSON.stringify(value);
 }
 
@@ -179,6 +187,8 @@ export function fieldText(field: ReviewField): string {
   // Proposed titles and artists wait here too (wbx-66).
   if (field === "title") return "Title";
   if (field === "artist") return "Artist";
+  // A proposed tag (wbx-45.26). The dimension is in the value, not the field name.
+  if (field === "tag") return "Tag";
   return field;
 }
 
@@ -442,11 +452,17 @@ export function fromServiceRejected(answer: unknown): RejectedFact[] {
   return arr(obj(answer).rejected).map((r) => {
     const row = obj(r);
     const offered = obj(row.offered ?? row);
+    const value = offered.value ?? null;
+    // A rejected tag is filed under its dimension's id, with the tag row's
+    // value (dimension, terms, labels): the same Tag row Waiting showed.
+    const tag = typeof value === "object" && value !== null
+      && typeof (value as { dimension?: unknown }).dimension === "string"
+      && Array.isArray((value as { terms?: unknown }).terms);
     return {
       fact: num(offered.fact),
       track: str(offered.track),
-      field: str(offered.field),
-      value: offered.value ?? null,
+      field: tag ? "tag" : str(offered.field),
+      value,
       source: source(offered.source),
       confidence: num(offered.confidence),
       entry: num(obj(row.rejection).entry),

@@ -1550,10 +1550,10 @@ asked for that barrier. Not an MCP tool.
 
 ### `wreckordbox review`
 
-The group for Facts Projection held back for the DJ, and for the titles and
-artists agents proposed (never projected: they wait for the DJ, and the
-Intake queue shows the same rows). Filters on every subcommand: `--track`,
-`--field energy|prep_colour|title|artist`, `--from SOURCE`,
+The group for Facts Projection held back for the DJ, and for the titles,
+artists and tags agents proposed (never projected: they wait for the DJ, and
+the Intake queue shows the same rows). Filters on every subcommand: `--track`,
+`--field energy|prep_colour|title|artist|tag`, `--from SOURCE`,
 `--at-least CONFIDENCE`.
 
 ### `wreckordbox review waiting`
@@ -1572,10 +1572,16 @@ Show these to the DJ; their answer is theirs to give.
 `--token` (from the listing the DJ decided from) are required; `[FACT]...` or
 `--all`. Refused with `review_not_the_djs` for any other source. A proposed
 title or artist is accepted only by naming its Fact: `--all` and a filter or
-confidence never take one, and `--field title|artist` is refused. Two
-proposals for the same track and field in one accept are refused
-(`review_competing`): the DJ chooses one. Only on the DJ's word. Not an MCP
-tool.
+confidence never take one, and `--field title|artist` is refused. A proposed
+tag is field `tag`; `before` and `after` carry `dimension`, `terms`, `label`
+and `dimension_label`. A rejection is keyed on the dimension and the terms,
+not on the word `tag`. `--all` and a confidence filter do take tag rows.
+Two proposals for the same track and field (for a tag, the same dimension)
+in one accept are refused (`review_competing`): the DJ chooses one. Each
+accepted tag is the tag panel's own edit, after any native rows in the same
+accept, so several tags are separate Undo steps; a later tag failure leaves
+the earlier ones written (`review_partial`). Only on the DJ's word. Not an
+MCP tool.
 
 ### `wreckordbox review reject`
 
@@ -1584,7 +1590,8 @@ offered again. `--source dj` only. Not an MCP tool.
 
 ### `wreckordbox review rejected`
 
-Reads the rejected suggestions and the rejection each is in.
+Reads the rejected suggestions and the rejection each is in. A rejected tag's
+`field` is its dimension's id; `--field tag` lists it (and reopens it).
 
 ### `wreckordbox review reopen`
 

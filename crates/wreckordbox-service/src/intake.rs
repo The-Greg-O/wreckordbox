@@ -230,24 +230,26 @@ pub struct QueuedTrack {
     pub empty_dimensions: Vec<Dimension>,
     /// Where the beat grid stands; the detail of [`needs::GRID`].
     pub grid: GridState,
-    /// The waiting Facts that flag the title or the artist; the detail of
-    /// [`needs::TITLE`] and [`needs::ARTIST`]. Newest first.
+    /// The waiting Facts that flag the title, the artist or a tag. Newest
+    /// first within a field. A tag's `field` is the dimension's id.
     pub suggestions: Vec<Suggestion>,
 }
 
-/// A title or an artist proposed for a track by a waiting Fact: exactly a
-/// row `review.waiting` lists for it ([`crate::review_text`], wbx-66), so
-/// one the DJ rejected is not here, and one accepted or rejected in Review
-/// is gone. The DJ accepts it here with Review's own `review.accept`,
-/// naming the row by `fact_id` and `token`.
+/// A title, an artist or a tag proposed for a track by a waiting Fact:
+/// exactly a row `review.waiting` lists for it ([`crate::review_text`],
+/// wbx-66; [`crate::review_tags`], wbx-45.26), so one the DJ rejected is
+/// not here, and one accepted or rejected in Review is gone. The DJ accepts
+/// it here with Review's own `review.accept`, naming the row by `fact_id`
+/// and `token`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Suggestion {
-    /// The field it proposes a value for: `title` or `artist`. Also the
-    /// kind of the Fact.
+    /// The field it proposes a value for: `title`, `artist`, or a tag
+    /// dimension's id (the kind of that Fact). A tag row in Review is the
+    /// field `tag`; here the dimension, so the chip it marks is that one.
     pub field: String,
     /// The Fact, as `facts.of_track` numbers it.
     pub fact_id: i64,
-    /// The proposed text.
+    /// The proposed text: a title, an artist, or a tag's label.
     pub value: String,
     pub source: Source,
     pub confidence: f64,
@@ -258,6 +260,9 @@ pub struct Suggestion {
     /// `row_tokens`: what an accept of this row carries.
     #[serde(default)]
     pub token: String,
+    /// A tag's explicit terms. Empty for a title or an artist.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub terms: Vec<String>,
 }
 
 /// The stable names of what a queued track can still need.
@@ -698,6 +703,8 @@ struct Known {
     rejected: crate::review_text::Rejected,
     /// Why those could not be read, when they could not.
     facts_unavailable: Option<String>,
+    /// Proposed tags for the page, the same rows Review lists.
+    tag_rows: Vec<crate::projection::Held>,
 }
 
 impl Known {
@@ -722,9 +729,26 @@ impl Known {
             let locked = locked(db.connection(), &ids).map_err(|e| failed(&e))?;
             Ok((my_tags, locked))
         })?;
-        let (facts, rejected, facts_unavailable) = match page_facts(stems, &ids) {
+        let (facts, rejected, mut facts_unavailable) = match page_facts(stems, &ids) {
             Ok((facts, rejected)) => (facts, rejected, None),
             Err(why) => (HashMap::new(), HashSet::new(), Some(why)),
+        };
+        // An empty page has no proposals; to `waiting`, no ids is every track.
+        let tag_rows = if ids.is_empty() {
+            Ok(Vec::new())
+        } else {
+            crate::review_tags::waiting(library, stems, &ids)
+        };
+        let tag_rows = match tag_rows {
+            Ok(rows) => rows,
+            Err(error) => {
+                let why = error.message;
+                facts_unavailable = Some(match facts_unavailable {
+                    Some(earlier) => format!("{earlier}; {why}"),
+                    None => why,
+                });
+                Vec::new()
+            }
         };
         Ok(Self {
             dimensions: dimensions_reaching_the_deck(&my_tags, stems.sidecar_dir()),
@@ -732,6 +756,7 @@ impl Known {
             facts,
             rejected,
             facts_unavailable,
+            tag_rows,
         })
     }
 
@@ -756,8 +781,32 @@ impl Known {
                     confidence: row.confidence,
                     before: held.clone(),
                     token: crate::review::row_token(row),
+                    terms: Vec::new(),
                 }));
             }
+        }
+        for row in self.tag_rows.iter().filter(|row| row.track == track.id) {
+            let terms = crate::review_tags::terms_of(&row.after);
+            suggestions.push(Suggestion {
+                field: crate::review_tags::dimension_of(row).unwrap_or_default(),
+                fact_id: row.fact,
+                value: row
+                    .after
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+                source: row.source.clone(),
+                confidence: row.confidence,
+                before: row
+                    .before
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+                token: crate::review::row_token(row),
+                terms,
+            });
         }
         let carried = index.my_tag_keys(row as usize);
         let empty_dimensions: Vec<Dimension> = self
