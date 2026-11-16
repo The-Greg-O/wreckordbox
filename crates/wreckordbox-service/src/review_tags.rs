@@ -80,32 +80,40 @@ pub(crate) fn waiting(
     stems: &Stems,
     tracks: &[String],
 ) -> Result<Vec<Held>, ServiceError> {
-    let dimensions = tag_panel::dimensions(library, stems)?;
+    // Resolved once: not again for each track.
+    let panel = tag_panel::Panel::read(library, stems)?;
+    let dimensions = panel.dimensions();
     if dimensions.is_empty() {
         return Ok(Vec::new());
     }
-    let (facts, rejected) = read(stems, &dimensions)?;
-    if facts.values().all(Vec::is_empty) {
+    let (facts, rejected) = read(stems, dimensions)?;
+    // Only a live Fact that is not the DJ's can wait: a track the DJ tagged
+    // by hand, with no proposal, is not read at all.
+    let proposals = || {
+        facts
+            .values()
+            .flatten()
+            .filter(|fact| fact.is_live() && fact.source.kind != SourceKind::Dj)
+    };
+    if proposals().next().is_none() {
         return Ok(Vec::new());
     }
     let index = library.index()?;
     let mut by_track: std::collections::BTreeMap<u32, String> = std::collections::BTreeMap::new();
-    for of in facts.values() {
-        for fact in of {
-            if !tracks.is_empty() && !tracks.contains(&fact.track_id) {
-                continue;
-            }
-            let Some(row) = index.row_of(&fact.track_id) else {
-                continue;
-            };
-            by_track.entry(row).or_insert_with(|| fact.track_id.clone());
+    for fact in proposals() {
+        if !tracks.is_empty() && !tracks.contains(&fact.track_id) {
+            continue;
         }
+        let Some(row) = index.row_of(&fact.track_id) else {
+            continue;
+        };
+        by_track.entry(row).or_insert_with(|| fact.track_id.clone());
     }
     let mut rows = Vec::new();
     for (row, track) in by_track {
-        let selection = tag_panel::explicit_selection(library, stems, &track)?;
+        let selection = panel.explicit_selection(library, stems, &track)?;
         let title = crate::review_text::native(&index, row, Field::Title);
-        for dimension in &dimensions {
+        for dimension in dimensions {
             let of = match facts.get(&dimension.id) {
                 Some(found) => found.as_slice(),
                 None => &[],

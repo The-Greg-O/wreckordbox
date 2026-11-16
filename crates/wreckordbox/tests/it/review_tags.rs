@@ -266,6 +266,66 @@ fn a_tag_rejected_in_review_is_gone_from_intake_and_stays_rejected() {
     assert!(tag_rows(&s).iter().any(|row| row["fact"] == other));
 }
 
+fn rejected(s: &Sandbox, args: &[&str]) -> Vec<i64> {
+    let mut all = vec!["review", "rejected"];
+    all.extend_from_slice(args);
+    ok(s, &all)["rejected"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["fact"].as_i64().unwrap())
+        .collect()
+}
+
+#[test]
+fn a_rejected_tag_is_listed_as_rejected_and_reopened_waits_again() {
+    let s = Sandbox::new();
+    let situation = proposed(&s);
+    ok(
+        &s,
+        &["review", "reject", &situation.to_string(), "--source", "dj"],
+    );
+    assert!(tag_rows(&s).is_empty(), "{:?}", tag_rows(&s));
+
+    // Listed with no filter, and under the field `tag`; not under another.
+    assert_eq!(rejected(&s, &[]), [situation]);
+    assert_eq!(rejected(&s, &["--field", "tag"]), [situation]);
+    assert!(rejected(&s, &["--field", "energy"]).is_empty());
+    let row = &ok(&s, &["review", "rejected"])["rejected"][0];
+    assert_eq!(row["field"], "situation", "{row}");
+    assert_eq!(row["value"]["label"], "Peak", "{row}");
+
+    // Found by the same filter to reopen, and then it waits again.
+    let reopened = ok(
+        &s,
+        &["review", "reopen", "--field", "tag", "--source", "dj"],
+    );
+    assert_eq!(reopened["count"], 1, "{reopened}");
+    assert!(rejected(&s, &[]).is_empty());
+    assert!(tag_rows(&s).iter().any(|row| row["fact"] == situation));
+    assert_eq!(suggestion_for(&s, "situation")["fact_id"], situation);
+}
+
+#[test]
+fn a_proposal_over_a_set_tag_says_what_it_replaces_and_the_accept_replaces_it() {
+    // What an accept means (wbx-45.26 review): the proposal is the
+    // dimension's whole value. The row carries what the track holds, so
+    // the window can say what an accept replaces before the DJ clicks.
+    let s = Sandbox::new();
+    let peak = proposed(&s);
+    accept(&s, &[peak]);
+    assert_eq!(my_tags(&s), vec!["Situation: Peak".to_owned()]);
+
+    let warm = terms(&s, TRACK, "situation", &["warm-up"], "0.9");
+    let row = suggestion_for(&s, "situation");
+    assert_eq!(row["fact_id"], warm, "{row}");
+    assert_eq!(row["value"], "Warm-up", "{row}");
+    assert_eq!(row["before"], "Peak", "{row}");
+
+    accept(&s, &[warm]);
+    assert_eq!(my_tags(&s), vec!["Situation: Warm-up".to_owned()]);
+}
+
 #[test]
 fn an_accept_under_library_protection_changes_nothing_and_the_tag_still_waits() {
     let s = Sandbox::new();

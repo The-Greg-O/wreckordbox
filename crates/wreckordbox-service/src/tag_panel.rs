@@ -753,22 +753,30 @@ pub(crate) fn term_ids(value: &Value) -> Vec<String> {
     }
 }
 
-/// The panel's dimensions, in the panel's order. A read.
-pub(crate) fn dimensions(
-    library: &OpenLibrary,
-    stems: &Stems,
-) -> Result<Vec<PanelDimension>, ServiceError> {
-    Ok(Resolved::read(library, stems)?.dimensions)
-}
+/// The panel's description, resolved once for a read of many tracks
+/// (Review's waiting tags): one `MyTag` query and one Tag schema parse.
+pub(crate) struct Panel(Resolved);
 
-/// The explicit selection of one track, by dimension id. A read.
-pub(crate) fn explicit_selection(
-    library: &OpenLibrary,
-    stems: &Stems,
-    track: &str,
-) -> Result<BTreeMap<String, Vec<String>>, ServiceError> {
-    let resolved = Resolved::read(library, stems)?;
-    Ok(track_tags(library, stems, &resolved, track)?.set)
+impl Panel {
+    /// A read.
+    pub(crate) fn read(library: &OpenLibrary, stems: &Stems) -> Result<Self, ServiceError> {
+        Ok(Self(Resolved::read(library, stems)?))
+    }
+
+    /// The panel's dimensions, in the panel's order.
+    pub(crate) fn dimensions(&self) -> &[PanelDimension] {
+        &self.0.dimensions
+    }
+
+    /// The explicit selection of one track, by dimension id. A read.
+    pub(crate) fn explicit_selection(
+        &self,
+        library: &OpenLibrary,
+        stems: &Stems,
+        track: &str,
+    ) -> Result<BTreeMap<String, Vec<String>>, ServiceError> {
+        Ok(track_tags(library, stems, &self.0, track)?.set)
+    }
 }
 
 /// `values` that this dimension knows, reduced to the explicit selection.

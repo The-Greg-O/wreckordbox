@@ -733,7 +733,13 @@ impl Known {
             Ok((facts, rejected)) => (facts, rejected, None),
             Err(why) => (HashMap::new(), HashSet::new(), Some(why)),
         };
-        let tag_rows = match crate::review_tags::waiting(library, stems, &ids) {
+        // An empty page has no proposals; to `waiting`, no ids is every track.
+        let tag_rows = if ids.is_empty() {
+            Ok(Vec::new())
+        } else {
+            crate::review_tags::waiting(library, stems, &ids)
+        };
+        let tag_rows = match tag_rows {
             Ok(rows) => rows,
             Err(error) => {
                 let why = error.message;

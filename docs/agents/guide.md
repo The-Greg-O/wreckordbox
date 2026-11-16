@@ -1534,7 +1534,8 @@ offered again. `--source dj` only. Not an MCP tool.
 
 ### `wreckordbox review rejected`
 
-Reads the rejected suggestions and the rejection each is in.
+Reads the rejected suggestions and the rejection each is in. A rejected tag's
+`field` is its dimension's id; `--field tag` lists it (and reopens it).
 
 ### `wreckordbox review reopen`
 

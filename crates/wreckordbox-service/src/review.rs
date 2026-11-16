@@ -1241,8 +1241,10 @@ fn rejected_matching(stems: &Stems, asked: &Selection) -> Result<Vec<Rejected>, 
         .into_iter()
         .filter(|r| {
             let o = &r.offered;
-            field_of(&o.field)
-                .is_some_and(|field| asked.matches(&o.track, field, &o.source, o.confidence))
+            // A rejected tag is filed under its dimension's id, which is
+            // no field's name (`offered`): it is the field `tag`.
+            let field = field_of(&o.field).unwrap_or(Field::Tag);
+            asked.matches(&o.track, field, &o.source, o.confidence)
         })
         .collect())
 }
