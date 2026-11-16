@@ -6,9 +6,12 @@
 //! - **The volume holding a path** is asked of the kernel with `statfs` on
 //!   the path's nearest existing ancestor, and handed on as one line shaped
 //!   like `/proc/self/mountinfo`'s, so the rule that reads the table is the
-//!   same one on every system. When `statfs` is refused for a path under
-//!   `/Volumes`, the folder under `/Volumes` stands for the mount, of an
-//!   unknown kind.
+//!   same one on every system. A path the machine will not answer about
+//!   (anything but "nothing there"), or whose volume's mount point the
+//!   path does not spell, is never taken to be on the root volume: the
+//!   folder under `/Volumes` (elsewhere, the path's own leading folders)
+//!   stands for its mount, of an unknown kind, which the rule protects
+//!   when its root cannot be read.
 //! - **Removable** is the kernel's `MNT_REMOVABLE` flag (an external
 //!   drive). A local volume without it is only called fixed when it is the
 //!   system's own; any other is "cannot tell".
@@ -46,9 +49,21 @@ fn text(field: &[std::ffi::c_char]) -> PathBuf {
     PathBuf::from(OsString::from_vec(bytes))
 }
 
-/// The nearest ancestor of `path` that exists (`path` itself when it does).
-fn existing(path: &Path) -> Option<&Path> {
-    path.ancestors().find(|dir| dir.symlink_metadata().is_ok())
+/// What `statfs` says of the volume holding a path.
+struct Found {
+    /// `f_mntonname`.
+    point: PathBuf,
+    /// `f_fstypename`.
+    kind: PathBuf,
+    /// `f_flags`.
+    flags: u32,
+}
+
+/// How the machine is asked: whether something is at a path (`lstat`), and
+/// which volume holds it (`statfs`). A test puts its own answers here.
+struct Lookups<'a> {
+    present: &'a dyn Fn(&Path) -> std::io::Result<()>,
+    volume: &'a dyn Fn(&Path) -> std::io::Result<Found>,
 }
 
 /// A mount point as `/proc/self/mountinfo` writes one: space, tab, newline
@@ -68,54 +83,89 @@ fn line(device: &str, point: &Path) -> String {
     format!("0 0 {device} / {} - - - -\n", escape(point))
 }
 
+/// The line for a path the machine would not answer about, or answered
+/// about in a way that does not fit the path: a mount of an unknown kind.
+/// Under `/Volumes` it is the folder there; elsewhere the first `depth`
+/// parts of the path. Never the root volume: what cannot be told is not
+/// taken for an ordinary folder.
+fn unknown(resolved: &Path, depth: usize) -> String {
+    let mut parts = resolved.components();
+    let under_volumes = matches!(
+        (parts.next(), parts.next()),
+        (Some(std::path::Component::RootDir), Some(volumes)) if volumes.as_os_str() == "Volumes"
+    );
+    let depth = if under_volumes { 3 } else { depth.max(2) };
+    let point: PathBuf = resolved.components().take(depth).collect();
+    line(UNKNOWN, &point)
+}
+
 /// The mount table as far as `resolved` (canonical) needs it: the one mount
 /// holding it.
 pub(crate) fn mount_table(resolved: &Path) -> std::io::Result<String> {
-    let at = existing(resolved).ok_or_else(|| std::io::Error::other("no existing ancestor"))?;
-    match rustix::fs::statfs(at) {
-        Ok(found) => {
-            let point = text(&found.f_mntonname);
-            let kind = text(&found.f_fstypename);
-            let system = found.f_flags & MNT_ROOTFS != 0
-                || point.starts_with("/System/Volumes")
-                || kind == Path::new("devfs")
-                || kind == Path::new("autofs");
-            let device = if found.f_flags & MNT_REMOVABLE != 0 {
-                REMOVABLE
-            } else if found.f_flags & MNT_LOCAL == 0 || system {
-                FIXED
-            } else {
-                UNKNOWN
-            };
-            // The system's data volume is reached through the root's
-            // folders (`/Users`, `/private`...), not under its own mount
-            // point: such a path is on the root volume, as far as paths go.
-            let point = if resolved.starts_with(&point) {
-                point
-            } else {
-                PathBuf::from("/")
-            };
-            Ok(line(device, &point))
-        }
-        Err(error) => {
-            // Refused (a volume this process may not look at): under
-            // `/Volumes`, the folder there is the mount, of an unknown kind.
-            let mut parts = resolved.components();
-            let under_volumes = (
-                parts.next(),
-                parts.next().map(|c| c.as_os_str().to_owned()),
-                parts.next(),
-            );
-            match under_volumes {
-                (Some(std::path::Component::RootDir), Some(volumes), Some(name))
-                    if volumes == "Volumes" =>
-                {
-                    Ok(line(UNKNOWN, &Path::new("/Volumes").join(name.as_os_str())))
-                }
-                _ => Err(error.into()),
+    mount_table_with(
+        resolved,
+        &Lookups {
+            present: &|path| path.symlink_metadata().map(|_| ()),
+            volume: &|path| {
+                let found = rustix::fs::statfs(path)?;
+                Ok(Found {
+                    point: text(&found.f_mntonname),
+                    kind: text(&found.f_fstypename),
+                    flags: found.f_flags,
+                })
+            },
+        },
+    )
+}
+
+fn mount_table_with(resolved: &Path, lookups: &Lookups) -> std::io::Result<String> {
+    // The nearest ancestor that exists. Only "nothing there" moves on to
+    // the parent: a path that may not be looked at is not taken to be on
+    // whatever volume its parent is on.
+    let (mut at, mut refused) = (None, None);
+    for dir in resolved.ancestors() {
+        match (lookups.present)(dir) {
+            Ok(()) => {
+                at = Some(dir);
+                break;
             }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            // The highest folder that may not be looked at stands for the
+            // mount.
+            Err(_) => refused = Some(dir.components().count()),
         }
     }
+    if let Some(depth) = refused {
+        return Ok(unknown(resolved, depth));
+    }
+    let at = at.ok_or_else(|| std::io::Error::other("no existing ancestor"))?;
+    let Ok(found) = (lookups.volume)(at) else {
+        return Ok(unknown(resolved, at.components().count()));
+    };
+    let system = found.flags & MNT_ROOTFS != 0
+        || found.point.starts_with("/System/Volumes")
+        || found.kind == Path::new("devfs")
+        || found.kind == Path::new("autofs");
+    let device = if found.flags & MNT_REMOVABLE != 0 {
+        REMOVABLE
+    } else if found.flags & MNT_LOCAL == 0 || system {
+        FIXED
+    } else {
+        UNKNOWN
+    };
+    if resolved.starts_with(&found.point) {
+        return Ok(line(device, &found.point));
+    }
+    if system {
+        // The system's data volume is reached through the root's folders
+        // (`/Users`, `/private`...), not under its own mount point: such a
+        // path is on the root volume, as far as paths go.
+        return Ok(line(device, Path::new("/")));
+    }
+    // Another volume's mount point that the path does not spell (a letter
+    // case, a link that could not be resolved): the path's own spelling
+    // stands for it.
+    Ok(unknown(resolved, found.point.components().count()))
 }
 
 /// Whether the volume whose table line carries `device` is removable.
@@ -211,15 +261,126 @@ mod tests {
         assert_eq!(removable(&mount.device), Some(false));
     }
 
+    fn found(point: &str, kind: &str, flags: u32) -> Found {
+        Found {
+            point: point.into(),
+            kind: kind.into(),
+            flags,
+        }
+    }
+
+    fn denied() -> std::io::Error {
+        std::io::ErrorKind::PermissionDenied.into()
+    }
+
+    fn missing() -> std::io::Error {
+        std::io::ErrorKind::NotFound.into()
+    }
+
+    /// The facts the shared rule reads from what `mount_table` made.
+    fn facts(table: &str, path: &str) -> crate::VolumeFacts {
+        crate::facts_in(table, Path::new(path)).expect("the mount is found")
+    }
+
     #[test]
-    fn a_refused_volume_under_volumes_is_its_own_mount_of_an_unknown_kind() {
-        // The line the fallback makes, read by the shared rule.
-        let made = line(UNKNOWN, Path::new("/Volumes/GIG"));
-        let facts = crate::facts_in(&made, Path::new("/Volumes/GIG/PIONEER/rekordbox"))
-            .expect("the mount is found");
+    fn a_volume_that_may_not_be_looked_at_is_its_own_mount_of_an_unknown_kind() {
+        let table = mount_table_with(
+            Path::new("/Volumes/GIG/Contents/a.mp3"),
+            &Lookups {
+                present: &|path| match path.to_str() {
+                    Some("/Volumes" | "/") => Ok(()),
+                    _ => Err(denied()),
+                },
+                volume: &|_| Ok(found("/", "apfs", MNT_ROOTFS | MNT_LOCAL)),
+            },
+        )
+        .expect("a line, not an error");
+        assert_eq!(table, line(UNKNOWN, Path::new("/Volumes/GIG")));
+        let facts = facts(&table, "/Volumes/GIG/Contents/a.mp3");
+        assert_eq!(facts.root, Path::new("/Volumes/GIG"));
         assert!(facts.media);
         assert_eq!(facts.removable, None);
         assert!(crate::is_stick(&facts), "unreadable: fails closed");
+    }
+
+    #[test]
+    fn a_volume_statfs_refuses_is_its_own_mount_of_an_unknown_kind() {
+        let table = mount_table_with(
+            Path::new("/Volumes/GIG/Contents"),
+            &Lookups {
+                present: &|_| Ok(()),
+                volume: &|_| Err(denied()),
+            },
+        )
+        .expect("a line, not an error");
+        assert_eq!(table, line(UNKNOWN, Path::new("/Volumes/GIG")));
+    }
+
+    #[test]
+    fn a_mount_point_spelled_in_another_case_is_not_taken_for_the_root_volume() {
+        let table = mount_table_with(
+            Path::new("/Volumes/gig/Contents"),
+            &Lookups {
+                present: &|_| Ok(()),
+                volume: &|_| Ok(found("/Volumes/GIG", "exfat", MNT_REMOVABLE | MNT_LOCAL)),
+            },
+        )
+        .expect("a line, not an error");
+        assert_eq!(table, line(UNKNOWN, Path::new("/Volumes/gig")));
+        let facts = facts(&table, "/Volumes/gig/Contents");
+        assert!(facts.media && facts.removable.is_none());
+    }
+
+    #[test]
+    fn a_refused_path_outside_volumes_is_not_taken_for_the_root_volume_either() {
+        let table = mount_table_with(
+            Path::new("/mnt/stick/Contents"),
+            &Lookups {
+                present: &|path| match path.to_str() {
+                    Some("/mnt" | "/") => Ok(()),
+                    _ => Err(denied()),
+                },
+                volume: &|_| Ok(found("/", "apfs", MNT_ROOTFS | MNT_LOCAL)),
+            },
+        )
+        .expect("a line, not an error");
+        assert_eq!(table, line(UNKNOWN, Path::new("/mnt/stick")));
+        let facts = facts(&table, "/mnt/stick/Contents");
+        assert!(crate::is_stick(&facts), "unreadable and may be removable");
+    }
+
+    #[test]
+    fn a_path_not_there_yet_is_on_its_nearest_existing_ancestors_volume() {
+        let asked = std::cell::RefCell::new(Vec::new());
+        let table = mount_table_with(
+            Path::new("/Volumes/GIG/new/folder"),
+            &Lookups {
+                present: &|path| match path.to_str() {
+                    Some("/Volumes/GIG/new/folder" | "/Volumes/GIG/new") => Err(missing()),
+                    _ => Ok(()),
+                },
+                volume: &|path| {
+                    asked.borrow_mut().push(path.to_path_buf());
+                    Ok(found("/Volumes/GIG", "exfat", MNT_REMOVABLE | MNT_LOCAL))
+                },
+            },
+        )
+        .expect("a line, not an error");
+        assert_eq!(*asked.borrow(), [PathBuf::from("/Volumes/GIG")]);
+        assert_eq!(table, line(REMOVABLE, Path::new("/Volumes/GIG")));
+    }
+
+    #[test]
+    fn the_systems_data_volume_is_the_root_volume_as_far_as_paths_go() {
+        let table = mount_table_with(
+            Path::new("/Users/dj/Music"),
+            &Lookups {
+                present: &|_| Ok(()),
+                volume: &|_| Ok(found("/System/Volumes/Data", "apfs", MNT_LOCAL)),
+            },
+        )
+        .expect("a line, not an error");
+        assert_eq!(table, line(FIXED, Path::new("/")));
     }
 
     #[test]

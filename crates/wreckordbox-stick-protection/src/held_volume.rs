@@ -125,6 +125,23 @@ mod tests {
         );
     }
 
+    /// What was decided while the volume could not be looked at holds for
+    /// the holder's life: protected, never "ordinary".
+    #[test]
+    fn a_volume_that_could_not_be_looked_at_stays_a_stick_for_this_holder() {
+        let held = HeldVolume::reading(
+            Path::new("/Volumes/wbx-no-such-volume/Sidecar/facts.db"),
+            Box::new(|| Ok("0 0 unknown / /Volumes/wbx-no-such-volume - - - -\n".to_owned())),
+        );
+        for _ in 0..2 {
+            assert_eq!(
+                held.stick_root(),
+                Some(PathBuf::from("/Volumes/wbx-no-such-volume")),
+                "its root cannot be read, and nothing says it is fixed"
+            );
+        }
+    }
+
     #[test]
     fn the_mount_table_is_read_once_however_often_it_is_asked() {
         let dir = tempfile::tempdir().unwrap();
